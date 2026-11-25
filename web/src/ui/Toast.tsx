@@ -25,7 +25,7 @@ import { useT } from '../i18n'
 import { Button } from './Button'
 import { Icon } from './Icon'
 import { IconButton } from './IconButton'
-import { onModalChange, topModal } from './layers'
+import { focusables, onModalChange, refocus, topModal } from './layers'
 import './Toast.css'
 import './VisuallyHidden.css'
 
@@ -205,6 +205,23 @@ function ToastView({ item }: { item: ToastItem }) {
   const [pointer, setPointer] = useState(false)
   const [focus, setFocus] = useState(false)
   const held = pointer || focus
+  const ref = useRef<HTMLDivElement>(null)
+  // Where the focus came from when it came into this toast.
+  const from = useRef<Element | null>(null)
+
+  // Going with the focus in it (its action or its dismiss button pressed, and the action didn't
+  // move the focus itself), it doesn't leave the focus to <body>: it goes to the toast beside
+  // this one, or else back to where it came from.
+  useLayoutEffect(() => {
+    const el = ref.current
+    return () => {
+      if (!el?.contains(document.activeElement)) return
+      const beside = [el.nextElementSibling, el.previousElementSibling].find((n) => n?.classList.contains('ui-toast'))
+      const next = beside ? focusables(beside)[0] : undefined
+      if (next) next.focus()
+      else refocus(from.current)
+    }
+  }, [])
 
   // It leaves by itself, unless the pointer or the focus is on it: then the time starts again
   // once both have left.
@@ -217,11 +234,15 @@ function ToastView({ item }: { item: ToastItem }) {
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hovering only pauses the timer
     <div
+      ref={ref}
       className="ui-toast"
       data-tone={item.tone}
       onPointerEnter={() => setPointer(true)}
       onPointerLeave={() => setPointer(false)}
-      onFocus={() => setFocus(true)}
+      onFocus={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) from.current = e.relatedTarget
+        setFocus(true)
+      }}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocus(false)
       }}

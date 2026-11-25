@@ -260,11 +260,13 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
       </Dialog>,
     )
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    // The first Escape is refused; the second the browser carries out, closing it under the
+    // screen, and it opens again.
     pressEscape()
+    expect(dialog().open).toBe(true)
     pressEscape()
-    await act(async () => {
-      await new Promise((r) => setTimeout(r))
-    })
+    expect(dialog().open).toBe(false)
+    await nextTasks()
     expect(onClose).not.toHaveBeenCalled()
     expect(dialog().open).toBe(true)
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload this page' }))
@@ -276,8 +278,24 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
     fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
     expect(onClose).not.toHaveBeenCalled()
     rerender(<Dialog open onClose={onClose} title="Move the card" closeOnOutsidePress />)
+    fireEvent.mouseDown(dialog(), { clientX: -10, clientY: -10 })
     fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  test('a drag that begins inside and ends on the backdrop leaves it open', () => {
+    const onClose = vi.fn()
+    render(
+      <Dialog open onClose={onClose} title="Move the card" closeOnOutsidePress>
+        <p>Some words to select</p>
+      </Dialog>,
+    )
+    // Selecting the words: pressed on them, released outside the box. The click goes to the
+    // <dialog>, the nearest element both are in, at the release's place.
+    fireEvent.mouseDown(screen.getByText('Some words to select'), { clientX: 0, clientY: 0 })
+    fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(dialog().open).toBe(true)
   })
 })
 

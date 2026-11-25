@@ -106,7 +106,8 @@ export function Button({
 export type ButtonLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> &
   Look & {
     href: string
-    // A plain anchor, not the app's router: a download, another site, a page outside the app.
+    // A plain anchor, not the app's router: a download, another site, a page outside the app. One
+    // with a `target` other than _self is always a plain anchor.
     plain?: boolean
   }
 
@@ -125,7 +126,9 @@ export function ButtonLink({
       {children}
     </Content>
   )
-  if (plain)
+  // A link to another browsing context (target="_blank") is the browser's to follow: the router
+  // would take the click over and open it here instead.
+  if (plain || (rest.target && rest.target !== '_self'))
     return (
       <a className={cls} {...rest}>
         {content}

@@ -880,16 +880,35 @@ export const EVERYWHERE = new Map([
   ],
 ])
 
+// A nested rule's selector as the one it stands for: `&` is the parent (`.tt-card { &:hover }` is
+// `.tt-card:hover`), and a selector without `&` is inside it (`.tt-card { h2 }` is `.tt-card h2`).
+export function nestedSelector(parent, child) {
+  return child.includes('&') ? child.replaceAll('&', parent) : `${parent} ${child}`
+}
+
+// The style rule a nested block is in, through the conditional rules between them (`input {
+// @media (…) { … } }` styles `input`): none for a block at the top or only in at-rules.
+function enclosingRule(blocks) {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i].kind === 'rule') return blocks[i]
+    if (blocks[i].kind === 'keyframes') return null
+  }
+  return null
+}
+
 // Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
 // whose `from` and `to` are not elements), each with its line and the properties its block sets.
+// A nested rule is recorded as the selector it stands for (nestedSelector), and the declarations
+// in a conditional rule nested in a style rule are that style rule's.
 export function allRules(css) {
   const out = []
-  const blocks = [] // for each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  // For each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  const blocks = []
   let prelude = ''
   let preludeLine = 1
   let line = 1
   const declare = (text) => {
-    const top = blocks.at(-1)
+    const top = blocks.at(-1)?.kind === 'at' ? enclosingRule(blocks) : blocks.at(-1)
     if (top?.kind !== 'rule') return
     const colon = text.indexOf(':')
     if (colon < 0) return
@@ -919,10 +938,13 @@ export function allRules(css) {
       else {
         const rules = []
         if (!blocks.some((b) => b.kind === 'keyframes')) {
-          for (const selector of splitSelectors(text)) {
-            const r = { selector, line: preludeLine, properties: [] }
-            rules.push(r)
-            out.push(r)
+          const parents = enclosingRule(blocks)?.rules.map((r) => r.selector)
+          for (const own of splitSelectors(text)) {
+            for (const selector of parents ? parents.map((p) => nestedSelector(p, own)) : [own]) {
+              const r = { selector, line: preludeLine, properties: [] }
+              rules.push(r)
+              out.push(r)
+            }
           }
         }
         blocks.push({ kind: 'rule', rules })

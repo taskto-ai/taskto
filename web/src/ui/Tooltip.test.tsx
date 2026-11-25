@@ -67,6 +67,30 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(true)
   })
 
+  test('stays open when the pointer comes back from it straight onto the control', () => {
+    const b = setup()
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
+    fireEvent.pointerLeave(b, { pointerType: 'mouse', relatedTarget: tip() })
+    fireEvent.pointerEnter(tip(), { pointerType: 'mouse', relatedTarget: b })
+    fireEvent.pointerLeave(tip(), { pointerType: 'mouse', relatedTarget: b })
+    act(() => vi.advanceTimersByTime(CLOSE_DELAY_MS * 3))
+    expect(isOpen()).toBe(true)
+    // Leaving both closes it.
+    fireEvent.pointerLeave(b, { pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(CLOSE_DELAY_MS))
+    expect(isOpen()).toBe(false)
+  })
+
+  test('closes when the control is used from the keyboard (Enter or Space: a click, no pointer)', () => {
+    const b = setup()
+    act(() => b.focus())
+    expect(isOpen()).toBe(true)
+    fireEvent.click(b, { detail: 0 })
+    expect(isOpen()).toBe(false)
+    expect(document.activeElement).toBe(b)
+  })
+
   test("doesn't open on touch", () => {
     const b = setup()
     fireEvent.pointerEnter(b, { pointerType: 'touch' })

@@ -57,6 +57,13 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
     refusedSinceActivation = false
   }
   for (const type of ['pointerdown', 'mousedown', 'click']) window.addEventListener(type, activate, true)
+  // Each test starts as a page just loaded: no Escape refused yet, no modal open. Otherwise what
+  // one test pressed decides what the next one's first Escape does (refusable or not), and a
+  // test means one thing alone and another after its neighbours.
+  afterEach(() => {
+    refusedSinceActivation = false
+    modals.length = 0
+  })
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return activate()
     const top = modals.filter((d) => d.isConnected && d.open).at(-1)

@@ -213,6 +213,12 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     hovered.current = true
     clearTimeout(timer.current)
   }
+  // Off the tooltip and straight back onto the control: still hovering. The wrapper around both
+  // was never left, so it hears no new enter that would hold it again.
+  const tipOut = (e: ReactPointerEvent) => {
+    if (e.relatedTarget instanceof Node && anchor.current?.contains(e.relatedTarget)) return
+    pointerOut(e)
+  }
   const focus = (e: ReactFocusEvent) => {
     if (!focusVisible(e.target)) return
     focused.current = true
@@ -222,7 +228,9 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     focused.current = false
     release(0)
   }
-  // Pressing the control is using it: the tooltip goes, whatever held it.
+  // Pressing the control is using it: the tooltip goes, whatever held it. A press of the pointer
+  // closes it at once; Enter or Space give the control a click and no pointer-down, so the click
+  // closes it too.
   const press = () => {
     hovered.current = false
     focused.current = false
@@ -234,13 +242,15 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     .join(' ')
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer and focus events; the control is what is interactive.
+    // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer, click and focus events; the control is what is interactive.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the click it hears is the control's, from a pointer or from the keyboard's Enter or Space
     <span
       ref={anchor}
       className="ui-tooltip-anchor"
       onPointerEnter={pointerIn}
       onPointerLeave={pointerOut}
       onPointerDown={press}
+      onClick={press}
       onFocus={focus}
       onBlur={blur}
     >
@@ -254,7 +264,7 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
         data-open={open ? '' : undefined}
         aria-hidden={describes ? undefined : true}
         onPointerEnter={tipIn}
-        onPointerLeave={pointerOut}
+        onPointerLeave={tipOut}
       >
         {content}
       </span>

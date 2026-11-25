@@ -18,6 +18,17 @@ describe('place', () => {
     expect(place(anchor, box, view, { ...ltr, align: 'start' }).left).toBe(500)
   })
 
+  test('never taller than the window between its margins, even for an anchor scrolled past its edge', () => {
+    // The anchor is below the window: all of the window is "above" it, and more.
+    const p = place({ ...anchor, top: 1200 }, { width: 200, height: 900 }, view, ltr)
+    expect(p.side).toBe('above')
+    expect(p.maxHeight).toBe(800 - 2 * 8)
+    expect(p.top).toBe(8)
+    // And above the window: all of it is "below".
+    const q = place({ ...anchor, top: -400 }, { width: 200, height: 900 }, view, ltr)
+    expect(q.maxHeight).toBe(800 - 2 * 8)
+  })
+
   test('above when there is not room below and more above', () => {
     const low = { ...anchor, top: 700 }
     expect(place(low, box, view, ltr)).toMatchObject({ side: 'above', top: 546 })

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { OLD_STYLESHEETS } from '../scripts/css-check.mjs'
+import { allowedEverywhere, allRules, OLD_STYLESHEETS, OPT_OUT, reachesAnywhere } from '../scripts/css-check.mjs'
 
 // scripts/css-check.mjs: the stylesheets are global (one list of files, every rule in force on every
 // page), so a selector declared twice, in one file or two, a class a component uses that no rule
@@ -640,5 +640,60 @@ describe('how the app loads its stylesheets', () => {
       expect(r.code, base).toBe(1)
       expect(r.err, base).toContain("reaches into the design system's components")
     }
+  })
+})
+
+describe('nested rules in an old stylesheet', () => {
+  // What css-check makes of each rule: whether it reaches anywhere, and if so whether it may.
+  const verdicts = (css: string) =>
+    allRules(css).map((r) => ({
+      selector: r.selector,
+      properties: r.properties,
+      refused: reachesAnywhere(r.selector) && !allowedEverywhere(r),
+    }))
+
+  test('a nested rule is scoped by its parent, with & or without it', () => {
+    expect(
+      verdicts('.tt-card { color: red; & h2 { margin: 0; } &:hover { opacity: 0.8; } h3 { margin: 0; } }'),
+    ).toEqual([
+      { selector: '.tt-card', properties: ['color'], refused: false },
+      { selector: '.tt-card h2', properties: ['margin'], refused: false },
+      { selector: '.tt-card:hover', properties: ['opacity'], refused: false },
+      { selector: '.tt-card h3', properties: ['margin'], refused: false },
+    ])
+    // Each of several parents.
+    expect(allRules('.tt-a, .tt-b { & p { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-a',
+      '.tt-b',
+      '.tt-a p',
+      '.tt-b p',
+    ])
+  })
+
+  test('a nested rule under a rule that reaches anywhere reaches anywhere too', () => {
+    expect(verdicts('main { & h2 { margin: 0; } }').at(-1)).toEqual({
+      selector: 'main h2',
+      properties: ['margin'],
+      refused: true,
+    })
+    expect(verdicts(`h2${OPT_OUT} { &:hover { color: red; } }`).at(-1)?.refused).toBe(false)
+  })
+
+  test("a conditional rule's declarations nested in a style rule are that rule's", () => {
+    expect(verdicts('input { @media (pointer: coarse) { padding: 0; } }')).toEqual([
+      { selector: 'input', properties: ['padding'], refused: true },
+    ])
+    expect(verdicts('input { @media (max-width: 40rem) { @supports (x: y) { font-size: 16px; } } }')).toEqual([
+      { selector: 'input', properties: ['font-size'], refused: false },
+    ])
+    // At the top, a @media's rules are what they are, as before.
+    expect(verdicts('@media (pointer: coarse) { h2 { margin: 0; } .tt-x { margin: 0; } }')).toEqual([
+      { selector: 'h2', properties: ['margin'], refused: true },
+      { selector: '.tt-x', properties: ['margin'], refused: false },
+    ])
+  })
+
+  test('inside @keyframes, nothing is a rule', () => {
+    expect(allRules('@keyframes spin { from { rotate: 0; } to { rotate: 1turn; } }')).toEqual([])
   })
 })

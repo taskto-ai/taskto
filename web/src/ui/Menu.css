@@ -96,9 +96,12 @@
   }
 
   /* The keyboard's place in the menu is the tint and a ring, not only the tint. */
+  /* The outline is transparent, so only the ring shows; in forced colours, which take shadows
+     away, the browser paints the outline in the system's colour and it is the ring. */
   .ui-menu-item:focus-visible {
     background: var(--color-hover);
-    outline: none;
+    outline: var(--line-focus) solid transparent;
+    outline-offset: calc(var(--line-focus) * -1);
     box-shadow: inset 0 0 0 var(--line-focus) var(--color-focus);
   }
 

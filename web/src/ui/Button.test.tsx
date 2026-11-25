@@ -133,4 +133,16 @@ describe('ButtonLink', () => {
     // Not taken over by the router: the browser follows it.
     expect(e).toBe(true)
   })
+
+  test('opens in a new tab when it has a target: the router leaves the click to the browser', () => {
+    render(
+      <ButtonLink href="/w/1/boards" target="_blank" rel="noopener">
+        Boards
+      </ButtonLink>,
+    )
+    const a = screen.getByRole('link', { name: 'Boards' })
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(fireEvent.click(a)).toBe(true)
+    expect(window.location.pathname).toBe('/')
+  })
 })

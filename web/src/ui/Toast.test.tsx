@@ -98,6 +98,57 @@ describe('Toast', () => {
     expect(shown().queryByText('Two')).toBeNull()
   })
 
+  test('pressed from the keyboard, it leaves the focus beside it, not on the page', () => {
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    const archive = document.querySelector('button') as HTMLButtonElement
+    act(() => {
+      toast({ message: 'Card archived', action: { label: 'Undo', onClick: () => {} } })
+    })
+    // From the page into the toast, then its action.
+    act(() => archive.focus())
+    const undo = shown().getByRole('button', { name: 'Undo' })
+    act(() => undo.focus())
+    act(() => undo.click())
+    expect(shown().queryByText('Card archived')).toBeNull()
+    expect(document.activeElement).toBe(archive)
+
+    // With two toasts, dismissing one goes to the other.
+    act(() => {
+      toast('First')
+      toast('Second')
+    })
+    const dismiss = shown().getAllByRole('button', { name: 'Dismiss' })
+    act(() => dismiss[1].focus())
+    act(() => dismiss[1].click())
+    expect(shown().queryByText('Second')).toBeNull()
+    expect(stack().contains(document.activeElement)).toBe(true)
+    expect(shown().getByText('First').closest('.ui-toast')?.contains(document.activeElement)).toBe(true)
+  })
+
+  test('an action that moves the focus itself keeps that', () => {
+    render(
+      <>
+        <button type="button">Archive</button>
+        <input aria-label="Title" />
+        <Toaster />
+      </>,
+    )
+    const title = document.querySelector('input') as HTMLInputElement
+    act(() => {
+      toast({ message: 'Card archived', action: { label: 'Undo', onClick: () => title.focus() } })
+    })
+    const undo = shown().getByRole('button', { name: 'Undo' })
+    act(() => (document.querySelector('button') as HTMLButtonElement).focus())
+    act(() => undo.focus())
+    act(() => undo.click())
+    expect(document.activeElement).toBe(title)
+  })
+
   test('stacks, newest last, and keeps the latest four', () => {
     render(<Toaster />)
     act(() => {
