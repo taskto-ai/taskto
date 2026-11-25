@@ -520,6 +520,50 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 	}
 }
 
+// A login ended between WatchSession's first look at it and the watch's registration sent its
+// signal to nobody: the watch ends at once all the same, not at the interval's next look (an
+// hour here).
+func TestWatchSessionEndedBeforeItIsRegistered(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.setup()
+	laptop := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
+	phone := e.loginAs("owner@example.com", ownerPassword, safariIOS)
+
+	var phoneID string
+	for _, x := range e.sessionsOf(laptop) {
+		if x.Browser == "Safari" {
+			phoneID = x.ID
+		}
+	}
+	for name, end := range map[string]func(){
+		"signed out": func() { expect(t, phone.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent) },
+		"revoked": func() {
+			expect(t, laptop.do(http.MethodDelete, "/api/me/sessions/"+phoneID, nil), http.StatusNoContent)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e.svc.hook = func(point string) {
+				if point == "watch-session-looked-up" {
+					e.svc.hook = nil
+					end()
+				}
+			}
+			t.Cleanup(func() { e.svc.hook = nil })
+			ctx, stop := e.svc.WatchSession(phone.req(http.MethodGet, "/api/me", nil), time.Hour)
+			defer stop()
+			if ctx.Err() == nil {
+				t.Fatal("a login ended before its watch was registered kept the connection")
+			}
+		})
+		phone = e.loginAs("owner@example.com", ownerPassword, safariIOS)
+		for _, x := range e.sessionsOf(laptop) {
+			if x.Browser == "Safari" {
+				phoneID = x.ID
+			}
+		}
+	}
+}
+
 // A login that passes the second step is a session like any other: it names its browser and
 // system (from the second request's User-Agent), is listed, and can be signed out.
 func TestSessionAfterTheSecondStepRecordsItsDevice(t *testing.T) {
