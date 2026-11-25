@@ -19,7 +19,7 @@ Each event is one row of `audit_events` (`internal/db/migrations/0036_audit_even
 | `workspace_id` | the workspace the event belongs to; empty for one that belongs to none (a login, a password change, a personal provider account) |
 | `actor_id` | the user who did it; empty for an anonymous attempt (a login to an account that doesn't exist, a refused single sign-on) or once that user is deleted |
 | `action` | a stable snake_case code, from the table below |
-| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account` or `workspace`, and when that object was created (see below) |
+| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration` or `workspace`, and when that object was created (see below) |
 | `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed |
 | `client_addr` | the address the request came from, found as the login limits find it (the direct peer, or the client behind a [trusted proxy](install.md)); empty for an event with no request |
 
@@ -83,8 +83,13 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `search_embeddings_changed` | the workspace's embeddings model is set or turned off, or its account is removed | the workspace | workspace | `enabled`, `account`; `cascade` when the account's removal turned it off |
 | `search_consent_changed` | a space is consented to, or withdrawn from, the embeddings endpoint, or its consent goes with the account | the space's | space | `enabled`; `cascade` |
 | `dictation_settings_changed` | an admin saves the workspace's dictation settings | the workspace | workspace | `engine`, `language`, `base_host`, `api_key_changed`, `api_key_set`, `notice_confirmed` |
+| `integration_created` | an admin connects an integration | the integration's | integration | `provider`, `kind`, `mode`, `api_key_set`, `webhook_secret_set` |
+| `integration_updated` | an admin changes an integration's display name, settings, ceiling, currencies or secrets (a request that changes nothing records nothing; a secret that is sent counts as changed, even if it is the one already stored) | the integration's | integration | `provider`, `mode`, `fields`, `api_key_changed`, `webhook_secret_changed` |
+| `integration_disabled`, `integration_enabled` | an admin switches an integration off or on | the integration's | integration | `provider` |
+| `integration_spaces_changed` | an admin changes which spaces may use an integration | the integration's | integration | `provider`, `added`, `removed` (counts, never the spaces) |
+| `integration_removed` | an admin deletes an integration | the integration's | integration | `provider`, `kind` |
 
-The names a person gives things (a token's, a space's, a shared account's label, a model's) are
+The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
 not recorded: they are free text, and people paste secrets into such boxes. The target's id
 says which object it was, and `fields` says what about it changed.
 
