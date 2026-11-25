@@ -196,6 +196,10 @@ function Stack() {
   )
 }
 
+// Where the focus was in the page when it came into the toasts: it goes back there when the last
+// toast it is in goes, whichever toasts it went through.
+let cameFrom: Element | null = null
+
 const ICONS = { neutral: 'info', success: 'check', danger: 'alert' } as const
 
 function ToastView({ item }: { item: ToastItem }) {
@@ -206,8 +210,6 @@ function ToastView({ item }: { item: ToastItem }) {
   const [focus, setFocus] = useState(false)
   const held = pointer || focus
   const ref = useRef<HTMLDivElement>(null)
-  // Where the focus came from when it came into this toast.
-  const from = useRef<Element | null>(null)
 
   // Going with the focus in it (its action or its dismiss button pressed, and the action didn't
   // move the focus itself), it doesn't leave the focus to <body>: it goes to the toast beside
@@ -219,7 +221,7 @@ function ToastView({ item }: { item: ToastItem }) {
       const beside = [el.nextElementSibling, el.previousElementSibling].find((n) => n?.classList.contains('ui-toast'))
       const next = beside ? focusables(beside)[0] : undefined
       if (next) next.focus()
-      else refocus(from.current)
+      else refocus(cameFrom)
     }
   }, [])
 
@@ -240,7 +242,9 @@ function ToastView({ item }: { item: ToastItem }) {
       onPointerEnter={() => setPointer(true)}
       onPointerLeave={() => setPointer(false)}
       onFocus={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) from.current = e.relatedTarget
+        // From the page, not from another toast (one that is going, which hands the focus on).
+        const before = e.relatedTarget
+        if (!(before instanceof Element && before.closest('.ui-toaster'))) cameFrom = before
         setFocus(true)
       }}
       onBlur={(e) => {

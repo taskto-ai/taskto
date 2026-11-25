@@ -130,6 +130,28 @@ describe('Toast', () => {
     expect(shown().getByText('First').closest('.ui-toast')?.contains(document.activeElement)).toBe(true)
   })
 
+  test('dismissed one after another, the toasts give the focus back to the page at the end', () => {
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    const archive = document.querySelector('button') as HTMLButtonElement
+    act(() => {
+      toast('First')
+      toast('Second')
+    })
+    act(() => archive.focus())
+    const second = shown().getAllByRole('button', { name: 'Dismiss' })[1]
+    act(() => second.focus())
+    act(() => second.click())
+    const first = shown().getByRole('button', { name: 'Dismiss' })
+    expect(document.activeElement).toBe(first)
+    act(() => first.click())
+    expect(document.activeElement).toBe(archive)
+  })
+
   test('an action that moves the focus itself keeps that', () => {
     render(
       <>

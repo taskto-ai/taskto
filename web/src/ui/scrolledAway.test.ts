@@ -50,3 +50,14 @@ test('two boxes that each show a part of it, but not the same part, hide it', ()
   )
   expect(scrolledAway(el)).toBe(true)
 })
+
+test('a box that shows only a part of it outside the window hides it', () => {
+  document.body.innerHTML = '<div id="box" style="overflow-y: auto"><button id="b">x</button></div>'
+  const el = document.getElementById('b') as HTMLElement
+  // Half of it is in the window, but the box shows only a part above the window.
+  vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(rect(-100, 100, 200, 32))
+  vi.spyOn(document.getElementById('box') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+    rect(-100, 0, 80, 500),
+  )
+  expect(scrolledAway(el)).toBe(true)
+})

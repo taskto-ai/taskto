@@ -661,6 +661,12 @@ describe('nested rules in an old stylesheet', () => {
       { selector: '.tt-card:hover', properties: ['opacity'], refused: false },
       { selector: '.tt-card h3', properties: ['margin'], refused: false },
     ])
+    // An ampersand in a string or escaped is a character, not the parent.
+    expect(allRules('.tt-card { a[href*="&"] { margin: 0; } .x\\&y { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-card',
+      '.tt-card a[href*="&"]',
+      '.tt-card .x\\&y',
+    ])
     // Each of several parents.
     expect(allRules('.tt-a, .tt-b { & p { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-a',

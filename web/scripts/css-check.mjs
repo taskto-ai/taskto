@@ -882,8 +882,27 @@ export const EVERYWHERE = new Map([
 
 // A nested rule's selector as the one it stands for: `&` is the parent (`.tt-card { &:hover }` is
 // `.tt-card:hover`), and a selector without `&` is inside it (`.tt-card { h2 }` is `.tt-card h2`).
+// Only a bare `&` is the nesting selector: one in a string (`a[href*="&"]`) or escaped (`\\&`)
+// is a character.
 export function nestedSelector(parent, child) {
-  return child.includes('&') ? child.replaceAll('&', parent) : `${parent} ${child}`
+  let out = ''
+  let nested = false
+  for (let i = 0; i < child.length; i++) {
+    const c = child[i]
+    if (c === '\\') {
+      out += child.slice(i, i + 2)
+      i++
+    } else if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < child.length && child[j] !== c) j += child[j] === '\\' ? 2 : 1
+      out += child.slice(i, j + 1)
+      i = j
+    } else if (c === '&') {
+      out += parent
+      nested = true
+    } else out += c
+  }
+  return nested ? out : `${parent} ${child}`
 }
 
 // The style rule a nested block is in, through the conditional rules between them (`input {

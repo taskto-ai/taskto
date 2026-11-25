@@ -68,10 +68,16 @@ export function scrolledAway(el: Element): boolean {
   const outsideY = (b: { top: number; bottom: number }) => r.bottom <= b.top || r.top >= b.bottom
   if (outsideX({ left: 0, right: window.innerWidth }) || outsideY({ top: 0, bottom: window.innerHeight })) return true
   // A box clips on each axis on its own: `overflow-x: clip` with `overflow-y: visible` hides only
-  // what is beside it, not what is below it. What shows is what every clipping box lets through,
+  // what is beside it, not what is below it. What shows is what the window and every clipping box
+  // let through,
   // so the part still seen narrows box by box: one box may show its top and another its bottom,
   // and nothing of it is left.
-  const seen = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+  const seen = {
+    left: Math.max(r.left, 0),
+    right: Math.min(r.right, window.innerWidth),
+    top: Math.max(r.top, 0),
+    bottom: Math.min(r.bottom, window.innerHeight),
+  }
   for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
     const s = getComputedStyle(p)
     const b = p.getBoundingClientRect()
