@@ -1,7 +1,14 @@
 // A small router on the History API: the server answers every path outside /api with the
 // app (internal/webui), so a URL can be bookmarked and reloaded.
 
-import { type AnchorHTMLAttributes, type MouseEvent, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import {
+  type AnchorHTMLAttributes,
+  type MouseEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+} from 'react'
 
 const listeners = new Set<() => void>()
 
