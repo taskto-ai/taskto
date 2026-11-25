@@ -123,8 +123,8 @@ const (
 	CodeTooManyApps   Code = "too_many_apps"   // params: max
 	// CodeAppTokenRateLimited is a 429, with Retry-After: the user's access tokens ran their share
 	// of actions in the workspace this minute (params: max, seconds).
-	CodeAppTokenRateLimited Code = "app_token_rate_limited"
-	CodeAppFull             Code = "app_full" // params: max_rows, max_mib
+	CodeAppTokenRateLimited Code = "app_token_rate_limited" //nolint:gosec // G101: an error code, not a credential
+	CodeAppFull             Code = "app_full"               // params: max_rows, max_mib
 	CodeAppRowNotFound      Code = "app_row_not_found"
 	// CodeAppPreviewFull is a preview at its own row limit (params: max_rows); CodeAppPreviewTooLarge
 	// a preview's request over its size limit (413; params: max_mib).
