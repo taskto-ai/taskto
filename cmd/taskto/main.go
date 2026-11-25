@@ -303,6 +303,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	convs := conversations.New(sqlDB, convAgent)
 	convs.SetCapabilities(tools.Capability)
+	// The search index reads each conversation's text from the agent runtime, through them: with
+	// no agent runtime there is none to read, and no conversation is searched.
+	if cfg.Agent {
+		index.SetConversations(convs)
+	}
 	convs.SetCLIQuestions(cliAccounts)
 
 	if cfg.InsecureCookies {
