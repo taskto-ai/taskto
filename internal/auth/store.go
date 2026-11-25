@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"taskto.ai/taskto/internal/audit"
@@ -292,24 +293,46 @@ func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (
 		return "", err
 	}
 	token, hash := newToken()
-	_, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
-		hash, userID, stamp(now.Add(s.opts.SessionTTL)))
+	browser, os := deviceOf(ctx)
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (public_id, token_hash, user_id, created_at, expires_at, browser, os) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		newSessionPublicID(), hash, userID, stamp(now), stamp(now.Add(s.opts.SessionTTL)), browser, os)
 	return token, err
 }
 
+// sessionTouchEvery is the most often a session's last use is written down.
+const sessionTouchEvery = time.Minute
+
 // sessionUser returns the user a session token belongs to, or errNotFound if the token
-// is unknown or expired.
+// is unknown or expired. It records the use, at most once a minute.
 func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 	var u User
+	var id int64
+	var seen string
+	now := s.now()
 	err := s.db.QueryRowContext(ctx, `
-		SELECT u.id, u.email, u.name
+		SELECT u.id, u.email, u.name, s.id, COALESCE(s.last_seen_at, s.created_at)
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`, hashToken(token), stamp(s.now())).
-		Scan(&u.ID, &u.Email, &u.Name)
+		WHERE s.token_hash = ? AND s.expires_at > ?`, hashToken(token), stamp(now)).
+		Scan(&u.ID, &u.Email, &u.Name, &id, &seen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errNotFound
 	}
-	return u, err
+	if err != nil {
+		return u, err
+	}
+	if seen <= stamp(now.Add(-sessionTouchEvery)) {
+		// The cutoff is in the statement too: of two requests that both read the old time, only the
+		// first finds the row still stale, so a session is written once a minute under concurrency.
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE sessions SET last_seen_at = ?
+			WHERE id = ? AND COALESCE(last_seen_at, created_at) <= ?`,
+			stamp(now), id, stamp(now.Add(-sessionTouchEvery))); err != nil {
+			// The request can go ahead: last_seen_at is a hint for the user, not a control.
+			slog.WarnContext(ctx, "auth: recording a session's use", "session_id", id, "err", err)
+		}
+	}
+	return u, nil
 }
 
 func (s *Service) deleteSession(ctx context.Context, token string) error {
@@ -320,7 +343,8 @@ func (s *Service) deleteSession(ctx context.Context, token string) error {
 // endSession logs out the session token belongs to, and records it. A token that is no
 // session, such as one that expired, ends nothing and records nothing.
 func (s *Service) endSession(ctx context.Context, token string) error {
-	return s.write(ctx, func(tx *sql.Tx) error {
+	var ended int64
+	err := s.write(ctx, func(tx *sql.Tx) error {
 		var userID int64
 		// The same test as sessionUser: a session that has expired is no longer a login to
 		// end, even while its row is still there to be swept.
@@ -334,9 +358,14 @@ func (s *Service) endSession(ctx context.Context, token string) error {
 		if err != nil {
 			return err
 		}
+		ended = userID
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.Logout,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil && ended != 0 {
+		s.endLive(ended, token) // this login's open connections go with it
+	}
+	return err
 }
 
 // workspacesOf lists the workspaces userID belongs to, oldest first.
