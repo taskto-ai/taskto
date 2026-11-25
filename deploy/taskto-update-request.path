@@ -1,0 +1,14 @@
+# Installed by deploy/INSTALL.md (step 16), unless TASKTO_UPDATE_CHANNEL=off. Starts
+# taskto-update-request.service when an operator presses "Update now" in Settings → About: the
+# server puts one file in this directory, the one place of the updater's it can write. Only the
+# file's existence starts anything; the service never reads it as arguments (docs/install.md#update-now).
+# Step 16 sets another directory (TASKTO_UPDATE_REQUEST in /etc/taskto/install.env) in a drop-in.
+[Unit]
+Description=TaskTo.AI: an operator asked for an update
+
+[Path]
+PathExists=/var/lib/taskto-update/request/update-now
+Unit=taskto-update-request.service
+
+[Install]
+WantedBy=multi-user.target

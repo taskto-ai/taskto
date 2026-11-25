@@ -1,0 +1,14 @@
+# Installed by deploy/INSTALL.md (step 16). Started by taskto-update-request.path, never by
+# hand or by the timer. Runs deploy/taskto-update.sh for one operator's request: the request is
+# taken and removed first, then it is the nightly run (same channel, same gates, same lock).
+[Unit]
+Description=TaskTo.AI: update now, as an operator asked
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/taskto-update --requested
+# Like the nightly run: an update has no time limit of its own, only its checks'.
+TimeoutStartSec=infinity
