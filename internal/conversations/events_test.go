@@ -443,7 +443,13 @@ func TestEventsSurviveABriefDatabaseError(t *testing.T) {
 	e.rt.watch(t, 0)
 	check := func() sse {
 		t.Helper()
-		ticks <- time.Time{}
+		// A handler that returned without an end line has nobody left to take the tick: fail
+		// instead of waiting for the test binary's timeout.
+		select {
+		case ticks <- time.Time{}:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the stream took no heartbeat: it ended without an end event")
+		}
 		return s.next()
 	}
 	rename := func(from, to string) {
