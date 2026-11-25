@@ -7,6 +7,8 @@ import { CLOSE_DELAY_MS, OPEN_DELAY_MS, Tooltip } from './Tooltip'
 
 beforeEach(() => {
   vi.useFakeTimers()
+  // Each test starts from the keyboard: the last input is heard across the page.
+  fireEvent.keyDown(document, { key: 'Tab' })
 })
 afterEach(() => {
   cleanup()
@@ -80,6 +82,45 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(false)
     // The focus stays where it was.
     expect(document.activeElement).toBe(b)
+  })
+
+  test("doesn't open on the focus a click gives a button", () => {
+    const b = setup()
+    fireEvent.pointerDown(b, { pointerType: 'mouse' })
+    act(() => b.focus())
+    expect(isOpen()).toBe(false)
+  })
+
+  test("doesn't open on a focus the browser doesn't show", () => {
+    const b = setup()
+    const matches = Element.prototype.matches
+    const spy = vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, s: string) {
+      return s === ':focus-visible' ? false : matches.call(this, s)
+    })
+    act(() => b.focus())
+    spy.mockRestore()
+    expect(isOpen()).toBe(false)
+  })
+
+  test("on a text field: opens on the keyboard's focus, not on a click's or a tap's", () => {
+    render(
+      <Tooltip content="Your work email">
+        <input aria-label="Email" />
+      </Tooltip>,
+    )
+    const field = screen.getByRole('textbox', { name: 'Email' })
+    // A text field is :focus-visible on every focus, a click's too: the last input decides.
+    fireEvent.pointerDown(field, { pointerType: 'mouse' })
+    act(() => field.focus())
+    expect(isOpen()).toBe(false)
+    act(() => field.blur())
+    fireEvent.pointerDown(field, { pointerType: 'touch' })
+    act(() => field.focus())
+    expect(isOpen()).toBe(false)
+    act(() => field.blur())
+    fireEvent.keyDown(document, { key: 'Tab' })
+    act(() => field.focus())
+    expect(isOpen()).toBe(true)
   })
 
   test('closes on blur and when the control is pressed', () => {
