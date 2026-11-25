@@ -212,3 +212,66 @@ test('a new page agreed to while a Back is being undone waits for the undoing, a
   expect(window.location.pathname).toBe('/w/1/d')
   expect(getByTestId('path').textContent).toBe('/w/1/d')
 })
+
+test('a page drawn while a Back is being undone shows where the app is, not where the address went', async () => {
+  render(<Page ask={null} />)
+  act(() => navigate('/w/1/b'))
+  act(() => navigate('/w/1/c'))
+  cleanup()
+  const ask = vi.fn()
+  const { getByTestId, rerender } = render(<Page ask={ask} />)
+  let drawn = ''
+  window.addEventListener(
+    'popstate',
+    () => {
+      // The router has heard of the Back and is undoing it; something draws the page meanwhile.
+      act(() => rerender(<Page ask={ask} />))
+      drawn = getByTestId('path').textContent ?? ''
+    },
+    { once: true },
+  )
+  // Not inside act(): the draw in the listener must happen there and then, as a browser's would.
+  window.history.back()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  await settled()
+  expect(ask).toHaveBeenCalled()
+  expect(drawn).toBe('/w/1/c')
+  expect(window.location.pathname).toBe('/w/1/c')
+})
+
+test('an undoing that never lands is given up: the app takes where the address is, and a waiting push numbers from there', async () => {
+  render(<Page ask={null} />)
+  act(() => navigate('/w/1/b'))
+  act(() => navigate('/w/1/c'))
+  cleanup()
+  let hold = true
+  const ask = vi.fn((go: () => void) => {
+    if (!hold) go()
+  })
+  const { getByTestId } = render(<Page ask={ask} />)
+  // The undoing of the next Back is lost (as a move out of the history's range is): no popstate.
+  const lost = vi.spyOn(window.history, 'go').mockImplementationOnce(() => {})
+  window.addEventListener(
+    'popstate',
+    () => {
+      // Meanwhile the page agrees to a new page: it waits for the undoing.
+      hold = false
+      navigate('/w/1/d')
+      hold = true
+    },
+    { once: true },
+  )
+  await act(async () => {
+    window.history.back()
+    await new Promise((resolve) => setTimeout(resolve, 1300))
+  })
+  lost.mockRestore()
+  // Given up: the waiting push went, numbered from the entry the address was on.
+  expect(window.location.pathname).toBe('/w/1/d')
+  expect(getByTestId('path').textContent).toBe('/w/1/d')
+  // So a held Back from it is undone, back onto it.
+  await go(-1)
+  await settled()
+  expect(window.location.pathname).toBe('/w/1/d')
+  expect(getByTestId('path').textContent).toBe('/w/1/d')
+})

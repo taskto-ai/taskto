@@ -63,7 +63,18 @@ const GIVE_UP_MS = 1000
 // Whether the address is on an entry the app didn't number (Back past where it started): the next
 // numbered entry it comes to is where the app is, whatever its number.
 let unnumbered = false
+// The path the app is on, as the pages see it. It is the address, except while an undoing is on its
+// way back to `index`: the address is then somewhere the person hasn't been let go yet.
+let accepted = typeof window === 'undefined' ? '/' : window.location.pathname
 let watching = false
+
+// While the app's own move back to where it is (an undoing) is on its way.
+const undoing = () => flight !== null && flight === index
+
+function snapshot(): string {
+  if (!undoing()) accepted = window.location.pathname
+  return accepted
+}
 
 function numbered(state: unknown): number | undefined {
   const idx = (state as { idx?: unknown } | null)?.idx
@@ -90,7 +101,14 @@ function travel(from: number, to: number) {
   window.history.go(to - from)
   setTimeout(() => {
     if (trip !== mine || flight !== to) return
+    // It never landed: the app takes the entry the address is on as where it is (one it didn't
+    // number included), and tells the pages, before what waited goes on. A push then numbers its
+    // entry from there, so numbers stay the distances the browser moves by.
     flight = null
+    const here = numbered(window.history.state)
+    if (here === undefined) unnumbered = true
+    else index = here
+    moved()
     landed()
   }, GIVE_UP_MS)
 }
@@ -218,7 +236,7 @@ export function navigate(path: string, { replace = false } = {}) {
 }
 
 export function usePath(): string {
-  return useSyncExternalStore(subscribe, () => window.location.pathname)
+  return useSyncExternalStore(subscribe, snapshot)
 }
 
 // 'notifications' is the inbox, the sidebar's entry with the unread count.
