@@ -283,3 +283,21 @@ test('a system colour is a colour literal too, outside a theme', () => {
   expect(theme.err).toBe('')
   expect(theme.code).toBe(0)
 })
+
+test('sees the classes of an array a component builds its className from, whatever its name', () => {
+  const source = `export function A({ big }: { big: boolean }) {
+  const cls = ['ui-a', big ? 'ui-a-big' : '', 'ui-missing'].filter(Boolean).join(' ')
+  return <p className={cls}>x</p>
+}
+`
+  const r = run('.ui-a { color: inherit; }\n.ui-a-big { margin: 0; }\n', { 'A.tsx': source })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain('ui-missing is used but no rule')
+  expect(r.err).not.toContain('ui-a is used')
+  expect(r.err).not.toContain('ui-a-big is used')
+  // An array of words that are not classes is not a problem.
+  const words = run('.ui-a { color: inherit; }\n', {
+    'B.tsx': "const names = ['launch', 'design']\nexport const B = () => <p className=\"ui-a\">{names[0]}</p>\n",
+  })
+  expect(words.code).toBe(0)
+})

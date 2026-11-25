@@ -273,17 +273,28 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   them is 44px.
 - **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
   neutral ground, never half-opacity) and, where they apply, loading and invalid.
-- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules for
-  `button`, `input`, `select`, `textarea` and `a` would beat every component. They skip elements
-  with the class `ui-control` (`:not(:where(.ui-control))`, which adds no specificity): a new
-  control puts that class on its native element.
+- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules that
+  style an element by its name (headings, `p`, `a`, `button`, the fields, a checkbox's or a
+  radio's label, also under `pointer: coarse`) would beat every component. Every element a
+  component draws has a class that starts with `ui-` (a control's native element also has
+  `ui-control`), and each of those rules skips such elements: its subject ends with
+  `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
+  screens' own elements have no `ui-` class, so they are styled as before.
+  `web/src/ui/controlRules.test.tsx` draws every gallery and fails when a rule of `styles.css`
+  reaches one of these elements, or names a `ui-` class outside `:where()`.
+- **Two rules reach every field on purpose:** the caret's colour, and 16px text in a window under
+  48rem (it keeps iOS from zooming in on focus), with a mouse too. A field then has 16px text
+  beside 14px buttons; its height is set by the control scale, not by its text, so a row still
+  lines up. (On a touch screen a field's text is 16px in any window.)
 
 **The gallery.** `pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
 and type roles and every component's specimens, with switches for light and dark, the sample second
 brand and the direction. It collects every `<Name>.gallery.tsx` beside the components
 (`import.meta.glob`), so a new component adds its own file. It exists on the dev server only:
 `main.tsx` opens it under `import.meta.env.DEV`, so a production build has none of its code. The
-query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures.
+query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures. Its text goes through
+`t()` like every screen's (`gallery.*` in the locale files), so the gallery can be seen in each
+language.
 
 ## The buttons
 

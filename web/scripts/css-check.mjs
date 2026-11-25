@@ -22,10 +22,12 @@
 // - In a component, a class is a `tt-` name inside a className: a string, or an expression (a
 //   template, a conditional, a join), and the strings of a lookup table that a constant holds:
 //   `const NAME = { ok: 'tt-ok' }` or `const NAME = ['tt-a', 'tt-b']`, with the name in capitals,
-//   in the same file (a map imported from another file is read there). A string that is only a
-//   class name, in a constant whose name is not in capitals, or in a function's body, or built
-//   from pieces (`'tt-' + kind`), is not seen: such a class has to be written out in the
-//   stylesheet's component anyway, and the check can't tell it is missing.
+//   in the same file (a map imported from another file is read there), and the strings of an
+//   array a constant of any name holds (`const cls = ['ui-a', big ? 'ui-a-big' : '']`, the way the
+//   components build their classes). A string that is only a class name in another kind of
+//   constant (`const cls = 'ui-a'`), or built from pieces (`'tt-' + kind`), is not seen: such a
+//   class has to be written out in the stylesheet's component anyway, and the check can't tell it
+//   is missing.
 //
 // --root <dir> checks another web directory (its src/ and the stylesheets in it), for the script's
 // tests.
@@ -38,7 +40,10 @@ import { fileURLToPath } from 'node:url'
 // and that deliberately have no rule. Each needs a reason; a class that is merely not styled yet
 // gets a rule, not an entry here.
 export const UNSTYLED = new Map([
-  // (none today)
+  [
+    'ui-control',
+    "marks a control's native element (Button, Input, Checkbox …); like every ui- class it keeps the old element rules off, and no rule needs it on its own",
+  ],
 ])
 
 // The app's own classes: `tt-` (the screens) and `ui-` (the design system's components, src/ui/).
@@ -284,7 +289,9 @@ export function blankComments(source) {
 }
 
 function tableClasses(source, used) {
-  for (const m of source.matchAll(/\bconst\s+[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])/g)) {
+  // A table in capitals (an object or an array), or an array a component builds its classes from,
+  // whatever its name: `const cls = ['ui-button', size === 'sm' ? 'ui-button-sm' : '']`.
+  for (const m of source.matchAll(/\bconst\s+(?:[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])|[a-z]\w*\s*=\s*(?=\[))/g)) {
     const start = m.index + m[0].length
     const end = tableEnd(source, start)
     for (const lit of source
