@@ -684,3 +684,37 @@ test('after a failed submit the focus goes to the field the error is about, or e
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
   await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Password')))
 })
+
+test('a challenge that ran out is said for the form, which takes the focus: the code field is off', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: challenged },
+    'POST /api/login/two-factor': { status: 401, body: { error: 'gone', code: 'two_factor_challenge_invalid' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  fireEvent.change(await screen.findByLabelText(codeLabel), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  const alert = await screen.findByRole('alert')
+  const code = screen.getByLabelText(codeLabel)
+  expect(code.getAttribute('aria-invalid')).toBeNull()
+  await vi.waitFor(() => expect(alert.closest('[tabindex="-1"]')).toBe(document.activeElement))
+})
+
+test('an error about a field goes once that field is edited, and stays while another one is', async () => {
+  fakeFetch({ 'POST /api/setup': { status: 403, body: { error: 'wrong token', code: 'setup_token' } } })
+  render(<SetupScreen onDone={() => {}} />)
+  const token = screen.getByLabelText('Setup token')
+  fireEvent.change(token, { target: { value: 'wrong-token' } })
+  fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
+  await screen.findByRole('alert')
+  fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Owner Two' } })
+  expect(token.getAttribute('aria-invalid')).toBe('true')
+  fireEvent.change(token, { target: { value: 'right-token' } })
+  expect(token.getAttribute('aria-invalid')).toBeNull()
+  expect(screen.queryByRole('alert')).toBeNull()
+})

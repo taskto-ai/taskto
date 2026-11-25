@@ -57,12 +57,15 @@ export function AuthLayout({
 export function AuthForm({
   onSubmit,
   failure,
+  onEdit,
   children,
 }: {
   onSubmit: (e: FormEvent) => void
   // The form's last failure: when one comes, the focus goes to the first field it marked
   // invalid, or else to the form's error, so the person lands where there is something to do.
   failure?: object | null
+  // A field of the form changed, by its name: a failure about it can go.
+  onEdit?: (name: string) => void
   children: ReactNode
 }) {
   const ref = useRef<HTMLFormElement>(null)
@@ -74,7 +77,14 @@ export function AuthForm({
     target?.focus()
   }, [failure])
   return (
-    <form ref={ref} className="ui-auth-form" onSubmit={onSubmit}>
+    <form
+      ref={ref}
+      className="ui-auth-form"
+      onSubmit={onSubmit}
+      onChange={(e) => {
+        if (e.target instanceof HTMLInputElement && e.target.name) onEdit?.(e.target.name)
+      }}
+    >
       {children}
     </form>
   )

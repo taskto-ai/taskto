@@ -51,7 +51,6 @@ const FIELD_OF: Record<string, string> = {
   password_too_short: 'password',
   password_too_long: 'password',
   wrong_two_factor_code: 'code',
-  two_factor_challenge_invalid: 'code',
 }
 
 // A field's error, said as soon as it appears, as the form's is.
@@ -78,10 +77,20 @@ const failureOf = (err: unknown): Failure => ({
   code: err instanceof ApiError ? err.code : undefined,
 })
 
+// A failure about one field goes once that field is edited: the value it was about isn't there any
+// more. The form reports which field changed by its name (AuthForm's onEdit), and the names are the
+// ones FIELD_OF gives.
+function useEdited(failure: Failure | null, setFailure: (f: Failure | null) => void) {
+  return (name: string) => {
+    if (failure?.code && FIELD_OF[failure.code] === name) setFailure(null)
+  }
+}
+
 // send may answer null: the step is done but nobody is logged in yet (a login that asks for a code).
 function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
+  const edited = useEdited(failure, setFailure)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
@@ -95,7 +104,7 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
       setBusy(false)
     }
   }
-  return { busy, failure, submit }
+  return { busy, failure, submit, edited }
 }
 
 // How people can sign in on this server (GET /api/login/methods). A server that doesn't know the
@@ -278,14 +287,14 @@ export function SetupScreen({ onDone }: { onDone: (me: Me) => void }) {
   }))
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }))
-  const { busy, failure, submit } = useSubmit(
+  const { busy, failure, submit, edited } = useSubmit(
     () => api<Me>('/api/setup', { method: 'POST', body: { ...form, setup_token: form.setup_token.trim() } }),
     onDone,
   )
   const errors = placed(failure, ['setup_token', 'name', 'email', 'password', 'workspace_name'])
   return (
     <AuthLayout title={t('auth.setup.title')} help={<p>{t('auth.setup.lede')}</p>}>
-      <AuthForm key="setup" failure={failure} onSubmit={submit}>
+      <AuthForm key="setup" failure={failure} onEdit={edited} onSubmit={submit}>
         <Field
           label={t('auth.setup.token')}
           hint={t.rich('auth.setup.tokenHint', { code: (text) => <code className="ui-auth-mono">{text}</code> })}
@@ -352,7 +361,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const [password, setPassword] = useState('')
   // The challenge of a login whose password was right and that now asks for a code.
   const [challenge, setChallenge] = useState<string | null>(null)
-  const { busy, failure, submit } = useSubmit(async () => {
+  const { busy, failure, submit, edited } = useSubmit(async () => {
     const reply = await api<Me | Challenged>('/api/login', {
       method: 'POST',
       body: { email, password },
@@ -390,7 +399,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
       <SsoButtons providers={methods.sso} next={here()} />
       {methods.password && methods.sso.length > 0 && <AuthDivider>{t('auth.sso.or')}</AuthDivider>}
       {methods.password && (
-        <AuthForm key="login" failure={failure} onSubmit={submit}>
+        <AuthForm key="login" failure={failure} onEdit={edited} onSubmit={submit}>
           <EmailField value={email} onChange={setEmail} error={errors.field('email')} />
           <Field label={t('auth.password')} error={errors.field('password')}>
             <PasswordInput
@@ -434,7 +443,7 @@ function TwoFactorStep({
   const [code, setCode] = useState('')
   const [expired, setExpired] = useState(false)
   const [verified, setVerified] = useState<Me | null>(null)
-  const { busy, failure, submit } = useSubmit(async () => {
+  const { busy, failure, submit, edited } = useSubmit(async () => {
     let me = verified
     if (!me) {
       try {
@@ -458,7 +467,7 @@ function TwoFactorStep({
         </Button>
       }
     >
-      <AuthForm key="two-factor" failure={failure} onSubmit={submit}>
+      <AuthForm key="two-factor" failure={failure} onEdit={edited} onSubmit={submit}>
         <Field label={t('auth.twoFactor.code')} hint={t('auth.twoFactor.lost')} error={errors.field('code')}>
           <Input
             name="code"
@@ -490,6 +499,7 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
   const [email, setEmail] = useState(initialEmail)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
+  const edited = useEdited(failure, setFailure)
   const [sentTo, setSentTo] = useState<string | null>(null)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -523,7 +533,7 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
   const errors = placed(failure, ['email'])
   return (
     <AuthLayout title={t('auth.forgot.title')} help={<p>{t('auth.forgot.intro')}</p>} links={back}>
-      <AuthForm key="forgot" failure={failure} onSubmit={submit}>
+      <AuthForm key="forgot" failure={failure} onEdit={edited} onSubmit={submit}>
         <EmailField value={email} onChange={setEmail} error={errors.field('email')} />
         {errors.form}
         <Button type="submit" variant="primary" loading={busy}>
@@ -545,7 +555,7 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   const mismatch = again !== '' && password !== again
   // With two-factor login on the link sets the password and asks for a code: no session before.
   const [challenge, setChallenge] = useState<string | null>(null)
-  const { busy, failure, submit } = useSubmit(async () => {
+  const { busy, failure, submit, edited } = useSubmit(async () => {
     const reply = await api<Me | Challenged>('/api/password-reset', { method: 'POST', body: { token, password } })
     if (needsCode(reply)) {
       setPassword('')
@@ -578,7 +588,12 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   const errors = placed(failure, ['password'])
   return (
     <AuthLayout title={t('auth.reset.title')} help={<p>{t('auth.reset.intro')}</p>}>
-      <AuthForm key="reset" failure={failure} onSubmit={(e) => (mismatch ? e.preventDefault() : submit(e))}>
+      <AuthForm
+        key="reset"
+        failure={failure}
+        onEdit={edited}
+        onSubmit={(e) => (mismatch ? e.preventDefault() : submit(e))}
+      >
         <Field label={t('auth.reset.password')} hint={t('auth.reset.hint')} error={errors.field('password')}>
           <PasswordInput
             name="password"
@@ -634,7 +649,7 @@ export function InviteScreen({
   // An existing account with two-factor login on gets a challenge from the login, not a session:
   // the code comes first, and the invite is accepted after it.
   const [challenge, setChallenge] = useState<string | null>(null)
-  const { busy, failure, submit } = useSubmit(
+  const { busy, failure, submit, edited } = useSubmit(
     async () => {
       if (me) return accept({})
       if (mode === 'login') {
@@ -696,7 +711,7 @@ export function InviteScreen({
           </Button>
         }
       >
-        <AuthForm key="invite-join" failure={failure} onSubmit={submit}>
+        <AuthForm key="invite-join" failure={failure} onEdit={edited} onSubmit={submit}>
           {errors.form}
           <Button type="submit" variant="primary" loading={busy}>
             {t('auth.invite.join')}
@@ -723,7 +738,7 @@ export function InviteScreen({
       <AuthLayout title={t('auth.invite.loginTitle')} help={<p>{t('auth.invite.loginIntro')}</p>}>
         {sso}
         {or}
-        <AuthForm key="invite-login" failure={failure} onSubmit={submit}>
+        <AuthForm key="invite-login" failure={failure} onEdit={edited} onSubmit={submit}>
           <EmailField
             value={form.email}
             onChange={(email) => setForm((f) => ({ ...f, email }))}
@@ -751,7 +766,7 @@ export function InviteScreen({
     <AuthLayout title={t('auth.invite.title')} help={<p>{t('auth.invite.newIntro')}</p>}>
       {sso}
       {or}
-      <AuthForm key="invite-new" failure={failure} onSubmit={submit}>
+      <AuthForm key="invite-new" failure={failure} onEdit={edited} onSubmit={submit}>
         <Field label={t('auth.yourName')} error={errors.field('name')}>
           <Input name="name" value={form.name} onChange={set('name')} required maxLength={100} autoComplete="name" />
         </Field>
