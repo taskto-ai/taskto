@@ -103,6 +103,10 @@ jobs:
       # language still shows in English (docs/i18n.md).
       - name: Translations
         run: pnpm --filter @taskto/web run i18n
+      # Fails on a .tt- selector declared twice at the top level of the stylesheet, and on a
+      # tt- class a component uses that no rule has (web/scripts/css-check.mjs).
+      - name: Stylesheet
+        run: pnpm --filter @taskto/web run css
       - run: pnpm run build
       # Each package's vitest also writes a JSON report, read back by vitest-report, so a
       # failure that happens once in a while can be read afterwards: the log ends with each

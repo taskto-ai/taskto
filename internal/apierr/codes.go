@@ -331,6 +331,9 @@ const (
 	// CodeMailTestRateLimited is a 429: the person sent a test email a moment ago, or the server's
 	// test sends are all busy. Retry-After says how long.
 	CodeMailTestRateLimited Code = "mail_test_rate_limited"
+	// CodeTooManyInviteEmails is a 429: the admin, or the invited address, has had too many
+	// invitations emailed lately. Retry-After says how long.
+	CodeTooManyInviteEmails Code = "too_many_invite_emails"
 
 	// The export of a person's own data (internal/export).
 

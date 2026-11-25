@@ -730,7 +730,7 @@
     "labels": "Labels",
     "noLabels": "No labels.",
     "labelField": "New label",
-    "labelPlaceholder": "design",
+    "labelPlaceholder": "Add a label",
     "addLabel": "Add label",
     "removeLabel": "Remove the label {label}",
     "filters": "Filter the cards",
@@ -1044,7 +1044,8 @@
     "notification_email_verification_invalid": "That confirmation link doesn't work: it was used, has expired, or was replaced by a newer one. Ask for a new link in Settings, Notifications.",
     "notification_email_verification_too_soon": "A link was sent a moment ago. Check your inbox, or try again in {seconds} seconds.",
     "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again.",
-    "too_many_resets": "Too many reset requests: try again later."
+    "too_many_resets": "Too many reset requests: try again later.",
+    "too_many_invite_emails": "Too many invitations emailed: try again later."
   },
   "language": {
     "label": "Language",
@@ -1079,6 +1080,7 @@
         "title": "Email",
         "loading": "Loading…",
         "off": "This server can't send email yet. The person who runs it sets an SMTP server, as the install guide (docs/install.md, Email) explains; until then, reset and invite links are passed on by hand.",
+        "noLinks": "The server doesn't email reset or invite links yet: its operator also has to set public_url, the server's external address, which the links are built on (docs/install.md, Email). Until then, links are passed on by hand.",
         "server": "SMTP server",
         "serverValue": "{host}, port {port}",
         "security": "Connection",
@@ -1162,6 +1164,9 @@
       "inviting": "Inviting…",
       "invite": "Invite",
       "inviteMade": "Send this link to {email}. It is shown only now, works once, and expires {date}.",
+      "inviteSendEmail": "Email the invite link to this address",
+      "inviteEmailed": "The invite was emailed to {email}. You can also send them this link yourself. It is shown only now, works once, and expires {date}.",
+      "inviteEmailFailed": "The invite was made, but the email to {email} couldn't be sent: the server's log says why. Send them this link yourself. It is shown only now, works once, and expires {date}.",
       "inviteLink": "Invite link"
     },
     "password": {
@@ -1616,6 +1621,7 @@
         "workspace_created": "Workspace created",
         "workspace_updated": "Workspace settings changed",
         "invite_created": "Invite sent",
+        "invite_emailed": "Invite emailed",
         "invite_revoked": "Invite withdrawn",
         "invite_accepted": "Invite accepted",
         "member_role_changed": "Member role changed",

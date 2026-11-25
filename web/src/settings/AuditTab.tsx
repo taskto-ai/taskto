@@ -29,6 +29,7 @@ export const AUDIT_ACTIONS = [
   'workspace_created',
   'workspace_updated',
   'invite_created',
+  'invite_emailed',
   'invite_revoked',
   'invite_accepted',
   'member_role_changed',
@@ -244,7 +245,7 @@ export function AuditTab({ workspace }: { workspace: number }) {
           <p className="tt-muted">{t(filtered ? 'settings.audit.noMatches' : 'settings.audit.empty')}</p>
         )}
         {events.length > 0 && (
-          <ul className="tt-rows tt-audit-events" aria-label={t('settings.audit.title')}>
+          <ul className="tt-rows" aria-label={t('settings.audit.title')}>
             {events.map((e) => (
               <Event key={e.id} e={e} />
             ))}

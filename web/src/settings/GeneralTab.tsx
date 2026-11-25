@@ -111,6 +111,7 @@ function MailPanel({ workspace, email }: { workspace: number; email: string }) {
               {m.password === 'set' ? t('settings.general.mail.signInSet') : t('settings.general.mail.signInNone')}
             </dd>
           </dl>
+          {m.sends_links === false && <p className="tt-muted">{t('settings.general.mail.noLinks')}</p>}
           <div>
             <button type="button" className="tt-button" disabled={busy} onClick={send}>
               {busy ? t('settings.general.mail.testing') : t('settings.general.mail.test')}

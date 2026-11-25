@@ -734,7 +734,7 @@
     "labels": "Etiquetas",
     "noLabels": "Sem etiquetas.",
     "labelField": "Nova etiqueta",
-    "labelPlaceholder": "design",
+    "labelPlaceholder": "Adicionar uma etiqueta",
     "addLabel": "Adicionar etiqueta",
     "removeLabel": "Remover a etiqueta {label}",
     "filters": "Filtrar os cartões",
@@ -1048,7 +1048,8 @@
     "notification_email_verification_invalid": "Esse link de confirmação não funciona: já foi usado, expirou ou foi substituído por um mais novo. Peça um novo em Configurações, Notificações.",
     "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
     "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo.",
-    "too_many_resets": "Muitos pedidos de redefinição: tente de novo mais tarde."
+    "too_many_resets": "Muitos pedidos de redefinição: tente de novo mais tarde.",
+    "too_many_invite_emails": "Muitos convites enviados por e-mail: tente de novo mais tarde."
   },
   "language": {
     "label": "Idioma",
@@ -1083,6 +1084,7 @@
         "title": "E-mail",
         "loading": "Carregando…",
         "off": "Este servidor ainda não consegue enviar e-mail. Quem o administra define um servidor SMTP, como explica o guia de instalação (docs/install.md, Email); até lá, os links de redefinição e de convite são repassados à mão.",
+        "noLinks": "O servidor ainda não envia links de redefinição ou de convite por e-mail: quem o administra também precisa definir public_url, o endereço externo do servidor, em que os links são montados (docs/install.md, Email). Até lá, os links são repassados à mão.",
         "server": "Servidor SMTP",
         "serverValue": "{host}, porta {port}",
         "security": "Conexão",
@@ -1167,6 +1169,9 @@
       "inviting": "Convidando…",
       "invite": "Convidar",
       "inviteMade": "Envie este link para {email}. Ele só é mostrado agora, funciona uma vez e expira em {date}.",
+      "inviteSendEmail": "Enviar o link do convite por e-mail para este endereço",
+      "inviteEmailed": "O convite foi enviado por e-mail para {email}. Você também pode enviar este link a essa pessoa. Ele é mostrado só agora, funciona uma vez e expira em {date}.",
+      "inviteEmailFailed": "O convite foi criado, mas não foi possível enviar o e-mail para {email}: o log do servidor diz por quê. Envie este link a essa pessoa. Ele é mostrado só agora, funciona uma vez e expira em {date}.",
       "inviteLink": "Link do convite"
     },
     "password": {
@@ -1628,6 +1633,7 @@
         "workspace_created": "Espaço de trabalho criado",
         "workspace_updated": "Configurações do espaço de trabalho alteradas",
         "invite_created": "Convite enviado",
+        "invite_emailed": "Convite enviado por e-mail",
         "invite_revoked": "Convite cancelado",
         "invite_accepted": "Convite aceito",
         "member_role_changed": "Papel de um membro alterado",
