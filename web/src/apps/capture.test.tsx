@@ -344,10 +344,7 @@ test('touch-action: none is set on the signature pad and nowhere else in the app
   }
   walk(join(import.meta.dirname, '..'))
   // The stylesheet rule for the pad's class, and the pad's own inline style.
-  expect(found.sort()).toEqual([
-    'apps/SignaturePad.tsx',
-    'apps/capture.css',
-  ])
+  expect(found.sort()).toEqual(['apps/SignaturePad.tsx', 'apps/capture.css'])
   for (const file of found.filter((f) => f.endsWith('.css'))) {
     const css = readFileSync(join(import.meta.dirname, '..', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
     const selectors = [...css.matchAll(/([^{}]+)\{[^}]*touch-action:\s*none[^}]*\}/g)].map((m) => m[1].trim())
