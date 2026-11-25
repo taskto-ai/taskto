@@ -223,6 +223,13 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 			return RecordResults{}, err
 		}
 		if !slices.Equal(now.all, reach.all) || !slices.Equal(now.own, reach.own) {
+			// A later page's offset counts the records read under the old access: it can't be
+			// applied to the new, or the records between would be skipped and the page called
+			// complete. The caller starts again from the first page.
+			if q.Offset > 0 {
+				res.Incomplete = true
+				return res, nil
+			}
 			reach = now
 			if reach.none() {
 				return res, nil

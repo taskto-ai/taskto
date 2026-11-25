@@ -426,14 +426,86 @@ func TestAnOlderTranscriptReadNeverReplacesANewerOne(t *testing.T) {
 type holdingSource struct {
 	*fakeTranscripts
 	text   string
+	err    error // what the read answers instead of text, when set
 	during func()
 	once   sync.Once
 }
 
 func (h *holdingSource) Transcript(_ context.Context, _ int64) (string, error) {
-	text := h.text
+	text, err := h.text, h.err
 	h.once.Do(h.during)
-	return text, nil
+	return text, err
+}
+
+// reuseID removes conversation c, which is being read, and gives its ID to a new conversation of
+// bob's (as the table does once the highest ID is gone), whose agent runtime conversation has text.
+func (w *world) reuseID(c int64, src *fakeTranscripts, text string) int64 {
+	w.e.t.Helper()
+	if _, err := w.e.db.Exec(`DELETE FROM conversations WHERE id = ?`, c); err != nil {
+		w.e.t.Fatal(err)
+	}
+	nextAgent++
+	if _, err := w.e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, ?, 'Bob''s plans')`,
+		c, w.ws, w.bob.id, nextAgent); err != nil {
+		w.e.t.Fatal(err)
+	}
+	src.set(nextAgent, text)
+	return nextAgent
+}
+
+// A read of a conversation that is removed meanwhile is never written onto another conversation
+// that has taken its ID: not its text, and not its being gone.
+func TestConversationIDsReusedNeverTakeAnotherOnesTranscript(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"a transcript", nil}, {"a conversation gone", conversations.ErrGone}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			src := newFakeTranscripts()
+			w.e.idx.SetConversations(src)
+			c := w.conversation(w.alice, w.ws, "Alice's trip", "alice's secret about quokkas", src)
+
+			held := &holdingSource{fakeTranscripts: src, text: "alice's secret about quokkas", err: tc.err}
+			held.during = func() { w.reuseID(c, src, "bob's words about numbats") }
+			if _, err := w.e.idx.syncConversations(ctx, held, w.alice.id, w.ws, 0); err != nil {
+				t.Fatal(err)
+			}
+			// Bob's conversation is still waiting to be indexed from his own transcript.
+			var queued int
+			if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue WHERE conversation_id = ?`, c).Scan(&queued); err != nil || queued != 1 {
+				t.Fatalf("bob's conversation queued = %d, %v", queued, err)
+			}
+			var indexed int
+			if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_fts WHERE rowid = ?`, c).Scan(&indexed); err != nil || indexed != 0 {
+				t.Fatalf("bob's conversation has index rows from alice's read: %d, %v", indexed, err)
+			}
+			wantConversations(t, "bob, alice's words", w.searchConversations(w.bob, w.ws, "quokkas"))
+			wantConversations(t, "bob, his words", w.searchConversations(w.bob, w.ws, "numbats"), "Bob's plans")
+			wantConversations(t, "alice", w.searchConversations(w.alice, w.ws, "quokkas"))
+		})
+	}
+}
+
+// A disabled account finds nothing of its conversations, as every route to them refuses it, and
+// finds them again when it is enabled.
+func TestConversationSearchRefusesADisabledAccount(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	w.conversation(w.alice, w.ws, "Alice's trip", "plan the zanzibar trip", src)
+	wantConversations(t, "alice", w.searchConversations(w.alice, w.ws, "zanzibar"), "Alice's trip")
+
+	if _, err := w.e.db.Exec(`UPDATE users SET disabled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, w.alice.id); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := w.e.idx.SearchConversations(ctx, w.alice.id, w.ws, Query{Text: "zanzibar"}); err != nil || len(r.Results) != 0 {
+		t.Fatalf("a disabled account found %+v, %v", r, err)
+	}
+	if _, err := w.e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, w.alice.id); err != nil {
+		t.Fatal(err)
+	}
+	wantConversations(t, "alice, enabled again", w.searchConversations(w.alice, w.ws, "zanzibar"), "Alice's trip")
 }
 
 // A mark of a conversation always has a number nobody had before, also after the queue's entry

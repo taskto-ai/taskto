@@ -530,6 +530,41 @@ func TestRecordSearchHasNoOffsetAfterLosingTheSpace(t *testing.T) {
 	}
 }
 
+// An offset counts the records read under the access the first page had. If the caller's access
+// changes while a later page is searched, that page can't be counted again under the new: it says
+// it is incomplete, with nothing and no offset, instead of skipping records the caller reads.
+func TestRecordSearchLaterPageIsIncompleteWhenAccessChanges(t *testing.T) {
+	w := newWorld(t)
+	w.addMember(w.team, w.mallory, access.RoleEditor)
+	a := w.newApp(w.alice, w.team, "Team expenses", true)
+	w.setAppRoles(w.alice, w.team, a, roleOf(w.alice, access.AppRoles...), roleOf(w.mallory, access.AppReader))
+	for i := range 3 {
+		w.addRecord(w.alice, w.team, a, fmt.Sprintf("zanzibar %d", i))
+	}
+	for i := range 2 {
+		if _, err := w.e.db.Exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, ?, ?)`,
+			a.ID, fmt.Sprintf(`{"description":"zanzibar mine %d","amount":1}`, i), w.mallory.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := w.recordsTarget(nil, "zanzibar") + "&limit=2"
+	first := decode[recordsReply](t, w.mallory.do(http.MethodGet, target, nil))
+	if len(first.Results) != 2 || first.NextOffset == nil || first.Incomplete {
+		t.Fatalf("first page = %+v", first)
+	}
+	// Her role becomes the user's (only her own records) while the second page is searched.
+	w.e.idx.afterRecordSync = func() {
+		if _, err := w.e.db.Exec(`UPDATE app_roles SET role = 'user' WHERE app_id = ? AND user_id = ?`, a.ID, w.mallory.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { w.e.idx.afterRecordSync = nil }()
+	second := decode[recordsReply](t, w.mallory.do(http.MethodGet, fmt.Sprintf("%s&offset=%d", target, *first.NextOffset), nil))
+	if !second.Incomplete || len(second.Results) != 0 || second.NextOffset != nil {
+		t.Fatalf("second page after her access changed = %+v", second)
+	}
+}
+
 // A search indexes only so many records before it answers, and leaves the rest queued, which it
 // finds behind: the background sync does the rest.
 func TestRecordSyncStopsAtItsLimit(t *testing.T) {

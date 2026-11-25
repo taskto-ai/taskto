@@ -1872,7 +1872,9 @@ quotes text older than the record. As for cards, a search that still finds some 
 `"incomplete": true`, leaves them out, and has no `next_offset`; only the records the caller
 may read can make it so; so can a search that is over its allowance (2,000 records and 20 seconds in
 all, however often it looks again), and a change of the caller's own access while it runs makes it look
-again with the new access, so it never says anything of records the caller no longer reads. An app that moves to another space is searched under the access to
+again with the new access, so it never says anything of records the caller no longer reads (a later
+page, whose `offset` counted records under the old access, is then `"incomplete": true` with no results and no
+`next_offset`: start again from the first page). An app that moves to another space is searched under the access to
 the space it is in then, and who may read what is checked again, through the same checks, after the
 records are found.
 
@@ -1913,7 +1915,7 @@ A person's own conversations with the agent are searched apart too, by full text
 conversation's title, and what was said in it (the person's messages and the agent's, as the
 agent runtime's transcript has them; not the system's instructions and not what a tool returned,
 and only the newest 256 KiB of a long conversation). Conversations are private to their owner:
-only the caller's own, in this workspace, as a member of it, are found, archived ones too, whoever
+only the caller's own, in this workspace, as a member of it whose account isn't disabled, are found, archived ones too, whoever
 else is in the workspace, and an administrator's included. They are never sent to an embeddings
 endpoint. A conversation whose title has every word of the query comes first, then the others, the
 conversation updated last first within each; no score is returned.

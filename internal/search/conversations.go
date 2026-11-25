@@ -113,10 +113,12 @@ const conversationSnippetSQL = `CASE WHEN c.id IN (SELECT rowid FROM search_conv
 	ELSE '' END`
 
 // ownConversationSQL is the condition on a row c of conversations that makes it userID's, in
-// workspaceID, who must be a member there: the condition every route to a conversation makes
-// (conversations.Service.find), so a search finds nothing a route would refuse.
+// workspaceID, who must be a member there and whose account isn't disabled: the condition every
+// route to a conversation makes (conversations.Service.find), so a search finds nothing a route
+// would refuse.
 const ownConversationSQL = `c.workspace_id = ? AND c.owner_id = ?
-	AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)`
+	AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)
+	AND EXISTS (SELECT 1 FROM users u WHERE u.id = c.owner_id AND u.disabled_at IS NULL)`
 
 // SearchConversations finds the conversations matching q that userID owns in workspaceID, and
 // no one else's, as a member of it. The ownership is part of the statement that finds them, so
@@ -382,18 +384,25 @@ func (x *Index) queuedConversations(ctx context.Context, everyone bool, userID, 
 // written. If it was marked, what was read is old, and whoever read after the mark (or the next
 // sync) writes the index: an older read never replaces a newer one's text. A conversation the
 // agent runtime no longer has (gone) leaves the index. One that was removed meanwhile is left alone.
+//
+// A conversation's ID can be taken by another conversation once it is removed (the table doesn't
+// number past the highest), and that one starts again at revision 1. So what was read is only
+// ever written onto the conversation it was read for: the agent runtime's ID, which is unique
+// and never changes (the schema forbids it), is read in this transaction too and must be qc's,
+// whether the read gave a text or found the conversation gone. A mismatch leaves the new
+// conversation's index and queue entry as they are.
 func indexConversation(ctx context.Context, tx *sql.Tx, qc queuedConversation, text string, gone bool) error {
 	var title string
-	var revision int64
-	err := tx.QueryRowContext(ctx, `SELECT c.title, rv.revision FROM conversations c
-		JOIN search_conversation_revisions rv ON rv.conversation_id = c.id WHERE c.id = ?`, qc.id).Scan(&title, &revision)
+	var revision, agentID int64
+	err := tx.QueryRowContext(ctx, `SELECT c.title, c.agent_id, rv.revision FROM conversations c
+		JOIN search_conversation_revisions rv ON rv.conversation_id = c.id WHERE c.id = ?`, qc.id).Scan(&title, &agentID, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if revision != qc.revision {
+	if agentID != qc.agentID || revision != qc.revision {
 		return nil
 	}
 	if !gone {
