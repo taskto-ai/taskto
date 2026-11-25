@@ -119,6 +119,10 @@ type Definition struct {
 	// ConversationOnly tools are the conversation agent's alone, not listed over MCP: the
 	// agent browser's, whose hand-over to the user happens in a conversation.
 	ConversationOnly bool `json:"conversation_only,omitempty"`
+	// NoToken tools are offered in conversations (to the agent, and to the CLIs of their turns)
+	// but not at the access tokens' MCP endpoint: they read what only a conversation's owner
+	// reads, in a conversation, such as their other conversations.
+	NoToken bool `json:"no_token,omitempty"`
 }
 
 // Definitions returns the tools, in the order of tools.json.
@@ -134,38 +138,40 @@ func Definitions() []Definition {
 func New(o Options) *Service {
 	s := &Service{o: o}
 	s.tools = map[string]tool{
-		"list_spaces":      s.listSpaces,
-		"list_members":     s.listMembers,
-		"search_docs":      s.searchDocs,
-		"search_cards":     s.searchCards,
-		"list_docs":        s.listDocs,
-		"read_doc":         s.readDoc,
-		"write_doc":        s.writeDoc,
-		"move_doc":         s.moveDoc,
-		"delete_doc":       s.deleteDoc,
-		"doc_history":      s.docHistory,
-		"restore_doc":      s.restoreDoc,
-		"list_boards":      s.listBoards,
-		"list_cards":       s.listCards,
-		"show_card":        s.showCard,
-		"create_card":      s.createCard,
-		"update_card":      s.updateCard,
-		"move_card":        s.moveCard,
-		"comment_card":     s.commentCard,
-		"set_blocked":      s.setBlocked,
-		"create_board":     s.createBoard,
-		"update_board":     s.updateBoard,
-		"archive_card":     s.archiveCard,
-		"restore_card":     s.restoreCard,
-		"app_catalog":      s.appCatalog,
-		"list_apps":        s.listApps,
-		"show_app":         s.showApp,
-		"list_app_rows":    s.listAppRows,
-		"query_app_rows":   s.queryAppRows,
-		"create_app":       s.createApp,
-		"update_app":       s.updateApp,
-		"list_app_actions": s.listAppActions,
-		"run_app_action":   s.runAppAction,
+		"list_spaces":          s.listSpaces,
+		"list_members":         s.listMembers,
+		"search_docs":          s.searchDocs,
+		"search_cards":         s.searchCards,
+		"search_records":       s.searchRecords,
+		"search_conversations": s.searchConversations,
+		"list_docs":            s.listDocs,
+		"read_doc":             s.readDoc,
+		"write_doc":            s.writeDoc,
+		"move_doc":             s.moveDoc,
+		"delete_doc":           s.deleteDoc,
+		"doc_history":          s.docHistory,
+		"restore_doc":          s.restoreDoc,
+		"list_boards":          s.listBoards,
+		"list_cards":           s.listCards,
+		"show_card":            s.showCard,
+		"create_card":          s.createCard,
+		"update_card":          s.updateCard,
+		"move_card":            s.moveCard,
+		"comment_card":         s.commentCard,
+		"set_blocked":          s.setBlocked,
+		"create_board":         s.createBoard,
+		"update_board":         s.updateBoard,
+		"archive_card":         s.archiveCard,
+		"restore_card":         s.restoreCard,
+		"app_catalog":          s.appCatalog,
+		"list_apps":            s.listApps,
+		"show_app":             s.showApp,
+		"list_app_rows":        s.listAppRows,
+		"query_app_rows":       s.queryAppRows,
+		"create_app":           s.createApp,
+		"update_app":           s.updateApp,
+		"list_app_actions":     s.listAppActions,
+		"run_app_action":       s.runAppAction,
 
 		"list_app_templates":   s.listAppTemplates,
 		"install_app_template": s.installAppTemplate,

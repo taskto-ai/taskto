@@ -11,7 +11,7 @@
     border: 0;
     background: none;
     overflow: visible;
-    inline-size: min(380px, calc(100vw - var(--space-8)));
+    inline-size: min(var(--width-toast), calc(100vw - var(--space-8)));
     pointer-events: none;
   }
 
@@ -20,13 +20,20 @@
     gap: var(--space-2);
   }
 
-  .ui-toaster-region {
-    display: grid;
-    gap: var(--space-2);
+  /* What holds the stack in the page (<body>, or the topmost modal dialog), and the root the first
+     toast() draws one in: no box of their own. */
+  .ui-toaster-host,
+  .ui-toaster-root {
+    display: contents;
   }
 
-  .ui-toaster-region:empty {
-    display: none;
+  /* The live regions a screen reader hears: out of sight (with ui-visually-hidden). */
+  .ui-toaster-announcer {
+    pointer-events: none;
+  }
+
+  .ui-toaster-said {
+    margin: 0;
   }
 
   .ui-toast {
@@ -34,8 +41,9 @@
     display: flex;
     align-items: center;
     gap: var(--space-2) var(--space-3);
-    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
-    border: 1px solid var(--color-border);
+    padding-block: var(--space-2);
+    padding-inline: var(--space-4) var(--space-2);
+    border: var(--line-thin) solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
     color: var(--color-text);
@@ -47,7 +55,7 @@
   @keyframes ui-toast-in {
     from {
       opacity: 0;
-      transform: translateY(8px);
+      transform: translateY(var(--space-2));
     }
   }
 
@@ -71,7 +79,7 @@
     overflow-wrap: anywhere;
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 40rem) {
     .ui-toaster {
       inset-inline: var(--space-4);
       inline-size: auto;

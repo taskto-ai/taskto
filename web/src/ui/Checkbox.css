@@ -31,17 +31,6 @@
       border-color var(--duration-fast) var(--ease-out);
   }
 
-  .ui-check-box::after {
-    content: "";
-    box-sizing: border-box;
-    inline-size: calc(var(--mark-check) / 2);
-    block-size: calc(var(--mark-check) / 4);
-    border: solid transparent;
-    border-width: 0 0 var(--line-strong) var(--line-strong);
-    rotate: -45deg;
-    translate: 0 -1px;
-  }
-
   .ui-check:hover .ui-check-box:not(:disabled) {
     border-color: var(--color-text);
   }
@@ -57,15 +46,28 @@
     background: var(--color-text);
   }
 
+  /* The mark is drawn only when there is one. A mark drawn always with a transparent edge would
+     show in forced colours, where the browser paints every edge in the system's colour. */
   .ui-check-box:checked::after {
+    content: "";
+    box-sizing: border-box;
+    inline-size: calc(var(--mark-check) / 2);
+    block-size: calc(var(--mark-check) / 4);
+    border-style: solid;
     border-color: var(--color-bg);
-    border-width: 0 0 var(--line-focus-offset) var(--line-focus-offset);
+    border-width: 0 0 var(--mark-stroke) var(--mark-stroke);
+    rotate: -45deg;
+    translate: 0 calc(var(--line-thin) * -1);
   }
 
   .ui-check-box:indeterminate::after {
+    content: "";
+    box-sizing: border-box;
+    inline-size: calc(var(--mark-check) / 2);
     block-size: 0;
+    border-style: solid;
     border-color: var(--color-bg);
-    border-width: 0 0 var(--line-focus-offset);
+    border-width: 0 0 var(--mark-stroke);
     rotate: none;
     translate: none;
   }

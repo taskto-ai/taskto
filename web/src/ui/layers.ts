@@ -27,6 +27,15 @@ export function modalClosed(dialog: HTMLElement): void {
   changed()
 }
 
+// A modal the browser closed and the component opened again: it is the topmost again (another
+// may have opened meanwhile), and what must stay above it (the toasts) goes back on top.
+export function modalReopened(dialog: HTMLElement): void {
+  const i = modals.lastIndexOf(dialog)
+  if (i >= 0) modals.splice(i, 1)
+  modals.push(dialog)
+  changed()
+}
+
 export function modalOpen(): boolean {
   return modals.length > 0
 }
@@ -48,8 +57,14 @@ export function onModalChange(fn: () => void): () => void {
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]'
 
+// Not one inside an inert or hidden part, nor one the browser doesn't draw (display: none, or
+// visibility: hidden), where the browser can tell (checkVisibility).
 export function focusables(root: Element): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.closest('[inert]'))
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) =>
+      !el.closest('[inert], [hidden]') &&
+      (typeof el.checkVisibility !== 'function' || el.checkVisibility({ visibilityProperty: true })),
+  )
 }
 
 // Focus an element that may have gone, or be inert, since it was remembered.

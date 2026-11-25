@@ -1862,6 +1862,8 @@
     "newWorkspace": "New workspace",
     "newWorkspaceName": "Name of the new workspace",
     "createWorkspace": "Create workspace",
+    "workspaceCreated": "“{name}” was created.",
+    "openWorkspace": "Open it",
     "sectionsNav": "Sections",
     "theme": {
       "label": "Theme",
@@ -2015,6 +2017,26 @@
       "searching": "Searching the boards’ cards…",
       "failed": "The boards’ cards could not be searched: {error}",
       "incomplete": "Some cards changed just now and are not in these results. Search again in a moment."
+    },
+    "records": {
+      "title": "Records",
+      "label": "Records found",
+      "in": "{space} · {app}",
+      "more": "More records",
+      "searching": "Searching the apps’ records…",
+      "failed": "The apps’ records could not be searched: {error}",
+      "incomplete": "Some records changed just now and are not in these results. Search again in a moment."
+    },
+    "conversations": {
+      "title": "Conversations",
+      "label": "Conversations found",
+      "untitled": "Untitled conversation",
+      "updated": "Updated {when}",
+      "archivedAt": "Archived · updated {when}",
+      "more": "More conversations",
+      "searching": "Searching your conversations…",
+      "failed": "Your conversations could not be searched: {error}",
+      "incomplete": "Some conversations changed just now, or the agent could not be reached, so they are not in these results. Search again in a moment."
     },
     "notice": {
       "embeddings_off": "Semantic search is off: no embeddings model is set for this workspace. These are full-text results.",
@@ -2531,7 +2553,8 @@
     "close": "Close",
     "moreActions": "More actions",
     "dismiss": "Dismiss",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Design system",
@@ -2714,10 +2737,6 @@
       "duplicateDisabled": "Duplicate (disabled)",
       "dialog": "Modal: the page behind is inert; Escape closes it",
       "openDialog": "Open a dialog",
-      "openGuard": "Open one that must be answered",
-      "guardTitle": "The account changed",
-      "guardHelp": "No close button, and Escape does nothing: only its answer closes it.",
-      "guardAnswer": "Reload this page",
       "renameApp": "Rename the app",
       "renameHelp": "The new name shows in the menu and on Home.",
       "showToastOver": "Show a toast over it",
@@ -2757,7 +2776,9 @@
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
       "addColumn": "Add a column",
-      "headings": "Sizes from the type roles: the display face from 20px up, Inter below"
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "busyAsk": "Delete, then fail…",
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
     }
   }
 }

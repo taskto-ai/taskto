@@ -3,14 +3,21 @@
 // and actions, and a close button.
 //
 // It is open while it is drawn with `open`: the screen holds the state and closes it in
-// `onClose`, which Escape and the close button call. When it opens, the focus goes to the
-// element marked data-autofocus, or else the first one that takes it in the body, or else the
-// dialog; when it closes, the focus goes back to where it was.
+// `onClose`, which Escape and the close button call (and a press outside it, with
+// `closeOnOutsidePress`). When it opens, the focus goes to the element marked data-autofocus
+// that can take it, or else the first one that takes it in the body, or else in the actions, or
+// else the dialog; when it closes, the focus goes back to where it was.
+//
+// The screen may keep it open (it is saving: ConfirmDialog's `busy`), so Escape only asks. But a
+// browser lets a page refuse Escape once per press of the person's, and closes the <dialog> on
+// the next one whatever the page says. Then the screen is told, and if it still draws the dialog
+// open, the dialog opens again at once, with the focus chosen as on the first opening: what is
+// drawn and what the browser shows never part.
 
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef } from 'react'
+import { type MouseEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n'
 import { IconButton } from './IconButton'
-import { focusables, modalClosed, modalOpened, refocus } from './layers'
+import { focusables, modalClosed, modalOpened, modalReopened, refocus } from './layers'
 import './Dialog.css'
 
 export interface DialogProps {
@@ -29,27 +36,34 @@ export interface DialogProps {
   // False for a question that has no way out but its answers (a guard before anything else is
   // shown): no close button, and Escape does nothing. onClose is then never called.
   dismissible?: boolean
-}
-
-// What takes the focus when the dialog opens: the element marked data-autofocus, else the first
-// that takes it in the body, then in the actions, else the dialog. Not the close button, which
-// comes first: what the dialog is for.
-function focusFirst(dialog: HTMLDialogElement) {
-  const firstIn = (selector: string) => {
-    const part = dialog.querySelector(selector)
-    return part ? focusables(part)[0] : undefined
-  }
-  const first =
-    dialog.querySelector<HTMLElement>('[data-autofocus]') ??
-    firstIn('.ui-dialog-body') ??
-    firstIn('.ui-dialog-actions') ??
-    dialog
-  first.focus()
+  // A press on the dimmed page around it closes it too. Off by default: a form loses nothing to a
+  // stray click.
+  closeOnOutsidePress?: boolean
 }
 
 export function Dialog(props: DialogProps) {
   if (!props.open) return null
   return <OpenDialog {...props} />
+}
+
+// Where the focus goes when the dialog opens: not the close button, which comes first, but what
+// the dialog is for. Each candidate is tried in turn until one takes the focus (one can be hidden
+// or disabled); the dialog itself is the last.
+function focusFirst(dialog: HTMLDialogElement) {
+  const within = (selector: string) => {
+    const part = dialog.querySelector(selector)
+    return part ? focusables(part) : []
+  }
+  const candidates = [
+    ...[...dialog.querySelectorAll<HTMLElement>('[data-autofocus]')],
+    ...within('.ui-dialog-body'),
+    ...within('.ui-dialog-actions'),
+    dialog,
+  ]
+  for (const el of candidates) {
+    el.focus()
+    if (document.activeElement === el) return
+  }
 }
 
 function OpenDialog({
@@ -61,15 +75,19 @@ function OpenDialog({
   size = 'md',
   role,
   dismissible = true,
+  closeOnOutsidePress = false,
 }: DialogProps) {
   const t = useT()
   const ref = useRef<HTMLDialogElement>(null)
   const id = useId()
-  // The latest onClose, for the listeners set up once.
+  // The latest committed props, for the listeners set up once: written after each commit, so a
+  // render that never commits (a transition that suspends) can't change what Escape does.
   const close = useRef(onClose)
-  close.current = onClose
   const canClose = useRef(dismissible)
-  canClose.current = dismissible
+  useLayoutEffect(() => {
+    close.current = onClose
+    canClose.current = dismissible
+  })
 
   useLayoutEffect(() => {
     const dialog = ref.current
@@ -88,34 +106,52 @@ function OpenDialog({
   useEffect(() => {
     const dialog = ref.current
     if (!dialog) return
+    let mounted = true
+    let reopening: ReturnType<typeof setTimeout> | undefined
     // Escape: the screen decides (it may be saving).
     const cancel = (e: Event) => {
       e.preventDefault()
       if (canClose.current) close.current()
     }
-    // The browser closed it itself (a second Escape it doesn't let a page refuse).
-    // A close event comes in a task of its own, so it can be the late echo of a close this
-    // component made and has already undone (StrictMode's second mount opens it again): only a
-    // dialog that is still closed tells the screen.
-    // One that can't be dismissed is opened again: what it guards stays behind it.
+    // The browser closed it itself (an Escape it doesn't let a page refuse). A close event comes
+    // in a task of its own, so it can be the late echo of a close this component made and has
+    // already undone (StrictMode's second mount opens it again): only a dialog that is still
+    // closed counts. The screen is told; if it still draws the dialog after it has had its say
+    // (this component is still mounted a task later), the dialog opens again. One that can't be
+    // dismissed opens again without asking.
+    const reopen = () => {
+      if (!mounted || dialog.open || !dialog.isConnected) return
+      dialog.showModal()
+      focusFirst(dialog)
+      modalReopened(dialog)
+    }
     const closed = () => {
       if (dialog.open) return
-      if (canClose.current) close.current()
-      else if (dialog.isConnected) {
-        dialog.showModal()
-        // The browser would focus the first button it finds, which may be the destructive one.
-        focusFirst(dialog)
-      }
+      clearTimeout(reopening)
+      if (!canClose.current) return reopen()
+      close.current()
+      reopening = setTimeout(reopen)
     }
     dialog.addEventListener('cancel', cancel)
     dialog.addEventListener('close', closed)
     return () => {
+      mounted = false
+      clearTimeout(reopening)
       dialog.removeEventListener('cancel', cancel)
       dialog.removeEventListener('close', closed)
     }
   }, [])
 
+  // A press on the backdrop is a click on the <dialog> itself, outside its box.
+  const pressOutside = (e: MouseEvent<HTMLDialogElement>) => {
+    if (!closeOnOutsidePress || !canClose.current || e.target !== e.currentTarget) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+    if (!inside) close.current()
+  }
+
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape is the keyboard's way out, handled as `cancel`
     <dialog
       ref={ref}
       className="ui-dialog"
@@ -125,6 +161,7 @@ function OpenDialog({
       aria-describedby={description ? `${id}-description` : undefined}
       // Focus that lands on the dialog itself shows no ring.
       tabIndex={-1}
+      onClick={pressOutside}
     >
       {/* Not a <header>: that would be a banner, a landmark of the page, which a dialog's top is not. */}
       <div className="ui-dialog-header">

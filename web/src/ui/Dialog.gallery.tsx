@@ -12,26 +12,9 @@ export const title = 'Dialog'
 export default function DialogGallery() {
   const t = useT()
   const [open, setOpen] = useState(false)
-  const [guard, setGuard] = useState(false)
   return (
     <Specimen caption={t('gallery.layout.dialog')}>
       <Button onClick={() => setOpen(true)}>{t('gallery.layout.openDialog')}</Button>
-      <Button onClick={() => setGuard(true)}>{t('gallery.layout.openGuard')}</Button>
-      <Dialog
-        open={guard}
-        onClose={() => undefined}
-        dismissible={false}
-        role="alertdialog"
-        size="sm"
-        title={t('gallery.layout.guardTitle')}
-        actions={
-          <Button variant="primary" onClick={() => setGuard(false)}>
-            {t('gallery.layout.guardAnswer')}
-          </Button>
-        }
-      >
-        <p>{t('gallery.layout.guardHelp')}</p>
-      </Dialog>
       <Dialog
         open={open}
         onClose={() => setOpen(false)}

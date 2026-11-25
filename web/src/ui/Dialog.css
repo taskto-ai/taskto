@@ -1,11 +1,11 @@
 @layer components {
   .ui-dialog {
     box-sizing: border-box;
-    inline-size: min(560px, calc(100vw - var(--space-8)));
+    inline-size: min(var(--width-dialog-md), calc(100vw - var(--space-8)));
     max-block-size: calc(100dvh - var(--space-8));
     margin: auto;
     padding: 0;
-    border: 1px solid var(--color-border);
+    border: var(--line-thin) solid var(--color-border);
     border-radius: var(--radius-lg);
     background: var(--color-surface);
     color: var(--color-text);
@@ -21,11 +21,11 @@
   }
 
   .ui-dialog[data-size="sm"] {
-    inline-size: min(420px, calc(100vw - var(--space-8)));
+    inline-size: min(var(--width-dialog-sm), calc(100vw - var(--space-8)));
   }
 
   .ui-dialog[data-size="lg"] {
-    inline-size: min(760px, calc(100vw - var(--space-8)));
+    inline-size: min(var(--width-dialog-lg), calc(100vw - var(--space-8)));
   }
 
   .ui-dialog::backdrop {
@@ -40,7 +40,7 @@
   @keyframes ui-dialog-in {
     from {
       opacity: 0;
-      transform: translateY(8px) scale(0.98);
+      transform: translateY(var(--space-2)) scale(0.98);
     }
   }
 
@@ -100,11 +100,11 @@
     justify-content: flex-end;
     gap: var(--space-2);
     padding: var(--space-4) var(--space-6) var(--space-5);
-    border-block-start: 1px solid var(--color-border);
+    border-block-start: var(--line-thin) solid var(--color-border);
   }
 
   /* On a phone the dialog sits at the bottom, the full width, and the actions fill the row. */
-  @media (max-width: 640px) {
+  @media (max-width: 40rem) {
     .ui-dialog,
     .ui-dialog[data-size] {
       inline-size: 100%;

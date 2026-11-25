@@ -5,7 +5,6 @@ import { useState } from 'react'
 import type { Me } from '../api'
 import { AuthLayout } from '../auth/AuthLayout'
 import { useT } from '../i18n'
-import { navigate, routePath } from '../router'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { NewWorkspaceDialog } from './NewWorkspace'
@@ -34,15 +33,7 @@ export function NoWorkspace({ me, onLogout, onMe }: { me: Me; onLogout: () => vo
         <p>{t('shell.noWorkspaceHelp')}</p>
       </EmptyState>
       {canCreate && onMe && (
-        <NewWorkspaceDialog
-          open={creating}
-          onClose={() => setCreating(false)}
-          user={me.user.id}
-          onCreated={(next, created) => {
-            onMe(next)
-            navigate(routePath({ workspace: created.id, section: 'conversations' }))
-          }}
-        />
+        <NewWorkspaceDialog open={creating} onClose={() => setCreating(false)} user={me.user.id} onMe={onMe} />
       )}
     </AuthLayout>
   )

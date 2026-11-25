@@ -17,6 +17,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useT } from '../i18n'
 import { Button } from './Button'
 import { Dialog } from './Dialog'
+import './ConfirmDialog.css'
 
 export interface ConfirmDialogProps {
   open: boolean
@@ -67,7 +68,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      {typeof children === 'string' ? <p>{children}</p> : children}
+      {typeof children === 'string' ? <p className="ui-confirm-text">{children}</p> : children}
     </Dialog>
   )
 }
@@ -83,12 +84,16 @@ export interface ConfirmOptions {
 // The dialog to draw, and a function that asks and resolves true when the action is confirmed,
 // false when it is cancelled (or the component goes away).
 export function useConfirm(): [ReactNode, (options: ConfirmOptions) => Promise<boolean>] {
-  const [asking, setAsking] = useState<ConfirmOptions | null>(null)
+  // Each question has its own key: a new one replaces the dialog whole, so it starts again with
+  // the focus on Cancel (Enter must not approve a different action by habit).
+  const [asking, setAsking] = useState<(ConfirmOptions & { key: number }) | null>(null)
+  const asked = useRef(0)
   const answer = useRef<((yes: boolean) => void) | null>(null)
 
   const confirm = useCallback((options: ConfirmOptions) => {
     answer.current?.(false)
-    setAsking(options)
+    asked.current += 1
+    setAsking({ ...options, key: asked.current })
     return new Promise<boolean>((resolve) => {
       answer.current = resolve
     })
@@ -105,6 +110,7 @@ export function useConfirm(): [ReactNode, (options: ConfirmOptions) => Promise<b
 
   const dialog = asking && (
     <ConfirmDialog
+      key={asking.key}
       open
       title={asking.title}
       confirmLabel={asking.confirmLabel}

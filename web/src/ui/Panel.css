@@ -1,11 +1,14 @@
 @layer components {
   .ui-panel {
-    border: 1px solid var(--color-border);
+    border: var(--line-thin) solid var(--color-border);
     border-radius: var(--radius-lg);
     background: var(--color-surface);
     color: var(--color-text);
     /* Rows and tables inside keep to the rounded corners. */
     overflow: clip;
+    /* A grid or flex item that clips would take its content's width as its least: this one follows
+       its place, and a wide table inside scrolls in its own box. */
+    min-inline-size: 0;
   }
 
   .ui-panel[data-padded] {

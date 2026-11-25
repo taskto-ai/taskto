@@ -37,7 +37,8 @@ import { useT } from '../i18n'
 import { Button, type ButtonProps } from './Button'
 import { Icon, type IconName } from './Icon'
 import { IconButton } from './IconButton'
-import { place } from './place'
+import { place, scrolledAway } from './place'
+import './VisuallyHidden.css'
 import './Menu.css'
 
 interface MenuState {
@@ -115,6 +116,7 @@ export interface MenuButtonProps extends Omit<ButtonProps, 'onClick' | 'children
 
 export function MenuButton({ label, icon = 'more', children, variant = 'ghost', size, ...rest }: MenuButtonProps) {
   const menu = useMenu('MenuButton')
+  const t = useT()
   // A press on the button while the list is open closes it (the click outside does), and the
   // click that follows must not open it again.
   const wasOpen = useRef(false)
@@ -146,9 +148,22 @@ export function MenuButton({ label, icon = 'more', children, variant = 'ghost', 
     return <IconButton {...rest} {...common} icon={icon} label={label} size={size} />
   }
   return (
-    <Button {...rest} {...common} variant={variant} size={size} aria-label={label === children ? undefined : label}>
+    // Its name is what it chooses, then what it shows: "Sort by: Newest first". The words you see
+    // stay in the name (a voice command says them), and the label says what they are.
+    <Button
+      {...rest}
+      {...common}
+      variant={variant}
+      size={size}
+      aria-labelledby={`${menu.buttonId}-label ${menu.buttonId}-value`}
+    >
       <span className="ui-menu-button-text">
-        {children}
+        <span id={`${menu.buttonId}-label`} className="ui-visually-hidden">
+          {t('ui.menuButtonName', { label })}
+        </span>
+        <span id={`${menu.buttonId}-value`} className="ui-menu-button-value">
+          {children}
+        </span>
         <Icon name="chevron-down" size={16} />
       </span>
     </Button>
@@ -191,19 +206,28 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
 
     // Keep it beside the button while the page scrolls or the window changes size.
     let frame = 0
+    // A button scrolled out of sight takes its menu with it.
+    const follow = () => {
+      if (button.current && scrolledAway(button.current)) closeMenu(false)
+      else position()
+    }
     const later = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(position)
     }
+    const scrolled = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(follow)
+    }
     window.addEventListener('resize', later)
-    window.addEventListener('scroll', later, true)
+    window.addEventListener('scroll', scrolled, true)
     return () => {
       cancelAnimationFrame(frame)
       window.removeEventListener('resize', later)
-      window.removeEventListener('scroll', later, true)
+      window.removeEventListener('scroll', scrolled, true)
       el.hidePopover()
     }
-  }, [open, start, list, button, align])
+  }, [open, start, list, button, align, closeMenu])
 
   // A press outside the list and the button closes it, and the focus stays where it went.
   useEffect(() => {
@@ -243,8 +267,12 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
     }
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== ' ') {
       const now = Date.now()
-      const text = (now - typed.current.at < 600 ? typed.current.text : '') + e.key.toLocaleLowerCase()
-      typed.current = { text, at: now }
+      const typedSoFar = (now - typed.current.at < 600 ? typed.current.text : '') + e.key.toLocaleLowerCase()
+      typed.current = { text: typedSoFar, at: now }
+      // One letter again and again ("r r r") goes round the items that start with it; letters
+      // that spell more ("re") look for an item that starts with them all.
+      const repeated = [...typedSoFar].every((c) => c === typedSoFar[0])
+      const text = repeated ? typedSoFar[0] : typedSoFar
       // From the item after this one (the same one when the letters go on), round the list.
       const from = text.length > 1 ? at : at + 1
       for (let n = 0; n < items.length; n++) {

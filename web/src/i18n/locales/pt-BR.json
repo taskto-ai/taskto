@@ -1874,6 +1874,8 @@
     "newWorkspace": "Novo espaço de trabalho",
     "newWorkspaceName": "Nome do novo espaço de trabalho",
     "createWorkspace": "Criar espaço de trabalho",
+    "workspaceCreated": "“{name}” foi criado.",
+    "openWorkspace": "Abrir",
     "sectionsNav": "Seções",
     "theme": {
       "label": "Tema",
@@ -2028,6 +2030,26 @@
       "searching": "Buscando nos cartões dos quadros…",
       "failed": "Não foi possível buscar nos cartões dos quadros: {error}",
       "incomplete": "Alguns cartões mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
+    },
+    "records": {
+      "title": "Registros",
+      "label": "Registros encontrados",
+      "in": "{space} · {app}",
+      "more": "Mais registros",
+      "searching": "Buscando nos registros dos apps…",
+      "failed": "Não foi possível buscar nos registros dos apps: {error}",
+      "incomplete": "Alguns registros mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
+    },
+    "conversations": {
+      "title": "Conversas",
+      "label": "Conversas encontradas",
+      "untitled": "Conversa sem título",
+      "updated": "Atualizada em {when}",
+      "archivedAt": "Arquivada · atualizada em {when}",
+      "more": "Mais conversas",
+      "searching": "Buscando nas suas conversas…",
+      "failed": "Não foi possível buscar nas suas conversas: {error}",
+      "incomplete": "Algumas conversas mudaram agora há pouco, ou o agente não pôde ser alcançado, e não estão nestes resultados. Busque de novo em instantes."
     },
     "notice": {
       "embeddings_off": "A busca semântica está desligada: este espaço de trabalho não tem modelo de embeddings. Estes são resultados da busca por texto.",
@@ -2552,7 +2574,8 @@
     "close": "Fechar",
     "moreActions": "Mais ações",
     "dismiss": "Dispensar",
-    "notifications": "Notificações"
+    "notifications": "Notificações",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Sistema de design",
@@ -2735,10 +2758,6 @@
       "duplicateDisabled": "Duplicar (desativado)",
       "dialog": "Modal: a página atrás fica inerte; Esc fecha",
       "openDialog": "Abrir um diálogo",
-      "openGuard": "Abrir uma que precisa de resposta",
-      "guardTitle": "A conta mudou",
-      "guardHelp": "Sem botão de fechar, e Esc não faz nada: só a resposta a fecha.",
-      "guardAnswer": "Recarregar esta página",
       "renameApp": "Renomear o app",
       "renameHelp": "O novo nome aparece no menu e no Início.",
       "showToastOver": "Mostrar um aviso sobre ele",
@@ -2778,7 +2797,9 @@
       "labels": "Etiquetas",
       "assignedToMe": "Atribuídos a mim",
       "addColumn": "Adicionar uma coluna",
-      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo"
+      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
+      "busyAsk": "Excluir e falhar…",
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
     }
   }
 }
