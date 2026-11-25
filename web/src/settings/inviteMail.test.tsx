@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { MailStatus, Me, Workspace } from '../api'
 import { type Call, fakeFetch } from '../test/fakes'
@@ -109,4 +109,34 @@ test('a server with email but no public address says why links are not emailed',
   fakeFetch({ 'GET /api/workspaces/1/mail': { body: mail(false) } })
   render(<SettingsPage me={me} workspace={admin} />)
   expect(await screen.findByText(/doesn't email reset or invite links yet/)).toBeTruthy()
+})
+
+test("the invite form says the server doesn't email invites only when it read the server's email status", async () => {
+  // Read, and the server doesn't send links: said.
+  for (const status of [{ configured: false } as MailStatus, mail(false)]) {
+    cleanup()
+    fakeFetch(routes(status, made({})))
+    render(<SettingsPage me={me} workspace={admin} tab="members" />)
+    expect(await screen.findByText(/This server doesn't email invites/)).toBeTruthy()
+  }
+  // Not readable: an admin who doesn't run the server is refused the status, and nothing is said
+  // about the server's email, which may well work.
+  for (const refusal of [
+    { status: 403, body: { error: 'operators only' } },
+    { status: 500, body: {} },
+  ]) {
+    cleanup()
+    const calls = fakeFetch({ ...routes(null, made({})), 'GET /api/workspaces/1/mail': refusal })
+    render(<SettingsPage me={me} workspace={admin} tab="members" />)
+    await screen.findByLabelText('Email')
+    await waitFor(() => expect(calls.some((c) => c.path === '/api/workspaces/1/mail')).toBe(true))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(screen.queryByText(/This server doesn't email invites/)).toBeNull()
+  }
+  // And where it does send them, nothing is said either.
+  cleanup()
+  fakeFetch(routes(mail(true), made({})))
+  render(<SettingsPage me={me} workspace={admin} tab="members" />)
+  await screen.findByLabelText('Email the invite link to this address')
+  expect(screen.queryByText(/This server doesn't email invites/)).toBeNull()
 })

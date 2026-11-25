@@ -160,6 +160,25 @@ describe('the tokens', () => {
   test('the layers are declared once, in order, before anything is imported', () => {
     const index = read('index.css').replace(/\/\*[\s\S]*?\*\//g, '')
     expect(index.trim().split('\n')[0]).toBe('@layer tokens, themes, base, components, screens;')
+    // And the built CSS starts with it only if index.css is the app's first import: Vite writes CSS
+    // in import order, and a component's `@layer components` block coming first would put that
+    // layer below tokens, themes and base.
+    const main = readFileSync(join(dir, '../main.tsx'), 'utf8')
+    const imports = [...main.matchAll(/^import\s[^\n]*$/gm)].map((m) => m[0])
+    expect(imports[0]).toBe("import './ui/index.css'")
+  })
+
+  test('the page declares the layers’ order before any stylesheet, as index.css does', () => {
+    // A production build links the stylesheets of shared chunks (a component's `@layer components`)
+    // before the entry's, so the order is fixed in the page itself, ahead of every <link> and <style>.
+    // The page as it is: its comments name no element, so they need no stripping.
+    const html = readFileSync(join(dir, '../../index.html'), 'utf8')
+    const head = html.slice(0, html.indexOf('</head>'))
+    const firstStyle = head.search(/<style\b|<link[^>]*rel="stylesheet"/)
+    expect(firstStyle).toBeGreaterThan(-1)
+    const style = /^<style>\s*([^<]*?)\s*<\/style>/.exec(head.slice(firstStyle))
+    const index = read('index.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(style?.[1]).toBe(index.trim().split('\n')[0])
   })
 
   test('the stacking levels are in their order, and the skip link is above every z-index there is', () => {

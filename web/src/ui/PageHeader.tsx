@@ -2,7 +2,7 @@
 // an optional line of help under it, and the page's actions at the end. On a narrow screen the
 // actions wrap under the title.
 
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import './PageHeader.css'
 
 export interface PageHeaderProps {
@@ -15,15 +15,20 @@ export interface PageHeaderProps {
   path?: ReactNode
   // The title's heading level: 1 for a page, 2 where the page is inside another.
   level?: 1 | 2
+  // The title, to move the keyboard to when what had it goes away (a panel dismissed, a list
+  // emptied). Given one, the title can take the focus from a script, though not from Tab.
+  titleRef?: Ref<HTMLHeadingElement>
 }
 
-export function PageHeader({ title, help, actions, path, level = 1 }: PageHeaderProps) {
+export function PageHeader({ title, help, actions, path, level = 1, titleRef }: PageHeaderProps) {
   const Heading = level === 1 ? 'h1' : 'h2'
   return (
     <header className="ui-page-header">
       <div className="ui-page-header-titles">
         {path && <div className="ui-page-header-path">{path}</div>}
-        <Heading className="ui-page-header-title">{title}</Heading>
+        <Heading ref={titleRef} tabIndex={titleRef ? -1 : undefined} className="ui-page-header-title">
+          {title}
+        </Heading>
         {help && <p className="ui-page-header-help">{help}</p>}
       </div>
       {actions && <div className="ui-page-header-actions">{actions}</div>}

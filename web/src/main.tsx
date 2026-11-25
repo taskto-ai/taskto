@@ -1,7 +1,7 @@
-// First of all, the design system's entry: the build emits CSS in the order modules import it, and
-// ui/index.css declares the cascade layers' order (tokens, themes, base, components, screens). A
-// component imported before it (through App) would put its @layer components block first, and
-// make @layer base win over it (css-check fails when this is not the first import).
+// First of all, before anything that imports a stylesheet: the design tokens and the cascade layers'
+// order (ui/index.css). Vite writes the CSS in the order the modules are imported, so a component's
+// `@layer components { … }` that came first would fix the layers' order before the statement that
+// declares it (src/ui/tokens.test.ts and css-check check this import stays first).
 import './ui/index.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -17,7 +17,7 @@ import { trackKeyboard } from './pwa/viewport'
 import '@fontsource-variable/bricolage-grotesque/wght.css'
 import '@fontsource-variable/inter/wght.css'
 import '@fontsource-variable/jetbrains-mono/wght.css'
-// Then the old screens' stylesheets, after the fonts.
+// Then the old stylesheet, after the tokens (which are first, above).
 import './styles.css'
 import { applyTheme, storedTheme } from './theme'
 
