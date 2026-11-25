@@ -96,7 +96,7 @@ export function BarcodeField({
 
   const heading = label ?? t('apps.barcode.label')
   return (
-    <fieldset className="tt-capture tt-barcode" aria-describedby={`${ids}-note`}>
+    <fieldset className="tt-capture" aria-describedby={`${ids}-note`}>
       <legend className="tt-capture-label">{heading}</legend>
       <label className="tt-capture-field">
         {t('apps.barcode.typed')}

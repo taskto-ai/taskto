@@ -198,7 +198,7 @@ export function PhotoField({
               />
               <button
                 type="button"
-                className="tt-button tt-photo-remove"
+                className="tt-button"
                 aria-label={t('apps.photos.removeNamed', { n: i + 1 })}
                 onClick={() => remove(id)}
               >
@@ -313,7 +313,7 @@ export function PhotoStrip({
   if (local) ids = ids.filter((id) => local.url(id) !== undefined)
   if (ids.length === 0) return null
   return (
-    <figure className="tt-photos tt-photos-strip" aria-label={label ?? t('apps.photos.label')}>
+    <figure className="tt-photos" aria-label={label ?? t('apps.photos.label')}>
       <ul className="tt-photo-grid">
         {ids.map((id, i) => (
           <li key={id} className="tt-photo">

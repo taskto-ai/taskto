@@ -1,6 +1,7 @@
 // A small Markdown renderer for previews: headings, paragraphs, lists, quotes, code, rules,
-// emphasis and links, built as React elements. Nothing is ever inserted as HTML, so raw HTML
-// in a document shows as its text; links keep only http(s), mailto and relative targets, and
+// emphasis, links and task lists (read-only checkboxes), built as React elements. Nothing is
+// ever inserted as HTML, so raw HTML in a document shows as its text; links keep only http(s),
+// mailto and relative targets, and
 // images show as links rather than loading from anywhere. It covers the common syntax, not
 // all of CommonMark. Shared by every page that shows Markdown (documents, cards, comments).
 
@@ -461,13 +462,40 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean): React
     }
     case 'list': {
       // A list whose items are single paragraphs is tight: no paragraph margins.
-      const items = b.items.map((item, n) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
-        <li key={n}>{render(item, onLink, item.length === 1 && item[0].kind === 'paragraph')}</li>
-      ))
+      const items = b.items.map((item, n) => {
+        const tight = item.length === 1 && item[0].kind === 'paragraph'
+        const task = taskItem(item)
+        return task ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
+          <li key={n} className="tt-task-item">
+            {/* Read-only: a document's checkboxes are its text, changed by editing it. The item's
+                own words are the label. */}
+            <label>
+              <input type="checkbox" checked={task.checked} disabled />
+              <Paragraph text={task.text} onLink={onLink} tight />
+            </label>
+            {render(task.rest, onLink, tight)}
+          </li>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
+          <li key={n}>{render(item, onLink, tight)}</li>
+        )
+      })
       return b.ordered ? <ol start={b.start === 1 ? undefined : b.start}>{items}</ol> : <ul>{items}</ul>
     }
   }
+}
+
+// A task list item ("- [ ] text", "- [x] text"): its first paragraph begins with a box, then a
+// space and some text. Its words, and the blocks after them (a nested list), are returned apart.
+const TASK = /^\[([ xX])\][ \t]+(?=\S)/
+
+function taskItem(item: Block[]): { checked: boolean; text: string; rest: Block[] } | null {
+  const first = item[0]
+  if (first?.kind !== 'paragraph') return null
+  const m = TASK.exec(first.text)
+  if (!m) return null
+  return { checked: m[1] !== ' ', text: first.text.slice(m[0].length), rest: item.slice(1) }
 }
 
 // How a person mentioned in a comment is shown (`@[label](user:ID)`): by the name the server gives

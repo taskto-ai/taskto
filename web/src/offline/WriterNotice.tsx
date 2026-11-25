@@ -13,7 +13,7 @@ export function WriterNotice({ runtime }: { runtime: Runtime }) {
   const [waiting, setWaiting] = useState(false)
   if (writer) return null
   return (
-    <p className="tt-muted tt-small tt-writer-notice" role="status">
+    <p className="tt-muted tt-small" role="status">
       <span>{waiting ? t('offline.writer.waiting') : t('offline.writer.elsewhere')}</span>{' '}
       <button
         type="button"

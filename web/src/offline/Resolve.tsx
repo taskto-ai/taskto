@@ -348,7 +348,7 @@ function ConflictTable({
   const del = kindOf(item) === 'delete'
   const shown = fields.filter((field) => field.name in changed || !same(original[field.name], server[field.name]))
   return (
-    <table className="tt-table tt-resolve-table">
+    <table className="tt-resolve-table">
       <thead>
         <tr>
           <th scope="col">{t('offline.resolve.column.field')}</th>

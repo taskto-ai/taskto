@@ -90,6 +90,19 @@ error's) shows it too: `.tt-app .a2ui-textfield:focus-visible`, 17.8 light and 1
 When you change a colour, check the pair again; a literal that "looks close" is how a dark-mode
 badge ended up white on salmon.
 
+## One stylesheet
+
+`web/src/styles.css` is global, so a class name is shared by the whole app: declaring a name a
+second time silently changes the first screen that used it (a code sample's grid once made every
+highlighted word of a search result a row of its own). `web/scripts/css-check.mjs`, run by
+`make check` and CI, fails when a `.tt-` selector is declared twice at the top level of the file
+(a state or a screen size goes in an at-rule block; two different things get two names), and when
+a `tt-` class a component's `className` uses has no rule. A class that is deliberately an
+unstyled hook goes in the script's `UNSTYLED` list, with the reason. It reads class selectors
+(not an attribute selector's value), a component's `className`, and the strings of a lookup table
+in capitals (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and
+the header of the script says what else it can't.
+
 ## The buttons
 
 Pills, as on the website. A plain button is white with a 1px control edge. **The primary button**
