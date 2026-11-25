@@ -10,6 +10,8 @@ import { type Change, isConflict } from './docs'
 export function useDraft(url: string, doc: Doc, onSaved: () => void) {
   const [text, setText] = useState(doc.content ?? '')
   const [base, setBase] = useState<string | null>(doc.version)
+  // The text the draft started from (or was last replaced by): what "unchanged" means.
+  const [loaded, setLoaded] = useState(doc.content ?? '')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -48,6 +50,7 @@ export function useDraft(url: string, doc: Doc, onSaved: () => void) {
 
   const takeTheirs = (current: Doc) => {
     setText(current.content ?? '')
+    setLoaded(current.content ?? '')
     setBase(current.version)
     setConflict(null)
   }
@@ -58,5 +61,20 @@ export function useDraft(url: string, doc: Doc, onSaved: () => void) {
     save(version)
   }
 
-  return { text, setText, message, setMessage, busy, error, conflict, save: () => save(base), takeTheirs, overwrite }
+  // The draft differs from what was loaded: closing it would lose something.
+  const dirty = text !== loaded || message.trim() !== ''
+
+  return {
+    text,
+    setText,
+    message,
+    setMessage,
+    dirty,
+    busy,
+    error,
+    conflict,
+    save: () => save(base),
+    takeTheirs,
+    overwrite,
+  }
 }
