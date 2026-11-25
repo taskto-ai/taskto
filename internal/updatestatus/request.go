@@ -61,18 +61,27 @@ func Pending(dir string, now time.Time) (since time.Time, pending bool, err erro
 	return info.ModTime().UTC(), true, nil
 }
 
-// Request puts an update request in dir, atomically and without replacing one that waits. Its
-// content is a fixed line, the time and a random nonce, which the host checks against a strict
-// pattern and uses for nothing but telling one request from another. It holds no secret.
-func Request(dir string, now time.Time) error {
+// Prepared is a request that is written but not yet there for the host to see: its content sits
+// in a temporary file the path unit doesn't watch. The caller records the request (the audit
+// event, in its transaction), and only when that is committed does Publish make it visible, so the
+// host can't act on a request that has no record. Discard drops it.
+type Prepared struct {
+	dir, tmp string
+	now      time.Time
+}
+
+// Prepare checks that no request waits and writes the next one's content to a temporary file in
+// dir. The content is a fixed line, the time and a random nonce, which the host checks against a
+// strict pattern and uses for nothing but telling one request from another. It holds no secret.
+func Prepare(dir string, now time.Time) (*Prepared, error) {
 	if dir == "" {
-		return ErrNoDir
+		return nil, ErrNoDir
 	}
 	final := filepath.Join(dir, RequestFile)
 	if _, pending, err := Pending(dir, now); err != nil {
-		return err
+		return nil, err
 	} else if pending {
-		return ErrPending
+		return nil, ErrPending
 	}
 	// A request nobody took in ExpireAfter, or a leftover of a crash, goes.
 	if info, err := os.Lstat(final); err == nil && now.Sub(info.ModTime()) > ExpireAfter {
@@ -80,17 +89,16 @@ func Request(dir string, now time.Time) error {
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return err
+		return nil, err
 	}
 	tmp, err := os.CreateTemp(dir, ".request-*")
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
 		// The mount isn't there, or isn't the server's to write: an install from before the button.
-		return ErrNoDir
+		return nil, ErrNoDir
 	}
 	if err != nil {
-		return fmt.Errorf("updatestatus: %w", err)
+		return nil, fmt.Errorf("updatestatus: %w", err)
 	}
-	defer os.Remove(tmp.Name())
 	_, err = fmt.Fprintf(tmp, "%s %s\n", now.UTC().Format(time.RFC3339), hex.EncodeToString(nonce[:]))
 	if err == nil {
 		err = tmp.Sync()
@@ -99,22 +107,38 @@ func Request(dir string, now time.Time) error {
 		err = cerr
 	}
 	if err != nil {
-		return fmt.Errorf("updatestatus: %w", err)
+		_ = os.Remove(tmp.Name())
+		return nil, fmt.Errorf("updatestatus: %w", err)
 	}
-	// A hard link fails when the name is taken, where a rename would replace it: two presses at
-	// once make one request.
-	if err := os.Link(tmp.Name(), final); err != nil {
+	return &Prepared{dir: dir, tmp: tmp.Name(), now: now}, nil
+}
+
+// Publish makes the request visible to the host, atomically and without replacing one that waits:
+// a hard link fails when the name is taken, where a rename would replace it, so two presses at once
+// make one request. The temporary file goes either way.
+func (p *Prepared) Publish() error {
+	defer os.Remove(p.tmp)
+	if err := os.Link(p.tmp, filepath.Join(p.dir, RequestFile)); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return ErrPending
 		}
 		return fmt.Errorf("updatestatus: %w", err)
 	}
-	sweep(dir, now)
+	sweep(p.dir, p.now)
 	return nil
 }
 
-// Cancel removes the request, for a request whose record could not be kept.
-func Cancel(dir string) { _ = os.Remove(filepath.Join(dir, RequestFile)) }
+// Discard drops a request that wasn't published.
+func (p *Prepared) Discard() { _ = os.Remove(p.tmp) }
+
+// Request prepares and publishes a request at once, for a caller with nothing to record first.
+func Request(dir string, now time.Time) error {
+	p, err := Prepare(dir, now)
+	if err != nil {
+		return err
+	}
+	return p.Publish()
+}
 
 // sweep removes the temporary files of requests that were interrupted.
 func sweep(dir string, now time.Time) {

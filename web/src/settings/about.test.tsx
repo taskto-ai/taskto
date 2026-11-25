@@ -382,3 +382,27 @@ test("an admin who doesn't run the server never sees Update now", async () => {
   await screen.findByText(/Nothing this workspace uses now asks for a credit/)
   expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
 })
+
+test('a request the host never took says so after a while, instead of waiting for ever', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({ request: { available: false, reason: 'pending', pending_since: ago(0.5) } }),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/The host hasn't started the update/)).toBeTruthy()
+  expect(screen.queryByText(/Update requested\. Waiting/)).toBeNull()
+  cleanup()
+
+  // A fresh one is still waited for.
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({ request: { available: false, reason: 'pending', pending_since: ago(0.01) } }),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/Update requested\. Waiting/)).toBeTruthy()
+  expect(screen.queryByText(/The host hasn't started the update/)).toBeNull()
+})

@@ -276,20 +276,46 @@ func TestUpdateRequestedIgnoresAHostileRequest(t *testing.T) {
 	}
 }
 
-// What is in a request's content never becomes an argument or anything else: a file of any text
-// that is small and regular is a request (its existence is the signal), and does the same run.
+// What is in a request's content never becomes an argument or anything else: a request is the one
+// fixed line the server writes, and anything else (text that looks like a command line, extra
+// lines, a line without its end, a file that grew past the limit) is removed and ignored.
 func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
+	pwned := func(e *updEnv) string { return filepath.Join(e.dir, "pwned") }
+	for name, content := range map[string]func(e *updEnv) string{
+		"a command line":         func(e *updEnv) string { return "--to v9.9.9; touch " + pwned(e) + " $(touch " + pwned(e) + "2)\n" },
+		"a valid line and more":  func(e *updEnv) string { return requestLine + "--to v9.9.9\n" },
+		"a line without its end": func(e *updEnv) string { return strings.TrimSuffix(requestLine, "\n") },
+		"a nonce of capitals":    func(e *updEnv) string { return "2026-11-24T12:00:00Z 0123456789ABCDEF0123456789ABCDEF\n" },
+		"empty":                  func(e *updEnv) string { return "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, dir := requestEnv(t)
+			e.request(dir, content(e))
+			if code, out := e.run("--requested"); code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			e.wantNoRequestLeft(dir)
+			e.wantUntouched()
+			if last := requestOutcome(t, e); last.Result != "ignored" || last.Code != "bad-request" {
+				t.Errorf("outcome = %+v, want ignored bad-request", last)
+			}
+			if e.exists("state/status.json") || e.exists("state/request-last-run") || e.count(`^pull`) != 0 {
+				t.Error("a malformed request started a run or used the rate limit")
+			}
+			if e.exists("pwned") || e.exists("pwned2") {
+				t.Error("the request's content was run")
+			}
+		})
+	}
+	// The one line the server writes is the request, whatever its time and nonce.
 	e, dir := requestEnv(t)
-	e.request(dir, "--to v9.9.9; touch "+filepath.Join(e.dir, "pwned")+" $(touch "+filepath.Join(e.dir, "pwned2")+")\n")
+	e.request(dir, "2030-01-01T00:00:00Z ffffffffffffffffffffffffffffffff\n")
 	if code, out := e.run("--requested"); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	e.wantStatus("updated", "")
 	if st := e.status(); st["to"] != updNew {
-		t.Errorf("the request chose a version: %v", st)
-	}
-	if e.exists("pwned") || e.exists("pwned2") {
-		t.Error("the request's content was run")
+		t.Errorf("status = %v", st)
 	}
 }
 
@@ -501,6 +527,14 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 			refused(t, e, tc.edit, tc.want)
 		})
 	}
+	t.Run("another service has a volume that binds it", func(t *testing.T) {
+		e := newUpdEnv(t)
+		e.release(updNew, "", false, false)
+		// An external volume keeps the options it was made with, whatever the Compose file says.
+		e.write("fake/volume-options", "taskto_reqvol "+e.state+"/request\n")
+		refused(t, e, `.services.caddy.volumes += [{type: "volume", source: "reqvol", target: "/r", volume: {}}]
+			| .volumes.reqvol = {name: "taskto_reqvol", external: true}`, "other than the server")
+	})
 	t.Run("the request directory is the public directory", func(t *testing.T) {
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)

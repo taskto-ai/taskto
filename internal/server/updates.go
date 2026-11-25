@@ -47,8 +47,8 @@ func updateStatus(version, statusDir, requestDir string) http.Handler {
 // its configured channel, under every gate of that run. The server writes one file into the
 // request directory (updatestatus.Request) and never runs anything; the host's path unit and
 // updater do the rest (docs/install.md#update-now). One request waits at a time, none while a
-// run is changing the install, and each is an audit event, recorded in the transaction that makes
-// the file, so a refused request records none.
+// run is changing the install, and each is an audit event, committed before the file is made
+// visible to the host, so a refused request records none and an update has always a record.
 func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now func() time.Time) http.Handler {
 	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +80,28 @@ func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now fun
 			}
 			return
 		}
+		// The request is written first but kept out of sight; the event is committed; only then
+		// is the request made visible. A host that took a request always has its record, and a
+		// request that couldn't be published leaves an event of one that came to nothing.
+		prepared, err := updatestatus.Prepare(requestDir, t)
+		switch {
+		case errors.Is(err, updatestatus.ErrPending):
+			apierr.Write(w, http.StatusConflict, apierr.CodeUpdateRequestPending, "an update is already requested")
+			return
+		case errors.Is(err, updatestatus.ErrNoDir):
+			apierr.Write(w, http.StatusConflict, apierr.CodeUpdateRequestUnsupported, "this host can't take an update request")
+			return
+		case err != nil:
+			slog.Error("update request: writing the request", "err", err)
+			apierr.Internal(w)
+			return
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				prepared.Discard()
+			}
+		}()
 		tx, err := sqlDB.BeginTx(r.Context(), nil)
 		if err != nil {
 			slog.Error("update request: begin", "err", err)
@@ -93,21 +115,18 @@ func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now fun
 			apierr.Internal(w)
 			return
 		}
-		switch err := updatestatus.Request(requestDir, t); {
-		case errors.Is(err, updatestatus.ErrPending):
-			apierr.Write(w, http.StatusConflict, apierr.CodeUpdateRequestPending, "an update is already requested")
-			return
-		case errors.Is(err, updatestatus.ErrNoDir):
-			apierr.Write(w, http.StatusConflict, apierr.CodeUpdateRequestUnsupported, "this host can't take an update request")
-			return
-		case err != nil:
-			slog.Error("update request: writing the request", "err", err)
+		if err := tx.Commit(); err != nil {
+			slog.Error("update request: commit", "err", err)
 			apierr.Internal(w)
 			return
 		}
-		if err := tx.Commit(); err != nil {
-			updatestatus.Cancel(requestDir)
-			slog.Error("update request: commit", "err", err)
+		committed = true
+		switch err := prepared.Publish(); {
+		case errors.Is(err, updatestatus.ErrPending):
+			apierr.Write(w, http.StatusConflict, apierr.CodeUpdateRequestPending, "an update is already requested")
+			return
+		case err != nil:
+			slog.Error("update request: publishing the request", "err", err)
 			apierr.Internal(w)
 			return
 		}

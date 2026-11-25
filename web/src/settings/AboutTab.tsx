@@ -223,6 +223,7 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
           workspace={workspace}
           report={u}
           reload={updates.reload}
+          settled={updates.settled ?? 0}
           loadError={updates.error}
           label={label}
           reasonText={reasonText}
@@ -289,6 +290,7 @@ function UpdateNow({
   workspace,
   report,
   reload,
+  settled,
   loadError,
   label,
   reasonText,
@@ -296,6 +298,8 @@ function UpdateNow({
   workspace: number
   report: UpdateStatus
   reload: () => void
+  // How many reads have ended: the next one is asked for after the last ended, not on a clock.
+  settled: number
   loadError: string | null
   label: (result: string) => string
   reasonText: (code: string) => string
@@ -313,17 +317,24 @@ function UpdateNow({
   const since = requestedAt === null ? null : Math.floor(Date.parse(requestedAt) / 1000) * 1000
   const last = st?.requests?.last ?? null
   const answered = since !== null && !!last?.at && Date.parse(last.at) >= since
+  // A request that waits, or was just made, and that nobody has answered: since when.
+  const askedAt = since ?? (pending && req.pending_since ? Date.parse(req.pending_since) : null)
   const waiting = since !== null && !answered
-  const gaveUp = waiting && !running && !pending && since !== null && now - since > GIVE_UP_MS
-  const busy = running || pending || (waiting && !gaveUp)
+  // The host never took it (its path unit is off) or never answered: said, whether or not the file
+  // still waits in the directory.
+  const gaveUp = !answered && !running && askedAt !== null && now - askedAt > GIVE_UP_MS
+  const busy = running || ((pending || waiting) && !gaveUp)
+  // Ask again a moment after the last answer (or failure) came, never while one is on its way: the
+  // server restarts during an update, and a read that is cut off by the next one shows nothing.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `settled` is what moves the timer on
   useEffect(() => {
-    if (!busy) return
-    const timer = setInterval(() => {
+    if (!busy || settled === 0) return
+    const timer = setTimeout(() => {
       setNow(Date.now())
       reload()
     }, POLL_MS)
-    return () => clearInterval(timer)
-  }, [busy, reload])
+    return () => clearTimeout(timer)
+  }, [busy, settled, reload])
   const press = async () => {
     const ok = await action.run(async () => {
       const r = await api<UpdateRequested>(updateRequestPath(workspace), { method: 'POST', body: {} })

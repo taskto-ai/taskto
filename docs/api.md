@@ -4147,10 +4147,11 @@ gate asks, then `taskto-update --to` on the host.
 `update_request_pending` (one request waits at a time; one nobody took for three hours doesn't
 count) or `update_running`; `403` `operator_only` and the usual `404`, `401` and `403` for a
 non-member, no login and an access token. The request is an event on the
-[audit log](audit.md), `server_update_requested` (with the channel), made in the same transaction
-as the file: a refused request records none. The server also doesn't know whether the host
+[audit log](audit.md), `server_update_requested` (with the channel), committed before the file
+is made visible to the host: a refused request records none, and no update happens without one. The server also doesn't know whether the host
 accepts it: the host ignores a second request within ten minutes of the last (`rate-limited`) and
-anything in the directory that isn't a small regular file (`bad-request`).
+anything in the directory that isn't a small regular file holding the one fixed line the server
+writes (`bad-request`).
 
 ### `GET /healthz/backup`
 

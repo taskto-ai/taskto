@@ -209,3 +209,53 @@ func TestReadChecksWhatTheHostSaysOfRequests(t *testing.T) {
 		t.Errorf("a running note without a time is kept: %+v / %+v", s.Running, s.Requests.Last)
 	}
 }
+
+// A prepared request is not there for the host until it is published, so the caller can record it
+// first; a discarded one leaves nothing.
+func TestPreparedRequestIsHiddenUntilPublished(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	p, err := Prepare(dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, pending, _ := Pending(dir, now); pending {
+		t.Fatal("a prepared request is visible to the host")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, RequestFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the request's name exists: %v", err)
+	}
+	if err := p.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	if _, pending, _ := Pending(dir, now); !pending {
+		t.Error("a published request isn't pending")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("the directory has %v", entries)
+	}
+
+	dir = t.TempDir()
+	p, err = Prepare(dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Discard()
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("a discarded request left %v", entries)
+	}
+
+	// Another request published in between: the second to publish is refused, the first stands.
+	dir = t.TempDir()
+	a, _ := Prepare(dir, now)
+	b, _ := Prepare(dir, now)
+	if err := a.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Publish(); !errors.Is(err, ErrPending) {
+		t.Errorf("the second: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("the directory has %v", entries)
+	}
+}

@@ -384,12 +384,12 @@ record_request_outcome() {
 # request is turned away (neither changes the install or the last run's status). The request is
 # renamed out of the server's directory into $STATE first and looked at there, so what the server
 # can change in the directory (a link, a fifo, a huge file, a swap after a check) is never read or
-# followed; only a regular file of at most $REQUEST_MAX_BYTES is a request, and its content is
-# matched against one fixed pattern (a time and a nonce, which only tell requests apart). The
+# followed; only a regular file of at most $REQUEST_MAX_BYTES is a request, and its whole content
+# must be one fixed line (a time and a nonce, which only tell requests apart), else it is ignored. The
 # request is gone before anything else is done, so a failed or refused run can't be started again
 # by it.
 take_request() {
-	local f=$REQUEST/$REQUEST_FILE taken=$STATE/request.taken t size line nonce="" last_at=0 last_nonce="" now
+	local f=$REQUEST/$REQUEST_FILE taken=$STATE/request.taken t size content line nonce="" last_at=0 last_nonce="" now
 	if ! request_dir_ok; then
 		log "the request directory $REQUEST isn't in place as the updater needs it (a real directory of uid $REQUEST_OWNER, the server's, on the same filesystem as $STATE, in a directory only root writes): nothing is read or removed there (deploy/INSTALL.md step 16)"
 		QUIET=1
@@ -428,9 +428,21 @@ take_request() {
 		log "ignored: $reason"
 		exit 0
 	fi
-	line=$(head -n 1 -- "$taken" | tr -d '\r') || line=""
+	# At most one byte more than the limit is read, whatever the file has grown to meanwhile; and
+	# the whole of it must be the one fixed line the server writes, a time and a nonce. Anything
+	# else is not from the server's code: it is removed and ignored, never used.
+	content=$(head -c $((REQUEST_MAX_BYTES + 1)) -- "$taken"; echo x) || content=x
+	content=${content%x}
 	rm -f -- "$taken"
-	if [[ $line =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\ ([0-9a-f]{32})$ ]]; then nonce=${BASH_REMATCH[1]}; fi
+	line=${content%$'\n'}
+	if [ "${#content}" -gt "$REQUEST_MAX_BYTES" ] || [ "$line" = "$content" ] ||
+		! [[ $line =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\ ([0-9a-f]{32})$ ]]; then
+		result=ignored reason="the request wasn't in the fixed format (a time and a nonce, one line): removed, nothing done"
+		write_public || true
+		log "ignored: $reason"
+		exit 0
+	fi
+	nonce=${BASH_REMATCH[1]}
 	# One requested run per $REQUEST_MIN seconds, and never the same request twice.
 	now=$(date +%s)
 	if [ -s "$STATE/request-last-run" ]; then

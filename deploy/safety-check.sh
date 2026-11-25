@@ -227,6 +227,14 @@ if [ "$mode" = static ]; then
 		| if .type == "bind" then {p: (.source // ""), ro: (.read_only == true)}
 		  elif .type == "volume" then {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: false} else empty end]' <<<"$cfg") ||
 		fail "can't read the other services' mounts"
+	# A named volume that exists already, or an external one, keeps the options it was made with
+	# whatever the Compose file says: its device, as Docker has it, counts too.
+	while IFS= read -r vn; do
+		[ -n "$vn" ] || continue
+		grep -qxF -- "$vn" <<<"$existing" || continue
+		dev=$(volume_device "$vn") || fail "can't inspect the volume $vn of a service other than the server"
+		others=$(jq -c --arg p "$dev" '. + [{p: $p, ro: false}]' <<<"$others") || fail "can't read the options of the volume $vn"
+	done < <(jq -r '. as $c | .services | to_entries[] | select(.key != "taskto") | .value.volumes[]? | select(.type == "volume") | ($c.volumes[.source // ""].name // .source)' <<<"$cfg")
 	r=$(resolved <<<"$others") || fail "a host path of another service's mounts can't be resolved: it isn't absolute, or isn't a path"
 	jq -e --arg request "$request" "$PARTS"'($request | parts) as $q | [.[] | (.p | parts) as $p | select(within($q; $p) or within($p; $q))] | length == 0' <<<"$r" >/dev/null ||
 		fail "a service other than the server has the updater's request directory ($request), or one above or inside it, mounted"

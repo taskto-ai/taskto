@@ -1428,13 +1428,15 @@ How it goes, and what keeps the server from gaining power over the host:
    temporary file in that directory and a hard link, so it appears whole or not at all, and a
    second one can't replace it: one request waits at a time, and none is taken while a run is
    changing the install. Its content is a time and a random nonce, no secret. The request is an
-   [audit event](audit.md) (`server_update_requested`), recorded in the same transaction.
+   [audit event](audit.md) (`server_update_requested`), committed before the file is made visible
+   to the host (it is written under another name first), so no update happens without its record.
 2. `taskto-update-request.path` (a systemd path unit) starts `taskto-update-request.service`
    when that file exists, which runs `taskto-update --requested`. Under the updater's lock it
    **renames the file out of the directory first** (so nothing the server can change there is
    read or followed), looks at what it is, and removes it, so it can't start again by itself. A
    request that isn't a regular file of at most 512 bytes (a link, a directory, a fifo, a large
-   file) is removed and ignored. The content is only ever matched against one fixed pattern; it is
+   file) is removed and ignored, and so is one whose whole content isn't the one fixed line the
+   server writes (a time and a nonce). The content is only ever matched against that pattern; it is
    never used as an argument. Then it is the nightly run.
 3. The host ignores a request within ten minutes of the last requested run, and the same request
    twice (the page says so); a request that comes while the nightly run is going waits for it.
