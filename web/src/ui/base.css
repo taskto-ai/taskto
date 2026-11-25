@@ -28,15 +28,6 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Every element a component of the design system draws has a class that starts with `ui-`, and
-     each element rule here that can match anywhere leaves those out with
-     `:not(:where([class^="ui-"], [class*=" ui-"]))`: `:where()` adds no specificity, so the screens'
-     own elements, which have no ui- class, are styled exactly as before. In this layer a component
-     wins over these rules wherever both set a property, but not where only the base does: a field's
-     min-height here would still stretch a component that sets its height and no min-height. So the
-     opt-out stays, and it also keeps a rule off the components should the rule ever leave the
-     layer. css-check fails on an element rule here without it (docs/design.md, "Components"). */
-
   /* Headings are Bricolage Grotesque, heavy and tight as on the website, and break evenly. Text,
      labels and controls stay in Inter. */
   h1:not(:where([class^="ui-"], [class*=" ui-"])),
@@ -110,15 +101,6 @@
     min-height: 2.4rem;
   }
 
-  .tt-sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .tt-muted {
     color: var(--tt-muted);
   }
@@ -130,10 +112,6 @@
   .tt-error {
     color: var(--tt-danger);
     margin: var(--tt-error-margin);
-  }
-
-  .tt-center-text {
-    text-align: center;
   }
 
   /* Fingers: every control is at least 44px each way (--tt-touch). */

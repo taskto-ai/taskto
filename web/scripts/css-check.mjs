@@ -10,6 +10,8 @@
 //   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
 //   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
 // - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
+// - the reverse for the old classes: a rule naming a `tt-` class that no module mentions (a dead rule,
+//   left behind when a screen moved onto the components; see unusedClassErrors);
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
 //   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
@@ -413,19 +415,11 @@ export const OLD_STYLESHEETS = [
   'ui/base.css',
   'legacy-shared.css',
   'auth/auth.legacy.css',
-  'shell/shell.legacy.css',
-  'conversations/conversations.legacy.css',
-  'knowledge/knowledge.legacy.css',
   'boards/boards.legacy.css',
   'markdown.legacy.css',
-  'search/search.legacy.css',
-  'apps/apps.legacy.css',
   'settings/settings.legacy.css',
-  'browser/browser.legacy.css',
   'pwa/pwa.legacy.css',
-  'home/home.legacy.css',
   'offline/offline.legacy.css',
-  'notifications/notifications.legacy.css',
 ]
 const LIST = 'src/styles.css'
 // The cascade layers, in order, as ui/index.css and index.html declare them.
@@ -1087,16 +1081,52 @@ export function check(web) {
   return errors
 }
 
+// --- Old rules nothing uses ------------------------------------------------------------------
+
+// A rule that names a `tt-` class (the old stylesheet's) that no module of the app mentions can
+// match nothing: it was left behind when its screen moved onto the components, and it goes. A
+// module mentions a class when the name is anywhere in its code (a className, a lookup table, a
+// string a class is built from), its comments left out; tests and the gallery's specimens don't
+// count, nor does a name that is only the start of a longer one. Only the old classes are held to
+// it: a component's `ui-` class can be built from pieces (`ui-button-${variant}`), which a search
+// for the name doesn't see.
+export function unusedClassErrors(web) {
+  const src = join(web, 'src')
+  const code = components(src)
+    .filter((f) => !/\.gallery\.tsx?$/.test(f))
+    .map((f) => blankComments(readFileSync(f, 'utf8')))
+  const html = join(web, 'index.html')
+  if (existsSync(html)) code.push(readFileSync(html, 'utf8'))
+  const used = new Set(
+    code.flatMap((c) => [...c.matchAll(/(?<![\w-])tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g)].map((m) => m[0])),
+  )
+  const errors = []
+  for (const path of stylesheets(src)) {
+    const file = relative(web, path).split('\\').join('/')
+    const css = blankCssComments(readFileSync(path, 'utf8'))
+    const reported = new Set()
+    for (const m of css.matchAll(/\.(tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g)) {
+      const cls = m[1]
+      if (used.has(cls) || reported.has(cls)) continue
+      reported.add(cls)
+      const line = css.slice(0, m.index).split('\n').length
+      errors.push(`${file}:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules`)
+    }
+  }
+  return errors
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const at = process.argv.indexOf('--root')
   const web = at > 0 ? process.argv[at + 1] : join(dirname(fileURLToPath(import.meta.url)), '..')
-  const errors = check(web)
+  // The app's own tree (not a test's): its old rules nothing uses any more, too.
+  const errors = [...check(web), ...(at > 0 ? [] : unusedClassErrors(web))]
   if (errors.length > 0) {
     console.error(`css-check: ${errors.length} problem${errors.length === 1 ? '' : 's'}\n`)
     for (const e of errors) console.error(`  ${e}`)
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, no old rule reaches into a component, and src/ui/ takes its sizes, spaces, radii, shadows and durations from the tokens',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule and every tt- class a rule names is used, no colour is written outside the themes, no old rule reaches into a component, and src/ui/ takes its sizes, spaces, radii, shadows and durations from the tokens',
   )
 }

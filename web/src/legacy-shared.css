@@ -39,9 +39,6 @@
   fill: var(--tt-logo-dot);
 }
 
-/* A bar with no room for the name shows the mark: a square box crops the drawing
-   (xMinYMid slice) to the arrow and dot at its start (the phone's top bar, below). */
-
 /* Buttons. */
 
 .tt-button {
@@ -105,50 +102,14 @@
   }
 }
 
-.tt-icon-button {
-  display: inline-grid;
-  place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border: 0;
-  border-radius: var(--tt-radius);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.tt-icon-button:hover {
-  background: var(--tt-hover);
-}
-
 .tt-icon {
   flex-shrink: 0;
 }
 
-.tt-badge {
-  position: absolute;
-  inset-block-start: 0.15rem;
-  inset-inline-end: 0.1rem;
-  min-width: 1.1rem;
-  padding-inline: 0.25rem;
-  border-radius: 999px;
-  background: var(--tt-danger);
-  color: var(--tt-on-danger);
-  font-size: 0.7rem;
-  line-height: 1.1rem;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
 /* Fingers: every control is at least 44px each way (--tt-touch). */
 @media (pointer: coarse) {
-  .tt-button,
-  .tt-icon-button {
+  .tt-button {
     min-height: var(--tt-touch);
-  }
-
-  .tt-icon-button {
-    min-width: var(--tt-touch);
   }
 }
 
@@ -168,13 +129,6 @@
   font-weight: 400;
   font-size: 0.85rem;
   color: var(--tt-muted);
-}
-
-.tt-section {
-  padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
-  display: grid;
-  gap: 0.75rem;
-  align-content: start;
 }
 
 .tt-pane-head {
@@ -201,127 +155,12 @@
 
 /* Lists. */
 
-.tt-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 2px;
-  align-content: start;
-}
-
-.tt-list a,
-.tt-list button {
-  display: grid;
-  width: 100%;
-  padding: 0.5rem 0.6rem;
-  border: 0;
-  border-radius: var(--tt-radius);
-  background: transparent;
-  text-align: start;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.tt-list a:hover,
-.tt-list button:hover {
-  background: var(--tt-hover);
-}
-
-.tt-list [aria-current] {
-  background: var(--tt-accent-soft);
-}
-
-.tt-list-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tt-back {
-  display: none;
-}
-
 .tt-pane-head > .tt-error {
   flex-basis: 100%;
   order: 1;
 }
 
 /* Editing the knowledge base and boards, and search. */
-
-.tt-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.tt-search {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.tt-search input {
-  flex: 1 1 14rem;
-  min-width: 0;
-}
-
-.tt-editor {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.tt-editor textarea {
-  width: 100%;
-  min-height: 16rem;
-  resize: vertical;
-  font-family: var(--tt-mono);
-  font-size: 0.9rem;
-}
-
-.tt-view-tabs {
-  display: flex;
-  gap: 2px;
-}
-
-.tt-view-tabs button {
-  padding: 0.3rem 0.8rem;
-  border: 0;
-  border-radius: var(--tt-radius);
-  background: transparent;
-  color: var(--tt-muted);
-  cursor: pointer;
-}
-
-.tt-view-tabs button[aria-pressed="true"] {
-  background: var(--tt-accent-soft);
-  color: var(--tt-fg);
-  font-weight: 600;
-}
-
-.tt-preview {
-  padding: 0.75rem;
-  border: 1px dashed var(--tt-line-strong);
-  border-radius: var(--tt-radius);
-  min-width: 0;
-}
-
-.tt-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.1rem;
-  padding-inline: 0.5rem;
-  border: 1px solid var(--tt-line);
-  border-radius: 999px;
-  background: var(--tt-accent-soft);
-  overflow-wrap: anywhere;
-}
-
-.tt-label .tt-icon {
-  width: 0.9rem;
-  height: 0.9rem;
-}
 
 a.tt-button {
   color: inherit;
@@ -330,52 +169,6 @@ a.tt-button {
 
 a.tt-button.tt-primary {
   color: var(--tt-on-accent);
-}
-
-.tt-history {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.4rem;
-  padding-inline-start: 0.75rem;
-  border-inline-start: 2px solid var(--tt-line);
-}
-
-.tt-conflict {
-  display: grid;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0.6rem;
-  border: 2px solid var(--tt-focus);
-  border-radius: var(--tt-radius);
-  background: var(--tt-hover);
-}
-
-.tt-stage {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.tt-stage-label {
-  display: inline-block;
-  padding: 0.05rem 0.5rem;
-  border: 1px solid var(--tt-line-strong);
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.tt-stage-label[data-stage="live"] {
-  color: var(--tt-success);
-  border-color: currentColor;
-}
-
-.tt-stage-label[data-stage="draft"] {
-  color: var(--tt-warning);
-  border-color: currentColor;
 }
 
 .tt-panel {
@@ -441,23 +234,6 @@ a.tt-button.tt-primary {
   color: var(--tt-warning);
 }
 
-.tt-notice {
-  display: grid;
-  align-items: center;
-  gap: 0.6rem;
-  margin: 0;
-  padding: 0.75rem;
-  border-radius: var(--tt-radius);
-  border-inline-start: 3px solid var(--tt-focus);
-  background: var(--tt-accent-soft);
-}
-
-.tt-stage[data-stage="draft"] {
-  padding: 0.6rem;
-  border: 1px dashed var(--tt-warning);
-  border-radius: var(--tt-radius);
-}
-
 .tt-field {
   display: grid;
   gap: 0.25rem;
@@ -471,32 +247,7 @@ a.tt-button.tt-primary {
 /* Phones: the sidebar is a drawer, and one pane at a time. */
 
 @media (max-width: 48rem) {
-  .tt-section {
-    padding: 0.75rem;
-  }
-
-  .tt-back {
-    display: inline-grid;
-  }
-
   .tt-panel {
     padding: 0.75rem;
   }
-}
-
-.tt-stage-label[data-state="synced"] {
-  color: var(--tt-success);
-  border-color: currentColor;
-}
-
-.tt-stage-label[data-state="attention"] {
-  color: var(--tt-danger);
-  border-color: currentColor;
-}
-
-.tt-stage-label[data-state="queued"],
-.tt-stage-label[data-state="syncing"],
-.tt-stage-label[data-state="draft"] {
-  color: var(--tt-warning);
-  border-color: currentColor;
 }

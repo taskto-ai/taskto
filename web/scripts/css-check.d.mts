@@ -22,3 +22,4 @@ export function topLevel(
   | { kind: 'import'; url: string; rest: string; line: number }
   | { kind: 'block' | 'statement'; prelude: string; line: number }
 )[]
+export function unusedClassErrors(web: string): string[]

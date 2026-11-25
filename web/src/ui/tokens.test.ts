@@ -192,7 +192,7 @@ describe('the tokens', () => {
       levels.join(' < '),
     ).toBe(true)
     const found = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
-    // The scan reads the stylesheets that declare them (the skip link's is in shell/shell.legacy.css).
+    // The scan reads the stylesheets that declare them (the scrim's, the guards').
     expect(found.length).toBeGreaterThan(0)
     expect(levels.at(-1)).toBeGreaterThanOrEqual(Math.max(...found))
   })
@@ -212,13 +212,9 @@ const OLD_NAMES = [
   'stone',
   'surface',
   'hover',
-  'selected',
-  'user',
   'fg',
-  'fg-soft',
   'muted',
   'line',
-  'rule',
   'line-strong',
   'accent',
   'accent-hover',
@@ -227,18 +223,11 @@ const OLD_NAMES = [
   'accent-soft',
   'focus',
   'link',
-  'node',
-  'node-edge',
   'logo-dot',
-  'bar',
-  'on-bar',
-  'on-bar-muted',
   'danger',
-  'on-danger',
   'success',
   'warning',
   'clear-icon',
-  'qr-ground',
   'scrim',
   'shadow-lift',
   'shadow-lift-hover',
@@ -247,8 +236,6 @@ const OLD_NAMES = [
   'display',
   'mono',
   'radius',
-  'topbar-h',
-  'sidebar-w',
   'touch',
 ]
 
@@ -258,13 +245,9 @@ const OLD_COLORS: Record<string, [string, string]> = {
   stone: ['#f1efe9', '#181816'],
   surface: ['#ffffff', '#1b1b19'],
   hover: ['rgba(17, 17, 16, 0.05)', 'rgba(250, 248, 244, 0.07)'],
-  selected: ['rgba(17, 17, 16, 0.08)', 'rgba(250, 248, 244, 0.12)'],
-  user: ['#f1efe9', '#262624'],
   fg: ['#111110', '#faf8f4'],
-  'fg-soft': ['#2e2d2a', '#d6d3cc'],
   muted: ['#5c5a55', '#aba89f'],
   line: ['rgba(17, 17, 16, 0.15)', 'rgba(250, 248, 244, 0.14)'],
-  rule: ['#111110', 'rgba(250, 248, 244, 0.24)'],
   'line-strong': ['#7e7b74', '#8a877f'],
   accent: ['#4cefa8', '#4cefa8'],
   'accent-hover': ['#6bf5b8', '#6bf5b8'],
@@ -273,17 +256,10 @@ const OLD_COLORS: Record<string, [string, string]> = {
   'accent-soft': ['#dcfceb', 'rgba(76, 239, 168, 0.14)'],
   focus: ['#111110', '#4cefa8'],
   link: ['#006b45', '#4cefa8'],
-  node: ['#4cefa8', '#4cefa8'],
-  'node-edge': ['#1fc98a', '#1fc98a'],
   'logo-dot': ['#00a86b', '#00a86b'],
-  bar: ['#faf8f4', '#111110'],
-  'on-bar': ['#111110', '#faf8f4'],
-  'on-bar-muted': ['#5c5a55', '#aba89f'],
   danger: ['#b42318', '#ff8a82'],
-  'on-danger': ['#ffffff', '#111110'],
   success: ['#006b45', '#4cefa8'],
   warning: ['#9a4700', '#ffb04d'],
-  'qr-ground': ['#ffffff', '#ffffff'],
   scrim: ['rgba(17, 17, 16, 0.42)', 'rgba(0, 0, 0, 0.6)'],
 }
 
@@ -300,8 +276,6 @@ const OLD_VALUES: Record<string, [string, string]> = {
     '"JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   ],
   radius: ['8px', '8px'],
-  'topbar-h': ['52px', '52px'],
-  'sidebar-w': ['232px', '232px'],
   touch: ['44px', '44px'],
   // The values base.css wrote as literals, which it takes from these aliases.
   'text-body': ['15px', '15px'],
@@ -351,9 +325,7 @@ describe('the old --tt-* names', () => {
     // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
     // The screens' files, the base and the shared rules: not only the list that imports them.
-    expect(sheetPaths()).toEqual(
-      expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.legacy.css']),
-    )
+    expect(sheetPaths()).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'markdown.legacy.css']))
     const css = allSheets().join('\n')
     const missing = [...css.matchAll(/var\((--tt-[a-z0-9-]+)\s*\)/g)]
       .map((m) => m[1])
