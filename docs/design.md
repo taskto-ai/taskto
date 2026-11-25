@@ -176,3 +176,64 @@ equal to `--tt-canvas`, the metas and the manifest. The icons are the website's 
 (`#00a86b`) square with the logo's arrow and dot in ink, drawn by `web/scripts/make-icons.mjs` from
 the same geometry as `icon.svg`. The top bar is light, so the iOS status bar is the default one (dark
 text), not `black-translucent`, whose white text it would hide.
+
+## Capturing the screens
+
+A pull request that changes how the app looks attaches its captures from before and after.
+`make screens` makes them: it builds, starts the server on an empty temporary data directory and a
+free loopback port, seeds sample data through the HTTP API (invented names and `example.com`
+addresses only: documents, cards with labels and due dates, comments, a shared space with boards,
+a second person who joins and assigns the owner a card and mentions them, so the inbox has
+notifications, a pending invite, an access token, apps installed from the templates and published, Home widgets and
+pins, conversations), and visits each screen in Playwright's Chromium (`web/e2e/screens.mjs`). It
+stops the server and removes the data directory when it ends, also when a step failed or it was
+interrupted (Ctrl-C, `SIGTERM` and `SIGHUP` stop and reap the server, close the browser, remove the
+directory and exit with 130, 143 or 129). CI never runs it. The seeding uses the script's own HTTP
+client (the session cookie stays in memory), and a failed call is reported as its method, path
+and status only, never a header or a body.
+
+The PNGs go to `web/screens/`, which git ignores, as `<size>-<theme>/<screen>.png`: `desktop`
+(1440x900), `tablet` (820x1100) and `phone` (390x844), each `light` and `dark` (the browser's
+colour scheme, as a person's system sets it). The names are the same on every run, so a run on the
+base branch and one on the change can be compared file by file, for instance
+`desktop-dark/boards.png`. The screens are the first-run setup and the sign-in, every section
+empty, then with the sample data: Home and its customise mode, the conversations (the list, and
+one with messages), the knowledge base (the list, a document, the editor, search results), the
+boards (a board, a card open, adding a card), the apps (the list, the templates, an app open, the
+builder), the inbox, every tab of Settings, the account menu, and on the phone the menu drawer.
+Each is the browser's window, not the whole page, so what scrolls out of view is not in it. A
+picture is saved only once the screen's own ready check is on the page (a heading, a control or a
+seeded item that only that screen shows, in English): a screen that shows something else, such as
+an error page or another server's, is a failed capture and the run exits non-zero. The
+sample dates are relative to the day it runs, so "overdue" and "soon" read the same every day; the
+times of conversations are the time of the run, so those differ between two runs.
+
+When the browser logs an error or a request fails, the script lists it with the capture it
+happened in, and it exits non-zero when a screen could not be captured or the list of pictures (the manifest) could not be written (`--strict` also fails on
+what the browser reported). Options, by flag or environment variable:
+
+| Flag | Variable | |
+|---|---|---|
+| `--out DIR` | `TASKTO_SCREENS_OUT` | Where the PNGs go (default `web/screens/`). The script replaces only the files it writes, which it lists in `.screens-manifest.json` there (another file already at a capture's path fails that capture and stays): a capture that failed or was skipped loses its old picture, a full run that failed nowhere also removes the pictures an earlier run listed and this one didn't write, and no other file is ever deleted. |
+| `--only TEXT[,TEXT]` | `TASKTO_SCREENS_ONLY` | Only the captures whose name contains one of the texts: `desktop-dark/`, `boards`, `phone-light/drawer`. |
+| `--list` | | Print the capture names and stop. |
+| `--strict` | | Fail on anything the browser reported too. |
+| `--unsafe-agent` | `TASKTO_SCREENS_UNSAFE_AGENT=1` | See below. |
+
+With `make`, pass flags in `SCREENS_ARGS`: `make screens SCREENS_ARGS="--only desktop-light/boards"`.
+`TASKTO_SCREENS_BIN` runs another binary than `bin/taskto`.
+
+**The agent runtime and the conversations.** A conversation with replies needs the server started
+with `-agent`, where the scripted offline model answers. The server refuses to start the agent
+when its user can run `sudo` without a password ([agent-safety.md](agent-safety.md)). The script
+tries `-agent` and, when the server refuses, starts it without: it says so, the conversation list
+is captured empty and the conversation detail is skipped (no picture of it is made). On a development machine you can opt in to
+the override with `TASKTO_SCREENS_UNSAFE_AGENT=1` (or `--unsafe-agent`), which passes
+`-unsafe-privileged-agents`: for development only, a throwaway VM where the developer is root, say;
+never set it on a server people use. The script never sets it by itself.
+
+When you add a screen, add it to `SCREENS` in the script with its `ready` check; its test
+(`web/e2e/screens.test.mjs`, which runs in `pnpm run test` and needs no browser) checks that names
+are unique, that every screen has a ready check and that every Settings tab is there. The same test
+covers starting and stopping the server against fake server processes, the cleanup on a signal, the
+HTTP client's error text and what is left in the output folder.

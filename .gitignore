@@ -27,3 +27,6 @@ dist/
 # CI's test reports (.github/workflows/ci.yml)
 vitest-results.json
 web/e2e-results/
+
+# Captures of every screen (make screens, docs/design.md)
+web/screens/
