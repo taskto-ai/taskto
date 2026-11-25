@@ -2,7 +2,14 @@
 // box with a check (or a dash, when it is mixed), so the keyboard (Space), a screen reader and a
 // form all work as they always do. The whole row is the target, at least 44px tall on touch.
 
-import { type ComponentPropsWithRef, type ReactNode, useCallback, useLayoutEffect, useRef } from 'react'
+import {
+  type ChangeEvent,
+  type ComponentPropsWithRef,
+  type ReactNode,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+} from 'react'
 import './Checkbox.css'
 
 export type CheckboxProps = Omit<ComponentPropsWithRef<'input'>, 'type' | 'children'> & {
@@ -11,13 +18,18 @@ export type CheckboxProps = Omit<ComponentPropsWithRef<'input'>, 'type' | 'child
   indeterminate?: boolean
 }
 
-export function Checkbox({ label, indeterminate = false, className, ref, ...rest }: CheckboxProps) {
+export function Checkbox({ label, indeterminate = false, className, ref, onChange, ...rest }: CheckboxProps) {
   const own = useRef<HTMLInputElement>(null)
-  // After every render, not only when the prop changes: pressing a checkbox clears the browser's
-  // mixed state, and a controlled one that stays mixed must get it back.
+  // Pressing a checkbox clears the browser's mixed state. It is put back after every render, and
+  // right after the change too, since a controlled checkbox whose state doesn't change is not
+  // drawn again.
   useLayoutEffect(() => {
     if (own.current) own.current.indeterminate = indeterminate
   })
+  const change = (e: ChangeEvent<HTMLInputElement>) => {
+    onChange?.(e)
+    e.currentTarget.indeterminate = indeterminate
+  }
   // The caller's ref too, with what React 19 lets a callback ref return: its own cleanup.
   const setRef = useCallback(
     (el: HTMLInputElement | null) => {
@@ -40,7 +52,7 @@ export function Checkbox({ label, indeterminate = false, className, ref, ...rest
   )
   return (
     <label className={['ui-check', className ?? ''].filter(Boolean).join(' ')}>
-      <input ref={setRef} type="checkbox" className="ui-control ui-check-box" {...rest} />
+      <input ref={setRef} type="checkbox" className="ui-control ui-check-box" onChange={change} {...rest} />
       <span>{label}</span>
     </label>
   )

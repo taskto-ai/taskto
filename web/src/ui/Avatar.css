@@ -19,7 +19,7 @@
   .ui-avatar-sm {
     inline-size: calc(var(--space-5) + var(--space-1) / 2);
     block-size: calc(var(--space-5) + var(--space-1) / 2);
-    font-size: calc(var(--text-xs) - 1px);
+    font-size: var(--text-xs);
   }
 
   .ui-avatar-lg {

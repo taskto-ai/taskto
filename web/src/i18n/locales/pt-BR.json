@@ -1866,11 +1866,10 @@
       "notifications": "Notificações"
     },
     "noWorkspace": "Você não é membro de nenhum espaço de trabalho. Peça um convite a um administrador.",
-    "noWorkspaceTitle": "Nenhum espaço de trabalho ainda",
     "logOut": "Sair",
     "openMenu": "Abrir o menu",
     "closeMenu": "Fechar o menu",
-    "workspaces": "Seus espaços de trabalho",
+    "workspace": "Espaço de trabalho",
     "newWorkspace": "Novo espaço de trabalho",
     "newWorkspaceName": "Nome do novo espaço de trabalho",
     "createWorkspace": "Criar espaço de trabalho",
@@ -1886,9 +1885,10 @@
     "pinned": "Apps fixados",
     "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
     "reload": "Recarregar",
+    "noWorkspaceTitle": "Nenhum espaço de trabalho ainda",
+    "workspaces": "Seus espaços de trabalho",
     "workspaceCreated": "“{name}” foi criado.",
     "openWorkspace": "Abrir",
-    "workspace": "Espaço de trabalho",
     "accountLabel": "Conta"
   },
   "common": {
@@ -2030,6 +2030,26 @@
       "searching": "Buscando nos cartões dos quadros…",
       "failed": "Não foi possível buscar nos cartões dos quadros: {error}",
       "incomplete": "Alguns cartões mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
+    },
+    "records": {
+      "title": "Registros",
+      "label": "Registros encontrados",
+      "in": "{space} · {app}",
+      "more": "Mais registros",
+      "searching": "Buscando nos registros dos apps…",
+      "failed": "Não foi possível buscar nos registros dos apps: {error}",
+      "incomplete": "Alguns registros mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
+    },
+    "conversations": {
+      "title": "Conversas",
+      "label": "Conversas encontradas",
+      "untitled": "Conversa sem título",
+      "updated": "Atualizada em {when}",
+      "archivedAt": "Arquivada · atualizada em {when}",
+      "more": "Mais conversas",
+      "searching": "Buscando nas suas conversas…",
+      "failed": "Não foi possível buscar nas suas conversas: {error}",
+      "incomplete": "Algumas conversas mudaram agora há pouco, ou o agente não pôde ser alcançado, e não estão nestes resultados. Busque de novo em instantes."
     },
     "notice": {
       "embeddings_off": "A busca semântica está desligada: este espaço de trabalho não tem modelo de embeddings. Estes são resultados da busca por texto.",
@@ -2732,7 +2752,6 @@
       "howToSetUp": "Como configurar",
       "menuClip": "Numa caixa que corta: o menu não é cortado",
       "menuItems": "Ícones, um item desativado, um separador, um item perigoso",
-      "menuChoices": "Uma escolha entre várias, num grupo com nome",
       "sortBy": "Ordenar por",
       "newest": "Mais recentes primeiro",
       "oldest": "Mais antigos primeiro",
@@ -2781,7 +2800,8 @@
       "addColumn": "Adicionar uma coluna",
       "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
       "busyAsk": "Excluir e falhar…",
-      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo.",
+      "menuChoices": "Uma escolha entre várias, num grupo com nome"
     }
   }
 }

@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
@@ -73,6 +74,18 @@ type Index struct {
 	// afterCardSync, when set, is called by a card search after it has indexed the cards it
 	// looks in and before it finds them; tests change the world there.
 	afterCardSync func()
+	// afterRecordSync is the same for a search of app records.
+	afterRecordSync func()
+	// recordSyncLimit is the most records a search indexes before it answers (recordSyncMax);
+	// tests lower it.
+	recordSyncLimit int
+	// conversationSyncLimit is the same for the transcripts a conversation search reads.
+	conversationSyncLimit int
+	// conversationPassLimit is the most transcripts one pass of the background sync reads
+	// (conversationPassMax); tests lower it.
+	conversationPassLimit int
+	// conversations is where the transcripts of conversations are read from (SetConversations).
+	conversations atomic.Pointer[ConversationSource]
 
 	locks sync.Map // space ID → chan struct{} of one slot: one sync of a space at a time
 	// syncWait is how long a search waits for a sync of a space already running before it
@@ -85,6 +98,10 @@ type Index struct {
 	dirty     map[int64]access.Space
 	syncWake  chan struct{}
 	embedWake chan struct{}
+	// convWake wakes the conversations' worker, which has a goroutine of its own: reading
+	// transcripts from the agent runtime is slow, and must not hold up the documents' and
+	// records' sync.
+	convWake chan struct{}
 }
 
 // New returns the index over kb's repositories, kept in sqlDB, which must be migrated. Its
@@ -94,9 +111,9 @@ func New(sqlDB *sql.DB, kb *knowledge.Store, prov *providers.Store, opts Options
 	x := &Index{
 		db: sqlDB, kb: kb, providers: prov, client: opts.HTTPClient, log: opts.Logger, now: time.Now,
 		vectors:    newVectorCache(opts.VectorCache),
-		batchFiles: syncBatch, batchBytes: syncBatchBytes, syncWait: searchSyncWait,
+		batchFiles: syncBatch, batchBytes: syncBatchBytes, syncWait: searchSyncWait, recordSyncLimit: recordSyncMax, conversationSyncLimit: conversationSyncMax, conversationPassLimit: conversationPassMax,
 		dirty:    map[int64]access.Space{},
-		syncWake: make(chan struct{}, 1), embedWake: make(chan struct{}, 1),
+		syncWake: make(chan struct{}, 1), embedWake: make(chan struct{}, 1), convWake: make(chan struct{}, 1),
 	}
 	if x.client == nil {
 		x.client = egress.Any.Client(EmbedTimeout)
@@ -139,6 +156,7 @@ func (x *Index) Start(ctx context.Context) (stop func()) {
 	var wg sync.WaitGroup
 	wg.Go(func() { x.syncLoop(ctx) })
 	wg.Go(func() { x.embedLoop(ctx) })
+	wg.Go(func() { x.conversationLoop(ctx) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -159,6 +177,16 @@ func (x *Index) syncLoop(ctx context.Context) {
 	if err := x.syncCards(ctx, ""); err != nil && ctx.Err() == nil {
 		x.log.Error("search: indexing cards at startup", "err", err)
 	}
+	// And every app record, in the same way.
+	if err := x.queueRecords(ctx); err != nil && ctx.Err() == nil {
+		x.log.Error("search: queueing app records at startup", "err", err)
+	}
+	if err := x.syncRecords(ctx, ""); err != nil && ctx.Err() == nil {
+		x.log.Error("search: indexing app records at startup", "err", err)
+	}
+	if err := x.queueConversations(ctx); err != nil && ctx.Err() == nil {
+		x.log.Error("search: queueing conversations at startup", "err", err)
+	}
 	tick := time.NewTicker(sweepEvery)
 	defer tick.Stop()
 	for {
@@ -176,6 +204,9 @@ func (x *Index) syncLoop(ctx context.Context) {
 			if _, err := x.Sync(ctx, sp); err != nil && ctx.Err() == nil {
 				x.log.Error("search: syncing a space", "space", sp.ID, "err", err)
 			}
+		}
+		if err := x.syncRecords(ctx, ""); err != nil && ctx.Err() == nil {
+			x.log.Error("search: indexing app records", "err", err)
 		}
 	}
 }
