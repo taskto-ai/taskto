@@ -34,6 +34,8 @@ func TestCLIWorkerHistoryOfAnOlderInstallIsUnknown(t *testing.T) {
 	}
 	for _, q := range []string{
 		`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x')`,
+		// made, by a clock ahead of this one, after the upgrade's now
+		`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (2, 'b@example.com', 'B', 'x', '2999-01-01T00:00:00.000Z')`,
 		`INSERT INTO purge_cleanups (user_id, kind, target, attempts, last_error) VALUES (7, 'cli_home', '7', 3, 'cli_worker_failed')`,
 		`INSERT INTO purge_cleanups (user_id, kind, target) VALUES (7, 'providers', 'feed:7')`,
 	} {
@@ -59,6 +61,13 @@ func TestCLIWorkerHistoryOfAnOlderInstallIsUnknown(t *testing.T) {
 	_ = rows.Close()
 	if !slices.Equal(workers, []string{"unknown"}) {
 		t.Fatalf("history = %v, want [unknown]", workers)
+	}
+	var since string
+	if err := sqlDB.QueryRowContext(ctx, `SELECT since FROM cli_worker_history`).Scan(&since); err != nil {
+		t.Fatal(err)
+	}
+	if since < "2999-01-01T00:00:00.000Z" {
+		t.Errorf("unknown since %s: before an account the database has", since)
 	}
 	var steps []string
 	rows, err = sqlDB.QueryContext(ctx, `SELECT kind || ' ' || target || ' ' || attempts || ' ' || coalesce(last_error, '') FROM purge_cleanups ORDER BY kind, target`)

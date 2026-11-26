@@ -573,7 +573,9 @@ func forgetWorkerHistory(ctx context.Context, p string) error {
 	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cli_worker_history'`).Scan(&n); err != nil || n == 0 {
 		return err
 	}
-	_, err = sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker, since) VALUES ('unknown', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	// Not before any restored account was made, whatever this host's clock says.
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker, since)
+		VALUES ('unknown', max(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), coalesce((SELECT max(created_at) FROM users), '')))
 		ON CONFLICT (worker) DO UPDATE SET since = max(since, excluded.since)`)
 	return err
 }

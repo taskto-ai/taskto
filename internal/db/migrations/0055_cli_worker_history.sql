@@ -17,8 +17,9 @@ CREATE TABLE cli_worker_history (
     since  TEXT NOT NULL
 ) STRICT;
 
+-- Not before any account was made, whatever the clock says.
 INSERT INTO cli_worker_history (worker, since)
-SELECT 'unknown', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+SELECT 'unknown', max(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), coalesce((SELECT max(created_at) FROM users), ''))
 WHERE EXISTS (SELECT 1 FROM users) OR (SELECT high FROM user_ids WHERE id = 1) > 0;
 
 -- A purge's CLI step names the worker it waits for: 'local:' or 'container:' and the user's id. A

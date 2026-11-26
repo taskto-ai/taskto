@@ -704,6 +704,10 @@ func TestRestoreMarksTheCLIWorkersHistoryUnknown(t *testing.T) {
 	if _, err := f.server.Exec(`INSERT INTO cli_worker_history (worker, since) VALUES ('local', '2026-01-01T00:00:00.000Z')`); err != nil {
 		t.Fatal(err)
 	}
+	// An account made, by the backup's clock, after what this host's clock says now.
+	if _, err := f.server.Exec(`UPDATE users SET created_at = '2999-01-01T00:00:00.000Z'`); err != nil {
+		t.Fatal(err)
+	}
 	archive, _ := backup(t, f.dir)
 	dst := filepath.Join(t.TempDir(), "restored")
 	if _, err := Restore(ctx, archive, dst); err != nil {
@@ -721,6 +725,9 @@ func TestRestoreMarksTheCLIWorkersHistoryUnknown(t *testing.T) {
 	var created string
 	if err := server.QueryRow(`SELECT max(created_at) FROM users`).Scan(&created); err != nil {
 		t.Fatal(err)
+	}
+	if created != "2999-01-01T00:00:00.000Z" {
+		t.Fatalf("fixture: newest account made %s", created)
 	}
 	if since < created {
 		t.Errorf("unknown since %s, before the backup's newest account (%s)", since, created)

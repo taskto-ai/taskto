@@ -266,8 +266,8 @@ func (s *Service) recordCLIHomes(ctx context.Context, tx *sql.Tx, userID int64) 
 			kinds[k] = true
 		}
 	}
-	if err := rows.Close(); err != nil {
-		return err
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err // a partial list would leave out a worker that holds their files
 	}
 	for _, k := range []string{cliLocal, cliContainer} {
 		if !kinds[k] {
