@@ -693,6 +693,25 @@ test('the deletion notice is not used up by a step that does not show it', async
   await screen.findByText(/Your account was deleted\./)
 })
 
+test('a notice is not told again to another account that went to the code step and back', async () => {
+  sessionStorage.clear()
+  resetDeletion()
+  rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z')
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { two_factor_required: true, challenge: 'fake-challenge', expires_at: 'x' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Your account was deleted\./)
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'b@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'right horse battery' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Back to the password' }))
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+  expect(peekDeletion()).toBeNull()
+})
+
 // --- The rework on the component library: what it adds to the screens.
 
 test('the password can be shown and hidden again, and the button says which it does', async () => {

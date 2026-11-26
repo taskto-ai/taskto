@@ -127,6 +127,15 @@ export function deletionShown(): void {
   if (n) retire(n)
 }
 
+// Sign-in details were submitted on this page (a password, or the start of a single sign-on): the
+// browser has moved on from the deleted account, and a notice still waiting is dropped without being
+// shown. The form does not know whose account the email names, so any submission drops it: telling
+// it too early to the account it belongs to is acceptable, telling it to someone else is not.
+export function dropDeletion(): void {
+  const n = current()
+  if (n && !n.shown && keyOf(n) !== spent) retire(n)
+}
+
 // For tests: this page as it was before anything happened.
 export function resetDeletion(): void {
   memory = null

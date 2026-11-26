@@ -1,7 +1,7 @@
 // The screens before the app: first-run setup, logging in, invites and password reset links.
 // Each answers with the GET /api/me body, which the caller takes as the session.
 
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { t, useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -11,7 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
-import { DELETION_EVENT, deletionShown, peekDeletion } from './deleted'
+import { DELETION_EVENT, deletionShown, dropDeletion, peekDeletion } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -200,7 +200,15 @@ function MethodsPending({ state, retry }: { state: MethodsState; retry: () => vo
 
 // One button per single sign-on provider. `next` is where the provider's sign-in brings the
 // person back to, a path on this server.
-function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next: string }) {
+function SsoButtons({
+  providers,
+  next,
+  onStart,
+}: {
+  providers: LoginMethods['sso']
+  next: string
+  onStart?: () => void
+}) {
   const t = useT()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -212,6 +220,7 @@ function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next:
     inFlight.current = true
     setBusy(id)
     setError(null)
+    onStart?.()
     try {
       const { url } = await api<{ url: string }>(`/api/sso/${encodeURIComponent(id)}/start`, {
         method: 'POST',
@@ -378,7 +387,17 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const [password, setPassword] = useState('')
   // The challenge of a login whose password was right and that now asks for a code.
   const [challenge, setChallenge] = useState<string | null>(null)
+  // Told to a person who has just deleted their account: read here, and removed from storage only
+  // once it is on the screen (below), so a screen that goes before drawing it loses nothing.
+  const [deleted, setDeleted] = useState(peekDeletion)
+  // Sign-in details were submitted: the notice is not for whoever they belong to, now or after a
+  // step that took the form's place and gave it back.
+  const dropNotice = useCallback(() => {
+    dropDeletion()
+    setDeleted(null)
+  }, [])
   const { busy, failure, submit, edited } = useSubmit(async () => {
+    dropNotice()
     const reply = await api<Me | Challenged>('/api/login', {
       method: 'POST',
       body: { email, password },
@@ -391,9 +410,6 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     return reply
   }, onDone)
   const [forgot, setForgot] = useState(false)
-  // Told to a person who has just deleted their account: read here, and removed from storage only
-  // once it is on the screen (below), so a screen that goes before drawing it loses nothing.
-  const [deleted, setDeleted] = useState(peekDeletion)
   // ...or told now, if the deletion is answered after this screen is up.
   useEffect(() => {
     const told = () => {
@@ -435,7 +451,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     >
       {deleted && <Notice tone="info">{t('auth.accountDeleted', { date: f.date(deleted) })}</Notice>}
       {ssoError && <Notice tone="danger">{ssoError}</Notice>}
-      <SsoButtons providers={methods.sso} next={here()} />
+      <SsoButtons providers={methods.sso} next={here()} onStart={dropNotice} />
       {methods.password && methods.sso.length > 0 && <AuthDivider>{t('auth.sso.or')}</AuthDivider>}
       {methods.password && (
         <AuthForm key="login" failure={failure} onEdit={edited} onSubmit={submit}>
