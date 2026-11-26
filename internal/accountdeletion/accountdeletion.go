@@ -81,7 +81,11 @@ type Apps interface {
 // Knowledge is what the purge needs of the knowledge base: *knowledge.Store.
 type Knowledge interface {
 	AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error)
+	// RemoveSpace removes a space's files, and refuses every later call on it until ForgetSpace.
 	RemoveSpace(sp access.Space) error
+	// ForgetSpace drops the refusal once the space's rows are deleted: a space made later may be
+	// given its ID.
+	ForgetSpace(sp access.Space)
 }
 
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
@@ -409,6 +413,9 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	}
 	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
 		return err
+	}
+	for _, sp := range private {
+		s.o.Knowledge.ForgetSpace(sp)
 	}
 	// The providers file and the key files, now that the database has no account of theirs. A
 	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.

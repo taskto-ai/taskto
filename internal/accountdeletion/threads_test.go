@@ -9,6 +9,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/knowledge"
 )
 
 // failingKB fails the removal and the rewriting of the spaces it is told to, and notes every space it
@@ -214,5 +215,24 @@ func TestAnAgentRuntimeThatIsNeverReadyFailsTheStepAtItsDeadlineAndLaterStepsRun
 	}
 	if len(kinds) != 1 || kinds[0] != cleanAgentConversation {
 		t.Fatalf("steps left %v, want only the agent step (the providers step ran)", kinds)
+	}
+}
+
+// A purge refuses every call on a private space it removed until the space's rows are gone, and
+// then forgets it: the database may give the same ID to a space made later (spaces' IDs aren't
+// kept apart from the rows'), and its documents must be writable.
+func TestAPurgedSpaceIDCanBeUsedAgain(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM spaces WHERE id = ?`, w.private.ID); n != 0 {
+		t.Fatalf("fixture: the space's row remains")
+	}
+	if _, err := w.kb.Put(ctx, w.private, "again.md", []byte("a new space with the old ID"), "", by, ""); err != nil {
+		t.Fatalf("the ID of a purged space can't be used again: %v", err)
 	}
 }

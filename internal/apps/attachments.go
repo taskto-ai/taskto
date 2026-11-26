@@ -162,6 +162,24 @@ func (s *Service) WithFiles(dataDir string) *Service {
 	return s
 }
 
+// SpaceHolder orders the writes in a space's directory against its removal: the knowledge base's
+// Store, which removes a purged account's private spaces (knowledge.Store.HoldSpace).
+type SpaceHolder interface {
+	// HoldSpace holds sp's directory until release is called, so a removal of the space waits for
+	// it; it is an error that is access.ErrNotFound once the space is removed, and the caller then
+	// makes nothing in the directory.
+	HoldSpace(sp access.Space) (release func(), err error)
+}
+
+// WithSpaceHolder gives the service what orders its writes in a space's directory (an upload's
+// chunks, a finished picture, a photo that follows its app) against the space's removal, so none
+// lands after it and makes the directory again. Without one, a space is never removed under the
+// service (the tests of the apps alone).
+func (s *Service) WithSpaceHolder(h SpaceHolder) *Service {
+	s.holder = h
+	return s
+}
+
 // WithQuota gives the service the storage quotas, which an upload is checked against when it
 // starts, at its declared size, and again when it is finalized, at what is kept.
 func (s *Service) WithQuota(q *quota.Service) *Service {
@@ -200,16 +218,32 @@ func newID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// filesRoot opens the directory of spaceID, which holds the files of attachments stored there.
-func (s *Service) filesRoot(ctx context.Context, spaceID int64) (*os.Root, error) {
+// filesRoot opens the directory of spaceID, which holds the files of attachments stored there, and
+// holds the space (WithSpaceHolder) until done is called, which also closes the root: a removal of
+// the space waits for it, and one that happened refuses it (access.ErrNotFound) before the
+// directory is made again. A caller that has the root open doesn't open another of the same space
+// (the hold is a read lock, which a waiting removal makes a second reader queue behind).
+func (s *Service) filesRoot(ctx context.Context, spaceID int64) (root *os.Root, done func(), err error) {
 	if s.dataDir == "" {
-		return nil, errNoFiles
+		return nil, nil, errNoFiles
 	}
 	var workspace int64
 	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id FROM spaces WHERE id = ?`, spaceID).Scan(&workspace); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return access.OpenRoot(s.dataDir, access.Space{ID: spaceID, WorkspaceID: workspace})
+	sp := access.Space{ID: spaceID, WorkspaceID: workspace}
+	release := func() {}
+	if s.holder != nil {
+		if release, err = s.holder.HoldSpace(sp); err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", ErrNotFound, err) // a space that is gone has no photos: the API's 404
+		}
+	}
+	root, err = access.OpenRoot(s.dataDir, sp)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return root, func() { _ = root.Close(); release() }, nil
 }
 
 // fileName is the name, inside a space's directory, of an attachment's file with suffix: "" for
@@ -412,11 +446,11 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 			return &statusError{http.StatusRequestEntityTooLarge, apierr.CodeAppUploadChunk, "the chunk runs past the size the upload declared",
 				apierr.Params{"max": u.Size - u.Received}}
 		}
-		root, err := s.filesRoot(ctx, u.spaceID)
+		root, done, err := s.filesRoot(ctx, u.spaceID)
 		if err != nil {
 			return err
 		}
-		defer root.Close()
+		defer done()
 		if err := root.MkdirAll(path.Dir(fileName(appID, id, "")), 0o700); err != nil {
 			return err
 		}
@@ -479,11 +513,11 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if u.Received != u.Size {
 		return Attachment{}, offsetError(u.Received)
 	}
-	root, err := s.filesRoot(ctx, u.spaceID)
+	root, done, err := s.filesRoot(ctx, u.spaceID)
 	if err != nil {
 		return Attachment{}, err
 	}
-	defer root.Close()
+	defer done()
 	data, err := readUpload(root, appID, id, u.Size)
 	if errors.Is(err, errShort) || errors.Is(err, fs.ErrNotExist) {
 		// The bytes the store counts aren't all in the file (it was lost): start again from what is.
@@ -520,7 +554,7 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if errors.Is(err, errNotPicture) || errors.Is(err, errNotPNG) {
 		// Not a picture (or, for a signature, not a PNG), so not an attachment: it is removed, and the
 		// client starts over.
-		if derr := s.deleteAttachment(ctx, id, appID); derr != nil {
+		if derr := s.deleteAttachment(ctx, id, appID, root); derr != nil {
 			slog.Warn("apps: removing a file that isn't a picture", "app", appID, "err", derr)
 		}
 		return Attachment{}, err
@@ -679,8 +713,9 @@ func (s *Service) abandonUpload(ctx context.Context, sp access.Space, a Actor, a
 }
 
 // deleteAttachment removes an attachment that isn't attached, whoever's: the server's own clearing
-// of what can't be used.
-func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64) error {
+// of what can't be used. held is the root of its space when the caller has it open (and so holds
+// the space), which the files are then removed through.
+func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64, held *os.Root) error {
 	var spaceID int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND row_id IS NULL RETURNING space_id`, id).Scan(&spaceID)
@@ -691,6 +726,12 @@ func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64) 
 	})
 	if err != nil || spaceID == 0 {
 		return err
+	}
+	if held != nil {
+		if err := unlinkIn(held, appID, id); err != nil {
+			slog.Warn("apps: removing attachment files", "app", appID, "err", err)
+		}
+		return nil
 	}
 	s.removeFiles(ctx, spaceID, appID, id)
 	return nil
@@ -707,14 +748,19 @@ func (s *Service) removeFiles(ctx context.Context, spaceID, appID int64, id stri
 // unlinkFiles deletes an attachment's files from the space that held them, and reports a file that
 // couldn't be removed (all are tried). One already gone is not a failure.
 func (s *Service) unlinkFiles(ctx context.Context, spaceID, appID int64, id string) error {
-	root, err := s.filesRoot(ctx, spaceID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil // the space is gone, and its directory with it
+	root, done, err := s.filesRoot(ctx, spaceID)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, access.ErrNotFound) {
+		return nil // the space is gone (removed, or its rows are), and its directory with it
 	}
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer done()
+	return unlinkIn(root, appID, id)
+}
+
+// unlinkIn removes the files of an attachment from root, all of them tried.
+func unlinkIn(root *os.Root, appID int64, id string) error {
 	var errs []error
 	for _, suffix := range []string{"", ".part", ".thumb", ".thumb.tmp", ".tmp"} {
 		if err := root.Remove(fileName(appID, id, suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -766,11 +812,11 @@ func (s *Service) openAttachment(ctx context.Context, sp access.Space, a Actor, 
 	} else if !u.owner.Valid || u.owner.Int64 != a.UserID {
 		return nil, ErrNotFound
 	}
-	root, err := s.filesRoot(ctx, u.spaceID)
+	root, done, err := s.filesRoot(ctx, u.spaceID)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer done()
 	suffix, contentType, ext := "", u.ContentType, ""
 	for _, pt := range pictureTypes {
 		if pt.contentType == u.ContentType {
@@ -1067,16 +1113,28 @@ func (s *Service) relocate(ctx context.Context, appID int64) error {
 
 func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from, to int64) error {
 	defer s.lock(id)()
-	src, err := s.filesRoot(ctx, from)
-	if err != nil {
+	if from == to {
+		return nil // nothing to move; copying a file onto itself and removing the old copy would lose it
+	}
+	// The two spaces are held in the order of their ids, whichever way the file goes: two moves in
+	// opposite directions never each wait for the other's space behind a waiting removal.
+	var src, dst *os.Root
+	first, second := &src, &dst
+	ids := [2]int64{from, to}
+	if to < from {
+		first, second = &dst, &src
+		ids = [2]int64{to, from}
+	}
+	var err error
+	var doneFirst, doneSecond func()
+	if *first, doneFirst, err = s.filesRoot(ctx, ids[0]); err != nil {
 		return err
 	}
-	defer src.Close()
-	dst, err := s.filesRoot(ctx, to)
-	if err != nil {
+	defer doneFirst()
+	if *second, doneSecond, err = s.filesRoot(ctx, ids[1]); err != nil {
 		return err
 	}
-	defer dst.Close()
+	defer doneSecond()
 	// The stored picture and its thumbnail go. The received file goes only while the upload isn't
 	// finished: after, it is a leftover that is not the picture (it still has its metadata).
 	var status string
@@ -1243,11 +1301,14 @@ func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 }
 
 func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.Time) error {
-	root, err := access.OpenRoot(s.dataDir, sp)
+	root, done, err := s.filesRoot(ctx, sp.ID)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, access.ErrNotFound) {
+		return nil // the space is gone, with its files
+	}
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer done()
 	apps, err := fs.ReadDir(root.FS(), filesDir)
 	if err != nil {
 		return err
