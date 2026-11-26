@@ -27,6 +27,9 @@ type Request struct {
 	// EffectID is the outbox entry's number, which the integration's reference is unique by.
 	EffectID int64
 	Slot     string
+	// URLField is the record's field the link is written to. A record has one payable link per field:
+	// an entry with no reference of its own first reads the record's newest one for the field.
+	URLField string
 	// Amount is the amount as decimal text and Currency its code, as the record held them
 	// (payload): nothing in them was rounded, converted or checked yet.
 	Amount, Currency string

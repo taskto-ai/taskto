@@ -194,7 +194,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
-		Slot: p.Slot, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
+		Slot: p.Slot, URLField: p.URLField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
 	})
 	if err != nil {
 		var pe *paylink.Error

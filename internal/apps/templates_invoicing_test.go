@@ -19,7 +19,7 @@ import (
 // changes when the template sends another field out, writes another field or value, asks in
 // another currency or changes what its action does: that makes every installed copy ask for a new
 // approval, so change it on purpose, in the same commit as the template and its version.
-const invoicingContractHash = "782dc1692d8d1f0c50cac0062163c1355b3bb96c5fd0d5aa423ca562876850fd"
+const invoicingContractHash = "4a3669ad2d9da4680ac7967de72a072bf50694c8a03947134f574407490d2119"
 
 func invoicingTemplate(t *testing.T) Template {
 	t.Helper()
@@ -72,6 +72,64 @@ func TestTheInvoicingTemplateDeclaresAPaymentsSlotAndNothingElse(t *testing.T) {
 	}
 	if got := contract.Hash(); got != invoicingContractHash {
 		t.Fatalf("the contract's hash is %s: if the change is intended, pin it in invoicingContractHash", got)
+	}
+}
+
+// An ordinary edit of an invoice never asks for a payment link: the record editor takes an update
+// action without effects (web/src/apps/explorer.ts), and the template has one. Only sending a draft
+// and replacing an expired link run the effect, and only for a sent invoice; the record's earlier link
+// decides whether a new one is made at all (internal/integrations paymentlink.go).
+func TestTheInvoicingTemplateEditsWithoutAPaymentLink(t *testing.T) {
+	def := invoicingTemplate(t).Definition
+	edit, ok := def.Actions["edit_invoice"]
+	if !ok || edit.Kind != ActionUpdate || len(edit.Effects) != 0 {
+		t.Fatalf("edit_invoice = %+v, %v: the record editor's update must have no effect", edit, ok)
+	}
+	for _, name := range []string{"send_invoice", "replace_link"} {
+		a := def.Actions[name]
+		if a.Kind != ActionUpdate || len(a.Effects) != 1 || a.Effects[0].Kind != EffectCreatePaymentLink {
+			t.Fatalf("%s = %+v", name, a)
+		}
+		w := a.Effects[0].When
+		if w == nil || w.Field != "status" || w.Op != OpEq || w.Value != "sent" {
+			t.Fatalf("%s runs its payment link when %+v: only for a sent invoice", name, w)
+		}
+	}
+	var links []string
+	for _, l := range def.contract("payments").Links {
+		links = append(links, l.Action)
+	}
+	if slices.Sort(links); !slices.Equal(links, []string{"replace_link", "send_invoice"}) {
+		t.Fatalf("the contract's links are of %v", links)
+	}
+	// The screen's buttons: sending sets the status only, and replacing clears the expired link, which
+	// is the change that queues the effect again.
+	buttons := map[string]map[string]any{}
+	for _, sc := range def.Screens {
+		for _, c := range sc.Components {
+			raw := mustJSON(t, c)
+			var b struct {
+				ID     string `json:"id"`
+				Action struct {
+					Event struct {
+						Name    string         `json:"name"`
+						Context map[string]any `json:"context"`
+					} `json:"event"`
+				} `json:"action"`
+			}
+			if err := json.Unmarshal([]byte(raw), &b); err != nil {
+				t.Fatal(err)
+			}
+			if b.Action.Event.Name != "" {
+				buttons[b.Action.Event.Name] = b.Action.Event.Context
+			}
+		}
+	}
+	if c := buttons["send_invoice"]; len(c) != 2 || c["status"] != "sent" {
+		t.Fatalf("send_invoice's context = %v", c)
+	}
+	if c := buttons["replace_link"]; len(c) != 3 || c["pay_url"] != "" || c["payment_id"] != "" {
+		t.Fatalf("replace_link's context = %v", c)
 	}
 }
 

@@ -165,12 +165,14 @@
             "when": { "field": "status", "op": "eq", "value": "sent" },
             "child": "detail-resend"
           },
-          { "id": "detail-resend-label", "component": "Text", "text": "Make a new payment link" },
+          { "id": "detail-resend-label", "component": "Text", "text": "Replace an expired link" },
           {
             "id": "detail-resend",
             "component": "Button",
             "child": "detail-resend-label",
-            "action": { "event": { "name": "send_invoice", "context": { "id": { "path": "/record/id" }, "status": "sent" } } }
+            "action": {
+              "event": { "name": "replace_link", "context": { "id": { "path": "/record/id" }, "pay_url": "", "payment_id": "" } }
+            }
           },
           { "id": "detail-actions", "component": "Row", "children": ["detail-back"] },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
@@ -215,12 +217,29 @@
       "open_invoice": { "kind": "navigate", "screen": "detail" },
       "back_to_list": { "kind": "navigate", "screen": "list" },
       "add_invoice": { "kind": "insert", "then": "list" },
+      "edit_invoice": { "kind": "update" },
       "send_invoice": {
         "kind": "update",
         "effects": [
           {
             "kind": "create_payment_link",
             "integration": "payments",
+            "when": { "field": "status", "op": "eq", "value": "sent" },
+            "amount_field": "total",
+            "currency_field": "currency",
+            "description": "Invoice {{number}} for {{customer}}",
+            "url_field": "pay_url",
+            "id_field": "payment_id"
+          }
+        ]
+      },
+      "replace_link": {
+        "kind": "update",
+        "effects": [
+          {
+            "kind": "create_payment_link",
+            "integration": "payments",
+            "when": { "field": "status", "op": "eq", "value": "sent" },
             "amount_field": "total",
             "currency_field": "currency",
             "description": "Invoice {{number}} for {{customer}}",

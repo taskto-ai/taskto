@@ -168,13 +168,35 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	// With no public URL there are no pages of ours: both are empty and the provider hosts the
 	// payer's confirmation (a link is made all the same). A ref already made keeps its own.
 	success, cancel := s.pageURLs()
-	if s.beforeBeginRef != nil {
-		s.beforeBeginRef()
-	}
 	mode := Lookup(rec.Provider).Mode(rec.Settings, creds.APIKey.Reveal())
-	ref, err = s.beginRef(ctx, req, minor, cur, whose{account: account, mode: mode}, success, cancel)
-	if err != nil {
-		return paylink.Link{}, err
+	who := whose{account: account, mode: mode}
+	for i := 0; ; i++ {
+		// An entry with no ref of its own reads the record's earlier link for the field first: one a
+		// payer may still use is given again, and nothing is made (earlierLink).
+		var checked int64
+		if !found {
+			var link paylink.Link
+			var reuse bool
+			if link, reuse, checked, err = s.earlierLink(ctx, provider, creds, client, rec, req, minor, cur, who); err != nil {
+				return paylink.Link{}, err
+			} else if reuse {
+				return link, nil
+			}
+		}
+		if s.beforeBeginRef != nil {
+			s.beforeBeginRef()
+		}
+		ref, err = s.beginRef(ctx, req, minor, cur, who, success, cancel, checked)
+		if errors.Is(err, errRecheck) && i < maxKeysPerTry {
+			continue // the record's newest link changed since it was read: read it again
+		}
+		if err != nil {
+			if errors.Is(err, errRecheck) {
+				return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+			}
+			return paylink.Link{}, err
+		}
+		break
 	}
 	if ref.objectID != "" { // made by a call that finished while this one began
 		return madeLink(ref, req)
@@ -683,6 +705,10 @@ type ref struct {
 	// paidObjectID and paymentID are what the verified event that paid the ref said: the provider's
 	// object the payment arrived on and the payment itself (apply.go), empty until then.
 	paidObjectID, paymentID string
+	// effectID is the outbox entry the ref is for now (0 once it was cleaned up), and urlField the
+	// record's field its link is written to ("" for a ref made before refs kept it: any field).
+	effectID int64
+	urlField string
 }
 
 // newLink is what the provider is asked for under key a: the key's token, the ref's money and the
@@ -702,13 +728,13 @@ func (r ref) link() paylink.Link {
 // refColumns are integration_refs' own, so a query of that table alone reads a ref.
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
 	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
-	coalesce(paid_object_id, ''), coalesce(payment_id, '')`
+	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), url_field`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
 		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
-		&r.paidObjectID, &r.paymentID)
+		&r.paidObjectID, &r.paymentID, &r.effectID, &r.urlField)
 	return r, err
 }
 
@@ -749,24 +775,43 @@ func newToken() (string, error) {
 // when it is queued). A ref with no object that was made in another account or mode than who is left
 // exactly as it is and the try is refused (whatever its calls made is where they were made), and so is
 // one made under another integration than the request's (integration_changed), or for other money.
-func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string, who whose, successURL, cancelURL string) (ref, error) {
+//
+// An entry that has no ref yet takes the record's earlier one for the same field instead of making
+// its own, in the same transaction (takeEarlier): one link a payer may use per record and field.
+// checked is the earlier ref with an object that earlierLink read at the provider and found unable to
+// take payment (0 for none): only then is a new ref made over it.
+func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string, who whose, successURL, cancelURL string, checked int64) (ref, error) {
 	token, err := newToken()
 	if err != nil {
 		return ref{}, err
 	}
+	// The transaction begins IMMEDIATE (the database's _txlock): it holds the write lock from its
+	// first statement, so the record's earlier ref is read and taken, or a new one made, by one entry
+	// at a time.
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ref{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	at := s.store.stamp(s.store.now())
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at, account_id, account_mode, success_url, cancel_url)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (effect_id) DO NOTHING`,
-		token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at, who.account, who.mode, successURL, cancelURL); err != nil {
-		return ref{}, err
-	}
 	out, err := scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		var took bool
+		if out, took, err = s.takeEarlier(ctx, tx, req, checked); err != nil {
+			return ref{}, err
+		}
+		if !took {
+			at := s.store.stamp(s.store.now())
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at,
+					account_id, account_mode, success_url, cancel_url, url_field)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at,
+				who.account, who.mode, successURL, cancelURL, req.URLField); err != nil {
+				return ref{}, err
+			}
+			out, err = scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
+		}
+	}
 	if err != nil {
 		return ref{}, err
 	}
@@ -777,7 +822,9 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
 	}
 	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur) {
-		return ref{}, unavailable() // not what the ref was made for: its keys ask what it asked
+		// Not what the ref was made for (its keys ask what it asked): the record's earlier link, still
+		// being made, asks other money. Nothing else is made while it may still be paid.
+		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
 	}
 	return out, tx.Commit()
 }
@@ -967,4 +1014,142 @@ func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Re
 	// Another try noted its answer first (the same object, since the key is the same), or moved the ref
 	// on: what the ref holds now is what is given, checked as any finished ref is.
 	return s.refHolds(ctx, r, req)
+}
+
+// ----- one payable link per record and field -----
+//
+// An outbox entry has one ref, and a record may ask for its link more than once: the invoice is sent
+// again (an action that runs the effect after an edit), or its expired link is replaced. Each is a
+// new entry, and a new ref would make a new link while the record's earlier one may still take
+// payment: two links a payer could pay for one invoice. So an entry that has no ref of its own reads
+// the record's newest ref for the same field first, and makes a new one only when nothing of the
+// earlier one can still be paid:
+//
+//   - one with a link: its state is read at the provider. Open, it is given again (the same link is
+//     written back, and nothing is made), or, if it asks other money, the entry fails with
+//     integration_link_still_open. Expired, or paid and complete, a new ref is made. Settled while the
+//     ref doesn't know it paid, the entry stops for a person (integration_link_already_paid). A read
+//     that fails makes nothing. One made under another integration, account or mode can't be read with
+//     this key: unless the ref is paid, refunded or expired, the entry fails with the code that says
+//     which.
+//   - one still being made, or whose call's outcome is unknown: the entry takes it (it becomes the
+//     entry's ref) and goes on resolving it as its own, so it waits on its reconciliation, adopts its
+//     object, or fails for an admin exactly as the first entry would have. A ref under which no call
+//     ever ran holds nothing at the provider: it is removed and a new one is made in its place, in the
+//     transaction that holds the write lock, which also stops any call under it from being written
+//     ahead (writeAhead needs the ref).
+//   - one paid before it learned its link: a new ref is made.
+//
+// The read at the provider happens before the transaction, which reads the record's newest ref again
+// under the write lock: if it isn't the one checked, the entry reads it again (errRecheck).
+
+// errRecheck is beginRef's answer when the record's newest ref is not the one earlierLink checked.
+var errRecheck = errors.New("the record's newest payment link changed")
+
+// latestRefOf is the record's newest ref for the request's field (or of no known field), other than
+// the entry's own.
+func latestRefOf(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, req paylink.Request) (ref, bool, error) {
+	r, err := scanRef(q.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs
+		WHERE app_id = ? AND record_id = ? AND (url_field = ? OR url_field = '') AND (effect_id IS NULL OR effect_id != ?)
+		ORDER BY id DESC LIMIT 1`, req.AppID, req.RecordID, req.URLField, req.EffectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ref{}, false, nil
+	}
+	return r, err == nil, err
+}
+
+// earlierLink reads the record's earlier link for the field at the provider, for an entry that has no
+// ref of its own. It says reuse with the link a payer may still use, which is the entry's answer; or
+// the id of the earlier ref it found unable to take payment (checked), over which a new ref may be
+// made; or neither, when the earlier ref has no link and beginRef decides under the write lock.
+func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, creds Credentials, client *Client, rec record,
+	req paylink.Request, minor int64, cur string, who whose) (link paylink.Link, reuse bool, checked int64, err error) {
+	prior, ok, err := latestRefOf(ctx, s.store.db, req)
+	if err != nil || !ok || prior.objectID == "" {
+		return paylink.Link{}, false, 0, err
+	}
+	finished := prior.state == "paid" || prior.state == "refunded" || prior.state == "expired"
+	switch {
+	case prior.integrationID != req.IntegrationID:
+		if finished {
+			return paylink.Link{}, false, prior.id, nil
+		}
+		return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationChanged}
+	case prior.accountID != who.account || prior.accountMode != who.mode:
+		if finished {
+			return paylink.Link{}, false, prior.id, nil
+		}
+		return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+	}
+	state, err := provider.LinkState(ctx, creds, client, prior.successURL == "", prior.objectID)
+	if err != nil {
+		return paylink.Link{}, false, 0, s.failed(ctx, rec, nil, err)
+	}
+	switch state {
+	case LinkOpen:
+		if prior.amountMinor != minor || prior.currency != cur {
+			return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
+		}
+		slog.Info("integrations: a record's payment link that may still be paid is given again", "integration", prior.integrationID, "ref", prior.id)
+		return prior.link(), true, 0, nil
+	case LinkExpired:
+		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'expired', settled_at = coalesce(settled_at, ?)
+			WHERE id = ? AND state IN ('creating', 'open')`, s.store.stamp(s.store.now()), prior.id); err != nil {
+			return paylink.Link{}, false, 0, err
+		}
+		return paylink.Link{}, false, prior.id, nil
+	}
+	if prior.state == "paid" || prior.state == "refunded" {
+		return paylink.Link{}, false, prior.id, nil // paid, and complete: nothing of it can be paid again
+	}
+	// Paid, or unable to take payment for a reason that doesn't say it wasn't, and the ref doesn't know
+	// of a payment: a person reconciles it before anything else is made for the record.
+	return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+}
+
+// takeEarlier decides, in beginRef's transaction (under the write lock), what an entry with no ref of
+// its own does with the record's earlier ref for the field: it takes it (took, and the ref is now the
+// entry's), or a new ref is to be made (not took). checked is the earlier ref with a link that
+// earlierLink found unable to take payment.
+func (s *Service) takeEarlier(ctx context.Context, tx *sql.Tx, req paylink.Request, checked int64) (ref, bool, error) {
+	prior, ok, err := latestRefOf(ctx, tx, req)
+	switch {
+	case err != nil:
+		return ref{}, false, err
+	case !ok:
+		return ref{}, false, nil
+	case prior.objectID != "":
+		if prior.id == checked {
+			return ref{}, false, nil
+		}
+		return ref{}, false, errRecheck
+	case paidWithoutLink(prior):
+		return ref{}, false, nil
+	case prior.effectID > req.EffectID:
+		// A newer entry has the record's link in hand: this one is replaced by it (the apps find so when
+		// it runs again), and takes nothing meanwhile.
+		return ref{}, false, &paylink.Error{Code: apierr.CodeIntegrationLinkLookupPending, Wait: lookupWaitMin}
+	}
+	var ran bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_ref_attempts
+		WHERE ref_id = ? AND (sends > clean_sends OR object_id IS NOT NULL OR outcome IS NOT NULL))`, prior.id).Scan(&ran); err != nil {
+		return ref{}, false, err
+	}
+	if !ran && prior.state == "creating" {
+		// Nothing ever ran under it, so nothing of it is at the provider: it goes, and with it any call
+		// another try was about to write ahead under it.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM integration_refs WHERE id = ?`, prior.id); err != nil {
+			return ref{}, false, err
+		}
+		return ref{}, false, nil
+	}
+	// Still being made, or its outcome unknown: the entry takes it and resolves it as its own.
+	if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET effect_id = ? WHERE id = ?`, req.EffectID, prior.id); err != nil {
+		return ref{}, false, err
+	}
+	slog.Info("integrations: a record's payment link still being made is taken by its newer entry", "integration", prior.integrationID, "ref", prior.id)
+	out, err := scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE id = ?`, prior.id))
+	return out, err == nil, err
 }

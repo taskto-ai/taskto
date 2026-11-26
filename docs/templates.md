@@ -73,12 +73,16 @@ Invoices with a number, a customer, an amount, a currency (EUR, USD, GBP or BRL)
 *Draft*, *Sent*, *Paid* or *Refunded*. Screens: the list with the count waiting for payment, a form,
 and an invoice's detail. **Send invoice** makes a payment page at the payment provider and puts its
 address on the invoice; when the customer pays, the invoice becomes *Paid* with the date, and when
-the payment is refunded in full, *Refunded*. An invoice whose page expired offers **Make a new
-payment link**. A **Home widget** counts the invoices waiting for payment and the paid ones.
+the payment is refunded in full, *Refunded*. A sent invoice offers **Replace an expired link**, which
+makes a new page only once the old one has expired at the provider (until then it puts the same
+address back). Editing an invoice in the records view never asks for a link: the template has an edit
+action without effects, which the records view uses. A **Home widget** counts the invoices waiting
+for payment and the paid ones.
 
 It is the one template that reaches outside TaskTo.AI, and it does so without naming anything: its
 definition declares a **slot** called `payments` of the kind `payments` ([integrations.md](integrations.md#apps-and-approval)),
-an action with a `create_payment_link` effect on that slot, and what a payment may write (the status
+two actions with a `create_payment_link` effect on that slot (sending, and replacing an expired link,
+both only for a *Sent* invoice), and what a payment may write (the status
 and the date, only when the invoice is *Sent*; *Refunded*, only when it is *Paid*). It holds no
 provider, no address, no account, no key and no limit, which are the admin's. So:
 
@@ -96,8 +100,10 @@ provider, no address, no account, no key and no limit, which are the admin's. So
 
 The whole setup, from the provider's keys to the first paid invoice, is in
 [integrations.md](integrations.md#taking-payments-a-guide). The template's contract hash is pinned in
-`internal/apps/templates_invoicing_test.go`: a change to what it sends or writes makes every
-installed copy ask for a new approval, so it is changed on purpose.
+`internal/apps/templates_invoicing_test.go`, so a change to what it sends or writes is made on purpose.
+Such a change reaches new installs, and apps whose definition is updated to the new one (whose next
+release then asks for a new approval); an app installed before keeps its own definition and its
+approval, and doesn't change by itself.
 
 ## Duplicate as template
 

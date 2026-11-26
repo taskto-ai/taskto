@@ -110,7 +110,9 @@ money**.
    connects.
 2. The draft has the screens of an invoice: a number, a customer, an amount, a currency and a
    status (*Draft*, *Sent*, *Paid*, *Refunded*), the paid date and the address of the payment page.
-   **Send invoice** makes the payment link. When the customer pays, the status becomes *Paid* and
+   **Send invoice** makes the payment link. Editing an invoice (in its records view, or by the
+   agent through the edit action) never asks Stripe for anything: only **Send invoice** and
+   **Replace an expired link** do, and only for a *Sent* invoice. When the customer pays, the status becomes *Paid* and
    the date is filled in; when the payment is refunded in full, it becomes *Refunded*. The
    builder's preview shows what a link would ask ("Create a payment link of 120.00 EUR") and never
    calls Stripe or needs an account.
@@ -133,29 +135,53 @@ What an approval is, and isn't:
 - **A copy has none.** Installing the template again, or duplicating an app, gives an app that asks
   again. So the template can't send anyone's money anywhere by being copied.
 - An admin can **revoke** an approval, switch the integration off or take a space away, and the app
-  stops making links and receiving payments at once. It stays online.
+  stops making links and having payments written to its records at once. It stays online. What it
+  doesn't stop is a payment page already open at Stripe: a customer who has the address can still
+  pay there, because the page is Stripe's. That payment is real money and is never dropped:
+  - **Approval revoked, or the space taken away**: Stripe's message arrives, and the payment is kept
+    as a *failed* event with a reason, the admins are notified, and the invoice is left as it is.
+    Once the app is approved again (or the money refunded at Stripe), an admin retries the event
+    ([When an event can't be applied](#when-an-event-cant-be-applied)).
+  - **Integration switched off**: its webhook address answers every delivery with `404`, as if it
+    didn't exist, and nothing is stored. Stripe treats that as a failed delivery and tries again for
+    up to three days (in live mode; less in test mode). Switch it back on within that and the payment
+    arrives; after that, resend the event from Stripe's dashboard.
+
+  If no more payments should be taken, also expire the open Checkout Sessions (or deactivate the
+  Payment Links) in Stripe.
 
 ### 5. Send an invoice
 
 1. Open an invoice and press **Send invoice**. The invoice becomes *Sent* and, a moment later, the
-   payment page's address appears on it. You send that address to your customer yourself, however
-   you like: TaskTo doesn't email it.
+   server writes the payment page's address on it. The open invoice doesn't refresh by itself:
+   close it and open it again (or reload the page) to see the address. You send that address to
+   your customer yourself, however you like: TaskTo doesn't email it.
 2. The customer pays on Stripe's page. TaskTo never sees the card.
 3. Stripe tells the server. TaskTo checks the signature, checks the amount and the currency are
    exactly what the link asked, and then marks the invoice **Paid** with the date. The record's
-   history shows who did it: the integration, not a person.
+   history shows who did it: the integration, not a person. Here too an invoice that is open on
+   your screen shows the change once you open it again.
 
 If a link isn't made, the person who pressed the button sees why, in words ("The amount is above the
 …", "The payment provider didn't accept this integration's key"), and retries it from the app's
 **Effects** panel once it is fixed. Amounts are exact: more decimals than the currency has, zero, or negative amounts are refused,
 and never rounded.
 
+**One payable link per invoice.** An invoice never has two pages that could both be paid. Whenever
+an invoice asks for its link again (it was sent again after going back to *Draft*, or its link is
+replaced), the server first looks at the link it already has: if that one can still be paid, is
+still being made, or its outcome is unknown, the same link is used again and nothing new is made
+(a link for another amount fails with a message instead, until the old one expires). Only a link
+that Stripe says has expired, or one that was paid, lets a new one be made.
+
 **An expired link.** With a public address the payment page is a Stripe Checkout Session, which
 Stripe closes after 24 hours. A customer who comes later finds a closed page, and the invoice stays
-*Sent*. The invoice then offers **Make a new payment link**: that makes a fresh page and replaces the
-address on the invoice. Use it once the old page has expired; a page that hasn't expired can still
-be paid. Without a public address the link is a Stripe Payment Link, which takes one payment and
-doesn't expire by itself.
+*Sent*. The invoice offers **Replace an expired link**: it clears the address on the invoice and asks
+for the link again. If Stripe says the old page has expired, exactly one new page is made and its
+address is written on the invoice; if the old page can still be paid, the same address is put back
+and nothing is made. (Reopen the invoice to see the result.) Without a public address the link is a
+Stripe Payment Link, which takes one payment and doesn't expire by itself, so it is never replaced
+this way.
 
 **A declined card** is not a failure: the customer can try another card on the same page.
 
@@ -177,19 +203,33 @@ could leave **two payable links for one invoice**, so TaskTo never does that by 
    The person who pressed the button sees that the server is still looking.
 2. **If six hours pass without an answer**, the action fails with a message that says the outcome is
    unknown, and the admins have a decision to make.
-3. **The admin checks Stripe**. In Stripe's dashboard, look in **Payment Links** (or in **Checkout
-   Sessions** if the server has a public address) for one made around the time of the invoice, for
-   its amount, with the invoice's text as its product name ("Invoice INV-7 for Acme").
-   - **One is there.** Tell the person who pressed the button to retry that payment (it is listed,
-     failed, in the app's **Effects** panel): the server finds the link, adopts it, and writes its
-     address on the invoice.
-   - **None is there.** The admin confirms that no link exists, and a new one is made, **once**. If
-     that attempt's outcome is unknown too, the admin decides again.
+3. **The admin checks Stripe, by the attempt's reference.** The admin list of unresolved payment
+   links gives, for each attempt, the reference TaskTo sent with it (the API's list returns it, and
+   the integration's settings screen shows it). In Stripe's dashboard, find the object carrying
+   **exactly** that reference: a Checkout Session's `client_reference_id` (a server with a public
+   address), or a Payment Link's metadata `taskto_ref` (a server without one). Never decide from the
+   amount, the time or the product name alone: another invoice, or another attempt of this one, can
+   look the same, and a wrong "none" makes a second payable link.
+   - **One carries the reference.** Tell the person who pressed the button to retry that payment
+     (it is listed, failed, in the app's **Effects** panel). A retry only looks and adopts: if the
+     object can still be paid it becomes the invoice's link and its address is written on the
+     invoice; if it is a completed Checkout Session or an inactive Payment Link, the retry stops
+     with a message that the link was paid or can't be used, and makes nothing (a person reconciles
+     it in Stripe).
+   - **None carries it, after searching both lists in the integration's account and mode.** The
+     admin confirms that no link exists. A confirmation queues **exactly one** new attempt under a
+     new reference, and runs the entry again as the person who first pressed the button, with the
+     access they have now (if they lost access to the app, it fails and makes nothing). If that
+     attempt's outcome is unknown too, the admin decides again. The server refuses the confirmation
+     when it saw anything of the attempt at Stripe.
+   - **Anything ambiguous** (an object you can't match to the reference, a list you couldn't read
+     whole, a mode you aren't sure of): don't confirm. Leave it unresolved; nothing more is made
+     while it is.
 4. **If the customer paid anyway** while it was undecided, the payment is real money and is applied
    as usual: the invoice becomes *Paid*, and the stuck action ends without making a link.
 
-The list of payments waiting for an admin's decision, and the confirmation, are routes of the API for
-now, with no screen: [the list](api.md#get-apiworkspacesworkspaceintegrationsintegrationpayment-linksunresolved) and
+The list of payments waiting for an admin's decision, and the confirmation, are routes of the API
+(the integration's settings screen shows the list and its references too): [the list](api.md#get-apiworkspacesworkspaceintegrationsintegrationpayment-linksunresolved) and
 [the confirmation](api.md#confirm-that-no-payment-link-exists). Only an admin can use them, only for
 spaces the admin manages (somebody's private space is theirs), and the confirmation is written to the
 audit log. The agent has no tool for either.
@@ -200,9 +240,10 @@ Money that arrives is never dropped quietly. An event that can't be applied (the
 approval was revoked, the record was deleted, the amount isn't what the link asked) is kept with a
 reason, every admin of the workspace gets a notification that says an integration's payment needs an
 admin, and nothing is changed in the app. After fixing the cause, an admin retries the event through
-[the API](api.md#post-apiworkspacesworkspaceintegrationsintegrationeventseventretry). A second payment of
-an invoice that is already paid is never applied: it is recorded and shown to the admin, who refunds
-it at Stripe.
+[the API](api.md#post-apiworkspacesworkspaceintegrationsintegrationeventseventretry). Only an event in
+the *failed* state can be retried; one that was applied or ignored stays as it is. A second payment
+of an invoice that is already paid is never applied: it is recorded and shown to the admin, who
+refunds it at Stripe.
 
 ### What TaskTo never does with your keys
 
@@ -213,8 +254,12 @@ it at Stripe.
 - It never lets an app or a model choose where a call goes. Providers are a fixed list in the server,
   each with fixed addresses, and a definition has no place for an address, a header or a key: an app
   only says *what it wants* (a link for this amount) and the server asks the account an admin chose.
-- It never stores a card number, a customer's email or the body of Stripe's messages. It keeps a link,
-  the provider's id and the amount it asked for.
+- From Stripe's messages it never stores a card number, the payer's email or name, or the body: it
+  reads only typed fields (ids, the reference, the amount, when it happened) and keeps a link, the
+  provider's id and the amount it asked for. What you type into a record is your own data and is
+  stored like any record: the template's *Customer* is free text and can hold an email, and the
+  payment page's text sends the invoice's number and customer to Stripe (what an admin approves
+  says so).
 - It never calls Stripe from a test or from CI: tests run against a fake. You are the one who tries
   it for real, in test mode ([trying it by hand](#trying-an-integration-by-hand)).
 - **Backups.** A backup holds the server's key (`server.key`) next to the sealed keys, so a backup
@@ -548,6 +593,33 @@ write.
 - **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
   than the currency has, zero or less, above the integration's ceiling, or a currency the integration
   doesn't list are each refused, with a code that says which, before anything is made.
+- **One payable link per record and field.** An outbox entry has one reference, and a record asks for
+  its link again with a new entry (an action that runs the effect after an edit, an invoice sent again,
+  an expired link replaced). So an entry that has no reference of its own first reads the record's
+  newest reference for the same field (`integration_refs.url_field`, migration 0063; `''` for a
+  reference made before it, counted as any field of the record), and makes a new one only when nothing
+  of the earlier one can be paid:
+  - *It has a link*: its state is read at Stripe. **Open** (a Payment Link: active), the same link is
+    given again and written back, and nothing is made; if it asks other money than the new entry, the
+    entry fails with `integration_link_still_open`. **Expired**, the reference is marked expired and a
+    new reference is made. **Settled** (complete, or an inactive Payment Link), a new one is made only
+    if the reference knows it was paid; otherwise `integration_link_already_paid`, for a person. A read
+    that fails makes nothing (the entry's failure, tried again). A reference made under another
+    integration, account or mode can't be read with the key now: unless it is paid, refunded or
+    expired, the entry fails with `integration_changed` or `integration_account_changed`.
+  - *It is still being made, or its outcome is unknown*: the new entry **takes it** (the reference's
+    `effect_id` becomes the new entry's) and goes on resolving it as its own, under every rule below:
+    it waits on the reconciliation, adopts what the earlier call made, or fails with
+    `integration_outcome_unknown` for an admin, whose confirmation then names the new entry. A reference
+    under which no call ever ran (every call refused before it ran, or none sent) holds nothing at
+    Stripe: it is removed, in the transaction that makes the new one, which also stops a call another
+    try was about to write ahead under it (the write-ahead needs the reference). A reference held by an
+    entry newer than the one asking is left to it: the older entry waits and is then superseded.
+  - *It was paid before it learned its link*: a new reference is made.
+
+  The read at Stripe happens before the transaction (which holds the write lock from its start), and
+  the transaction reads the record's newest reference again: if it isn't the one checked, the entry
+  reads it again. So two entries of one record never both make a link.
 - **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
   unique by the outbox entry and keeps the provider's answer. It has **keys**
   (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of
@@ -980,14 +1052,19 @@ and takes about twenty minutes:
 5. **Replay.** Resend the same event from Stripe's dashboard: nothing changes.
 6. **Refund.** Refund the whole payment in Stripe: the invoice becomes *Refunded*. Try a partial
    refund on another invoice: it stays *Paid*.
-7. **Expiry.** Make a payment page and expire it (Stripe's API has an "expire a Checkout Session"
-   call, or wait a day): the invoice stays
-   *Sent*; **Make a new payment link** gives a new address that can be paid.
+7. **Expiry.** Make a payment page and press **Replace an expired link** while it is still open:
+   the same address comes back (reopen the invoice) and Stripe has no new session. Then expire it
+   (Stripe's API has an "expire a Checkout Session" call, or wait a day): the invoice stays *Sent*;
+   **Replace an expired link** now gives one new address that can be paid, and Stripe has exactly
+   one new session. Edit the invoice's customer in the records view: nothing is asked of Stripe.
 8. **Without the public address.** Stop forwarding `/hooks/*` and clear `-public-url`, restart, send
    an invoice: a link is made on a confirmation page Stripe hosts, the payment is taken, and the
-   invoice stays *Sent* (polling isn't built yet).
-9. **Revoke.** Revoke the approval: **Send invoice** now fails with a message that says an admin
-   must approve it, and a payment made afterwards waits as a failed event for an admin.
+   invoice stays *Sent* (polling isn't built yet). Then set `-public-url` again, forward
+   `POST /hooks/*` again and restart: the next step needs Stripe's deliveries.
+9. **Revoke.** Send an invoice and keep its address, then revoke the approval: **Send invoice** now
+   fails with a message that says an admin must approve it. Pay the address you kept: Stripe still
+   takes the payment, and it waits as a failed event for an admin, with the invoice still *Sent*.
+   Approve the app again and retry the event: the invoice becomes *Paid*.
 10. **Clean up.** Switch the integration off or delete it, and delete the test keys and endpoint at
     Stripe.
 

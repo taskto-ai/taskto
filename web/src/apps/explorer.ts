@@ -78,7 +78,13 @@ export function toText(v: unknown): string {
 export const numberFields = (fields: AppField[]) => fields.filter((f) => f.type === 'number')
 
 // The action of an app that changes a record, or removes one, if it has one: the explorer edits
-// through the app's own actions, as its screen does.
-export function actionOf(actions: Record<string, { kind: string }> | undefined, kind: 'update' | 'delete') {
-  return Object.entries(actions ?? {}).find(([, a]) => a.kind === kind)?.[0]
+// through the app's own actions, as its screen does. An ordinary edit prefers an action that sets
+// nothing going (no effects), so that changing a field never runs what a button does, such as asking
+// for a payment link; an app with only actions that have effects is edited through the first.
+export function actionOf(
+  actions: Record<string, { kind: string; effects?: unknown[] | null }> | undefined,
+  kind: 'update' | 'delete',
+) {
+  const all = Object.entries(actions ?? {}).filter(([, a]) => a.kind === kind)
+  return (all.find(([, a]) => !a.effects?.length) ?? all[0])?.[0]
 }
