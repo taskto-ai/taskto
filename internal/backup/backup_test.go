@@ -695,3 +695,37 @@ func TestRestoreEndsEveryLogin(t *testing.T) {
 		}
 	}
 }
+
+// A restore can't say which CLI workers ran after the backup was made: the history it brings back
+// is marked unknown up to the restore, so the purge of an account from the backup waits for both.
+func TestRestoreMarksTheCLIWorkersHistoryUnknown(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.server.Exec(`INSERT INTO cli_worker_history (worker, since) VALUES ('local', '2026-01-01T00:00:00.000Z')`); err != nil {
+		t.Fatal(err)
+	}
+	archive, _ := backup(t, f.dir)
+	dst := filepath.Join(t.TempDir(), "restored")
+	if _, err := Restore(ctx, archive, dst); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	server, err := db.Open(ctx, filepath.Join(dst, db.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	var since string
+	if err := server.QueryRow(`SELECT since FROM cli_worker_history WHERE worker = 'unknown'`).Scan(&since); err != nil {
+		t.Fatalf("no unknown history after the restore: %v", err)
+	}
+	var created string
+	if err := server.QueryRow(`SELECT max(created_at) FROM users`).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if since < created {
+		t.Errorf("unknown since %s, before the backup's newest account (%s)", since, created)
+	}
+	if n := count(t, server, `SELECT count(*) FROM cli_worker_history WHERE worker = 'local'`); n != 1 {
+		t.Error("the restore dropped the known history")
+	}
+}

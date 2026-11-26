@@ -87,6 +87,9 @@ type Knowledge interface {
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
 type CLIWorkers interface {
 	Forget(ctx context.Context, user int64) error
+	// WorkerKind is where this server's worker keeps a user's files: "local", "container", or ""
+	// when CLI workers are off (cliaccounts.WorkerKind).
+	WorkerKind() string
 }
 
 // Options are what a Service needs.
@@ -107,8 +110,8 @@ type Options struct {
 	// ready (the purge is tried again). Nil when the agent runtime is off: a conversation's records
 	// stay recorded as a step to do when it is on.
 	Agent func(ctx context.Context) (conversations.Purger, error)
-	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
-	// CLI workers are off: that step stays recorded for when they are on.
+	// CLI forgets the CLI worker's files of the person. Nil when CLI workers are off: a step that
+	// needs a worker that isn't running stays recorded for when it is.
 	CLI CLIWorkers
 	// Clock is the time; time.Now by default.
 	Clock func() time.Time
@@ -330,7 +333,7 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 				return err
 			}
 		}
-		return s.record(ctx, tx, userID, cleanCLIHome, strconv.FormatInt(userID, 10))
+		return s.recordCLIHomes(ctx, tx, userID)
 	})
 	if err != nil {
 		return err

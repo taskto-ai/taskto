@@ -37,6 +37,10 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 	if err != nil {
 		return nil, nil, err
 	}
+	// Before the worker is used: a purge must know that this kind of worker may hold people's files.
+	if err := cliaccounts.RecordWorker(ctx, sqlDB, mode); err != nil {
+		return nil, nil, fmt.Errorf("cli workers: recording the worker's kind: %w", err)
+	}
 	if mode == cliaccounts.Off {
 		svc := cliaccounts.New(sqlDB, mode, nil)
 		svc.SetShared(cliaccounts.Shared{Key: key, Egress: egressOf(cfg).Workspace})

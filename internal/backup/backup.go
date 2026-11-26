@@ -551,8 +551,31 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 		if err := endLogins(ctx, filepath.Join(dataDir, db.FileName)); err != nil {
 			return m, fmt.Errorf("end the restored logins: %w", err)
 		}
+		if err := forgetWorkerHistory(ctx, filepath.Join(dataDir, db.FileName)); err != nil {
+			return m, fmt.Errorf("mark the CLI workers' history unknown: %w", err)
+		}
 	}
 	return m, nil
+}
+
+// forgetWorkerHistory marks the CLI workers' history of the restored server database at p as
+// unknown up to now (cli_worker_history, migration 0055). The backup's record says which workers
+// had run when it was made, not which ran since, while its accounts were still in use: a purge of
+// one of those accounts must wait for either worker to remove their files. A database from a
+// version without the record gets it when the server migrates it.
+func forgetWorkerHistory(ctx context.Context, p string) error {
+	sqlDB, err := open(p)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	var n int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cli_worker_history'`).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker, since) VALUES ('unknown', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		ON CONFLICT (worker) DO UPDATE SET since = max(since, excluded.since)`)
+	return err
 }
 
 // loginTables are the tables of the server's database that hold a bearer's way in, emptied

@@ -81,6 +81,35 @@ type Worker interface {
 	Answer(ctx context.Context, user, conversation int64, id string, allow bool) error
 }
 
+// RecordWorker notes, in sqlDB, that CLI workers of mode's kind run on this data directory
+// (cli_worker_history, migration 0055): the purge of a deleted account waits for each kind that
+// ever ran to remove the person's files there. The server calls it at start, before the worker is
+// used; Off records nothing.
+func RecordWorker(ctx context.Context, sqlDB *sql.DB, mode Mode) error {
+	kind := WorkerKind(mode)
+	if kind == "" {
+		return nil
+	}
+	_, err := sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker, since) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		ON CONFLICT (worker) DO NOTHING`, kind)
+	return err
+}
+
+// WorkerKind is where mode's worker keeps a user's files: "local" (under the data directory) for
+// local and local-unsafe, "container" (the worker's own volume), and "" when CLI workers are off.
+func WorkerKind(mode Mode) string {
+	switch mode {
+	case Local, LocalUnsafe:
+		return "local"
+	case Container:
+		return "container"
+	}
+	return ""
+}
+
+// WorkerKind is where this server's worker keeps a user's files (the package's WorkerKind).
+func (s *Service) WorkerKind() string { return WorkerKind(s.mode) }
+
 // LocalWorker adapts a worker running in this process.
 func LocalWorker(w *cliworker.Worker) Worker { return localWorker{w} }
 

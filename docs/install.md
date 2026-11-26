@@ -875,7 +875,12 @@ is a decision about the workspace's records, not an account's.
   to delete a conversation, so the purge **retires** each one (its work stops and the runtime refuses
   it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`, with the
   deleted content zeroed in the file. It also rewrites the runtime's providers file, and removes the
-  CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
+  CLI worker's directory of the person: `<data>/cli/u<id>` if the local worker ever ran here, and
+  the worker container's own copy if the container worker ever did, which only that worker can
+  remove, so that step waits for a start with `-cli-workers container` (a start in local mode doesn't
+  clear it). The server records each kind of worker it starts (`cli_worker_history`); an install that
+  never ran CLI workers has no such step. For an install from before that record, and after a
+  **restore**, the history is unknown: the accounts that existed then wait for both. Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
   need them stay recorded, and are done by the next start with them on and every ten minutes. The log
