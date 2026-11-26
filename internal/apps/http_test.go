@@ -17,6 +17,8 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/integrations"
+	"taskto.ai/taskto/internal/serverkey"
 )
 
 // Test passwords: obviously fake, and long enough for the account rules.
@@ -59,6 +61,11 @@ func newEnv(t *testing.T) *env {
 	s.ApprovalRoutes(mux, accounts)
 	s.HomeRoutes(mux, accounts)
 	s.TemplateRoutes(mux, accounts)
+	key, err := serverkey.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{}).Routes(mux, accounts, spaces)
 	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir, dbHooks: dbHooks}
 }
 

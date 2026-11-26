@@ -148,7 +148,11 @@ function IntegrationRow({
   const names = i.spaces
     .map((id) => spaces.find((s) => s.id === id))
     .filter((s): s is Space => s !== undefined)
-    .map((s) => spaceName(t, s))
+    .map((s) =>
+      i.approval_spaces.includes(s.id)
+        ? t('settings.integrations.approvalSpace', { name: spaceName(t, s) })
+        : spaceName(t, s),
+    )
 
   const runCheck = () => {
     setCheck(null)
@@ -313,10 +317,15 @@ function SpacesForm({
   const t = useT()
   const action = useAction()
   const [chosen, setChosen] = useState<number[]>(integration.spaces)
+  // The approval-made spaces the admin said to keep: saving the list alone never adopts one.
+  const [kept, setKept] = useState<number[]>([])
   const flip = (id: number) => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
+  const flipKept = (id: number) => setKept((k) => (k.includes(id) ? k.filter((x) => x !== id) : [...k, id]))
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    const ok = await action.run(() => api(`${url}/spaces`, { method: 'PUT', body: { spaces: chosen } }))
+    const keep = kept.filter((id) => chosen.includes(id))
+    const body = keep.length > 0 ? { spaces: chosen, keep } : { spaces: chosen }
+    const ok = await action.run(() => api(`${url}/spaces`, { method: 'PUT', body }))
     if (ok) onDone()
   }
   return (
@@ -328,12 +337,26 @@ function SpacesForm({
       <p className="tt-hint">{t('settings.integrations.spacesHint')}</p>
       <fieldset className="tt-checks">
         <legend className="tt-small">{t('settings.integrations.spaces')}</legend>
-        {spaces.map((s) => (
-          <label key={s.id}>
-            <input type="checkbox" checked={chosen.includes(s.id)} onChange={() => flip(s.id)} />
-            {spaceName(t, s)}
-          </label>
-        ))}
+        {spaces.map((s) => {
+          const byApproval = integration.approval_spaces.includes(s.id)
+          return (
+            <div key={s.id}>
+              <label>
+                <input type="checkbox" checked={chosen.includes(s.id)} onChange={() => flip(s.id)} />
+                {spaceName(t, s)}
+              </label>
+              {byApproval && chosen.includes(s.id) && (
+                <>
+                  <span className="tt-muted tt-small"> {t('settings.integrations.approvalSpaceNote')}</span>
+                  <label className="tt-small">
+                    <input type="checkbox" checked={kept.includes(s.id)} onChange={() => flipKept(s.id)} />
+                    {t('settings.integrations.keepSpace', { name: spaceName(t, s) })}
+                  </label>
+                </>
+              )}
+            </div>
+          )
+        })}
       </fieldset>
       <Alert error={action.error} />
       <div className="tt-row-actions">

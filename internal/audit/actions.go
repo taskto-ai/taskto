@@ -77,6 +77,7 @@ const (
 	IntegrationDisabled      = "integration_disabled"
 	IntegrationEnabled       = "integration_enabled"
 	IntegrationSpacesChanged = "integration_spaces_changed"
+	IntegrationSpacesKept    = "integration_spaces_kept"
 
 	// An operator asks the host's updater to update the server now (Settings → About).
 	ServerUpdateRequested = "server_update_requested"

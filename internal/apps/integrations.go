@@ -429,7 +429,7 @@ func (e Effect) checkPaymentLink(c Collection) error {
 // ----- the contract -----
 
 // contractVersion is the format of Contract, in its hash, so a change of format is a new hash.
-const contractVersion = 3
+const contractVersion = 4
 
 // Contract is what the server derives from a draft for one slot: what the app may send out and
 // what the integration may write back, in field names and literals, never in the app's wording.
@@ -477,6 +477,14 @@ type ContractField struct {
 	Max          *float64 `json:"max,omitempty"`
 	// Options are the values a choice field may hold, sorted.
 	Options []string `json:"options,omitempty"`
+	// Format is the kind of code a barcode field reads: without it, the text is any text, so
+	// dropping or changing it changes what the field accepts.
+	Format string `json:"format,omitempty"`
+	// Editable is whether a stored location or signature may be replaced later.
+	Editable bool `json:"editable,omitempty"`
+	// MaxFiles and MaxBytes bound an attachment (or signature) field's files.
+	MaxFiles int `json:"max_files,omitempty"`
+	MaxBytes int `json:"max_bytes,omitempty"`
 }
 
 // ContractLink is one kind of payment link request an app makes. It holds no wording.
@@ -665,13 +673,31 @@ func (d Definition) contract(slot string) Contract {
 			named[f] = true
 		}
 	}
+	// Whether a named field may be left out, or holds what it holds, can depend on another field
+	// (required_when): follow those, transitively, so a change to the constraints of a field that
+	// only gates another one's requirement is another contract too.
+	for queue := sortedKeys(named); len(queue) > 0; {
+		name := queue[0]
+		queue = queue[1:]
+		f, ok := d.Collection.field(name)
+		if !ok || f.RequiredWhen == nil {
+			continue
+		}
+		for _, dep := range ruleFields(*f.RequiredWhen) {
+			if !named[dep] {
+				named[dep] = true
+				queue = append(queue, dep)
+			}
+		}
+	}
 	for _, name := range sortedKeys(named) {
 		f, ok := d.Collection.field(name)
 		if !ok {
 			continue
 		}
 		c.Fields = append(c.Fields, ContractField{Name: f.Name, Type: f.Type, Required: f.Required, RequiredWhen: f.RequiredWhen,
-			MaxLength: f.MaxLength, Min: f.Min, Max: f.Max, Options: sortedCopy(f.Options)})
+			MaxLength: f.MaxLength, Min: f.Min, Max: f.Max, Options: sortedCopy(f.Options),
+			Format: f.Format, Editable: f.Editable, MaxFiles: f.MaxFiles, MaxBytes: f.MaxBytes})
 	}
 	return c
 }

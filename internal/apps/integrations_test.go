@@ -16,6 +16,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/integrations"
 )
 
 // invoiceJSON is an invoicing app that declares a slot of payments: sending an invoice asks for a
@@ -1187,16 +1188,41 @@ var received = []string{
 	`"paid_at": {"from": "occurred_at"}`, `"paid_at": {"from": "occurred_at"}, "received": {"from": "amount"}`,
 }
 
+// withSKU names a barcode of a stated format in the payment's description.
+var withSKU = []string{
+	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string"},
+    {"name": "sku", "type": "barcode", "format": "ean_13", "max_length": 13},`,
+	`for {{customer}}"`, `for {{customer}} {{sku}}"`,
+}
+
+// withQuantity makes the description's customer required by a rule over a quantity that the
+// integration itself never reads.
+var withQuantity = []string{
+	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string", "required_when": {"field": "quantity", "op": "gt", "value": 50}},
+    {"name": "quantity", "type": "number", "max": 100},`,
+}
+
+// withChain is the same one step further: the quantity's own requirement reads the batch.
+var withChain = []string{
+	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string", "required_when": {"field": "quantity", "op": "gt", "value": 50}},
+    {"name": "quantity", "type": "number", "required_when": {"field": "batch", "op": "gt", "value": 5}},
+    {"name": "batch", "type": "number", "max": 100},`,
+}
+
 // Each of these edits changes what the integration may do or who can trigger it, so its approval
 // must not carry over.
 func TestAnEditThatChangesWhatTheIntegrationMayDoNeedsAFreshApproval(t *testing.T) {
 	for name, tc := range map[string]struct{ base, edit []string }{
-		"the record's id in the description":  {nil, []string{"Invoice {{number}} for {{customer}}", "Invoice {{number}} for {{customer}} {{id}}"}},
-		"an action that inserts, not updates": {nil, []string{`"send": {"kind": "update"`, `"send": {"kind": "insert"`}},
-		"a higher maximum of a field written": {received, []string{`"max": 1000`, `"max": 100000`}},
-		"a longer text field sent out":        {nil, []string{`{"name": "customer", "type": "string"}`, `{"name": "customer", "type": "string", "max_length": 5000}`}},
-		"another option of a choice written":  {nil, []string{`"options": ["draft", "sent", "overdue", "paid"]`, `"options": ["draft", "sent", "overdue", "paid", "void"]`}},
-		"a field no longer required":          {nil, []string{`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number"}`}},
+		"the record's id in the description":                   {nil, []string{"Invoice {{number}} for {{customer}}", "Invoice {{number}} for {{customer}} {{id}}"}},
+		"an action that inserts, not updates":                  {nil, []string{`"send": {"kind": "update"`, `"send": {"kind": "insert"`}},
+		"a higher maximum of a field written":                  {received, []string{`"max": 1000`, `"max": 100000`}},
+		"a longer text field sent out":                         {nil, []string{`{"name": "customer", "type": "string"}`, `{"name": "customer", "type": "string", "max_length": 5000}`}},
+		"another option of a choice written":                   {nil, []string{`"options": ["draft", "sent", "overdue", "paid"]`, `"options": ["draft", "sent", "overdue", "paid", "void"]`}},
+		"a field no longer required":                           {nil, []string{`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number"}`}},
+		"a barcode's format dropped":                           {withSKU, []string{`"format": "ean_13", `, ``}},
+		"a barcode's format changed":                           {withSKU, []string{`"format": "ean_13"`, `"format": "upc_a"`}},
+		"a higher maximum of a field only a requirement reads": {withQuantity, []string{`"max": 100`, `"max": 1000`}},
+		"a requirement's field two steps away":                 {withChain, []string{`"max": 100`, `"max": 1000`}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			i := newInv(t)
@@ -1410,5 +1436,115 @@ func TestMovingOrDeletingAnAppTakesBackTheSpaceItsApprovalAllowed(t *testing.T) 
 	}
 	if got := i.grants(i.stripe); len(got) != 0 {
 		t.Fatalf("a grant is left after the app was deleted: %v", got)
+	}
+}
+
+// ----- review fixes: saving an integration's spaces never adopts an approval's grant -----
+
+// approvedFromApproval has the admin approve the shared app's contract and allow its space in the
+// same decision, so the grant is the approval's.
+func (i *inv) approvedFromApproval() int64 {
+	i.e.t.Helper()
+	req := i.mustRequest(i.alice, i.shared, i.app)
+	expect(i.e.t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	return req.ID
+}
+
+func (i *inv) spacesPath() string {
+	return fmt.Sprintf("/api/workspaces/%d/integrations/%d/spaces", i.ws, i.stripe)
+}
+
+func (i *inv) fromApproval() []int64 {
+	i.e.t.Helper()
+	rows, err := i.e.db.Query(`SELECT space_id FROM integration_spaces WHERE integration_id = ? AND from_approval = 1 ORDER BY space_id`, i.stripe)
+	if err != nil {
+		i.e.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			i.e.t.Fatal(err)
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (i *inv) keptEvents() int {
+	i.e.t.Helper()
+	rows, err := audit.List(context.Background(), i.e.db, audit.Filter{Workspace: i.ws, Action: audit.IntegrationSpacesKept, Limit: 100})
+	if err != nil {
+		i.e.t.Fatal(err)
+	}
+	return len(rows)
+}
+
+func TestSavingTheSettingsUnchangedLeavesAnApprovalsGrantTheApprovals(t *testing.T) {
+	i := newInv(t)
+	req := i.approvedFromApproval()
+	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
+
+	// The settings form sends every checked space, the approval's included: nothing is adopted.
+	rec := i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}})
+	expect(t, rec, http.StatusOK)
+	if got := decode[integrations.Integration](t, rec); !slices.Equal(got.ApprovalSpaces, []int64{i.shared.ID}) {
+		t.Fatalf("the integration doesn't say the space is an approval's: %+v", got)
+	}
+	if got := i.fromApproval(); !slices.Equal(got, []int64{i.shared.ID}) {
+		t.Fatalf("a save adopted the approval's grant: from_approval = %v", got)
+	}
+	if n := i.keptEvents(); n != 0 {
+		t.Fatalf("%d adoption events for a save that adopted nothing", n)
+	}
+
+	// So revoking the approval still takes the space back.
+	expect(t, i.decide(i.owner, i.ws, req, "revoke", nil), http.StatusOK)
+	if got := i.grants(i.stripe); len(got) != 0 {
+		t.Fatalf("a grant is left after the revoke: %v", got)
+	}
+}
+
+func TestKeepingAnApprovalsSpaceIsExplicitAndAudited(t *testing.T) {
+	i := newInv(t)
+	req := i.approvedFromApproval()
+
+	// keep names only spaces the list holds.
+	expect(t, i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{}, "keep": []int64{i.shared.ID}}), http.StatusBadRequest)
+	if got := i.fromApproval(); !slices.Equal(got, []int64{i.shared.ID}) {
+		t.Fatalf("a refused request changed the grant: %v", got)
+	}
+
+	rec := i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}, "keep": []int64{i.shared.ID}})
+	expect(t, rec, http.StatusOK)
+	if got := decode[integrations.Integration](t, rec); len(got.ApprovalSpaces) != 0 || !slices.Equal(got.Spaces, []int64{i.shared.ID}) {
+		t.Fatalf("after keeping: %+v", got)
+	}
+	if got := i.fromApproval(); len(got) != 0 {
+		t.Fatalf("the kept space is still the approval's: %v", got)
+	}
+	if n := i.keptEvents(); n != 1 {
+		t.Fatalf("%d adoption events, want 1", n)
+	}
+	// Asking again changes nothing and records nothing.
+	expect(t, i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}, "keep": []int64{i.shared.ID}}), http.StatusOK)
+	if n := i.keptEvents(); n != 1 {
+		t.Fatalf("%d adoption events after asking again, want 1", n)
+	}
+
+	// The approval ending leaves the admin's own grant.
+	expect(t, i.decide(i.owner, i.ws, req, "revoke", nil), http.StatusOK)
+	if got := i.grants(i.stripe); !slices.Equal(got, []int64{i.shared.ID}) {
+		t.Fatalf("the kept grant after the revoke = %v", got)
+	}
+}
+
+func TestOnlyAnAdminMayKeepAnApprovalsSpace(t *testing.T) {
+	i := newInv(t)
+	i.approvedFromApproval()
+	expect(t, i.alice.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}, "keep": []int64{i.shared.ID}}), http.StatusForbidden)
+	if got := i.fromApproval(); !slices.Equal(got, []int64{i.shared.ID}) {
+		t.Fatalf("a member kept the grant: %v", got)
 	}
 }

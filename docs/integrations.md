@@ -110,6 +110,10 @@ validated in Go.
   lists only the allowed spaces the caller manages, and counts the others. A change of the
   list changes only the caller's own subset, so one admin can't take away another's private
   space. The database refuses an allowance across workspaces, on insert and on update.
+- A space an app's approval allowed (the admin ticked "allow the space" when approving) is the
+  approval's: it is marked in the integration's settings and goes with the approval. Saving the
+  settings' list never makes it the admin's; only naming it in `keep`, which the settings offer
+  as "Keep after the approval ends", does, and that is an audit event of its own.
 - Anyone who can read a space sees which integrations are allowed there, with a name, kind and
   status. No secret, no webhook address, no limit, no provider.
 - The name, provider and workspace of an integration, and its `public_id`, never change (the
@@ -146,11 +150,13 @@ it handles, for each field the integration may write the literals and sources it
 rules that gate them, for each payment link the action that asks and what it does (insert, update
 or delete: it decides who may trigger it), its amount, its currency, its `when` and whether its
 description names the record's id, and the constraints of every field the integration reads, writes
-or is gated by (type, whether it is required, length, bounds and options). It has no wording, so a
+or is gated by (type, whether it is required, length, bounds, options, a barcode's format, whether a
+captured value may be replaced, and an attachment's limits), and the fields those depend on through a
+`required_when`, followed all the way. It has no wording, so a
 changed description that names the same fields needs no new approval; sending another field or the
 record's id, writing another field or value, writing a value in another event, asking in another
 currency or from another action, changing what the action does, loosening a field's constraints
-(a higher maximum, another option), dropping a `when`, or loosening a rule does. Its
+(a higher maximum, another option, no barcode format), dropping a `when`, or loosening a rule does. Its
 SHA-256 is the contract's **hash**.
 
 **Approval is by hash, through a queue.**

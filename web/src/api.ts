@@ -637,6 +637,9 @@ export type Integration = {
   // and the shared ones), and how many more are allowed that they can't see: other people's
   // private spaces, which are never named.
   spaces: number[]
+  // The ones of spaces an app's approval allowed: they end with the approval unless an admin keeps
+  // them (the `keep` of the PUT); saving the list never does.
+  approval_spaces: number[]
   other_spaces: number
   created_at: string
   updated_at: string

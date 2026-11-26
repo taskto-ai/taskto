@@ -4002,6 +4002,7 @@ An integration looks like this:
   "disabled": false,
   "disabled_at": null,
   "spaces": [12],
+  "approval_spaces": [],
   "other_spaces": 0,
   "created_at": "…",
   "updated_at": "…",
@@ -4040,6 +4041,9 @@ An integration looks like this:
   they can be taken out). Another person's private space is never in it: **`other_spaces`**
   counts the integration's allowed spaces the caller can't see, which they can't change
   either. A new integration has none.
+- **`approval_spaces`**: the ones of `spaces` that an app's approval allowed (`allow_space`)
+  rather than an admin: they go with the approval, when it is revoked or its app moves or is
+  deleted, unless an admin keeps them (`keep`, below).
 
 ### `GET /api/workspaces/{workspace}/integration-providers`
 
@@ -4085,6 +4089,13 @@ whether or not they are a member; any other space, another person's private spac
 workspace's, is `404 space_not_found` and nothing changes. The integration's allowed spaces
 the caller can't manage (another admin's private space) stay as they are, whatever the list.
 `200` with the integration, as the caller sees it.
+
+Saving the list never changes who a grant belongs to: a space in `approval_spaces` that the
+list names stays the approval's. To keep one after its approval ends, the request names it in
+**`keep`**: `{"spaces": [id, …], "keep": [id, …]}`. Each id in `keep` must be in `spaces`
+(`400 bad_request` otherwise and nothing changes); one that is not an approval's grant is
+left as it is. Each request that keeps a space records an `integration_spaces_kept` event
+([audit.md](audit.md)).
 
 ### `POST /api/workspaces/{workspace}/integrations/{integration}/check`
 

@@ -1362,8 +1362,8 @@ func TestCheckOfARemovedIntegrationIsNotFound(t *testing.T) {
 	expectCode(t, owner.do(http.MethodPost, one+"/check", nil), http.StatusNotFound, "integration_not_found")
 }
 
-// A space an approval allowed is the approval's until an admin who sees it keeps it in the
-// integration's settings; another person's private space, which they can't see, is left as it is.
+// A space an approval allowed is the approval's until an admin who sees it says to keep it: saving
+// the list never does. Another person's private space, which they can't see, is left as it is.
 func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1376,22 +1376,54 @@ func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spaces := wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID))
-	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}}), http.StatusOK)
-	var owned []int64
-	rows, err := e.db.Query(`SELECT space_id FROM integration_spaces WHERE integration_id = ? AND from_approval = 1`, in.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+	owned := func() []int64 {
+		rows, err := e.db.Query(`SELECT space_id FROM integration_spaces WHERE integration_id = ? AND from_approval = 1 ORDER BY space_id`, in.ID)
+		if err != nil {
 			t.Fatal(err)
 		}
-		owned = append(owned, id)
+		defer rows.Close()
+		var out []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, id)
+		}
+		return out
 	}
-	if len(owned) != 1 || owned[0] != theirs {
-		t.Fatalf("spaces still an approval's = %v, want only %d", owned, theirs)
+	spaces := wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID))
+
+	// A plain save of the list the admin sees adopts nothing, and says nothing in the audit log.
+	rec := owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}})
+	expect(t, rec, http.StatusOK)
+	if got := decode[Integration](t, rec); !slices.Equal(got.ApprovalSpaces, []int64{shared}) || got.OtherSpaces != 1 {
+		t.Fatalf("the integration as the admin sees it: %+v", got)
+	}
+	if got := owned(); len(got) != 2 {
+		t.Fatalf("a save adopted a grant: still an approval's = %v", got)
+	}
+	if got := e.events(ws, audit.IntegrationSpacesKept); len(got) != 0 {
+		t.Fatalf("adoption events after a plain save: %+v", got)
+	}
+
+	// Keeping a space is explicit: only the named one, only if it is in the list.
+	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{}, "keep": []int64{shared}}), http.StatusBadRequest, "bad_request")
+	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}, "keep": []int64{theirs}}), http.StatusBadRequest, "bad_request")
+	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}, "keep": []int64{shared}}), http.StatusOK)
+	if got := owned(); len(got) != 1 || got[0] != theirs {
+		t.Fatalf("spaces still an approval's = %v, want only %d", got, theirs)
+	}
+	kept := e.events(ws, audit.IntegrationSpacesKept)
+	if len(kept) != 1 || kept[0].Details["kept"] != float64(1) || kept[0].Details["provider"] != "stripe" || *kept[0].TargetID != in.ID {
+		t.Fatalf("adoption events = %+v", kept)
+	}
+	if got := e.events(ws, audit.IntegrationSpacesChanged); len(got) != 0 {
+		t.Fatalf("an adoption recorded as a change of the list: %+v", got)
+	}
+	// A space that isn't an approval's, named again, changes and records nothing.
+	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}, "keep": []int64{shared}}), http.StatusOK)
+	if got := e.events(ws, audit.IntegrationSpacesKept); len(got) != 1 {
+		t.Fatalf("adoption events after naming a kept space again: %+v", got)
 	}
 }

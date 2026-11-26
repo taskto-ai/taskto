@@ -185,6 +185,10 @@ export type AppsContractField = {
   min?: number
   max?: number
   options?: string[]
+  format?: string
+  editable?: boolean
+  max_files?: number
+  max_bytes?: number
 }
 
 export type AppsContractHandler = {
@@ -578,6 +582,7 @@ export type Integration = {
   disabled_at: string | null
   spaces: number[]
   other_spaces: number
+  approval_spaces: number[]
   created_at: string
   updated_at: string
   last_event_at: string | null

@@ -59,6 +59,7 @@ const shop: Integration = {
   disabled: false,
   disabled_at: null,
   spaces: [12],
+  approval_spaces: [],
   other_spaces: 0,
   created_at: '2026-11-24T10:00:00.000Z',
   updated_at: '2026-11-24T10:00:00.000Z',
@@ -323,4 +324,35 @@ test('an error of the server is shown in words, from its code', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Remove Shop' }))
   fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }))
   expect(await screen.findByText(/An app still uses this integration/)).toBeTruthy()
+})
+
+test('a space an approval allowed is marked, and saving the list does not keep it', async () => {
+  const calls = fakeFetch({
+    ...routes([{ ...shop, spaces: [12], approval_spaces: [12] }]),
+    'PUT /api/workspaces/1/integrations/7/spaces': { body: shop },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  expect(within(row).getByText("Allowed in: Shop floor (by an app's approval)")).toBeTruthy()
+  fireEvent.click(within(row).getByRole('button', { name: 'Spaces of Shop' }))
+  const form = await screen.findByRole('form', { name: 'Spaces of Shop' })
+  expect(within(form).getByText(/ends when the approval does/)).toBeTruthy()
+  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')).toHaveLength(1))
+  expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')[0]).toEqual({ spaces: [12] })
+})
+
+test('keeping an approval’s space after the approval ends is asked for by name', async () => {
+  const calls = fakeFetch({
+    ...routes([{ ...shop, spaces: [12], approval_spaces: [12] }]),
+    'PUT /api/workspaces/1/integrations/7/spaces': { body: shop },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  fireEvent.click(within(row).getByRole('button', { name: 'Spaces of Shop' }))
+  const form = await screen.findByRole('form', { name: 'Spaces of Shop' })
+  fireEvent.click(within(form).getByLabelText('Keep Shop floor after the approval ends'))
+  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')).toHaveLength(1))
+  expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')[0]).toEqual({ spaces: [12], keep: [12] })
 })
