@@ -379,8 +379,9 @@ func contractFindTerms(ctx context.Context, fx *paymentsFixture) error {
 		} {
 			l := nl
 			change(&l)
+			// A refusal may name the object it saw (unchecked, for the key to keep), never a link to give.
 			got, found, _, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, l, since)
-			if !isCall(err, CallRefused) || found || got != (Link{}) {
+			if !isCall(err, CallRefused) || found || got.URL != "" {
 				return failf("%s: a lookup of %s adopted %+v, %v, %v, want a refusal", sh.Name, what, got, found, err)
 			}
 		}
