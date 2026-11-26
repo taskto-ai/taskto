@@ -190,7 +190,10 @@ this way.
 TaskTo doesn't refund. You refund in Stripe's dashboard, and Stripe tells TaskTo. A refund of the
 **whole** payment marks the invoice *Refunded*. A **partial** refund changes nothing in TaskTo,
 because the invoice isn't refunded yet; the refund that completes it does. (The status is the only
-thing TaskTo changes; the money moves in Stripe.)
+thing TaskTo changes; the money moves in Stripe.) Stripe may tell a full refund before the payment
+it undoes: the refund then waits, shown as *waiting* in the events panel, for up to 72 hours, and
+is applied right after the payment is; if the payment hasn't arrived by then, the refund fails and
+the admins are told (see [Applying events](#applying-events) for the exact rule).
 
 ### When a payment's outcome is unknown
 
