@@ -411,9 +411,14 @@ The UI shows what the command prints.
   (their turns, the ones waiting for a place too, their sign-ins, their helper requests and the
   process groups they started), so a CLI that was using the login has ended before its files go and
   nothing writes into them or makes them again. The agent browsers that run in the worker are
-  stopped too, and waited for, before the directory goes: the profile is in it. If something
+  stopped too, and waited for, before the directory goes: the profile is in it. In container mode
+  every process of the user's Unix user is then ended, whatever started it, so a process a CLI
+  detached into a group of its own (a daemon a tool started) doesn't outlive the account, and
+  none is left to write into the directory or into the next person's who is given the number; no
+  one else's process is touched, since a uid is one user's alone. In local mode there is no such
+  user, and a process a CLI detached into a group of its own is not tracked. If something
   doesn't end in time it fails (`ErrBusy`) and the purge tries again (the purge gives each attempt
-  two minutes); the mark stays. A process a CLI detached into a group of its own is not tracked.
+  two minutes); the mark stays.
 - **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) brings the worker in
   line with the server's database after a restore of the server's data. User numbers are never
   reused within one database's history, but a restore goes back in it: a person whose account was

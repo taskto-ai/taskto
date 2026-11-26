@@ -3,6 +3,7 @@
 package cliworker_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -372,5 +373,65 @@ func TestIsolationRefusesRootInLocalMode(t *testing.T) {
 		case allow && (done.Status != cliworker.StatusOK || probeResult(done.Text, "uid") != "ok 0 0"):
 			t.Errorf("as root with the override: %+v", done)
 		}
+	}
+}
+
+// Forgetting a user ends every process of their Unix user before their directory goes: also one
+// a tool of the CLI detached from the process group (a daemon, a browser's leftover), which the
+// stops of the turns and groups don't reach, and which would go on running as the user, writing
+// into the directory, or into a new person's that is given the number. Another user's processes,
+// turn and directory are not touched: a uid is one user's alone.
+func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
+	h := newIsolated(t)
+	for _, user := range []int64{1, 2} {
+		h.signIn(t, user, cliworker.Grok)
+	}
+	// User 1's tool detaches a process from the turn's group; user 2's stays in its own.
+	h.scenario(t, 1, cliworker.Grok, clitest.Scenario{SleepMS: 60_000, Background: true, Detached: true})
+	h.scenario(t, 2, cliworker.Grok, clitest.Scenario{SleepMS: 60_000, Background: true})
+	var turns [3]*cliworker.Turn
+	var bg [3]int
+	for _, user := range []int64{1, 2} {
+		turn, _, err := h.w.Start(spec(fmt.Sprintf("turn-%d", user), user, cliworker.Grok, "slow"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := h.layout.User(user).Config(cliworker.Grok)
+		eventually(t, "the CLI didn't start its tool", func() bool {
+			_, err := os.Stat(filepath.Join(cfg, "background.pid"))
+			return err == nil
+		})
+		turns[user], bg[user] = turn, backgroundPID(t, cfg)
+	}
+	// The detached process is in a session of its own: not in the turn's group.
+	if pgid, err := syscall.Getpgid(bg[1]); err != nil || pgid != bg[1] {
+		t.Fatalf("the detached process's group = %d, %v: want a group of its own (%d)", pgid, err, bg[1])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if alive(bg[1]) {
+		t.Error("the user's detached process still runs after Forget")
+	}
+	if !turns[1].Over() {
+		t.Error("the user's turn still runs after Forget")
+	}
+	gone(t, h.layout.User(1).Root)
+
+	// The other user: process, turn and files.
+	if !alive(bg[2]) {
+		t.Error("another user's process was ended")
+	}
+	if turns[2].Over() {
+		t.Errorf("another user's turn ended: %+v", last(waitDone(t, turns[2], time.Second)))
+	}
+	if _, err := os.Stat(h.layout.User(2).Config(cliworker.Grok)); err != nil {
+		t.Errorf("another user's directory: %v", err)
+	}
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Errorf("forgetting again: %v", err)
 	}
 }

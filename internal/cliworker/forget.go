@@ -120,7 +120,8 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 // removeUser removes user's whole directory, once the caller has made sure nothing new starts for
 // them (a mark, or a gate that covers all their accounts) and stopped what ran (quiesce). Their
 // agent browsers are stopped first, and waited for: the profile is in the directory, and a
-// browser's processes aren't the turns' and helpers' that quiesce stops. Then the helper removes
+// browser's processes aren't the turns' and helpers' that quiesce stops. With a Unix user per
+// taskto user, every process of that Unix user is then ended, wherever it came from. Then the helper removes
 // what is inside, as the user, and the worker the directory itself, which is its in the layout's
 // root, so the next person given the number gets a new one; and the record of when it was made.
 func (w *Worker) removeUser(ctx context.Context, user int64) error {
@@ -128,6 +129,12 @@ func (w *Worker) removeUser(ctx context.Context, user int64) error {
 		if err := b.StopAll(ctx, user); err != nil {
 			return fmt.Errorf("stopping the user's browsers: %w", err)
 		}
+	}
+	// In container mode, whatever of the user's is still running is ended now: the processes the
+	// stops above could not list, such as one a CLI or a browser detached from its process group.
+	// Nothing new starts for them, so what is left after this runs no more.
+	if err := w.endUserProcesses(ctx, user); err != nil {
+		return fmt.Errorf("ending the user's processes: %w", err)
 	}
 	root := w.cfg.Layout.User(user).Root
 	if _, err := os.Lstat(root); err == nil {

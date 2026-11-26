@@ -4,6 +4,7 @@ package cliworker
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const isolationSupported = true
@@ -151,6 +153,13 @@ func addLine(path, name string, id int, line string) error {
 
 // killUIDs kills every process whose real uid is min or more: all the CLI users'.
 func killUIDs(min int) int {
+	return killMatching(func(uid int) bool { return uid >= min })
+}
+
+// killMatching kills every live process whose real uid match accepts, and returns how many it
+// signalled. A zombie is not one: it is dead already, only waiting for its parent to reap it, and
+// can't be killed again, so a caller that kills until nothing is left would never see an end.
+func killMatching(match func(uid int) bool) int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0
@@ -165,19 +174,56 @@ func killUIDs(min int) int {
 		if err != nil {
 			continue
 		}
+		uid, zombie := -1, false
 		for _, line := range strings.Split(string(b), "\n") {
+			if rest, ok := strings.CutPrefix(line, "State:"); ok {
+				zombie = strings.HasPrefix(strings.TrimSpace(rest), "Z")
+			}
 			if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
-				fields := strings.Fields(rest)
-				if len(fields) > 0 {
-					if uid, err := strconv.Atoi(fields[0]); err == nil && uid >= min {
-						if syscall.Kill(pid, syscall.SIGKILL) == nil {
-							killed++
-						}
+				if fields := strings.Fields(rest); len(fields) > 0 {
+					if v, err := strconv.Atoi(fields[0]); err == nil {
+						uid = v
 					}
 				}
-				break
 			}
+		}
+		if uid >= 0 && !zombie && match(uid) && syscall.Kill(pid, syscall.SIGKILL) == nil {
+			killed++
 		}
 	}
 	return killed
+}
+
+// userProcessWait is how long a removal waits for the processes of a user's Unix user to be gone
+// after it killed them.
+const userProcessWait = 5 * time.Second
+
+// endUserProcesses ends every process of user's Unix user: the ones a removal could not list, such
+// as a process a CLI detached from its process group. It kills, and looks again until a pass finds
+// none, since a process that was forking as it died may have left a child; ErrBusy if some are
+// still there after userProcessWait. The caller has made sure nothing new starts for the user. A
+// uid is one user's alone, so no one else's process is touched.
+func (w *Worker) endUserProcesses(ctx context.Context, user int64) error {
+	iso := w.cfg.Isolation
+	if iso == nil {
+		return nil
+	}
+	if user <= 0 || user >= maxIsolatedUser {
+		return fmt.Errorf("user %d can't have a Unix user", user)
+	}
+	uid := iso.uid(user)
+	deadline := time.NewTimer(userProcessWait)
+	defer deadline.Stop()
+	for {
+		if killMatching(func(u int) bool { return u == uid }) == 0 {
+			return nil
+		}
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline.C:
+			return ErrBusy
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
