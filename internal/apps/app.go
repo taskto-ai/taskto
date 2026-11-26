@@ -81,10 +81,17 @@ const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 // attachments.go), location, signature and barcode fields (capture.go) and contributions
 // (contributions.go: home widgets and a navigation pin, each slot a capability the release needs). A definition that says version 1 is read, checked and
 // drawn as it always was, and can't use any of version 2.
-const DefinitionVersion = 2
+//
+// Version 3 adds integrations (integrations.go): the slots an app declares of a kind of outside
+// service, the payment link effect that asks one for a link, and the handlers that say what the
+// service's events may set in a record. A definition that says version 2 or 1 can't use them.
+const DefinitionVersion = 3
 
 // firstVersion is the version of the format before screens and rules.
 const firstVersion = 1
+
+// integrationsVersion is the version of the format that has integrations.
+const integrationsVersion = 3
 
 // Definition is what an app is made of: its screen or screens, its collection and its actions.
 type Definition struct {
@@ -112,6 +119,10 @@ type Definition struct {
 	// Contributions are what the app offers the platform's Home page and navigation
 	// (contributions.go): version 2 of the format.
 	Contributions *Contributions `json:"contributions,omitempty"`
+	// Integrations are the uses of outside services the app declares, by the slot's name
+	// (integrations.go): version 3 of the format. A slot holds no provider, no address, no key and
+	// no integration id; an admin binds one when approving the app's contract.
+	Integrations map[string]IntegrationSlot `json:"integrations,omitempty"`
 }
 
 // Collection is the schema of the app's rows, shown in the data model at /items.
@@ -558,6 +569,14 @@ func (d Definition) Check() (Definition, error) {
 	if d.DefinitionVersion == firstVersion && len(uses2) > 0 {
 		return Definition{}, invalidf("definition_version %d can't use %s: they are for version 2 (leave definition_version out for the current one)",
 			d.DefinitionVersion, strings.Join(sortedKeys(setOf(uses2)), ", "))
+	}
+	usesIntegrations, err := d.checkIntegrations(out.Collection)
+	if err != nil {
+		return Definition{}, err
+	}
+	if usesIntegrations && d.DefinitionVersion < integrationsVersion {
+		return Definition{}, invalidf("definition_version %d can't use integrations: they are for version %d (leave definition_version out for the current one)",
+			d.DefinitionVersion, integrationsVersion)
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {

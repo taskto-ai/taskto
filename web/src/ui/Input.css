@@ -46,10 +46,6 @@
     outline-offset: var(--line-focus-offset);
   }
 
-  .ui-textbox[aria-invalid]:not([aria-invalid="false"]) {
-    border-color: var(--color-danger);
-  }
-
   /* Disabled: the neutral ground, muted text, no edge to press. Read-only keeps its look but loses
      its edge's weight. */
   .ui-textbox:disabled {
@@ -62,6 +58,12 @@
   .ui-textbox:read-only:not(:disabled, select) {
     border-color: var(--color-border);
     background: var(--color-bg-sunken);
+  }
+
+  /* After the read-only rule, of the same weight: a read-only field that is invalid keeps the
+     danger edge. */
+  .ui-textbox[aria-invalid]:not([aria-invalid="false"]) {
+    border-color: var(--color-danger);
   }
 
   /* Fingers: the touch height; the text at 16px so a phone doesn't zoom in on focus. */

@@ -16,9 +16,5 @@
 
 @import "./ui/base.css";
 @import "./legacy-shared.css";
-@import "./auth/auth.legacy.css";
-@import "./boards/boards.legacy.css";
 @import "./markdown.legacy.css";
 @import "./settings/settings.legacy.css";
-@import "./pwa/pwa.legacy.css";
-@import "./offline/offline.legacy.css";

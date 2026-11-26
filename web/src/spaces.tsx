@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { api, type Space, ws } from './api'
-import { t, useT } from './i18n'
+import { t } from './i18n'
 import { useLoad } from './load'
 
 // initial is the space to open on (a link's), if the user can read it.
@@ -17,29 +17,4 @@ export function useSpaces(workspace: number, initial?: number) {
 // also calls useT(), so it re-renders when the language changes.
 export function spaceLabel(s: Space): string {
   return s.kind === 'private' ? t('knowledge.spaces.private') : s.name
-}
-
-export function SpacePicker({
-  spaces,
-  space,
-  choose,
-}: {
-  spaces: Space[]
-  space: Space | undefined
-  choose: (id: number) => void
-}) {
-  const t = useT()
-  if (spaces.length < 2) return null
-  return (
-    <label className="tt-inline-field">
-      {t('knowledge.spaces.label')}
-      <select value={space?.id} onChange={(e) => choose(Number(e.target.value))}>
-        {spaces.map((s) => (
-          <option key={s.id} value={s.id}>
-            {spaceLabel(s)}
-          </option>
-        ))}
-      </select>
-    </label>
-  )
 }

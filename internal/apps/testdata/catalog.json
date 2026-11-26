@@ -26,6 +26,7 @@
     "data.labels",
     "effect.create_card",
     "effect.create_document",
+    "effect.create_payment_link",
     "effect.open_route",
     "effect.update_card",
     "field.attachment",
@@ -197,7 +198,7 @@
       "weight"
     ]
   },
-  "definition_version": 2,
+  "definition_version": 3,
   "functions": [
     "and",
     "email",

@@ -10,7 +10,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
-import { ConfirmButton } from './ConfirmButton'
+import { Button } from '../ui/Button'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { Notice } from '../ui/Notice'
 import type { Runtime } from './runtime'
 import { NotWriter } from './store'
 
@@ -39,15 +42,24 @@ export function LogoutGuard({
   const [left, setLeft] = useState(count)
   const [stuck, setStuck] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
-  const first = useRef<HTMLButtonElement>(null)
-  useEffect(() => first.current?.focus(), [])
+  // Discarding is a second, explicit step.
+  const [discarding, setDiscarding] = useState(false)
+  // A sync is under way: one at a time (a second press before React draws `busy` is refused too),
+  // and the guard can't be closed meanwhile, since its end may sign the person out.
+  const syncing = useRef(false)
+  // The guard is still on screen. Once it is gone (cancelled, or the page moved on) a sync that ends
+  // later signs nobody out and changes nothing: the person was shown the app again.
+  const live = useRef(true)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCancel()
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
+    live.current = true
+    return () => {
+      live.current = false
+    }
+  }, [])
 
   const sync = async () => {
+    if (syncing.current) return
+    syncing.current = true
     setBusy(true)
     setStuck(false)
     setFailure(null)
@@ -59,71 +71,93 @@ export function LogoutGuard({
       // is told, and nothing is attempted.
       if (!runtime.writer.holds()) {
         await runtime.writer.takeOver()
+        if (!live.current) return
         if (!runtime.writer.holds()) {
           setFailure(t('offline.logout.notWriter'))
           return
         }
       }
       await runtime.engine.retry()
+      if (!live.current) return
       const unsent = await runtime.store.unsynced()
+      if (!live.current) return
       setLeft(unsent.length)
       if (unsent.length === 0) onSignOut()
       else setStuck(true)
     } catch (e) {
+      if (!live.current) return
       // The right was lost while this ran (another tab took it), or the device refused.
       setFailure(e instanceof NotWriter ? t('offline.logout.notWriter') : errorText(e))
     } finally {
-      setBusy(false)
+      syncing.current = false
+      if (live.current) setBusy(false)
     }
   }
+  // Escape and the close button are Cancel, but not while a sync runs.
+  const cancel = () => {
+    if (!syncing.current) onCancel()
+  }
+  // The safe way out takes the focus: keeping or sending the records, or else (nothing to sync
+  // here) Cancel, never the destructive button.
+  const canSync = !unreadable && runtime !== null
 
   return (
-    <div className="tt-guard">
-      <div className="tt-guard-box" role="alertdialog" aria-modal="true" aria-labelledby="tt-guard-title">
-        <h2 id="tt-guard-title">{t('offline.logout.title')}</h2>
+    <>
+      <Dialog
+        open
+        // Escape, as Cancel: nothing is signed out and nothing is deleted. Not while a sync runs.
+        onClose={cancel}
+        dismissible={!busy}
+        role="alertdialog"
+        size="sm"
+        title={t('offline.logout.title')}
+        actions={
+          <>
+            <Button variant="danger" disabled={busy} onClick={() => setDiscarding(true)}>
+              {t('offline.logout.discard')}
+            </Button>
+            <Button disabled={busy} onClick={cancel} data-autofocus={!unreadable && !canSync ? true : undefined}>
+              {t('offline.logout.cancel')}
+            </Button>
+            {unreadable ? (
+              <Button variant="primary" disabled={busy} onClick={onKeep} data-autofocus>
+                {t('offline.logout.keep')}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                loading={busy}
+                disabled={!runtime}
+                onClick={() => void sync()}
+                data-autofocus={canSync ? true : undefined}
+              >
+                {t('offline.logout.sync')}
+              </Button>
+            )}
+          </>
+        }
+      >
         {unreadable ? (
           <p>{t(unreadable === 'schema' ? 'offline.logout.unreadableSchema' : 'offline.logout.unreadableStorage')}</p>
         ) : (
           <p>{t('offline.logout.body', { count: left })}</p>
         )}
-        {stuck && (
-          <p role="alert" className="tt-error">
-            {t('offline.logout.stillWaiting')}
-          </p>
-        )}
-        {failure && (
-          <p role="alert" className="tt-error">
-            {failure}
-          </p>
-        )}
-        <div className="tt-row-actions">
-          {unreadable ? (
-            <button ref={first} type="button" className="tt-button tt-primary" disabled={busy} onClick={onKeep}>
-              {t('offline.logout.keep')}
-            </button>
-          ) : (
-            <button
-              ref={first}
-              type="button"
-              className="tt-button tt-primary"
-              disabled={busy || !runtime}
-              onClick={() => void sync()}
-            >
-              {busy ? t('offline.logout.syncing') : t('offline.logout.sync')}
-            </button>
-          )}
-          <ConfirmButton
-            label={t('offline.logout.discard')}
-            question={t('offline.queue.discardQuestion')}
-            confirm={t('offline.queue.discardConfirm')}
-            disabled={busy}
-            onConfirm={onSignOut}
-          />
-          <button type="button" className="tt-button" disabled={busy} onClick={onCancel}>
-            {t('offline.logout.cancel')}
-          </button>
-        </div>
-      </div>
-    </div>
+        {stuck && <Notice tone="danger">{t('offline.logout.stillWaiting')}</Notice>}
+        {failure && <Notice tone="danger">{failure}</Notice>}
+      </Dialog>
+      <ConfirmDialog
+        open={discarding}
+        title={t('offline.logout.discard')}
+        confirmLabel={t('offline.queue.discardConfirm')}
+        tone="danger"
+        onConfirm={() => {
+          setDiscarding(false)
+          onSignOut()
+        }}
+        onCancel={() => setDiscarding(false)}
+      >
+        {t('offline.queue.discardQuestion')}
+      </ConfirmDialog>
+    </>
   )
 }

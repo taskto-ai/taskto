@@ -47,8 +47,13 @@ function OpenDrawer({ onClose, title, children, headerActions, footer, className
   const t = useT()
   const ref = useRef<HTMLElement>(null)
   const id = useId()
+  // The latest committed onClose, for the listener set up once: written after each commit, so a
+  // render that never commits (a transition to another card that suspends) can't change what
+  // Escape and the close button do while the drawer on screen is still the old one.
   const close = useRef(onClose)
-  close.current = onClose
+  useLayoutEffect(() => {
+    close.current = onClose
+  })
 
   useLayoutEffect(() => {
     const before = document.activeElement

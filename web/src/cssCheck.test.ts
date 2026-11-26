@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { OLD_STYLESHEETS } from '../scripts/css-check.mjs'
+import { allowedEverywhere, allRules, OLD_STYLESHEETS, OPT_OUT, reachesAnywhere } from '../scripts/css-check.mjs'
 
 // scripts/css-check.mjs: the stylesheets are global (one list of files, every rule in force on every
 // page), so a selector declared twice, in one file or two, a class a component uses that no rule
@@ -443,9 +443,9 @@ describe('how the app loads its stylesheets', () => {
     expect(dropped.err).toContain('src/markdown.legacy.css: nothing loads it')
     expect(dropped.err).toContain('src/styles.css: lists ')
 
-    const gone = app({ 'pwa/pwa.legacy.css': null })
+    const gone = app({ 'settings/settings.legacy.css': null })
     expect(gone.code).toBe(1)
-    expect(gone.err).toContain('src/styles.css: lists src/pwa/pwa.legacy.css, which is not there')
+    expect(gone.err).toContain('src/styles.css: lists src/settings/settings.legacy.css, which is not there')
   })
 
   test('the list counts only if the entry imports it', () => {
@@ -506,9 +506,9 @@ describe('how the app loads its stylesheets', () => {
   })
 
   test('a stylesheet both listed and imported by a module is loaded twice', () => {
-    const r = app({ 'App.tsx': "import './boards/Board'\n", 'boards/Board.tsx': "import './boards.legacy.css'\n" })
+    const r = app({ 'App.tsx': "import './Md'\n", 'Md.tsx': "import './markdown.legacy.css'\n" })
     expect(r.code).toBe(1)
-    expect(r.err).toContain('src/boards/boards.legacy.css: loaded more than one way')
+    expect(r.err).toContain('src/markdown.legacy.css: loaded more than one way')
   })
 
   test('the list is in its order, plain, and nothing else', () => {
@@ -622,5 +622,98 @@ describe('how the app loads its stylesheets', () => {
       expect(r.code, base).toBe(1)
       expect(r.err, base).toContain("reaches into the design system's components")
     }
+  })
+})
+
+describe('nested rules in an old stylesheet', () => {
+  // What css-check makes of each rule: whether it reaches anywhere, and if so whether it may.
+  const verdicts = (css: string) =>
+    allRules(css).map((r) => ({
+      selector: r.selector,
+      properties: r.properties,
+      refused: reachesAnywhere(r.selector) && !allowedEverywhere(r),
+    }))
+
+  test('a nested rule is scoped by its parent, with & or without it', () => {
+    expect(
+      verdicts('.tt-card { color: red; & h2 { margin: 0; } &:hover { opacity: 0.8; } h3 { margin: 0; } }'),
+    ).toEqual([
+      { selector: '.tt-card', properties: ['color'], refused: false },
+      { selector: '.tt-card h2', properties: ['margin'], refused: false },
+      { selector: '.tt-card:hover', properties: ['opacity'], refused: false },
+      { selector: '.tt-card h3', properties: ['margin'], refused: false },
+    ])
+    // An ampersand in a string or escaped is a character, not the parent.
+    expect(allRules('.tt-card { a[href*="&"] { margin: 0; } .x\\&y { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-card',
+      '.tt-card a[href*="&"]',
+      '.tt-card .x\\&y',
+    ])
+    // After a compound's start, the parent is a condition on that element, and a parent of
+    // wrappers alone scopes nothing.
+    // (Glued on as text, `#tt-main&` would be `#tt-mainbody #root input`, an id of its own that
+    // seems to scope it.)
+    expect(verdicts('body #root { #tt-main& input { margin: 0; } }').at(-1)).toEqual({
+      selector: '#tt-main:is(body #root) input',
+      properties: ['margin'],
+      refused: true,
+    })
+    // A leading combinator keeps the parent in front, even with an & later on.
+    expect(allRules('.tt-card { + .x + & { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-card',
+      '.tt-card + .x + .tt-card',
+    ])
+    // Each & is the whole parent list, chosen on its own.
+    expect(allRules('.tt-a, .tt-b { & + & { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-a',
+      '.tt-b',
+      '.tt-a + .tt-a',
+      '.tt-a + .tt-b',
+      '.tt-b + .tt-a',
+      '.tt-b + .tt-b',
+    ])
+    // Each of several parents.
+    expect(allRules('.tt-a, .tt-b { & p { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-a',
+      '.tt-b',
+      '.tt-a p',
+      '.tt-b p',
+    ])
+  })
+
+  test('a nested rule under a rule that reaches anywhere reaches anywhere too', () => {
+    expect(verdicts('main { & h2 { margin: 0; } }').at(-1)).toEqual({
+      selector: 'main h2',
+      properties: ['margin'],
+      refused: true,
+    })
+    expect(verdicts(`h2${OPT_OUT} { &:hover { color: red; } }`).at(-1)?.refused).toBe(false)
+  })
+
+  test("a conditional rule's declarations nested in a style rule are that rule's", () => {
+    expect(verdicts('input { @media (pointer: coarse) { padding: 0; } }')).toEqual([
+      { selector: 'input', properties: ['padding'], refused: true },
+    ])
+    expect(verdicts('input { @media (max-width: 40rem) { @supports (x: y) { font-size: 16px; } } }')).toEqual([
+      { selector: 'input', properties: ['font-size'], refused: false },
+    ])
+    // At the top, a @media's rules are what they are, as before.
+    expect(verdicts('@media (pointer: coarse) { h2 { margin: 0; } .tt-x { margin: 0; } }')).toEqual([
+      { selector: 'h2', properties: ['margin'], refused: true },
+      { selector: '.tt-x', properties: ['margin'], refused: false },
+    ])
+  })
+
+  test('a class named only in a nested selector, with & or without it, has a rule', () => {
+    const r = run(
+      '.tt-card { margin: 0; & .tt-inner { padding: 0; } &.tt-on { color: inherit; } .tt-plain { margin: 0; } }\n',
+      { 'A.tsx': 'export const A = () => <p className="tt-card tt-inner tt-on tt-plain">x</p>\n' },
+    )
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
+  })
+
+  test('inside @keyframes, nothing is a rule', () => {
+    expect(allRules('@keyframes spin { from { rotate: 0; } to { rotate: 1turn; } }')).toEqual([])
   })
 })

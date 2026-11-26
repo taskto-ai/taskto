@@ -2,24 +2,32 @@
 // in, or out, in another tab). Nothing of the earlier account's is on screen or in memory any more:
 // this says only that, and the page is reloaded to go on as whoever is signed in (docs/offline.md).
 
-import { useEffect, useRef } from 'react'
+import { AuthLayout } from '../auth/AuthLayout'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
 
 export function AccountChanged() {
   const t = useT()
-  const first = useRef<HTMLButtonElement>(null)
-  useEffect(() => first.current?.focus(), [])
   return (
-    <main className="tt-center" id="main">
-      <div className="tt-guard-box" role="alertdialog" aria-modal="true" aria-labelledby="tt-account-title">
-        <h2 id="tt-account-title">{t('offline.accountChanged.title')}</h2>
-        <p>{t('offline.accountChanged.body')}</p>
-        <div className="tt-row-actions">
-          <button ref={first} type="button" className="tt-button tt-primary" onClick={() => window.location.reload()}>
+    // Behind it, the logo only: nothing of the earlier account.
+    <AuthLayout>
+      <Dialog
+        open
+        // Reloading is the only way on.
+        dismissible={false}
+        onClose={() => undefined}
+        role="alertdialog"
+        size="sm"
+        title={t('offline.accountChanged.title')}
+        actions={
+          <Button variant="primary" onClick={() => window.location.reload()} data-autofocus>
             {t('offline.accountChanged.reload')}
-          </button>
-        </div>
-      </div>
-    </main>
+          </Button>
+        }
+      >
+        <p>{t('offline.accountChanged.body')}</p>
+      </Dialog>
+    </AuthLayout>
   )
 }

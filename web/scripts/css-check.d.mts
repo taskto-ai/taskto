@@ -10,6 +10,8 @@ export const OPT_OUT: string
 export const WRAPPERS: ReadonlySet<string>
 export const EVERYWHERE: ReadonlyMap<string, { properties: string[]; reason: string }>
 export function allRules(css: string): CssRule[]
+export function nestedSelector(parent: string, child: string): string
+export function nestedSelectors(parents: string[], child: string): string[]
 export function compounds(selector: string): string[]
 export function optsOut(compound: string): boolean
 export function reachesAnywhere(selector: string): boolean

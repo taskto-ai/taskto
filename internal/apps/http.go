@@ -79,6 +79,11 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	// The live release and the caller's records, to keep on a device (offline.go).
 	mux.Handle("GET "+apps+"/{app}/offline", read(s.handleOffline))
+	// The integrations the app declares and the approval of each (integration_approvals.go): its
+	// designers and publishers read them, and a publisher asks for a contract to be approved. The
+	// admin's side is ApprovalRoutes.
+	mux.Handle("GET "+apps+"/{app}/integrations", read(s.handleIntegrationStatus))
+	mux.Handle("POST "+apps+"/{app}/integrations/{slot}/request", write(s.handleRequestApproval))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 	// Attachments (attachments.go): the uploads, and the photos kept for records.
@@ -526,6 +531,8 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusConflict, body)
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
+	case errors.Is(err, auth.ErrAccountDisabled):
+		auth.WriteAccountDisabled(w) // the admin was disabled after the request was let in
 	case errors.Is(err, errSpaceArchived):
 		writeError(w, http.StatusForbidden, apierr.CodeSpaceArchived, err.Error())
 	case errors.Is(err, ErrReadOnly):
