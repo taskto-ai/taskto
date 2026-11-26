@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -715,6 +716,9 @@ type ref struct {
 	// record's field its link is written to ("" for a ref made before refs kept it: any field).
 	effectID int64
 	urlField string
+	// linkExpiredAt is when the ref's own link was seen expired ("" if it wasn't): kept apart from its
+	// state, which stays paid for a ref paid on another key's object.
+	linkExpiredAt string
 }
 
 // newLink is what the provider is asked for under key a: the key's token, the ref's money and the
@@ -734,13 +738,13 @@ func (r ref) link() paylink.Link {
 // refColumns are integration_refs' own, so a query of that table alone reads a ref.
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
 	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
-	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), url_field`
+	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), url_field, coalesce(link_expired_at, '')`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
 		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
-		&r.paidObjectID, &r.paymentID, &r.effectID, &r.urlField)
+		&r.paidObjectID, &r.paymentID, &r.effectID, &r.urlField, &r.linkExpiredAt)
 	return r, err
 }
 
@@ -809,10 +813,10 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 			at := s.store.stamp(s.store.now())
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at,
-					account_id, account_mode, success_url, cancel_url, url_field)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					account_id, account_mode, success_url, cancel_url, url_field, amount_field, currency_field)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at,
-				who.account, who.mode, successURL, cancelURL, req.URLField); err != nil {
+				who.account, who.mode, successURL, cancelURL, req.URLField, req.AmountField, req.CurrencyField); err != nil {
 				return ref{}, err
 			}
 			out, err = scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
@@ -1083,7 +1087,8 @@ func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, cre
 	// paid on another key's object (one an admin confirmed away, which was paid after all) still has its
 	// own link on record, which may be open: it can't be read under another integration or account, so
 	// the entry stops with the code that says which, for an admin.
-	finished := prior.state == "expired" || ((prior.state == "paid" || prior.state == "refunded") && prior.paidObjectID == prior.objectID)
+	finished := prior.state == "expired" || prior.linkExpiredAt != "" ||
+		((prior.state == "paid" || prior.state == "refunded") && prior.paidObjectID == prior.objectID)
 	switch {
 	case prior.integrationID != req.IntegrationID:
 		if finished {
@@ -1112,14 +1117,20 @@ func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, cre
 		// Given again by an entry of the live release: its payment is written through the slot that
 		// release declares, which is bound to the same integration (checked above). A slot renamed since
 		// the ref was made would no longer find the app's rules for the payment.
-		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET slot = ? WHERE id = ? AND slot != ?`, req.Slot, prior.id, req.Slot); err != nil {
+		// Only forward: an older entry (a release behind, resuming late) never moves it back.
+		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET slot = ?, slot_effect_id = ?
+			WHERE id = ? AND coalesce(slot_effect_id, effect_id, 0) < ?`, req.Slot, req.EffectID, prior.id, req.EffectID); err != nil {
 			return paylink.Link{}, false, 0, err
 		}
 		slog.Info("integrations: a record's payment link that may still be paid is given again", "integration", prior.integrationID, "ref", prior.id)
 		return prior.link(), true, 0, nil
 	case LinkExpired:
+		at := s.store.stamp(s.store.now())
 		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'expired', settled_at = coalesce(settled_at, ?)
-			WHERE id = ? AND state IN ('creating', 'open')`, s.store.stamp(s.store.now()), prior.id); err != nil {
+			WHERE id = ? AND state IN ('creating', 'open')`, at, prior.id); err != nil {
+			return paylink.Link{}, false, 0, err
+		}
+		if err := s.noteLinkExpired(ctx, prior.id, prior.objectID, at); err != nil {
 			return paylink.Link{}, false, 0, err
 		}
 		return paylink.Link{}, false, prior.id, nil
@@ -1187,7 +1198,7 @@ func (s *Service) takeEarlier(ctx context.Context, tx *sql.Tx, req paylink.Reque
 	}
 	// Still being made, or its outcome unknown: the entry takes it and resolves it as its own, under the
 	// slot the entry's release declares (beginRef refuses it if that slot is bound to another integration).
-	if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET effect_id = ?, slot = ? WHERE id = ?`, req.EffectID, req.Slot, prior.id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET effect_id = ?, slot = ?, slot_effect_id = NULL WHERE id = ?`, req.EffectID, req.Slot, prior.id); err != nil {
 		return ref{}, false, err
 	}
 	slog.Info("integrations: a record's payment link still being made is taken by its newer entry", "integration", prior.integrationID, "ref", prior.id)
@@ -1205,12 +1216,37 @@ const deadKey = `(coalesce(o.outcome, '') = 'expired' OR (coalesce(o.outcome, ''
 // MayBePaid says whether a ref of the app's record may still take a payment, or still come to have a
 // link (paylink.Opener): one with a link that isn't confirmed expired and wasn't paid on that very
 // link, or one with none yet that has a key that isn't dead (being made, or its outcome unknown).
-func (s *Service) MayBePaid(ctx context.Context, q paylink.Querier, appID, recordID int64) (bool, error) {
-	var yes bool
-	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_refs r WHERE r.app_id = ? AND r.record_id = ? AND (
+// It says the record's fields the money of each such ref was read from too.
+func (s *Service) MayBePaid(ctx context.Context, q paylink.Querier, appID, recordID int64) (bool, []paylink.MoneyFields, error) {
+	var n int
+	var fields string
+	err := q.QueryRowContext(ctx, `SELECT count(*), coalesce(json_group_array(json_array(r.amount_field, r.currency_field)), '[]')
+		FROM integration_refs r WHERE r.app_id = ? AND r.record_id = ? AND (
 		CASE WHEN r.provider_object_id IS NOT NULL
-			THEN r.state != 'expired' AND NOT (r.state IN ('paid', 'refunded') AND r.paid_object_id = r.provider_object_id)
+			THEN r.state != 'expired' AND r.link_expired_at IS NULL
+				AND NOT (r.state IN ('paid', 'refunded') AND r.paid_object_id = r.provider_object_id)
 			ELSE EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = r.id AND NOT `+deadKey+`)
-		END))`, appID, recordID).Scan(&yes)
-	return yes, err
+		END)`, appID, recordID).Scan(&n, &fields)
+	if err != nil || n == 0 {
+		return false, nil, err
+	}
+	var pairs [][2]string
+	if err := json.Unmarshal([]byte(fields), &pairs); err != nil {
+		return false, nil, err
+	}
+	out := make([]paylink.MoneyFields, 0, len(pairs))
+	for _, p := range pairs {
+		if p[0] != "" || p[1] != "" {
+			out = append(out, paylink.MoneyFields{Amount: p[0], Currency: p[1]})
+		}
+	}
+	return true, out, nil
+}
+
+// noteLinkExpired keeps that the ref's own link was seen expired, whatever its state: a ref paid on
+// another key's object stays paid, as it was settled.
+func (s *Service) noteLinkExpired(ctx context.Context, refID int64, objectID, at string) error {
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET link_expired_at = coalesce(link_expired_at, ?)
+		WHERE id = ? AND provider_object_id = ?`, at, refID, objectID)
+	return err
 }

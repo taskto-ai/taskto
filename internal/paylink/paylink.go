@@ -24,8 +24,14 @@ type Opener interface {
 	// is unknown, read through q (the transaction that changes the record, under its write lock). Only
 	// a link confirmed expired, or paid on that very link, is no longer one. While a link may be paid,
 	// the record's money (the amount and currency it asks) can't change.
-	MayBePaid(ctx context.Context, q Querier, appID, recordID int64) (bool, error)
+	// It also says the fields the money of each such link was read from (MoneyFields), whatever the
+	// app's live release declares now.
+	MayBePaid(ctx context.Context, q Querier, appID, recordID int64) (bool, []MoneyFields, error)
 }
+
+// MoneyFields are the record's fields a payment link's amount and currency were read from (Currency ""
+// for an effect's own currency).
+type MoneyFields struct{ Amount, Currency string }
 
 // Querier is what MayBePaid reads with: a transaction or the database.
 type Querier interface {
@@ -42,6 +48,10 @@ type Request struct {
 	// URLField is the record's field the link is written to. A record has one payable link per field:
 	// an entry with no reference of its own first reads the record's newest one for the field.
 	URLField string
+	// AmountField and CurrencyField are the record's fields the money was read from ("" for an
+	// effect's own currency): the reference keeps them, so the record's money stays as it is while the
+	// link may be paid whatever the app's live release declares by then.
+	AmountField, CurrencyField string
 	// Amount is the amount as decimal text and Currency its code, as the record held them
 	// (payload): nothing in them was rounded, converted or checked yet.
 	Amount, Currency string

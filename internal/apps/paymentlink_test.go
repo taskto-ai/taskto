@@ -29,8 +29,8 @@ type stubLinks struct {
 	onOpen func(req paylink.Request)
 }
 
-func (s *stubLinks) MayBePaid(context.Context, paylink.Querier, int64, int64) (bool, error) {
-	return false, nil
+func (s *stubLinks) MayBePaid(context.Context, paylink.Querier, int64, int64) (bool, []paylink.MoneyFields, error) {
+	return false, nil, nil
 }
 
 func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (paylink.Link, error) {

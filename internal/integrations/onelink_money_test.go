@@ -5,13 +5,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/integrations/testprovider"
+	"taskto.ai/taskto/internal/paylink"
 )
+
+// paylinkRequest is the request of the entry for the record, as the worker makes it.
+func paylinkRequest(p *pay, record, effect int64, slot string) paylink.Request {
+	return paylink.Request{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: effect,
+		Slot: slot, URLField: "pay_url", AmountField: "total", CurrencyField: "currency", Amount: "10", Currency: "EUR", Description: "Invoice"}
+}
 
 // One payable link per invoice, and a payment that can always be written to it: the money a link asks
 // stays the record's while the link may be paid, a new link is never made while an earlier one may
@@ -237,7 +245,7 @@ func TestAKeyInDoubtLocksTheRecordsMoney(t *testing.T) {
 	p.exec(`UPDATE app_effects SET state = 'failed'`) // only the ref decides
 	mayBePaid := func() bool {
 		t.Helper()
-		yes, err := p.svc.MayBePaid(context.Background(), p.db, p.app.ID, record)
+		yes, _, err := p.svc.MayBePaid(context.Background(), p.db, p.app.ID, record)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,4 +269,100 @@ func TestAKeyInDoubtLocksTheRecordsMoney(t *testing.T) {
 	}
 	p.exec(`UPDATE integration_ref_attempts SET clean_sends = 0`)
 	expectCode(t, p.actRec("", "send", map[string]any{"id": record, "total": 12}), http.StatusUnprocessableEntity, string(apierr.CodeAppPaymentLinkOpen))
+}
+
+// republish replaces the app's draft with the definition and publishes it.
+func (p *pay) republish(definition string) {
+	p.t.Helper()
+	rec := p.owner.do(http.MethodGet, p.appsPath(fmt.Sprintf("/%d", p.app.ID)), nil)
+	expect(p.t, rec, http.StatusOK)
+	app := decode[apps.App](p.t, rec)
+	rec = p.owner.do(http.MethodPatch, p.appsPath(fmt.Sprintf("/%d", p.app.ID)), map[string]any{"version": app.Version, "definition": rawJSON(definition)})
+	expect(p.t, rec, http.StatusOK)
+	app = decode[apps.App](p.t, rec)
+	// The contract changed with the definition: the admin approves it again.
+	rec = p.owner.do(http.MethodGet, p.appsPath(fmt.Sprintf("/%d/integrations", app.ID)), nil)
+	expect(p.t, rec, http.StatusOK)
+	hash := decode[apps.IntegrationStatus](p.t, rec).Slots[0].ContractHash
+	rec = p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/integrations/payments/request", app.ID)), map[string]any{"contract_hash": hash})
+	expect(p.t, rec, http.StatusOK)
+	approval := decode[apps.IntegrationApproval](p.t, rec)
+	expect(p.t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integration-approvals/%d/approve", approval.ID)),
+		map[string]any{"integration_id": p.in.ID}), http.StatusOK)
+	expect(p.t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/publish", p.app.ID)),
+		map[string]any{"version": app.Version, "acknowledge": []any{}}), http.StatusOK)
+}
+
+// A release that no longer asks for payment links leaves the links it made: the money they ask stays
+// the record's while one may be paid, whatever the live release declares.
+func TestTheMoneyStaysLockedAfterTheEffectIsRemoved(t *testing.T) {
+	p := newPay(t, publicURL)
+	record, r := p.sentInvoice(10, "EUR", "op-removed-001")
+	p.republish(strings.Replace(invoiceApp, `"send": {"kind": "update", "effects": [{
+      "kind": "create_payment_link", "integration": "payments", "amount_field": "total", "currency_field": "currency",
+      "description": "Invoice {{number}} for {{customer}}", "url_field": "pay_url", "id_field": "payment_id"}]}`, `"send": {"kind": "update"}`, 1))
+	expectCode(t, p.actRec("", "send", map[string]any{"id": record, "total": 12}), http.StatusUnprocessableEntity, string(apierr.CodeAppPaymentLinkOpen))
+	expectCode(t, p.actRec("", "send", map[string]any{"id": record, "currency": "JPY"}), http.StatusUnprocessableEntity, string(apierr.CodeAppPaymentLinkOpen))
+	p.expires(r.object)
+	expect(t, p.actRec("", "send", map[string]any{"id": record, "total": 12}), http.StatusOK)
+}
+
+// Two entries give the record's link again out of order: the older one never takes the ref back to
+// the slot it names.
+func TestAnOlderEntryNeverMovesALinksSlotBack(t *testing.T) {
+	p := newPay(t, publicURL)
+	record, r := p.sentInvoice(10, "EUR", "op-order-00001")
+	p.stop()
+	p.act("op-order-00002", "send", map[string]any{"id": record, "status": "sent", "customer": "B"})
+	p.act("op-order-00003", "send", map[string]any{"id": record, "status": "sent", "customer": "C"})
+	es := p.entries()
+	req := func(effect int64, slot string) {
+		t.Helper()
+		_, err := p.svc.OpenPaymentLink(context.Background(), paylinkRequest(p, record, effect, slot))
+		if err != nil {
+			t.Fatalf("entry %d: %v", effect, err)
+		}
+	}
+	p.exec(`UPDATE integration_refs SET slot = 'old_payments' WHERE id = ?`, r.id)
+	req(es[2].id, "payments")     // the newest gives it again, under the live slot
+	req(es[1].id, "old_payments") // an older one, a release behind, resumes
+	var slot string
+	if err := p.db.QueryRow(`SELECT slot FROM integration_refs WHERE id = ?`, r.id).Scan(&slot); err != nil || slot != "payments" {
+		t.Fatalf("the ref's slot is %q, %v", slot, err)
+	}
+}
+
+// A ref paid on another key's object whose own link then expired holds nothing a payer can use: that
+// is kept, as Stripe tells it or as an entry reads it, and the payment stays as it was.
+func TestAPaidRefsExpiredLinkIsKept(t *testing.T) {
+	for _, how := range []string{"told by Stripe", "read by an entry"} {
+		t.Run(how, func(t *testing.T) {
+			p := newPay(t, publicURL)
+			record, r := p.sentInvoice(10, "EUR", "op-paid-exp-01")
+			p.exec(`UPDATE integration_refs SET state = 'paid', paid_object_id = 'cs_test_abandoned', payment_id = 'pi_test_1', settled_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, r.id)
+			if how == "told by Stripe" {
+				p.expires(r.object)
+				if yes, _, err := p.svc.MayBePaid(context.Background(), p.db, p.app.ID, record); err != nil || yes {
+					t.Fatalf("may be paid %v, %v", yes, err)
+				}
+			} else {
+				// An entry reads it expired, keeps that, and makes the record's one new link.
+				if _, err := p.fake.Expire(r.object); err != nil {
+					t.Fatal(err)
+				}
+				p.act("op-paid-exp-02", "send", map[string]any{"id": record, "status": "sent", "customer": "Other"})
+				if es := p.allEnded(2); es[1].state != apps.StateDone || len(p.posts()) != 2 {
+					t.Fatalf("the second entry: %+v, %d links", es[1], len(p.posts()))
+				}
+			}
+			if n := p.count(`SELECT count(*) FROM integration_refs WHERE id = ? AND link_expired_at IS NOT NULL`, r.id); n != 1 {
+				t.Fatal("the link's expiry wasn't kept")
+			}
+			var state, paidObject, settled string
+			if err := p.db.QueryRow(`SELECT state, paid_object_id, settled_at FROM integration_refs WHERE id = ?`, r.id).Scan(&state, &paidObject, &settled); err != nil ||
+				state != "paid" || paidObject != "cs_test_abandoned" || settled != "2026-01-01T00:00:00.000Z" {
+				t.Fatalf("the payment changed: %s %s %s, %v", state, paidObject, settled, err)
+			}
+		})
+	}
 }

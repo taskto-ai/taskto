@@ -621,9 +621,12 @@ write.
     `integration_account_changed` for an admin. A reference paid on another key's object (one an admin
     confirmed away, paid after all) still has its own link on record, which may be open, so it counts
     as neither; under the same integration such a link, read open, stops the entry with
-    `integration_link_already_paid`. A link given again takes the slot of the entry that gives it (the
-    live release's, bound to the same integration), so its payment is written even when the slot was
-    renamed since the link was made.
+    `integration_link_already_paid`; read expired, that is kept on the reference
+    (`link_expired_at`, as is Stripe's `checkout.session.expired` for it) while its payment stays as it
+    was settled. A link given again takes the slot of the entry that gives it (the live release's,
+    bound to the same integration), so its payment is written even when the slot was renamed since the
+    link was made; only a newer entry than the one that last moved it does (`slot_effect_id`), so one
+    a release behind that resumes late never moves it back.
   - *It is still being made, or its outcome is unknown*: the new entry **takes it** (the reference's
     `effect_id` becomes the new entry's) and goes on resolving it as its own, under every rule below:
     it waits on the reconciliation, adopts what the earlier call made, or fails with
@@ -646,10 +649,16 @@ write.
   an app's `create_payment_link` effects read) is refused with `422 app_payment_link_open`, in the
   change's own transaction, while an entry of the effect waits to run or a reference of the record may
   still be paid: one with a link that isn't known expired and wasn't paid on that very link, or one with
-  none yet that has a key whose outcome is unknown or that made something. So a link is never paid at
-  an amount the record no longer says, and the payment is always written to a record that asks it. An
-  entry retried after the money changed (it failed before it made anything) fails with
-  `integration_amount_changed` and makes nothing.
+  none yet that has a key whose outcome is unknown or that made something. The fields are those the
+  live release's effects read and those each waiting entry and each such reference was read from
+  (`integration_refs.amount_field` and `currency_field`), so a release that stops asking for links
+  doesn't free them. So a link is never paid at an amount the record no longer says, and the payment
+  is always written to a record that asks it, with one exception the server can't see: an admin who
+  confirms that no link exists when one does (see [When a payment's outcome is unknown](#when-a-payments-outcome-is-unknown)).
+  The confirmation counts as the admin's word, as it does for the new key it allows, so the amount
+  may change after it; if that link is paid after all, the payment settles the reference for the amount it
+  was made with, and the admin reconciles it. An entry retried after the money changed (it failed
+  before it made anything) fails with `integration_amount_changed` and makes nothing.
 - **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
   unique by the outbox entry and keeps the provider's answer. It has **keys**
   (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of

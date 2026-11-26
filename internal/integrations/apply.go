@@ -309,6 +309,12 @@ func (s *Service) settledAlready(ctx context.Context, ev StoredEvent, r ref, tr 
 	case ev.Kind == EventPaymentRefunded:
 		// A refund of a ref that was not paid (its payment is not applied yet, or was refused): wait.
 		return s.refundWaits(ev)
+	case ev.Kind == EventPaymentExpired && ev.ObjectID != "" && ev.ObjectID == r.objectID:
+		// The ref's own link expired after the ref was paid on another key's object: the payment stays
+		// as it was settled, and the link is kept as one no payer can use (MayBePaid).
+		if err := s.noteLinkExpired(ctx, r.id, r.objectID, s.store.stamp(s.now())); err != nil {
+			return err
+		}
 	}
 	return Ignore(apierr.CodeIntegrationEventLate)
 }

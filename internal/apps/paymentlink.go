@@ -201,7 +201,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
-		Slot: p.Slot, URLField: p.URLField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
+		Slot: p.Slot, URLField: p.URLField, AmountField: p.AmountField, CurrencyField: p.CurrencyField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
 	})
 	if err != nil {
 		var pe *paylink.Error
@@ -325,44 +325,63 @@ func (p payload) moneyEffect() Effect {
 // that says another, and the payment would settle it. Once the link is confirmed expired (or paid on
 // that very link), the money may change, and the next link asks the new one. Asked of the update's
 // own transaction, under the write lock, so no entry or link begins between the check and the change.
+//
+// The money's fields are those the live release's effects read, and those the entries that wait and the
+// links that may be paid were read from: a release that no longer asks for links (or reads other
+// fields) doesn't free the money of the ones made before it.
 func paymentMoneyLocked(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID, recordID int64, def Definition, before, after map[string]any) error {
-	changed := ""
+	var fields []paylink.MoneyFields
 	for _, name := range slices.Sorted(maps.Keys(def.Actions)) {
 		for _, e := range def.Actions[name].Effects {
-			if e.Kind != EffectCreatePaymentLink {
-				continue
+			if e.Kind == EffectCreatePaymentLink {
+				fields = append(fields, paylink.MoneyFields{Amount: e.AmountField, Currency: e.CurrencyField})
 			}
-			wasAmount, wasCode := e.moneyOf(def.Collection, before)
-			nowAmount, nowCode := e.moneyOf(def.Collection, after)
-			switch {
-			case wasAmount != nowAmount:
-				changed = e.AmountField
-			case wasCode != nowCode:
-				changed = e.CurrencyField
-			}
-			if changed != "" {
-				break
-			}
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT coalesce(json_extract(payload, '$.amount_field'), ''), coalesce(json_extract(payload, '$.currency_field'), '')
+		FROM app_effects WHERE app_id = ? AND record_id = ? AND kind = ? AND state IN ('pending', 'running')`, appID, recordID, EffectCreatePaymentLink)
+	if err != nil {
+		return err
+	}
+	queued := false
+	for rows.Next() {
+		var f paylink.MoneyFields
+		if err := rows.Scan(&f.Amount, &f.Currency); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		queued = true
+		fields = append(fields, f)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	payable := false
+	if payments != nil {
+		var linked []paylink.MoneyFields
+		if payable, linked, err = payments.MayBePaid(ctx, tx, appID, recordID); err != nil {
+			return err
+		}
+		fields = append(fields, linked...)
+	}
+	if !queued && !payable {
+		return nil
+	}
+	changed := ""
+	for _, f := range fields {
+		e := Effect{Kind: EffectCreatePaymentLink, AmountField: f.Amount, CurrencyField: f.Currency}
+		wasAmount, wasCode := e.moneyOf(def.Collection, before)
+		nowAmount, nowCode := e.moneyOf(def.Collection, after)
+		if wasAmount != nowAmount {
+			changed = f.Amount
+		} else if f.Currency != "" && wasCode != nowCode {
+			changed = f.Currency
 		}
 		if changed != "" {
 			break
 		}
 	}
-	if changed == "" {
-		return nil
-	}
-	var locked bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM app_effects
-		WHERE app_id = ? AND record_id = ? AND kind = ? AND state IN ('pending', 'running'))`, appID, recordID, EffectCreatePaymentLink).Scan(&locked); err != nil {
-		return err
-	}
-	if !locked && payments != nil {
-		var err error
-		if locked, err = payments.MayBePaid(ctx, tx, appID, recordID); err != nil {
-			return err
-		}
-	}
-	if locked {
+	if changed != "" {
 		return invalidAs(apierr.CodeAppPaymentLinkOpen, apierr.Params{"field": changed},
 			"%s can't change while the record's payment link may still be paid: change it once the link has expired", changed)
 	}
