@@ -535,14 +535,28 @@ func (s *Service) savedLink(ctx context.Context, rec record, provider PaymentPro
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
 	}
 	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
-	state, err := provider.LinkState(ctx, creds, client, r.successURL == "", r.objectID)
-	if err != nil {
+	readFailed := func(err error) error {
 		ce, ok := IsCall(err)
 		if !ok {
-			return paylink.Link{}, err
+			return err
 		}
 		logFailure(rec, ce)
-		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+		return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+	}
+	// And the account's: the object is looked for only where it was made. A key of another account
+	// can't read it and says nothing of it; a rotated key of the same account reads it.
+	if r.accountID != "" {
+		account, err := provider.AccountID(ctx, creds, client)
+		if err != nil {
+			return paylink.Link{}, readFailed(err)
+		}
+		if account != r.accountID {
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+		}
+	}
+	state, err := provider.LinkState(ctx, creds, client, r.successURL == "", r.objectID)
+	if err != nil {
+		return paylink.Link{}, readFailed(err)
 	}
 	if state != LinkOpen {
 		slog.Warn("integrations: a saved payment link can no longer take a payment; an admin reconciles it", "ref", r.id)

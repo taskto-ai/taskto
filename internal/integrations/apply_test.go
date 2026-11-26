@@ -1638,8 +1638,50 @@ func TestPaymentsWithNoObjectAreToldApartByTheirPayment(t *testing.T) {
 			t.Fatalf("%d notifications, want %d", all, n)
 		}
 	}
+	// A second payment told again (the purge forgot it, the provider retried) is the duplicate of
+	// one recorded: no other row, and no other notification.
+	p.exec(`DELETE FROM integration_events`)
+	var again Event
+	if err := p.db.QueryRow(`SELECT payment_id FROM integration_ref_duplicates ORDER BY recorded_at LIMIT 1`).Scan(&again.PaymentID); err != nil {
+		t.Fatal(err)
+	}
+	again.Kind, again.RefToken, again.AmountMinor, again.Currency = EventPaymentSucceeded, ref.token, ref.amount, "EUR"
+	p.put(again)
+	p.drain()
+	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventIgnored, apierr.CodeIntegrationEventDuplicate)
+	if got := p.count(`SELECT count(*) FROM integration_ref_duplicates`); got != 2 {
+		t.Fatalf("%d second payments recorded after a replay", got)
+	}
+	if all, _ := p.adminNotices(); all != 2 {
+		t.Fatalf("%d notifications after a replay", all)
+	}
 	if fmt.Sprint(p.fields(record)) != fmt.Sprint(paid) || p.revision(record) != rev {
 		t.Fatal("a second payment was applied")
+	}
+}
+
+// Each claim's end owes its own notification: an end told after an earlier one that couldn't be written
+// yet never takes its place.
+func TestEveryClaimsNotificationIsKeptUntilItIsWritten(t *testing.T) {
+	p := newPay(t, publicURL)
+	_, ref := p.sentInvoice(100, "EUR", "op-a-0001")
+	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount + 1, Currency: "EUR"})
+	ev := p.lastEvent(EventPaymentSucceeded)
+	p.exec(`CREATE TRIGGER no_notices BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT, 'notifications are down'); END`)
+	p.drain()
+	p.mustEvent(p.eventByID(ev.id), EventFailed, apierr.CodeIntegrationAmountMismatch)
+	// An admin retries it before the first notification was written, and it fails again.
+	p.retry(ev.id, http.StatusOK)
+	p.drain()
+	p.mustEvent(p.eventByID(ev.id), EventFailed, apierr.CodeIntegrationAmountMismatch)
+	if n := p.count(`SELECT count(*) FROM integration_event_notices WHERE event_id = ?`, ev.id); n != 2 {
+		t.Fatalf("%d notifications owed for two failures", n)
+	}
+	p.exec(`DROP TRIGGER no_notices`)
+	p.later(noticeRetry + time.Second)
+	p.drain()
+	if all, _ := p.adminNotices(); all != 2 {
+		t.Fatalf("%d notifications for two failures", all)
 	}
 }
 
@@ -1667,7 +1709,7 @@ func TestANotificationThatCannotBeWrittenNeverHoldsTheEventsBack(t *testing.T) {
 	if all, _ := p.adminNotices(); all != 0 {
 		t.Fatalf("%d notifications written while they can't be", all)
 	}
-	if n := p.count(`SELECT count(*) FROM integration_events WHERE notice_lease IS NOT NULL`); n != 1 {
+	if n := p.count(`SELECT count(*) FROM integration_event_notices`); n != 1 {
 		t.Fatalf("%d notifications owed", n)
 	}
 
@@ -1677,7 +1719,7 @@ func TestANotificationThatCannotBeWrittenNeverHoldsTheEventsBack(t *testing.T) {
 	if all, non := p.adminNotices(); all != 1 || non != 0 {
 		t.Fatalf("notifications: %d, %d to non-admins", all, non)
 	}
-	if n := p.count(`SELECT count(*) FROM integration_events WHERE notice_lease IS NOT NULL`); n != 0 {
+	if n := p.count(`SELECT count(*) FROM integration_event_notices`); n != 0 {
 		t.Fatalf("%d notifications still owed", n)
 	}
 }

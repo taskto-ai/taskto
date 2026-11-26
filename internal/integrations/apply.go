@@ -303,14 +303,7 @@ func (s *Service) settledAlready(ctx context.Context, ev StoredEvent, r ref, tr 
 		if samePayment(r, ev) {
 			return Ignore(apierr.CodeIntegrationEventDuplicate) // the same payment, told again
 		}
-		// Another payment of the same ref: a second payment. It is kept for the admins for as long as
-		// the ref is, not only while the event is, once per payment.
-		if _, err := s.store.db.ExecContext(ctx, `INSERT INTO integration_ref_duplicates (ref_id, payment_key, object_id, payment_id, amount_minor, currency, recorded_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (ref_id, payment_key) DO NOTHING`,
-			r.id, paymentKey(ev), nullString(ev.ObjectID), nullString(ev.PaymentID), ev.AmountMinor, ev.Currency, s.store.stamp(s.store.now())); err != nil {
-			return err
-		}
-		return Ignore(apierr.CodeIntegrationEventSecondPayment)
+		return s.secondPayment(ctx, ev, r)
 	case r.state == tr.to:
 		return Ignore(apierr.CodeIntegrationEventDuplicate)
 	case ev.Kind == EventPaymentRefunded:
@@ -318,6 +311,38 @@ func (s *Service) settledAlready(ctx context.Context, ev StoredEvent, r ref, tr 
 		return s.refundWaits(ev)
 	}
 	return Ignore(apierr.CodeIntegrationEventLate)
+}
+
+// secondPayment records another payment of a paid ref for the admins, kept for as long as the ref is
+// (not only while the event is), once per payment, and ends the event in the same transaction: told
+// to the admins when the payment is new, and a duplicate when it was recorded already (the same event
+// told again after the purge). A worker that stops between the two leaves neither, so the first
+// notification can't be lost to a later try finding the row.
+func (s *Service) secondPayment(ctx context.Context, ev StoredEvent, r ref) error {
+	code := apierr.CodeIntegrationEventSecondPayment
+	err := s.store.tx(ctx, func(tx *sql.Tx) error {
+		at := s.store.stamp(s.now())
+		res, err := tx.ExecContext(ctx, `INSERT INTO integration_ref_duplicates (ref_id, payment_key, object_id, payment_id, amount_minor, currency, recorded_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (ref_id, payment_key) DO NOTHING`,
+			r.id, paymentKey(ev), nullString(ev.ObjectID), nullString(ev.PaymentID), ev.AmountMinor, ev.Currency, at)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			code = apierr.CodeIntegrationEventDuplicate
+		}
+		ok, err := s.store.endEvent(ctx, tx, ev.ID, ev.Lease, ev.Kind, EventIgnored, code, nil, at)
+		if err == nil && !ok {
+			err = errLeaseLost
+		}
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	return Ignore(code)
 }
 
 // samePayment says whether a paid event tells the payment that paid the ref: the same payment when

@@ -2844,6 +2844,18 @@ func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
 				t.Fatalf("with the read failing: %+v, %v", link, err)
 			}
 
+			// A key of another account (same mode) never reads it: nothing given, nothing read.
+			p.fake.SetAccount(otherAccount)
+			reads = len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
+			link, err = p.svc.OpenPaymentLink(ctx, req)
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationAccountChanged || link.URL != "" {
+				t.Fatalf("under another account: %+v, %v", link, err)
+			}
+			if n := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID)); n != reads {
+				t.Fatal("another account's key read the saved session")
+			}
+			p.fake.SetAccount(testprovider.TestAccountID)
+
 			if err := end(p, first.ObjectID); err != nil {
 				t.Fatal(err)
 			}

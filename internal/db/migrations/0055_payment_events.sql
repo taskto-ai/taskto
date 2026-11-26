@@ -34,13 +34,18 @@ CREATE TABLE integration_ref_duplicates (
     PRIMARY KEY (ref_id, payment_key)
 ) STRICT, WITHOUT ROWID;
 
--- The admins' notification of an event's end, owed and not sent yet. The end state and the debt are
--- one statement (the worker's, or the apply's own transaction), and the notification is written by a
--- step of its own (events.go, sendEventNotices), so a notification that can't be written never holds
--- the event back, nor the events after it. notice_lease is the claim the end belongs to (the
--- notification's dedupe key), NULL when nothing is owed; notice_at is when the step next tries, moved
--- on after a failure. An event that owes a notification is not purged.
-ALTER TABLE integration_events ADD COLUMN notice_lease INTEGER;
-ALTER TABLE integration_events ADD COLUMN notice_at TEXT;
+-- The admins' notifications of events' ends, owed and not written yet: one per event and claim (lease,
+-- the notification's dedupe key), so an end told after an earlier one never replaces the earlier one's
+-- debt. The end state and its debt are one transaction (the worker's, or the apply's own), and the
+-- notification is written by a step of its own (events.go, sendEventNotices), so a notification that
+-- can't be written never holds the event back, nor the events after it. due_at is when the step next
+-- tries, moved on after a failure; the row goes once the notification is written. An event that owes
+-- a notification is not purged.
+CREATE TABLE integration_event_notices (
+    event_id INTEGER NOT NULL REFERENCES integration_events (id) ON DELETE CASCADE,
+    lease    INTEGER NOT NULL,
+    due_at   TEXT NOT NULL,
+    PRIMARY KEY (event_id, lease)
+) STRICT, WITHOUT ROWID;
 
-CREATE INDEX integration_events_notices ON integration_events (notice_at) WHERE notice_lease IS NOT NULL;
+CREATE INDEX integration_event_notices_due ON integration_event_notices (due_at);

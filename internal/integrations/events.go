@@ -345,7 +345,12 @@ func (s *Service) poke() {
 // notifications that are owed.
 func (s *Service) drainEvents(ctx context.Context) {
 	defer s.sendEventNotices(ctx)
-	for ctx.Err() == nil {
+	for done := 1; ctx.Err() == nil; done++ {
+		// A queue that stays busy never keeps the admins waiting: the notifications owed get a turn
+		// between events too.
+		if done%noticeTurn == 0 {
+			s.sendEventNotices(ctx)
+		}
 		a := s.currentApplier()
 		if a == nil {
 			return
@@ -372,7 +377,8 @@ func (s *Service) drainEvents(ctx context.Context) {
 func (s *Service) purgeEvents(ctx context.Context) error {
 	t := s.now()
 	_, err := s.store.db.ExecContext(ctx, `DELETE FROM integration_events
-		WHERE ((state IN ('applied', 'ignored') AND received_at < ?) OR (state = 'failed' AND received_at < ?)) AND notice_lease IS NULL`,
+		WHERE ((state IN ('applied', 'ignored') AND received_at < ?) OR (state = 'failed' AND received_at < ?))
+			AND NOT EXISTS (SELECT 1 FROM integration_event_notices n WHERE n.event_id = integration_events.id)`,
 		s.store.stamp(t.Add(-keepEventsDone)), s.store.stamp(t.Add(-keepEventsAll)))
 	return err
 }
@@ -400,9 +406,12 @@ func (s *Service) claimEvent(ctx context.Context) (ev StoredEvent, lease int64, 
 				// owed a notification, which sendEventNotices writes: one that can't be written never holds
 				// this event, or the ones after it, back.
 				if _, err := tx.ExecContext(ctx, `UPDATE integration_events
-					SET state = 'failed', lease_until = NULL, error_code = ?, error_params = NULL, processed_at = ?,
-						notice_lease = lease, notice_at = ? WHERE id = ?`,
-					string(apierr.CodeIntegrationEventGaveUp), at, at, id); err != nil {
+					SET state = 'failed', lease_until = NULL, error_code = ?, error_params = NULL, processed_at = ? WHERE id = ?`,
+					string(apierr.CodeIntegrationEventGaveUp), at, id); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO integration_event_notices (event_id, lease, due_at)
+					SELECT id, lease, ? FROM integration_events WHERE id = ? ON CONFLICT DO NOTHING`, at, id); err != nil {
 					return err
 				}
 				continue
@@ -491,40 +500,47 @@ func (s *Service) settleEvent(ctx context.Context, ev StoredEvent, lease int64, 
 // ended, in the transaction that wrote its record (eventApplier's Done), isn't running any more and
 // keeps the end it has.
 func (s *Service) finishEvent(ctx context.Context, ev StoredEvent, lease int64, state string, code apierr.Code, params apierr.Params, at string) error {
-	_, err := s.store.endEvent(ctx, s.store.db, ev.ID, lease, ev.Kind, state, code, params, at)
-	return err
-}
-
-type execer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	return s.store.tx(ctx, func(tx *sql.Tx) error {
+		_, err := s.store.endEvent(ctx, tx, ev.ID, lease, ev.Kind, state, code, params, at)
+		return err
+	})
 }
 
 // endEvent gives the event its end state, if the claim (lease) still owns it, and says whether it
-// did. When the end is one the admins are told of (needsAdmin), the same statement records that a
-// notification is owed for that claim: the end and the debt can't be stored apart, and the
-// notification itself is written by sendEventNotices, so one that can't be written never holds the
-// event, or the events after it, back.
-func (s *Store) endEvent(ctx context.Context, q execer, id, lease int64, kind, state string, code apierr.Code, params apierr.Params, at string) (bool, error) {
+// did. When the end is one the admins are told of (needsAdmin), the same transaction records that a
+// notification is owed for that claim (integration_event_notices): the end and the debt can't be
+// stored apart, a debt of an earlier claim is kept beside it, and the notification itself is written by
+// sendEventNotices, so one that can't be written never holds the event, or the events after it, back.
+func (s *Store) endEvent(ctx context.Context, tx *sql.Tx, id, lease int64, kind, state string, code apierr.Code, params apierr.Params, at string) (bool, error) {
 	var c any
 	if code != "" {
 		c = string(code)
 	}
-	notify := needsAdmin(state, code, kind)
-	res, err := q.ExecContext(ctx, `UPDATE integration_events
-		SET state = ?, error_code = ?, error_params = ?, lease_until = NULL, processed_at = ?,
-			notice_lease = CASE WHEN ? THEN lease ELSE notice_lease END,
-			notice_at = CASE WHEN ? THEN ? ELSE notice_at END
-		WHERE id = ? AND state = 'running' AND lease = ?`, state, c, paramsJSON(params), at, notify, notify, at, id, lease)
+	res, err := tx.ExecContext(ctx, `UPDATE integration_events
+		SET state = ?, error_code = ?, error_params = ?, lease_until = NULL, processed_at = ?
+		WHERE id = ? AND state = 'running' AND lease = ?`, state, c, paramsJSON(params), at, id, lease)
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return false, err
+	}
+	if needsAdmin(state, code, kind) {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO integration_event_notices (event_id, lease, due_at) VALUES (?, ?, ?)
+			ON CONFLICT DO NOTHING`, id, lease, at); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // noticeRetry is the wait before a notification that couldn't be written is tried again. It is
 // tried until it is written: it is how the admins learn of money that wasn't applied.
 const noticeRetry = time.Minute
+
+// noticeTurn is how many events the worker does before the notifications owed get a turn, while the
+// queue stays busy.
+const noticeTurn = 10
 
 // sendEventNotices writes the admins' notifications that events owe, each in a transaction of its
 // own with the debt's settling. One that fails is logged and tried again after noticeRetry, and the
@@ -532,8 +548,8 @@ const noticeRetry = time.Minute
 func (s *Service) sendEventNotices(ctx context.Context) {
 	for ctx.Err() == nil {
 		var id, lease int64
-		err := s.store.db.QueryRowContext(ctx, `SELECT id, notice_lease FROM integration_events
-			WHERE notice_lease IS NOT NULL AND notice_at <= ? ORDER BY notice_at, id LIMIT 1`, s.store.stamp(s.now())).Scan(&id, &lease)
+		err := s.store.db.QueryRowContext(ctx, `SELECT event_id, lease FROM integration_event_notices
+			WHERE due_at <= ? ORDER BY due_at, event_id, lease LIMIT 1`, s.store.stamp(s.now())).Scan(&id, &lease)
 		if errors.Is(err, sql.ErrNoRows) {
 			return
 		}
@@ -547,8 +563,7 @@ func (s *Service) sendEventNotices(ctx context.Context) {
 			if err := s.store.notifyEventAdmins(ctx, tx, id, lease); err != nil {
 				return err
 			}
-			_, err := tx.ExecContext(ctx, `UPDATE integration_events SET notice_lease = NULL, notice_at = NULL
-				WHERE id = ? AND notice_lease = ?`, id, lease)
+			_, err := tx.ExecContext(ctx, `DELETE FROM integration_event_notices WHERE event_id = ? AND lease = ?`, id, lease)
 			return err
 		})
 		if err == nil {
@@ -558,7 +573,7 @@ func (s *Service) sendEventNotices(ctx context.Context) {
 			return
 		}
 		slog.Warn("integrations: the admins couldn't be notified of an event; tried again later", "event", id)
-		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_events SET notice_at = ? WHERE id = ? AND notice_lease = ?`,
+		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_event_notices SET due_at = ? WHERE event_id = ? AND lease = ?`,
 			s.store.stamp(s.now().Add(noticeRetry)), id, lease); err != nil {
 			return
 		}

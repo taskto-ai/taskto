@@ -432,7 +432,9 @@ write.
   outcome stays unknown (above).
 - **A saved link is read again before it is given again.** An entry done again after its link was
   saved (its try stopped before the record held the link, or the entry runs once more) gets the
-  saved link only if its state, read again at the provider, still says a payer can use it. One that
+  saved link only if its state, read again at the provider in the reference's own account and mode
+  (another account's or mode's key is refused with `integration_account_changed` and reads nothing),
+  still says a payer can use it. One that
   expired or was paid since, or that the reference's own verified events ended, is not given, and
   nothing else is made for the entry: it stops with `integration_link_already_paid` for a person to
   reconcile. A read that fails gives nothing and makes nothing, and the entry tries again.
@@ -616,7 +618,9 @@ provider said and changes what an app holds, so it believes little:
   ref has moved on to a link of a later key that is still open (`integration_event_late`).
 - **A second payment** on a ref that was paid, by another payment, is never applied: it is
   recorded in `integration_ref_duplicates` (kept as long as the ref, unlike the event, once per
-  payment) and the admins are told (`integration_event_second_payment`, ignored). Two paid events
+  payment) and the admins are told (`integration_event_second_payment`, ignored); the row and the
+  event's end are one transaction, and the same second payment told again (after the purge) is a
+  duplicate, with no second notification. Two paid events
   are the same payment when both name the same payment (the payment intent), or, when either names
   none, the same object; two that can't be told apart by either id are two payments, so a payment
   is never taken for a repeat because both lack an id.
@@ -651,9 +655,10 @@ provider said and changes what an app holds, so it believes little:
 - **The admins** are told (an inbox notification of the kind `integration_event`, to each admin of
   the workspace, naming the integration and nothing of the payment) of every failed event, of a
   second payment and of a payment the app's rule left unrecorded. The event's end and the debt of
-  its notification are stored together, and the notification is written by a step of its own: one
-  that can't be written is tried again every minute until it is, and never holds back the event or
-  the events after it. An event that still owes one is not purged. An admin lists an integration's
+  its notification (one per end, so a later end never replaces an earlier one's) are stored
+  together, and the notification is written by a step of its own, after every ten events and once
+  the queue is empty: one that can't be written is tried again every minute until it is, and never
+  holds back the event or the events after it. An event that still owes one is not purged. An admin lists an integration's
   events and retries a failed one through [the API](api.md#get-apiworkspacesworkspaceintegrationsintegrationevents); an
   event shows its kind, amount, state and code, never the app or record, since an admin has no read
   access to a private app's records. A notification to the record's creator is not sent.
