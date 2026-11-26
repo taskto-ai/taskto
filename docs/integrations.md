@@ -239,8 +239,11 @@ approving and publishing are the same person's three calls, which the web app of
   (`payment-links/unresolved`): each with its amount, record, app, space and the time its outcome became
   unknown, what to look for in the Stripe account (in the account and mode the link was first asked in:
   `client_reference_id` on a Checkout Session, `metadata[taskto_ref]` on a Payment Link, the reference
-  of every attempt, which the screen doesn't show, so a candidate is found by amount and time; a link
-  that is found is left alone and the person who ran the action retries it, not the payer), and, once
+  of every attempt, which the screen lists under each payment: each attempt's reference in a read-only
+  monospace field with a copy button, the field to search for that kind of object, any object seen (and
+  whether it was checked against the payment), the account and mode it was made under and when it was
+  first sent, so the admin searches by reference and falls back to amount and time only where the
+  provider can't be searched by it; a link that is found is left alone and the person who ran the action retries it, not the payer), and, once
   the wait ended, a "Confirm no link exists" button behind a confirmation that says it queues one more
   attempt, which may adopt a link that exists or fail, and plainly that if a link does exist the payer
   ends up with two and could pay twice. A lookup that stopped for another reason (the integration's
@@ -438,7 +441,10 @@ write.
       moves on by itself (from one seen expired) only while every key of the reference left nothing a
       payer can use. The
       admins' list of what waits for a decision is
-      `GET …/integrations/{integration}/payment-links/unresolved`. Both routes cover only the spaces the
+      `GET …/integrations/{integration}/payment-links/unresolved`, which lists each payment's attempts
+      too (every key of the reference, oldest first: its reference, the kind of object, any object
+      seen, the account and mode, when it was first sent; never a key of the provider's account or
+      anything sealed). Both routes cover only the spaces the
       admin manages (a private space's payments are not another admin's to decide).
 - **Nothing is saved as the link until its state is read.** What a call answers, and above all what
   Stripe replays for a key it kept, is the object as it was made: a Checkout Session replayed a day

@@ -2,7 +2,15 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
-import type { IntegrationEvent, IntegrationRegistry, Me, PaymentLinkOutcome, Space, Workspace } from '../api'
+import type {
+  IntegrationEvent,
+  IntegrationRegistry,
+  Me,
+  PaymentLinkAttempt,
+  PaymentLinkOutcome,
+  Space,
+  Workspace,
+} from '../api'
 import { type Call, fakeFetch } from '../test/fakes'
 import { shop } from '../test/integrations'
 import { SettingsPage } from './SettingsPage'
@@ -59,6 +67,20 @@ const link = (over: Partial<PaymentLinkOutcome> = {}): PaymentLinkOutcome => ({
   since: '2026-11-26T12:00:00Z',
   waiting: false,
   can_confirm: true,
+  object_id: '',
+  attempts: [],
+  ...over,
+})
+// A reference is built at run time, as the server's are random: no literal that looks like a token.
+const reference = (digit: string) => digit.repeat(32)
+const attempt = (over: Partial<PaymentLinkAttempt> = {}): PaymentLinkAttempt => ({
+  reference: reference('a'),
+  kind: 'checkout_session',
+  object_id: '',
+  object_verified: false,
+  account_id: 'acct_shop',
+  mode: 'test',
+  first_sent_at: '2026-11-26T12:00:00Z',
   ...over,
 })
 
@@ -458,4 +480,79 @@ test('with several integrations the admin picks one, and its events are the ones
   open()
   expect(await screen.findByText('There is no integration to show events for.')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Open integrations' })).toBeTruthy()
+})
+
+test('each payment lists its attempts with the reference, the field to search, any object seen, the account, the mode and the time', async () => {
+  fakeFetch({
+    ...around,
+    ...events(),
+    ...links(
+      link({
+        object_id: 'obj_seen',
+        attempts: [
+          attempt({ object_id: 'obj_seen', object_verified: false }),
+          attempt({
+            reference: reference('b'),
+            kind: 'payment_link',
+            object_id: 'obj_checked',
+            object_verified: true,
+            mode: 'live',
+            first_sent_at: '2026-11-27T08:00:00Z',
+          }),
+          attempt({ reference: reference('c'), kind: 'payment_link', account_id: '', mode: '', first_sent_at: '' }),
+        ],
+      }),
+    ),
+  })
+  open()
+  const attempts = await screen.findByRole('list', { name: 'Attempts at this payment' })
+  const [first, second, third] = within(attempts).getAllByRole('listitem')
+  expect(first.textContent).toContain('Attempt 1 · Checkout Session')
+  expect((within(first).getByRole('textbox', { name: 'Reference' }) as HTMLInputElement).value).toBe(reference('a'))
+  expect(within(first).getByRole('textbox', { name: 'Reference' }).hasAttribute('readonly')).toBe(true)
+  expect(first.textContent).toContain('Field to search for it: client_reference_id')
+  expect(first.textContent).toContain('Object seen: obj_seen (not checked against this payment)')
+  expect(first.textContent).toContain('Account acct_shop · Test mode')
+  expect(first.textContent).toContain('First sent Nov 26, 2026')
+  expect(second.textContent).toContain('Attempt 2 · Payment Link')
+  expect((within(second).getByRole('textbox', { name: 'Reference' }) as HTMLInputElement).value).toBe(reference('b'))
+  expect(second.textContent).toContain('Field to search for it: metadata[taskto_ref]')
+  expect(second.textContent).not.toContain('client_reference_id')
+  expect(second.textContent).toContain('Object seen: obj_checked (checked against this payment)')
+  expect(second.textContent).toContain('Account acct_shop · Live money')
+  expect(second.textContent).toContain('First sent Nov 27, 2026')
+  // What isn't known is said, not left blank.
+  expect(third.textContent).toContain('No object seen')
+  expect(third.textContent).toContain('Account not recorded')
+  expect(third.textContent).toContain('Never sent')
+  // The checklist says where to find them.
+  expect(screen.getByText('What to check at Stripe').closest('.ui-notice')?.textContent).toContain(
+    'Each payment below lists its attempts with the reference to look for.',
+  )
+})
+
+test('copying an attempt’s reference puts that attempt’s reference on the clipboard', async () => {
+  fakeFetch({
+    ...around,
+    ...events(),
+    ...links(link({ attempts: [attempt(), attempt({ reference: reference('b'), kind: 'payment_link' })] })),
+  })
+  const writeText = vi.fn(async () => {})
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+  open()
+  const attempts = await screen.findByRole('list', { name: 'Attempts at this payment' })
+  const [, second] = within(attempts).getAllByRole('listitem')
+  fireEvent.click(within(second).getByRole('button', { name: 'Copy reference of attempt 2' }))
+  // The button says it copied, for that attempt only.
+  expect(await within(second).findByText('Copied')).toBeTruthy()
+  expect(within(attempts).getAllByText('Copy')).toHaveLength(1)
+  expect(writeText).toHaveBeenCalledTimes(1)
+  expect(writeText).toHaveBeenCalledWith(reference('b'))
+})
+
+test('a payment with no attempts listed shows no attempts section', async () => {
+  fakeFetch({ ...around, ...events(), ...links(link()) })
+  open()
+  await screen.findByRole('list', { name: 'Payment links to check' })
+  expect(screen.queryByRole('list', { name: 'Attempts at this payment' })).toBeNull()
 })

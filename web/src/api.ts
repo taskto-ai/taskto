@@ -901,6 +901,24 @@ export type PaymentLinkOutcome = {
   // Why the lookup stopped, when it neither waits nor may be confirmed (the code the entry failed
   // with); older servers don't send it.
   code?: string
+  // The provider's id of an object of the waiting key that the server saw and couldn't resolve, "" when none.
+  object_id: string
+  // Every attempt at this payment, oldest first: what an admin looks for at the provider.
+  attempts: PaymentLinkAttempt[]
+}
+// One attempt at a payment link. `reference` is its random token, sent as client_reference_id for a
+// Checkout Session and as metadata[taskto_ref] for a Payment Link (`kind` says which).
+export type PaymentLinkAttempt = {
+  reference: string
+  kind: 'checkout_session' | 'payment_link'
+  // An object seen for this attempt ("" when none) and whether it was checked against the payment.
+  object_id: string
+  object_verified: boolean
+  // The provider's account and the key's mode (test or live) it was made under; "" when not recorded.
+  account_id: string
+  mode: string
+  // When the first call under the reference went out; "" when none did.
+  first_sent_at: string
 }
 export type PaymentLinkOutcomes = { payment_links: PaymentLinkOutcome[] }
 

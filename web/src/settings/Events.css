@@ -50,4 +50,50 @@
     margin: 0;
     padding-inline-start: var(--space-5);
   }
+
+  /* An attempt at a payment: its reference to look for, then the facts of where it was made. */
+  .events-attempts {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .events-attempt {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .events-attempt-title {
+    font: var(--type-ui-strong);
+  }
+
+  /* The reference in a field that can be selected whole, with its copy button at its end. */
+  .events-reference {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-2);
+  }
+
+  .events-reference .ui-field {
+    flex: 1 1 20rem;
+    min-inline-size: 0;
+  }
+
+  .events-reference-field {
+    font-family: var(--font-mono);
+  }
+
+  .events-field-name {
+    font-family: var(--font-mono);
+  }
+
+  .events-attempt-facts {
+    display: grid;
+    gap: var(--space-1);
+    overflow-wrap: anywhere;
+  }
 }

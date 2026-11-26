@@ -16,6 +16,7 @@ import {
   type IntegrationEvent,
   type IntegrationEventList,
   type IntegrationRegistry,
+  type PaymentLinkAttempt,
   type PaymentLinkOutcome,
   type PaymentLinkOutcomes,
   type Space,
@@ -29,13 +30,14 @@ import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { SegmentedControl } from '../ui/SegmentedControl'
 import { Select } from '../ui/Select'
 import { decimalMoney, money } from './money'
-import { Loading, Section, SettingsTab } from './parts'
+import { CopyButton, Loading, Section, SettingsTab } from './parts'
 import './Events.css'
 
 type Filter = 'all' | 'failed' | 'ignored' | 'applied' | 'pending'
@@ -253,6 +255,7 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
                         </p>
                       </Notice>
                     )}
+                    <Attempts attempts={l.attempts} />
                   </Row>
                 )
               })}
@@ -262,6 +265,71 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
       )}
       {confirmDialog}
     </Section>
+  )
+}
+
+// Each attempt at a payment: the reference to look for at the provider, in the field that kind of object
+// carries it in, with any object seen and where it was made. The references are TaskTo's own random
+// tokens, never a key of the provider's account.
+const REFERENCE_FIELD: Record<PaymentLinkAttempt['kind'], string> = {
+  checkout_session: 'client_reference_id',
+  payment_link: 'metadata[taskto_ref]',
+}
+
+function Attempts({ attempts }: { attempts: PaymentLinkAttempt[] }) {
+  const t = useT()
+  const f = useFormat()
+  if (attempts.length === 0) return null
+  return (
+    <ol className="events-attempts" aria-label={t('settings.events.links.attemptsList')}>
+      {attempts.map((a, i) => {
+        const n = i + 1
+        const kind = t(
+          a.kind === 'checkout_session'
+            ? 'settings.events.links.kindCheckoutSession'
+            : 'settings.events.links.kindPaymentLink',
+        )
+        const mode = a.mode === 'live' || a.mode === 'test' ? t(`settings.events.${a.mode}` as Key) : a.mode
+        return (
+          <li key={a.reference} className="events-attempt">
+            <strong className="events-attempt-title">{t('settings.events.links.attemptTitle', { n, kind })}</strong>
+            <div className="events-reference">
+              <Field label={t('settings.events.links.reference')}>
+                <Input readOnly size="sm" className="events-reference-field" value={a.reference} />
+              </Field>
+              <CopyButton size="sm" text={a.reference} name={t('settings.events.links.referenceName', { n })} />
+            </div>
+            <span className="events-attempt-facts">
+              <span>
+                {t('settings.events.links.searchField')}{' '}
+                <code className="events-field-name">{REFERENCE_FIELD[a.kind]}</code>
+              </span>
+              <span>
+                {a.object_id
+                  ? t(
+                      a.object_verified
+                        ? 'settings.events.links.objectSeenChecked'
+                        : 'settings.events.links.objectSeenUnchecked',
+                      { id: a.object_id },
+                    )
+                  : t('settings.events.links.objectNone')}
+              </span>
+              <span>
+                {a.account_id
+                  ? t('settings.events.links.account', { account: a.account_id })
+                  : t('settings.events.links.accountNone')}
+                {mode && ` · ${mode}`}
+              </span>
+              <span>
+                {a.first_sent_at
+                  ? t('settings.events.links.firstSent', { when: f.dateTime(a.first_sent_at) })
+                  : t('settings.events.links.notSent')}
+              </span>
+            </span>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
