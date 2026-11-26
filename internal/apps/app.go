@@ -98,6 +98,10 @@ type Definition struct {
 	// DefinitionVersion is the format version the definition is written in; DefinitionVersion
 	// if left out.
 	DefinitionVersion int `json:"definition_version"`
+	// copied marks a copy of another app's definition (duplicateApp): the copier didn't write it,
+	// so Check doesn't hold it to the rule a person who edits can follow, that a control drawn only
+	// with icons names one (icons.go). Never stored or sent.
+	copied bool
 	// Requires lists the catalog capabilities the screen needs (Capabilities): a component
 	// it draws is component.<Name>, a function it calls function.<name>. Check works the list
 	// out from the screen, replacing whatever was sent, so it can't claim less than it uses.
@@ -512,7 +516,7 @@ func (d Definition) Check() (Definition, error) {
 			}
 		}
 	}
-	scope := &screenScope{actions: d.Actions, collection: out.Collection, screens: screens}
+	scope := &screenScope{actions: d.Actions, collection: out.Collection, screens: screens, copied: d.copied}
 	var requires []string
 	if len(d.Screens) > 0 {
 		if len(d.Components) > 0 {

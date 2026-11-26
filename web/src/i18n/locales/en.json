@@ -1068,6 +1068,8 @@
     "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
     "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
+    "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
+    "app_icon_label": "The icon “{component}” is in a button or a trigger that shows only icons, so it needs a name: give it an accessibility label.",
     "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",
     "app_release_not_found": "That release of the app doesn’t exist.",
     "app_release_outdated": "This screen is from an older release of the app (release {release}; the live one is {live}). Reload the app to continue.",
