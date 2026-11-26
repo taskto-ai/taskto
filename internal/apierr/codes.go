@@ -365,6 +365,7 @@ const (
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
 	CodeCLINotInstalled        Code = "cli_not_installed" // params: cli
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
+	CodeCLIAccountForgotten    Code = "cli_account_forgotten" // the worker removed the account's CLI files and refuses it
 	CodeCLINoLogin             Code = "cli_no_login"
 	CodeCLILoginCodeInvalid    Code = "cli_login_code_invalid" // params: max
 	CodeCLILoginNoCode         Code = "cli_login_no_code"

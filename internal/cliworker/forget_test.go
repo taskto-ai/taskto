@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -51,7 +52,9 @@ func gone(t *testing.T, path string) {
 // and refreshed credentials back after Forget returned.
 func TestForgetStopsARunningTurnBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
-	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000}, true)
+	// The CLI takes a moment to stop and saves a file into its directory as it goes, as a real
+	// one saves its session: Forget must wait for that, and remove the directory after it.
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, TermWriteMS: 300}, true)
 	turn, _, err := h.w.Start(spec("running", 1, cliworker.Claude, "work"))
 	if err != nil {
 		t.Fatal(err)
@@ -74,11 +77,69 @@ func TestForgetStopsARunningTurnBeforeTheFilesGo(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
+// A sign-in in progress is stopped and waited for as well: one that ends while the files go could
+// write its credentials back.
+func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
+	for _, cli := range []cliworker.CLI{cliworker.Claude, cliworker.Codex} {
+		t.Run(string(cli), func(t *testing.T) {
+			h := newHarness(t, nil)
+			dirs := h.user(t, 1, cli, clitest.Scenario{TermWriteMS: 300}, false)
+			l, err := h.w.StartLogin(1, cli, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if l.Info().State != cliworker.LoginWaiting {
+				t.Fatalf("fixture: the sign-in is %+v", l.Info())
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := h.w.Forget(ctx, 1); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-l.Done():
+			default:
+				t.Fatal("Forget returned while the user's sign-in was still running")
+			}
+			gone(t, dirs.Root)
+		})
+	}
+}
+
+// A helper request in flight (here a slow status check, which writes into the directory as it
+// ends) is waited for too.
+func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
+	h := newHarness(t, nil)
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{StatusSleepMS: 1500}, true)
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		_, _ = h.w.Status(context.Background(), 1, cliworker.Claude, "")
+	}()
+	// The check is running: the fake says so by the file it writes first.
+	eventually(t, "the status check didn't start", func() bool {
+		_, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), clitest.StatusStarted))
+		return err == nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Whatever the check did on its way out, nothing of it is left once it ends.
+	select {
+	case <-answered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the status check never ended")
+	}
+	gone(t, dirs.Root)
+}
+
 // A turn waiting for a place when the user is forgotten never starts: it would make the
 // directory again and run on a login that was just removed.
 func TestForgetEndsAQueuedTurnWithoutStartingIt(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.MaxTurnsPerUser = 1 })
-	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000}, true)
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, TermWriteMS: 200}, true)
 	first, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "work"))
 	if err != nil {
 		t.Fatal(err)
@@ -166,4 +227,45 @@ func TestForgottenUserSurvivesARestart(t *testing.T) {
 		t.Errorf("a turn after a restart: %v", err)
 	}
 	gone(t, dirs.Root)
+}
+
+// Reconcile takes back the marks a restore of the server's data made wrong, and only those: the
+// marks of users that are live, of numbers that come next or later, and none made after the
+// server read the database (a purge running now).
+func TestReconcileTakesBackOnlyTheMarksARestoreMadeWrong(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	for _, user := range []int64{2, 3, 4, 5} {
+		if err := h.w.Forget(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 2 is a person whose account is back; 3 is gone for good; 4 and 5 come next and later; 5's
+	// purge ran after the server read its database.
+	time.Sleep(20 * time.Millisecond)
+	snapshot := time.Now()
+	time.Sleep(20 * time.Millisecond) // the mark's time is on the filesystem's clock
+	if err := h.w.Forget(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, []int64{1, 2}, 4, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	refused := func(user int64) bool {
+		_, err := h.w.Status(ctx, user, cliworker.Claude, "")
+		return errors.Is(err, cliworker.ErrForgotten)
+	}
+	for user, want := range map[int64]bool{2: false, 3: true, 4: false, 5: true} {
+		if got := refused(user); got != want {
+			t.Errorf("user %d refused = %v, want %v", user, got, want)
+		}
+	}
+	// A mark can't be read: the user stays refused rather than started.
+	if err := os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0o700) //nolint:errcheck // the temporary directory is removed anyway
+	if os.Geteuid() != 0 && !refused(6) {
+		t.Error("a mark that can't be looked up counted as no mark")
+	}
 }

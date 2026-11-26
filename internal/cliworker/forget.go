@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,8 +19,13 @@ import (
 // forgotten, durably, which refuses everything that would start for them (Start, StartLogin
 // and every helper request, helperCommand); then stops what is running for them and waits for it
 // to end (their turns, queued ones included, their logins and the short helper requests in
-// flight); and only then removes the directory. A user's ID is never reused, so the mark never
-// has to be taken back.
+// flight); and only then removes the directory.
+//
+// A mark outlives the worker's restarts, but not a restore of the server's data: user numbers
+// are never reused within one database's history, and a restore goes back in it (the person
+// whose account was purged may be back, and the numbers after the backup are given again), while
+// the worker's directory, in container mode, is not part of the backup. So the server says at
+// every start which numbers are live and which come next (Reconcile), and the marks of those go.
 
 // forgetWait is how long Forget gives what runs for the user to end, beyond a stopped CLI's own
 // grace: the short helper requests are bounded to 30 s.
@@ -29,10 +36,11 @@ func (w *Worker) forgottenMark(user int64) string {
 	return filepath.Join(w.stateDir(), "forgotten-u"+strconv.FormatInt(user, 10))
 }
 
-// isForgotten reports whether user was forgotten (Forget): nothing runs for them any more.
+// isForgotten reports whether user was forgotten (Forget): nothing runs for them any more. A
+// mark that can't be read counts: only its absence says the user was not forgotten.
 func (w *Worker) isForgotten(user int64) bool {
 	_, err := os.Stat(w.forgottenMark(user))
-	return err == nil
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // markForgotten records user as forgotten, durably: a worker that restarts still refuses them.
@@ -43,6 +51,11 @@ func (w *Worker) markForgotten(user int64) error {
 	f, err := os.OpenFile(w.forgottenMark(user), os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
+	}
+	// A mark made again is as new as this call (Reconcile leaves the ones made after its snapshot).
+	if now := time.Now(); os.Chtimes(w.forgottenMark(user), now, now) != nil {
+		_ = f.Close()
+		return errors.New("recording the time of the mark")
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
@@ -150,4 +163,41 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 
 	_, _, err := w.runQuick(ctx, user, helperRequest{Op: "forget"})
 	return err
+}
+
+// Reconcile takes back the marks that a restore of the server's data made wrong. The server
+// calls it at every start with what its database says: live holds the numbers of the users
+// that exist, next the number the next user gets, and before is the time it read them. A mark
+// is removed when its user is live (their account is back) or its number is next or above (it
+// will be given again), unless the mark was made after before: that one is a purge running now,
+// which the snapshot can't know of. The marks of numbers below next that aren't live stay: those
+// accounts are gone for good.
+func (w *Worker) Reconcile(_ context.Context, live []int64, next int64, before time.Time) error {
+	entries, err := os.ReadDir(w.stateDir())
+	if err != nil {
+		return err
+	}
+	isLive := make(map[int64]bool, len(live))
+	for _, id := range live {
+		isLive[id] = true
+	}
+	var errs []error
+	for _, e := range entries {
+		id, ok := strings.CutPrefix(e.Name(), "forgotten-u")
+		if !ok {
+			continue
+		}
+		user, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || user <= 0 || (!isLive[user] && user < next) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(before) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(w.stateDir(), e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
