@@ -599,7 +599,7 @@ borderless button sets that variable to the deep green as well as its own `color
 the muted text, and a label in a button inherits it in every variant, so a caption on a mint button
 is ink on mint (12.8:1) and not muted grey (1.6:1).
 
-TaskTo.AI's own components in an app (`web/src/apps/catalog.tsx`) are styled with the screens
+taskto.ai's own components in an app (`web/src/apps/catalog.tsx`) are styled with the screens
 (`web/src/apps/AppView.css`): a number (`Stat`) is a tile, its label small and muted over a large
 value with tabular figures, and tiles in one of the app's rows wrap onto the next line when there
 isn't room.

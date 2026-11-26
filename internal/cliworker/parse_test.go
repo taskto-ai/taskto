@@ -93,7 +93,7 @@ func TestParseCodexTurn(t *testing.T) {
 	}
 }
 
-// A Codex MCP tool call (recorded against a scripted model and a stand-in for TaskTo's
+// A Codex MCP tool call (recorded against a scripted model and a stand-in for taskto's
 // endpoint): the tool event names the server and the tool, with the call's arguments, which
 // the sidecar reads for a browser_help (docs/cli-tools.md).
 func TestParseCodexMCPToolCall(t *testing.T) {
@@ -342,7 +342,7 @@ func TestParseGrokNotSignedIn(t *testing.T) {
 	}
 }
 
-// The app a CLI saved through TaskTo's create_app or update_app is named in the tool event, read
+// The app a CLI saved through taskto's create_app or update_app is named in the tool event, read
 // from the whole answer even where the event's output is cut, so the conversation can show it.
 func TestParseSavedApps(t *testing.T) {
 	big := strings.Repeat("x", 3*maxToolText)

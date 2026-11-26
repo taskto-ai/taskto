@@ -6,7 +6,7 @@
 > their own, which is the OS boundary this spike asked for; every CLI starts through a
 > helper that refuses root by default (local development can override with
 > `-unsafe-privileged-agents`) and, on Linux only, sets `no_new_privs`; a user can have several accounts per
-> CLI, and workspaces share accounts through a per-turn proxy; and CLI turns call TaskTo's
+> CLI, and workspaces share accounts through a per-turn proxy; and CLI turns call taskto's
 > own tools. See [cli-workers.md](../cli-workers.md),
 > [account-switching.md](../account-switching.md) and [cli-tools.md](../cli-tools.md). The
 > spike's `run_cli` code is still only a spike, and the rest of this page is the spike as it
@@ -116,7 +116,7 @@ What they do not give:
   `cat /tmp/…/users/u1/work/private.txt` and printed the contents. Codex's sandbox limits writes, not reads, and
   Claude Code's tools run unsandboxed by default. Both run as the server's OS user, so a user's CLI can read other
   users' files, config dirs (with their logins), the server's data directory and its secrets.
-- So a CLI worker needs an OS boundary: a separate Unix user per TaskTo user (files mode 700), or better a
+- So a CLI worker needs an OS boundary: a separate Unix user per taskto user (files mode 700), or better a
   container per user or per run with only that user's directories mounted and no access to the server's.
 
 ## Go / no-go

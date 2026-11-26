@@ -1,16 +1,16 @@
 {
-  "footer": "Sent by TaskTo.AI, the server you work on.",
+  "footer": "Sent by taskto.ai, the server you work on.",
   "messages": {
     "test": {
-      "subject": "TaskTo.AI test email",
+      "subject": "taskto.ai test email",
       "title": "Email works",
       "paragraphs": [
-        "Hello {name}, this is a test message from your TaskTo.AI server, sent at your request.",
+        "Hello {name}, this is a test message from your taskto.ai server, sent at your request.",
         "If you can read it, the server can send email: invitations, password resets and notifications will reach people."
       ]
     },
     "digest": {
-      "subject": "Your TaskTo.AI notifications",
+      "subject": "Your taskto.ai notifications",
       "title": "You have notifications waiting",
       "paragraphs": [
         "{count} of your notifications are unread since your last summary.",
@@ -22,7 +22,7 @@
       "subject": "A card was assigned to you",
       "title": "A card was assigned to you",
       "paragraphs": [
-        "Open TaskTo.AI to see it.",
+        "Open taskto.ai to see it.",
         "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
       ],
       "action": "Open the notification"
@@ -31,7 +31,7 @@
       "subject": "A card of yours has a new comment",
       "title": "A card of yours has a new comment",
       "paragraphs": [
-        "Open TaskTo.AI to read it.",
+        "Open taskto.ai to read it.",
         "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
       ],
       "action": "Open the notification"
@@ -40,7 +40,7 @@
       "subject": "You were mentioned in a comment",
       "title": "You were mentioned in a comment",
       "paragraphs": [
-        "Open TaskTo.AI to see it.",
+        "Open taskto.ai to see it.",
         "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
       ],
       "action": "Open the notification"
@@ -49,7 +49,7 @@
       "subject": "A card of yours is due",
       "title": "A card of yours is due",
       "paragraphs": [
-        "Open TaskTo.AI to see it.",
+        "Open taskto.ai to see it.",
         "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
       ],
       "action": "Open the notification"
@@ -58,7 +58,7 @@
       "subject": "A card of yours is overdue",
       "title": "A card of yours is overdue",
       "paragraphs": [
-        "Open TaskTo.AI to see it.",
+        "Open taskto.ai to see it.",
         "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
       ],
       "action": "Open the notification"
@@ -73,28 +73,28 @@
       "action": "Open the notification"
     },
     "verify_email": {
-      "subject": "Confirm your email address for TaskTo.AI notifications",
+      "subject": "Confirm your email address for taskto.ai notifications",
       "title": "Confirm your email address",
       "paragraphs": [
-        "You asked TaskTo.AI to email notifications to this address. Open the link to confirm that it is yours: until you do, nothing is sent.",
+        "You asked taskto.ai to email notifications to this address. Open the link to confirm that it is yours: until you do, nothing is sent.",
         "The link works once and expires in {hours} hours. If you didn't ask for this, ignore this message and nothing will be sent."
       ],
       "action": "Confirm this address"
     },
     "password_reset": {
-      "subject": "Reset your TaskTo.AI password",
+      "subject": "Reset your taskto.ai password",
       "title": "Reset your password",
       "paragraphs": [
-        "Hello {name}, someone asked to reset the password of your TaskTo.AI account. Use the button below to choose a new one. The link works once and for {hours} hours.",
+        "Hello {name}, someone asked to reset the password of your taskto.ai account. Use the button below to choose a new one. The link works once and for {hours} hours.",
         "If it wasn't you, ignore this message: your password stays as it is."
       ],
       "action": "Choose a new password"
     },
     "invite": {
-      "subject": "{inviter} invited you to {workspace} on TaskTo.AI",
+      "subject": "{inviter} invited you to {workspace} on taskto.ai",
       "title": "You're invited to {workspace}",
       "paragraphs": [
-        "{inviter} invited you to join the workspace {workspace} on TaskTo.AI. Use the button below to accept. The invitation is for this email address, works once and for {days} days.",
+        "{inviter} invited you to join the workspace {workspace} on taskto.ai. Use the button below to accept. The invitation is for this email address, works once and for {days} days.",
         "If you weren't expecting it, ignore this message: nothing happens until someone accepts."
       ],
       "action": "Accept the invitation"

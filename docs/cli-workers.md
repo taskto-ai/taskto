@@ -8,7 +8,7 @@ conversation over, and set the conditions this design meets:
 
 | Spike condition | Where it is met |
 |---|---|
-| An OS boundary per user | [Process and OS model](#process-and-os-model): a Unix user per TaskTo user, in a worker container that can't see the server's data |
+| An OS boundary per user | [Process and OS model](#process-and-os-model): a Unix user per taskto user, in a worker container that can't see the server's data |
 | Something per turn a restart can reliably stop | [Stopping and resuming](#stopping-and-resuming): a process group per turn, a sweep of every CLI user's processes when the worker starts, no bare PIDs |
 | A clean environment | [The turn](#the-turn): the child's environment is built from nothing |
 | The session id saved before the CLI starts | [Sessions](#sessions) |
@@ -16,7 +16,7 @@ conversation over, and set the conditions this design meets:
 
 Account modes (own, organisation, own-if-connected) and switching accounts are not here:
 this design connects one personal login per CLI per user. Their design is
-[account-switching.md](account-switching.md). TaskTo's own tools in these conversations (the
+[account-switching.md](account-switching.md). taskto's own tools in these conversations (the
 knowledge base, boards, apps and the agent browser) are [cli-tools.md](cli-tools.md).
 
 ## Choices
@@ -143,7 +143,7 @@ browser ─▶ Go server ─▶ agent sidecar (Pi Durable)
 - It runs as root with every capability dropped except `SETUID`, `SETGID`, `CHOWN`, `FOWNER`
   and `KILL`. It needs those to create users, create their homes and run each turn as the
   user.
-- **Each TaskTo user gets a Unix user** in the worker container:
+- **Each taskto user gets a Unix user** in the worker container:
   - uid `100000 + user id`, a group of its own, no supplementary groups;
   - an `/etc/passwd` entry, since Node's `os.userInfo()` needs one;
   - home `/homes/u<id>`, mode 700, owned by that uid. It holds the CLIs' config directories
@@ -175,9 +175,9 @@ browser ─▶ Go server ─▶ agent sidecar (Pi Durable)
 **`local`**: development, macOS, and a personal install without the worker container.
 
 - The worker runs inside the server process. The CLIs run as the server's own OS user, with
-  a home per TaskTo user under `<data>/cli/u<id>/` (mode 700) and the same clean
+  a home per taskto user under `<data>/cli/u<id>/` (mode 700) and the same clean
   environment.
-- **There is no OS boundary between TaskTo users in this mode.** Any user's CLI, or a command
+- **There is no OS boundary between taskto users in this mode.** Any user's CLI, or a command
   it runs, can read every other user's CLI login, the server's data directory with
   `server.key` and the database, and signal the server. Separate directories only keep
   sessions and settings apart, not secrets.
@@ -246,7 +246,7 @@ Compose service, not the host, its LAN or a cloud's metadata service.
    - Nothing of the server's or the worker's environment reaches it, and never a key: the
      only credential is the login in the user's own config directory (or, on a workspace's
      account, the proxy's token for the turn).
-   - TaskTo's own tools, over MCP: the helper writes each CLI's MCP settings for the server's
+   - taskto's own tools, over MCP: the helper writes each CLI's MCP settings for the server's
      endpoint for turns, and the turn's token for it is in `TASKTO_TOOLS_TOKEN`
      ([cli-tools.md](cli-tools.md)).
 4. The worker turns the CLI's events into one small event stream:
@@ -497,7 +497,7 @@ reset time, and the account shows it.
   file.
 - **Real CLIs on a scripted model.** With `TASKTO_CLI_REAL_TOOLS=1`, the installed Claude Code
   and Codex run against a stand-in for Anthropic's and OpenAI's APIs on this machine, which makes
-  them call TaskTo's tools ([cli-tools.md](cli-tools.md)) on a stand-in endpoint: no account, key
+  them call taskto's tools ([cli-tools.md](cli-tools.md)) on a stand-in endpoint: no account, key
   or network. It checks the settings the worker writes, the names their permission hook asks
   under, and the token they send.
 - **Isolation in `container` mode** is tested as root on Linux. They run in CI when its job

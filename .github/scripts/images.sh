@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds TaskTo.AI's three images from the Dockerfile and pushes them to a container
+# Builds taskto.ai's three images from the Dockerfile and pushes them to a container
 # registry with immutable tags. Run by .github/workflows/images.yml (to ghcr.io); see it for
 # when, and docs/install.md#prebuilt-images for how the images are used.
 #

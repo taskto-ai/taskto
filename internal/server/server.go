@@ -1,4 +1,4 @@
-// Package server is the HTTP side of the TaskTo.AI binary.
+// Package server is the HTTP side of the taskto.ai binary.
 package server
 
 import (

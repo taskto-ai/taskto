@@ -1,4 +1,4 @@
-// About: TaskTo.AI's licence, the credits of the third-party work this workspace uses, as
+// About: taskto.ai's licence, the credits of the third-party work this workspace uses, as
 // the server lists them (a local speech model's, or an add-on's while it is on), and for
 // admins, how the server's scheduled backups are doing (docs/install.md#backups), what its
 // host's updater last did (docs/install.md#automatic-updates), and for operators the Update now

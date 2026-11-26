@@ -11,7 +11,7 @@ import (
 // for every engine, hosted ones included, without the glossary leaving the server.
 //
 //   - A run of up to maxSpan words matches a term when they are equal ignoring case,
-//     accents, punctuation and the spaces between the words ("task to" is "TaskTo").
+//     accents, punctuation and the spaces between the words ("task to" is "taskto").
 //   - A run of as many words as the term matches it when, the same way, they are within a
 //     small edit distance of it: 1 for terms of 6 to 9 letters, 2 for longer ones, and the
 //     first letter is the same. Shorter terms must match exactly.

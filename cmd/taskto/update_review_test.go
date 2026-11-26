@@ -159,7 +159,7 @@ func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
 	}
 }
 
-// The data is mounted in each of TaskTo's services exactly as the running server has it: the
+// The data is mounted in each of taskto's services exactly as the running server has it: the
 // volume, its subpath and whether it is read-only, the backup services' included, though their
 // profiles are off; and the new settings make no volume: every one they use exists, none is anonymous.
 func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {

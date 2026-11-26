@@ -894,7 +894,7 @@ other route accepts it, as a cookie or as an access token.
 `{"password": "…"}`: starts turning it on. `200`:
 
 ```json
-{"enrolment": "…", "secret": "GEZDGNBVGY3TQOJQ…", "otpauth_uri": "otpauth://totp/TaskTo:me@example.com?secret=…&issuer=TaskTo&…"}
+{"enrolment": "…", "secret": "GEZDGNBVGY3TQOJQ…", "otpauth_uri": "otpauth://totp/taskto:me@example.com?secret=…&issuer=taskto&…"}
 ```
 
 The web app draws `otpauth_uri` as a QR code in the browser (the secret goes nowhere else)
@@ -1007,7 +1007,7 @@ While an account is disabled:
   single sign-on is refused with `?sso_error=account_disabled`, and a reset link sets nothing;
 - its access tokens, for the REST API and MCP, are refused (`401 token_invalid`);
 - its conversations' agents and CLI turns are refused at their next call: no new turn starts, a
-  turn running loses TaskTo's tools and its workspace account's proxy, and what a person's
+  turn running loses taskto's tools and its workspace account's proxy, and what a person's
   agent or a scheduled job would do for it is refused as for someone with no space;
 - what is open when it is disabled is cut: an open [agent browser live
   view](agent-browser.md) ends at once (it also ends, within seconds, whenever its login does:
@@ -1660,7 +1660,7 @@ The commits that changed a document, newest first. It doesn't follow moves: a mo
   "commits": [
     {
       "commit": "…", "author": {"name": "Alice", "email": "alice@example.com"},
-      "agent": "TaskTo.AI agent", "time": "2026-01-02T03:04:05.000Z",
+      "agent": "taskto.ai agent", "time": "2026-01-02T03:04:05.000Z",
       "message": "Update notes/plan.md", "change": "update", "version": "…", "versioned": true
     }
   ],
@@ -2815,7 +2815,7 @@ and kind included.
 The server checks every definition when it is saved, strictly, and refuses it (`400`,
 saying what is wrong) unless:
 
-- **definition_version** is the version of the definition's own format, TaskTo.AI's,
+- **definition_version** is the version of the definition's own format, taskto.ai's,
   independent of the A2UI protocol's version: `3` today (left out, it is the server's
   current). A higher one is refused (`app_definition_version`), and a client that finds a
   release in a version it doesn't read asks to be updated instead of drawing it. **Version 1**
@@ -4005,7 +4005,7 @@ idempotent; `404` for a default of an app the caller may not view.
 The people who may **publish** an app of a shared space (the app's `publish` capability, which
 every writer of the space has in an app without roles, and is the publisher role's in one with
 them) may set its widgets and pin as defaults for the space's members, who see them unless they
-hide them: a default changes what every member sees when they open TaskTo.AI, as publishing
+hide them: a default changes what every member sees when they open taskto.ai, as publishing
 changes what every member uses. Defaults are for the apps of **shared** spaces only, are bounded
 (12 widgets and 8 pins per space), and go when the app moves to another space. Everyone who
 reads the space may list them; they are seen only for the apps they may view.
@@ -4322,11 +4322,11 @@ Speech to text for the chat box ([dictation.md](dictation.md)). The web app reco
 
 **The glossary.** A space's `glossary.md`, at its root, lists terms the transcription
 should get right, one per list item: the item's leading words, up to the first `:`, ` — `
-or ` - ` (`- **TaskTo**: the product`). A dictation uses the glossaries of the spaces its
+or ` - ` (`- **taskto**: the product`). A dictation uses the glossaries of the spaces its
 caller can read, up to 500 terms. Engines that run on the server can favour them; then,
 for every engine, words that match a term ignoring case, accents and the spaces between
 them, or nearly match a long term, are replaced by its spelling ("task to" becomes
-"TaskTo"). Glossary terms are never sent to a hosted API.
+"taskto"). Glossary terms are never sent to a hosted API.
 
 ### `GET /api/workspaces/{workspace}/dictation`
 
@@ -4423,7 +4423,7 @@ Whether the server can send email, and where:
 
 ```json
 {"configured": true, "sends_links": true, "host": "smtp.example.com", "port": 587,
- "security": "starttls", "from": "\"TaskTo\" <taskto@example.com>", "password": "set"}
+ "security": "starttls", "from": "\"taskto\" <taskto@example.com>", "password": "set"}
 ```
 
 `security` is `starttls`, `tls` or `none`. `password` is `"set"` or `"not set"`: whether the server

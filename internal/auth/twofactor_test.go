@@ -72,10 +72,10 @@ func TestTOTPURI(t *testing.T) {
 	}
 	q := u.Query()
 	if u.Scheme != "otpauth" || u.Host != "totp" || q.Get("secret") != "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" ||
-		q.Get("issuer") != "TaskTo" || q.Get("digits") != "6" || q.Get("period") != "30" || q.Get("algorithm") != "SHA1" {
+		q.Get("issuer") != "taskto" || q.Get("digits") != "6" || q.Get("period") != "30" || q.Get("algorithm") != "SHA1" {
 		t.Fatalf("uri = %s", u)
 	}
-	if got := u.Path; got != "/TaskTo:a+b@example.com" {
+	if got := u.Path; got != "/taskto:a+b@example.com" {
 		t.Fatalf("label = %q", got)
 	}
 }

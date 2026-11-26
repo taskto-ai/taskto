@@ -72,7 +72,7 @@ GET  /conversations/:id/watch          → NDJSON: { type: "value", value }, the
    `protobufjs`) are denied in `pnpm-workspace.yaml`; neither is needed.
 7. **Node 22.19+** is required by Pi Durable. `engines` says so.
 8. **Attribution.** By default pi-ai tells some providers (OpenRouter, NVIDIA NIM, OpenCode) the requests come from pi.
-   The sidecar sends no attribution for now; it should send TaskTo.AI's once we have a public URL.
+   The sidecar sends no attribution for now; it should send taskto.ai's once we have a public URL.
 
 ## Not checked here
 

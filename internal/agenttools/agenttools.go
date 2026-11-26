@@ -63,7 +63,7 @@ import (
 
 // AgentName is the agent's name in the knowledge base's history: the committer of the
 // changes it makes for a user.
-const AgentName = "TaskTo.AI agent"
+const AgentName = "taskto.ai agent"
 
 const (
 	// MaxResult bounds a tool's reply, in bytes of JSON.

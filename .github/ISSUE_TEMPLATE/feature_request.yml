@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest something TaskTo.AI should do.
+description: Suggest something taskto.ai should do.
 labels: [enhancement]
 body:
   - type: textarea

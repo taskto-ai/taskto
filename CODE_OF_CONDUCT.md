@@ -1,6 +1,6 @@
 # Code of Conduct
 
-TaskTo.AI follows the [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
+taskto.ai follows the [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
 Everyone who takes part in the project's spaces (the repository, its issues, pull requests
 and discussions, and any chat or event in the project's name) agrees to it.
 

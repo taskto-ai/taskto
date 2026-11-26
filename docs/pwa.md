@@ -1,6 +1,6 @@
 # The installable app (PWA)
 
-TaskTo.AI's web app can be added to a phone's Home Screen or a computer's apps, opens in a
+taskto.ai's web app can be added to a phone's Home Screen or a computer's apps, opens in a
 window of its own, and starts offline. It stays a normal website: everything below is an
 addition the browser may ignore, and the app works the same in a tab. How to set up a server
 for it (HTTPS) and what people do is in [install.md](install.md#the-app-on-phones-and-computers).
@@ -61,7 +61,7 @@ cached for a year. `sw.js` is registered with `updateViaCache: 'none'`.
 
 A new version of the app installs in the background, then **waits**: the worker doesn't call
 `skipWaiting()` by itself, and the page doesn't reload by itself. `UpdateBanner` says *A new
-version of TaskTo.AI is ready* with **Reload to update** and **Later**. Only **Reload to update**
+version of taskto.ai is ready* with **Reload to update** and **Later**. Only **Reload to update**
 sends the worker a `SKIP_WAITING` message; once it has taken over (`controllerchange`) the page
 that asked reloads. **Later** hides the prompt until the page is opened again. An open
 installed app checks for a new version when it comes back to the foreground (at most every
@@ -120,7 +120,7 @@ the push service carries it with a lifetime of an hour, and it can arrive late, 
 app learns what is new from the server, as always, and never from a push. A push that waited past
 its lifetime, or for a notification that was read meanwhile, is not sent.
 
-**What a push says.** The worker shows `TaskTo.AI` with one line for the kind of notification, in
+**What a push says.** The worker shows `taskto.ai` with one line for the kind of notification, in
 the person's language, and nothing else. The server sends only `{"id", "kind"}` (the
 notification's own ID, and its kind: `card_assigned`, `card_comment`, `card_mention`, `card_due`, `card_overdue`, `app_effect_failed`, or `changed`), encrypted
 to the browser (RFC 8291) and signed with the server's VAPID key (RFC 8292), both done with the

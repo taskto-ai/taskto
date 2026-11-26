@@ -15,7 +15,7 @@
 // An expired login doesn't fail the turn: the tool says so, waits until the owner signs in again
 // (POST /cli/wait, which answers once the account is connected), and goes on with the turn.
 //
-// The CLI has TaskTo's tools over MCP (docs/cli-tools.md). When it asks the user to take over
+// The CLI has taskto's tools over MCP (docs/cli-tools.md). When it asks the user to take over
 // the browser (browser_help), the request is kept in the result's details, as `help`, so the
 // conversation shows the same card as for the built-in agent's call.
 
@@ -95,7 +95,7 @@ type CliEvent = {
 
 type Done = { status: string; text: string }
 
-/** An app the CLI saved with TaskTo's create_app or update_app (the server read it from the whole answer). */
+/** An app the CLI saved with taskto's create_app or update_app (the server read it from the whole answer). */
 export type SavedApp = { space: number; app: number }
 
 /** A browser_help call's request to the user: why, and what to do. */
@@ -133,11 +133,11 @@ class Helps {
   }
 }
 
-// The names a CLI gives TaskTo's browser_help: Claude Code's MCP name, the worker's for a Codex
+// The names a CLI gives taskto's browser_help: Claude Code's MCP name, the worker's for a Codex
 // MCP call (server.tool), and Grok Build's; Grok Build may also call it through use_tool.
 const HELP_NAMES = new Set(['mcp__taskto__browser_help', 'taskto.browser_help', 'taskto__browser_help'])
 
-/** The request of a CLI's tool call, if it is TaskTo's browser_help with a message. */
+/** The request of a CLI's tool call, if it is taskto's browser_help with a message. */
 export function helpOf(tool: { name: string; input?: string }): Help | undefined {
   let args: unknown
   try {

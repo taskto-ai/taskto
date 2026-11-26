@@ -42,7 +42,7 @@ ${readFileSync(join(dir, 'LICENSE'), 'utf8').trim()}
 
 export function thirdPartyNotices(root: string): string {
   const parts = [
-    `Third-party code and fonts in TaskTo.AI's web app
+    `Third-party code and fonts in taskto.ai's web app
 
 The fonts the app is set in, Inter, Bricolage Grotesque and JetBrains Mono, are served from the
 files beside this one (inter-*.woff2, bricolage-grotesque-*.woff2 and jetbrains-mono-*.woff2),

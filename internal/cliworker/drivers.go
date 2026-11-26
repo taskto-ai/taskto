@@ -83,7 +83,7 @@ type Overrides struct {
 
 // env returns the clean environment of a CLI run for dirs: built from nothing, so none of
 // the server's variables (or keys) reach the CLI or the commands it runs. Its credentials are
-// the login in its config directory, or the proxy's token, and the token for TaskTo's tools.
+// the login in its config directory, or the proxy's token, and the token for taskto's tools.
 func env(cli CLI, slot Slot, dirs Dirs, path string, o Overrides, proxy *Proxy, tools *Tools) []string {
 	vars := []string{
 		"PATH=" + path,
@@ -111,7 +111,7 @@ func env(cli CLI, slot Slot, dirs Dirs, path string, o Overrides, proxy *Proxy, 
 	return mergeEnv(vars, o.Env)
 }
 
-// TaskTo's own tools (docs/cli-tools.md): each CLI knows the server's MCP endpoint for turns as
+// taskto's own tools (docs/cli-tools.md): each CLI knows the server's MCP endpoint for turns as
 // the server "taskto", from settings the helper writes before every run. The token is in the
 // CLI's environment, and the settings name the variable, not the value.
 const (
@@ -195,7 +195,7 @@ func proxyCodexConfig(p *Proxy) string {
 	lines := []string{
 		`model_provider = "taskto"`,
 		"[model_providers.taskto]",
-		`name = "TaskTo.AI shared account"`,
+		`name = "taskto.ai shared account"`,
 		"base_url = " + tomlString(p.base()+"/cli-proxy/v1"),
 		`env_key = "` + proxyCodexKey + `"`,
 		`wire_api = "responses"`,
@@ -226,7 +226,7 @@ func mergeEnv(base, extra []string) []string {
 
 // prepare writes the settings a CLI reads from its config directory (the slot's) before every
 // run, so a command that changed them can't change the next run: the permission hook that
-// runs approve (docs/agent-safety.md) for each CLI, TaskTo's tools (or none), and Codex's
+// runs approve (docs/agent-safety.md) for each CLI, taskto's tools (or none), and Codex's
 // config.toml (no approval prompts of its own, no update check, the sandbox,
 // "workspace-write" unless given, and a shared account's proxy).
 func prepare(cli CLI, slot Slot, dirs Dirs, o Overrides, sandbox string, proxy *Proxy, tools *Tools, approve []string) error {
@@ -244,7 +244,7 @@ func prepare(cli CLI, slot Slot, dirs Dirs, o Overrides, sandbox string, proxy *
 		sandbox = "workspace-write"
 	}
 	lines := []string{
-		"# Written by TaskTo.AI for every run; changes here are replaced.",
+		"# Written by taskto.ai for every run; changes here are replaced.",
 		`approval_policy = "never"`,
 		`sandbox_mode = "` + sandbox + `"`,
 		"check_for_update_on_startup = false",
@@ -283,7 +283,7 @@ func writeFileAtomic(path string, data []byte) error {
 
 // writeHooks writes cli's permission hook, which runs approve (the hook program and its
 // arguments): Claude Code's PermissionRequest in settings.json, Codex's PreToolUse in
-// hooks.json, Grok Build's PreToolUse in config.toml, failing closed, with TaskTo's tools
+// hooks.json, Grok Build's PreToolUse in config.toml, failing closed, with taskto's tools
 // after it. Without approve, the files are written without a hook.
 func writeHooks(cli CLI, config string, approve []string, tools *Tools) error {
 	switch cli {
@@ -305,7 +305,7 @@ func writeHooks(cli CLI, config string, approve []string, tools *Tools) error {
 		}
 		return writeFileAtomic(filepath.Join(config, file), append(b, '\n'))
 	default: // Grok
-		lines := []string{"# Written by TaskTo.AI for every run; changes here are replaced."}
+		lines := []string{"# Written by taskto.ai for every run; changes here are replaced."}
 		if len(approve) > 0 {
 			args := make([]string, 0, len(approve)-1)
 			for _, a := range approve[1:] {

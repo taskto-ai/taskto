@@ -275,7 +275,7 @@ commit.
 ## Not here, on purpose
 
 - **No model-authored HTTP call.** An app, an effect or an action never holds a URL.
-- **No card data in TaskTo.** Hosted checkout only; TaskTo will keep a link, a provider's
+- **No card data in taskto.** Hosted checkout only; taskto will keep a link, a provider's
   object id and the amount it asked for.
 - **No raw webhook bodies** will be stored, only normalized fields and a hash.
 - No refunds, payouts, subscriptions or customer records.

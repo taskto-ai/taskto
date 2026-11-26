@@ -276,7 +276,7 @@ func (x *Index) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// A model that doesn't answer now would leave every document failing: say so here.
 		ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
-		_, err = x.embed(ctx, ep, model, []string{"TaskTo.AI"})
+		_, err = x.embed(ctx, ep, model, []string{"taskto.ai"})
 		cancel()
 		if err != nil {
 			if r.Context().Err() != nil {
