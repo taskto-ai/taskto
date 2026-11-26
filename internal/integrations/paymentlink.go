@@ -93,12 +93,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return paylink.Link{}, unavailable() // an entry's number is its own: never another's
 	}
 	if found && ref.objectID != "" {
-		// The link belongs to the integration that made it: another one, bound since, is not the one
-		// the record may be written with, and no second link is made for the entry.
-		if ref.integrationID != req.IntegrationID {
-			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
-		}
-		return ref.link(), nil
+		return madeLink(ref, req)
 	}
 
 	cur := strings.ToUpper(strings.TrimSpace(req.Currency))
@@ -129,12 +124,15 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	// With no public URL there are no pages of ours: both are empty and the provider hosts the
 	// payer's confirmation (a link is made all the same). A ref already made keeps its own.
 	success, cancel := s.pageURLs()
+	if s.beforeBeginRef != nil {
+		s.beforeBeginRef()
+	}
 	ref, err = s.beginRef(ctx, req, minor, cur, account, success, cancel)
 	if err != nil {
 		return paylink.Link{}, err
 	}
 	if ref.objectID != "" { // made by a call that finished while this one began
-		return ref.link(), nil
+		return madeLink(ref, req)
 	}
 
 	nl := NewLink{
@@ -172,6 +170,16 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return paylink.Link{}, err
 	}
 	return paylink.Link{URL: link.URL, ObjectID: link.ObjectID, AmountMinor: minor, Currency: cur}, nil
+}
+
+// madeLink is the link a ref already has. It belongs to the integration that made it: another one,
+// bound since, is not the one the record may be written with, and no second link is made for the
+// entry. It is checked wherever a finished ref is found, however late.
+func madeLink(r ref, req paylink.Request) (paylink.Link, error) {
+	if r.integrationID != req.IntegrationID {
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
+	}
+	return r.link(), nil
 }
 
 // keyTrusted is how long a key is known to be kept by the provider (Stripe keeps one for at least 24
@@ -339,11 +347,14 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 	return out, tx.Commit()
 }
 
-// noteLink keeps the provider's answer on the ref: the object, the address, and that it is open.
+// noteLink keeps the provider's answer on the ref: the object, the address, and that it is open. An
+// answer that made an object is recorded whatever another try (one whose lease ran out, still
+// working) noted of the ref meanwhile, a failure included: the link is about to be returned, and a
+// ref that doesn't have it would let a later try make a second one.
 func (s *Service) noteLink(ctx context.Context, r ref, l Link) error {
 	res, err := s.store.db.ExecContext(ctx, `
 		UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'
-		WHERE id = ? AND provider_object_id IS NULL AND state = 'creating'`, l.ObjectID, l.URL, r.id)
+		WHERE id = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed')`, l.ObjectID, l.URL, r.id)
 	if err != nil {
 		var se *sqlite.Error
 		if errors.As(err, &se) && se.Code() == 2067 { // SQLITE_CONSTRAINT_UNIQUE: the object is another ref's

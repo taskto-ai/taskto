@@ -282,12 +282,15 @@ write.
   for first, below). A failure that
   Stripe keeps under a key (a `5xx`) would be answered to the same key for ever, so the next try has
   a key of its own; but Stripe documents a `5xx` as an indeterminate result, the object may have been
-  made, so before that call the integration lists what the account made (the open Checkout Sessions
-  created since the reference, matched on `client_reference_id`, or the active Payment Links, newest
-  first, matched on `metadata[taskto_ref]`; neither has a filter for them and the search API doesn't
-  cover them) and adopts an object of the token as if a call had answered it, if it asks the amount
-  and the currency of the payment (an object of the token that doesn't is never given to a payer, and
-  the entry fails with the provider's refusal for a person to settle). The same look comes before a
+  made, so before that call the integration lists what the account made (the Checkout Sessions of any
+  status created since the reference, matched on `client_reference_id`, or the Payment Links, active
+  or not, newest first, matched on `metadata[taskto_ref]`; neither has a filter for them and the
+  search API doesn't cover them) and adopts an object of the token as if a call had answered it, if it
+  is open (an active link) and asks the amount and the currency of the payment. An object of the token
+  that doesn't ask them, a completed session and a link that is inactive (deactivated, or at its limit
+  of payments) are never given to a payer and stop the call: the entry fails with the provider's
+  refusal, nothing else is made, and a person reconciles the payment. An expired session can't be
+  paid and is passed over. The same look comes before a
   call under the same key once the reference is a day old, when Stripe may have forgotten the key.
   When the listing can't be read (a failed read, an answer that isn't a whole list: no `object: list`,
   no `data`, no `has_more`, or `has_more` with nothing to read on from), nothing is made: the entry
@@ -297,8 +300,11 @@ write.
   active Payment Links, none of them the reference's), the lookup can't say whether an earlier try made
   the object, and asking again reads the same pages, so the entry doesn't wait for ever: it fails with
   `integration_lookup_incomplete`, nothing is made and the reference stays. An admin settles it by
-  deactivating the links the account no longer uses (the lookup reads only active links), then the
-  person who acted retries the entry.
+  reconciling the original payment: look in the account for an object of the reference (a Payment
+  Link's `metadata.taskto_ref`, a Checkout Session's `client_reference_id`); if one was paid, nothing
+  is recreated; if one is unpaid, it is made unable to take payment first; only then is the action
+  run again, which is a new entry with a new reference. Deactivating other links doesn't shrink what
+  the lookup reads, since it lists inactive links too.
 - **A reference belongs to its account and its request.** When the reference is made, the integration
   reads the account its key belongs to (`GET /v1/account`, which with no id answers the account of the
   key; <https://docs.stripe.com/api/accounts/retrieve>, so the key must be allowed to read it) and
@@ -307,11 +313,13 @@ write.
   the same kind of objects (Checkout Sessions or Payment Links), whatever the server's public URL is
   by then. If the integration's key has been replaced by another account's while a reference has no
   object, nothing is looked for or made in the new account, where an object the old one made could
-  not be found: the entry fails with `integration_account_changed` and the reference is left as it is,
-  for an admin to check the old account for a link and to recreate it from the record. A link a
+  not be found: the entry fails with `integration_account_changed` and the reference is left as it is.
+  Its old link is neither cancelled nor known to be unpaid, so an admin reconciles the original
+  payment in the old account first (paid: nothing is recreated; not paid: the old link is made unable
+  to take payment), and only then runs the action again (a new entry, a new reference). A link a
   reference already made is only ever given under the integration that made it
-  (`integration_changed` otherwise), so a record is never written with a link of an integration that
-  is no longer the slot's.
+  (`integration_changed` otherwise, wherever the finished reference is found), so a record is never
+  written with a link of an integration that is no longer the slot's; the same reconciliation applies.
 - **The newest entry wins, and what is sent is what was approved.** Entries are done in the order they
   were queued, but one tried again later could write its link after a newer entry for the same record
   and fields wrote its own. An entry for which a newer one exists (same record, same two fields, any

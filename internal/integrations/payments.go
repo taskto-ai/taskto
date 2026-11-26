@@ -319,27 +319,29 @@ const (
 // for, at the pinned API version (StripeAPIVersion):
 //   - List Checkout Sessions, https://docs.stripe.com/api/checkout/sessions/list: filters by
 //     created, status, payment_intent and payment_link, and none by client_reference_id or
-//     metadata, so the open sessions created since the ref was made are read and matched on
+//     metadata, so the sessions created since the ref was made are read and matched on
 //     client_reference_id, the token (the object has it, https://docs.stripe.com/api/checkout/sessions/object);
 //   - List all payment links, https://docs.stripe.com/api/payment-link/list: only active and the
-//     cursors, so the active links are read newest first and matched on metadata[taskto_ref];
+//     cursors, so the links are read newest first, active or not, and matched on metadata[taskto_ref];
 //   - the Search API (https://docs.stripe.com/search) doesn't list Checkout Sessions or Payment
 //     Links, and its data can take a minute to be searchable ("don't use search for
 //     read-after-write flows", which this is), so it isn't used.
 //
 // An object is adopted only if it asks what the payment asks now: a session's amount_total and
 // currency, and a link's currency and the line items it lists
-// (https://docs.stripe.com/api/payment-link/line_items). The list APIs read what was written. A session that is no longer open (paid or expired) or a
-// link that is no longer active is not adopted: the payer was never given its address.
+// (https://docs.stripe.com/api/payment-link/line_items). The list APIs read what was written. Every
+// state is listed (sessions of any status since the reference was made, links active or not), since
+// an object of the token that is no longer payable may have been paid: an open session or an active
+// link is adopted, an expired session is passed over (it can't be paid), and a completed session or
+// an inactive link (deactivated, or at its limit of payments) stops the call with a refusal, so no
+// second object is made and a person reconciles the payment.
 func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, error) {
 	hosted := l.SuccessURL == ""
 	path := "/v1/checkout/sessions"
 	q := url.Values{"limit": {strconv.Itoa(findPageSize)}}
 	if hosted {
 		path = "/v1/payment_links"
-		q.Set("active", "true")
 	} else {
-		q.Set("status", "open")
 		q.Set("created[gte]", strconv.FormatInt(since.Add(-findSkew).Unix(), 10))
 	}
 	for range findMaxPages {
@@ -355,6 +357,8 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				Object            string            `json:"object"`
 				URL               string            `json:"url"`
 				Currency          string            `json:"currency"`
+				Status            string            `json:"status"`
+				Active            *bool             `json:"active"`
 				AmountTotal       int64             `json:"amount_total"`
 				ClientReferenceID *string           `json:"client_reference_id"`
 				Metadata          map[string]string `json:"metadata"`
@@ -376,6 +380,22 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			}
 			if !ours {
 				continue
+			}
+			// Every state is read, not only the payable ones: an object of the token that was paid, or
+			// that a payer can no longer use for another reason, shows the earlier try did make one, and
+			// must not read as "not made" (the next call would make a second payable link).
+			if hosted && (o.Active == nil || !*o.Active) {
+				// Deactivated by a person, or by its limit of payments: no one can say it wasn't paid.
+				return Link{}, false, &CallError{Kind: CallRefused, Status: status}
+			}
+			if !hosted {
+				switch o.Status {
+				case "open":
+				case "expired":
+					continue // can't be paid, and the payer was never given an address that works
+				default:
+					return Link{}, false, &CallError{Kind: CallRefused, Status: status} // complete, or not said
+				}
 			}
 			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
 			if !ok || !strings.EqualFold(o.Currency, l.Currency) {

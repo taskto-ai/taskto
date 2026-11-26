@@ -1440,3 +1440,129 @@ func TestALookupThatCannotSeeEverythingFailsTheEntryForAPerson(t *testing.T) {
 		t.Fatalf("entry = %+v, was %+v", got, e)
 	}
 }
+
+// ----- a link noted late, and objects that are no longer open -----
+
+// Another worker's call finishes under the integration the slot was bound to before, while this try
+// is between reading the ref and making it ready: the link it returns is that integration's, and is
+// refused here as it is on the early path.
+func TestALinkNotedWhileATryBeginsIsRefusedUnderAnotherIntegration(t *testing.T) {
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-late-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	body := stripeBody("second")
+	body["secrets"] = map[string]string{"api_key": p.fake.APIKey()}
+	body["currencies"] = []string{"EUR"}
+	second := p.create(p.owner, p.ws, body)
+	p.exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, second.ID, p.space.ID)
+	req.IntegrationID = second.ID
+	p.svc.beforeBeginRef = func() { // the other worker's call finishes, under the first integration
+		p.exec(`UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'`, p.fake.Sessions()[0].ID, *p.fake.Sessions()[0].URL)
+	}
+	_, err := p.svc.OpenPaymentLink(context.Background(), req)
+	var pe *paylink.Error
+	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationChanged {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A try that failed while another's answer was on its way doesn't lose the answer: the link that is
+// returned is on the ref, so a later try finds it and makes no second one.
+func TestAnAnswerIsRecordedEvenIfAnotherTryMarkedTheRefFailed(t *testing.T) {
+	p := newPay(t, publicURL)
+	invoiceID := p.invoice(10, "EUR")
+	req := p.direct(invoiceID, "op-late-0002")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	r := p.refs()[0]
+	stale := ref{id: r.id, keySeq: 0, integrationID: p.in.ID}
+	// The other try's refusal marks the ref failed...
+	_ = p.svc.callFailed(context.Background(), &stale, record{Integration: Integration{Provider: "stripe"}}, &CallError{Kind: CallRefused, Status: 400})
+	if got := p.refs()[0]; got.state != "failed" {
+		t.Fatalf("state = %s", got.state)
+	}
+	// ...and this try's answer, which made the object, is noted all the same.
+	if err := p.svc.noteLink(context.Background(), stale, Link{ObjectID: p.fake.Sessions()[0].ID, URL: *p.fake.Sessions()[0].URL}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.refs()[0]; got.state != "open" || got.object != p.fake.Sessions()[0].ID {
+		t.Fatalf("the answer was not recorded: %+v", got)
+	}
+	link, err := p.svc.OpenPaymentLink(context.Background(), req)
+	if err != nil || link.ObjectID != p.fake.Sessions()[0].ID || len(p.posts()) != 1 {
+		t.Fatalf("link = %+v, %v, %d calls", link, err, len(p.posts()))
+	}
+}
+
+// An object of the token that is no longer open may have been paid, and the lookup sees it: a
+// completed session or an inactive link stops the call with a refusal (nothing else is made), an
+// expired session can't be paid and is passed over, and an open one is adopted.
+func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
+	token := strings.Repeat("d", 32)
+	session := func(p *pay) string {
+		f := url.Values{}
+		f.Set("mode", "payment")
+		f.Set("success_url", publicURL+PaymentDonePath)
+		f.Set("client_reference_id", token)
+		f.Set("line_items[0][quantity]", "1")
+		f.Set("line_items[0][price_data][currency]", "eur")
+		f.Set("line_items[0][price_data][unit_amount]", "1000")
+		f.Set("line_items[0][price_data][product_data][name]", "Invoice")
+		p.mustPost("/v1/checkout/sessions", f)
+		return p.fake.Sessions()[0].ID
+	}
+	link := func(p *pay) string {
+		f := url.Values{}
+		f.Set("after_completion[type]", "hosted_confirmation")
+		f.Set("metadata[taskto_ref]", token)
+		f.Set("restrictions[completed_sessions][limit]", "1")
+		f.Set("line_items[0][quantity]", "1")
+		f.Set("line_items[0][price_data][currency]", "eur")
+		f.Set("line_items[0][price_data][unit_amount]", "1000")
+		f.Set("line_items[0][price_data][product_data][name]", "Invoice")
+		p.mustPost("/v1/payment_links", f)
+		return p.fake.Links()[0].ID
+	}
+	cases := map[string]struct {
+		nl     NewLink
+		make   func(*pay) string
+		change func(*pay, string)
+		found  bool
+		kind   CallKind // of the error, 0 for none
+	}{
+		"an open session":    {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(*pay, string) {}, true, 0},
+		"a paid session":     {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(p *pay, id string) { _, _ = p.fake.Pay(id) }, false, CallRefused},
+		"an expired session": {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(p *pay, id string) { _, _ = p.fake.Expire(id) }, false, 0},
+		"an active link":     {NewLink{}, link, func(*pay, string) {}, true, 0},
+		"a paid link":        {NewLink{}, link, func(p *pay, id string) { _, _ = p.fake.PayLink(id) }, false, CallRefused},
+		"a deactivated link": {NewLink{}, link, func(p *pay, id string) { p.mustPost("/v1/payment_links/"+id, url.Values{"active": {"false"}}) }, false, CallRefused},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, "")
+			tc.change(p, tc.make(p))
+			c := NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(p.fake.Host()))
+			nl := tc.nl
+			nl.Token, nl.AmountMinor, nl.Currency = token, 1000, "EUR"
+			got, found, err := stripe{}.FindPaymentLink(context.Background(), Credentials{APIKey: Secret(p.fake.APIKey())}, c, nl, time.Now())
+			if found != tc.found {
+				t.Fatalf("found = %v, err = %v", found, err)
+			}
+			if tc.kind == 0 {
+				if err != nil || (tc.found && got.URL == "") {
+					t.Fatalf("link = %+v, err = %v", got, err)
+				}
+				return
+			}
+			if ce, ok := IsCall(err); !ok || ce.Kind != tc.kind || ce.KeyKept || got.URL != "" {
+				t.Fatalf("err = %v, link %+v", err, got)
+			}
+		})
+	}
+}

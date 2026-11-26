@@ -53,6 +53,9 @@ type Service struct {
 	publicURL  string
 	egress     egress.Policy
 	clientOpts []ClientOption
+	// beforeBeginRef is for tests: it runs between reading an entry's ref and making it ready for a
+	// call, where another worker's call may finish.
+	beforeBeginRef func()
 }
 
 // New returns the API over store.
