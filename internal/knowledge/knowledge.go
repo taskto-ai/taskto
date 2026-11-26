@@ -908,6 +908,13 @@ func (s *Store) read(sp access.Space, fn func(*repo) error) error {
 	st := s.state(sp.ID)
 	st.mu.RLock()
 	defer st.mu.RUnlock()
+	// A space removed while this waited for the lock is gone: opening it would make its
+	// directory again.
+	leave, err := access.EnterSpace(s.dataDir, sp)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	r, err := openRepo(s.dataDir, sp, st, false)
 	if err != nil {
 		return err
@@ -945,6 +952,13 @@ func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bo
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	// A space removed while this waited for the lock is gone: writing to it would make its
+	// directory, and a repository in it, again (RemoveSpace).
+	leave, err := access.EnterSpace(s.dataDir, sp)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	r, err := openRepo(s.dataDir, sp, st, create)
 	if err != nil {
 		return err

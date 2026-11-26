@@ -410,6 +410,12 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
 		return err
 	}
+	// The rows are gone, so nothing resolves these spaces any more: their IDs may be given to
+	// spaces made later, which must not be refused as removed. Until here, a write that had
+	// resolved one was refused instead of making its directory again (access.RemoveSpaceDir).
+	for _, sp := range private {
+		access.ForgetRemoved(s.o.DataDir, sp)
+	}
 	// The providers file and the key files, now that the database has no account of theirs. A
 	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.
 	if _, err := s.runCleanups(ctx, userID); err != nil {

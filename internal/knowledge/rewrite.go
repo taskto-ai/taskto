@@ -1003,15 +1003,19 @@ func (r *repo) countAuthored(ctx context.Context, head *object.Commit, set map[s
 // RemoveSpace deletes everything sp keeps on disk: its git repository, its unversioned files
 // and the large files' bytes, and whatever the apps stored in its directory (photos), for a
 // private space whose owner's account is purged (internal/accountdeletion). It takes the space's
-// lock, so no write is half-way through, and forgets what the Store cached of it. The space's
-// rows are deleted by the caller, after: the directory goes first, so a purge that stops between
-// the two still finds the space to finish. Removing what is gone already succeeds.
+// lock, so no write is half-way through, and forgets what the Store cached of it. The space is then
+// marked removed (access.RemoveSpaceDir): a write or upload that had resolved the space and was
+// only waiting for the lock, or that arrives while the rows are still there, is refused with
+// access.ErrNotFound rather than making the directory and a new repository again. The caller
+// deletes the space's rows after, then calls access.ForgetRemoved: the directory goes first, so a
+// purge that stops between the two still finds the space to finish. Removing what is gone already
+// succeeds.
 func (s *Store) RemoveSpace(sp access.Space) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if err := os.RemoveAll(sp.Dir(s.dataDir)); err != nil {
-		return fmt.Errorf("knowledge: removing space %d: %w", sp.ID, err)
+	if err := access.RemoveSpaceDir(s.dataDir, sp); err != nil {
+		return fmt.Errorf("knowledge: %w", err)
 	}
 	s.mu.Lock()
 	delete(s.spaces, sp.ID)

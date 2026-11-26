@@ -294,6 +294,15 @@ func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) 
 	if err := s.ensureRepo(sp); err != nil {
 		return nil, err
 	}
+	// Held until the bytes are staged, so a removal of the space waits for the upload instead of
+	// finding its directory made again under it. After ensureRepo, which takes the space's lock:
+	// the lock comes before the gate. The staged file is adopted later under the lock, which
+	// refuses a space that was removed since.
+	leave, err := access.EnterSpace(s.dataDir, sp)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	root, err := access.OpenRoot(s.dataDir, sp)
 	if err != nil {
 		return nil, err
@@ -351,6 +360,11 @@ func (s *Store) ensureRepo(sp access.Space) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	leave, err := access.EnterSpace(s.dataDir, sp)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	r, err := openRepo(s.dataDir, sp, st, true)
 	if err != nil {
 		return err
