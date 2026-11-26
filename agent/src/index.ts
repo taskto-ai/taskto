@@ -410,7 +410,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       await found.commit(async (tx) => {
         ;(await tx.doc(Lifecycle, found.id)).retiredAt = Date.now()
       }, context)
-      await found.abort(context) // withdraws queued input and stops the running work
+      // Withdraws queued input and stops the running work, its background tasks too (Pi Durable's
+      // abort leaves those running unless asked): nothing of a retired conversation's goes on writing.
+      await found.abort(context, { background: true })
       console.error(`conversation ${found.id} retired`)
       res.writeHead(204).end()
       return
@@ -422,7 +424,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         if ((await harness.snapshot(Lifecycle, num, context))?.retiredAt == null) {
           throw new HttpError(409, 'retire the conversation before purging it')
         }
-        await found.abort(context) // idle, as retiring left it
+        // Idle, as retiring left it: background work included, so nothing writes into what the purge
+        // removes (a retire before this version stopped only the rest).
+        await found.abort(context, { background: true })
         // On a worker thread (purge.ts): its waits for the database never stall other turns.
         await runPurge({ path: dbPath as string, root: num, timeoutMs: walBusyMs })
         console.error(`conversation ${num} purged`)

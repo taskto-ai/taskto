@@ -18,8 +18,6 @@
 // This module is also the worker's entry: it imports nothing of the sidecar's, so the same file
 // runs as the worker in the built sidecar (dist/purge.js) and in the tests (src/purge.ts).
 
-import { readFileSync } from 'node:fs'
-import { endianness } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads'
 
@@ -49,126 +47,88 @@ function sleep(ms: number): void {
 const PAUSE_MS = 30
 
 /**
- * How many frames of the log may still be waiting to be copied when the purge empties it: the copy
- * is done under the write lock, so it is only tried on a log that a passive checkpoint has all but
- * drained (what the harness wrote since).
+ * How many frames of the log may still be waiting to be copied when the purge empties it: the
+ * TRUNCATE checkpoint copies them under the write lock, so it is only tried on a log that a passive
+ * checkpoint has just found (all but) drained.
  */
 const DRAINED_FRAMES = 64
 
 /**
  * Copies what it can of the log into the database by a checkpoint that never waits and never holds
  * the harness's writes up (PASSIVE), and says how many frames are left to copy: some while a
- * reader's snapshot still needs them. Infinity when it couldn't run.
+ * reader's snapshot still needs them. Throws what SQLite throws.
  */
-function backlog(db: DatabaseSync): number {
-  try {
-    const row = db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get() as
-      | { log: number | bigint; checkpointed: number | bigint }
-      | undefined
-    if (!row) return Number.POSITIVE_INFINITY
-    const log = Number(row.log)
-    return log < 0 ? 0 : log - Number(row.checkpointed) // -1: not in WAL mode, nothing to copy
-  } catch {
-    return Number.POSITIVE_INFINITY
-  }
+function passive(db: DatabaseSync): number {
+  const row = db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get() as
+    | { log: number | bigint; checkpointed: number | bigint }
+    | undefined
+  if (!row) throw new Error('the checkpoint returned no row')
+  const log = Number(row.log)
+  return log < 0 ? 0 : log - Number(row.checkpointed) // -1: not in WAL mode, nothing to copy
 }
 
-/**
- * The frames of the log at path that no checkpoint has copied yet, read from SQLite's WAL index
- * (path-shm, https://www.sqlite.org/walformat.html): the header's mxFrame (offset 16) less the
- * checkpoint's nBackfill (offset 96), both in the machine's byte order. Reading it copies nothing.
- * Infinity when the index can't be read as one.
- */
-export function pendingFrames(path: string): number {
-  let shm: Buffer
+/** passive, with Infinity when it couldn't run (a writer or another checkpoint was at it). */
+function backlog(db: DatabaseSync): number {
   try {
-    shm = readFileSync(`${path}-shm`).subarray(0, 136)
+    return passive(db)
   } catch {
     return Number.POSITIVE_INFINITY
   }
-  if (shm.length < 136) return Number.POSITIVE_INFINITY
-  const le = endianness() === 'LE'
-  const u32 = (at: number) => (le ? shm.readUInt32LE(at) : shm.readUInt32BE(at))
-  if (u32(0) !== 3007000) return Number.POSITIVE_INFINITY // the WAL index's version
-  const pending = u32(16) - u32(96)
-  return pending < 0 ? Number.POSITIVE_INFINITY : pending
 }
 
 /** What truncateWalWithin tells a test. */
 export type TruncateHooks = {
   /** Each round's backlog after its passive checkpoint, before the round decides what to do. */
   round?: (backlog: number) => void
-  /** Just before the TRUNCATE checkpoint, the frames it has to copy, as read under the write lock. */
-  truncating?: (pending: number) => void
+  /** Just before the TRUNCATE checkpoint, the backlog its round found. */
+  truncating?: (backlog: number) => void
 }
 
 /**
- * truncateWal, tried until timeoutMs has passed, never holding the write lock while it waits or
- * copies much: each round copies the log by a passive checkpoint (which writers go on beside), and
- * only once it is drained tries the TRUNCATE, which holds the lock while it runs (busy_timeout 0, so
- * it doesn't wait for readers either). The pause between rounds is a sleep of this thread. A reader
- * that lets go of its snapshot lets the next round copy the rest. Throws WalBusyError if a reader
- * still holds the log at the end.
+ * truncateWal, tried until timeoutMs has passed, never holding the write lock while it waits for a
+ * reader or copies a backlog: each round copies the log by a passive checkpoint (which writers go
+ * on beside, and which waits for no one), and when that found it drained (DRAINED_FRAMES at most)
+ * tries the TRUNCATE at once, which holds the lock while it runs (busy_timeout 0: it doesn't wait for
+ * readers or a writer either, and a round that finds one is tried again after a pause, a sleep of
+ * this thread). A reader that lets go of its snapshot lets the next round copy the rest. Throws
+ * WalBusyError if a reader still holds the log at the end.
  *
- * A commit can land between the passive checkpoint and the TRUNCATE (one that was being written while
- * the passive one ran), which the TRUNCATE would then copy under the lock. So the drained log is
- * checked again while this thread holds the write lock (on a second connection, lock), from the WAL
- * index, which copies nothing, and the TRUNCATE is tried the moment the lock is let go: a writer that
- * takes it first makes the TRUNCATE busy for this round, and none can write much in between.
+ * The bound: under the lock, the TRUNCATE copies what the passive checkpoint left (DRAINED_FRAMES at
+ * most) and what was committed between the two, which is at most the commit that was being written
+ * when the passive checkpoint ran (a writer that holds the lock when the TRUNCATE starts makes it
+ * busy instead). Nothing gates the harness's writers for it.
  */
-export function truncateWalWithin(db: DatabaseSync, path: string, timeoutMs: number, hooks?: TruncateHooks): void {
+export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, hooks?: TruncateHooks): void {
   db.exec('PRAGMA busy_timeout = 0')
-  const lock = new DatabaseSync(path, { timeout: 0 })
-  try {
-    const deadline = performance.now() + timeoutMs
-    let last: unknown
-    for (;;) {
-      const left = backlog(db)
-      hooks?.round?.(left)
-      if (left <= DRAINED_FRAMES && drainedUnderLock(lock, path, hooks)) {
-        try {
-          truncateWal(db)
-          return
-        } catch (error) {
-          if (!(error instanceof WalBusyError)) throw error
-          last = error
-        }
+  const deadline = performance.now() + timeoutMs
+  let last: unknown
+  for (;;) {
+    const left = backlog(db)
+    hooks?.round?.(left)
+    if (left <= DRAINED_FRAMES) {
+      hooks?.truncating?.(left)
+      try {
+        truncateWal(db)
+        return
+      } catch (error) {
+        if (!(error instanceof WalBusyError)) throw error
+        last = error
       }
-      if (performance.now() + PAUSE_MS > deadline) {
-        throw last instanceof WalBusyError
-          ? last
-          : new WalBusyError('a reader holds the write-ahead log, so it could not be copied and truncated')
-      }
-      sleep(PAUSE_MS)
     }
-  } finally {
-    lock.close()
+    if (performance.now() + PAUSE_MS > deadline) {
+      throw last instanceof WalBusyError
+        ? last
+        : new WalBusyError('a reader holds the write-ahead log, so it could not be copied and truncated')
+    }
+    sleep(PAUSE_MS)
   }
-}
-
-// Whether the log at path is drained while lock holds the write lock (false if a writer has it).
-function drainedUnderLock(lock: DatabaseSync, path: string, hooks?: TruncateHooks): boolean {
-  try {
-    lock.exec('BEGIN IMMEDIATE')
-  } catch {
-    return false // a writer is at it: the next round looks again
-  }
-  let pending: number
-  try {
-    pending = pendingFrames(path)
-  } finally {
-    lock.exec('ROLLBACK')
-  }
-  if (pending > DRAINED_FRAMES) return false
-  hooks?.truncating?.(pending)
-  return true
 }
 
 /** Empties the log of the database at path, on a connection of its own, trying for up to timeoutMs. */
 export function truncateWalAt(path: string, timeoutMs: number): void {
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
-    truncateWalWithin(db, path, timeoutMs)
+    truncateWalWithin(db, timeoutMs)
   } finally {
     db.close()
   }
@@ -176,35 +136,47 @@ export function truncateWalAt(path: string, timeoutMs: number): void {
 
 /**
  * The kind of the sidecar's document that says when a conversation was created and retired
- * (index.ts, Lifecycle). The purge removes it last, with the conversation's row.
+ * (index.ts, Lifecycle). The purge removes the root's last, with the root's row.
  */
 export const LIFECYCLE_KIND = 'taskto.lifecycle'
 
 /** How many rows one statement of the purge deletes: small, so a transaction stays near SLICE_MS. */
 const CHUNK = 100
 
+/** How many marked conversations and tasks one step of the sweep takes. */
+const SWEEP = 200
+
 /** How long one of the purge's transactions goes on deleting before it commits and pauses. */
 const SLICE_MS = 20
 
+/** What purgeRecords tells a test. */
+export type PurgeHooks = {
+  /** Runs after each short transaction commits. */
+  afterSlice?: () => void
+  /** The last transaction's length, from taking the write lock to its commit, in ms. */
+  final?: (ms: number) => void
+}
+
 // Deletes a conversation's records, and those of the conversations its tasks started, from the
 // database at path: its entries (what was said), tasks, submissions and documents with their
-// revisions, each record with its row of record_ids. Only a retired conversation is purged: its work
-// has stopped, so nothing writes the rows that go. secure_delete zeroes the deleted content in the
-// file, and the checkpoint takes it out of the write-ahead log.
+// revisions, each record with its row of record_ids. Only a retired conversation is purged:
+// retiring it stopped all its work, background tasks included, so nothing writes the rows that go.
+// secure_delete zeroes the deleted content in the file, and the checkpoint takes it out of the
+// write-ahead log.
 //
-// Everything goes a chunk at a time, in short transactions (see the top of the file), in an order
-// that lets a purge that stops halfway be finished by the next, which finds the tree again from the
-// root: first what was said (documents with their revisions, submissions, entries), then the tree
-// itself from the bottom up, a task only once no conversation it started is left and a conversation
-// only once no task of it is left, so whatever is left is still reachable from the root. A
-// conversation's records that were written late go with it, and a document's revisions with it, in
-// the same transaction. The root's row and its lifecycle document, which says it is retired (so the
-// purge goes on, and it stays closed to new input), go last, in a transaction that finds the tree
-// again and takes whatever is left: normally the root alone, so it is short, and nothing written
-// during the pauses outlives a purge that says it is done.
-//
-// afterSlice, for tests, runs after each short transaction commits.
-export function purgeRecords(path: string, root: number, timeoutMs: number, afterSlice?: () => void): void {
+// Everything goes in short transactions (see the top of the file), in an order that lets a purge
+// that stops halfway be finished by the next. First the tree's conversations and tasks are marked
+// (taskto_purge_marks): a retry starts from the marks as well as from the root, so what a removed
+// row led to is still found. Then what was said goes (documents with their revisions, submissions,
+// entries), and then the sweep: each marked conversation or task, but the root, has what was
+// started under it marked (in the same transaction, before it goes), what is left of its records
+// removed, and its row removed (its mark stays, done); a second pass looks again for anything that
+// refers to what is done (a late record) before it forgets the marks. A document's revisions go
+// with it. The root's row, its lifecycle document, which says it is retired (so the purge goes on,
+// and it stays closed to new input), and its marks go last, in a transaction that finds what is
+// left from the root and the marks left: normally the root alone, so it stays short whatever the
+// tree's size.
+export function purgeRecords(path: string, root: number, timeoutMs: number, hooks?: PurgeHooks): void {
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
     db.exec('PRAGMA secure_delete = ON')
@@ -212,14 +184,11 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     // write lock for its sync. The checkpoint that ends the purge syncs the database, and the purge
     // isn't done (the server asks again) until it has.
     db.exec('PRAGMA synchronous = NORMAL')
-    // Every conversation and task of the tree is remembered before any of their rows go: a retry
-    // after a stop finds the tree again from them too, so a record written for a conversation whose
-    // row went (a child's late entry) is found. Pi Durable never gives an id again (its next_id only
-    // grows), so a remembered id names nothing else.
-    db.exec(REMEMBERED_TABLE)
-    const seen = discover(db, root, remembered(db, root))
-    remember(db, root, seen)
-    const steps = purgeSteps(db, root, seen)
+    // Pi Durable never gives an id again (its next_id only grows), so a mark names nothing else.
+    db.exec(MARKS_TABLE)
+    const seen = discover(db, root, marked(db, root))
+    mark(db, root, seen)
+    const steps = [...contentSteps(db, seen), sweepStep(db, root)]
     // Transactions of at most about SLICE_MS each, with a pause between them in which the harness's
     // writes get the lock.
     for (let at = 0; at < steps.length; ) {
@@ -234,28 +203,30 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
         db.exec('ROLLBACK')
         throw error
       }
-      afterSlice?.()
+      hooks?.afterSlice?.()
       sleep(PAUSE_MS)
     }
+    const began = performance.now()
     db.exec('BEGIN IMMEDIATE')
     try {
-      // Found again under the write lock, from what this purge removed too: what was written during
-      // the pauses goes, even into a conversation whose row went in an earlier transaction.
-      const tree = discover(db, root, seen)
-      for (const step of purgeSteps(db, root, tree)) while (step() > 0);
+      // Found again under the write lock, from the root and the marks left: what was written during
+      // the pauses goes too. The sweep has taken the rest, so this is the root and what is late.
+      const tree = discover(db, root, marked(db, root))
+      for (const step of contentSteps(db, tree)) while (step() > 0);
       const ids = list(tree.ids)
       removeDocuments(db, select(db, `SELECT id FROM documents WHERE ${ownedBy(tree)}`))
       removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE conversation_id IN (${ids})`))
       removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${ids})`))
-      db.prepare('DELETE FROM taskto_purge_tree WHERE root = ?').run(root)
+      db.prepare('DELETE FROM taskto_purge_marks WHERE root = ?').run(root)
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
       throw error
     }
+    hooks?.final?.(performance.now() - began)
     // What was deleted is still in the log until it is emptied, and a reader (the harness's, or a
     // watch) can hold it up: then the purge isn't done, and the server asks again.
-    truncateWalWithin(db, path, timeoutMs)
+    truncateWalWithin(db, timeoutMs)
   } finally {
     db.close()
   }
@@ -263,23 +234,25 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
 
 /**
  * The conversations and tasks of each purge that has begun and not ended, by its root: the
- * sidecar's own table in Pi Durable's database, which Pi Durable doesn't read. Its rows go in the
+ * sidecar's own table in Pi Durable's database, which Pi Durable doesn't read. done: the row it
+ * names is gone, and the mark waits for the sweep's second look. The root's marks go in the
  * transaction that ends the purge.
  */
-const REMEMBERED_TABLE = `CREATE TABLE IF NOT EXISTS taskto_purge_tree (
+const MARKS_TABLE = `CREATE TABLE IF NOT EXISTS taskto_purge_marks (
   root INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('conversation', 'task')),
   id   INTEGER NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
   PRIMARY KEY (root, kind, id)
 ) STRICT`
 
-/** How many ids one of remember's transactions writes. */
-const REMEMBER_CHUNK = 2000
+/** How many ids one of mark's transactions writes. */
+const MARK_CHUNK = 2000
 
-// The tree an earlier, unfinished purge of root remembered.
-function remembered(db: DatabaseSync, root: number): Tree {
+// The tree an earlier, unfinished purge of root marked.
+function marked(db: DatabaseSync, root: number): Tree {
   const tree: Tree = { ids: new Set(), taskIds: new Set() }
-  for (const row of db.prepare('SELECT kind, id FROM taskto_purge_tree WHERE root = ?').all(root) as {
+  for (const row of db.prepare('SELECT kind, id FROM taskto_purge_marks WHERE root = ?').all(root) as {
     kind: string
     id: number | bigint
   }[]) {
@@ -288,18 +261,18 @@ function remembered(db: DatabaseSync, root: number): Tree {
   return tree
 }
 
-// Remembers tree's ids for root, in short transactions with pauses between them.
-function remember(db: DatabaseSync, root: number, tree: Tree): void {
+// Marks tree's conversations and tasks for root, in short transactions with pauses between them.
+function mark(db: DatabaseSync, root: number, tree: Tree): void {
   const all = [
     ...[...tree.ids].map((id) => ['conversation', id] as const),
     ...[...tree.taskIds].map((id) => ['task', id] as const),
   ]
-  for (let i = 0; i < all.length; i += REMEMBER_CHUNK) {
-    const chunk = all.slice(i, i + REMEMBER_CHUNK)
+  for (let i = 0; i < all.length; i += MARK_CHUNK) {
+    const chunk = all.slice(i, i + MARK_CHUNK)
     db.exec('BEGIN IMMEDIATE')
     try {
       const values = chunk.map(([kind, id]) => `(${root}, '${kind}', ${id})`).join(', ')
-      db.exec(`INSERT OR IGNORE INTO taskto_purge_tree (root, kind, id) VALUES ${values}`)
+      db.exec(`INSERT OR IGNORE INTO taskto_purge_marks (root, kind, id) VALUES ${values}`)
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
@@ -345,61 +318,89 @@ function ownedBy(tree: Tree): string {
     OR (scope_kind = 'task' AND owner_id IN (${list(tree.taskIds)})))`
 }
 
-/**
- * The steps that delete tree's rows but the root's own row and lifecycle document, each a chunk at
- * a time in the transaction that is open, saying how many rows it removed (0: that step is done).
- */
-function purgeSteps(db: DatabaseSync, root: number, tree: Tree): (() => number)[] {
-  const ids = list(tree.ids)
-  const docs = `SELECT id FROM documents WHERE ${ownedBy(tree)} AND kind <> '${LIFECYCLE_KIND}'`
-  const each = (query: string, remove: (chunk: number[]) => void) => () => {
+/** A step: one chunk in the transaction that is open, saying how many rows it took (0: done). */
+type Step = () => number
+
+/** A step that deletes, a chunk at a time, what query (of rowids or ids) finds. */
+function each(db: DatabaseSync, query: string, remove: (chunk: number[]) => void): Step {
+  return () => {
     const chunk = select(db, `${query} LIMIT ${CHUNK}`)
     remove(chunk)
     return chunk.length
   }
-  // A conversation of the tree that is about to go, with whatever of its was written late.
-  const removeConversations = (chunk: number[]) => {
-    const of = list(chunk)
-    removeDocuments(
-      db,
-      select(db, `SELECT id FROM documents WHERE scope_kind = 'conversation' AND owner_id IN (${of})`),
-    )
-    removeRows(db, 'submissions', select(db, `SELECT id FROM submissions WHERE conversation_id IN (${of})`))
-    removeRows(db, 'entries', select(db, `SELECT id FROM entries WHERE conversation_id IN (${of})`))
-    removeRows(db, 'conversations', chunk)
-  }
+}
+
+/** The steps that delete what tree's conversations and tasks said: all but the root's lifecycle. */
+function contentSteps(db: DatabaseSync, tree: Tree): Step[] {
+  const ids = list(tree.ids)
+  const docs = `SELECT id FROM documents WHERE ${ownedBy(tree)} AND kind <> '${LIFECYCLE_KIND}'`
   return [
-    each(`SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (c) =>
+    each(db, `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (c) =>
       removeRows(db, 'document_revisions', c, false),
     ),
-    each(docs, (c) => removeDocuments(db, c)),
-    each(`SELECT id FROM submissions WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'submissions', c)),
-    each(`SELECT id FROM entries WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'entries', c)),
-    // The tree from the bottom up: tasks that started no conversation still there, then the
-    // conversations (but the root) that have no task left, until neither is left.
-    () => {
-      const tasks = select(
-        db,
-        `SELECT id FROM tasks WHERE conversation_id IN (${ids})
-          AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.owner_task_id = tasks.id) LIMIT ${CHUNK}`,
-      )
-      if (tasks.length > 0) {
-        removeDocuments(
-          db,
-          select(db, `SELECT id FROM documents WHERE scope_kind = 'task' AND owner_id IN (${list(tasks)})`),
-        )
-        removeRows(db, 'tasks', tasks)
-        return tasks.length
-      }
-      const conversations = select(
-        db,
-        `SELECT id FROM conversations WHERE id IN (${ids}) AND id <> ${root}
-          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id = conversations.id) LIMIT ${CHUNK}`,
-      )
-      removeConversations(conversations)
-      return conversations.length
-    },
+    each(db, docs, (c) => removeDocuments(db, c)),
+    each(db, `SELECT id FROM submissions WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'submissions', c)),
+    each(db, `SELECT id FROM entries WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'entries', c)),
   ]
+}
+
+/**
+ * The sweep of root's marks, but the root's own, in batches of SWEEP. First pass (marks not done):
+ * what each started is marked (so it is still found once its parent is gone), what is left of its
+ * records goes a chunk at a time, and then its row, and its mark is done. Second pass (once none is
+ * left to do): anything that still refers to a done mark (a record written late) is taken, or
+ * marked if it is a conversation or a task, and then the marks are forgotten.
+ */
+function sweepStep(db: DatabaseSync, root: number): Step {
+  const mine = `root = ${root} AND NOT (kind = 'conversation' AND id = ${root})`
+  return () => {
+    let batch = db
+      .prepare(
+        `SELECT rowid AS r, kind, id FROM taskto_purge_marks WHERE ${mine} AND done = 0 ORDER BY rowid LIMIT ${SWEEP}`,
+      )
+      .all() as { r: number | bigint; kind: string; id: number | bigint }[]
+    const removing = batch.length > 0
+    if (!removing) {
+      batch = db
+        .prepare(`SELECT rowid AS r, kind, id FROM taskto_purge_marks WHERE ${mine} ORDER BY rowid LIMIT ${SWEEP}`)
+        .all() as typeof batch
+    }
+    if (batch.length === 0) return 0
+    const convs = list(batch.filter((m) => m.kind === 'conversation').map((m) => Number(m.id)))
+    const tasks = list(batch.filter((m) => m.kind === 'task').map((m) => Number(m.id)))
+    // What was started under them, late too, is marked before they go, so it is still found.
+    const started = db
+      .prepare(`INSERT OR IGNORE INTO taskto_purge_marks (root, kind, id)
+        SELECT ?, 'task', id FROM tasks WHERE conversation_id IN (${convs})
+        UNION ALL SELECT ?, 'conversation', id FROM conversations WHERE owner_task_id IN (${tasks})`)
+      .run(root, root)
+    if (Number(started.changes) > 0) return Number(started.changes) // the first pass takes them
+    // What is left of their records, a chunk at a time.
+    const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${convs}))
+      OR (scope_kind = 'task' AND owner_id IN (${tasks}))`
+    for (const step of [
+      each(db, `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (c) =>
+        removeRows(db, 'document_revisions', c, false),
+      ),
+      each(db, docs, (c) => removeDocuments(db, c)),
+      each(db, `SELECT id FROM submissions WHERE conversation_id IN (${convs})`, (c) =>
+        removeRows(db, 'submissions', c),
+      ),
+      each(db, `SELECT id FROM entries WHERE conversation_id IN (${convs})`, (c) => removeRows(db, 'entries', c)),
+    ]) {
+      const n = step()
+      if (n > 0) return n
+    }
+    const rows = batch.map((m) => Number(m.r)).join(',')
+    if (removing) {
+      removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE id IN (${tasks})`))
+      removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${convs})`))
+      db.exec(`UPDATE taskto_purge_marks SET done = 1 WHERE rowid IN (${rows})`)
+    } else {
+      db.exec(`DELETE FROM taskto_purge_marks WHERE rowid IN (${rows})`)
+    }
+    return batch.length
+  }
 }
 
 // The tree of root's purge as the database has it now, from root and, when given, the conversations
@@ -481,6 +482,9 @@ export const HARNESS_DB_OPTIONS = { walAutoCheckpointPages: 0 } as const
 /** How often the checkpointer copies the log into the database. */
 const CHECKPOINT_EVERY_MS = 1000
 
+/** How many checkpoints in a row may fail before the checkpointer's thread is started again. */
+const CHECKPOINT_FAILURES = 10
+
 const CHECKPOINTER = 'taskto.checkpointer'
 
 type CheckpointerJob = { path: string; everyMs: number; stop: Int32Array }
@@ -489,7 +493,8 @@ type CheckpointerJob = { path: string; everyMs: number; stop: Int32Array }
  * Copies the log of the database at path into the database by a passive checkpoint every everyMs,
  * on a worker thread of its own (writers go on beside it, and it never waits for readers), until the
  * function it returns is called. It stands in for the commits' own checkpoints, which
- * HARNESS_DB_OPTIONS turns off. A thread that fails is started again.
+ * HARNESS_DB_OPTIONS turns off. A checkpoint that fails is logged and counted; a thread whose
+ * checkpoints keep failing, or that fails, is started again.
  */
 export function startCheckpointer(path: string, everyMs = CHECKPOINT_EVERY_MS): () => Promise<void> {
   const stop = new Int32Array(new SharedArrayBuffer(4))
@@ -516,9 +521,19 @@ export function startCheckpointer(path: string, everyMs = CHECKPOINT_EVERY_MS): 
 
 function checkpoint(job: CheckpointerJob): void {
   const db = new DatabaseSync(job.path, { timeout: 0 })
+  let failures = 0
+  let failed = 0
   try {
     while (Atomics.load(job.stop, 0) === 0) {
-      backlog(db)
+      try {
+        passive(db)
+        failures = 0
+      } catch (error) {
+        failures++
+        failed++
+        console.error(`checkpoint failed (${failed} so far, ${failures} in a row): ${(error as Error).message}`)
+        if (failures >= CHECKPOINT_FAILURES) throw new Error(`${failures} checkpoints in a row failed`)
+      }
       Atomics.wait(job.stop, 0, 0, job.everyMs)
     }
   } finally {
