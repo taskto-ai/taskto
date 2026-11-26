@@ -39,7 +39,8 @@ type Fault struct {
 	Kept bool
 
 	method, path string
-	times        int // 0 means once; negative means forever
+	when         func(*http.Request) bool // a further condition on the request (nil: none)
+	times        int                      // 0 means once; negative means forever
 }
 
 // ServerError is Stripe's 500.
@@ -112,8 +113,18 @@ func (f Fault) On(method, pathPrefix string) Fault {
 	return f
 }
 
+// When restricts the fault further to the requests cond accepts: a list's later pages only (those with
+// starting_after), say, or a Payment Link's retrieval and not its line items.
+func (f Fault) When(cond func(*http.Request) bool) Fault {
+	f.when = cond
+	return f
+}
+
 func (f Fault) matches(r *http.Request) bool {
 	if f.method != "" && f.method != r.Method {
+		return false
+	}
+	if f.when != nil && !f.when(r) {
 		return false
 	}
 	return len(r.URL.Path) >= len(f.path) && r.URL.Path[:len(f.path)] == f.path

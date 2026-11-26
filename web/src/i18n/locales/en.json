@@ -1188,6 +1188,7 @@
     "integration_link_lookup_pending": "The payment provider didn’t say whether it made this payment link. The server keeps looking for it, and makes no other, for a few hours.",
     "integration_condition_changed": "The record was changed and no longer meets this action’s condition, so no payment link was made. Nobody needs to approve anything: change the record back, or run the action when it qualifies.",
     "integration_nothing_to_confirm": "This payment isn’t waiting for a decision about an unknown outcome.",
+    "integration_link_not_confirmable": "A link of this payment was already seen at the payment provider, or an earlier try of it was already accounted for, so confirming that none exists can’t allow a new one: a second link could be paid twice. Check the payment provider’s account and reconcile this payment there.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
     "app_icon_label": "The icon “{component}” is in a button or a trigger that shows only icons, so it needs a name: give it an accessibility label.",

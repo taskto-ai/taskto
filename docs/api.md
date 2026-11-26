@@ -230,6 +230,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
+| `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
@@ -3784,7 +3785,9 @@ asked again, never a new one. Anything else, any other `4xx` or `5xx`, a timeout
 a crash, leaves the key's **outcome unknown**, and the reference then never gets a new key by itself:
 each try looks for the key's object by its token and asks again under the same key while the provider
 keeps it (the provider answers with what the first call made), with a growing wait
-(`integration_link_lookup_pending`) that failed reads don't end; if nothing resolves it within **6
+(`integration_link_lookup_pending`) that no failed read ends early or counts against the entry's tries,
+whatever the failure (the provider down, the key refused, an answer that can't be read; the read of the
+key's account, each page of the lookup and the read of an object's state alike); if nothing resolves it within **6
 hours** the entry fails with `integration_outcome_unknown`, and an admin checks the provider's account
 and either has the entry retried once the link is visible (which adopts it) or confirms that none exists
 ([below](#confirm-that-no-payment-link-exists)), the only way to a new key. Nothing is saved as the link
@@ -4409,7 +4412,8 @@ have no object, in the spaces the admin manages (another person's private space 
 "waiting", "can_confirm"}]}`. `effect_id` is the entry's number, as in the app's effects; `amount` is
 decimal text with the currency's decimals; `since` is when the outcome became unknown. `waiting` is
 true while the server still looks (nothing is asked of the admin); `can_confirm` is true once the
-entry failed with `integration_outcome_unknown`. `403` for a member, `404` for another workspace's
+entry failed with `integration_outcome_unknown`, and only if nothing of the reference was ever seen at the
+provider and none of its keys was resolved (otherwise a confirmation is refused, see below). `403` for a member, `404` for another workspace's
 integration.
 
 ### Confirm that no payment link exists
@@ -4425,8 +4429,14 @@ the user who acted with their access then. Recorded in the audit log
 (`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
 integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
 entry isn't waiting for this decision (not failed with that code, the link was found, or it was
-confirmed already: a second request never allows a second key). If the new call too has an unknown
-outcome, the cycle starts again and needs another confirmation. The flow is in
+confirmed already: a second request never allows a second key); `409 integration_link_not_confirmable`
+when the server saw something of the reference that contradicts "none exists" (any of its keys has an
+object on record: a call's answer named one, or a lookup found one by the key's token, and its state
+could not be read) or any of its keys was already resolved (an earlier key whose object was seen
+expired, or that an earlier confirmation abandoned). Both are checked in the transaction that allows the
+new key. So a confirmation is possible only once per reference, for its first key: if the new key's call
+too has an unknown outcome, the entry fails with `integration_outcome_unknown` again and a person
+reconciles it in the provider's account. The flow is in
 [integrations.md](integrations.md#payment-links).
 
 ### `DELETE /api/workspaces/{workspace}/integrations/{integration}`

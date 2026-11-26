@@ -380,7 +380,10 @@ write.
     key is never called again, since Stripe may have forgotten it and would run it a second time.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
-    and a failed read of whose account the key is, leave the outcome as it was. The entry waits half
+    and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
+    whatever the failure, the key refused (`401`) included: any page of the lookup, a Payment Link's
+    line items, the read of the account and of the state alike. An object a lookup finds is kept on its
+    key before its state is read, as an answer's is. The entry waits half
     the time the outcome has been unknown, at least 30 seconds and at most 30 minutes (it shows
     `integration_link_lookup_pending`; these waits don't use up its tries), for at most **6 hours**
     from when the outcome became unknown (`outcomeWait`), and nothing ends that early.
@@ -395,8 +398,15 @@ write.
       [api.md](api.md#confirm-that-no-payment-link-exists)), the only way to a new key for such a
       reference. The key is recorded as abandoned (its record stays), **exactly one** new key is
       allowed, the entry is queued again as it was (the person who acted, with the access they have
-      then), and the confirmation is in the audit log (`integration_new_link_allowed`). If the new
-      key's call too has an unknown outcome, the cycle starts again and needs another confirmation. The
+      then), and the confirmation is in the audit log (`integration_new_link_allowed`). It is refused
+      (`integration_link_not_confirmable`), in the transaction that would allow the new key, when the
+      server saw anything of the reference that contradicts "none exists" (a key with an object on
+      record: an answer named one, or a lookup found one) or any key of it was already resolved (seen
+      expired, or abandoned by an earlier confirmation). So it is possible once per reference, for its
+      first key: if the new key's call too has an unknown outcome, the entry fails with
+      `integration_outcome_unknown` again and a person reconciles it in the Stripe account. A key also
+      moves on by itself (from one seen expired) only while every key of the reference left nothing a
+      payer can use. The
       admins' list of what waits for a decision is
       `GET …/integrations/{integration}/payment-links/unresolved`. Both routes cover only the spaces the
       admin manages (a private space's payments are not another admin's to decide).
