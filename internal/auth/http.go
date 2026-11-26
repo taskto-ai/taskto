@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +72,10 @@ type Me struct {
 	// IsOperator is whether the user is an admin of the workspace the server's setup made: only
 	// then does the web app show what belongs to the whole server (backups, email).
 	IsOperator bool `json:"is_operator"`
+	// Session is the public id of the login this reply is for (the one a login just made, or the one
+	// the request came with), as GET /api/me/sessions names it; empty for an access token. The web
+	// app compares it to know a login is still the same one, not only the same account.
+	Session string `json:"session"`
 }
 
 func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u User) {
@@ -78,7 +84,27 @@ func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u 
 		serverError(w, r, err)
 		return
 	}
+	// A login that was just made (its cookie is on this answer) is the one the reply is for.
+	for _, ck := range (&http.Response{Header: w.Header()}).Cookies() {
+		if ck.Name == s.cookieName() && ck.Value != "" {
+			if reply.Session, err = s.sessionPublicID(r.Context(), ck.Value); err != nil {
+				serverError(w, r, err)
+				return
+			}
+		}
+	}
 	writeJSON(w, status, reply)
+}
+
+// sessionPublicID is the public id of the live session whose token this is, or "" when none is.
+func (s *Service) sessionPublicID(ctx context.Context, token string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT public_id FROM sessions WHERE token_hash = ? AND expires_at > ?`,
+		hashToken(token), stamp(s.now())).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 func (s *Service) meOf(r *http.Request, u User) (Me, error) {
@@ -102,7 +128,21 @@ func (s *Service) meOf(r *http.Request, u User) (Me, error) {
 	if err != nil {
 		return Me{}, err
 	}
-	return Me{User: MeUser{User: u, Locale: locale, TimeZone: zone}, Workspaces: ws, CanCreateWorkspace: can, IsOperator: operator}, nil
+	session := ""
+	if token := s.sessionToken(r); token != "" {
+		if _, isBearer := BearerToken(r); !isBearer {
+			if session, err = s.sessionPublicID(r.Context(), token); err != nil {
+				return Me{}, err
+			}
+		}
+	}
+	return Me{
+		User:               MeUser{User: u, Locale: locale, TimeZone: zone},
+		Workspaces:         ws,
+		CanCreateWorkspace: can,
+		IsOperator:         operator,
+		Session:            session,
+	}, nil
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -353,14 +393,44 @@ func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
 	audit.Log(r.Context(), s.db, e)
 }
 
+// Logging out revokes the session the request carries, and that is all: the answer never
+// expires the browser's session cookie. The cookie is the browser's, shared by its tabs, and by the
+// time an answer arrives another tab may have signed in and replaced it; an expiring Set-Cookie
+// can't say "only if it is still this session", so it would sign that newer login out. The revoked
+// token left in the cookie is refused like any unknown one, and the next login replaces it. (The
+// single sign-on cookie follows the same rule.)
+//
+// A body may name the login the sign-out is for (`{"session": "<public id>"}`, as /api/me names it):
+// it is then revoked only if it is the login the request carries. A sign-out tried again after its
+// first answer was lost, from a tab whose browser has signed in again since (the same account in
+// another tab), must never revoke that newer login: it is refused (409 session_account_changed),
+// nothing is revoked, and the page says the account changed.
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Session string `json:"session"`
+	}
+	if r.ContentLength != 0 && !readJSON(w, r, &body) {
+		return
+	}
 	if token := s.sessionToken(r); token != "" {
+		if body.Session != "" {
+			current, err := s.sessionPublicID(r.Context(), token)
+			if err != nil {
+				serverError(w, r, err)
+				return
+			}
+			// A login that is over already (revoked, expired) has nothing left to end: 204, as without
+			// a session.
+			if current != "" && current != body.Session {
+				writeError(w, http.StatusConflict, apierr.CodeAccountChanged, "this browser's login is not the one this sign-out was for")
+				return
+			}
+		}
 		if err := s.endSession(r.Context(), token); err != nil {
 			serverError(w, r, err)
 			return
 		}
 	}
-	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

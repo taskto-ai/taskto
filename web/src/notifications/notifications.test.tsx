@@ -267,7 +267,7 @@ test('a device that lost its permission is forgotten, not registered', async () 
   expect(localStorage.getItem('taskto.push')).toBeNull()
 })
 
-test('signing out removes this device first, while the session can still say whose it is', async () => {
+test('signing out removes this device once the server confirmed it, which dropped the session’s subscription itself', async () => {
   const sub = fakeSub()
   pushBrowser({ permission: 'granted', subscription: sub })
   localStorage.setItem('taskto.push', '1')
@@ -288,11 +288,13 @@ test('signing out removes this device first, while the session can still say who
     fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
   })
   await screen.findByRole('heading', { name: 'Log in' })
+  // The server first; it drops the session's subscription with the session, so no request removes
+  // it; then the browser's own subscription ends.
   const order = calls
     .filter((c) => c.method === 'DELETE' || c.path === '/api/logout')
     .map((c) => `${c.method} ${c.path}`)
-  expect(order).toEqual(['DELETE /api/me/push/subscription', 'POST /api/logout'])
-  expect(sub.unsubscribe).toHaveBeenCalled()
+  expect(order).toEqual(['POST /api/logout'])
+  await waitFor(() => expect(sub.unsubscribe).toHaveBeenCalled())
   expect(localStorage.getItem('taskto.push')).toBeNull()
 })
 

@@ -89,6 +89,14 @@ type CLIWorkers interface {
 	Forget(ctx context.Context, user int64) error
 }
 
+// Browsers is what the purge needs of the agent browsers: browser.Browsers.
+type Browsers interface {
+	// Forget stops the account's browsers, closes their live views, refuses to start new ones while
+	// it runs and removes their files. It returns nil only when the processes are gone and the files
+	// are removed, and is safe to call again.
+	Forget(ctx context.Context, user int64) error
+}
+
 // Options are what a Service needs.
 type Options struct {
 	// DB is the migrated database.
@@ -110,6 +118,10 @@ type Options struct {
 	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
 	// CLI workers are off: that step stays recorded for when they are on.
 	CLI CLIWorkers
+	// Browsers stops the account's agent browsers and removes their profile (a durable step, tried
+	// again until it is done). Nil when this server has no agent browser to stop: local mode with the
+	// browser off, or CLI workers off.
+	Browsers Browsers
 	// Clock is the time; time.Now by default.
 	Clock func() time.Time
 }
@@ -329,6 +341,10 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 			if err := s.record(ctx, tx, userID, cleanAgentConversation, strconv.FormatInt(o.AgentID, 10)); err != nil {
 				return err
 			}
+		}
+		// The browsers first: the CLI home holds their directory, and is left until they are gone.
+		if err := s.record(ctx, tx, userID, cleanBrowser, strconv.FormatInt(userID, 10)); err != nil {
+			return err
 		}
 		return s.record(ctx, tx, userID, cleanCLIHome, strconv.FormatInt(userID, 10))
 	})

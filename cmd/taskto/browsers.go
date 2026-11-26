@@ -11,21 +11,29 @@ import (
 	"taskto.ai/taskto/internal/config"
 )
 
-// startBrowsers returns the agent browser (docs/agent-browser.md) for cfg, and a stop that
+// startBrowsers returns the agent browser (docs/agent-browser.md) for cfg, the browsers a deleted
+// account's purge stops and removes the files of (nil when there are none to stop), and a stop that
 // ends every browser. It runs where the CLIs do and under the same rule (cli.Usable):
 //
 //   - in container mode, in the CLI worker, as each user's Unix user (a Remote client);
 //   - in local mode, in this process, as the server's own OS user, each user's browser in
 //     their CLI directory (<data>/cli/u<id>/browser), with Chromium's sandbox on.
 //
-// Off (the default), its API and tools say so.
-func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.Service, func()) {
+// Off (the default), its API and tools say so. A container worker keeps its browsers whatever the
+// server's setting (one may still run from when it was on, and its files are in the worker), so the
+// purge of an account reaches it anyway.
+func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.Service, browser.Browsers, func()) {
+	container := cli.Mode() == string(cliaccounts.Container)
 	if !cfg.Browser {
-		return agentbrowser.New(nil, nil), func() {}
+		if container {
+			return agentbrowser.New(nil, nil), browser.NewRemote(cfg.CLIWorkerSocket), func() {}
+		}
+		return agentbrowser.New(nil, nil), nil, func() {}
 	}
-	if cli.Mode() == string(cliaccounts.Container) {
+	if container {
 		slog.Info("agent browser on, in the CLI worker")
-		return agentbrowser.New(browser.NewRemote(cfg.CLIWorkerSocket), cli.Usable), func() {}
+		remote := browser.NewRemote(cfg.CLIWorkerSocket)
+		return agentbrowser.New(remote, cli.Usable), remote, func() {}
 	}
 	bins := browser.FindBins(cfg.BrowserChromium)
 	m := browser.NewManager(browser.Config{Host: &browser.LocalHost{
@@ -37,5 +45,5 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 	if !m.Available(browser.Testing) {
 		slog.Warn("agent browser: no Chromium found (chromium on the PATH, or -browser-chromium)")
 	}
-	return agentbrowser.New(m, cli.Usable), m.Close
+	return agentbrowser.New(m, cli.Usable), m, m.Close
 }

@@ -27,6 +27,7 @@ import {
   watchAccount,
 } from './account'
 import { SchemaTooNew } from './idb'
+import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
 import { type Approval, type Download, OfflineStore, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
@@ -195,7 +196,8 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   const attempt = (async () => {
     await teardown(false)
     // A browser whose marker can't be trusted opens no database offline.
-    if (!name && (await offlineRefused())) {
+    // Nor one whose sign-out is certain and not finished (pendingSignOut.ts): what it held is going.
+    if (!name && ((await offlineRefused()) || signOutPending(user))) {
       set({ runtime: null, problem: 'unavailable', foreign: null })
       return state
     }
@@ -323,13 +325,24 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // was changed, and the person is asked again. A database that can't be opened is not looked at
 // here: the person already chose what happens to it.
 export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
-  if (opening) await opening.catch(() => {})
-  const users = [...new Set([state.runtime?.user, user].filter((n): n is number => n !== undefined))]
-  return settleUsers(users, approved)
+  return checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false))
 }
 
-async function settleUsers(users: number[], approved: Approval): Promise<UnsentRef[]> {
+// The same question as `settle`, only asked: the unsent records of `user` that the person didn't
+// agree to as they are now, with nothing changed on the device. A sign-out asks this before it is
+// certain; what it agreed to is discarded only after the server confirmed the sign-out (deactivate).
+export async function stillAgreed(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  return checkUnsent(user, (store) => store.unapproved(approved))
+}
+
+async function checkUnsent(
+  user: number | undefined,
+  ask: (store: OfflineStore) => Promise<UnsentRef[]>,
+): Promise<UnsentRef[]> {
+  if (opening) await opening.catch(() => {})
   const runtime = state.runtime
+  // Only the account signing out (`user`), never another that is open here meanwhile.
+  const users = user !== undefined ? [user] : runtime ? [runtime.user] : []
   const left: UnsentRef[] = []
   for (const id of users) {
     let store = runtime?.user === id ? runtime.store : undefined
@@ -340,7 +353,7 @@ async function settleUsers(users: number[], approved: Approval): Promise<UnsentR
       continue
     }
     try {
-      left.push(...(await store.retireOrKeepUnsent(approved, false)))
+      left.push(...(await ask(store)))
     } catch {
       // Not read: the person's choice (they were told) decides, as it did.
     } finally {
@@ -351,7 +364,9 @@ async function settleUsers(users: number[], approved: Approval): Promise<UnsentR
 }
 
 async function teardown(purge: boolean, user?: number): Promise<void> {
-  const runtime = state.runtime
+  // The runtime open here is let go only if it is the account signing out's: another's (signed in
+  // since) is left as it is.
+  const runtime = user === undefined || state.runtime?.user === user ? state.runtime : null
   if (runtime) {
     runtime.stop()
     if (purge) {
@@ -393,7 +408,7 @@ export async function deactivate({
   if (opening) await opening.catch(() => {})
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])
-    await teardown(false)
+    await teardown(false, user)
     forgetLast(user)
     return []
   }
@@ -414,7 +429,7 @@ export async function deactivate({
 // are the answer.
 export async function purgeAccount(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
-  const left = await settleUsers([user], approved)
+  const left = await settle(user, approved)
   if (left.length > 0) return left
   // Looked at again after the waits above: the one in use may have changed.
   const runtime = state.runtime

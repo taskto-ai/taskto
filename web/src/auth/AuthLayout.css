@@ -141,6 +141,13 @@
     margin-block: auto;
   }
 
+  /* Signing out: the spinner beside what is happening. */
+  .ui-auth-signing-out {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
   /* On a touch screen a button is the touch target's height, and so is the field: the Show button
      keeps the whole 44px to tap, while what it draws (its hover fill and its focus ring) keeps a
      space's clearance inside the field's edges, not over them. */

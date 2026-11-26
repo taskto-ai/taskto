@@ -39,7 +39,7 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
     const since = beginDeletion()
     e.preventDefault()
     let reply: DeletionReply | undefined
-    const ok = await deleting.run(async () => {
+    await deleting.run(async () => {
       reply = await api<DeletionReply>('/api/me/deletion', {
         method: 'POST',
         // The account whose form this is: a tab left open while another account signed in here
@@ -48,7 +48,9 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
         body: s?.method === 'password' ? { password, ...(s.two_factor ? { code } : {}) } : {},
       })
     })
-    if (ok && reply) {
+    // From the server's answer itself, not from the form's: the form may be gone by now (useAction
+    // then says nothing more), and what the device kept of the deleted account goes all the same.
+    if (reply) {
       // The server accepted the deletion and ended this session. What this device kept of the
       // account (drafts, the offline database with its downloads and queue) will never be sent or
       // read again, and is gone now, from this answer and for the account whose form this is: a

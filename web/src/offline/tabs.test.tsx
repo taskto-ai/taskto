@@ -13,6 +13,7 @@ import { fakeFetch } from '../test/fakes'
 import { holdItem, keepServer, releaseItem, retryItem } from './choices'
 import { useOfflineData } from './hooks'
 import { OutboxList } from './OutboxList'
+import { recordSignOut, settleSignOut } from './pendingSignOut'
 import { activate, deactivate, type Runtime, rememberUser, setSyncDeps } from './runtime'
 import { OfflineStore, type OutboxItem, scopeKey, seenAs, seenOf } from './store'
 import { SyncEngine } from './sync'
@@ -577,4 +578,40 @@ test('a “Discard” question opened from Review, closed because another tab to
   await screen.findByText(/question about discarding a record was closed/)
   expect(screen.queryByRole('button', { name: 'Yes, discard' })).toBeNull()
   expect(await a.store.listItems()).toHaveLength(1)
+})
+
+// A sign-out of the account, certain in another tab and not resolved yet (the server hasn't
+// confirmed it, or the device isn't cleared): this tab's queue sends nothing for the account
+// meanwhile, neither claiming an item nor sending one it had claimed already.
+test("another tab's sign-out of the account keeps this tab's queue from claiming anything", async () => {
+  const { a } = await twoTabs({ announce: false })
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  recordSignOut(7, 'login-1', false, new Map())
+  await a.runtime.engine.run()
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+  expect((await a.store.listItems())[0]?.state).toBe('queued')
+
+  // The person went back to the app (the same login): the queue goes on.
+  settleSignOut(7)
+  await a.runtime.engine.run()
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+})
+
+test("a sign-out made in another tab while this tab's queue had claimed an item stops it right before it is sent", async () => {
+  const { a } = await twoTabs({ announce: false })
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  // The other tab's sign-out becomes certain just after this tab claimed the item.
+  const claim = a.store.claimItem.bind(a.store)
+  a.store.claimItem = async (...args: Parameters<typeof claim>) => {
+    const claimed = await claim(...args)
+    recordSignOut(7, 'login-1', false, new Map())
+    return claimed
+  }
+  await a.runtime.engine.run()
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+  // Let go, not left claimed: it is the next sender's once the sign-out is resolved.
+  expect((await a.store.listItems())[0]?.state).toBe('queued')
+  settleSignOut(7)
 })
