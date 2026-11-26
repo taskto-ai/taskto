@@ -857,7 +857,9 @@ address, the search index's rows for all of it, and the account.
 A private space's files go under the knowledge base's own lock for that space, with the apps'
 photo writes in it held too: a write already under way finishes first, and one that comes after
 is refused as a space that isn't there, so nothing of the space is written again once it is
-removed. The directory is renamed aside in one step and then deleted, so a server that stops in the
+removed. A call that had found the space before the purge is told from a space made later with the
+same number (the database can give a purged space's number again) by its creation time, and its row
+is checked once more under the lock, so it can't make the directory again either. The directory is renamed aside in one step and then deleted, so a server that stops in the
 middle leaves no half-deleted repository at the space's path; the purge's next try deletes what
 was left.
 

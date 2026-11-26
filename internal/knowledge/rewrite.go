@@ -1016,7 +1016,7 @@ func (s *Store) RemoveSpace(sp access.Space) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.removed = true
+	st.removed, st.removedCreated = true, sp.CreatedAt
 	dir := sp.Dir(s.dataDir)
 	leftover := dir + removingSuffix
 	// What an earlier removal renamed and didn't finish deleting, first: the rename below
@@ -1045,9 +1045,9 @@ const removingSuffix = ".removing"
 func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
 	st := s.state(sp.ID)
 	st.mu.RLock()
-	if st.removed {
+	if err := s.admit(st, sp); err != nil {
 		st.mu.RUnlock()
-		return nil, ErrSpaceRemoved
+		return nil, err
 	}
 	return st.mu.RUnlock, nil
 }

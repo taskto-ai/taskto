@@ -325,8 +325,8 @@ func (s *Store) openStaged(sp access.Space) (*staged, *os.File, error) {
 	}
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	if st.removed {
-		return nil, nil, ErrSpaceRemoved
+	if err := s.admit(st, sp); err != nil {
+		return nil, nil, err
 	}
 	root, err := access.OpenRoot(s.dataDir, sp)
 	if err != nil {
@@ -372,8 +372,8 @@ func (s *Store) ensureRepo(sp access.Space) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.removed {
-		return ErrSpaceRemoved
+	if err := s.admit(st, sp); err != nil {
+		return err
 	}
 	r, err := openRepo(s.dataDir, sp, st, true)
 	if err != nil {

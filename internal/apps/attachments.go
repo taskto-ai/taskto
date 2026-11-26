@@ -238,6 +238,13 @@ func (s *Service) filesRoot(ctx context.Context, spaceID int64) (root *os.Root, 
 			return nil, nil, fmt.Errorf("%w: %w", ErrNotFound, err) // a space that is gone has no photos: the API's 404
 		}
 	}
+	// The row once more, inside the hold: a removal that finished between the read above and the
+	// hold has deleted the rows, and the directory must not be made for a space that is gone.
+	var one int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ?`, sp.ID, sp.WorkspaceID).Scan(&one); err != nil {
+		release()
+		return nil, nil, err
+	}
 	root, err = access.OpenRoot(s.dataDir, sp)
 	if err != nil {
 		release()

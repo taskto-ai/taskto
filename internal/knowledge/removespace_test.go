@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"taskto.ai/taskto/internal/access"
@@ -176,5 +177,105 @@ func TestForgetSpaceLetsALaterSpaceUseTheID(t *testing.T) {
 	must[Result](t)(s.Put(ctx, sp, "c.md", []byte("z"), "", alice, ""))
 	if _, err := os.Stat(sp.Dir(dataDir)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A space made later with a purged space's ID is another space, told by its creation time: the
+// mark of the removal doesn't refuse it, whether or not ForgetSpace has run, and does still refuse
+// a call that was authorized for the old one.
+func TestARemovalDoesNotRefuseALaterSpaceWithTheSameID(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	old := writable(1)
+	old.CreatedAt = "2026-01-01T00:00:00.000Z"
+	must[Result](t)(s.Put(ctx, old, "a.md", []byte("x"), "", alice, ""))
+	if err := s.RemoveSpace(old); err != nil {
+		t.Fatal(err)
+	}
+
+	later := writable(1)
+	later.CreatedAt = "2026-02-01T00:00:00.000Z"
+	must[Result](t)(s.Put(ctx, later, "b.md", []byte("y"), "", alice, ""))
+	if got := readText(t, s, later, "b.md", ""); got != "y" {
+		t.Fatalf("read %q", got)
+	}
+	_, err := s.Put(ctx, old, "c.md", []byte("z"), "", alice, "")
+	wantErr(t, err, access.ErrNotFound)
+	if _, err := os.Stat(filepath.Join(old.Dir(dataDir), "c.md")); err == nil {
+		t.Fatal("the stale write landed in the new space")
+	}
+}
+
+// A write that took the space's state before the removal and waits for the lock gets a state
+// that is new when the removal has been forgotten meanwhile (the purge deleted the rows and called
+// ForgetSpace): it is refused by the space's row, and makes nothing.
+func TestAWriteThatOutlivesTheForgettingIsRefusedByTheRow(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	sp := writable(1)
+	sp.CreatedAt = "2026-01-01T00:00:00.000Z"
+	var mu sync.Mutex
+	rows := map[int64]string{1: sp.CreatedAt}
+	s.SetSpaceCheck(func(c access.Space) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		created, ok := rows[c.ID]
+		return ok && (c.CreatedAt == "" || c.CreatedAt == created), nil
+	})
+	must[Result](t)(s.Put(ctx, sp, "a.md", []byte("x"), "", alice, ""))
+
+	reached, proceed := make(chan struct{}), make(chan struct{})
+	s.beforeLock = func(access.Space) {
+		s.beforeLock = nil
+		close(reached)
+		<-proceed
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Put(ctx, sp, "late.md", []byte("from a purged account"), "", alice, "")
+		done <- err
+	}()
+	<-reached
+	if err := s.RemoveSpace(sp); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	delete(rows, 1) // the purge deletes the rows
+	mu.Unlock()
+	s.ForgetSpace(sp)
+	close(proceed)
+
+	wantErr(t, <-done, ErrSpaceRemoved)
+	gone(t, dataDir, sp)
+
+	// The ID is given to a new space: the stale call is refused by its creation time, the new one works.
+	mu.Lock()
+	rows[1] = "2026-03-01T00:00:00.000Z"
+	mu.Unlock()
+	_, err := s.Put(ctx, sp, "late.md", []byte("stale"), "", alice, "")
+	wantErr(t, err, ErrSpaceRemoved)
+	gone(t, dataDir, sp)
+	fresh := writable(1)
+	fresh.CreatedAt = rows[1]
+	must[Result](t)(s.Put(ctx, fresh, "b.md", []byte("y"), "", alice, ""))
+}
+
+// Removing one space touches no other: a sibling, with its documents, uploads and holders, goes on.
+func TestRemovingOneSpaceLeavesTheOthersWorking(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	a, b := writable(1), writable(2)
+	b.WorkspaceID = 2
+	must[Result](t)(s.Put(ctx, a, "a.md", []byte("x"), "", alice, ""))
+	must[Result](t)(s.Put(ctx, b, "b.md", []byte("y"), "", alice, ""))
+	release, err := s.HoldSpace(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveSpace(a); err != nil { // does not wait for b's holder
+		t.Fatal(err)
+	}
+	release()
+	must[Result](t)(s.Put(ctx, b, "c.md", []byte("z"), "", alice, ""))
+	must[Result](t)(s.PutFile(ctx, b, "d.png", bytes.NewReader([]byte("bytes")), "", alice, ""))
+	if got := readText(t, s, b, "b.md", ""); got != "y" {
+		t.Fatalf("read %q", got)
 	}
 }

@@ -221,6 +221,9 @@ type Store struct {
 	// afterMeasure is for tests: it runs once a space's first measurement is made, before it is stored.
 	afterMeasure func(sp access.Space)
 
+	// spaceExists is SetSpaceCheck's; nil for none.
+	spaceExists func(sp access.Space) (bool, error)
+
 	// beforeLock is for tests: it runs in a write after the space's state is taken and before
 	// its lock is, the moment a removal can slip in between.
 	beforeLock func(sp access.Space)
@@ -242,6 +245,10 @@ type spaceState struct {
 	// and so does one that arrives later, so nothing makes the space's directory again. It stays
 	// set, in the Store's map, until ForgetSpace.
 	removed bool
+	// removedCreated is the creation time of the space that was removed (access.Space.CreatedAt;
+	// empty when the caller didn't have it). A space made later with the same ID has another, so
+	// the mark never refuses it, whether or not ForgetSpace has run.
+	removedCreated string
 
 	// cache is the usage the last write published, under cacheMu, which no one holds for
 	// long and a writer may take while holding mu.
@@ -269,6 +276,34 @@ func New(dataDir string, opts Options) *Store {
 
 // MaxFileSize is the largest file the Store accepts.
 func (s *Store) MaxFileSize() int64 { return s.opts.MaxFileSize }
+
+// SetSpaceCheck sets the check of a space's row that every call makes once it has the space's
+// lock: false is a space that is gone, or is not the one the caller was authorized for (a space
+// made later with a purged one's ID), and is refused as ErrSpaceRemoved. It closes the gap that is
+// left when the purge has deleted the rows and the Store has forgotten the removal (ForgetSpace), for
+// a call that resolved the space before: it would make the directory again. It is for the server's
+// start, before the Store is used (access.SpaceRowCheck); without one, the removal's mark is all
+// there is.
+func (s *Store) SetSpaceCheck(exists func(sp access.Space) (bool, error)) { s.spaceExists = exists }
+
+// admit is what every call that has st's lock asks first: it refuses sp when it was removed (and is
+// the space that was: a space made later with the same ID, whose creation time differs, is not
+// refused by the mark) or when its row is gone.
+func (s *Store) admit(st *spaceState, sp access.Space) error {
+	if st.removed && (st.removedCreated == "" || sp.CreatedAt == "" || sp.CreatedAt == st.removedCreated) {
+		return ErrSpaceRemoved
+	}
+	if s.spaceExists != nil {
+		ok, err := s.spaceExists(sp)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrSpaceRemoved
+		}
+	}
+	return nil
+}
 
 func (s *Store) state(spaceID int64) *spaceState {
 	s.mu.Lock()
@@ -922,8 +957,8 @@ func (s *Store) read(sp access.Space, fn func(*repo) error) error {
 	st := s.state(sp.ID)
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	if st.removed {
-		return ErrSpaceRemoved
+	if err := s.admit(st, sp); err != nil {
+		return err
 	}
 	r, err := openRepo(s.dataDir, sp, st, false)
 	if err != nil {
@@ -965,8 +1000,8 @@ func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bo
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.removed {
-		return ErrSpaceRemoved
+	if err := s.admit(st, sp); err != nil {
+		return err
 	}
 	r, err := openRepo(s.dataDir, sp, st, create)
 	if err != nil {

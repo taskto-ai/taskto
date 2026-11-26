@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,4 +54,61 @@ func TestNothingMakesARemovedSpaceAgain(t *testing.T) {
 		t.Fatalf("the sweep: %v", err)
 	}
 	gone("the sweep")
+}
+
+// removalIsWaiting reports whether a goroutine is in knowledge's RemoveSpace, blocked on the space's
+// exclusive lock: observed from the goroutines' stacks, so the test needs no sleep and no hook in
+// production code.
+func removalIsWaiting() bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "knowledge.(*Store).RemoveSpace") && strings.Contains(g, "sync.(*RWMutex).Lock") {
+			return true
+		}
+	}
+	return false
+}
+
+// A finalize that finds its picture isn't one removes the files through the directory it holds. If
+// it entered the space again while a removal waits for it to leave, the second entry would queue
+// behind the removal, which waits for the first: neither could go on.
+func TestCleanupInsideAHeldSpaceDoesNotWaitForAPendingRemoval(t *testing.T) {
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	w.e.s.WithSpaceHolder(kb)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	id := w.start(w.alice, s, a, "photos", 10)
+
+	root, done, err := w.e.s.filesRoot(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() { removed <- kb.RemoveSpace(s) }()
+	deadline := time.After(10 * time.Second)
+	for !removalIsWaiting() {
+		select {
+		case <-deadline:
+			t.Fatal("the removal never waited for the held space")
+		default:
+			runtime.Gosched()
+		}
+	}
+
+	cleaned := make(chan error, 1)
+	go func() { cleaned <- w.e.s.deleteAttachment(context.Background(), id, a.ID, root) }()
+	select {
+	case err := <-cleaned:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cleanup waits for the removal, which waits for the cleanup")
+	}
+	done()
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
 }

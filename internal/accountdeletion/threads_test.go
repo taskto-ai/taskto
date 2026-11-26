@@ -3,6 +3,8 @@ package accountdeletion
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -234,5 +236,26 @@ func TestAPurgedSpaceIDCanBeUsedAgain(t *testing.T) {
 	}
 	if _, err := w.kb.Put(ctx, w.private, "again.md", []byte("a new space with the old ID"), "", by, ""); err != nil {
 		t.Fatalf("the ID of a purged space can't be used again: %v", err)
+	}
+}
+
+// A write that had resolved a private space before its account was purged, and reaches the
+// knowledge base after the purge deleted the rows and forgot the removal, is refused by the
+// space's row and makes nothing: no directory, no repository.
+func TestAWriteThatResolvedASpaceBeforeThePurgeMakesNothingAfterIt(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.kb.SetSpaceCheck(access.SpaceRowCheck(w.db))
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	stale := w.private
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.kb.Put(ctx, stale, "late.md", []byte("from a purged account"), "", by, ""); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("a stale write after the purge: %v", err)
+	}
+	if _, err := os.Stat(stale.Dir(w.dir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the purged space's directory was made again: %v", err)
 	}
 }

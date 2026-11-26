@@ -312,11 +312,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 	// What is to go, read once the purge has begun: nothing new can be made by an account that
 	// is switched off, and what the steps below delete is found again by a retry.
-	private, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
+	private, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
-	shared, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE kind = 'shared' ORDER BY id`)
+	shared, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE kind = 'shared' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -488,7 +488,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 	var out []access.Space
 	for rows.Next() {
 		sp := access.Space{Access: access.Write}
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)
