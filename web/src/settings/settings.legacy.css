@@ -5,25 +5,12 @@
    and their order with the other files is styles.css's (docs/design.md, "Where styles live").
    Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
 
-/* Settings: tabs, panels of rows, forms in a row, and the consent to an endpoint. */
-
-.tt-settings {
-  display: grid;
-  gap: 1rem;
-  max-width: 52rem;
-}
-
-.tt-row-open {
-  display: block;
-}
+/* The inline "are you sure" of offline/ConfirmButton.tsx, which the offline guards draw: the last
+   user of this file, which goes with the sign-in rework. */
 
 .tt-confirm {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-}
-
-.tt-ok {
-  color: var(--tt-success);
 }

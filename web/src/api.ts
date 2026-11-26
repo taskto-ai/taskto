@@ -95,9 +95,14 @@ export function errorText(e: unknown, fieldLabels?: ReadonlyMap<string, string>)
   if (e instanceof ApiError) {
     const key = e.code && `errors.${e.code}`
     if (key && has(key)) {
-      const field = e.params?.field
-      const label = typeof field === 'string' ? fieldLabels?.get(field) : undefined
-      return t(key as Key, label ? { ...e.params, field: label } : e.params)
+      // A field or a secret the server names by its code is said by its label, when the form gave one.
+      const params = { ...e.params }
+      for (const name of ['field', 'secret'] as const) {
+        const code = params[name]
+        const label = typeof code === 'string' ? fieldLabels?.get(code) : undefined
+        if (label) params[name] = label
+      }
+      return t(key as Key, params)
     }
     const said = (e.body as { error?: unknown } | undefined)?.error
     if (typeof said !== 'string') return t('errors.http', { status: String(e.status) })
