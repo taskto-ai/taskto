@@ -16,7 +16,7 @@
 // losing a queue it can't read (the update waits for the person: docs/pwa.md).
 
 import type { OfflineApp } from '../api'
-import { deleteDatabase, type Migration, openDatabase, runTx, type Tx } from './idb'
+import { deleteDatabase, type Migration, openDatabase, runTx, StorageUnavailable, type Tx } from './idb'
 
 export const SCHEMA_VERSION = 2
 
@@ -874,10 +874,17 @@ export class OfflineStore {
   //     server's data), and the answer is which; the unsent are the person's own work, which
   //     they send by signing in as the account again, or discard. (`seal: false`, for an account
   //     still signed in, leaves the database exactly as it is instead.)
-  async retireOrKeepUnsent(approved: Approval = new Map(), seal = true): Promise<UnsentRef[]> {
+  // `still`: asked inside the transaction, right before anything is changed; when it no longer holds
+  // (a newer login of the account started), nothing is, and the answer is nothing unsent.
+  async retireOrKeepUnsent(
+    approved: Approval = new Map(),
+    seal = true,
+    still: () => boolean = () => true,
+  ): Promise<UnsentRef[]> {
     return this.keep([DOWNLOADS, OUTBOX, BLOBS, META], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const items = await outbox.getAll()
+      if (!still()) return []
       const unsent = items.filter((i) => i.state !== 'synced')
       const everyApproved = unsent.every((i) => {
         const shown = approved.get(i.id)
@@ -970,8 +977,11 @@ function probe(name: string): Promise<boolean | undefined> {
       resolve(undefined)
       return
     }
+    // Not there: the creation is undone (an aborted first upgrade leaves no database at all).
     request.onupgradeneeded = (e) => {
-      if (e.oldVersion === 0) made = true
+      if (e.oldVersion !== 0) return
+      made = true
+      request.transaction?.abort()
     }
     request.onsuccess = () => {
       request.result.close()
@@ -981,18 +991,55 @@ function probe(name: string): Promise<boolean | undefined> {
         () => resolve(undefined),
       )
     }
-    request.onerror = () => resolve(undefined)
+    request.onerror = (e) => {
+      e.preventDefault?.()
+      resolve(made ? false : undefined)
+    }
     request.onblocked = () => resolve(undefined)
   })
 }
 
+// How long the account's lock is waited for, and held at most (milliseconds; tests shorten them).
+export const lockTimes = { wait: 10_000, hold: 10_000 }
+
 // One at a time per account, across the browser's tabs: opening its database, and a sign-out's
 // deletion of it. Where the browser has no Web Locks, the deletion still removes only a retired
 // database, which leaves only the moment between that check and the deletion unguarded.
+//
+// Bounded both ways, so nothing waits on it for good: waiting for the lock gives up after a while
+// (the database is said to be unavailable, as one in use by another tab is), and the holder lets it
+// go when its own time is up, whatever its work is still waiting on (a deletion the browser keeps
+// blocked by another connection). What comes after it then meets the browser as it is, as it would
+// without the lock.
 function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
   if (!locks?.request) return work()
-  return locks.request(`taskto-offline-db:${user}`, () => work()) as Promise<T>
+  let granted = false
+  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(lockTimes.wait) : undefined
+  const held = () => {
+    granted = true
+    return withinTime(work(), lockTimes.hold)
+  }
+  return (locks.request(`taskto-offline-db:${user}`, signal ? { signal } : {}, held) as Promise<T>).catch((e) => {
+    if (!granted && signal?.aborted) throw new StorageUnavailable('the offline database is busy in another tab')
+    throw e
+  })
+}
+
+function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new StorageUnavailable('the offline database took too long')), ms)
+    work.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
 }
 
 // Whether the database is retired, or didn't exist (opening it here made it, empty).

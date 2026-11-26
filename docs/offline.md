@@ -580,9 +580,14 @@ signing in is dealt with when it signs in:
   that has ended shields nothing. It keeps the one it learned of last, by when the server was asked
   (a start answered late never puts an older login back), and only a login learned after a sign-out
   was recorded counts as newer than it. Every step of the cleanup asks again, after each wait, whether a
-  newer login started, and settles only its own login's record. Its deletion of the database is
+  newer login started, also inside the transaction that empties the database before it changes
+  anything, and settles only its own login's record. A cleanup that found the database unreadable keeps
+  the sign-out recorded and says so, whatever a later read says. Its deletion of the database is
   **one at a time with opening it** (a Web Lock per account; where the browser has none, only the
-  moment between the check and the deletion is unguarded), and removes only the database it retired:
+  moment between the check and the deletion is unguarded). The lock is waited for, and held, for a
+  bounded time only: a deletion the browser keeps blocked (another connection that never closes)
+  lets it go, and a start that can't have it in time finds the database unavailable, as one in use
+  by another tab is, so a sign-in never hangs on it. The deletion removes only the database it retired:
   one a newer start of the account made again since, with whatever was saved in it, stays. A cleanup
   that couldn't read the database it kept, or couldn't delete it, is not verified clear: it is said,
   and finished at a later start. A tab whose own sign-out another tab finished goes to the login

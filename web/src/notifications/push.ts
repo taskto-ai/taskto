@@ -329,7 +329,8 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   if (sub) {
     // Turning off from here on, for every tab and the next start, until it is done or given up.
     const turn = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-    const pending = `${TURNING_OFF_MARK}${turn}`
+    // Scoped to the account: another account's turn-off, left by a tab that closed, decides nothing here.
+    const pending = `${TURNING_OFF_MARK}${who}:${turn}`
     mark(pending, true)
     write(`${TURNING_OFF}${who}:${turn}:${baseOf(before) ?? ''}`)
     // This turn-off didn't happen: push is as it was before any turn-off began, unless another one is
@@ -337,7 +338,7 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
     const giveUp = () => {
       mark(pending, false)
       const now = read()
-      if (now?.startsWith(TURNING_OFF) && ownerOf(now) === String(who) && !freshMarks(TURNING_OFF_MARK))
+      if (now?.startsWith(TURNING_OFF) && ownerOf(now) === String(who) && !freshMarks(`${TURNING_OFF_MARK}${who}:`))
         write(baseOf(before))
     }
     try {
@@ -353,7 +354,7 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
       // changes isn't kept) may have claimed the browser's subscription while the server answered.
       // It is theirs then, with their flag; this account's turning off is done with the server's answer.
       const now = read()
-      if (now !== null && ownerOf(now) !== String(who) && now !== before) return
+      if (now !== null && ownerOf(now) !== String(who)) return
       if (!(await unsubscribe(sub).catch(() => false))) {
         // The browser kept it: shown as it was, for the person to try again.
         giveUp()
@@ -364,7 +365,10 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
       mark(pending, false)
     }
   }
-  write(null)
+  // Asked again after the waits: a flag another account wrote meanwhile (where nothing orders the
+  // changes) is theirs, and stays.
+  const now = read()
+  if (now === null || ownerOf(now) === String(who) || now === before) write(null)
 }
 
 /**
@@ -428,7 +432,8 @@ async function syncNow(userId: number): Promise<boolean> {
   // The session ended while the browser answered: this device is the next person's to decide.
   if (!s.ok()) return false
   if (!sub || Notification.permission !== 'granted') {
-    write(null)
+    // Only while the flag is still this person's (another tab may have changed it meanwhile).
+    if (read() === String(userId)) write(null)
     return false
   }
   // Asked again after the browser answered: another tab (where nothing orders the changes) may have

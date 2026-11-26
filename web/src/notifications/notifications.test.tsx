@@ -1578,3 +1578,25 @@ test('without Web Locks, a turn-off that fails while an earlier one is still on 
   await first
   expect(localStorage.getItem('taskto.push')).toBe('1')
 })
+
+test("turning push off over another account's stale flag never ends that account's push turned on again meanwhile", async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  // The second person's flag, left from a session that ended with no tab to clean up.
+  localStorage.setItem('taskto.push', '2')
+  let answer: (() => void) | undefined
+  fakeFetch({
+    'DELETE /api/me/push/subscription': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 204 })
+      }),
+  })
+  const off = disablePush()
+  await vi.waitFor(() => expect(answer).toBeDefined())
+  // The second person signs in again in another tab and turns push on with the same subscription.
+  localStorage.setItem('taskto.push', '2')
+  answer?.()
+  await off
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+})

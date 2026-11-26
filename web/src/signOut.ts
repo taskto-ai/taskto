@@ -108,6 +108,9 @@ export async function cleanUpAfterSignOut(
   // This login is over: it shields nothing from here on.
   forgetLogin(user, session)
   try {
+    // The database couldn't be read when it was to go: kept, and not verified clear whatever a later
+    // read says (it was never emptied), so the person is told and a later start finishes it.
+    let unreadable = false
     await bounded(
       (async () => {
         await leavePush(user, still)
@@ -120,10 +123,12 @@ export async function cleanUpAfterSignOut(
         // Records made since the person was asked (another tab of the account), or a database that
         // can't be read now: not theirs to lose unseen, so the database stays, listed for the
         // account's next sign-in to deal with.
+        if (left === 'unreadable') unreadable = true
         if (left === 'unreadable' || left.length > 0) await deactivate({ purge: false, keep: true, user, still })
       })(),
     )
     if (superseded()) return true
+    if (unreadable) return false
     if (!(await bounded(verifiedClear(user, { keep, approved, discardUnreadable })))) return false
     if (superseded()) return true
     settleSignOut(user, session)

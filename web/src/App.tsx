@@ -41,6 +41,7 @@ import {
   confirmSignOut,
   forgetLogin,
   recordSignOut,
+  settleSignOut,
   signOutPending,
   unansweredSignOut,
 } from './offline/pendingSignOut'
@@ -116,18 +117,22 @@ export function App() {
   // person first, `foreign`). Sending what the account queued starts (or goes on, after the
   // session ended and this person signed in again).
   // `asked`: when the server was asked who `me` is (a start, Back); a sign-in's answer is the newest.
-  const claim = useCallback(async (me: Me, asked = Date.now()) => {
+  // `still`: whether the claim is still wanted after its first wait (Back: no other tab finished the
+  // sign-out or signed someone in since); when it isn't, nothing is claimed, and it answers false.
+  const claim = useCallback(async (me: Me, asked = Date.now(), still: () => boolean = () => true) => {
     // A sign-out on this device that didn't finish (its tab closed, its cleanup failed) is finished
     // first, with its person's decision, before any account's offline data opens here; one of this
     // account's under a newer login is not to be, since the person signed in again (signOut.ts).
     await finishUnfinishedSignOuts(me, asked)
+    if (!still()) return false
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
+    return true
   }, [])
   // Whichever way they signed in, an account with no time zone gets this browser's, once.
   const enter = useCallback(
-    async (me: Me, asked?: number) => {
-      await claim(me, asked)
+    async (me: Me, asked?: number, still?: () => boolean) => {
+      if (!(await claim(me, asked, still))) return null
       return reportTimeZone(me)
     },
     [claim],
@@ -138,6 +143,7 @@ export function App() {
   const signIn = useCallback(
     async (me: Me, asked?: number) => {
       const now = await enter(me, asked)
+      if (!now) return
       // The session begins before the shell is drawn, so what the shell starts is in it.
       beginSession(now.user.id)
       setFinishedElsewhere(false)
@@ -272,7 +278,12 @@ export function App() {
         void over(tail, stillHere())
         return
       }
-      if (signedInUser !== null) void leavePush(signedInUser)
+      // Not a push a newer login of the account (another tab) has now.
+      if (signedInUser !== null)
+        void leavePush(signedInUser, () => {
+          const now = browserLogin()
+          return !(now?.user === signedInUser && now.session !== signedInLogin)
+        })
       // What this device kept of an account its person deleted is removed by the page that deleted
       // it (forgetAccount), not here: a session that ends any other way leaves the queue for the
       // next sign-in to send.
@@ -284,8 +295,11 @@ export function App() {
 
   const logIn = useCallback(
     async (me: Me) => {
+      // The sign-in's answer is the newest login, as of now: the language loading after it can't make
+      // it older than one another tab learns meanwhile.
+      const asked = Date.now()
       await setPreferences({ user: me.user.locale ?? null })
-      await signIn(me)
+      await signIn(me, asked)
     },
     [signIn],
   )
@@ -349,6 +363,13 @@ export function App() {
       if (outcome === 'out') {
         if (lapsed && before) forgetLogin(before.user, before.session)
         return over(tail, mine)
+      }
+      // Refused because the browser is the same person's on a newer login: this older one's sign-out
+      // holds nothing of the device (that login's, which its own sign-out will clear), so it doesn't
+      // stand in its way, whatever this page shows by now.
+      if (outcome === 'changed') {
+        const now = browserLogin()
+        if (now?.user === user && now.session !== session) settleSignOut(user, session)
       }
       if (!mine()) return
       // Refused: the browser's login is another one now (another tab). Nothing of this one is shown
@@ -459,10 +480,12 @@ export function App() {
         if (!mine()) return
         if (heard !== undefined) return accountChanged()
         const invite = tail.next.state === 'invite'
-        let now = me
-        if (invite) await claim(me, asked)
-        else now = await enter(me, asked)
-        if (!mine() || heard !== undefined) {
+        // Asked again once earlier sign-outs are finished, before anything of the account is claimed.
+        const wanted = () => mine() && heard === undefined
+        let now: Me | null = me
+        if (invite) now = (await claim(me, asked, wanted)) ? me : null
+        else now = await enter(me, asked, wanted)
+        if (!now || !mine() || heard !== undefined) {
           await deactivate({ purge: false, user: me.user.id }).catch(() => {})
           if (heard === null) forgetLast(me.user.id)
           if (mine()) accountChanged()
@@ -523,10 +546,16 @@ export function App() {
     // A payer needs no session and nothing of the server's: the page is drawn before anything is asked.
     const payment = PAYMENT_PATHS[window.location.pathname]
     if (payment) return setSession({ state: 'payment', outcome: payment })
-    // The login the browser's cookie is, as far as this browser knows: a 401 says it is over.
-    const before = browserLogin()
-    // When this start began asking: a sign-out recorded after it is a newer login's.
-    const started = Date.now()
+    // The login the browser's cookie is, as far as this browser knows, and when this start asked who is
+    // signed in: taken right before /api/me. A 401 says that login is over; a sign-out recorded after
+    // the question is a newer login's.
+    let before = browserLogin()
+    let started = Date.now()
+    const asking = () => {
+      before = browserLogin()
+      started = Date.now()
+      return started
+    }
     const lapsed = async () => {
       if (before) forgetLogin(before.user, before.session)
       // Nobody is signed in: a sign-out that didn't finish here is finished now.
@@ -537,7 +566,7 @@ export function App() {
       if (setup.needed) return setSession({ state: 'setup' })
       if (window.location.pathname === RESET_PATH) return setSession({ state: 'reset' })
       if (window.location.pathname === INVITE_PATH) {
-        const asked = Date.now()
+        const asked = asking()
         const me = await api<Me>('/api/me').catch((e) => {
           if (e instanceof ApiError && e.status === 401) return null
           throw e
@@ -552,7 +581,7 @@ export function App() {
         }
         return setSession({ state: 'invite', me })
       }
-      const asked = Date.now()
+      const asked = asking()
       const me = await api<Me>('/api/me')
       await setPreferences({ user: me.user.locale ?? null })
       if (await resumed(me, { state: 'login' }, asked)) return

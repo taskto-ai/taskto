@@ -583,3 +583,19 @@ test('the invite page with nobody signed in finishes a sign-out left unfinished'
   render(<App />)
   await waitFor(() => expect(pendingOf()).toEqual([]))
 })
+
+test("a sign-out refused because the same person signed in again elsewhere doesn't hold that newer login's queue back", async () => {
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': { status: 409, body: { error: 'not this login', code: 'session_account_changed' } },
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  // Another tab signed the same person in again: its start remembered the newer login.
+  localStorage.setItem('taskto:login', JSON.stringify({ user: 1, session: 's2', at: Date.now() }))
+  await logOut()
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  // The older login's sign-out is not one that holds the account's data or queue.
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+})

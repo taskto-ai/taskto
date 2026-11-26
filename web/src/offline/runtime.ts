@@ -327,12 +327,15 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // was changed, and the person is asked again. A database that can't be opened or read now is not
 // an empty one (`unreadable`): it may hold a record saved after the person was asked, so it is
 // kept, unless they were told it couldn't be read and chose to discard it (`discardUnreadable`).
+// `still`: whether the database is still the departing login's, asked after every wait and inside
+// the transaction before anything changes; when it no longer is, nothing is changed.
 export async function settle(
   user: number | undefined,
   approved: Approval = new Map(),
   discardUnreadable = false,
+  still: () => boolean = () => true,
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
-  const checked = await checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false))
+  const checked = await checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false, still), still)
   return { ...checked, unreadable: checked.unreadable && !discardUnreadable }
 }
 
@@ -356,8 +359,10 @@ export async function unsentState(
 async function checkUnsent(
   user: number | undefined,
   ask: (store: OfflineStore) => Promise<UnsentRef[]>,
+  still: () => boolean = () => true,
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   if (opening) await opening.catch(() => {})
+  if (!still()) return { left: [], unreadable: false }
   // A browser with no IndexedDB at all holds nothing: that is none, not unknown.
   if (typeof indexedDB === 'undefined') return { left: [], unreadable: false }
   const runtime = state.runtime
@@ -375,6 +380,7 @@ async function checkUnsent(
       continue
     }
     try {
+      if (!still()) return { left: [], unreadable: false }
       left.push(...(await ask(store)))
     } catch {
       unreadable = true
@@ -410,7 +416,8 @@ async function teardown(purge: boolean, user?: number, { still = () => true, for
 
 async function purgeDatabase(user: number, { still = () => true, force = false }: PurgeOptions) {
   const outcome = await OfflineStore.deleteRetired(user, { still, force }).catch(() => 'failed' as const)
-  if (outcome === 'removed') writeUsers(readUsers().filter((id) => id !== user))
+  // Asked again: a newer start of the account, once the lock was let go, may have listed it again.
+  if (outcome === 'removed' && still()) writeUsers(readUsers().filter((id) => id !== user))
   // The browser is no longer the account's, unless a newer start of it made the database again (it
   // is that login's) or it is someone's to keep now. A deletion that failed still lets go of the
   // marker: the sign-out is not verified clear, and is finished later.
@@ -451,7 +458,7 @@ export async function deactivate({
   // Deleting is conditional on there being nothing unsent that the person didn't approve: if some
   // appeared since they were asked, everything stays (and is the answer, for the caller to say).
   if (purge) {
-    const { left, unreadable } = await settle(user, approved, discardUnreadable)
+    const { left, unreadable } = await settle(user, approved, discardUnreadable, still)
     if (left.length > 0) return left
     if (unreadable) return 'unreadable'
     if (!still()) return []
