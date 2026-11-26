@@ -46,7 +46,7 @@ func (w *Worker) beginRemoval(ctx context.Context, r *removal) (end func(), err 
 	w.removals = append(w.removals, r)
 	var turns []*Turn
 	for _, t := range w.turns {
-		if r.covers(t.spec.User, t.spec.CLI, t.spec.Slot) {
+		if r.covers(t.spec.User, t.spec.CLI, t.spec.Slot) && !t.Over() {
 			turns = append(turns, t)
 		}
 	}
@@ -75,6 +75,9 @@ func (w *Worker) beginRemoval(ctx context.Context, r *removal) (end func(), err 
 			return nil, ctx.Err()
 		}
 	}
+	// Only the turns this removal stopped are waited for: a turn that was over before it began
+	// (kept for a while for re-attaching) had its group killed then, and the groups of many such
+	// turns, zombies only, would use up the caller's time for nothing.
 	// The turn is over when its CLI is reaped and its group has been sent SIGKILL: a process of
 	// the group may still be finishing a system call, and could write a file after the removal.
 	// Each group is polled until it is gone. One that outlives groupWait is let go with a
