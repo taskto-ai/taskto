@@ -281,55 +281,58 @@ function Attempts({ attempts }: { attempts: PaymentLinkAttempt[] }) {
   const f = useFormat()
   if (attempts.length === 0) return null
   return (
-    <ol className="events-attempts" aria-label={t('settings.events.links.attemptsList')}>
-      {attempts.map((a, i) => {
-        const n = i + 1
-        const kind = t(
-          a.kind === 'checkout_session'
-            ? 'settings.events.links.kindCheckoutSession'
-            : 'settings.events.links.kindPaymentLink',
-        )
-        const mode = a.mode === 'live' || a.mode === 'test' ? t(`settings.events.${a.mode}` as Key) : a.mode
-        return (
-          <li key={a.reference} className="events-attempt">
-            <strong className="events-attempt-title">{t('settings.events.links.attemptTitle', { n, kind })}</strong>
-            <div className="events-reference">
-              <Field label={t('settings.events.links.reference')}>
-                <Input readOnly size="sm" className="events-reference-field" value={a.reference} />
-              </Field>
-              <CopyButton size="sm" text={a.reference} name={t('settings.events.links.referenceName', { n })} />
-            </div>
-            <span className="events-attempt-facts">
-              <span>
-                {t('settings.events.links.searchField')}{' '}
-                <code className="events-field-name">{REFERENCE_FIELD[a.kind]}</code>
+    <>
+      <p className="events-attempts-note">{t('settings.events.links.objectNote')}</p>
+      <ol className="events-attempts" aria-label={t('settings.events.links.attemptsList')}>
+        {attempts.map((a, i) => {
+          const n = i + 1
+          const kind = t(
+            a.kind === 'checkout_session'
+              ? 'settings.events.links.kindCheckoutSession'
+              : 'settings.events.links.kindPaymentLink',
+          )
+          const mode = a.mode === 'live' || a.mode === 'test' ? t(`settings.events.${a.mode}` as Key) : a.mode
+          return (
+            <li key={a.reference} className="events-attempt">
+              <strong className="events-attempt-title">{t('settings.events.links.attemptTitle', { n, kind })}</strong>
+              <div className="events-reference">
+                <Field label={t('settings.events.links.reference')}>
+                  <Input readOnly size="sm" className="events-reference-field" value={a.reference} />
+                </Field>
+                <CopyButton size="sm" text={a.reference} name={t('settings.events.links.referenceName', { n })} />
+              </div>
+              <span className="events-attempt-facts">
+                <span>
+                  {t('settings.events.links.searchField')}{' '}
+                  <code className="events-field-name">{REFERENCE_FIELD[a.kind]}</code>
+                </span>
+                <span>
+                  {a.object_id
+                    ? t(
+                        a.object_verified
+                          ? 'settings.events.links.objectSeenAccepted'
+                          : 'settings.events.links.objectSeenNotAccepted',
+                        { id: a.object_id },
+                      )
+                    : t('settings.events.links.objectNone')}
+                </span>
+                <span>
+                  {a.account_id
+                    ? t('settings.events.links.account', { account: a.account_id })
+                    : t('settings.events.links.accountNone')}
+                  {mode && ` · ${mode}`}
+                </span>
+                <span>
+                  {a.first_sent_at
+                    ? t('settings.events.links.firstSent', { when: f.dateTime(a.first_sent_at) })
+                    : t('settings.events.links.notSent')}
+                </span>
               </span>
-              <span>
-                {a.object_id
-                  ? t(
-                      a.object_verified
-                        ? 'settings.events.links.objectSeenChecked'
-                        : 'settings.events.links.objectSeenUnchecked',
-                      { id: a.object_id },
-                    )
-                  : t('settings.events.links.objectNone')}
-              </span>
-              <span>
-                {a.account_id
-                  ? t('settings.events.links.account', { account: a.account_id })
-                  : t('settings.events.links.accountNone')}
-                {mode && ` · ${mode}`}
-              </span>
-              <span>
-                {a.first_sent_at
-                  ? t('settings.events.links.firstSent', { when: f.dateTime(a.first_sent_at) })
-                  : t('settings.events.links.notSent')}
-              </span>
-            </span>
-          </li>
-        )
-      })}
-    </ol>
+            </li>
+          )
+        })}
+      </ol>
+    </>
   )
 }
 

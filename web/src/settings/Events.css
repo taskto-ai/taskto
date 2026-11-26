@@ -52,6 +52,12 @@
   }
 
   /* An attempt at a payment: its reference to look for, then the facts of where it was made. */
+  .events-attempts-note {
+    margin: 0;
+    font: var(--type-caption);
+    color: var(--color-text-muted);
+  }
+
   .events-attempts {
     display: grid;
     gap: var(--space-3);
@@ -79,8 +85,14 @@
   }
 
   .events-reference .ui-field {
-    flex: 1 1 20rem;
+    flex: 1 1 var(--width-menu-max);
     min-inline-size: 0;
+  }
+
+  /* The field's empty live region keeps one grid gap below the input (a grid track can't be
+     negative), so the button rises by that gap to sit level with the input. */
+  .events-reference > :not(.ui-field) {
+    margin-block-end: var(--space-2);
   }
 
   .events-reference-field {

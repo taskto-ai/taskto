@@ -4503,7 +4503,7 @@ reference, not only the current one), for an admin to look for at the provider: 
 "object_id", "object_verified", "account_id", "mode", "first_sent_at"}`. `reference` is the attempt's
 random token, which the call carried as `client_reference_id` (`kind` `checkout_session`) or as
 `metadata[taskto_ref]` (`kind` `payment_link`); `object_id` is an object seen for the attempt (`""`
-when none) and `object_verified` whether it was checked to ask this payment's amount and currency;
+when none) and `object_verified` whether TaskTo accepted it for this attempt (`true`: a create response's object, or a lookup that matched the payment's amount and currency) or only saw it (`false`: for example a lookup whose amount or currency did not match). A seen but not accepted object blocks a new payment link until a person checks it at the provider;
 `account_id` and `mode` (`"test"` or `"live"`) are the provider's account and the key's mode the
 reference was made under, `""` when not recorded; `first_sent_at` is when the first call under the
 reference went out, `""` when none did. Nothing sealed is in it, and never a key of the provider's
