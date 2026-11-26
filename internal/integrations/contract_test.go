@@ -768,12 +768,17 @@ func contractNormalizeRefund(ctx context.Context, fx *paymentsFixture) error {
 			return failf("%s: the payment's event has no payment id, which is how a refund finds the ref", sh.Name)
 		}
 		part := nl.AmountMinor / 3
-		for name, want := range map[string]int64{"a part": part, "the rest": nl.AmountMinor} {
-			minor := int64(0)
-			if name == "a part" {
-				minor = part
-			}
-			ds, err := fx.Refund(l, sh, minor)
+		// The part comes first and the rest after it: the rest is a refund of what is left, which
+		// only exists once the part has been refunded, so these are steps in a fixed order.
+		for _, step := range []struct {
+			name        string
+			minor, want int64
+		}{
+			{"a part", part, part},
+			{"the rest", 0, nl.AmountMinor},
+		} {
+			name, want := step.name, step.want
+			ds, err := fx.Refund(l, sh, step.minor)
 			if err != nil {
 				return err
 			}

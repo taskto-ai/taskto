@@ -609,6 +609,10 @@ func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 	if len(answers) < 10 {
 		t.Fatalf("only %d answers were kept", len(answers))
 	}
+	// A control: the webhook routes' replies (the delivery above, and the two forged ones) are among them.
+	if n := len(s.hookAnswers()); n < 2 {
+		t.Fatalf("%d webhook replies were recorded: the check of the answers proves nothing for the webhook routes", n)
+	}
 	logs := s.logs.String()
 	for name, secret := range map[string]string{"the API key": keyA, "the first webhook secret": hookA, "the second": hookB} {
 		for _, a := range answers {

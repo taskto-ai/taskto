@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -158,11 +159,17 @@ type payStack struct {
 	logs  *lockedBuffer
 	seen  *answers
 	ops   int
+	// public is the server's public URL, "" for none.
+	public string
 }
 
-func newPayStack(t *testing.T) *payStack {
+func newPayStack(t *testing.T) *payStack { return newPayStackAt(t, hooksOrigin) }
+
+// newPayStackAt is newPayStack for a server whose public URL is publicURL: "" for one with none, whose
+// payment links are hosted by the provider.
+func newPayStackAt(t *testing.T, publicURL string) *payStack {
 	t.Helper()
-	p := &payStack{logs: &lockedBuffer{}, seen: &answers{}}
+	p := &payStack{logs: &lockedBuffer{}, seen: &answers{}, public: publicURL}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(p.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -177,7 +184,7 @@ func newPayStack(t *testing.T) *payStack {
 		}
 		policy := egress.MustParse("127.0.0.1")
 		p.svc = integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{
-			PublicURL: hooksOrigin, Egress: &policy, Now: p.clock.Now,
+			PublicURL: publicURL, Egress: &policy, Now: p.clock.Now,
 			ClientOptions: []integrations.ClientOption{integrations.WithTestEndpoint(p.fake.Host()), integrations.WithoutConnectionReuse()},
 		})
 		o.Integrations = p.svc
@@ -189,9 +196,8 @@ func newPayStack(t *testing.T) *payStack {
 			// A verified payment event is applied to the app's record by the apps, as the integration.
 			p.svc.UseRecords(a)
 		}
-	})
+	}, func(next http.Handler) http.Handler { return recording{next: next, into: p.seen} })
 	p.base = strings.TrimSuffix(p.mcpURL, "/mcp")
-	p.h = recording{next: p.h, into: p.seen}
 
 	// The server's workers, as the command starts them, stopped before the database closes.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -281,6 +287,11 @@ func (p *payStack) connect(admin person, ws int64, name, key, secret string) *sh
 		"provider": "stripe", "name": name, "secrets": map[string]string{"api_key": key, "webhook_secret": secret},
 		"max_amount_minor": 100000, "currencies": []string{"EUR"},
 	}, &out)
+	if out.WebhookURL == "" && p.public == "" {
+		// A server with no public URL shows no address; its route is there all the same, which a test
+		// reaches by the id the database holds.
+		return &shop{id: out.ID, ws: ws, hook: p.text(`SELECT public_id FROM integrations WHERE id = ?`, out.ID), secret: secret, key: key}
+	}
 	if !strings.HasPrefix(out.WebhookURL, hooksOrigin+integrations.HookPrefix) {
 		p.t.Fatalf("webhook_url = %q", out.WebhookURL)
 	}
@@ -426,6 +437,19 @@ func (p *payStack) sentInvoice(who person, inv invoicing, number string, total a
 		return session != ""
 	})
 	return record, session
+}
+
+// hookAnswers are the recorded answers of the webhook routes, which the listener serves to the provider,
+// as a control for a check of what the server answered: a check that finds nothing in them proves
+// something only if they were recorded at all.
+func (p *payStack) hookAnswers() []string {
+	var out []string
+	for _, a := range p.seen.all() {
+		if strings.HasPrefix(a, http.MethodPost+" "+integrations.HookPrefix) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // sender delivers signed events to the integration's route, over HTTP, as its provider does.
@@ -619,10 +643,18 @@ func TestAnInvoiceGoesFromSentToPaidThroughTheWholeServer(t *testing.T) {
 	}
 	// Doing the same send again, under the same operation, makes no second link.
 	sendRevision := rec.Revision
+	queued := s.scalar(`SELECT count(*) FROM app_effects`)
 	if got := s.act(s.bob, s.app, fmt.Sprintf("op-send-%04d", s.ops), "send", map[string]any{"id": record, "status": "sent"}); got != http.StatusOK {
 		t.Fatalf("the repeated send = %d", got)
 	}
-	time.Sleep(150 * time.Millisecond)
+	// Nothing more was queued (the stored work, not a wait for something that might still come), and
+	// nothing is left in flight that could still make a call.
+	if n := s.scalar(`SELECT count(*) FROM app_effects`); n != queued {
+		t.Fatalf("a repeated request queued %d more effects", n-queued)
+	}
+	s.eventually("the queue holds no work", func() bool {
+		return s.scalar(`SELECT count(*) FROM app_effects WHERE state IN ('pending', 'running')`) == 0
+	})
 	if n := len(s.sessionPosts()); n != 1 {
 		t.Fatalf("a repeated request made %d calls", n)
 	}
@@ -638,9 +670,19 @@ func TestAnInvoiceGoesFromSentToPaidThroughTheWholeServer(t *testing.T) {
 		t.Fatalf("event = %+v", e)
 	}
 
-	// The invoice is paid, by the integration, with the day the payment happened.
+	// The invoice is paid, by the integration, with the day the payment happened: the day of the
+	// delivered event's own time, not of the clock when this runs (which a midnight could move).
+	var happened time.Time
+	for _, e := range evs {
+		if e.Type == testprovider.EventSessionCompleted {
+			happened = time.Unix(e.Created, 0).UTC()
+		}
+	}
+	if happened.IsZero() {
+		t.Fatal("the payment's events have no completed session")
+	}
 	paid := s.record(s.bob, s.app, record)
-	if paid.Data["status"] != "paid" || paid.Data["paid_at"] != s.clock.Now().UTC().Format("2006-01-02") {
+	if paid.Data["status"] != "paid" || paid.Data["paid_at"] != happened.Format("2006-01-02") {
 		t.Fatalf("record = %+v", paid.Data)
 	}
 	if paid.Revision != sendRevision+1 || paid.UpdatedBy == nil || paid.UpdatedBy.System == nil || paid.UpdatedBy.System.ID != s.in.id || paid.UpdatedAction != integrations.EventPaymentSucceeded {
@@ -669,10 +711,16 @@ func TestAnInvoiceGoesFromSentToPaidThroughTheWholeServer(t *testing.T) {
 	for range 2 {
 		s.deliver(s.in, evs)
 	}
-	time.Sleep(150 * time.Millisecond)
-	if n := len(s.settled(s.alice, s.in, 1)); n != 1 {
+	// Each delivery was answered after it was stored, so the stored state says what the replay did.
+	if n := s.scalar(`SELECT count(*) FROM integration_events WHERE integration_id = ?`, s.in.id); n != 1 {
 		t.Fatalf("a replay stored %d events", n)
 	}
+	if n := len(s.settled(s.alice, s.in, 1)); n != 1 {
+		t.Fatalf("a replay left %d events", n)
+	}
+	s.eventually("the queue holds no work", func() bool {
+		return s.scalar(`SELECT count(*) FROM app_effects WHERE state IN ('pending', 'running')`) == 0
+	})
 	again := s.record(s.bob, s.app, record)
 	if again.Revision != paid.Revision || len(s.history(s.bob, s.app, record).History) != history {
 		t.Fatalf("a replay changed the record: revision %d, was %d", again.Revision, paid.Revision)
@@ -866,7 +914,11 @@ func TestNoRawWebhookBodyAndNoPayerDataIsKept(t *testing.T) {
 			t.Errorf("the database holds the payer's detail %q in %d places", needle, n)
 		}
 	}
-	// ...and not in anything the server answered or logged.
+	// ...and not in anything the server answered or logged, webhook replies included: the recorder
+	// must have seen the replies to the webhook deliveries, or this would find nothing for lack of looking.
+	if n := len(s.hookAnswers()); n < len(evs) {
+		t.Fatalf("%d webhook replies were recorded for %d deliveries: the check of the answers proves nothing", n, len(evs))
+	}
 	for _, a := range s.seen.all() {
 		if strings.Contains(a, payer.Email) || strings.Contains(a, payer.Name) {
 			t.Errorf("an answer holds the payer's details: %.200s", a)
@@ -878,5 +930,98 @@ func TestNoRawWebhookBodyAndNoPayerDataIsKept(t *testing.T) {
 	// An event has a digest of its body, and no body.
 	if n := s.scalar(`SELECT count(*) FROM pragma_table_info('integration_events') WHERE name LIKE '%body%' AND name != 'body_sha256'`); n != 0 {
 		t.Fatalf("integration_events has a column that holds a body")
+	}
+}
+
+// ----- a payment link the provider hosts -----
+
+// refMetadata is the key of a payment link's metadata that holds the reference's token: the
+// integration's own choice, which this checks from outside.
+const refMetadata = "taskto_ref"
+
+// A server with no public URL has no page of its own for a payer to return to, so its invoices get a
+// hosted payment link, with the reference's token in the link's address. A payer who opens the address
+// and pays makes a session that carries the token, and the payment finds its invoice by it: the other
+// invoice, whose link is of the same shape, is left as it was.
+func TestAPaymentThroughAHostedPaymentLinkFindsItsInvoiceByToken(t *testing.T) {
+	p := newPayStackAt(t, "")
+	in := p.connect(p.alice, p.one, "shop", keyA, hookA)
+	p.allowSpaces(p.alice, in, p.team)
+	app := p.build(p.bob, p.alice, in, p.team, "Invoices", payInvoiceApp)
+
+	first, firstLink := p.sentInvoice(p.bob, app, "A-1", 50)
+	second, secondLink := p.sentInvoice(p.bob, app, "A-2", 70)
+
+	// Links, not sessions: made once each, with no page of ours and the token in the link's metadata,
+	// and the record holds the link's address and id.
+	if n := len(p.sessionPosts()); n != 0 {
+		t.Fatalf("%d checkout sessions were made by a server with no public URL", n)
+	}
+	posts := p.fake.RequestsTo(http.MethodPost, "/v1/payment_links")
+	if len(posts) != 2 {
+		t.Fatalf("%d payment links were made: %+v", len(posts), posts)
+	}
+	tokens := map[string]string{}
+	for _, l := range []struct{ record, id string }{{"A-1", firstLink}, {"A-2", secondLink}} {
+		link, ok := p.fake.Link(l.id)
+		if !ok || len(link.Metadata[refMetadata]) != 32 || !link.Active {
+			t.Fatalf("the link of %s: %+v", l.record, link)
+		}
+		tokens[l.id] = link.Metadata[refMetadata]
+	}
+	if tokens[firstLink] == tokens[secondLink] {
+		t.Fatal("two invoices share a token")
+	}
+	payURL := func(record int64) string {
+		u, _ := p.record(p.bob, app, record).Data["pay_url"].(string)
+		return u
+	}
+	for record, link := range map[int64]string{first: firstLink, second: secondLink} {
+		u := payURL(record)
+		if !strings.HasSuffix(u, "?client_reference_id="+tokens[link]) {
+			t.Fatalf("the address %q doesn't carry the token of its link", u)
+		}
+	}
+
+	// The payer of the second invoice opens its address and pays. The first is not touched.
+	evs, err := p.fake.PayLinkAt(payURL(second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.deliver(in, evs)
+	events := p.settled(p.alice, in, 1)
+	if e := events[0]; e.Kind != integrations.EventPaymentSucceeded || e.State != integrations.EventApplied || e.AmountMinor != 7000 {
+		t.Fatalf("event = %+v", e)
+	}
+	if got := p.record(p.bob, app, second).Data["status"]; got != "paid" {
+		t.Fatalf("the invoice that was paid is %v", got)
+	}
+	if got := p.record(p.bob, app, first).Data["status"]; got != "sent" {
+		t.Fatalf("the other invoice is %v: the payment went to the wrong one", got)
+	}
+	// The session carried the token the address had.
+	var carried []string
+	for _, ss := range p.fake.Sessions() {
+		if ss.ClientReferenceID != nil {
+			carried = append(carried, *ss.ClientReferenceID)
+		}
+	}
+	if len(carried) != 1 || carried[0] != tokens[secondLink] {
+		t.Fatalf("the sessions carry %v, want the token of the second link", carried)
+	}
+	// The link takes no second payment, so the invoice can't be paid twice.
+	if _, err := p.fake.PayLinkAt(payURL(second)); !errors.Is(err, testprovider.ErrLinkInactive) {
+		t.Fatalf("a second payment through the same link: %v", err)
+	}
+
+	// Then the first one.
+	evs, err = p.fake.PayLinkAt(payURL(first))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.deliver(in, evs)
+	p.settled(p.alice, in, 2)
+	if got := p.record(p.bob, app, first).Data["status"]; got != "paid" {
+		t.Fatalf("the first invoice is %v", got)
 	}
 }
