@@ -626,6 +626,77 @@ func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 	}
 }
 
+// A purge that has to wait (a reader holds the database's log, which the purge waits on for up to
+// the busy timeout) is the sidecar's work on a worker thread: it doesn't stop the sidecar from
+// answering, as it would if it ran on the thread that serves every turn and stream.
+func TestPurgeConversationDoesNotStopTheSidecarWhileItWaits(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := s.client.Submit(ctx, doomed, Input{Content: "remember something to purge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if _, err := s.client.Wait(waitCtx, sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+
+	// A read transaction pinned on the database: the purge's checkpoint waits on it.
+	reader, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	conn, err := reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback() //nolint:errcheck // ends the pinned read
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+
+	purged := make(chan error, 1)
+	started := time.Now()
+	go func() { purged <- s.client.PurgeConversation(ctx, doomed) }()
+	time.Sleep(50 * time.Millisecond) // the purge is under way, waiting for the reader
+
+	// The sidecar answers while the purge waits, promptly. (A purge on the main thread holds every
+	// request until its wait is over, which the test entry sets to 300 ms.)
+	probeCtx, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelProbe()
+	probed := time.Now()
+	if err := s.client.Healthy(probeCtx); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(probed); took > 120*time.Millisecond {
+		t.Errorf("the sidecar took %v to answer while a purge waited: the purge holds the thread that serves it", took)
+	}
+	select {
+	case err := <-purged:
+		t.Fatalf("fixture: the purge ended after %v, with %v, before the sidecar was probed", time.Since(started), err)
+	default:
+	}
+	var se *StatusError
+	if err := <-purged; !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("the purge while a reader holds the log: err = %v, want a 503", err)
+	}
+}
+
 func TestAbortStopsTheRunningWork(t *testing.T) {
 	s := startSidecar(t)
 	ctx := ctxFor(t)
