@@ -394,6 +394,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return failed("%v", err)
 	}
 	pgid := cmd.Process.Pid
+	t.setGroup(pgid)
 	record := filepath.Join(w.stateDir(), spec.ID+".pid")
 	if start, err := startTime(pgid); err == nil {
 		if err := os.WriteFile(record, []byte(strconv.Itoa(pgid)+" "+start+"\n"), 0o600); err != nil {

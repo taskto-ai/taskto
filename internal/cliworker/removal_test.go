@@ -25,7 +25,7 @@ func started(t *testing.T, configDir string) {
 func TestForgetStopsTheRunningTurnsBeforeRemovingFiles(t *testing.T) {
 	h := newHarness(t, nil)
 	mine := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, Background: true}, true)
-	theirs := h.user(t, 2, cliworker.Claude, clitest.Scenario{SleepMS: 1500}, true)
+	theirs := h.user(t, 2, cliworker.Claude, clitest.Scenario{SleepMS: 60_000}, true)
 
 	turn, _, err := h.w.Start(spec("mine", 1, cliworker.Claude, "work"))
 	if err != nil {
@@ -67,11 +67,12 @@ func TestForgetStopsTheRunningTurnsBeforeRemovingFiles(t *testing.T) {
 		t.Errorf("the turn ended %+v, want stopped", done)
 	}
 
-	// Another user: their turn ran through it, and ends on its own.
+	// Another user: their turn ran through it, and ends only when it is stopped.
 	if other.Over() {
 		t.Error("forgetting one user stopped another's turn")
 	}
-	if done := last(waitDone(t, other, 15*time.Second)); done.Status != cliworker.StatusOK {
+	h.w.Stop("theirs")
+	if done := last(waitDone(t, other, 15*time.Second)); done.Status != cliworker.StatusStopped {
 		t.Errorf("the other user's turn = %+v", done)
 	}
 	if st, _ := h.w.Status(context.Background(), 2, cliworker.Claude, ""); !st.LoggedIn {

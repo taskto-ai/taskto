@@ -3,6 +3,7 @@ package cliworker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 )
@@ -74,5 +75,38 @@ func (w *Worker) beginRemoval(ctx context.Context, r *removal) (end func(), err 
 			return nil, ctx.Err()
 		}
 	}
+	// The turn is over when its CLI is reaped and its group has been sent SIGKILL: a process of
+	// the group may still be finishing a system call, and could write a file after the removal.
+	// Each group is polled until it is gone. One that outlives groupWait is let go with a
+	// warning: it can be only zombies, which no one reaps in a container without an init
+	// process, and which write nothing.
+	for _, t := range turns {
+		if err := waitGroupGone(ctx, t.group()); err != nil {
+			end()
+			return nil, err
+		}
+	}
 	return end, nil
+}
+
+// groupWait bounds the wait for a stopped turn's process group to be empty.
+const groupWait = 3 * time.Second
+
+// waitGroupGone waits until no process of group pgid exists, for groupWait at most, or ctx.
+func waitGroupGone(ctx context.Context, pgid int) error {
+	deadline := time.NewTimer(groupWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for groupAlive(pgid) {
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			slog.Warn("cliworker: a stopped turn's process group is still listed; removing its files anyway", "pgid", pgid)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
