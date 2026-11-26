@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -348,4 +349,44 @@ func TestAnIntegrationRemovedDuringLookupGetsTheDecoy(t *testing.T) {
 		t.Fatal(err)
 	}
 	isNotFound(t, "a removed integration", d.Status, d.Response)
+}
+
+// A request refused for its address's quota is bounded too: its unread body can't hold the
+// connection once the 429 is answered.
+func TestAStalledBodyOfARefusedRequestIsCutOff(t *testing.T) {
+	old := hookReadTimeout
+	hookReadTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { hookReadTimeout = old })
+	r := newRig(t)
+	srv := httptest.NewServer(r.h)
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	for range hookIPAttempts {
+		resp, err := http.Post(srv.URL+HookPrefix+r.id, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST %s%s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{", HookPrefix, r.id)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("an address over its quota = %d, want 429", resp.StatusCode)
+	}
+	start := time.Now()
+	if _, err := br.ReadByte(); err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("the connection of a refused request with a stalled body stayed open (%v, %v)", err, time.Since(start))
+	}
 }

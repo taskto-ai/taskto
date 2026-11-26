@@ -87,6 +87,10 @@ func hookClient(r *http.Request) string {
 func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 	// Nothing below reads the request's cookies, a session or a CSRF header, and nothing sets one.
 	w.Header().Set("Cache-Control", "no-store")
+	// A body that trickles in or never comes can't hold the connection: the read has a deadline of
+	// its own, set before any early return so a refused request is bounded too. A connection that can't take one (a test's
+	// recorder) is read without.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(hookReadTimeout))
 	// The address's limit is the only one before the signature is verified: a flood of unsigned
 	// requests is held back by where it comes from, and can't use up the quota of an id's real
 	// deliveries.
@@ -100,9 +104,6 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeWebhookTooLarge, "the body is too large")
 		return
 	}
-	// A body that trickles in or never comes can't hold the connection: the read has a deadline of
-	// its own. A connection that can't take one (a test's recorder) is read without.
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(hookReadTimeout))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBody))
 	if err != nil {
 		var tooBig *http.MaxBytesError
