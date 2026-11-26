@@ -41,6 +41,9 @@ export default function FieldGallery() {
       <Field label={t('gallery.sample.locked')} hint={t('gallery.state.readOnly')}>
         <Input readOnly defaultValue={t('gallery.sample.lockedValue')} />
       </Field>
+      <Field label={t('gallery.sample.locked')} error={t('gallery.sample.lockedError')}>
+        <Input readOnly defaultValue={t('gallery.sample.lockedValue')} />
+      </Field>
       <Field label={t('gallery.state.small')}>
         <Input size="sm" placeholder={t('gallery.sample.search')} />
       </Field>

@@ -220,19 +220,13 @@ const OLD_NAMES = [
   'line',
   'line-strong',
   'accent',
-  'accent-hover',
   'on-accent',
-  'accent-edge',
   'accent-soft',
   'focus',
   'link',
   'logo-dot',
   'danger',
-  'success',
-  'warning',
   'clear-icon',
-  'shadow-lift',
-  'shadow-lift-hover',
   'font',
   'display',
   'mono',
@@ -251,23 +245,17 @@ const OLD_COLORS: Record<string, [string, string]> = {
   line: ['rgba(17, 17, 16, 0.15)', 'rgba(250, 248, 244, 0.14)'],
   'line-strong': ['#7e7b74', '#8a877f'],
   accent: ['#4cefa8', '#4cefa8'],
-  'accent-hover': ['#6bf5b8', '#6bf5b8'],
   'on-accent': ['#111110', '#111110'],
-  'accent-edge': ['#111110', '#1fc98a'],
   'accent-soft': ['#dcfceb', 'rgba(76, 239, 168, 0.14)'],
   focus: ['#111110', '#4cefa8'],
   link: ['#006b45', '#4cefa8'],
   'logo-dot': ['#00a86b', '#00a86b'],
   danger: ['#b42318', '#ff8a82'],
-  success: ['#006b45', '#4cefa8'],
-  warning: ['#9a4700', '#ffb04d'],
 }
 
 // And the others, resolved as they were, light then dark: lengths, shadows, font stacks, the icon.
 const SANS = '"Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
 const OLD_VALUES: Record<string, [string, string]> = {
-  'shadow-lift': ['0 2px 0 #111110', '0 2px 0 #1fc98a'],
-  'shadow-lift-hover': ['0 3px 0 #111110', '0 3px 0 #1fc98a'],
   font: [SANS, SANS],
   display: [`"Bricolage Grotesque Variable", ${SANS}`, `"Bricolage Grotesque Variable", ${SANS}`],
   mono: [
@@ -282,9 +270,7 @@ const OLD_VALUES: Record<string, [string, string]> = {
   'text-h2': ['1rem', '1rem'],
   'text-h3': ['0.95rem', '0.95rem'],
   'text-code': ['0.9em', '0.9em'],
-  'text-small': ['0.85rem', '0.85rem'],
   'field-padding': ['0.45rem 0.6rem', '0.45rem 0.6rem'],
-  'error-margin': ['0.25rem 0', '0.25rem 0'],
   'clear-icon': Array(2).fill(
     `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E")`,
   ) as [string, string],

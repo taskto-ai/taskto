@@ -48,7 +48,9 @@ export function place(
   const below = view.height - (anchor.top + anchor.height + gap) - margin
   const above = anchor.top - gap - margin
   const side = box.height <= below || below >= above ? 'below' : 'above'
-  const room = Math.max(0, side === 'below' ? below : above)
+  // Never more than the window holds between its margins: an anchor scrolled past an edge has
+  // more than that on its far side, and a box that tall would run off the window.
+  const room = Math.max(0, Math.min(side === 'below' ? below : above, view.height - 2 * margin))
   const height = Math.min(box.height, room)
   const top = side === 'below' ? anchor.top + anchor.height + gap : anchor.top - gap - height
   return {
@@ -66,12 +68,28 @@ export function scrolledAway(el: Element): boolean {
   const outsideY = (b: { top: number; bottom: number }) => r.bottom <= b.top || r.top >= b.bottom
   if (outsideX({ left: 0, right: window.innerWidth }) || outsideY({ top: 0, bottom: window.innerHeight })) return true
   // A box clips on each axis on its own: `overflow-x: clip` with `overflow-y: visible` hides only
-  // what is beside it, not what is below it.
+  // what is beside it, not what is below it. What shows is what the window and every clipping box
+  // let through,
+  // so the part still seen narrows box by box: one box may show its top and another its bottom,
+  // and nothing of it is left.
+  const seen = {
+    left: Math.max(r.left, 0),
+    right: Math.min(r.right, window.innerWidth),
+    top: Math.max(r.top, 0),
+    bottom: Math.min(r.bottom, window.innerHeight),
+  }
   for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
     const s = getComputedStyle(p)
     const b = p.getBoundingClientRect()
-    if (s.overflowX !== 'visible' && outsideX(b)) return true
-    if (s.overflowY !== 'visible' && outsideY(b)) return true
+    if (s.overflowX !== 'visible') {
+      seen.left = Math.max(seen.left, b.left)
+      seen.right = Math.min(seen.right, b.right)
+    }
+    if (s.overflowY !== 'visible') {
+      seen.top = Math.max(seen.top, b.top)
+      seen.bottom = Math.min(seen.bottom, b.bottom)
+    }
+    if (seen.right <= seen.left || seen.bottom <= seen.top) return true
   }
   return false
 }

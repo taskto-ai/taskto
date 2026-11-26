@@ -98,6 +98,152 @@ describe('Toast', () => {
     expect(shown().queryByText('Two')).toBeNull()
   })
 
+  test('pressed from the keyboard, it leaves the focus beside it, not on the page', () => {
+    fireEvent.keyDown(document, { key: 'Tab' })
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    const archive = document.querySelector('button') as HTMLButtonElement
+    act(() => {
+      toast({ message: 'Card archived', action: { label: 'Undo', onClick: () => {} } })
+    })
+    // From the page into the toast, then its action.
+    act(() => archive.focus())
+    const undo = shown().getByRole('button', { name: 'Undo' })
+    act(() => undo.focus())
+    act(() => undo.click())
+    expect(shown().queryByText('Card archived')).toBeNull()
+    expect(document.activeElement).toBe(archive)
+
+    // With two toasts, dismissing one goes to the other's Dismiss, not to its action: one more
+    // Enter must not undo something else.
+    act(() => {
+      toast({ message: 'First', action: { label: 'Undo', onClick: () => {} } })
+      toast('Second')
+    })
+    const dismiss = shown().getAllByRole('button', { name: 'Dismiss' })
+    act(() => dismiss[1].focus())
+    act(() => dismiss[1].click())
+    expect(shown().queryByText('Second')).toBeNull()
+    expect(document.activeElement).toBe(shown().getByRole('button', { name: 'Dismiss' }))
+  })
+
+  test('the toast handed the focus is held like one focused, and leaves once the focus does', () => {
+    fireEvent.keyDown(document, { key: 'Tab' })
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    const archive = document.querySelector('button') as HTMLButtonElement
+    act(() => {
+      toast({ message: 'First', duration: 5000 })
+      toast({ message: 'Second', duration: 5000 })
+    })
+    act(() => archive.focus())
+    const second = shown().getAllByRole('button', { name: 'Dismiss' })[1]
+    act(() => second.focus())
+    act(() => second.click())
+    const first = shown().getByRole('button', { name: 'Dismiss' })
+    expect(document.activeElement).toBe(first)
+    act(() => vi.advanceTimersByTime(12_000))
+    expect(shown().getByText('First')).toBeTruthy()
+    expect(document.activeElement).toBe(first)
+    // The focus goes back to the page: the time starts again, and it leaves.
+    act(() => archive.focus())
+    act(() => vi.advanceTimersByTime(5000))
+    expect(shown().queryByText('First')).toBeNull()
+    expect(document.activeElement).toBe(archive)
+  })
+
+  test('after a press of the pointer, it hands no focus on', () => {
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    act(() => {
+      toast('First')
+      toast('Second')
+    })
+    const second = shown().getAllByRole('button', { name: 'Dismiss' })[1]
+    fireEvent.pointerDown(second)
+    act(() => second.focus())
+    act(() => second.click())
+    expect(shown().queryByText('Second')).toBeNull()
+    expect(stack().contains(document.activeElement)).toBe(false)
+  })
+
+  test('tabbed from one toast to another, the focus still goes back to the page at the end', () => {
+    fireEvent.keyDown(document, { key: 'Tab' })
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    const archive = document.querySelector('button') as HTMLButtonElement
+    act(() => {
+      toast('First')
+      toast('Second')
+    })
+    act(() => archive.focus())
+    const [first, second] = shown().getAllByRole('button', { name: 'Dismiss' })
+    act(() => first.focus())
+    act(() => second.focus())
+    act(() => second.click())
+    expect(document.activeElement).toBe(first)
+    act(() => first.click())
+    expect(document.activeElement).toBe(archive)
+  })
+
+  test('dismissed one after another, the toasts give the focus back to the page at the end', () => {
+    fireEvent.keyDown(document, { key: 'Tab' })
+    render(
+      <>
+        <button type="button">Archive</button>
+        <Toaster />
+      </>,
+    )
+    const archive = document.querySelector('button') as HTMLButtonElement
+    act(() => {
+      toast('First')
+      toast('Second')
+    })
+    act(() => archive.focus())
+    const second = shown().getAllByRole('button', { name: 'Dismiss' })[1]
+    act(() => second.focus())
+    act(() => second.click())
+    const first = shown().getByRole('button', { name: 'Dismiss' })
+    expect(document.activeElement).toBe(first)
+    act(() => first.click())
+    expect(document.activeElement).toBe(archive)
+  })
+
+  test('an action that moves the focus itself keeps that', () => {
+    render(
+      <>
+        <button type="button">Archive</button>
+        <input aria-label="Title" />
+        <Toaster />
+      </>,
+    )
+    const title = document.querySelector('input') as HTMLInputElement
+    act(() => {
+      toast({ message: 'Card archived', action: { label: 'Undo', onClick: () => title.focus() } })
+    })
+    const undo = shown().getByRole('button', { name: 'Undo' })
+    act(() => (document.querySelector('button') as HTMLButtonElement).focus())
+    act(() => undo.focus())
+    act(() => undo.click())
+    expect(document.activeElement).toBe(title)
+  })
+
   test('stacks, newest last, and keeps the latest four', () => {
     render(<Toaster />)
     act(() => {
