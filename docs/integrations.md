@@ -229,6 +229,29 @@ approving and publishing are the same person's three calls, which the web app of
   allowed space after its approval ends is the integration's own spaces dialog (Settings →
   Integrations, "Keep … after the approval ends"), which the queue points to and doesn't repeat. The
   admin reads no app and no record: the screen has only what the requester submitted.
+- **Settings → Integration events** (admins only, like the queue) is what became of an integration's
+  provider events ([applying events](#applying-events)): for the integration chosen, its events newest
+  first, filtered by state (failed, ignored, applied, waiting), each with its kind, amount, time, mode
+  and state, and the reason an ignored or failed one wasn't applied, in the words of its code; a second
+  payment and an amount that doesn't match are named so. A failed event has a Retry button, which calls
+  the retry route and shows the server's refusal under the event (an event that is no longer failed
+  reads the list again). An event holds no record, app or space, so none is shown. Above them, **Payment
+  links to check** lists the unresolved payment links of the spaces the admin manages
+  (`payment-links/unresolved`): each with its amount, record, app, space and the time its outcome became
+  unknown, what to look for in the Stripe account (in the account and mode the link was first asked in:
+  `client_reference_id` on a Checkout Session, `metadata[taskto_ref]` on a Payment Link, the reference
+  of every attempt, which the screen lists under each payment: each attempt's reference in a read-only
+  monospace field with a copy button, the field to search for that kind of object, any object seen (and
+  whether it was checked against the payment), the account and mode it was made under and when it was
+  first sent, so the admin searches by reference and falls back to amount and time only where the
+  provider can't be searched by it; a link that is found is left alone and the person who ran the action retries it, not the payer), and, once
+  the wait ended, a "Confirm no link exists" button behind a confirmation that says it queues one more
+  attempt, which may adopt a link that exists or fail, and plainly that if a link does exist the payer
+  ends up with two and could pay twice. A lookup that stopped for another reason (the integration's
+  account changed) is "Lookup stopped", with the reason in words and no button. Cancelling sends
+  nothing. A retry the server refuses because the event isn't failed any more stays said in the events
+  section after the list is read again. The screen asks only for the one integration's events
+  and links, the workspace's spaces' names and the provider registry.
 - **The builder's preview** says what a payment link would ask for from the sample record ("Create a
   payment link", simulated, the sum in the currency) and calls no service, opens no secret and needs
   no approval.
@@ -419,7 +442,10 @@ write.
       moves on by itself (from one seen expired) only while every key of the reference left nothing a
       payer can use. The
       admins' list of what waits for a decision is
-      `GET …/integrations/{integration}/payment-links/unresolved`. Both routes cover only the spaces the
+      `GET …/integrations/{integration}/payment-links/unresolved`, which lists each payment's attempts
+      too (every key of the reference, oldest first: its reference, the kind of object, any object
+      seen, the account and mode, when it was first sent; never a key of the provider's account or
+      anything sealed). Both routes cover only the spaces the
       admin manages (a private space's payments are not another admin's to decide).
 - **Nothing is saved as the link until its state is read.** What a call answers, and above all what
   Stripe replays for a key it kept, is the object as it was made: a Checkout Session replayed a day
@@ -776,6 +802,32 @@ against, so none of them needs a network:
   (`integrations.WithTestEndpoint`), never through configuration. The keys and secrets in it are
   obvious fakes. Nothing in the server imports the package, and a test in `cmd/taskto` fails if
   its binary links it. The fake Square comes with the Square adapter.
+
+## The end-to-end, isolation and contract suites
+
+Three groups of tests run in CI's Go job, with no real network:
+
+- **Invoice to paid** (`internal/server/payments_e2e_test.go`): the server's whole mux, SQLite, the apps'
+  outbox worker, the integrations' event worker and a clock the test moves, with the fake Stripe on a
+  socket and its signed events sent over HTTP to the real `/hooks/` route. An admin connects the
+  integration and approves an app's contract, a member sends an invoice, one payment link is made and
+  written to the record by the integration, the payer pays, and the invoice is paid with the history
+  saying the integration did it; then a replay, the same payment under another event id, an event that
+  arrives late, a payment of another amount and a partial and a whole refund.
+- **Isolation** (`internal/server/payments_isolation_test.go`): another workspace, a private space, an
+  event of one integration or app with another's token, a revoked approval, a disabled integration, a
+  test-mode event for a live reference, a definition with a URL, header, redirect or secret, a contract
+  that wasn't approved, an amount above the admin's ceiling, and the secrets never being in an answer, a
+  log or a row. Each shows that the thing that must not cross is there to cross: the record left alone is
+  one that a payment would have changed.
+- **The adapter contract** (`internal/integrations/contract_test.go`): what every payments adapter must do,
+  written once in terms of the adapter interfaces and the normalized shapes: a link made once for a
+  token and refused for the same token with other terms, found by its token, its state read live,
+  a webhook's signature, time tolerance and rotation, and a payment, expiry and refund each read as one
+  event with the ref's token and the exact amount, nothing a payer typed in it. An adapter runs it by
+  giving a `paymentsFixture` (its adapter, a client for its fake, the fake's payer, expiry and refund);
+  `contract_stripe_test.go` is Stripe's, and `TestTheContractSuiteNoticesABrokenAdapter` runs the cases
+  against adapters broken on purpose, to show they fail.
 
 ## Trying an integration by hand
 
