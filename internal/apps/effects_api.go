@@ -152,6 +152,10 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 			if !fieldsHold {
 				delete(v.Error.Params, "path")
 				delete(v.Error.Params, "title")
+				// A payment link's refusal names the currency and the ceiling it was held to, which the
+				// amount and currency fields of the record chose.
+				delete(v.Error.Params, "currency")
+				delete(v.Error.Params, "max")
 			}
 		}
 	}
@@ -171,10 +175,12 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 }
 
 // withheld removes from a result what was made from the record's fields (a card's title, a
-// document's path), at the top and in a route.
+// document's path, a payment link's amount and currency), at the top and in a route.
 func withheld(res map[string]any) {
 	delete(res, "title")
 	delete(res, "path")
+	delete(res, "amount")
+	delete(res, "currency")
 	if route, ok := res["route"].(map[string]any); ok {
 		delete(route, "path")
 	}

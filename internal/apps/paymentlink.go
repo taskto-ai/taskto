@@ -3,8 +3,10 @@ package apps
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/currency"
@@ -44,45 +46,129 @@ func (s *Service) WithPaymentLinks(p paylink.Opener) *Service {
 	return s
 }
 
-// createPaymentLink does the entry of a create_payment_link effect.
-func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[string]any, error) {
-	if s.platform.Payments == nil {
-		return nil, errors.New("payment links are not available in this server")
-	}
+// paymentGrant is what the live release approves for an entry, as of one moment: where the app is,
+// and the approved binding of the slot that asks for exactly this link.
+type paymentGrant struct {
+	spaceID, workspaceID int64
+	binding              Binding
+}
+
+// paymentGrantOf reads, through q (a snapshot, or the transaction a write holds the lock in), what the
+// live release approves for the entry: the app's space and workspace, the binding of its slot (the
+// app is online, the release declares the slot and its contract is approved, the integration is on
+// and allowed in the space), and that the contract has a link that asks for exactly what the entry
+// asks, as of the live record.
+func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, spaceID, workspaceID int64) (paymentGrant, error) {
 	p := e.payload
-	if err := s.authorizeApp(ctx, e); err != nil {
-		return nil, err
-	}
-	b, err := s.Binding(ctx, e.appID, p.Slot)
+	b, err := liveBinding(ctx, q, e.appID, p.Slot)
 	switch {
 	case errors.Is(err, ErrOffline):
-		return nil, refuse(apierr.CodeAppEffectAppOffline)
+		return paymentGrant{}, refuse(apierr.CodeAppEffectAppOffline)
 	case errors.Is(err, ErrNotFound):
-		return nil, refuse(apierr.CodeAppEffectAppAccess)
+		return paymentGrant{}, refuse(apierr.CodeAppEffectAppAccess)
 	case errors.Is(err, ErrIntegrationUnapproved), errors.Is(err, ErrNotPublished):
-		return nil, refuse(apierr.CodeIntegrationUnavailable)
+		return paymentGrant{}, refuse(apierr.CodeIntegrationUnavailable)
 	case err != nil:
-		return nil, err
+		return paymentGrant{}, err
 	}
-	// The live release must still ask for this very link: the approved contract holds the action,
-	// the amount and where the link goes, and an entry queued by an older release that asked for
-	// anything else has no authority now.
+	// The live release's collection and record, from the same read as the binding: what the contract's
+	// rule and bounds are held against.
+	ap, err := launchable(ctx, q, spaceID, e.appID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return paymentGrant{}, refuse(apierr.CodeAppEffectAppAccess) // moved to another space
+	case errors.Is(err, ErrOffline):
+		return paymentGrant{}, refuse(apierr.CodeAppEffectAppOffline)
+	case err != nil:
+		return paymentGrant{}, err
+	case ap.liveDef == nil:
+		return paymentGrant{}, refuse(apierr.CodeIntegrationUnavailable)
+	}
+	var raw string
+	switch err := q.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, e.recordID, e.appID).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+		return paymentGrant{}, refuse(apierr.CodeAppEffectRecordGone)
+	case err != nil:
+		return paymentGrant{}, err
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return paymentGrant{}, err
+	}
+	// The live release must still ask for this very link: the approved contract holds the action and
+	// what it does (who may trigger it), the amount, its bounds, the currency and where it is read from,
+	// the rule the record must meet, and where the link goes, and an entry queued by an older release
+	// that asked for anything else has no authority now.
 	// What the description sends out is part of what an admin approved: the entry's description was
 	// filled when it was queued, from the fields its release named, and the live contract must still
 	// name each of them (and the id, if the text holds it). Wording alone is not in the contract.
 	asked := slices.ContainsFunc(b.Contract.Links, func(l ContractLink) bool {
 		inCurrency := (l.Currency != "" && l.Currency == p.Currency) || (l.Currency == "" && slices.Contains(l.CurrencyOptions, p.Currency))
 		described := (!p.DescribesID || l.DescribesID) && !slices.ContainsFunc(p.Describes, func(f string) bool { return !slices.Contains(l.Describes, f) })
-		return l.Action == e.action && l.AmountField == p.AmountField && l.URLField == p.URLField && l.IDField == p.IDField && inCurrency && described
+		return l.Action == e.action && l.ActionKind == e.actionKind && l.AmountField == p.AmountField && l.CurrencyField == p.CurrencyField &&
+			l.URLField == p.URLField && l.IDField == p.IDField && inCurrency && described &&
+			(l.When == nil || ap.liveDef.Collection.holds(*l.When, data)) && amountWithinBounds(b.Contract, l.AmountField, p.Amount)
 	})
 	if !asked {
-		return nil, refuse(apierr.CodeIntegrationUnavailable)
+		return paymentGrant{}, refuse(apierr.CodeIntegrationUnavailable)
 	}
-	var spaceID, workspaceID int64
-	if err := s.db.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`,
-		e.appID).Scan(&spaceID, &workspaceID); err != nil {
+	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
+}
+
+// amountWithinBounds reports whether the amount (decimal text) is within the bounds the live
+// contract states for the amount's field: an amount of an older release, above a maximum the admin
+// approved since, is not what was approved. An amount that isn't a number is the integration's to
+// refuse, and a field with no bound has none.
+func amountWithinBounds(c Contract, field, amount string) bool {
+	v, err := strconv.ParseFloat(amount, 64)
+	if err != nil {
+		return true
+	}
+	for _, f := range c.Fields {
+		if f.Name != field {
+			continue
+		}
+		if (f.Min != nil && v < *f.Min) || (f.Max != nil && v > *f.Max) {
+			return false
+		}
+	}
+	return true
+}
+
+// paymentSnapshot is the authorization of an entry before the provider is asked, as of one moment:
+// the app's place, who may do what, and what the live release approves are read in one read
+// transaction, and the user's access is checked for the space that same read named.
+func (s *Service) paymentSnapshot(ctx context.Context, e effectRow) (paymentGrant, error) {
+	var g paymentGrant
+	err := s.snapshot(ctx, func(q queryer) error {
+		var spaceID, workspaceID int64
+		if err := q.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`,
+			e.appID).Scan(&spaceID, &workspaceID); errors.Is(err, sql.ErrNoRows) {
+			return refuse(apierr.CodeAppEffectAppAccess)
+		} else if err != nil {
+			return err
+		}
+		if err := s.authorizeAppIn(ctx, e, spaceID); err != nil {
+			return err
+		}
+		var err error
+		g, err = s.paymentGrantOf(ctx, q, e, spaceID, workspaceID)
+		return err
+	})
+	return g, err
+}
+
+// createPaymentLink does the entry of a create_payment_link effect.
+func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[string]any, error) {
+	if s.platform.Payments == nil {
+		return nil, errors.New("payment links are not available in this server")
+	}
+	p := e.payload
+	g, err := s.paymentSnapshot(ctx, e)
+	if err != nil {
 		return nil, err
 	}
+	spaceID, workspaceID, b := g.spaceID, g.workspaceID, g.binding
 	superseded := map[string]any{"workspace_id": workspaceID, "space_id": spaceID, "superseded": true}
 	if newer, err := s.paymentLinkSuperseded(ctx, s.db, e); err != nil {
 		return nil, err
@@ -105,11 +191,25 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 		Action:   "payment_link.created",
 		Declared: []string{p.URLField, p.IDField},
 		Set:      map[string]any{p.URLField: link.URL, p.IDField: link.ObjectID},
+		// In the write's own transaction, under the lock the change is made with: the provider took
+		// time, and an admin, the user's rights or the app may have changed in it. Nothing is written
+		// unless the entry is still the newest, the user still may, and the live release still approves
+		// this link with the integration that made it (as createCard checks, in its own).
 		Guard: func(ctx context.Context, tx *sql.Tx) error {
 			if newer, err := s.paymentLinkSuperseded(ctx, tx, e); err != nil {
 				return err
 			} else if newer {
 				return errSuperseded
+			}
+			if err := s.authorizeAppIn(ctx, e, spaceID); err != nil {
+				return err
+			}
+			now, err := s.paymentGrantOf(ctx, tx, e, spaceID, workspaceID)
+			if err != nil {
+				return err
+			}
+			if now.binding.IntegrationID != b.IntegrationID {
+				return refuse(apierr.CodeIntegrationChanged)
 			}
 			return nil
 		},
@@ -157,17 +257,30 @@ func previewPaymentLink(p payload) (EffectDetail, apierr.Code) {
 var errSuperseded = errors.New("a newer payment link entry replaced this one")
 
 // paymentLinkSuperseded is whether a newer entry (a higher number, since numbers are given in the
-// order entries are queued and never again) asks for a payment link of the same record into the
-// same two fields, in any state: that entry's link is the record's, and this one's must never
-// replace it.
-func (s *Service) paymentLinkSuperseded(ctx context.Context, q interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, e effectRow) (bool, error) {
+// order entries are queued and never again) asks for a payment link of the same record into either
+// of the same two fields, in any state: that entry's link is the record's, and this one's must never
+// replace it. It is read from the table that keeps the newest entry of each field (the entries
+// themselves are cleaned up, a done one after 30 days, and an older one tried again later must
+// still find it has been replaced).
+func (s *Service) paymentLinkSuperseded(ctx context.Context, q queryer, e effectRow) (bool, error) {
 	var n int
 	err := q.QueryRowContext(ctx, `
-		SELECT count(*) FROM app_effects
-		WHERE app_id = ? AND record_id = ? AND kind = ? AND id > ?
-		  AND json_extract(payload, '$.url_field') = ? AND json_extract(payload, '$.id_field') = ?`,
-		e.appID, e.recordID, EffectCreatePaymentLink, e.id, e.payload.URLField, e.payload.IDField).Scan(&n)
+		SELECT count(*) FROM app_payment_link_latest
+		WHERE app_id = ? AND record_id = ? AND field IN (?, ?) AND effect_id > ?`,
+		e.appID, e.recordID, e.payload.URLField, e.payload.IDField, e.id).Scan(&n)
 	return n > 0, err
+}
+
+// notePaymentLinkEntry records that the entry is the newest to write each of its two fields of the
+// record, in the transaction that queues it. Only forward: an entry never replaces a newer one's mark.
+func notePaymentLinkEntry(ctx context.Context, tx *sql.Tx, appID, recordID, effectID int64, p payload) error {
+	for _, field := range []string{p.URLField, p.IDField} {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO app_payment_link_latest (app_id, record_id, field, effect_id) VALUES (?, ?, ?, ?)
+			ON CONFLICT (app_id, record_id, field) DO UPDATE SET effect_id = excluded.effect_id
+			WHERE excluded.effect_id > app_payment_link_latest.effect_id`, appID, recordID, field, effectID); err != nil {
+			return err
+		}
+	}
+	return nil
 }

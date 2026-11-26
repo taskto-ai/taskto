@@ -1488,7 +1488,7 @@ func TestAnAnswerIsRecordedEvenIfAnotherTryMarkedTheRefFailed(t *testing.T) {
 		t.Fatalf("state = %s", got.state)
 	}
 	// ...and this try's answer, which made the object, is noted all the same.
-	if err := p.svc.noteLink(context.Background(), stale, Link{ObjectID: p.fake.Sessions()[0].ID, URL: *p.fake.Sessions()[0].URL}); err != nil {
+	if _, err := p.svc.noteLink(context.Background(), stale, req, Link{ObjectID: p.fake.Sessions()[0].ID, URL: *p.fake.Sessions()[0].URL}); err != nil {
 		t.Fatal(err)
 	}
 	if got := p.refs()[0]; got.state != "open" || got.object != p.fake.Sessions()[0].ID {
@@ -1537,11 +1537,11 @@ func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
 		kind   CallKind // of the error, 0 for none
 	}{
 		"an open session":    {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(*pay, string) {}, true, 0},
-		"a paid session":     {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(p *pay, id string) { _, _ = p.fake.Pay(id) }, false, CallRefused},
+		"a paid session":     {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(p *pay, id string) { _, _ = p.fake.Pay(id) }, false, CallSettled},
 		"an expired session": {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(p *pay, id string) { _, _ = p.fake.Expire(id) }, false, 0},
 		"an active link":     {NewLink{}, link, func(*pay, string) {}, true, 0},
-		"a paid link":        {NewLink{}, link, func(p *pay, id string) { _, _ = p.fake.PayLink(id) }, false, CallRefused},
-		"a deactivated link": {NewLink{}, link, func(p *pay, id string) { p.mustPost("/v1/payment_links/"+id, url.Values{"active": {"false"}}) }, false, CallRefused},
+		"a paid link":        {NewLink{}, link, func(p *pay, id string) { _, _ = p.fake.PayLink(id) }, false, CallSettled},
+		"a deactivated link": {NewLink{}, link, func(p *pay, id string) { p.mustPost("/v1/payment_links/"+id, url.Values{"active": {"false"}}) }, false, CallSettled},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1564,5 +1564,259 @@ func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
 				t.Fatalf("err = %v, link %+v", err, got)
 			}
 		})
+	}
+}
+
+// ----- a ref belongs to its key's mode and its integration -----
+
+// setKey replaces the integration's key, and the one the fake accepts, as an admin does.
+func (p *pay) setKey(key string) {
+	p.t.Helper()
+	p.fake.SetAPIKey(key)
+	expect(p.t, p.owner.do(http.MethodPatch, wsPath(p.ws, fmt.Sprintf("integrations/%d", p.in.ID)),
+		map[string]any{"secrets": map[string]string{"api_key": key}}), http.StatusOK)
+}
+
+// One Stripe account answers with the same id to its test key and its live key, but a test key
+// doesn't see what a live one made: an unfinished ref made under one mode is never looked for or
+// made again under the other, in either direction.
+func TestAKeyOfTheOtherModeOfTheSameAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
+	for name, swap := range map[string]struct{ from, to, mode string }{
+		"test to live": {stripeTestKey, stripeLiveKey, "test"},
+		"live to test": {stripeLiveKey, stripeTestKey, "live"},
+	} {
+		for shapeName, shape := range linkShapes {
+			t.Run(name+" "+shapeName, func(t *testing.T) {
+				p := newPay(t, shape.public)
+				p.setKey(swap.from)
+				record := p.invoice(10, "EUR")
+				req := p.direct(record, "op-mode-0001")
+				p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, shape.path))
+				if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+					t.Fatal("the lost answer was no error")
+				}
+				var account, mode string
+				if err := p.db.QueryRow(`SELECT account_id, account_mode FROM integration_refs`).Scan(&account, &mode); err != nil || account != testprovider.TestAccountID || mode != swap.mode {
+					t.Fatalf("the ref's account = %q, mode = %q, %v", account, mode, err)
+				}
+				before := p.refs()
+				requests := len(p.fake.Requests())
+
+				p.setKey(swap.to) // the same account, the other mode
+				p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
+				_, err := p.svc.OpenPaymentLink(context.Background(), req)
+				var pe *paylink.Error
+				if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationAccountChanged || pe.Transient {
+					t.Fatalf("err = %v", err)
+				}
+				for _, r := range p.fake.Requests()[requests:] {
+					if r.Path != "/v1/account" {
+						t.Fatalf("after the key's mode changed, %s %s was called", r.Method, r.Path)
+					}
+				}
+				if after := p.refs(); len(after) != 1 || after[0] != before[0] {
+					t.Fatalf("the ref changed: %+v, was %+v", after, before)
+				}
+				if n := p.objects(shape.path); n != 1 {
+					t.Fatalf("%d objects, want the first mode's one", n)
+				}
+				// The mode it was made in again: the ref carries on, and finds its object.
+				p.setKey(swap.from)
+				link, err := p.svc.OpenPaymentLink(context.Background(), req)
+				if err != nil || link.ObjectID != p.objectID(shape.path) {
+					t.Fatalf("link = %+v, %v", link, err)
+				}
+			})
+		}
+	}
+}
+
+// A slot bound to another integration since the ref's first try, even one of the same account, is
+// refused while the ref has no link, as it is when it has one: the ref is not moved, and nothing is
+// asked of the provider.
+func TestARefWithNoLinkIsNeverMovedToAnotherIntegration(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-rebind-0001")
+			p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+				t.Fatal("the lost answer was no error")
+			}
+			before, requests := p.refs(), len(p.fake.Requests())
+			body := stripeBody("second")
+			body["secrets"] = map[string]string{"api_key": p.fake.APIKey()} // the same account and mode
+			body["currencies"] = []string{"EUR"}
+			second := p.create(p.owner, p.ws, body)
+			p.exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, second.ID, p.space.ID)
+			req.IntegrationID = second.ID
+			for range 2 { // asked again, and again: the same answer, and never a call that makes an object
+				_, err := p.svc.OpenPaymentLink(context.Background(), req)
+				var pe *paylink.Error
+				if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationChanged || pe.Transient {
+					t.Fatalf("err = %v", err)
+				}
+			}
+			if after := p.refs(); len(after) != 1 || after[0] != before[0] || after[0].integration != p.in.ID {
+				t.Fatalf("the ref changed: %+v, was %+v", after, before)
+			}
+			for _, r := range p.fake.Requests()[requests:] {
+				if r.Method != http.MethodGet {
+					t.Fatalf("after the slot was rebound, %s %s was called", r.Method, r.Path)
+				}
+			}
+			// Bound to the first one again, the ref carries on.
+			req.IntegrationID = p.in.ID
+			link, err := p.svc.OpenPaymentLink(context.Background(), req)
+			if err != nil || link.ObjectID != p.objectID(shape.path) {
+				t.Fatalf("link = %+v, %v", link, err)
+			}
+		})
+	}
+}
+
+// ----- a key that may hold a dead answer is not used again -----
+
+// A Checkout Session of the ref that expired early (a person expired it) is passed over by the lookup,
+// but the key still holds Stripe's answer for the call that made it: under that key the next call
+// would be answered with the dead session. The lookup having found nothing a payer can use, the call
+// is made under a key of its own, once.
+func TestAnExpiredSessionIsNeverReplayedAsTheNewLink(t *testing.T) {
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-expired-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	dead := p.fake.Sessions()[0].ID
+	if _, err := p.fake.Expire(dead); err != nil {
+		t.Fatal(err)
+	}
+	// The ref is past the time the key is trusted and Stripe still keeps it (a day).
+	p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-23*time.Hour-30*time.Minute)))
+	link, err := p.svc.OpenPaymentLink(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.ObjectID == "" || link.ObjectID == dead {
+		t.Fatalf("link = %+v: the dead session %s was given", link, dead)
+	}
+	if ss, ok := p.fake.Session(link.ObjectID); !ok || ss.Status != "open" {
+		t.Fatalf("the link's session = %+v, %v", ss, ok)
+	}
+	reqs := p.posts()
+	if len(reqs) != 2 || reqs[0].IdempotencyKey == reqs[1].IdempotencyKey || reqs[1].IdempotencyKey != reqs[0].IdempotencyKey+"-1" {
+		t.Fatalf("keys: %+v", reqs)
+	}
+	if refs := p.refs(); len(refs) != 1 || refs[0].keySeq != 1 || refs[0].object != link.ObjectID {
+		t.Fatalf("refs = %+v", refs)
+	}
+	// Asked again, the ref has its link: nothing more is made.
+	if again, err := p.svc.OpenPaymentLink(context.Background(), req); err != nil || again.ObjectID != link.ObjectID || len(p.posts()) != 2 {
+		t.Fatalf("again = %+v, %v, %d calls", again, err, len(p.posts()))
+	}
+}
+
+// Stripe may keep any answer of an executed call under its key, a refusal of 4xx included, so a ref
+// that failed and is tried again looks for what the call made and then takes a key of its own.
+func TestAFailedRefTriedAgainLooksAndTakesAKeyOfItsOwn(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name+" that made nothing", func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-failed-0001")
+			p.fake.Fail(testprovider.Refusal("amount_too_small").On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+				t.Fatal("the refusal was no error")
+			}
+			if r := p.refs()[0]; r.state != "failed" || r.keySeq != 0 {
+				t.Fatalf("ref = %+v", r)
+			}
+			requests := len(p.fake.Requests())
+			link, err := p.svc.OpenPaymentLink(context.Background(), req)
+			if err != nil || link.ObjectID != p.objectID(shape.path) {
+				t.Fatalf("link = %+v, %v", link, err)
+			}
+			var looked bool
+			for _, r := range p.fake.Requests()[requests:] {
+				if r.Method == http.MethodGet && strings.HasPrefix(r.Path, shape.path) {
+					looked = true
+				}
+			}
+			posts := p.fake.RequestsTo(http.MethodPost, shape.path)
+			if !looked || len(posts) != 2 || posts[1].IdempotencyKey != posts[0].IdempotencyKey+"-1" {
+				t.Fatalf("looked = %v, keys = %+v", looked, posts)
+			}
+		})
+		t.Run(name+" that made an object", func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-failed-0002")
+			p.fake.Fail(testprovider.Refusal("amount_too_small").AfterExecuting().On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+				t.Fatal("the refusal was no error")
+			}
+			if p.objects(shape.path) != 1 {
+				t.Skip("the fake keeps no object of a refusal")
+			}
+			link, err := p.svc.OpenPaymentLink(context.Background(), req)
+			if err != nil || link.ObjectID != p.objectID(shape.path) || p.objects(shape.path) != 1 || len(p.fake.RequestsTo(http.MethodPost, shape.path)) != 1 {
+				t.Fatalf("link = %+v, %v: the object was not adopted", link, err)
+			}
+		})
+	}
+}
+
+// An object of the ref that was paid, or that can no longer be used for another reason, is not given
+// and no other is made: the entry fails with a code that asks an admin to reconcile it.
+func TestAPaidObjectOfTheRefFailsTheEntryWithItsOwnCode(t *testing.T) {
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-paid-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	if _, err := p.fake.Pay(p.fake.Sessions()[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
+	_, err := p.svc.OpenPaymentLink(context.Background(), req)
+	var pe *paylink.Error
+	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkAlreadyPaid || pe.Transient {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(p.posts()); n != 1 {
+		t.Fatalf("%d calls that make an object", n)
+	}
+}
+
+// A try whose answer was not recorded because another try changed the ref meanwhile gives what the
+// ref holds, checked as every finished ref is: under the integration that made it.
+func TestAnAnswerNotRecordedGivesWhatTheRefHolds(t *testing.T) {
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-noted-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	r := p.refs()[0]
+	stale := ref{id: r.id, integrationID: p.in.ID, amountMinor: 1000, currency: "EUR"}
+	made := p.fake.Sessions()[0]
+	// The other try noted the object under the first integration.
+	p.exec(`UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'`, made.ID, *made.URL)
+	other := Link{ObjectID: "cs_test_" + strings.Repeat("z", 20), URL: "https://checkout.stripe.com/c/pay/x"}
+	link, err := p.svc.noteLink(context.Background(), stale, req, other)
+	if err != nil || link.ObjectID != made.ID || link.URL != *made.URL {
+		t.Fatalf("link = %+v, %v: not the ref's own", link, err)
+	}
+	req.IntegrationID = p.in.ID + 100 // another integration is bound now
+	_, err = p.svc.noteLink(context.Background(), stale, req, other)
+	var pe *paylink.Error
+	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationChanged {
+		t.Fatalf("err = %v", err)
 	}
 }

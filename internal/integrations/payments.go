@@ -93,6 +93,10 @@ const (
 	// than a lookup reads, so it can't be said whether an earlier try made the object. Asking again
 	// reads the same, so the call is not tried again: a person settles it.
 	CallLookupIncomplete
+	// CallSettled: the lookup found an object of the reference that was paid, or that no payer can
+	// use any more for a reason that doesn't say it wasn't paid (a completed session, a Payment Link
+	// deactivated or at its limit). Nothing is made: a person reconciles that payment.
+	CallSettled
 )
 
 // CallError is the failure of a call to a provider. It carries no text of the provider's.
@@ -113,6 +117,8 @@ func (e *CallError) Error() string {
 		return "the provider refused the request (status " + strconv.Itoa(e.Status) + ")"
 	case CallLookupIncomplete:
 		return "the provider holds more than a lookup reads"
+	case CallSettled:
+		return "the provider holds a payment of the reference that was paid or can no longer be used"
 	}
 	return "the provider didn't answer (status " + strconv.Itoa(e.Status) + ")"
 }
@@ -386,7 +392,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			// must not read as "not made" (the next call would make a second payable link).
 			if hosted && (o.Active == nil || !*o.Active) {
 				// Deactivated by a person, or by its limit of payments: no one can say it wasn't paid.
-				return Link{}, false, &CallError{Kind: CallRefused, Status: status}
+				return Link{}, false, &CallError{Kind: CallSettled, Status: status}
 			}
 			if !hosted {
 				switch o.Status {
@@ -394,7 +400,10 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				case "expired":
 					continue // can't be paid, and the payer was never given an address that works
 				default:
-					return Link{}, false, &CallError{Kind: CallRefused, Status: status} // complete, or not said
+					if o.Status == "complete" {
+						return Link{}, false, &CallError{Kind: CallSettled, Status: status}
+					}
+					return Link{}, false, &CallError{Kind: CallRefused, Status: status} // a state not said
 				}
 			}
 			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
@@ -512,6 +521,10 @@ func stripeFailure(status int, body []byte) error {
 	case e.Error.Type == "idempotency_error":
 		return &CallError{Kind: CallRefused, Status: status, KeyKept: true}
 	}
+	// Any other refusal. Stripe saves the result of a request it executed under its key, a 4xx
+	// included (only a request that failed validation before it ran is not saved), so the same key may
+	// answer the same refusal again: a retry of the entry looks for what the call made and takes a key
+	// of its own, not this one.
 	return &CallError{Kind: CallRefused, Status: status}
 }
 

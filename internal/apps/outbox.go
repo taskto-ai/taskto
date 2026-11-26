@@ -251,12 +251,22 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO app_effects (app_id, operation_id, position, name, kind, record_id, record_revision,
 				user_id, acted_by_agent, acted_via, action_kind, payload, state, next_attempt_at, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-			appID, opID, i, e.Name, e.Kind, ap.id, ap.revision, actor.UserID, actor.Agent, via(actor), action.Kind, string(raw), at, at, at); err != nil {
+			appID, opID, i, e.Name, e.Kind, ap.id, ap.revision, actor.UserID, actor.Agent, via(actor), action.Kind, string(raw), at, at, at)
+		if err != nil {
 			return 0, err
+		}
+		if e.Kind == EffectCreatePaymentLink {
+			effectID, err := res.LastInsertId()
+			if err != nil {
+				return 0, err
+			}
+			if err := notePaymentLinkEntry(ctx, tx, appID, ap.id, effectID, p); err != nil {
+				return 0, err
+			}
 		}
 	}
 	return len(queued), nil
@@ -627,10 +637,16 @@ func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, err
 // role now says: an update needs the right to change that record, and to read it), and the record
 // is still there. An offline app does nothing.
 func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
+	return s.authorizeAppIn(ctx, e, 0)
+}
+
+// authorizeAppIn is authorizeApp for a caller that has read other things of the app in a space it
+// names (inSpace, 0 for none): an app that is in another space now, moved since, is not found.
+func (s *Service) authorizeAppIn(ctx context.Context, e effectRow, inSpace int64) error {
 	var spaceID int64
 	var archived sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT space_id, archived_at FROM apps WHERE id = ?`, e.appID).Scan(&spaceID, &archived)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && inSpace != 0 && spaceID != inSpace) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
 	if err != nil {

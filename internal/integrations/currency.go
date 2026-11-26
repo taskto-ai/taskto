@@ -11,14 +11,6 @@ import (
 // an app's declaration of what it asks for reads too, and the code that opens a payment (a later
 // card) reads its amounts from the same table, so a limit and a payment mean the same unit.
 
-// wholeUnitsOnly are the currencies written with decimals whose amounts must be whole: the
-// provider takes 500 for 5 ISK and refuses 550.
-var wholeUnitsOnly = map[string]bool{"ISK": true}
-
-// WholeUnitsOnly says whether amounts in the currency must be a multiple of 10^Exponent: its
-// decimals are written, but are always zero.
-func WholeUnitsOnly(code string) bool { return wholeUnitsOnly[code] }
-
 // Exponent returns the number of decimals of a currency, and whether the currency is on the
 // closed list.
 func Exponent(code string) (int, bool) { return currency.Exponent(code) }

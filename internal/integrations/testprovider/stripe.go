@@ -123,6 +123,15 @@ func (s *Stripe) SetAccount(id string) {
 	s.account = id
 }
 
+// SetAPIKey replaces the key the fake accepts from now on, as an admin replacing an integration's key
+// with the same account's key of the other mode does: the account's id stays, and the objects it
+// made, and a key with "_live_" in it makes the fake's new objects live-mode ones.
+func (s *Stripe) SetAPIKey(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apiKey, s.live = key, strings.Contains(key, "_live_")
+}
+
 // NewStripe starts a fake Stripe, stopped when the test ends.
 func NewStripe(t testing.TB, opts ...Option) *Stripe {
 	t.Helper()

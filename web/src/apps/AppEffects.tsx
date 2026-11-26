@@ -281,9 +281,12 @@ function detail(e: AppEffect, t: ReturnType<typeof useT>, f: Pick<Format, 'numbe
   const d = e.detail
   switch (e.kind) {
     case 'create_payment_link': {
-      // The amount is exact decimal text; only its showing is the locale's.
+      // The amount is exact decimal text; only its showing is the locale's. An amount the server
+      // refused is shown as it is, exactly (a number would round 120.123 to 120.12, which is not what
+      // the record holds), and so is one that is not a number.
       const n = Number(d.amount)
       if (!d.amount || !d.currency) return d.title ?? ''
+      if (!Number.isFinite(n) || e.error?.code === 'integration_amount_refused') return `${d.amount} ${d.currency}`
       try {
         return f.number(n, { style: 'currency', currency: d.currency })
       } catch {

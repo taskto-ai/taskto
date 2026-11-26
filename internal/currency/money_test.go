@@ -22,6 +22,11 @@ func TestMinor(t *testing.T) {
 		{"007.5", "USD", 750, nil},
 		{"90071992547409.93", "USD", 9007199254740993, nil}, // beyond what a float holds, still exact as text
 
+		{"500", "ISK", 50000, nil},
+		{"500.00", "ISK", 50000, nil}, // decimals that are zero are whole
+		{"5.5", "ISK", 0, ErrNotWhole},
+		{"5.01", "ISK", 0, ErrNotWhole},
+		{"5.001", "ISK", 0, ErrTooManyDecimals},
 		{"5.5", "JPY", 0, ErrTooManyDecimals},
 		{"5.501", "EUR", 0, ErrTooManyDecimals},
 		{"0.30000000000000004", "EUR", 0, ErrTooManyDecimals},

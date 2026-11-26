@@ -127,7 +127,7 @@ currency's smallest unit, up to a trillion) and 1 to 20 currencies from the serv
 The list has each currency's number of decimals in the provider's API, which is how a payment's
 amount is converted exactly, never rounded. That is Stripe's unit, which isn't always ISO 4217's:
 COP, HUF and IDR have two decimals, and ISK is written with two that are always `00` (5 ISK is
-500), so an ISK amount must be whole (`WholeUnitsOnly`). These limits are not in a definition and no app can raise them.
+500), so an ISK amount must be whole (`currency.WholeUnitsOnly`, which `currency.Minor` enforces: a preview refuses what the run would). These limits are not in a definition and no app can raise them.
 
 ## Gates
 
@@ -231,8 +231,12 @@ An app's action may declare a `create_payment_link` effect that names a slot of 
 ([Apps and approval](#apps-and-approval)). When the action runs, the effect is queued in the app's
 outbox in the same transaction as the record's change, and the outbox worker does it as the user who
 acted, with that user's access then (`docs/api.md`, [Payment links](api.md#payment-links)). It
-re-checks that the live release still asks for exactly this link and has an approved contract for it,
-that the integration is switched on and allowed in the app's space, and the admin's limits; it makes
+re-checks that the live release still asks for exactly this link and has an approved contract for it
+(the action and its kind, the amount field and its bounds, the currency and where it is read from, the
+rule the record must meet, where the link goes), that the integration is switched on and allowed in
+the app's space, and the admin's limits. These are read in one snapshot before the provider is asked,
+and again in the transaction that writes the link, with the user's access: what changes while the
+provider answers stops the write. It makes
 the link at the provider with the integration's key, which is opened only for the call; and it writes
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
@@ -308,22 +312,33 @@ write.
 - **A reference belongs to its account and its request.** When the reference is made, the integration
   reads the account its key belongs to (`GET /v1/account`, which with no id answers the account of the
   key; <https://docs.stripe.com/api/accounts/retrieve>, so the key must be allowed to read it) and
-  keeps the account's id, and the two pages of the request (or none) as the first try asked them.
+  keeps the account's id with the mode of the key (test or live: one Stripe account answers both keys
+  with the same id, and a test key doesn't see what a live one made), the integration, and the two
+  pages of the request (or none) as the first try asked them.
   A retry sends the same parameters, which Stripe requires of a retry under a key, and looks among
   the same kind of objects (Checkout Sessions or Payment Links), whatever the server's public URL is
-  by then. If the integration's key has been replaced by another account's while a reference has no
-  object, nothing is looked for or made in the new account, where an object the old one made could
+  by then. If the integration's key has been replaced by another account's, or by the same account's
+  key of the other mode, while a reference has no object, nothing is looked for or made in the new
+  account or mode, where an object the old one made could
   not be found: the entry fails with `integration_account_changed` and the reference is left as it is.
   Its old link is neither cancelled nor known to be unpaid, so an admin reconciles the original
   payment in the old account first (paid: nothing is recreated; not paid: the old link is made unable
-  to take payment), and only then runs the action again (a new entry, a new reference). A link a
-  reference already made is only ever given under the integration that made it
-  (`integration_changed` otherwise, wherever the finished reference is found), so a record is never
-  written with a link of an integration that is no longer the slot's; the same reconciliation applies.
+  to take payment), and only then runs the action again (a new entry, a new reference). A
+  reference is only ever used under the integration that made it, with its link or without
+  (`integration_changed` otherwise, wherever the reference is found), so a record is never written
+  with a link of an integration that is no longer the slot's; the same reconciliation applies.
+- **A key that may hold a dead answer is not used again.** Stripe answers a call's saved result to the
+  same key, a refusal (a 4xx included) and an object that has expired since. So a retry of a failed
+  reference, and a try that looks for the reference's object and finds only an expired Checkout
+  Session, moves on to a key of its own (once a call was made under the current one) before it makes
+  one. A lookup that finds an object of the reference that was paid, or that can't take payment for a
+  reason that doesn't say it wasn't (a completed session, a Payment Link deactivated or at its limit),
+  fails the entry with `integration_link_already_paid`: nothing is made, and an admin reconciles it
+  in the provider's account.
 - **The newest entry wins, and what is sent is what was approved.** Entries are done in the order they
   were queued, but one tried again later could write its link after a newer entry for the same record
-  and fields wrote its own. An entry for which a newer one exists (same record, same two fields, any
-  state) asks the provider for nothing and writes nothing, and ends done with a result that says it
+  and fields wrote its own. An entry for which a newer one exists (same record, either of the same two fields, any
+  state, kept apart from the entries so that cleaning them up doesn't lose it) asks the provider for nothing and writes nothing, and ends done with a result that says it
   was superseded; the check is made again in the transaction that writes the link. And an entry's
   description names the fields it was filled from: the live contract must still name each of them (and
   the record's id, if it was in the text), or the entry fails as no longer approved

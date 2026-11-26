@@ -381,3 +381,35 @@ test('a payment link says its amount in the person’s format, and what failed a
   expect(items[0].textContent).toContain('above the 5000.00 EUR that an admin allows')
   expect(items[1].textContent).toContain('€120.10')
 })
+
+test('an amount the server refused is shown exactly, never rounded to the locale’s decimals', async () => {
+  fakeFetch({
+    [`GET ${base}/effects?limit=50`]: {
+      body: {
+        effects: [
+          effect(2, {
+            kind: 'create_payment_link',
+            status: 'failed',
+            error: { code: 'integration_amount_refused' },
+            detail: { title: 'Invoice A-3', amount: '120.123', currency: 'EUR' },
+          }),
+          effect(1, {
+            kind: 'create_payment_link',
+            status: 'failed',
+            error: { code: 'integration_amount_refused' },
+            detail: { title: 'Invoice A-4', amount: 'abc', currency: 'EUR' },
+          }),
+        ],
+        active: 0,
+        failed: 2,
+      },
+    },
+  })
+  render(<AppEffects workspace={1} base={base} writable />)
+  fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
+  const items = within(await screen.findByRole('list', { name: 'The app’s effects' })).getAllByRole('listitem')
+  expect(items[0].textContent).toContain('120.123 EUR')
+  expect(items[0].textContent).not.toContain('€120.12')
+  expect(items[1].textContent).toContain('abc EUR')
+  expect(items[1].textContent).not.toContain('NaN')
+})

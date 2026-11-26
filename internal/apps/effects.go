@@ -622,9 +622,12 @@ type payload struct {
 	AmountField string `json:"amount_field,omitempty"`
 	Amount      string `json:"amount,omitempty"`
 	Currency    string `json:"currency,omitempty"`
-	Description string `json:"description,omitempty"`
-	URLField    string `json:"url_field,omitempty"`
-	IDField     string `json:"id_field,omitempty"`
+	// CurrencyField is the choice field the currency was read from, "" for the effect's own code: the
+	// live contract must still read it from the same place.
+	CurrencyField string `json:"currency_field,omitempty"`
+	Description   string `json:"description,omitempty"`
+	URLField      string `json:"url_field,omitempty"`
+	IDField       string `json:"id_field,omitempty"`
 	// Describes and DescribesID are what the description was filled with, as the approved contract
 	// states it (ContractLink): the fields it sends out as text, sorted, and whether it sends the
 	// record's id. When the entry runs they are checked against the live release's contract, so a
@@ -725,7 +728,7 @@ func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
 			p.Path = render(e.Path, c, data, id, modeSlug)
 		}
 	case EffectCreatePaymentLink:
-		p.Slot, p.AmountField, p.URLField, p.IDField = e.Integration, e.AmountField, e.URLField, e.IDField
+		p.Slot, p.AmountField, p.CurrencyField, p.URLField, p.IDField = e.Integration, e.AmountField, e.CurrencyField, e.URLField, e.IDField
 		p.Description = render(e.Description, c, data, id, modeLine)
 		p.Describes, p.DescribesID = e.describes()
 		p.Amount, p.Currency = e.moneyOf(c, data)

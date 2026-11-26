@@ -462,4 +462,5 @@ const (
 	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
 	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
 	CodeIntegrationLookupIncomplete    Code = "integration_lookup_incomplete"    // the provider's account has more objects than a lookup for an earlier try's link reads: an admin must settle it
+	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
 )

@@ -91,13 +91,21 @@ CREATE TABLE integration_refs (
     -- next call uses a key of its own (a provider that saved a failure answers it again to the same
     -- key), so a call whose answer never came back is the only one that is repeated under its key.
     key_seq            INTEGER NOT NULL DEFAULT 0 CHECK (key_seq >= 0),
+    -- The highest key_seq a call was made under (-1: none yet). A key a call was made under may hold the
+    -- provider's saved answer to it, a failure or an object that has expired since, which the same key
+    -- would answer again, so a try that found no object of the reference moves on from a key that was
+    -- used and not from one that was not.
+    key_called_seq     INTEGER NOT NULL DEFAULT -1 CHECK (key_called_seq >= -1),
     -- The provider's account the reference was made under (read from the provider with the integration's
-    -- key when the reference was made), and the shape of the request: the two pages the payer returns
+    -- key when the reference was made) and the mode of that key (test or live: one account has both,
+    -- with the same id, and what a test key made is not in the live objects), and the shape of the
+    -- request: the two pages the payer returns
     -- to, both empty for a link whose payer stays on the provider's own confirmation. A provider
     -- keeps a call's key only for its own parameters, and finds what a lost call made only in the
     -- account and among the kind of objects it was made as, so a retry after a restart, a changed
     -- public address or another account's key must ask what the first try asked, and nowhere else.
     account_id         TEXT NOT NULL DEFAULT '',
+    account_mode       TEXT NOT NULL DEFAULT '',
     success_url        TEXT NOT NULL DEFAULT '',
     cancel_url         TEXT NOT NULL DEFAULT '',
     -- Only forward: creating, then open, then one of paid, expired, failed (and paid, then refunded).
@@ -109,6 +117,21 @@ CREATE TABLE integration_refs (
     polls              INTEGER NOT NULL DEFAULT 0 CHECK (polls >= 0),
     UNIQUE (integration_id, provider_object_id)
 ) STRICT;
+
+-- The newest create_payment_link entry of each field a link is written to, by app, record and field. An
+-- entry is superseded when a newer one has the field, and the outbox's entries are cleaned up (a
+-- done one after 30 days), so what supersedes cannot rest on them: this row stays as long as the
+-- record does, as app_effect_cards does for cards. Written when an entry is queued, which only moves
+-- it forward.
+CREATE TABLE app_payment_link_latest (
+    app_id    INTEGER NOT NULL REFERENCES apps (id) ON DELETE CASCADE,
+    record_id INTEGER NOT NULL REFERENCES app_rows (id) ON DELETE CASCADE,
+    field     TEXT NOT NULL,
+    effect_id INTEGER NOT NULL,
+    PRIMARY KEY (app_id, record_id, field)
+) STRICT;
+
+CREATE INDEX app_payment_link_latest_by_record ON app_payment_link_latest (record_id);
 
 CREATE INDEX integration_refs_by_record ON integration_refs (record_id);
 CREATE INDEX integration_refs_by_app ON integration_refs (app_id);

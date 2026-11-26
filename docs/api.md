@@ -217,9 +217,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
 | `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
 | `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
-| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account than the integration's key belongs to now: nothing is looked up or made in the new account. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
-| `integration_changed` | — | A failed `create_payment_link` entry whose link was made under another integration than the slot is bound to now: it is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
+| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now: nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
+| `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
 | `integration_lookup_incomplete` | — | A failed `create_payment_link` entry whose earlier try's link could not be looked for in full (the account holds more objects than a lookup reads): nothing is made. An admin looks in the provider's account for an object of the reference (a Payment Link's `metadata.taskto_ref`, a Checkout Session's `client_reference_id`) and reconciles it as above before running the action again; deactivating other links does not help, since the lookup reads inactive ones too. |
+| `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -3616,9 +3617,13 @@ indeterminate result): one found is adopted as the call's answer, and while the 
 nothing is made and the entry is tried again; a lookup that worked but can't see all the account holds
 fails the entry with `integration_lookup_incomplete`. A reference keeps the provider account and the
 pages of its first try: after the integration's key is replaced by another account's, an unfinished
-reference's entry fails with `integration_account_changed`, and a link made under another integration
-than the slot's is not given (`integration_changed`). A newer entry for the same record and fields
-supersedes an older one, which ends done with `result.superseded` and writes nothing. The link and its
+reference's entry fails with `integration_account_changed` (so does a key of the same account's other
+mode, test or live), and a reference made under another integration than the slot's, finished or
+not, is not used (`integration_changed`). A retry of a failed reference looks for what the failed call may have made and
+moves on to a key of its own before it calls again, and so does a try that looks and finds only an
+expired Checkout Session (the key would answer with that dead session); an object of the reference
+that was paid fails the entry with `integration_link_already_paid`. A newer entry for the same record and fields
+supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
 again changes nothing. A Checkout Session expires by itself within the provider's default of 24

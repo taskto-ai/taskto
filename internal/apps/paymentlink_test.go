@@ -2,6 +2,8 @@ package apps
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -547,4 +549,310 @@ func (p *payFX) payloadOf() (payload string) {
 		p.e.t.Fatal(err)
 	}
 	return payload
+}
+
+// ----- the contract is checked whole, as of now -----
+
+// release publishes the definition, edited from the invoices' text by replacing each from with its to
+// (pairs of two), as the next release, approved.
+func (p *payFX) release(pairs ...string) { p.e.t.Helper(); p.releaseAck(nil, pairs...) }
+
+// releaseAck is release with the schema changes the publisher acknowledges.
+func (p *payFX) releaseAck(ack []SchemaChange, pairs ...string) {
+	p.e.t.Helper()
+	text := invoiceJSON
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if !strings.Contains(text, pairs[i]) {
+			p.e.t.Fatalf("the invoice definition has no %q", pairs[i])
+		}
+		text = strings.Replace(text, pairs[i], pairs[i+1], 1)
+	}
+	var d Definition
+	if err := json.Unmarshal([]byte(text), &d); err != nil {
+		p.e.t.Fatal(err)
+	}
+	if _, err := d.Check(); err != nil {
+		p.e.t.Fatal(err)
+	}
+	app := p.fresh(p.alice, p.shared, p.app)
+	expect(p.e.t, p.alice.do(http.MethodPatch, appPath(p.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
+	expect(p.e.t, p.approve2(), http.StatusOK)
+	expect(p.e.t, p.tryPublish(p.alice, p.shared, p.fresh(p.alice, p.shared, p.app), ack...), http.StatusOK)
+}
+
+// refused is the one entry's failure with the integration unavailable, and no call to the provider.
+func (p *payFX) refused() {
+	p.e.t.Helper()
+	p.work()
+	if p.links.count() != 0 {
+		p.e.t.Fatal("the entry called the provider's side")
+	}
+	if e := p.entries(p.alice).Effects[0]; e.Status != StateFailed || e.Error == nil || e.Error.Code != apierr.CodeIntegrationUnavailable {
+		p.e.t.Fatalf("entry = %+v", e)
+	}
+	if data, _, _ := p.row(); strings.Contains(data, "pay_url\":\"h") {
+		p.e.t.Fatalf("the record got a link: %s", data)
+	}
+}
+
+// What an admin approved is the whole link: the kind of action that asks, the rule the record must
+// meet, where the currency is read from and what the amount may be. An entry that an older release
+// queued has no authority under a release that approved something else of these.
+func TestAnEntryQueuedUnderAnotherContractOfTheSameLinkIsRefused(t *testing.T) {
+	const effect = `"amount_field": "total", "currency": "EUR",`
+	for name, tc := range map[string]struct{ from, to string }{
+		// The action that asked was an update; the release's is an insert (who may trigger it differs).
+		"another kind of action": {`"send": {"kind": "update"`, `"send": {"kind": "insert"`},
+		// A rule the record must meet was added and the record doesn't meet it.
+		"a rule the record fails": {effect, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "overdue"},`},
+		// The currency now comes from the record's choice, which the entry never read.
+		"the currency read from a field": {effect, `"amount_field": "total", "currency_field": "currency",`},
+		// The largest amount the field takes was lowered below the entry's 120.10.
+		"a lowered maximum": {`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number", "required": true, "max": 100}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t)
+			p.send(p.alice, "op-send-0001")
+			var ack []SchemaChange
+			if strings.Contains(tc.to, `"max": 100`) { // a lowered maximum narrows the field: the publisher says they know
+				ack = []SchemaChange{{Change: "field_narrowed", Field: "total"}}
+			}
+			p.releaseAck(ack, tc.from, tc.to)
+			p.refused()
+		})
+	}
+}
+
+// The same changes that the record satisfies are no obstacle: the entry runs.
+func TestAnEntryUnderAContractItSatisfiesStillRuns(t *testing.T) {
+	const effect = `"amount_field": "total", "currency": "EUR",`
+	for name, tc := range map[string]struct{ from, to string }{
+		"a rule the record meets": {effect, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "sent"},`},
+		"a maximum above it":      {`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number", "required": true, "max": 1000}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t)
+			p.send(p.alice, "op-send-0001")
+			p.release(tc.from, tc.to)
+			p.work()
+			if e := p.entries(p.alice).Effects[0]; e.Status != StateDone || p.links.count() != 1 {
+				t.Fatalf("entry = %+v, %d calls", e, p.links.count())
+			}
+		})
+	}
+}
+
+// ----- the write is checked where it is made -----
+
+// The provider takes time, and what authorized the entry may change in it: nothing is written to the
+// record unless everything still holds under the write's own lock.
+func TestWhatChangesWhileTheProviderIsAskedStopsTheWrite(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*payFX)
+		code   apierr.Code
+	}{
+		"approval revoked":         {func(p *payFX) { expect(p.e.t, p.decide(p.owner, p.ws, p.approve, "revoke", nil), http.StatusOK) }, apierr.CodeIntegrationUnavailable},
+		"integration switched off": {func(p *payFX) { p.exec(`UPDATE integrations SET disabled_at = CURRENT_TIMESTAMP`) }, apierr.CodeIntegrationUnavailable},
+		"space taken away":         {func(p *payFX) { p.exec(`DELETE FROM integration_spaces`) }, apierr.CodeIntegrationUnavailable},
+		"release changed": {func(p *payFX) {
+			p.release(`"amount_field": "total", "currency": "EUR"`, `"amount_field": "total", "currency": "USD"`)
+		}, apierr.CodeIntegrationUnavailable},
+		"app moved": {func(p *payFX) {
+			p.exec(`UPDATE apps SET space_id = ? WHERE id = ?`, p.old.ID, p.app.ID)
+		}, apierr.CodeAppEffectAppAccess},
+		"the user's access ended": {func(p *payFX) {
+			p.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, p.shared.ID, p.alice.id)
+		}, apierr.CodeAppEffectAppAccess},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t)
+			p.send(p.alice, "op-send-0001")
+			_, rev, _ := p.row()
+			done := false
+			p.links.onOpen = func(paylink.Request) {
+				if !done {
+					done = true
+					tc.change(p)
+				}
+			}
+			p.work()
+			if p.links.count() != 1 {
+				t.Fatalf("calls = %d, want the one that was in flight", p.links.count())
+			}
+			if data, rev2, system := p.row(); strings.Contains(data, "pay_url\":\"h") || rev2 != rev || system != "" {
+				t.Fatalf("the record was written: %s, revision %d (was %d), by %q", data, rev2, rev, system)
+			}
+			if n := p.count(`SELECT count(*) FROM app_row_history WHERE row_id = ? AND action = 'payment_link.created'`, p.invoice); n != 0 {
+				t.Fatalf("%d link writes in the history", n)
+			}
+			var state, errCode string
+			if err := p.e.db.QueryRow(`SELECT state, coalesce(error_code, '') FROM app_effects`).Scan(&state, &errCode); err != nil {
+				t.Fatal(err)
+			}
+			if state != StateFailed || errCode != string(tc.code) {
+				t.Fatalf("entry = %s, %s; want failed, %s", state, errCode, tc.code)
+			}
+		})
+	}
+}
+
+// ----- what an entry shows once its fields are gone -----
+
+// A payment link's amount and currency came from the record's fields: once the live release no
+// longer holds them as they were, neither the result nor an error's params show them.
+func TestAnEntrysAmountAndCurrencyAreWithheldOnceTheirFieldsAreGone(t *testing.T) {
+	s := &Service{}
+	all := func(int64) bool { return true }
+	caller := Actor{UserID: 1}
+	holds := Collection{Fields: []Field{{Name: "total", Type: TypeNumber}, {Name: "currency", Type: TypeChoice, Options: []string{"EUR"}}}}
+	retyped := Collection{Fields: []Field{{Name: "total", Type: TypeString}, {Name: "currency", Type: TypeChoice, Options: []string{"EUR"}}}}
+	gone := Collection{}
+	pl := payload{SpaceID: 7, Slot: "payments", Amount: "120.1", Currency: "EUR", Uses: map[string]string{"total": TypeNumber, "currency": TypeChoice}}
+	done := effectRow{state: StateDone, kind: EffectCreatePaymentLink, payload: pl,
+		result: sql.NullString{Valid: true, String: `{"workspace_id":1,"space_id":7,"amount":"120.10","currency":"EUR"}`}}
+	failed := effectRow{state: StateFailed, kind: EffectCreatePaymentLink, payload: pl, errCode: sql.NullString{Valid: true, String: string(apierr.CodeIntegrationAmountAboveMax)},
+		errParams: sql.NullString{Valid: true, String: `{"max":"100.00","currency":"EUR"}`}}
+	for name, tc := range map[string]struct {
+		live *Collection
+		show bool
+	}{"holds": {&holds, true}, "retyped": {&retyped, false}, "gone": {&gone, false}, "no live release": {nil, false}} {
+		t.Run(name, func(t *testing.T) {
+			v, err := s.view(done, caller, all, tc.live)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, hasAmount := v.Result["amount"]
+			_, hasCurrency := v.Result["currency"]
+			if hasAmount != tc.show || hasCurrency != tc.show || v.Detail.Amount != map[bool]string{true: "120.10", false: ""}[tc.show] {
+				t.Fatalf("result = %v, detail = %+v", v.Result, v.Detail)
+			}
+			v, err = s.view(failed, caller, all, tc.live)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, hasMax := v.Error.Params["max"]
+			_, hasCode := v.Error.Params["currency"]
+			if hasMax != tc.show || hasCode != tc.show {
+				t.Fatalf("params = %v", v.Error.Params)
+			}
+		})
+	}
+}
+
+// ----- a preview refuses what the run would -----
+
+// A currency of whole units (ISK) takes no decimals: the preview says so, as the entry would fail.
+func TestAPreviewRefusesDecimalsInACurrencyOfWholeUnits(t *testing.T) {
+	p := newPay(t)
+	d, err := changed(t, `"amount_field": "total", "currency": "EUR"`, `"amount_field": "total", "currency": "ISK"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := p.fresh(p.alice, p.shared, p.app)
+	expect(t, p.alice.do(http.MethodPatch, appPath(p.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
+	app = p.fresh(p.alice, p.shared, p.app)
+	for total, want := range map[any]apierr.Code{5.5: apierr.CodeIntegrationAmountRefused, 500: ""} {
+		body := struct {
+			ClientAction
+			Rows []PreviewRow `json:"rows"`
+		}{
+			ClientAction: action(app, "send", map[string]any{"id": 1, "status": "sent"}),
+			Rows:         []PreviewRow{{ID: 1, Revision: 1, Data: map[string]any{"number": "A-9", "customer": "Zed", "total": total, "status": "draft"}}},
+		}
+		rec := p.alice.do(http.MethodPost, appPath(p.shared, app.ID, "/actions/preview"), body)
+		expect(t, rec, http.StatusOK)
+		pr := decode[Preview](t, rec)
+		var got apierr.Code
+		if len(pr.Effects) == 1 && pr.Effects[0].Error != nil {
+			got = pr.Effects[0].Error.Code
+		}
+		if len(pr.Effects) != 1 || got != want {
+			t.Fatalf("total %v: preview = %+v, want %q", total, pr, want)
+		}
+	}
+}
+
+// ----- the newest entry wins, whatever has been cleaned up -----
+
+// The newest entry's mark outlives the entries: an older one tried again after the newer entry was
+// cleaned up still finds it was replaced.
+func TestAnOlderEntryIsStillSupersededOnceTheNewerOneIsCleanedUp(t *testing.T) {
+	p := newPay(t)
+	p.links.fail = &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+	p.send(p.alice, "op-send-0001")
+	p.work()
+	p.links.fail = nil
+	p.sendTotal("op-send-0002", 50)
+	p.work()
+	ids := p.effectIDs()
+	data, rev, _ := p.row()
+	if len(ids) != 2 || !strings.Contains(data, `"pay_url":"https://pay.example.test/c/1"`) {
+		t.Fatalf("entries = %v, record = %s", ids, data)
+	}
+	p.exec(`DELETE FROM app_effects WHERE id = ?`, ids[1]) // the retention sweep removed it
+	calls := p.links.count()
+	p.e.s.clock = func() time.Time { return time.Now().Add(time.Hour) }
+	p.work()
+	if p.links.count() != calls {
+		t.Fatalf("the older entry asked for a link again: %d calls, was %d", p.links.count(), calls)
+	}
+	if after, rev2, _ := p.row(); after != data || rev2 != rev {
+		t.Fatalf("the older entry changed the record: %s (revision %d), was %s (revision %d)", after, rev2, data, rev)
+	}
+	if e := p.entries(p.alice).Effects[0]; e.Status != StateDone || e.Result["superseded"] != true {
+		t.Fatalf("entry = %+v", e)
+	}
+}
+
+// A newer entry that shares either of the two fields with an older one replaces it: the record's link
+// is the newer one's, however the two entries name their other field.
+func TestANewerEntryOfEitherSharedFieldSupersedesAnOlderOne(t *testing.T) {
+	p := newPay(t)
+	ctx := context.Background()
+	older := effectRow{id: 10, appID: p.app.ID, recordID: p.invoice, payload: payload{URLField: "pay_url", IDField: "payment_id"}}
+	for name, tc := range map[string]struct {
+		url, id string
+		newest  int64
+		want    bool
+	}{
+		"both fields":           {"pay_url", "payment_id", 11, true},
+		"the link field only":   {"pay_url", "payment_ref", 11, true},
+		"the id field only":     {"pay_link", "payment_id", 11, true},
+		"neither field":         {"pay_link", "payment_ref", 11, false},
+		"an older entry's mark": {"pay_url", "payment_id", 9, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p.exec(`DELETE FROM app_payment_link_latest`)
+			tx, err := p.e.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := notePaymentLinkEntry(ctx, tx, p.app.ID, p.invoice, tc.newest, payload{URLField: tc.url, IDField: tc.id}); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := p.e.s.paymentLinkSuperseded(ctx, p.e.db, older)
+			if err != nil || got != tc.want {
+				t.Fatalf("superseded = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+	// The mark only moves forward: a late write of an older entry's number doesn't take it back.
+	tx, err := p.e.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{20, 15} {
+		if err := notePaymentLinkEntry(ctx, tx, p.app.ID, p.invoice, id, payload{URLField: "pay_url", IDField: "payment_id"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if n := p.count(`SELECT count(*) FROM app_payment_link_latest WHERE effect_id = 20`); n != 2 {
+		t.Fatalf("%d fields marked by the newest entry, want 2", n)
+	}
 }

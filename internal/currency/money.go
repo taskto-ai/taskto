@@ -20,6 +20,8 @@ var (
 	ErrNotPositive = errors.New("currency: the amount isn't more than zero")
 	// ErrTooManyDecimals is for an amount with more decimals than the currency has.
 	ErrTooManyDecimals = errors.New("currency: the amount has more decimals than the currency")
+	// ErrNotWhole is for an amount with decimals in a currency that takes whole units only (ISK).
+	ErrNotWhole = errors.New("currency: the currency takes whole units only")
 	// ErrTooLarge is for an amount that doesn't fit the smallest unit's 64-bit number.
 	ErrTooLarge = errors.New("currency: the amount is too large")
 	// ErrUnknown is for a code that isn't on the list.
@@ -40,7 +42,8 @@ func Decimal(v float64) (string, error) {
 // case) into its smallest unit: 12010 for EUR, 5 for JPY. It refuses what isn't a plain decimal
 // number, an amount of zero or less, an amount with more decimals than the currency has (a trailing
 // zero doesn't count: "5.50" is fine for 2, "5.500" too, "5.501" is not), a code that isn't on the
-// list and an amount whose smallest unit doesn't fit an int64. It never rounds.
+// list, an amount with decimals in a currency of whole units only (ISK) and an amount whose
+// smallest unit doesn't fit an int64. It never rounds.
 func Minor(amount, code string) (int64, error) {
 	exp, ok := Exponent(code)
 	if !ok {
@@ -60,10 +63,14 @@ func Minor(amount, code string) (int64, error) {
 		}
 		return 0, ErrTooManyDecimals
 	}
+	decimals := frac != "" // what is left once the trailing zeros are gone
 	frac += strings.Repeat("0", exp-len(frac))
 	n := strings.TrimLeft(whole+frac, "0")
 	if n == "" || negative {
 		return 0, ErrNotPositive
+	}
+	if wholeUnitsOnly[code] && decimals {
+		return 0, ErrNotWhole
 	}
 	v, err := strconv.ParseInt(n, 10, 64)
 	if err != nil {
