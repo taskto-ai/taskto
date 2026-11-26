@@ -160,6 +160,23 @@ test('each state is shown with its reason, the amount as money and the time of t
   expect(gone).toContain('Test mode')
 })
 
+test('a refund that waits for its payment is shown waiting, not failed, with no retry', async () => {
+  fakeFetch({
+    ...around,
+    ...events(event({ id: 2, state: 'pending', kind: 'payment.refunded', code: 'integration_event_payment_unknown' })),
+    ...links(),
+  })
+  open()
+  const list = await screen.findByRole('list', { name: 'Events' })
+  const [row] = within(list).getAllByRole('listitem')
+  const text = row.textContent ?? ''
+  expect(text).toContain('Payment refunded')
+  expect(text).toContain('Waiting')
+  expect(text).not.toContain('Failed')
+  expect(text).toContain('A refund arrived for a payment that no payment link has been paid by yet.')
+  expect(within(row).queryByRole('button', { name: /Retry/ })).toBeNull()
+})
+
 test('an event says nothing of the record it touched: the server holds none, so none is asked for or shown', async () => {
   const calls = fakeFetch({
     ...around,
