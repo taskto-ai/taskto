@@ -111,3 +111,25 @@ test('the equipment detail shows the status by its label', async () => {
   await screen.findByText('TAG-1')
   expect(stat('Status')).toBe('Checked out')
 })
+
+// Each template's list screen draws its icons, as paths: one beside the heading and one in the
+// button that starts a new record, both decoration, so the button is named by its text alone.
+test.each([
+  ['expense', expense, 'Expenses', 'New expense'],
+  ['equipment', equipment, 'Equipment', 'Check out an item'],
+  ['inspection', inspection, 'Inspections', 'New inspection'],
+] as const)('the %s list draws its icons', async (_, template, heading, start) => {
+  const { container } = render(
+    <AppView
+      surfaceId="app-9"
+      label="App"
+      transport={{ load: async () => messages(template, 'list', {}), act: async () => [] }}
+    />,
+  )
+  await screen.findByText(heading)
+  const button = screen.getByRole('button', { name: start })
+  expect(button.querySelector('svg.ui-app-icon path')?.getAttribute('d')).toMatch(/^M/)
+  const icons = container.querySelectorAll('svg.ui-app-icon')
+  expect(icons).toHaveLength(2)
+  for (const svg of icons) expect(svg.getAttribute('aria-hidden')).toBe('true')
+})
