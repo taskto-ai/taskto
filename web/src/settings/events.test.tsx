@@ -228,7 +228,7 @@ test('retrying a failed event calls its route, says so, and reads the list again
   expect(within(screen.getByRole('list', { name: 'Events' })).getByText('Waiting')).toBeTruthy()
 })
 
-test('a refused retry is said under its event, and an event that is no longer failed is read again', async () => {
+test('a refused retry that came too late is said in the section, and the event that is no longer failed is read again', async () => {
   let reads = 0
   fakeFetch({
     ...around,
@@ -253,11 +253,45 @@ test('a refused retry is said under its event, and an event that is no longer fa
   })
   open()
   fireEvent.click(await screen.findByRole('button', { name: /^Retry the event/ }))
-  const refusal = await screen.findByText('Only an event that failed can be retried.')
+  const refusal = await screen.findByText(/Only an event that failed can be retried\./)
   expect(refusal.closest('[role="alert"]')).toBeTruthy()
   // What the server holds now replaces the row that was out of date.
   await waitFor(() => expect(reads).toBe(2))
   await waitFor(() => expect(screen.queryByRole('button', { name: /^Retry the event/ })).toBeNull())
+  expect(screen.getByText(/Only an event that failed can be retried\./)).toBeTruthy()
+})
+
+test('with the Failed filter the refusal stays after the row leaves the list, and goes with the next filter', async () => {
+  let retried = false
+  fakeFetch({
+    ...around,
+    ...events(),
+    [`GET ${base}/events?state=failed`]: () => ({
+      body: {
+        events: retried
+          ? []
+          : [event({ id: 2, state: 'failed', code: 'integration_event_app_offline', retriable: true })],
+        next_before: 0,
+      },
+    }),
+    [`POST ${base}/events/2/retry`]: () => {
+      retried = true
+      return { status: 409, body: { error: 'only a failed event is retried', code: 'integration_event_not_retriable' } }
+    },
+    ...links(),
+  })
+  open()
+  fireEvent.click(await screen.findByRole('radio', { name: 'Failed' }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Retry the event/ }))
+  // The list is read again and no longer holds the event, which had a row for the refusal.
+  expect(await screen.findByText('No event has failed.')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /^Retry the event/ })).toBeNull()
+  const refusal = screen.getByText(/Only an event that failed can be retried\./)
+  expect(refusal.closest('[role="alert"]')).toBeTruthy()
+  expect(refusal.textContent).toContain('“Payment received” of Nov 26, 2026')
+  // Another filter is another question: the refusal is not carried to it.
+  fireEvent.click(screen.getByRole('radio', { name: 'All' }))
+  await waitFor(() => expect(screen.queryByText(/Only an event that failed can be retried\./)).toBeNull())
 })
 
 test('a refusal that leaves the event failed stays under it and is said in words, not as a status number', async () => {
@@ -280,11 +314,22 @@ test('the payment links to check say what to look for at Stripe; one still being
   fakeFetch({
     ...around,
     ...events(),
-    ...links(link(), link({ effect_id: 32, record_id: 90, amount: '75.50', waiting: true, can_confirm: false })),
+    ...links(
+      link(),
+      link({ effect_id: 32, record_id: 90, amount: '75.50', waiting: true, can_confirm: false }),
+      link({
+        effect_id: 33,
+        record_id: 91,
+        amount: '12.00',
+        waiting: false,
+        can_confirm: false,
+        code: 'integration_account_changed',
+      }),
+    ),
   })
   open()
   const list = await screen.findByRole('list', { name: 'Payment links to check' })
-  const [needs, looking] = within(list).getAllByRole('listitem')
+  const [needs, looking, stopped] = within(list).getAllByRole('listitem')
   expect(needs.textContent).toContain('Payment link for €120.00')
   expect(needs.textContent).toContain('Record 88 of app 4 · Shop floor')
   expect(needs.textContent).toContain('Outcome unknown since Nov 26, 2026')
@@ -293,9 +338,21 @@ test('the payment links to check say what to look for at Stripe; one still being
   expect(looking.textContent).toContain('€75.50')
   expect(within(looking).getByText('Still looking')).toBeTruthy()
   expect(within(looking).queryByRole('button')).toBeNull()
+  // A lookup that stopped is not "still looking": its own status, its reason in words and what to do.
+  expect(within(stopped).getByText('Lookup stopped')).toBeTruthy()
+  expect(within(stopped).queryByText('Still looking')).toBeNull()
+  expect(within(stopped).queryByText('Needs you')).toBeNull()
+  expect(stopped.textContent).toContain('started under another account of the payment provider')
+  expect(stopped.textContent).toContain('Nothing can be confirmed here.')
+  expect(within(stopped).queryByRole('button')).toBeNull()
   const check = screen.getByText('What to check at Stripe').closest('.ui-notice') as HTMLElement
-  expect(check.textContent).toContain('taskto_ref')
-  expect(check.textContent).toContain('Ask the person who made the payment to retry it')
+  // Each kind of object carries TaskTo's reference in its own field.
+  expect(check.textContent).toContain('For a Checkout Session, open its details and look for “client_reference_id”.')
+  expect(check.textContent).toContain('For a Payment Link, look for “metadata[taskto_ref]”.')
+  expect(check.textContent).not.toContain('whose metadata holds')
+  expect(check.textContent).toContain('same mode, test or live')
+  expect(check.textContent).toContain('every attempt, not only the last')
+  expect(check.textContent).toContain('The person who ran the original action in the app, not the payer, retries it')
   expect(check.textContent).toContain('confirm below that none exists')
 })
 
@@ -322,7 +379,8 @@ test('confirming asks first, says it can make a second link, and cancelling send
   expect(text).toContain(
     'You are saying that you checked the Stripe account and found no payment link or checkout session',
   )
-  expect(text).toContain('One new payment link will be made, once.')
+  expect(text).toContain('One more attempt to make a payment link will be queued, once.')
+  expect(text).not.toContain('One new payment link will be made')
   expect(text).toContain('If one does exist and you missed it, the payer ends up with two links and could pay twice.')
   // The way out has the focus, so Enter doesn't confirm by habit.
   expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
@@ -346,7 +404,8 @@ test('confirming sends the decision once, says it, and reads the list again', as
   fireEvent.click(await screen.findByRole('button', { name: 'Confirm that no payment link of €120.00 exists' }))
   const dialog = await screen.findByRole('alertdialog')
   fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm no link exists' }))
-  expect(await screen.findByText('A new payment link for €120.00 will be made, once.')).toBeTruthy()
+  const queued = await screen.findByText(/^Another attempt to make a payment link for €120\.00 is queued, once\./)
+  expect(queued.textContent).toContain('the payer could end up with two links and pay twice')
   expect(sent(calls, 'POST', `${base}/payment-links/31/confirm-no-link`)).toEqual([{}])
   expect(await screen.findByText('No payment link is waiting for a decision.')).toBeTruthy()
 })
@@ -372,7 +431,7 @@ test('a confirmation the server refuses says why and leaves the list as the serv
   )
   const refusal = await screen.findByText('This payment isn’t waiting for a decision about an unknown outcome.')
   expect(refusal.closest('[role="alert"]')).toBeTruthy()
-  expect(screen.queryByText('A new payment link for €120.00 will be made, once.')).toBeNull()
+  expect(screen.queryByText(/Another attempt to make a payment link/)).toBeNull()
   await waitFor(() => expect(reads).toBe(2))
   expect(await screen.findByText('No payment link is waiting for a decision.')).toBeTruthy()
 })

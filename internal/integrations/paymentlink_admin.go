@@ -54,6 +54,10 @@ type PaymentLinkOutcome struct {
 	// line items couldn't be read: "" when none was seen. When set, the admin can't confirm that no link
 	// exists; they check this object at the provider, and the entry adopts it once a lookup can.
 	ObjectID string `json:"object_id"`
+	// Code is why the lookup stopped, when it is neither waiting nor ready for a decision: the code
+	// the entry failed with (for example integration_account_changed), which the web app says in
+	// words. It is empty while the server waits and when the admin may confirm.
+	Code string `json:"code,omitempty"`
 }
 
 // PaymentLinkOutcomes is the answer of the list.
@@ -105,6 +109,9 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		o.Amount = currency.Format(minor, o.Currency)
 		o.CanConfirm = clean && state == "failed" && code == string(apierr.CodeIntegrationOutcomeUnknown)
 		o.Waiting = state == "pending" || state == "running"
+		if !o.Waiting && !o.CanConfirm {
+			o.Code = code
+		}
 		out = append(out, o)
 	}
 	return out, rows.Err()

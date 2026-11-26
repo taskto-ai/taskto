@@ -2082,6 +2082,39 @@ func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 	}
 }
 
+// A lookup that stopped for another reason than the wait ending (the integration's account changed)
+// is neither waiting nor ready for a decision: the list says so and names the code the entry failed
+// with, and confirming is refused.
+func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	p.unknownOutcome(shape, "op-stopped-0001")
+	p.later(time.Minute)
+	p.looked(shape.path, 1)
+	p.later(7 * time.Hour)
+	e := p.settled(apps.StateFailed)
+	p.exec(`UPDATE app_effects SET error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationAccountChanged), e.id)
+
+	rec := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	list := decode[PaymentLinkOutcomes](t, rec)
+	if len(list.PaymentLinks) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	if got := list.PaymentLinks[0]; got.Waiting || got.CanConfirm || got.Code != string(apierr.CodeIntegrationAccountChanged) {
+		t.Fatalf("link = %+v: want stopped, with the entry's code", got)
+	}
+	expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusConflict)
+
+	// A link ready for a decision carries no code.
+	p.exec(`UPDATE app_effects SET error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), e.id)
+	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	if got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks[0]; !got.CanConfirm || got.Code != "" {
+		t.Fatalf("link = %+v", got)
+	}
+}
+
 // While the server still looks, nothing is asked of an admin: confirming then is refused, and the key
 // stays where it is.
 func TestAnAdminCannotConfirmWhileTheServerStillLooks(t *testing.T) {

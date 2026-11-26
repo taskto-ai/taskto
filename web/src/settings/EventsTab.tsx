@@ -190,7 +190,10 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
         <>
           <Notice tone="warning" title={t('settings.events.links.checkTitle')} live={false}>
             <ol className="events-steps">
-              <li>{t('settings.events.links.checkLook')}</li>
+              <li>{t('settings.events.links.checkWhere')}</li>
+              <li>{t('settings.events.links.checkSession')}</li>
+              <li>{t('settings.events.links.checkPaymentLink')}</li>
+              <li>{t('settings.events.links.checkValue')}</li>
               <li>{t('settings.events.links.checkFound')}</li>
               <li>{t('settings.events.links.checkNone')}</li>
             </ol>
@@ -220,8 +223,12 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
                         <Badge tone="warning" dot>
                           {t('settings.events.links.needsYou')}
                         </Badge>
-                      ) : (
+                      ) : l.waiting ? (
                         <Badge tone="info">{t('settings.events.links.looking')}</Badge>
+                      ) : (
+                        <Badge tone="danger" dot>
+                          {t('settings.events.links.stopped')}
+                        </Badge>
                       )
                     }
                     actions={
@@ -237,7 +244,16 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
                         </Button>
                       )
                     }
-                  />
+                  >
+                    {!l.can_confirm && !l.waiting && (
+                      <Notice tone="warning" title={t('settings.events.links.stoppedTitle')} live={false}>
+                        <p>
+                          {codeText(l.code, undefined, t('settings.events.links.stoppedFallback'))}{' '}
+                          {t('settings.events.links.stoppedDo')}
+                        </p>
+                      </Notice>
+                    )}
+                  </Row>
                 )
               })}
             </Rows>
@@ -265,6 +281,10 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
   // The refusals of retries, by event: said under the event they are about.
   const [refused, setRefused] = useState<Record<number, string>>({})
   const [retrying, setRetrying] = useState<number | null>(null)
+  // The refusal of a retry that came too late, said in the section: the list is read again and the
+  // event may leave it (a failed filter no longer holds an event that isn't failed), so a row is no
+  // place to keep it.
+  const [late, setLate] = useState<string | null>(null)
   // The newest request for a list is the one that is shown: a slow answer for a filter left behind
   // is dropped.
   const latest = useRef(0)
@@ -297,15 +317,27 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
   const retry = async (event: IntegrationEvent) => {
     setRetrying(event.id)
     setNotice(null)
+    setLate(null)
     setRefused(({ [event.id]: _gone, ...rest }) => rest)
     try {
       await api<IntegrationEvent>(`${base}/events/${event.id}/retry`, { method: 'POST', body: {} })
       setNotice(t('settings.events.retried', { kind: kindText(t, event.kind) }))
       setNonce((n) => n + 1)
     } catch (e) {
-      setRefused((r) => ({ ...r, [event.id]: errorText(e) }))
-      // The event is not what the list said: what stays is what the server holds now.
-      if (e instanceof ApiError && STALE.includes(e.code ?? '')) setNonce((n) => n + 1)
+      if (e instanceof ApiError && STALE.includes(e.code ?? '')) {
+        // The event is not what the list said: what stays is what the server holds now, and the
+        // refusal with it, since the row it is about may be gone.
+        setLate(
+          t('settings.events.retryRefused', {
+            kind: kindText(t, event.kind),
+            when: f.dateTime(event.occurred_at),
+            reason: errorText(e),
+          }),
+        )
+        setNonce((n) => n + 1)
+      } else {
+        setRefused((r) => ({ ...r, [event.id]: errorText(e) }))
+      }
     } finally {
       setRetrying(null)
     }
@@ -319,6 +351,7 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
           value={filter}
           onChange={(v) => {
             setNotice(null)
+            setLate(null)
             setRefused({})
             setFilter(v)
           }}
@@ -326,6 +359,7 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
         />
       </div>
       {notice && <Notice tone="success">{notice}</Notice>}
+      {late && <Notice tone="danger">{late}</Notice>}
       {error && <Notice tone="danger">{error}</Notice>}
       {!page && !error && <Loading lines={3} />}
       {page && page.items.length === 0 && (

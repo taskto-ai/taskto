@@ -237,9 +237,16 @@ approving and publishing are the same person's three calls, which the web app of
   reads the list again). An event holds no record, app or space, so none is shown. Above them, **Payment
   links to check** lists the unresolved payment links of the spaces the admin manages
   (`payment-links/unresolved`): each with its amount, record, app, space and the time its outcome became
-  unknown, what to look for in the Stripe account, and, once the wait ended, a "Confirm no link exists"
-  button behind a confirmation that says plainly that if a link does exist the payer ends up with two
-  and could pay twice. Cancelling sends nothing. The screen asks only for the one integration's events
+  unknown, what to look for in the Stripe account (in the account and mode the link was first asked in:
+  `client_reference_id` on a Checkout Session, `metadata[taskto_ref]` on a Payment Link, the reference
+  of every attempt, which the screen doesn't show, so a candidate is found by amount and time; a link
+  that is found is left alone and the person who ran the action retries it, not the payer), and, once
+  the wait ended, a "Confirm no link exists" button behind a confirmation that says it queues one more
+  attempt, which may adopt a link that exists or fail, and plainly that if a link does exist the payer
+  ends up with two and could pay twice. A lookup that stopped for another reason (the integration's
+  account changed) is "Lookup stopped", with the reason in words and no button. Cancelling sends
+  nothing. A retry the server refuses because the event isn't failed any more stays said in the events
+  section after the list is read again. The screen asks only for the one integration's events
   and links, the workspace's spaces' names and the provider registry.
 - **The builder's preview** says what a payment link would ask for from the sample record ("Create a
   payment link", simulated, the sum in the currency) and calls no service, opens no secret and needs

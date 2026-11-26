@@ -898,6 +898,9 @@ export type PaymentLinkOutcome = {
   waiting: boolean
   // The wait ended and the entry stopped: the admin may confirm that no link exists.
   can_confirm: boolean
+  // Why the lookup stopped, when it neither waits nor may be confirmed (the code the entry failed
+  // with); older servers don't send it.
+  code?: string
 }
 export type PaymentLinkOutcomes = { payment_links: PaymentLinkOutcome[] }
 

@@ -4487,7 +4487,7 @@ for one that didn't fail.
 Admin only. The payment links of this integration whose outcome at the provider is unknown and that
 have no object, in the spaces the admin manages (another person's private space is not listed):
 `{"payment_links": [{"effect_id", "app_id", "space_id", "record_id", "amount", "currency", "since",
-"waiting", "can_confirm", "object_id"}]}`. `effect_id` is the entry's number, as in the app's effects; `amount` is
+"waiting", "can_confirm", "object_id", "code"?}]}`. `effect_id` is the entry's number, as in the app's effects; `amount` is
 decimal text with the currency's decimals; `since` is when the outcome became unknown. `waiting` is
 true while the server still looks (nothing is asked of the admin); `can_confirm` is true once the
 entry failed with `integration_outcome_unknown`, and only if nothing of the reference was ever seen at the
@@ -4496,7 +4496,9 @@ provider and none of its keys was resolved (otherwise a confirmation is refused,
 resolve (an answer named it, or a lookup found it carrying the key's token but couldn't read its amount,
 or found it asking another amount or currency), `""` when none: `can_confirm` is then false, and an
 admin checks that object at the provider; a retry of the entry adopts it once a lookup can check it.
-`403` for a member, `404` for another workspace's integration.
+When `waiting` and `can_confirm` are both false the lookup stopped, and `code` is the code the entry
+failed with (for example `integration_account_changed`), which clients say in words; it is left out
+otherwise. `403` for a member, `404` for another workspace's integration.
 
 ### Confirm that no payment link exists
 
