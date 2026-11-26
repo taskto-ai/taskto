@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
+import { NoWorkspace } from '../shell/NoWorkspace'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
 import { rememberDeletion, takeDeletion } from './deleted'
@@ -612,7 +613,7 @@ test('a reset whose two passwords differ says so under the second, and sends not
 test('before the login methods are known, the logo and a still form are shown, not a word alone', async () => {
   fakeFetch({ 'GET /api/login/methods': () => new Promise(() => {}) })
   render(<LoginScreen onDone={() => {}} />)
-  expect(screen.getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'taskto.ai' })).toBeTruthy()
   expect(screen.getByRole('main').getAttribute('aria-busy')).toBe('true')
   expect(screen.queryByRole('heading')).toBeNull()
   expect(screen.queryByLabelText('Password')).toBeNull()
@@ -626,6 +627,22 @@ test('the server unreachable says what happened, and Try again tries again', () 
   expect(alert.textContent).toContain('Failed to fetch')
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   expect(retry).toHaveBeenCalledOnce()
+})
+
+test('the server unreachable and no workspace are the frame’s own form: a display title, no box inside the card', () => {
+  render(<ServerUnreachable error="Failed to fetch" onRetry={() => {}} />)
+  const title = screen.getByRole('heading', { level: 1, name: "Can't reach the server" })
+  expect(title.getAttribute('data-size')).toBe('display')
+  expect(document.querySelector('.ui-auth-card .ui-empty')).toBeNull()
+  cleanup()
+
+  const none = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [] }
+  render(<NoWorkspace me={none as never} onLogout={() => {}} />)
+  const heading = screen.getByRole('heading', { level: 1, name: 'No workspace yet' })
+  expect(heading.getAttribute('data-size')).toBe('display')
+  expect(document.querySelectorAll('h1')).toHaveLength(1)
+  expect(document.querySelector('.ui-auth-card .ui-empty')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy()
 })
 
 test('an invite for someone signed in names the account, joins with one button, and offers to log out', async () => {

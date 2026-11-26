@@ -20,7 +20,7 @@ import (
 )
 
 // TestRealCLIsCallTaskToTools runs the installed Claude Code and Codex through the worker with
-// TaskTo's tools (docs/cli-tools.md): a scripted model (a stand-in for Anthropic's Messages API
+// taskto's tools (docs/cli-tools.md): a scripted model (a stand-in for Anthropic's Messages API
 // and OpenAI's Responses API, on this machine) makes each CLI call one tool of a stand-in for
 // the server's endpoint. No account, key or network is involved; it checks what the fakes
 // can't, that the real CLIs read the settings the worker writes, ask their permission hook
@@ -32,7 +32,7 @@ import (
 // without its own sign-in.
 func TestRealCLIsCallTaskToTools(t *testing.T) {
 	if os.Getenv("TASKTO_CLI_REAL_TOOLS") != "1" {
-		t.Skip("set TASKTO_CLI_REAL_TOOLS=1 to run the installed CLIs with TaskTo's tools against a scripted model")
+		t.Skip("set TASKTO_CLI_REAL_TOOLS=1 to run the installed CLIs with taskto's tools against a scripted model")
 	}
 	bins := map[cliworker.CLI]string{}
 	for _, cli := range []cliworker.CLI{cliworker.Claude, cliworker.Codex} {
@@ -124,7 +124,7 @@ func (s *toolsStub) saw(call string) bool {
 }
 
 // scriptedModel answers Anthropic's Messages API and OpenAI's Responses API, streaming: the
-// first answer of a turn calls the TaskTo tool its prompt names ("Please call <tool>."), and
+// first answer of a turn calls the taskto tool its prompt names ("Please call <tool>."), and
 // the next, once the tool's result is in the request, says "done".
 type scriptedModel struct{}
 

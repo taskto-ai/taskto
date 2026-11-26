@@ -342,7 +342,7 @@ type codexItem struct {
 	Query            string `json:"query"`
 	Server           string `json:"server"`
 	Tool             string `json:"tool"`
-	// Arguments are an MCP tool call's (TaskTo's own tools among them: docs/cli-tools.md).
+	// Arguments are an MCP tool call's (taskto's own tools among them: docs/cli-tools.md).
 	Arguments json.RawMessage `json:"arguments"`
 	// Result is an MCP tool call's answer: {"content": [{"type": "text", "text": …}]}.
 	Result  json.RawMessage `json:"result"`
@@ -485,12 +485,12 @@ func cut(s string, n int) string {
 	return s + mark
 }
 
-// saveTools are TaskTo's tools that save an app, answering with it.
+// saveTools are taskto's tools that save an app, answering with it.
 var saveTools = map[string]bool{"create_app": true, "update_app": true}
 
-// savedApp is the app a finished call of TaskTo's create_app or update_app saved, if the call was
+// savedApp is the app a finished call of taskto's create_app or update_app saved, if the call was
 // one and it succeeded, from the whole of its answer (an app's JSON: its id and its space_id). The
-// CLIs name TaskTo's tools mcp__taskto__<tool> (Claude Code), taskto.<tool> (Codex's server and
+// CLIs name taskto's tools mcp__taskto__<tool> (Claude Code), taskto.<tool> (Codex's server and
 // tool) and taskto__<tool> (Grok Build, which may also call it through use_tool, with the name
 // in the input).
 func savedApp(name, input, answer string, ok bool) *SavedApp {

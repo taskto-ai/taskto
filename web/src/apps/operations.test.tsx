@@ -6,8 +6,8 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { fakeFetch } from '../test/fakes'
 import { AppStage } from './AppStage'
-import { httpTransport } from './AppView'
 import { forgetOperations, setOperationUser } from './operations'
+import { httpTransport } from './transport'
 
 const base = '/api/workspaces/1/spaces/2/apps/1'
 
@@ -96,7 +96,7 @@ test('a submission keeps its key across a page reload', async () => {
   // A new page: nothing is left in memory but the tab's session storage.
   vi.resetModules()
   const fresh = await import('./operations')
-  const { httpTransport: freshTransport } = await import('./AppView')
+  const { httpTransport: freshTransport } = await import('./transport')
   fresh.setOperationUser(7)
   down = false
   await press(freshTransport(base, 3))

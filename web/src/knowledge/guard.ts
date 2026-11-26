@@ -59,6 +59,9 @@ export function useGuard(): Guard {
   const open = useRef<Wait | null>(null)
   open.current = pending
   const queued = useRef<Wait | null>(null)
+  // While what the person chose to discard goes on: a question it raises on its way (a link's
+  // navigate asks the router, which asks this page) is the same one, already answered.
+  const through = useRef(false)
 
   const goOn = useCallback(() => {
     const waiting = queued.current
@@ -66,7 +69,8 @@ export function useGuard(): Guard {
     waiting?.go()
   }, [])
   const ask = useCallback((go: () => void, why: Why = 'leave') => {
-    if (state.current.saving) queued.current = { go, why }
+    if (through.current) go()
+    else if (state.current.saving) queued.current = { go, why }
     else if (state.current.dirty) setPending({ go, why })
     else go()
   }, [])
@@ -111,14 +115,21 @@ export function useGuard(): Guard {
   const forget = useCallback(() => {
     queued.current = null
   }, [])
+  // The draft stays the editor's until it is gone (dispose): a move that kept the editor would keep
+  // the guard, the link guard and the browser's question on.
   const discard = useCallback(() => {
     setPending(null)
-    pending?.go()
+    through.current = true
+    try {
+      pending?.go()
+    } finally {
+      through.current = false
+    }
   }, [pending])
 
   // The page closing or reloading, and a link of the app that would leave this page: both
-  // with a draft that differs. (The router has no hook to stop other navigation, such as the
-  // browser's Back, so that is not covered.)
+  // with a draft that differs. The rest of leaving (the workspace switcher, the browser's Back and
+  // Forward) asks through the router's useBeforeLeave, in KnowledgePage.
   useEffect(() => {
     const unload = (e: BeforeUnloadEvent) => {
       if (!state.current.dirty) return

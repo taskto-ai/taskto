@@ -204,6 +204,18 @@ export function useBeforeLeave(ask: BeforeLeave | null) {
   }, [on])
 }
 
+// Leaving the app's pages without a move (signing out): the page that would lose something asks
+// first, as for a move, and `go` runs when it says so (at once when nothing would be lost).
+export function beforeLeaving(go: () => void) {
+  const ask = asker()
+  if (!ask) return go()
+  generation += 1
+  const mine = generation
+  ask(() => {
+    if (mine === generation) go()
+  })
+}
+
 export function navigate(path: string, { replace = false } = {}) {
   if (path === window.location.pathname) return
   watchHistory()

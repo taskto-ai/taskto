@@ -39,9 +39,15 @@ const result = (space: (typeof spaces)[number], path: string, title: string) => 
   commit: 'c'.repeat(40),
 })
 
-function search(q: string, scope?: 'In all spaces') {
+function search(q: string, scope?: 'Search in all spaces') {
   fireEvent.change(screen.getByLabelText('Search the knowledge base'), { target: { value: q } })
-  if (scope) fireEvent.change(screen.getByLabelText('Where to search'), { target: { value: 'workspace' } })
+  if (scope) {
+    // The scope says it is the search's, so it doesn't read like the space picker above it.
+    const where = screen.getByLabelText('Where to search')
+    expect(within(where).getByRole('option', { name: scope })).toBeTruthy()
+    expect(within(where).getAllByRole('option')[0].textContent).toMatch(/^Search in /)
+    fireEvent.change(where, { target: { value: 'workspace' } })
+  }
   fireEvent.click(screen.getByRole('button', { name: 'Search' }))
 }
 
@@ -90,7 +96,7 @@ test.each([
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   // Something that is off is said in the neutral tone: a part of the page, not an alert.
   const said = await within(results).findByText(notice)
@@ -117,7 +123,7 @@ test('says the notice from its codes, with the count in the plural it needs', as
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   expect(
     await within(results).findByText(
@@ -150,7 +156,7 @@ test('searches every space, pages on, and opens a result in its own space', asyn
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: /Mine/ })
   const embedding = /still being embedded/
@@ -235,7 +241,7 @@ test('shows cards apart from documents, each linking to its card', async () => {
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: /Team notes/ })
   const list = await within(results).findByRole('list', { name: 'Cards found' })
@@ -380,7 +386,7 @@ test('shows records and conversations apart from documents, each linking to its 
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
 
   const records = await within(results).findByRole('list', { name: 'Records found' })
@@ -444,7 +450,7 @@ test('records or conversations that cannot be searched leave the rest, and say s
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: /Team notes/ })
   const alerts = await within(results).findAllByRole('alert')
@@ -470,7 +476,7 @@ test('says when records or conversations that changed just now were left out', a
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   expect(await within(results).findByText(/Some records changed just now/)).toBeTruthy()
   expect(await within(results).findByText(/Some conversations changed just now/)).toBeTruthy()
@@ -486,7 +492,7 @@ test('a search that finds only records or conversations is not nothing', async (
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('link', { name: /Orchard trip/ })
   expect(within(results).queryByText('Nothing found.')).toBeNull()
@@ -503,7 +509,7 @@ test('a page of records that has none to show still leads to the next', async ()
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  search('orchard', 'In all spaces')
+  search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   const more = await within(results).findByRole('button', { name: 'More records' })
   // Not "nothing found" while a page of records is still to come.

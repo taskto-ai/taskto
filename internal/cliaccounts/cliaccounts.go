@@ -167,7 +167,7 @@ type Service struct {
 	// a new one.
 	tokens map[string]string
 	ended  map[string]time.Time
-	// tools gives turns TaskTo's own tools (SetTools); nil, they get none.
+	// tools gives turns taskto's own tools (SetTools); nil, they get none.
 	tools atomic.Pointer[Tools]
 	// setModel changes a conversation's model after a switch to another CLI; switches holds
 	// the notice of each switch a turn made, by the worker turn it switched to.

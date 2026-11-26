@@ -1,6 +1,6 @@
-# Installing TaskTo.AI on a fresh Ubuntu VM, step by step
+# Installing taskto.ai on a fresh Ubuntu VM, step by step
 
-This is a runbook for an agent, or a person, installing one TaskTo.AI server on a fresh
+This is a runbook for an agent, or a person, installing one taskto.ai server on a fresh
 Ubuntu VM over SSH, from the published images. The examples use **https://tasks.example.com**;
 everything specific comes from the inputs below. The general self-host guide, with the
 reasons behind each setting, is [docs/install.md](../docs/install.md). This file doesn't
@@ -45,7 +45,7 @@ here is a secret. The published images are public, so no token is needed to pull
 | `TASKTO_REGISTRY` | `ghcr.io/taskto-ai` | Where the images are: the registry host and the organisation that publishes them, with no trailing `/`. Change it only for a fork or a private registry. |
 | `TASKTO_ADMIN_EMAIL` | `owner@example.com` | The first account, the owner and admin of the first workspace. |
 | `TASKTO_ADMIN_NAME` | `Owner` | Their name. |
-| `TASKTO_WORKSPACE` | `TaskTo` | The first workspace's name. |
+| `TASKTO_WORKSPACE` | `taskto` | The first workspace's name. |
 | `TASKTO_LAN_IP` | `10.0.0.20` | `traefik` only: the VM's private address, the one Traefik forwards to. |
 | `TASKTO_PROXY_IP` | `10.0.0.2` | `traefik` only: Traefik's address as the VM sees it. Only it may reach the port, and only it is trusted for `X-Forwarded-For`. |
 | `TASKTO_CLI_WORKER_MEMORY` | `6g` | The CLI worker's memory cap. The CLIs take 250–400 MB each, and the agent browser 300–500 MB each. |
@@ -92,7 +92,7 @@ TASKTO_REGISTRY_USER=
 TASKTO_PULL_TOKEN_FILE=
 TASKTO_ADMIN_EMAIL=owner@example.com
 TASKTO_ADMIN_NAME='The Owner'
-TASKTO_WORKSPACE=TaskTo
+TASKTO_WORKSPACE=taskto
 TASKTO_LAN_IP=
 TASKTO_PROXY_IP=
 TASKTO_CLI_WORKER_MEMORY=6g
@@ -547,7 +547,7 @@ git show "${TASKTO_VERSION}:deploy/worker-firewall.sh" | ssh -o BatchMode=yes "$
 vm <<'EOF'
 cat > /etc/systemd/system/taskto-worker-firewall.service <<'UNIT'
 [Unit]
-Description=TaskTo.AI: the CLI worker's network reaches the internet only
+Description=taskto.ai: the CLI worker's network reaches the internet only
 Before=docker.service
 
 [Service]
@@ -655,7 +655,7 @@ if [ "$TASKTO_MODE" != traefik ]; then
 fi
 cat > /usr/local/sbin/taskto-lan-firewall <<'SH'
 #!/bin/sh
-# Written by deploy/INSTALL.md (step 10): only the reverse proxy may reach TaskTo's LAN port.
+# Written by deploy/INSTALL.md (step 10): only the reverse proxy may reach taskto's LAN port.
 set -eu
 . /etc/taskto/install.env
 tag="taskto-lan-firewall"
@@ -678,7 +678,7 @@ SH
 chmod 755 /usr/local/sbin/taskto-lan-firewall
 cat > /etc/systemd/system/taskto-lan-firewall.service <<'UNIT'
 [Unit]
-Description=TaskTo.AI: only the reverse proxy reaches the LAN port
+Description=taskto.ai: only the reverse proxy reaches the LAN port
 After=docker.service
 PartOf=docker.service
 

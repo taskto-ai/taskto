@@ -6,7 +6,7 @@
 // capabilities.test.ts keeps these names equal to the catalog's, and apps.test.tsx to the server's.
 
 // The version of the definition format this client reads (internal/apps DefinitionVersion), which
-// is TaskTo.AI's and has nothing to do with the A2UI protocol's.
+// is taskto.ai's and has nothing to do with the A2UI protocol's.
 export const DEFINITION_VERSION = 3
 
 // The kinds of effect an action may set going (internal/apps EffectKinds), which this client shows
@@ -78,6 +78,8 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   'summary.month_of',
   // Drawing a choice by its label: /_labels/<field> of an item or a record (offline/local.ts).
   'data.labels',
+  // Drawing an icon given as SVG path data, which this client checks before it draws (iconPath.ts).
+  'icon.svg_path',
   // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
   // navigation's pin.
   'slot.home_widgets.v1',

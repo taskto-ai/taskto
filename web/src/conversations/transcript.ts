@@ -118,7 +118,7 @@ function toolsOf(content: unknown, key: string, saved: Map<string, AppRef>, done
 
 // What a finished cli_turn kept in its result's details (agent/src/cli.ts): the transcript, a
 // browser_help request of the CLI's, shown as plain text like the built-in agent's, and the apps
-// it saved through TaskTo's create_app and update_app, which it names like those calls' results do.
+// it saved through taskto's create_app and update_app, which it names like those calls' results do.
 function cliKept(message: unknown): CliKept | undefined {
   const m = message as {
     role?: unknown

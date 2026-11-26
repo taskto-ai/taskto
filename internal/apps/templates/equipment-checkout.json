@@ -1,7 +1,7 @@
 {
   "template_version": 1,
   "id": "equipment-checkout",
-  "version": 1,
+  "version": 2,
   "name": "Equipment checkout",
   "description": "Scan an item's tag, say who has it and since when, and mark it returned. Everyone sees their own checkouts; data managers see them all.",
   "recommended_space": "shared",
@@ -12,15 +12,19 @@
         "name": "list",
         "root": "list-root",
         "components": [
-          { "id": "list-root", "component": "Column", "children": ["list-title", "list-out", "list-new", "list-items"] },
+          { "id": "list-root", "component": "Column", "children": ["list-head", "list-out", "list-new", "list-items"] },
           { "id": "list-title", "component": "Text", "text": "Equipment", "variant": "h2" },
+          { "id": "list-icon", "component": "Icon", "name": { "svgPath": "M9 3h6v3h6v14H3V6h6zm2 3h2V5h-2zM5 11v2h14v-2z" } },
+          { "id": "list-head", "component": "Row", "align": "center", "children": ["list-icon", "list-title"] },
           { "id": "list-out", "component": "Stat", "label": "Items checked out", "value": { "path": "/out" } },
           { "id": "list-new-label", "component": "Text", "text": "Check out an item" },
+          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z" } },
+          { "id": "list-new-content", "component": "Row", "align": "center", "children": ["list-new-icon", "list-new-label"] },
           {
             "id": "list-new",
             "component": "Button",
             "variant": "primary",
-            "child": "list-new-label",
+            "child": "list-new-content",
             "action": { "event": { "name": "new_checkout" } }
           },
           { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
@@ -69,10 +73,12 @@
           { "id": "new-notes", "component": "TextField", "label": "Notes", "variant": "longText", "value": { "path": "/draft/notes" } },
           { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
           { "id": "new-back-label", "component": "Text", "text": "Back" },
+          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
+          { "id": "new-back-content", "component": "Row", "align": "center", "children": ["new-back-icon", "new-back-label"] },
           {
             "id": "new-back",
             "component": "Button",
-            "child": "new-back-label",
+            "child": "new-back-content",
             "action": { "event": { "name": "back_to_list" } }
           },
           { "id": "new-save-label", "component": "Text", "text": "Check out" },
@@ -135,10 +141,12 @@
           },
           { "id": "detail-actions", "component": "Row", "children": ["detail-back"] },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
+          { "id": "detail-back-content", "component": "Row", "align": "center", "children": ["detail-back-icon", "detail-back-label"] },
           {
             "id": "detail-back",
             "component": "Button",
-            "child": "detail-back-label",
+            "child": "detail-back-content",
             "action": { "event": { "name": "back_to_list" } }
           }
         ]

@@ -130,7 +130,7 @@ func (s *Service) endTurn(turn string) {
 // maxProxyBody bounds a request to the provider: a conversation's context and its files.
 const maxProxyBody = 32 << 20
 
-// ProxyHandler serves the proxy's listener: the proxy, /cli-proxy/v1/…, and TaskTo's tools
+// ProxyHandler serves the proxy's listener: the proxy, /cli-proxy/v1/…, and taskto's tools
 // for turns, ToolsPath (tools.go), each request with a turn's token.
 func (s *Service) ProxyHandler() http.Handler {
 	mux := http.NewServeMux()
@@ -138,7 +138,7 @@ func (s *Service) ProxyHandler() http.Handler {
 	mux.HandleFunc(ToolsPath, func(w http.ResponseWriter, r *http.Request) {
 		t := s.tools.Load()
 		if t == nil {
-			proxyError(w, http.StatusNotFound, "TaskTo's tools are off on this server")
+			proxyError(w, http.StatusNotFound, "taskto's tools are off on this server")
 			return
 		}
 		t.Handler.ServeHTTP(w, r)

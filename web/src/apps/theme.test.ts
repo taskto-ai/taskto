@@ -13,7 +13,7 @@ const all = rules(css)
 const root = all.filter((r) => r.selector === ':root')
 
 // What themes each renderer component an app may use: a variable of its own on :root, or a rule under
-// .ui-app naming its element. TaskTo.AI's own components (drawn by catalog.tsx) are styled with the
+// .ui-app naming its element. taskto.ai's own components (drawn by catalog.tsx) are styled with the
 // components and are not the renderer's.
 const THEMED_BY: Record<string, string[]> = {
   Button: ['.a2ui-button'],
@@ -179,7 +179,8 @@ describe('rings and what could cut them', () => {
   })
 
   test('a screen on a Home widget doesn’t scroll itself and leaves room for a ring and the lift', () => {
-    const view = readFileSync(join(__dirname, 'AppView.css'), 'utf8')
+    // The frame's rules, which AppView and its lazy loader both draw (AppLoading.css).
+    const view = readFileSync(join(__dirname, 'AppLoading.css'), 'utf8')
     const bare = declarationsOf(view, '.ui-app[data-frame="bare"]')
     // 8px: more than the ring's reach (2.5px wide, 2px off) and the primary's 3px lift.
     expect(bare).toMatch(/padding: var\(--space-2\)/)

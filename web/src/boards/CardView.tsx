@@ -1,6 +1,7 @@
 import { type RefObject, useCallback, useEffect, useMemo } from 'react'
 import type { Card, Space } from '../api'
 import { useT } from '../i18n'
+import { useBeforeLeave } from '../router'
 import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { Drawer } from '../ui/Drawer'
@@ -90,6 +91,23 @@ export function CardView({
   const close = async () => {
     if (await mayLeave()) onClose()
   }
+  // Leaving the page (another section, another workspace, the browser's Back) asks the same, while
+  // a description or a comment is being written. With nothing unsaved the answer is at once, so the
+  // router lets a Back go as one move (an answer later undoes it and does it again).
+  useBeforeLeave((go) => {
+    if (!drafts.any()) return go()
+    void mayLeave().then((ok) => ok && go())
+  })
+  // Closing the tab or reloading it over a draft: the browser's own question.
+  useEffect(() => {
+    const unload = (e: BeforeUnloadEvent) => {
+      if (!drafts.any()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', unload)
+    return () => window.removeEventListener('beforeunload', unload)
+  }, [drafts])
 
   return (
     <DraftsContext.Provider value={drafts}>

@@ -8,8 +8,9 @@
 
 import { useMemo } from 'react'
 import { type HomeItem, ws } from '../api'
-import { AppView, httpTransport } from '../apps/AppView'
+import { LazyAppView as AppView } from '../apps/LazyAppView'
 import { appPath } from '../apps/route'
+import { httpTransport } from '../apps/transport'
 import { type Key, useT } from '../i18n'
 import { Button, ButtonLink } from '../ui/Button'
 import { Heading } from '../ui/Heading'

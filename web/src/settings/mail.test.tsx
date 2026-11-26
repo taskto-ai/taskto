@@ -29,7 +29,7 @@ const configured: MailStatus = {
   host: 'smtp.example.com',
   port: 587,
   security: 'starttls',
-  from: '"TaskTo" <taskto@example.com>',
+  from: '"taskto" <taskto@example.com>',
   password: 'set',
 }
 

@@ -101,7 +101,7 @@ type Config struct {
 	// For development only; the install never sets it.
 	UnsafePrivilegedAgents bool
 	// CLIProxyListen is where the per-turn proxy listens: workspaces' shared CLI accounts, and
-	// TaskTo's tools for CLI turns
+	// taskto's tools for CLI turns
 	// (docs/account-switching.md): a listener of its own, never the public one. A TCP address,
 	// or in container mode "unix:" and a socket's absolute path, which the worker relays to
 	// the CLIs (the Compose file's, since the worker's network can't reach the server). Empty
@@ -448,7 +448,7 @@ var settings = []setting{
 	},
 	{
 		flag: "cli-proxy-listen", env: "TASKTO_CLI_PROXY_LISTEN", key: "cli_proxy_listen",
-		usage: "where the per-turn proxy listens (workspaces' shared CLI accounts, and TaskTo's tools for CLI turns), apart from the public address: host:port, or unix:/path for the CLI worker to relay (default: 127.0.0.1 on a free port with -cli-workers local or local-unsafe; none with container)",
+		usage: "where the per-turn proxy listens (workspaces' shared CLI accounts, and taskto's tools for CLI turns), apart from the public address: host:port, or unix:/path for the CLI worker to relay (default: 127.0.0.1 on a free port with -cli-workers local or local-unsafe; none with container)",
 		get:   func(c Config) string { return c.CLIProxyListen },
 		set:   func(c *Config, v string) error { c.CLIProxyListen = v; return nil },
 	},

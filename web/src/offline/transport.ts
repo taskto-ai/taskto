@@ -9,9 +9,9 @@
 // form, where it was typed.
 
 import { ApiError } from '../api'
-import type { ActionPayload, AppTransport } from '../apps/AppView'
 import type { LocalPhotos } from '../apps/PhotoInput'
 import { ATTACHMENT_ID } from '../apps/photos'
+import type { ActionPayload, AppTransport } from '../apps/transport'
 import { t as translate } from '../i18n'
 import {
   answerChange,

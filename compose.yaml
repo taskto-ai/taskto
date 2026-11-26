@@ -1,4 +1,4 @@
-# TaskTo.AI with Docker Compose. See docs/install.md.
+# taskto.ai with Docker Compose. See docs/install.md.
 #
 #   docker compose up -d                                       # the server, on 127.0.0.1:8080
 #   TASKTO_DOMAIN=tasks.example.com docker compose --profile https up -d   # and Caddy, for HTTPS
@@ -87,7 +87,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   # The CLI worker (docs/cli-workers.md): the users' own Claude Code, Codex and Grok Build
-  # logins. Each TaskTo user's CLIs run as a Unix user of their own, here, away from the
+  # logins. Each taskto user's CLIs run as a Unix user of their own, here, away from the
   # server's data. It runs as root to make those users, with only the capabilities that
   # takes; the CLIs run with none, and no setuid program is left in the image.
   #

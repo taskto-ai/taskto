@@ -410,6 +410,31 @@ test('a page that asks before it is left is asked when another workspace is pick
   await screen.findByRole('button', { name: 'Workspace: Team' })
 })
 
+test('a drawer link whose move is refused (a draft kept) doesn’t take the focus from a later Escape', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  // A page with a draft that the person keeps: the move never goes on.
+  const ask = vi.fn<BeforeLeave>(() => {})
+  render(
+    <>
+      <Shell me={me as unknown as Me} onLogout={() => {}} />
+      <Draft ask={ask} />
+    </>,
+  )
+  const menuButton = await screen.findByRole('button', { name: 'Open the menu' })
+  fireEvent.click(menuButton)
+  fireEvent.click(
+    screen.getByRole('navigation', { name: 'Sections' }).querySelector('a[href="/w/1/boards"]') as Element,
+  )
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  // The menu opened again and closed with Escape: the focus is on the menu button, and stays there.
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  await act(async () => {})
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open the menu' }))
+})
+
 test('the workspace switcher works by keyboard and gives the focus back', async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
@@ -506,7 +531,7 @@ test("the theme picked in the app also sets the browser's theme-color, and the s
   for (const m of added) m.remove()
 })
 
-test('a long workspace name is cut in the switcher and whole in its tooltip; the phone bar has the menu, the mark and the section', async () => {
+test('a long workspace name is cut in the switcher and whole in its tooltip; the phone bar has the menu and the mark, not the section', async () => {
   const long = 'Operations and Field Services'
   fakeFetch({
     'GET /api/setup': { body: { needed: false } },
@@ -522,10 +547,11 @@ test('a long workspace name is cut in the switcher and whole in its tooltip; the
 
   // The phone's bar: what stays in it, each reachable by its label. The logo is one image with the
   // product's name, which the stylesheet crops to its mark.
-  const bar = screen.getByRole('banner')
+  const bar = screen.getByRole('banner', { name: 'App bar' })
   expect(within(bar).getByRole('button', { name: 'Open the menu' })).toBeTruthy()
-  expect(within(bar).getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
-  expect(within(bar).getByText('Conversations')).toBeTruthy()
+  expect(within(bar).getByRole('img', { name: 'taskto.ai' })).toBeTruthy()
+  // The page's own title is the one place the section's name appears.
+  expect(within(bar).queryByText('Conversations')).toBeNull()
   // The page owns its title: no heading in the bar.
   expect(within(bar).queryByRole('heading')).toBeNull()
 })
@@ -1068,4 +1094,38 @@ test('someone with no workspace is offered "New workspace" when the server lets 
   render(<App />)
   await screen.findByText(/member of any workspace/)
   expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+})
+
+test('Log out over a draft asks the page first, once: kept, nobody is signed out; discarded, the sign-out goes', async () => {
+  window.history.replaceState(null, '', '/w/4/boards')
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
+    'POST /api/logout': { status: 204 },
+    'GET /api/workspaces/4/spaces': { body: { spaces: [] } },
+  })
+  // The page's question: the first answer is "keep" (go is never called), the second "discard".
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <App />
+      <Draft ask={ask} />
+    </>,
+  )
+  await screen.findByRole('heading', { name: 'Boards' })
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  expect(ask).toHaveBeenCalledTimes(1)
+  await act(async () => {})
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  expect(screen.getByRole('heading', { name: 'Boards' })).toBeTruthy()
+
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  expect(ask).toHaveBeenCalledTimes(2)
+  act(() => leave?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+  expect(calls.filter((c) => c.path === '/api/logout')).toHaveLength(1)
+  expect(ask).toHaveBeenCalledTimes(2)
 })

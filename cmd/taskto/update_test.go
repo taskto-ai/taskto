@@ -765,7 +765,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 			},
 			"run an image that wasn't checked: cli-worker uses evil.example/worker:1",
 		},
-		"a compose override that runs an older image of TaskTo's in another service": {
+		"a compose override that runs an older image of taskto's in another service": {
 			func(e *updEnv) {
 				e.write("fake/config-edit", `.services.extra = {image: "ghcr.io/taskto-ai/taskto:`+updOld+`"}`)
 			},

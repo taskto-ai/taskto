@@ -1,4 +1,4 @@
-// TaskTo.AI's service worker. The build (pwa/plugin.ts) fills in VERSION and PRECACHE and
+// taskto.ai's service worker. The build (pwa/plugin.ts) fills in VERSION and PRECACHE and
 // writes it to the app's root as /sw.js; docs/pwa.md explains the design.
 //
 // What it does, and only this:
@@ -102,7 +102,7 @@ self.addEventListener('message', (event) => {
 // click opens /notification/{id}: the app reads it as the signed-in person and checks access
 // again before it shows where it leads. A push may arrive late, twice or never; nothing relies on it.
 
-const BRAND = 'TaskTo.AI'
+const BRAND = 'taskto.ai'
 const KINDS = [
   'card_assigned',
   'card_comment',

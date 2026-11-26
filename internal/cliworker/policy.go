@@ -186,11 +186,11 @@ func deniedInCluster(a string, denied []string) bool {
 	return false
 }
 
-// readOnly reports whether tool, called with input, is one of TaskTo's tools that change
+// readOnly reports whether tool, called with input, is one of taskto's tools that change
 // nothing (docs/cli-tools.md), in the form cli names it: mcp__taskto__<tool> from Claude Code
 // and Codex; taskto__<tool>, or the use_tool meta-tool calling it with its input inline, from
 // Grok Build, whose search_tool, which only lists the tools, is read-only too. A turn without
-// TaskTo's tools has none.
+// taskto's tools has none.
 func (t *Tools) readOnly(cli CLI, tool string, input json.RawMessage) bool {
 	if t == nil {
 		return false

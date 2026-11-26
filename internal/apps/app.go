@@ -69,7 +69,7 @@ const ProtocolVersion = "v0.9"
 const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 
 // DefinitionVersion is the version of the definition's own format, the one this server writes
-// and reads. It is TaskTo.AI's, independent of ProtocolVersion (A2UI's): it grows when the
+// and reads. It is taskto.ai's, independent of ProtocolVersion (A2UI's): it grows when the
 // definition gains something an older reader would misread (a new kind of action, say), while
 // the catalog's growth is told by Definition.Requires. A definition that says a higher version
 // than this is refused, and a client that finds a release in a higher one asks to be updated.
@@ -98,6 +98,10 @@ type Definition struct {
 	// DefinitionVersion is the format version the definition is written in; DefinitionVersion
 	// if left out.
 	DefinitionVersion int `json:"definition_version"`
+	// copied marks a copy of another app's definition (duplicateApp): the copier didn't write it,
+	// so Check doesn't hold it to the rule a person who edits can follow, that a control drawn only
+	// with icons names one (icons.go). Never stored or sent.
+	copied bool
 	// Requires lists the catalog capabilities the screen needs (Capabilities): a component
 	// it draws is component.<Name>, a function it calls function.<name>. Check works the list
 	// out from the screen, replacing whatever was sent, so it can't claim less than it uses.
@@ -200,7 +204,7 @@ type Action struct {
 	Screen string `json:"screen,omitempty"`
 	// Then is the screen an insert, update or delete opens once it has run, if any.
 	Then string `json:"then,omitempty"`
-	// Effects are what an insert or an update sets going on the rest of TaskTo.AI once the
+	// Effects are what an insert or an update sets going on the rest of taskto.ai once the
 	// record is changed (effects.go): done by the server's worker, as the user who acted.
 	Effects []Effect `json:"effects,omitempty"`
 }
@@ -512,7 +516,7 @@ func (d Definition) Check() (Definition, error) {
 			}
 		}
 	}
-	scope := &screenScope{actions: d.Actions, collection: out.Collection, screens: screens}
+	scope := &screenScope{actions: d.Actions, collection: out.Collection, screens: screens, copied: d.copied}
 	var requires []string
 	if len(d.Screens) > 0 {
 		if len(d.Components) > 0 {

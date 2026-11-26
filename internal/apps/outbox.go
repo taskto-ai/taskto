@@ -89,7 +89,7 @@ const (
 	defaultListed = 100
 )
 
-// Platform is the rest of TaskTo.AI that effects act on. Without one an app's effects can't be done
+// Platform is the rest of taskto.ai that effects act on. Without one an app's effects can't be done
 // (they stay queued); the server builds the apps service with one.
 type Platform struct {
 	Boards *boards.Service

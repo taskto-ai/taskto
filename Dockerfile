@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# TaskTo.AI in one image: the Go server with the web app inside it, and the agent runtime's
+# taskto.ai in one image: the Go server with the web app inside it, and the agent runtime's
 # Node.js sidecar, which the server starts and supervises (-agent). See docs/install.md.
 #
 #   docker build -t taskto .

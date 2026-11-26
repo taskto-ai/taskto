@@ -93,6 +93,8 @@ export function ConversationsPage({
           (archived ? (
             <EmptyState title={t('conversations.nothingArchived')} />
           ) : (
+            // The words say what each button does: the header's New starts one, this one asks the
+            // agent for an app.
             <EmptyState
               title={t('conversations.none')}
               actions={
@@ -100,7 +102,9 @@ export function ConversationsPage({
                   {t('apps.builder.build')}
                 </ButtonLink>
               }
-            />
+            >
+              {t('conversations.noneHelp')}
+            </EmptyState>
           ))}
         {list.data && list.data.length > 0 && (
           <div className="ui-chat-rows">

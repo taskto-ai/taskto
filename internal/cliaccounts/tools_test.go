@@ -26,11 +26,11 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// TaskTo's tools in CLI turns (docs/cli-tools.md): every turn gets the endpoint on the proxy's
+// taskto's tools in CLI turns (docs/cli-tools.md): every turn gets the endpoint on the proxy's
 // listener with a token of its own, and each call acts for the conversation's owner, with
 // exactly their access, while the turn runs.
 
-// newToolsEnv is newTurnEnv with TaskTo's tools on: the real tools over the real endpoint,
+// newToolsEnv is newTurnEnv with taskto's tools on: the real tools over the real endpoint,
 // served where the CLIs reach the proxy.
 func newToolsEnv(t *testing.T) *turnEnv {
 	t.Helper()
@@ -270,7 +270,7 @@ func TestToolsTokenRefusals(t *testing.T) {
 	if _, status := caller(replayed); status != http.StatusOK {
 		t.Fatalf("back: %d", status)
 	}
-	// Disabled: the turn that is running loses TaskTo's tools at its next call, and gets them back
+	// Disabled: the turn that is running loses taskto's tools at its next call, and gets them back
 	// when its owner is enabled.
 	if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2026-01-02T03:04:05.000Z' WHERE id = ?`, e.owner.id); err != nil {
 		t.Fatal(err)

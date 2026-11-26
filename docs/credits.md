@@ -1,6 +1,6 @@
 # Credits
 
-TaskTo.AI is MIT-licensed. This page lists third-party work it downloads or runs that asks
+taskto.ai is MIT-licensed. This page lists third-party work it downloads or runs that asks
 for attribution or notices. Nothing listed here is in this repository or the container
 image: each is downloaded on first use, pinned by sha256 (see
 [install.md](install.md#dictation)), or installed by the operator. The web app's About
@@ -10,7 +10,7 @@ page (Settings → About) shows the credits of whatever a workspace uses.
 
 - **Parakeet TDT 0.6B v3** by NVIDIA, licensed under
   [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/):
-  <https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3>. TaskTo.AI uses the int8 ONNX export
+  <https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3>. taskto.ai uses the int8 ONNX export
   that the sherpa-onnx project publishes
   (<https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8>). That
   export is quantized; the model is not otherwise changed. Used when `dictation_local` is
@@ -27,5 +27,5 @@ page (Settings → About) shows the credits of whatever a workspace uses.
 
 - **Voz** by Desert Ant Labs, under the
   [Desert Ant Labs Source-Available License 1.1](https://license.desertant.com/). It is
-  never bundled with TaskTo.AI. While a workspace uses it, the About page shows "Speech
+  never bundled with taskto.ai. While a workspace uses it, the About page shows "Speech
   recognition: Voz, powered by Desert Ant Labs", linked to <https://desertant.com>.

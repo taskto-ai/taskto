@@ -62,7 +62,7 @@ func TestVozAddon(t *testing.T) {
 	})
 	owner, ws := e.setup()
 	member := e.join(owner, ws, "member")
-	owner.putDoc(owner.privateSpace(ws), GlossaryFile, "- TaskTo\n")
+	owner.putDoc(owner.privateSpace(ws), GlossaryFile, "- taskto\n")
 
 	rec := member.do(http.MethodGet, route(ws, ""), nil)
 	expect(t, rec, http.StatusOK)
@@ -89,7 +89,7 @@ func TestVozAddon(t *testing.T) {
 	// The glossary corrects its text too (the owner reads their own private space).
 	rec = owner.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusOK)
-	if got := decode[transcribeReply](t, rec); got.Text != "voz heard TaskTo (--language pt)" || got.Engine != "desertant-voz" {
+	if got := decode[transcribeReply](t, rec); got.Text != "voz heard taskto (--language pt)" || got.Engine != "desertant-voz" {
 		t.Fatalf("reply = %+v", got)
 	}
 	// Back to local, and to the add-on again without confirming twice.

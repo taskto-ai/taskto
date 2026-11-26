@@ -136,7 +136,7 @@ fake runtime. The whole path, browser included, has an opt-in test too: see
 
 Voz (Desert Ant Labs) is source-available, not open source: it is **never bundled** in the
 repo or the image, and no Desert Ant code or weights enter either. The operator installs it
-and TaskTo only detects it and uses it.
+and taskto only detects it and uses it.
 
 - **Add-ons** are a small registry in Go: an ID, the vendor, what it does (here
   `speech-to-text`), its licence link, the notice to show before turning it on, and the
@@ -144,10 +144,10 @@ and TaskTo only detects it and uses it.
   more entries with other kinds.
 - **Detection:** an executable at `<addons_dir>/desertant-voz/transcribe`
   (`addons_dir` defaults to `<data>/addons`). The operator writes it with Voz's own SDK
-  (Swift on Linux, or Node with `onnxruntime-node`). The contract is TaskTo's, documented
+  (Swift on Linux, or Node with `onnxruntime-node`). The contract is taskto's, documented
   in [install.md](install.md#dictation): it reads a 16 kHz mono WAV on stdin, takes
   `--language <code>` (optional), and writes `{"text": "…"}` on stdout.
-- **Its network traffic is its own.** TaskTo runs it as a child process with a clean
+- **Its network traffic is its own.** taskto runs it as a child process with a clean
   environment, like the local runtimes, but the licence check is Voz's own connection to
   Desert Ant: the egress policy of provider accounts doesn't cover it (that policy is for
   endpoints people type in). An operator who wants to block it does so with the host's
@@ -166,7 +166,7 @@ and TaskTo only detects it and uses it.
 ## The glossary
 
 Each space can have a `glossary.md` at its root. Its terms are the list items' leading
-words: `- **TaskTo**: …`, `- Acme — …`, `- Parakeet`. Bold or code markers are dropped, and
+words: `- **taskto**: …`, `- Acme — …`, `- Parakeet`. Bold or code markers are dropped, and
 so is everything after the first `:`, ` — ` or ` - `.
 
 For a dictation, the server reads the glossary of every space **the caller can read** in
@@ -179,7 +179,7 @@ terms of up to 60 characters each. Then:
    replacement is worse than a miss:
    - a run of up to four words that equals a term ignoring case, accents, punctuation
      inside words and the spaces between them is replaced by the term ("task to" becomes
-     "TaskTo", "sao paulo" becomes "São Paulo");
+     "taskto", "sao paulo" becomes "São Paulo");
    - a run of **as many words as the term** that is within a small edit distance of it is
      replaced too, but only for terms of 6 letters or more (distance 1 for 6–9 letters, 2
      for 10 or more), and only when the first letter is the same ("Zansibar" becomes
@@ -194,8 +194,8 @@ that space's owner or an editor (search's embeddings); a glossary prompt would n
 The server's correction above still applies to a hosted API's text.
 
 The correction is conservative on purpose, and the end-to-end check shows its edge: Parakeet
-heard "TaskTo" as "task too", which no rule joins (only an exact join, "task to", becomes
-"TaskTo"; joining near matches would also turn "tasks to" into "TaskTo"), while a channel's
+heard "taskto" as "task too", which no rule joins (only an exact join, "task to", becomes
+"taskto"; joining near matches would also turn "tasks to" into "taskto"), while a channel's
 name heard one letter off was corrected.
 
 ## API
@@ -237,7 +237,7 @@ box, on an arm64 laptop.
 | English, a meeting request | 19 s | 0 of 52 (0%) | 2.0 s |
 | Portuguese, the same request | 26 s | 0 of 54 (0%) | 2.0 s |
 | Long: the Declaration of Independence and the Gettysburg Address | 9 min 16 s | 26 of 1,436 (1.8%) | 34.9 s |
-| Glossary: a request naming a colleague, TaskTo and a team channel | 8 s | see below | 1.3 s |
+| Glossary: a request naming a colleague, taskto and a team channel | 8 s | see below | 1.3 s |
 
 - **First use.** The first press of the microphone started the model's download (670 MB,
   44 s here). Pressing stop before it finished showed "the local speech model is
@@ -250,7 +250,7 @@ box, on an arm64 laptop.
   buffer (no gap in `playbackTime`, samples equal to the time recorded), with the browser's
   echo cancellation, noise suppression and gain control on or off.
 - **Glossary.** Without a `glossary.md` the model misspelt the colleague's uncommon name,
-  wrote "task too" for TaskTo, and heard the channel's name one letter off. With a glossary
+  wrote "task too" for taskto, and heard the channel's name one letter off. With a glossary
   listing the three, the channel's name was corrected; "task too" and the name, more than
   one letter off, stayed (see [the glossary](#the-glossary) for why).
 

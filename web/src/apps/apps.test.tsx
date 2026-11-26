@@ -14,9 +14,10 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { ApiError } from '../api'
 import { fakeFetch } from '../test/fakes'
-import { type ActionPayload, AppView, httpTransport } from './AppView'
+import { AppView } from './AppView'
 import { appsCatalog, catalogCapabilities, DEFINITION_VERSION } from './catalog'
 import { forgetOperations } from './operations'
+import { type ActionPayload, httpTransport } from './transport'
 
 afterEach(() => {
   cleanup()
@@ -229,10 +230,10 @@ test('a release that needs a capability this client lacks shows "update required
     />,
   )
   await screen.findByText('Update required')
-  expect(screen.getByText(/published with features this version of TaskTo.AI doesn’t have yet/)).toBeTruthy()
+  expect(screen.getByText(/published with features this version of taskto.ai doesn’t have yet/)).toBeTruthy()
   // It says what is missing, not what the client has.
   expect(screen.getByText('Needs: component.Gauge, function.sparkline')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Update TaskTo.AI' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Update taskto.ai' })).toBeTruthy()
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(never.load).not.toHaveBeenCalled()
   expect(screen.queryByText('Coffee')).toBeNull()

@@ -23,7 +23,7 @@ const (
 	// totpSecretBytes is the secret's length: 160 bits, as RFC 4226 recommends.
 	totpSecretBytes = 20
 	// totpIssuer is the name authenticator apps list the account under.
-	totpIssuer = "TaskTo"
+	totpIssuer = "taskto"
 )
 
 var secretEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)

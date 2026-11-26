@@ -13,7 +13,7 @@
 //
 //   - TASKTO_HANDOVER_E2E_BASE_URL: the gateway's base URL, up to /v1;
 //   - TASKTO_HANDOVER_E2E_KEY_FILE: a file with its API key. The key goes from the file to
-//     TaskTo's API (sealed there, as any account's key), never to a log or the command line;
+//     taskto's API (sealed there, as any account's key), never to a log or the command line;
 //   - TASKTO_HANDOVER_E2E_MODEL: a model that calls tools (default gpt-oss-120b).
 //
 // Optional:
@@ -100,7 +100,7 @@ before(async () => {
 
   // The fake site runs on the server's image (it has Node), in the worker's network namespace.
   // The networks get a subnet Docker picks and a bridge name of their own, so the stack runs
-  // beside another TaskTo's.
+  // beside another taskto's.
   const override = {
     services: {
       taskto: extraHosts.length ? { extra_hosts: extraHosts } : {},
@@ -307,7 +307,7 @@ test('a real model asks for help, the user signs in in the live view, and the ag
   }
 })
 
-// call is the owner's request to TaskTo's API.
+// call is the owner's request to taskto's API.
 async function call(method, path, body) {
   const res = await fetch(`${base}${path}`, {
     method,

@@ -1,6 +1,6 @@
 # Installed by deploy/INSTALL.md (step 16). Runs deploy/taskto-update.sh once, from the timer.
 [Unit]
-Description=TaskTo.AI: update to the latest release
+Description=taskto.ai: update to the latest release
 After=docker.service network-online.target
 Wants=network-online.target
 Requires=docker.service

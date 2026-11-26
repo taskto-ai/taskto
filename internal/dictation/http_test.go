@@ -320,7 +320,7 @@ func TestAPIEngine(t *testing.T) {
 	owner, ws := e.setup()
 	alice := e.join(owner, ws, "alice")
 	e.api.text = "I use task to in Zansibar"
-	owner.putDoc(owner.privateSpace(ws), GlossaryFile, "- TaskTo\n")
+	owner.putDoc(owner.privateSpace(ws), GlossaryFile, "- taskto\n")
 	alice.putDoc(alice.privateSpace(ws), GlossaryFile, "- Zanzibar: a place\n")
 
 	// Plain http to another host can't carry a key; this machine can.
@@ -467,7 +467,7 @@ func TestLocalEngineGetsTheGlossary(t *testing.T) {
 	owner, ws := e.setup()
 	alice := e.join(owner, ws, "alice")
 	bob := e.join(owner, ws, "bob")
-	alice.putDoc(alice.privateSpace(ws), GlossaryFile, "- Zanzibar\n- TaskTo\n")
+	alice.putDoc(alice.privateSpace(ws), GlossaryFile, "- Zanzibar\n- taskto\n")
 
 	rec := bob.do(http.MethodGet, route(ws, ""), nil)
 	expect(t, rec, http.StatusOK)
@@ -496,10 +496,10 @@ func TestLocalEngineGetsTheGlossary(t *testing.T) {
 	}
 	rec = alice.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusOK)
-	if got := decode[transcribeReply](t, rec).Text; got != "a trip to Zanzibar with TaskTo" {
+	if got := decode[transcribeReply](t, rec).Text; got != "a trip to Zanzibar with taskto" {
 		t.Fatalf("alice's text = %q", got)
 	}
-	if terms := local.calls[len(local.calls)-1].Terms; strings.Join(terms, ",") != "Zanzibar,TaskTo" {
+	if terms := local.calls[len(local.calls)-1].Terms; strings.Join(terms, ",") != "Zanzibar,taskto" {
 		t.Fatalf("alice's terms = %q", terms)
 	}
 	// A failing engine is a 502 without details.

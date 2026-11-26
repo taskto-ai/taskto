@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { SESSION_LOST, sessionLostFor } from '../api'
+import { type BeforeLeave, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
@@ -504,4 +505,44 @@ test('a record that appears after the person was asked is never deleted by the s
   stale.close()
   expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
   expect(await runtime.store.listItems()).toHaveLength(1)
+})
+
+// A page holding a draft: its question when the person would leave.
+function Draft({ ask }: { ask: BeforeLeave }) {
+  useBeforeLeave(ask)
+  return null
+}
+
+test('signing out over a draft and records not sent asks about the draft first, then the records, each once', async () => {
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 204 },
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <App />
+      <Draft ask={ask} />
+    </>,
+  )
+  await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
+  await screen.findByRole('banner')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  logOut()
+  // The draft's question, alone: the device's comes only once the person means to go.
+  expect(ask).toHaveBeenCalledTimes(1)
+  await act(async () => {})
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  act(() => leave?.())
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
 })
