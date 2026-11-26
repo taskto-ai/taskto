@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Consent, Me, ProviderAccount, SearchSettings, Space, SpaceMember, Token, Workspace } from '../api'
 import { setPreferences } from '../i18n'
+import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch } from '../test/fakes'
 import { answer, chooseFromMenu } from '../test/ui'
 import { resetToasts } from '../ui/Toast'
@@ -1278,3 +1279,24 @@ test('the new-token dialog stays open while the token is being made, so its one 
   expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe('ttp_fake-test-token-pending')
   expect(screen.queryByRole('dialog')).toBeNull()
 })
+
+for (const ending of ['the person leaves the tab', 'the session ends'] as const) {
+  test(`an export that answers after ${ending} doesn't take the tab to its download`, async () => {
+    const assign = stubAssign()
+    let answer: () => void = () => {}
+    fakeFetch({
+      'POST /api/workspaces/1/export': () =>
+        new Promise((done) => {
+          answer = () => done({ body: { download: '/api/workspaces/1/export/abc', expires_in: 60 } })
+        }),
+    })
+    beginSession(1)
+    const { unmount } = render(<SettingsPage me={me} workspace={member} tab="data" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Download my data' }))
+    if (ending === 'the person leaves the tab') unmount()
+    else endSession()
+    await act(async () => answer())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(assign).not.toHaveBeenCalled()
+  })
+}

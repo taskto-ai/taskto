@@ -24,6 +24,7 @@ import { SubmitCaptures, SubmitCapturesContext } from './submit'
 import { TextDictation, workspaceOf } from './TextDictation'
 import './AppLoading.css'
 import './AppView.css'
+import { steps } from '../session'
 import type { ActionPayload, AppTransport } from './transport'
 
 // The code of the server's answer to a change made against a record that has moved on.
@@ -121,20 +122,29 @@ export function AppView({
       [appsCatalog],
       (action) =>
         // One submission at a time: a second press while the first is capturing or sending is that one.
+        // It is the session's that pressed it: the capture before it is sent (a location, a photo, a
+        // signature) can take as long as the person or the device does, and the automatic account
+        // of api() names whoever is signed in when the request starts. So the session is taken
+        // here, before anything waits, and one that ended meanwhile sends nothing and shows nothing.
         captures.current.once(action, async () => {
+          const s = steps()
           try {
             const prepared = await captures.current.apply(action)
+            if (!s.ok()) return
             if (prepared.block) {
               setError(prepared.block)
               return
             }
             const pressed = withRevision({ ...action, context: prepared.context ?? action.context })
-            apply(await transportRef.current.act(pressed))
+            const answer = await transportRef.current.act(pressed)
+            if (!s.ok()) return
+            apply(answer)
             setError(null)
             // A preview says what the button would have set going; a live app's effects are listed by the page.
             setSimulated(transportRef.current.simulate ? await transportRef.current.simulate(pressed) : null)
             onActionRef.current?.()
           } catch (e) {
+            if (!s.ok()) return
             setSimulated(null)
             if (e instanceof ApiError && (e.code === RECORD_CONFLICT || e.code === 'offline_record_changed')) {
               // Show the record as it is now, so the next try is made against its latest revision.

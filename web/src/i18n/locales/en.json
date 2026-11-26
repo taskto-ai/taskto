@@ -3050,6 +3050,7 @@
       "on": "Push is on for this device.",
       "turnOn": "Turn on push on this device",
       "turnOff": "Turn off push on this device",
+      "busy": "Push is still being changed on this device (in another tab, or by a sign-out). Try again in a moment.",
       "turnOffFailed": "This device's browser wouldn't end its push subscription, so push is still on. Try again.",
       "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device.",
       "timeZoneTitle": "Time zone and reminders",

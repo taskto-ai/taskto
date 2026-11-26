@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { BoardsPage } from '../boards/BoardsPage'
+import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { resolveDocLink } from './docs'
 import { KnowledgePage } from './KnowledgePage'
@@ -578,4 +579,159 @@ test('only an admin who can write the space is offered to remove old versions', 
     expect(within(doc).queryByRole('button', { name: 'Remove old versions from history…' })).toBeNull()
     cleanup()
   }
+})
+
+// --- A restore or an upload whose session ends in the middle -------------------------------
+
+test('a restore whose session ends while it reads the history restores nothing', async () => {
+  let history: () => void = () => {}
+  const deleted = {
+    commits: [
+      {
+        commit: 'c3',
+        author: { name: 'A', email: 'a@x' },
+        time: '2026-01-03T00:00:00Z',
+        message: 'Delete',
+        change: 'delete',
+      },
+      {
+        commit: 'c2',
+        author: { name: 'A', email: 'a@x' },
+        time: '2026-01-02T00:00:00Z',
+        message: 'Update',
+        change: 'update',
+        version: V1,
+      },
+    ],
+  }
+  const calls = kb('write', {
+    [`DELETE ${S}/docs/notes/plan.md`]: { body: { commit: 'c3' } },
+    [`GET ${S}/history/notes/plan.md`]: () =>
+      new Promise((done) => {
+        history = () => done({ body: deleted })
+      }),
+    [`POST ${S}/restore/notes/plan.md`]: { body: { commit: 'c4', doc: plan } },
+  })
+  beginSession(1)
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  await within(doc).findByRole('button', { name: 'Edit' })
+  fromMenu(doc, 'Delete')
+  fireEvent.click(
+    within(screen.getByRole('alertdialog', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
+  )
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+  await waitFor(() => expect(calls.some((c) => c.path === `${S}/history/notes/plan.md`)).toBe(true))
+  endSession()
+  await act(async () => history())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(calls.some((c) => c.path.startsWith(`${S}/restore/`))).toBe(false)
+})
+
+test('an upload that replaces a file, whose session ends while it reads the current one, sends nothing', async () => {
+  let current: () => void = () => {}
+  let first = true
+  const calls = kb('write', {
+    [`PUT ${S}/docs/logo.png`]: (call) =>
+      !call.path.includes('base_version=')
+        ? { status: 409, body: { error: 'conflict' } }
+        : { status: 201, body: { commit: 'c1', doc: { path: 'logo.png', version: V2, size: 3 } } },
+    [`GET ${S}/docs/logo.png`]: () => {
+      if (first) {
+        first = false
+        return new Promise((done) => {
+          current = () => done({ body: { path: 'logo.png', version: V2, size: 3, content_base64: 'AQID' } })
+        })
+      }
+      return { body: { path: 'logo.png', version: V2, size: 3, content_base64: 'AQID' } }
+    },
+  })
+  beginSession(1)
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+  const dialog = screen.getByRole('dialog', { name: 'Upload a file' })
+  fireEvent.change(within(dialog).getByLabelText('File'), {
+    target: { files: [new File([new Uint8Array([1, 2, 3])], 'logo.png')] },
+  })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Upload' }))
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Replace it' }))
+  await waitFor(() =>
+    expect(calls.filter((c) => c.method === 'GET' && c.path === `${S}/docs/logo.png`)).toHaveLength(1),
+  )
+  const puts = () => calls.filter((c) => c.method === 'PUT').length
+  const before = puts()
+  endSession()
+  await act(async () => current())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(puts()).toBe(before)
+})
+
+test('a restore answered after its session ended opens nothing, though the page is still here', async () => {
+  let restored: () => void = () => {}
+  const calls = kb('write', {
+    [`DELETE ${S}/docs/notes/plan.md`]: { body: { commit: 'c3' } },
+    [`GET ${S}/history/notes/plan.md`]: {
+      body: {
+        commits: [
+          {
+            commit: 'c3',
+            author: { name: 'A', email: 'a@x' },
+            time: '2026-01-03T00:00:00Z',
+            message: 'Delete',
+            change: 'delete',
+          },
+          {
+            commit: 'c2',
+            author: { name: 'A', email: 'a@x' },
+            time: '2026-01-02T00:00:00Z',
+            message: 'Update',
+            change: 'update',
+            version: V1,
+          },
+        ],
+      },
+    },
+    [`POST ${S}/restore/notes/plan.md`]: () =>
+      new Promise((done) => {
+        restored = () => done({ body: { commit: 'c4', doc: plan } })
+      }),
+  })
+  beginSession(1)
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  await within(doc).findByRole('button', { name: 'Edit' })
+  fromMenu(doc, 'Delete')
+  fireEvent.click(
+    within(screen.getByRole('alertdialog', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
+  )
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+  await waitFor(() => expect(calls.some((c) => c.path.startsWith(`${S}/restore/`))).toBe(true))
+  endSession()
+  await act(async () => restored())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
+})
+
+test('an upload answered after its session ended opens nothing, though the form is still here', async () => {
+  let stored: () => void = () => {}
+  kb('write', {
+    [`PUT ${S}/docs/logo.png`]: () =>
+      new Promise((done) => {
+        stored = () => done({ status: 201, body: { commit: 'c1', doc: { path: 'logo.png', version: V2, size: 3 } } })
+      }),
+    [`GET ${S}/docs/logo.png`]: { body: { path: 'logo.png', version: V2, size: 3, content_base64: 'AQID' } },
+  })
+  beginSession(1)
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+  const dialog = screen.getByRole('dialog', { name: 'Upload a file' })
+  fireEvent.change(within(dialog).getByLabelText('File'), {
+    target: { files: [new File([new Uint8Array([1, 2, 3])], 'logo.png')] },
+  })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Upload' }))
+  await new Promise((r) => setTimeout(r, 20))
+  endSession()
+  await act(async () => stored())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByRole('article', { name: 'logo.png' })).toBeNull()
 })

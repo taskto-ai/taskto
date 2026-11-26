@@ -17,12 +17,17 @@ export function DataTab({ workspace, user, admin = false }: { workspace: number;
   const t = useT()
   const action = useAction()
   const wsAction = useAction()
-  const startAt = (path: string) => async () => {
-    const { download } = await api<{ download: string }>(path, { method: 'POST', body: {} })
-    window.location.assign(download)
+  // The tab goes to the download only if it is still here, in the session that asked for it: an
+  // answer that comes after the person left, or after someone else signed in, opens nothing.
+  const startAt = (path: string, run: typeof action.run) => async () => {
+    let download = ''
+    const ok = await run(async () => {
+      download = (await api<{ download: string }>(path, { method: 'POST', body: {} })).download
+    })
+    if (ok && download) window.location.assign(download)
   }
-  const start = () => action.run(startAt(exportPath(workspace)))
-  const startWorkspace = () => wsAction.run(startAt(workspaceExportPath(workspace)))
+  const start = startAt(exportPath(workspace), action.run)
+  const startWorkspace = startAt(workspaceExportPath(workspace), wsAction.run)
   return (
     <SettingsTab title={t('settings.tabs.data')} help={t('settings.help.data')}>
       <Section title={t('settings.data.title')} help={t('settings.data.intro')}>

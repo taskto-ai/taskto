@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { AvailableApp, HomeItem, HomeView, Me } from '../api'
+import { beginSession, endSession } from '../session'
 import { Shell } from '../shell/Shell'
 import { fakeFetch } from '../test/fakes'
 import { PinnedNav } from './PinnedNav'
@@ -559,4 +560,39 @@ test('a reload started before a move finishes doesn’t settle the keyboard; the
   act(() => finishMove?.())
   await screen.findByText('First moved to position 2 of 2')
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Move First earlier' })))
+})
+
+test('a Home change answered after its session ended tells nothing to whatever shows Home next', async () => {
+  let answer: () => void = () => {}
+  let deleted = false
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/home': () => ({
+      body: home({
+        widgets: deleted ? [] : [widgetItem({ id: 10, widget: { id: 'w0', title: 'First', kind: 'shortcut' } })],
+      }),
+    }),
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+    'DELETE /api/workspaces/1/home/items/10': () =>
+      new Promise((done) => {
+        answer = () => {
+          deleted = true
+          done({ status: 204 })
+        }
+      }),
+  })
+  beginSession(1)
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('article', { name: 'First' })
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove First' }))
+  await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true))
+  // The first person signs out and the next signs in, before the removal is answered.
+  endSession()
+  beginSession(2)
+  const loads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/workspaces/1/home').length
+  const before = loads()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  // No Home of anyone's is told to load again by the first person's late answer.
+  expect(loads()).toBe(before)
 })

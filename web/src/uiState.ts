@@ -3,7 +3,7 @@
 // in a private window, and throws then), so every read and write is allowed to fail, and what
 // matters is on the server.
 
-import { setOperationUser } from './apps/operations'
+import { forgetOperations, forgetOperationsOf, keepOperationsOf, setOperationUser } from './apps/operations'
 
 export function readState(key: string): string | null {
   try {
@@ -80,6 +80,8 @@ export function writeDraft(key: string | null, value: string | null): void {
 export function forgetDrafts(): void {
   owner = null
   setOperationUser(null)
+  // The app submissions still waiting for an answer hold what was typed in them: they go too.
+  forgetOperations()
   try {
     const keys: string[] = []
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -102,6 +104,8 @@ export function forgetDraftsOf(user: number): void {
     owner = null
     setOperationUser(null)
   }
+  // The app submissions still waiting for an answer: theirs, and no one else's.
+  forgetOperationsOf(user)
   const kinds = ['builder', 'builder-pane', 'builder-start', 'message']
   const prefixes = kinds.map((k) => `taskto:${k}:${user}:`)
   try {
@@ -121,6 +125,10 @@ export function forgetDraftsOf(user: number): void {
 // someone else's.
 export function claimDrafts(user: number): void {
   if (claimed() !== String(user)) forgetDrafts()
+  // The pending submissions are this tab's own (session storage), which the browser-wide claim
+  // above doesn't see: another account's are removed whatever it says. A person signed out by a 401
+  // keeps theirs on the login screen until someone signs in: their own again, or removed then.
+  keepOperationsOf(user)
   owner = user
   setOperationUser(user)
   writeState(DRAFTS_OF, String(user))

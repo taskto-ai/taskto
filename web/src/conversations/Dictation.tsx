@@ -9,6 +9,7 @@ import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
 import { Notice } from '../ui/Notice'
 import './Dictation.css'
+import { steps } from '../session'
 import { clock, encodeWav, type Recording, type StartRecording, startRecording, toBase64 } from './recorder'
 
 type Phase = 'idle' | 'starting' | 'recording' | 'transcribing'
@@ -97,16 +98,24 @@ export function useDictation({
   const transcribe = async (samples: Int16Array) => {
     setPhase('transcribing')
     setError(null)
+    // The recording is encoded before it is sent: one whose chat box went, or whose session ended,
+    // meanwhile is neither sent nor written into anyone's message.
+    const s = steps(alive)
     try {
-      const reply = await api<{ text: string }>(`${dictationPath(workspace)}/transcriptions`, {
-        method: 'POST',
-        // The server listens for the user's language when the workspace sets none (docs/i18n.md).
-        body: { audio_base64: await toBase64(encodeWav(samples)), browser_locale: browserLocale() },
-      })
+      const audio = await toBase64(encodeWav(samples))
+      s.check(undefined)
+      const reply = s.check(
+        await api<{ text: string }>(`${dictationPath(workspace)}/transcriptions`, {
+          method: 'POST',
+          // The server listens for the user's language when the workspace sets none (docs/i18n.md).
+          body: { audio_base64: audio, browser_locale: browserLocale() },
+        }),
+      )
       setUnsent(null)
       if (reply.text.trim()) onText(reply.text.trim())
       else setError(t('conversations.dictation.noSpeech'))
     } catch (e) {
+      if (!s.ok()) return
       setUnsent(samples)
       // 503: not set up, or the local model is still downloading; the reason says which.
       const notReady = e instanceof ApiError && e.status === 503

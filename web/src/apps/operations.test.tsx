@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { fakeFetch } from '../test/fakes'
+import { claimDrafts, forgetDrafts } from '../uiState'
 import { AppStage } from './AppStage'
 import { forgetOperations, setOperationUser } from './operations'
 import { httpTransport } from './transport'
@@ -163,4 +164,72 @@ test('the key is the submission’s: another release, app, action or context has
   const keys = calls.filter((c) => c.method === 'POST').map((c) => (c.body as { operation: string }).operation)
   expect(keys[1]).toBe(keys[0])
   expect(new Set(keys).size).toBe(4)
+})
+
+// --- Two people on one browser ------------------------------------------------------------------
+
+test("an answer after the person signed out and another signed in never writes the first one's pending submissions under the second's key", async () => {
+  claimDrafts(7)
+  let first = true
+  let answer: () => void = () => {}
+  fakeFetch({
+    [`POST ${base}/actions`]: () => {
+      if (first) {
+        first = false
+        return { status: 504, body: null }
+      }
+      return new Promise((done) => {
+        answer = () => done({ body: { messages: afterAdd, rows: [] } })
+      })
+    },
+  })
+  const transport = httpTransport(base, 1)
+  // One whose outcome is unknown stays pending; the next is held.
+  await expect(press(transport, { amount: '12.50', note: 'private' })).rejects.toBeTruthy()
+  expect(sessionStorage.getItem('taskto:operations:7')).toContain('private')
+  const held = press(transport, { amount: '3' }).catch(() => {})
+  await vi.waitFor(() => expect(answer).not.toBe(null))
+  // Signed out: what was typed in pending submissions goes from this tab.
+  forgetDrafts()
+  expect(sessionStorage.getItem('taskto:operations:7')).toBeNull()
+  // The next person signs in and has a pending submission of their own.
+  claimDrafts(8)
+  sessionStorage.setItem('taskto:operations:8', JSON.stringify([['theirs', 'op-of-theirs-1']]))
+  answer()
+  await held
+  expect(sessionStorage.getItem('taskto:operations:8')).toBe(JSON.stringify([['theirs', 'op-of-theirs-1']]))
+  expect(sessionStorage.getItem('taskto:operations:7')).toBeNull()
+})
+
+test('an answer after the same person signed out and in again never writes the old keys over the new ones', async () => {
+  claimDrafts(7)
+  let answer: () => void = () => {}
+  fakeFetch({
+    [`POST ${base}/actions`]: () =>
+      new Promise((done) => {
+        answer = () => done({ body: { messages: afterAdd, rows: [] } })
+      }),
+  })
+  const transport = httpTransport(base, 1)
+  const held = press(transport, { amount: '3' }).catch(() => {})
+  await vi.waitFor(() => expect(sessionStorage.getItem('taskto:operations:7')).not.toBeNull())
+  forgetDrafts()
+  claimDrafts(7)
+  // The new sign-in's own pending submission.
+  sessionStorage.setItem('taskto:operations:7', JSON.stringify([['new', 'op-of-the-new-sign-in']]))
+  answer()
+  await held
+  expect(sessionStorage.getItem('taskto:operations:7')).toBe(JSON.stringify([['new', 'op-of-the-new-sign-in']]))
+})
+
+test("claiming this browser removes another account's pending submissions from this tab, whatever the browser-wide claim says", async () => {
+  // This tab held the first person's pending submission when another tab signed them out and the
+  // second person in (the browser-wide claim already names the second).
+  sessionStorage.setItem('taskto:operations:7', JSON.stringify([['theirs', 'op-of-the-first-person']]))
+  sessionStorage.setItem('taskto:operations:8', JSON.stringify([['mine', 'op-of-the-second-person']]))
+  localStorage.setItem('taskto:drafts-of', '8')
+  // This tab is reloaded, and the second person's session claims it.
+  claimDrafts(8)
+  expect(sessionStorage.getItem('taskto:operations:7')).toBeNull()
+  expect(sessionStorage.getItem('taskto:operations:8')).toBe(JSON.stringify([['mine', 'op-of-the-second-person']]))
 })

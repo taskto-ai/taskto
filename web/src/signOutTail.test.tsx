@@ -343,3 +343,16 @@ test('another tab finishing the same sign-out takes this one to the login, not t
   await act(async () => confirm?.())
   expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
 })
+
+test("a tab that hears its account signed out in another tab forgets the account's pending app submissions", async () => {
+  fakeFetch({ ...pages, 'GET /api/me': { body: { ...first, session: 's1' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  // A submission this tab sent had no definite answer.
+  sessionStorage.setItem('taskto:operations:1', JSON.stringify([['k', 'op-unanswered']]))
+  // Another tab of the account signs out: its cleanup forgets the account.
+  localStorage.removeItem('taskto:offline-last')
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(sessionStorage.getItem('taskto:operations:1')).toBeNull()
+})

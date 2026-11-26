@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, expect, test, vi } from 'vitest'
+import { ApiError } from './api'
+import { withOperation } from './apps/operations'
 import {
   claimDrafts,
   draftKey,
@@ -127,4 +129,33 @@ test("forgetting an account's drafts when nobody else has signed in removes its 
   expect(readState('taskto:builder:1:1:last')).toBeNull()
   expect(readState('taskto:drafts-of')).toBeNull()
   expect(draftKey('message', 'x')).toBeNull()
+})
+
+// A sign-out confirmed, or the account deleted: the app submissions it still had waiting for an
+// answer go with it, in memory and in this tab's session storage, and another account's stay.
+test("forgetting an account's drafts forgets its pending app submissions, and no one else's", async () => {
+  const unknown = () => Promise.reject(new ApiError(502, 'bad gateway'))
+  const press = { name: 'add', context: { amount: '2' } }
+  claimDrafts(1)
+  let first = ''
+  await withOperation('app-1', press, (op) => {
+    first = op
+    return unknown()
+  }).catch(() => {})
+  expect(sessionStorage.getItem('taskto:operations:1')).toContain(first)
+  sessionStorage.setItem('taskto:operations:2', JSON.stringify([['k', 'op-of-the-second']]))
+
+  forgetDraftsOf(1)
+  expect(sessionStorage.getItem('taskto:operations:1')).toBeNull()
+  expect(sessionStorage.getItem('taskto:operations:2')).toContain('op-of-the-second')
+
+  // The same person signing in again presses anew: a new submission, not the forgotten one.
+  sessionStorage.removeItem('taskto:operations:2')
+  claimDrafts(1)
+  let again = ''
+  await withOperation('app-1', press, (op) => {
+    again = op
+    return unknown()
+  }).catch(() => {})
+  expect(again).not.toBe(first)
 })

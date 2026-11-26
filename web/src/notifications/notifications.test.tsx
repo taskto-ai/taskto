@@ -4,11 +4,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import { resetInstallInfo } from '../pwa/install'
+import { beginSession, endSession, SessionEnded } from '../session'
 import { NotificationsTab } from '../settings/NotificationsTab'
 import { Shell } from '../shell/Shell'
 import { fakeFetch } from '../test/fakes'
 import { NotificationsPage } from './NotificationsPage'
-import { syncPush } from './push'
+import { disablePush, enablePush, leavePush, PushBusy, sendPushStrings, syncPush } from './push'
 
 const SERVER_KEY = 'AQID' // the server's public key, as the push endpoint gives it: 1, 2, 3
 
@@ -90,6 +91,8 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   resetInstallInfo()
+  // The person whose settings these are is signed in: push is turned on and off in their session.
+  beginSession(1)
 })
 afterEach(() => {
   cleanup()
@@ -915,4 +918,380 @@ test("a new time zone is shown by the summary, which follows it, and not sent ba
   fireEvent.change(screen.getByLabelText('Send the daily summary at'), { target: { value: '18' } })
   await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
   expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ digest: { hour: 18, timezone: 'Asia/Tokyo' } })
+})
+
+// --- Push while the session changes hands ---------------------------------------------------
+
+test('turning push on, when the session ends while the server key is fetched, subscribes nobody and remembers nobody', async () => {
+  const browser = pushBrowser({ permission: 'granted' })
+  let key: () => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/me/push/key': () =>
+      new Promise((done) => {
+        key = () => done({ body: { public_key: SERVER_KEY } })
+      }),
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  beginSession(1)
+  await expect(
+    (async () => {
+      const on = enablePush(1)
+      await vi.waitFor(() => expect(calls.some((c) => c.path === '/api/me/push/key')).toBe(true))
+      // The first person signs out, the next signs in.
+      endSession()
+      beginSession(2)
+      key()
+      await on
+    })(),
+  ).rejects.toBeInstanceOf(SessionEnded)
+  expect(browser.subscribe).not.toHaveBeenCalled()
+  expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+})
+
+test('a subscription made just as the session ended is undone, and nothing is remembered', async () => {
+  pushBrowser({ permission: 'granted' })
+  let put: () => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': () =>
+      new Promise((done) => {
+        put = () => done({ status: 204 })
+      }),
+  })
+  beginSession(1)
+  const on = enablePush(1).catch((e) => e)
+  await vi.waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+  // The PUT names the person it is for: the server refuses it if the browser's session became
+  // someone else's.
+  expect(calls.find((c) => c.method === 'PUT')?.headers).toMatchObject({ 'x-taskto-expected-user': '1' })
+  endSession()
+  put()
+  expect(await on).toBeInstanceOf(SessionEnded)
+  const sub = (await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription()) as unknown as Sub
+  expect(sub.unsubscribe).toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+})
+
+test('turning push off names the account; signing out asks the server nothing (it dropped the session’s subscription)', async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  const calls = fakeFetch({ 'DELETE /api/me/push/subscription': { status: 204 } })
+  beginSession(1)
+  await disablePush()
+  expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.headers['x-taskto-expected-user'])).toEqual(['1'])
+  endSession()
+  localStorage.setItem('taskto.push', '1')
+  await leavePush(1)
+  expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
+  expect(sub.unsubscribe).toHaveBeenCalledTimes(2)
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+})
+
+test('registering again at start stops if the session ended meanwhile: the device is the next person’s to decide', async () => {
+  pushBrowser({ permission: 'denied', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  const calls = fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
+  let registered: () => void = () => {}
+  const reg = await navigator.serviceWorker.getRegistration()
+  Object.defineProperty(navigator, 'serviceWorker', {
+    value: {
+      getRegistration: () =>
+        new Promise((done) => {
+          registered = () => done(reg)
+        }),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
+    configurable: true,
+  })
+  beginSession(1)
+  const synced = syncPush(1)
+  endSession()
+  beginSession(2)
+  localStorage.setItem('taskto.push', '2')
+  registered()
+  expect(await synced).toBe(false)
+  // The second person's own flag is left as it is, and nothing was sent.
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+  expect(pushCalls(calls)).toEqual([])
+})
+
+test('the words for a push reach the worker only in the session that sent them', async () => {
+  const browser = pushBrowser({ permission: 'granted' })
+  beginSession(1)
+  const sending = sendPushStrings({ changed: 'Something changed' })
+  endSession()
+  await sending
+  expect(browser.postMessage).not.toHaveBeenCalled()
+})
+
+test('a tab whose push turned on as the session ended says nothing of it', async () => {
+  pushBrowser({ permission: 'granted' })
+  let key: () => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/me/push/key': () =>
+      new Promise((done) => {
+        key = () => done({ body: { public_key: SERVER_KEY } })
+      }),
+  })
+  beginSession(1)
+  render(<NotificationsTab me={1} workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn on push on this device' }))
+  await waitFor(() => expect(calls.some((c) => c.path === '/api/me/push/key')).toBe(true))
+  endSession()
+  await act(async () => key())
+  await new Promise((r) => setTimeout(r, 20))
+  // No error of the push section: the session ending is not something that went wrong.
+  expect(screen.queryByText(/session ended/)).toBeNull()
+})
+
+test("a sign-out's push removal that finds the subscription after someone else turned push on leaves it alone", async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  // The browser is slow to give the subscription.
+  let found: () => void = () => {}
+  const reg = await navigator.serviceWorker.getRegistration()
+  Object.defineProperty(navigator, 'serviceWorker', {
+    value: {
+      getRegistration: () =>
+        new Promise((done) => {
+          found = () => done(reg)
+        }),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
+    configurable: true,
+  })
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  // The first person signs out (their session is over); signing out doesn't wait past its bound.
+  const leaving = leavePush(1)
+  await vi.advanceTimersByTimeAsync(3000)
+  await leaving
+  vi.useRealTimers()
+  // The second person signs in and turns push on, with the same browser subscription.
+  beginSession(2)
+  localStorage.setItem('taskto.push', '2')
+  found()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+})
+
+test("turning push on, answered after its person signed out and someone else turned push on, leaves the other's subscription alone", async () => {
+  pushBrowser({ permission: 'granted' })
+  let put: () => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': () =>
+      new Promise((done) => {
+        put = () => done({ status: 204 })
+      }),
+  })
+  beginSession(1)
+  const on = enablePush(1).catch((e) => e)
+  await vi.waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+  const sub = (await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription()) as unknown as Sub
+  // The first person signs out; the second signs in and turns push on, with the same subscription.
+  endSession()
+  beginSession(2)
+  localStorage.setItem('taskto.push', '2')
+  put()
+  expect(await on).toBeInstanceOf(SessionEnded)
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+})
+
+test("an older tab's sign-out never ends the subscription another tab is registering for the next account", async () => {
+  // The browser has one subscription, the first person's, which another tab is about to reuse.
+  const sub = fakeSub('https://push.example.net/abc', [1, 2, 3])
+  const browser = pushBrowser({ permission: 'granted', subscription: sub })
+  // As a browser does: an ended subscription is no longer the browser's.
+  sub.unsubscribe.mockImplementation(async () => {
+    browser.state.subscription = null
+    return true
+  })
+  localStorage.setItem('taskto.push', '1')
+  let put: () => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': () =>
+      new Promise((done) => {
+        put = () => done({ status: 204 })
+      }),
+  })
+  // The older tab's sign-out finds the browser slow to give the subscription.
+  const reg = await navigator.serviceWorker.getRegistration()
+  let found: () => void = () => {}
+  let first = true
+  Object.defineProperty(navigator, 'serviceWorker', {
+    value: {
+      getRegistration: () => {
+        if (!first) return Promise.resolve(reg)
+        first = false
+        return new Promise((done) => {
+          found = () => done(reg)
+        })
+      },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
+    configurable: true,
+  })
+  const leaving = leavePush(1)
+  // Meanwhile the other tab, where the next person signed in, turns push on with that subscription.
+  const turningOn = enablePush(2).catch((e) => e)
+  await new Promise((r) => setTimeout(r, 20))
+  found()
+  await new Promise((r) => setTimeout(r, 20))
+  put()
+  await leaving
+  await turningOn
+  await new Promise((r) => setTimeout(r, 20))
+  // Whatever subscription the next person ended up registering is still there.
+  const registered = calls.filter((c) => c.method === 'PUT')
+  const current = (await (
+    await navigator.serviceWorker.getRegistration()
+  )?.pushManager.getSubscription()) as unknown as Sub | null
+  if (registered.length > 0) {
+    expect(current).not.toBeNull()
+    expect(current?.unsubscribe).not.toHaveBeenCalled()
+    expect(localStorage.getItem('taskto.push')).toBe('2')
+  }
+})
+
+test('where the browser has Web Locks, every change to its push subscription takes the same lock', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': { status: 204 },
+    'DELETE /api/me/push/subscription': { status: 204 },
+  })
+  const names: string[] = []
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: (name: string, _options: unknown, work: () => Promise<unknown>) => {
+        names.push(name)
+        return work()
+      },
+    },
+  })
+  try {
+    await enablePush(1)
+    await disablePush()
+    localStorage.setItem('taskto.push', '1')
+    await leavePush(1)
+  } finally {
+    Reflect.deleteProperty(navigator, 'locks')
+  }
+  expect(names).toEqual(['taskto-push-subscription', 'taskto-push-subscription', 'taskto-push-subscription'])
+})
+
+test('turning push on claims this browser’s subscription for its account before it reuses it', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  let put: () => void = () => {}
+  fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': () =>
+      new Promise((done) => {
+        put = () => done({ status: 204 })
+      }),
+  })
+  beginSession(2)
+  const on = enablePush(2)
+  // While it registers, the flag already names the account it is for: another tab's cleanup of the
+  // first account's push leaves the subscription alone.
+  await vi.waitFor(() => expect(localStorage.getItem('taskto.push')).toBe('2'))
+  put()
+  await on
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+})
+
+// The browser's one subscription is being ended (a sign-out's removal) while the person clicks to
+// turn push on; the turn comes only once it is over.
+function heldUnsubscribe() {
+  const sub = fakeSub()
+  let end: (ended: boolean) => void = () => {}
+  sub.unsubscribe = vi.fn(
+    () =>
+      new Promise<boolean>((done) => {
+        end = done
+      }),
+  )
+  return { sub, end: (ended = true) => end(ended) }
+}
+
+test('turning push on is for the session of the click: a turn that comes after the next person signed in does nothing', async () => {
+  const held = heldUnsubscribe()
+  const browser = pushBrowser({ permission: 'granted', subscription: held.sub })
+  const calls = fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  // An earlier person's sign-out is ending the subscription.
+  localStorage.setItem('taskto.push', '9')
+  const leaving = leavePush(9)
+  await vi.waitFor(() => expect(held.sub.unsubscribe).toHaveBeenCalled())
+  // The first person clicks to turn push on; before their turn comes, they sign out and the next
+  // person signs in.
+  const on = enablePush(1)
+  endSession()
+  beginSession(2)
+  held.end()
+  await expect(on).rejects.toBeInstanceOf(SessionEnded)
+  await leaving
+  expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  expect(browser.subscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+})
+
+test('without Web Locks, a subscription another tab is still ending is never reused: turning on says to try again', async () => {
+  const browser = pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  const calls = fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  // Another tab began ending the subscription a moment ago, and hasn't heard back from the browser.
+  localStorage.setItem('taskto.push-unsubscribing', JSON.stringify([{ id: 'other-tab', at: Date.now() }]))
+  await expect(enablePush(1)).rejects.toBeInstanceOf(PushBusy)
+  // Nor is it registered again at a start.
+  localStorage.setItem('taskto.push', '1')
+  expect(await syncPush(1)).toBe(false)
+  expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  expect(browser.subscribe).not.toHaveBeenCalled()
+
+  // Once that is over (or long past), it goes on.
+  localStorage.removeItem('taskto.push-unsubscribing')
+  expect(await syncPush(1)).toBe(true)
+})
+
+test('waiting for a turn to change push is bounded, and the turn held by a change the browser is still making is never given up', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const held = heldUnsubscribe()
+    pushBrowser({ permission: 'granted', subscription: held.sub })
+    const calls = fakeFetch({
+      'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+      'PUT /api/me/push/subscription': { status: 204 },
+    })
+    localStorage.setItem('taskto.push', '9')
+    const leaving = leavePush(9)
+    await vi.waitFor(() => expect(held.sub.unsubscribe).toHaveBeenCalled())
+    const on = enablePush(1)
+    const settled = expect(on).rejects.toBeInstanceOf(PushBusy)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settled
+    // The next change still waits for the one going on: nothing reached the server meanwhile.
+    const off = disablePush().catch((e) => e)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls.some((c) => c.method === 'DELETE' || c.method === 'PUT')).toBe(false)
+    held.end()
+    await leaving
+    await off
+  } finally {
+    vi.useRealTimers()
+  }
 })

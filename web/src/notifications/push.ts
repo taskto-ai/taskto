@@ -10,9 +10,16 @@
 // says which person turned it on, so a browser doesn't hand its push endpoint to whoever signs in
 // next: the subscription is removed when the person signs out (the server removes it with the
 // session as well), and re-registered at the next start only for the same person.
+//
+// Every step here waits (the worker, the browser's prompt, the push service, the server), and the
+// person can sign out, or someone else sign in, meanwhile. So each request names the account it is
+// for (the server refuses it as another's), and after each wait the session is checked
+// (session.ts): one that ended stops there, undoing a subscription it had just made, and never
+// writes who turned push on, or another person's words, into this browser.
 
-import { api } from '../api'
+import { api, forAccount } from '../api'
 import type { InstallInfo } from '../pwa/install'
+import { SessionEnded, sameSession, sessionUser, steps } from '../session'
 
 export type PushState =
   /** This browser can't push at all. */
@@ -42,6 +49,108 @@ function write(value: string | null) {
     else localStorage.setItem(FLAG, value)
   } catch {
     // Not remembered: push is registered again only when turned on again.
+  }
+}
+
+// The browser has one push subscription, shared by its tabs. Every change to it (turning push on or
+// off, a sign-out's removal, registering again at start) goes one at a time across the tabs (Web
+// Locks), so no tab ends a subscription another is in the middle of registering; where the browser
+// has no Web Locks, one at a time in this tab.
+//
+// Waiting for that turn is bounded (PushBusy), but a turn is never given up while the browser is
+// still changing the subscription: the lock is held until the work is over, however long it takes,
+// so the next change never starts on a subscription that is still being ended.
+//
+// Across tabs without Web Locks, nothing orders the changes, so one rule stands in: a subscription is
+// never reused (turned on, or registered again) while an unsubscribe of it, in any tab, is not
+// resolved (`UNSUBSCRIBING`, below). The person is told to try again in a moment.
+const PUSH_LOCK_WAIT_MS = 10_000
+
+/** Thrown when push can't be changed now: another change of it, here or in another tab, is going on. */
+export class PushBusy extends Error {}
+
+let chain: Promise<unknown> = Promise.resolve()
+function withPushLock<T>(work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  if (locks?.request) {
+    let granted = false
+    const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(PUSH_LOCK_WAIT_MS) : undefined
+    return (
+      locks.request('taskto-push-subscription', signal ? { signal } : {}, () => {
+        granted = true
+        return work()
+      }) as Promise<T>
+    ).catch((e) => {
+      // Only the wait timed out, never the work: once granted, it runs to its end.
+      if (!granted && signal?.aborted) throw new PushBusy()
+      throw e
+    })
+  }
+  return new Promise<T>((resolve, reject) => {
+    let state: 'waiting' | 'running' | 'gave-up' = 'waiting'
+    const timer = setTimeout(() => {
+      if (state !== 'waiting') return
+      state = 'gave-up'
+      reject(new PushBusy())
+    }, PUSH_LOCK_WAIT_MS)
+    const turn = () => {
+      clearTimeout(timer)
+      if (state === 'gave-up') return
+      state = 'running'
+      // The chain waits for the work itself, so the next change starts only once this one is over.
+      // (Work that throws at once is a failure like any other.)
+      return Promise.resolve().then(work).then(resolve, reject)
+    }
+    chain = chain.then(turn, turn).catch(() => {})
+  })
+}
+
+// The unsubscribes of this browser's subscription that are going on, in any tab: each one's own
+// entry, written before it starts and removed when the browser has answered. An entry is taken to be
+// over after a while (UNSUBSCRIBE_UNRESOLVED_MS), so a tab closed in the middle doesn't hold push off
+// for good.
+const UNSUBSCRIBING = 'taskto.push-unsubscribing'
+const UNSUBSCRIBE_UNRESOLVED_MS = 60_000
+
+function unsubscribing(): { id: string; at: number }[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(UNSUBSCRIBING) ?? '[]') as unknown
+    return Array.isArray(list)
+      ? list.filter(
+          (e): e is { id: string; at: number } =>
+            !!e &&
+            typeof e.id === 'string' &&
+            typeof e.at === 'number' &&
+            Date.now() - e.at < UNSUBSCRIBE_UNRESOLVED_MS,
+        )
+      : []
+  } catch {
+    return []
+  }
+}
+
+function setUnsubscribing(list: { id: string; at: number }[]) {
+  try {
+    if (list.length === 0) localStorage.removeItem(UNSUBSCRIBING)
+    else localStorage.setItem(UNSUBSCRIBING, JSON.stringify(list))
+  } catch {
+    // Not kept: where storage is refused, Web Locks (or this tab's chain) still order the changes.
+  }
+}
+
+// Whether an unsubscribe of the browser's subscription isn't resolved yet, in this tab or another.
+function unsubscribeUnresolved(): boolean {
+  return unsubscribing().length > 0
+}
+
+// Ends the subscription, marked as going on until the browser answers. True when it ended.
+async function unsubscribe(sub: PushSubscription): Promise<boolean> {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  setUnsubscribing([...unsubscribing(), { id, at: Date.now() }])
+  try {
+    return await sub.unsubscribe()
+  } finally {
+    setUnsubscribing(unsubscribing().filter((e) => e.id !== id))
   }
 }
 
@@ -98,30 +207,76 @@ function subscriptionBody(sub: PushSubscription) {
   return { endpoint: sub.endpoint, keys: { p256dh: json.keys?.p256dh ?? '', auth: json.keys?.auth ?? '' } }
 }
 
-/** Turns push on for this person on this device. Call it from a click. */
-export async function enablePush(userId: number): Promise<void> {
-  const reg = await registration()
+/**
+ * Turns push on for this person on this device. Call it from a click: the session is the one of the
+ * click, taken before the turn is waited for, and checked again when it comes, so a turn that comes
+ * after the person signed out (or someone else in) does nothing.
+ */
+export function enablePush(userId: number): Promise<void> {
+  const s = steps()
+  if (sessionUser() !== userId) return Promise.reject(new SessionEnded())
+  return withPushLock(() => {
+    s.check(undefined)
+    return enableNow(userId, s)
+  })
+}
+
+async function enableNow(userId: number, s: ReturnType<typeof steps>): Promise<void> {
+  // A subscription that is being ended (in another tab) is not taken up again.
+  if (unsubscribeUnresolved()) throw new PushBusy()
+  const reg = s.check(await registration())
   if (!reg) throw new Error('push unavailable')
-  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission()
+  const permission = s.check(Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission())
   if (permission !== 'granted') throw new PushDenied()
+  // The browser's subscription is claimed for this account before it is looked at or reused: a
+  // cleanup of another's (a sign-out, a failed turning on) then leaves it alone. Given back if
+  // turning push on doesn't finish.
+  const before = read()
+  write(String(userId))
+  try {
+    await registerFor(userId, reg, s)
+  } catch (e) {
+    if (read() === String(userId) && before !== String(userId)) write(before)
+    throw e
+  }
+}
+
+async function registerFor(userId: number, reg: ServiceWorkerRegistration, s: ReturnType<typeof steps>): Promise<void> {
   const { public_key } = await api<{ public_key: string }>(KEY_PATH)
   const key = keyBytes(public_key)
-  let sub = await reg.pushManager.getSubscription()
+  s.check(undefined)
+  let sub = s.check(await reg.pushManager.getSubscription())
   // A subscription made for another server key is of no use: made again.
   if (sub && !sameKey(sub.options.applicationServerKey, key)) {
-    await sub.unsubscribe()
+    await unsubscribe(sub)
+    s.check(undefined)
     sub = null
   }
   const fresh = sub === null
   sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
   try {
-    await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub) })
+    s.check(undefined)
+    // Asked again before it is handed to the server: another tab may have begun ending it.
+    if (unsubscribeUnresolved()) throw new PushBusy()
+    await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub), headers: forAccount(userId) })
+    s.check(undefined)
   } catch (e) {
-    // The server doesn't know this device: the browser mustn't keep a subscription it never got.
-    if (fresh) await sub.unsubscribe().catch(() => {})
+    // The server doesn't know this device, or the session ended meanwhile: the browser mustn't keep
+    // a subscription that isn't the signed-in person's. Unless it is someone else's by now: the
+    // browser's subscription is one, shared by its tabs, and another may have signed someone in who
+    // turned push on with it meanwhile. Then it is theirs, and left alone.
+    if (fresh && !someoneElses(userId)) await unsubscribe(sub).catch(() => {})
     throw e
   }
   write(String(userId))
+}
+
+// Whether this browser's push is someone else's than `userId` now: another account's session has
+// begun here, or the flag names another account. Asked at the moment a subscription would be ended.
+function someoneElses(userId: number): boolean {
+  const signedIn = sessionUser()
+  const flag = read()
+  return (signedIn !== null && signedIn !== userId) || (flag !== null && flag !== String(userId))
 }
 
 /** Thrown by disablePush when the browser wouldn't end its subscription. */
@@ -133,11 +288,24 @@ export class PushUnsubscribeFailed extends Error {}
  * person can try again: nothing is remembered as off until both are done (the server's answer
  * to a delete of a device it doesn't know is the same as to one it does).
  */
-export async function disablePush(): Promise<void> {
-  const sub = await (await registration())?.pushManager.getSubscription()
+export function disablePush(): Promise<void> {
+  // The session of the click, as for turning it on.
+  const s = steps()
+  const who = sessionUser()
+  if (who === null) return Promise.reject(new SessionEnded())
+  return withPushLock(() => {
+    s.check(undefined)
+    return disableNow(who, s)
+  })
+}
+
+async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<void> {
+  const sub = s.check(await (await registration())?.pushManager.getSubscription())
   if (sub) {
-    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint } })
-    if (!(await sub.unsubscribe().catch(() => false))) throw new PushUnsubscribeFailed()
+    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
+    s.check(undefined)
+    if (!(await unsubscribe(sub).catch(() => false))) throw new PushUnsubscribeFailed()
+    s.check(undefined)
   }
   write(null)
 }
@@ -148,15 +316,28 @@ export async function disablePush(): Promise<void> {
  * session's subscription with it, so only the browser's is left to end. Best effort and bounded: a
  * push service that is told the subscription is over answers "gone" to the next one.
  */
-export async function leavePush(): Promise<void> {
+//
+// It is part of the sign-out of `userId`, whose session is already over here (session.ts): the
+// request names them, so it can't remove the device of someone who signed in since.
+export async function leavePush(userId: number): Promise<void> {
   if (!pushSupported()) return
-  write(null)
-  const leave = async () => {
-    const sub = await (await registration())?.pushManager.getSubscription()
-    if (!sub) return
-    await sub.unsubscribe().catch(() => {})
+  // The sign-out this is part of: once another session has begun here, or someone else turned push
+  // on (the flag names them), this browser's subscription is theirs, and is left alone. That is
+  // checked again at the moment it would be ended, since the browser is shared by its tabs.
+  const mine = sameSession()
+  const theirs = () => {
+    const flag = read()
+    return flag !== null && flag !== String(userId)
   }
-  // Bounded: signing out never waits long on a browser that is slow to answer.
+  if (!theirs()) write(null)
+  const leave = () =>
+    withPushLock(async () => {
+      const sub = await (await registration())?.pushManager.getSubscription()
+      if (!sub || !mine() || theirs()) return
+      await unsubscribe(sub).catch(() => {})
+    })
+  // Bounded: signing out never waits long on a browser that is slow to answer. What is still on
+  // its way after that checks, before it touches the subscription, that it is still this sign-out's.
   await Promise.race([leave().catch(() => {}), new Promise((done) => setTimeout(done, 3000))])
 }
 
@@ -168,20 +349,34 @@ export async function leavePush(): Promise<void> {
  * Nothing is registered for a person who is in no workspace: push is for people in one, and the
  * server refuses it.
  */
-export async function syncPush(userId: number, inWorkspace = true): Promise<boolean> {
-  if (!inWorkspace || read() !== String(userId) || !pushSupported()) return false
+export function syncPush(userId: number, inWorkspace = true): Promise<boolean> {
+  if (!inWorkspace || read() !== String(userId) || !pushSupported()) return Promise.resolve(false)
+  return withPushLock(() => syncNow(userId))
+}
+
+async function syncNow(userId: number): Promise<boolean> {
+  if (read() !== String(userId)) return false
+  // Not registered again while it is being ended in another tab: the next start does it.
+  if (unsubscribeUnresolved()) return false
+  const s = steps()
   const reg = await registration()
   const sub = await reg?.pushManager.getSubscription()
+  // The session ended while the browser answered: this device is the next person's to decide.
+  if (!s.ok()) return false
   if (!sub || Notification.permission !== 'granted') {
     write(null)
     return false
   }
-  await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub) }).catch(() => {})
-  return true
+  await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub), headers: forAccount(userId) }).catch(
+    () => {},
+  )
+  return s.ok()
 }
 
 /** What the service worker says for each kind of push, in the person's language. */
 export async function sendPushStrings(strings: Record<string, string>): Promise<void> {
+  const s = steps()
   const reg = await registration()
-  reg?.active?.postMessage({ type: 'PUSH_STRINGS', strings })
+  // Another person's words never reach the worker: only while the session that sent them lasts.
+  if (s.ok()) reg?.active?.postMessage({ type: 'PUSH_STRINGS', strings })
 }
