@@ -248,6 +248,12 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 				return paylink.Link{}, err
 			}
 		}
+		// The key's time is checked again just before the call leaves: a write-ahead (or anything
+		// between) that ran past the time the provider keeps the key must not send under a key it may
+		// have forgotten. The send written ahead stays on record, so the outcome stays unknown.
+		if a.unknown() && !s.keyKept(a, provider) {
+			return paylink.Link{}, s.stillUnknown(ctx, a)
+		}
 		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(a, req.Description))
 		if err != nil {
 			ce, ok := IsCall(err)

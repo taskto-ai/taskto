@@ -82,11 +82,11 @@ const (
 	// when its event was created at most squareRetryWindow+squareSkew ago and at most squareSkew ahead.
 	squareRetryWindow = 24 * time.Hour
 	squareSkew        = 5 * time.Minute
-	// squareKeyKept is how long a key is relied on to be kept. Square publishes no retention period for
-	// idempotency keys, so a call is asked again under its key only shortly after it was first sent,
-	// while the reconciliation's first tries run; after that a key whose outcome is unknown is only
-	// looked for by its token, which the list of payment links always shows.
-	squareKeyKept = time.Hour
+	// squareKeyKept is how long a key is relied on to be kept: not at all. Square publishes no retention
+	// period for idempotency keys, so a call whose outcome is unknown is never sent again under its key
+	// (a key Square forgot would make a second payable link); it is only looked for by its token, which
+	// the list of payment links always shows, and an admin decides when the wait ends.
+	squareKeyKept time.Duration = 0
 	// squareFindPageSize is the page asked of a list (Square's maximum; it is advisory), and
 	// squareFindMaxPages how many pages a lookup reads before it says it couldn't read them all.
 	squareFindPageSize = 1000

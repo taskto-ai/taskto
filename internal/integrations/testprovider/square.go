@@ -106,6 +106,8 @@ type Square struct {
 	idem   map[string]squareIdem
 	faults []squareFault
 	calls  int
+	// requests is every request served, its method and path only.
+	requests []Request
 	// ordersDown: every read of an order fails with a 500 (a link is listed, its order can't be read).
 	ordersDown bool
 }
@@ -203,10 +205,18 @@ func (s *Square) FailOrderReads(down bool) {
 	s.ordersDown = down
 }
 
+// Requests returns the method and path of every request the fake served, oldest first.
+func (s *Square) Requests() []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Request(nil), s.requests...)
+}
+
 func (s *Square) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	s.requests = append(s.requests, Request{Method: r.Method, Path: r.URL.Path})
 	if r.Header.Get("Square-Version") != SquareAPIVersion {
 		squareError(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_SQUARE_VERSION_FORMAT")
 		return

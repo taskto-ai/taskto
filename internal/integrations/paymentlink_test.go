@@ -2814,6 +2814,33 @@ func TestRepeatedFailedReadsNeverEndTheReconciliationEarly(t *testing.T) {
 	}
 }
 
+// The key's window is checked again after the write-ahead: a try that passed the check just before the
+// window closed and reached the call after it never sends under a key the provider may have forgotten.
+func TestAKeyPastItsWindowAfterTheWriteAheadIsNotSent(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-window-0001")
+			p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+				t.Fatal("the 5xx was no error")
+			}
+			p.later(stripeKeyKept - time.Minute)
+			p.svc.afterWriteAhead = func() error { p.later(2 * time.Minute); return nil }
+			// Still unknown (the wait for it is shorter than Stripe's window, so it has ended): not sent.
+			if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
+				t.Fatalf("err = %v", err)
+			}
+			p.svc.afterWriteAhead = nil
+			if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+				t.Fatalf("%d calls, want the first only", n)
+			}
+		})
+	}
+}
+
 // A crash between the write-ahead and the call: nothing left, and the key's outcome reads unknown all
 // the same. The next try finds nothing and asks again under the same key, which makes the one link.
 func TestACrashBetweenTheWriteAheadAndTheCallMakesOneLink(t *testing.T) {

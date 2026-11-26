@@ -272,10 +272,10 @@ func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 	}
 }
 
-// Square publishes no retention for idempotency keys: a key is asked again only briefly, well inside
-// what Stripe documents, and then only looked for.
-func TestSquareKeysAreReliedOnBriefly(t *testing.T) {
-	if (square{}).KeyKept() <= 0 || (square{}).KeyKept() > (stripe{}).KeyKept() || (square{}).KeyKept() > 2*time.Hour {
+// Square publishes no retention for idempotency keys: a key whose outcome is unknown is never relied
+// on, only looked for.
+func TestSquareKeysAreNeverReliedOn(t *testing.T) {
+	if (square{}).KeyKept() != 0 {
 		t.Fatalf("Square's keys are relied on for %v", (square{}).KeyKept())
 	}
 }
@@ -611,8 +611,8 @@ func TestSquareASeenLinkIsNeverConfirmedAway(t *testing.T) {
 		t.Fatalf("%d links at Square after the lost answer, want 1", n)
 	}
 
-	// Past the key's time, only looked for; the link is listed, its order can't be read.
-	p.later(squareKeyKept + time.Minute)
+	// Only looked for (Square's key is never relied on); the link is listed, its order can't be read.
+	p.later(time.Minute)
 	p.sq.FailOrderReads(true)
 	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationLinkLookupPending) {
 		t.Fatalf("a lookup that can't check the link it saw: %v", err)
@@ -633,5 +633,59 @@ func TestSquareASeenLinkIsNeverConfirmedAway(t *testing.T) {
 	p.sq.FailOrderReads(false)
 	if n := len(p.sq.Links()); n != 1 {
 		t.Fatalf("%d links at Square, want 1", n)
+	}
+}
+
+// A Square call that failed without making anything leaves its outcome unknown all the same: it is
+// never sent again under its key, which Square may have forgotten (it publishes no retention), only
+// looked for. When the wait ends, an admin who finds nothing at Square allows exactly one new key,
+// which makes the one link.
+func TestSquareAnUnknownOutcomeIsOnlyLookedForUntilAnAdminDecides(t *testing.T) {
+	ctx := context.Background()
+	p := newSquarePay(t, publicURL)
+	record := p.invoice(10, "USD")
+	req := p.direct(record, "op-square-unknown-0001")
+	req.Currency = "USD"
+	creates := func() int {
+		n := 0
+		for _, r := range p.sq.Requests() {
+			if r.Method == http.MethodPost && r.Path == "/v2/online-checkout/payment-links" {
+				n++
+			}
+		}
+		return n
+	}
+
+	p.sq.FailNext(http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", false)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the failure was no error")
+	}
+	for _, d := range []time.Duration{time.Second, time.Minute, time.Hour} {
+		p.later(d)
+		if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationLinkLookupPending) {
+			t.Fatalf("after %v: %v", d, err)
+		}
+	}
+	if n := creates(); n != 1 || len(p.sq.Links()) != 0 {
+		t.Fatalf("%d creations and %d links while the outcome is unknown, want the first call only", n, len(p.sq.Links()))
+	}
+	p.later(7 * time.Hour)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
+		t.Fatalf("at the end of the wait: %v", err)
+	}
+	if n := creates(); n != 1 {
+		t.Fatalf("%d creations, want 1", n)
+	}
+	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ?`, string(apierr.CodeIntegrationOutcomeUnknown))
+	e := p.entries()[0]
+	if status, code := p.confirm(e.id); status != http.StatusNoContent {
+		t.Fatalf("confirm = %d %q", status, code)
+	}
+	link, err := p.svc.OpenPaymentLink(ctx, req)
+	if err != nil || link.ObjectID == "" || creates() != 2 || len(p.sq.Links()) != 1 || p.sq.Links()[0].ID != link.ObjectID {
+		t.Fatalf("after the admin's decision: %+v, %v; %d creations, %d links", link, err, creates(), len(p.sq.Links()))
+	}
+	if r := p.refs(); len(r) != 1 || r[0].keySeq != 1 {
+		t.Fatalf("refs = %+v", r)
 	}
 }

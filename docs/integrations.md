@@ -77,8 +77,8 @@ The registry is the list in `internal/integrations/registry.go`. Each provider s
   its sandbox host, by `environment`), and the **API version** it is written against and sends
   with every call (`Stripe-Version`, `Square-Version`);
 - how long it **keeps an idempotency key** (`KeyKept`): Stripe documents at least 24 hours, which
-  the server relies on for 23; Square publishes no period, so its keys are relied on for an hour
-  ([Square](#square)).
+  the server relies on for 23; Square publishes no period, so its keys are never relied on: a
+  call whose outcome is unknown is never sent again under its key ([Square](#square)).
 
 A new provider is a change of code and tests, never a migration: the `provider` column is
 validated in Go.
@@ -407,7 +407,9 @@ write.
   - *Then the same key is asked again*, with the same parameters, while Stripe still keeps it (23 hours
     from the key's first call; Stripe keeps keys at least 24): Stripe answers with what the first call
     made (an object, or the failure it kept), or runs the call if it never ran. Past that window the
-    key is never called again, since Stripe may have forgotten it and would run it a second time.
+    key is never called again, since Stripe may have forgotten it and would run it a second time; the
+    window is checked again just before the call leaves, after it is written ahead. A provider that
+    documents no window (Square) is never asked again under a key whose outcome is unknown.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
     and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
@@ -785,9 +787,9 @@ is a change of code and of this section.
 - **Idempotency** ([Idempotency](https://developer.squareup.com/docs/build-basics/common-api-patterns/idempotency)):
   the same key and request return the first successful answer, the same key with another request
   is `IDEMPOTENCY_KEY_REUSED`. Square publishes no period for which a key is kept, so a key whose
-  outcome is unknown is asked again only within an hour of its first call; after that it is only
-  looked for by its token, and never replaced by a new one without an admin
-  ([Payment links](#payment-links)).
+  outcome is unknown is never asked again: it is only looked for by its token, and never replaced
+  by a new one without an admin ([Payment links](#payment-links)). A call that certainly never left is
+  not unknown, and is sent again under the same key.
 - **Errors** ([Handling errors](https://developer.squareup.com/docs/build-basics/handling-errors)):
   Square documents no answer as given before the request ran (not even `429`, after which "Square
   might temporarily stop processing your requests"), so every answer to a creation that isn't a
