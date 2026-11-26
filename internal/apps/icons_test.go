@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 )
@@ -212,5 +213,31 @@ func TestTemplatesHaveIcons(t *testing.T) {
 		if !slices.Contains(tpl.Definition.Requires, IconPathCapability) {
 			t.Errorf("%s: requires = %v, want %s", tpl.ID, tpl.Definition.Requires, IconPathCapability)
 		}
+	}
+}
+
+// References that fan out (each of four rows naming the next one 200 times) are looked at once
+// each: the check stays fast and still finds the unlabelled icon at the bottom.
+func TestIconLabelsDoNotMultiplyFanOut(t *testing.T) {
+	fan := func(next string) string {
+		refs := make([]string, maxListLen)
+		for i := range refs {
+			refs[i] = `"` + next + `"`
+		}
+		return "[" + strings.Join(refs, ",") + "]"
+	}
+	comps := []string{`{"id":"icon","component":"Button","child":"r1","action":{"event":{"name":"add"}}}`,
+		`{"id":"r1","component":"Row","children":` + fan("r2") + `}`,
+		`{"id":"r2","component":"Row","children":` + fan("r3") + `}`,
+		`{"id":"r3","component":"Row","children":` + fan("r4") + `}`,
+		`{"id":"r4","component":"Row","children":["plus"]}`,
+		`{"id":"plus","component":"Icon","name":{"svgPath":"` + plusPath + `"}}`}
+	start := time.Now()
+	_, err := iconScreen(comps...).Check()
+	if code, params := codeOf(err); code != apierr.CodeAppIconLabel || params["component"] != "plus" {
+		t.Fatalf("err = %v, want %s for plus", err, apierr.CodeAppIconLabel)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("the check took %v", took)
 	}
 }

@@ -75,6 +75,7 @@ func (c *screenCheck) iconPath(id string, o map[string]any) error {
 // from assistive technology unless it has a label. Icons by name draw nothing, so they neither
 // name a control nor need a name.
 func (c *screenCheck) iconLabels(byID map[string]map[string]any) error {
+	memo := map[contentAt]contentName{}
 	for _, id := range sortedKeys(byID) {
 		obj := byID[id]
 		var content string
@@ -86,12 +87,10 @@ func (c *screenCheck) iconLabels(byID map[string]map[string]any) error {
 		default:
 			continue
 		}
-		var icons []string
-		if c.namedBy(byID, content, 0, &icons) || len(icons) == 0 {
-			continue
+		if got := namedBy(byID, c.pathIcons, memo, content, 0); !got.named && got.icon != "" {
+			return invalidAs(apierr.CodeAppIconLabel, apierr.Params{"component": got.icon},
+				"component %q: %s %q shows only icons, so one needs a name: give the icon accessibility.label", got.icon, obj["component"], id)
 		}
-		return invalidAs(apierr.CodeAppIconLabel, apierr.Params{"component": icons[0]},
-			"component %q: %s %q shows only icons, so one needs a name: give the icon accessibility.label", icons[0], obj["component"], id)
 	}
 	return nil
 }
@@ -100,42 +99,60 @@ func (c *screenCheck) iconLabels(byID map[string]map[string]any) error {
 // is taken to name it, so a rare deep layout is never refused for what wasn't looked at.
 const maxIconContentDepth = 4
 
-// namedBy reports whether the content under id names the control it is in: a labelled path icon, a
-// Text or any other component that isn't a container, an icon by name or a template of a list.
-// It adds the unlabelled path icons it passes to icons.
-func (c *screenCheck) namedBy(byID map[string]map[string]any, id string, depth int, icons *[]string) bool {
-	obj, ok := byID[id]
-	if !ok || depth > maxIconContentDepth {
-		return true
+// contentAt is a component reached at a depth; contentName is what was found under it: whether
+// something names the control, and the first unlabelled path icon met.
+type (
+	contentAt struct {
+		id    string
+		depth int
 	}
-	switch obj["component"] {
-	case "Icon":
-		if !c.pathIcons[id] {
-			return false // a name draws nothing
+	contentName struct {
+		named bool
+		icon  string
+	}
+)
+
+// namedBy reports what the content under id says of the control it is in: named by a labelled
+// path icon, a Text or any other component that isn't a container, or a template of a list; and
+// the first unlabelled path icon it holds. Each component is looked at once per depth (memo), so a
+// component that many containers refer to costs no more than one: the work is bounded by the
+// depth, the components and their children, however the references fan out.
+func namedBy(byID map[string]map[string]any, pathIcons map[string]bool, memo map[contentAt]contentName, id string, depth int) contentName {
+	key := contentAt{id, depth}
+	if got, seen := memo[key]; seen {
+		return got
+	}
+	got := contentName{named: true}
+	obj, ok := byID[id]
+	switch {
+	case !ok || depth > maxIconContentDepth:
+	case obj["component"] == "Icon":
+		switch {
+		case !pathIcons[id]:
+			got.named = false // a name draws nothing
+		case !hasLabel(obj):
+			got = contentName{icon: id}
 		}
-		if hasLabel(obj) {
-			return true
-		}
-		*icons = append(*icons, id)
-		return false
-	case "Card":
+	case obj["component"] == "Card":
 		child, _ := obj["child"].(string)
-		return c.namedBy(byID, child, depth+1, icons)
-	case "Row", "Column":
+		got = namedBy(byID, pathIcons, memo, child, depth+1)
+	case obj["component"] == "Row" || obj["component"] == "Column":
 		children, isList := obj["children"].([]any)
 		if !isList {
-			return true // a template draws rows of data
+			break // a template draws rows of data
 		}
-		named := false
+		got.named = false
 		for _, ch := range children {
 			s, _ := ch.(string)
-			if c.namedBy(byID, s, depth+1, icons) {
-				named = true
+			under := namedBy(byID, pathIcons, memo, s, depth+1)
+			got.named = got.named || under.named
+			if got.icon == "" {
+				got.icon = under.icon
 			}
 		}
-		return named
 	}
-	return true
+	memo[key] = got
+	return got
 }
 
 // hasLabel is whether a component has a non-empty accessibility label: text, or a value bound
