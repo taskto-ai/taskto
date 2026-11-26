@@ -417,6 +417,11 @@ func route(r *http.Request) (handlerFn, string, bool) {
 			return (*Stripe).expireSession, id, true
 		}
 	}
+	if rest, ok := strings.CutPrefix(p, "/v1/payment_links/"); ok && m == http.MethodGet {
+		if id, tail, _ := strings.Cut(rest, "/"); id != "" && tail == "line_items" {
+			return (*Stripe).linkLineItems, id, true
+		}
+	}
 	if id, ok := strings.CutPrefix(p, "/v1/payment_links/"); ok && id != "" && !strings.Contains(id, "/") {
 		fn, ok := both((*Stripe).retrieveLink, (*Stripe).updateLink)
 		return fn, id, ok

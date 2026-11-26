@@ -312,7 +312,9 @@ const (
 //     Links, and its data can take a minute to be searchable ("don't use search for
 //     read-after-write flows", which this is), so it isn't used.
 //
-// The list APIs read what was written. A session that is no longer open (paid or expired) or a
+// An object is adopted only if it asks what the payment asks now: a session's amount_total and
+// currency, and a link's currency and the line items it lists
+// (https://docs.stripe.com/api/payment-link/line_items). The list APIs read what was written. A session that is no longer open (paid or expired) or a
 // link that is no longer active is not adopted: the payer was never given its address.
 func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, error) {
 	hosted := l.SuccessURL == ""
@@ -326,37 +328,30 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 		q.Set("created[gte]", strconv.FormatInt(since.Add(-findSkew).Unix(), 10))
 	}
 	for range findMaxPages {
-		req, err := c.NewRequest(ctx, http.MethodGet, c.BaseURL(stripeHost)+path+"?"+q.Encode(), nil)
+		body, status, err := stripeGet(ctx, creds, c, path+"?"+q.Encode())
 		if err != nil {
-			return Link{}, false, &CallError{Kind: CallUnreachable}
-		}
-		stripeHeaders(req, creds)
-		resp, err := c.Do(req)
-		if err != nil {
-			return Link{}, false, &CallError{Kind: CallUnreachable}
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
-		_ = resp.Body.Close()
-		if err != nil {
-			return Link{}, false, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
-		}
-		if resp.StatusCode != http.StatusOK {
-			return Link{}, false, stripeLookupFailure(resp.StatusCode)
+			return Link{}, false, err
 		}
 		var page struct {
-			HasMore bool `json:"has_more"`
-			Data    []struct {
+			Object  string `json:"object"`
+			HasMore bool   `json:"has_more"`
+			Data    *[]struct {
 				ID                string            `json:"id"`
 				Object            string            `json:"object"`
 				URL               string            `json:"url"`
+				Currency          string            `json:"currency"`
+				AmountTotal       int64             `json:"amount_total"`
 				ClientReferenceID *string           `json:"client_reference_id"`
 				Metadata          map[string]string `json:"metadata"`
 			} `json:"data"`
 		}
-		if err := json.Unmarshal(body, &page); err != nil {
-			return Link{}, false, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
+		// A negative answer is only as good as the page it rests on: an answer that isn't a list, or
+		// that says there is more and shows none, says nothing about the object.
+		if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || (page.HasMore && len(*page.Data) == 0) {
+			return Link{}, false, &CallError{Kind: CallUnreachable, Status: status}
 		}
-		for _, o := range page.Data {
+		data := *page.Data
+		for _, o := range data {
 			var ours bool
 			if hosted {
 				ours = o.Metadata[stripeRefMetadata] == l.Token
@@ -367,18 +362,84 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				continue
 			}
 			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
-			if !ok {
+			if !ok || !strings.EqualFold(o.Currency, l.Currency) {
 				// Ours, and not a link the payer could be given: nothing says what it is.
-				return Link{}, false, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+				return Link{}, false, &CallError{Kind: CallRefused, Status: status}
+			}
+			amount := o.AmountTotal
+			if hosted {
+				// A link's list entry has no amount: its line items do.
+				if amount, err = stripeLinkAmount(ctx, creds, c, o.ID, l.Currency); err != nil {
+					return Link{}, false, err
+				}
+			}
+			if amount != l.AmountMinor {
+				// Made for another amount than the one asked for now: its address is never given
+				// to a payer, and no other is made while it stands.
+				return Link{}, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			return link, true, nil
 		}
-		if !page.HasMore || len(page.Data) == 0 {
+		if !page.HasMore {
 			return Link{}, false, nil
 		}
-		q.Set("starting_after", page.Data[len(page.Data)-1].ID)
+		q.Set("starting_after", data[len(data)-1].ID)
 	}
 	return Link{}, false, &CallError{Kind: CallUnreachable} // not read in full
+}
+
+// stripeLinkAmount is what a Payment Link asks, from its line items
+// (https://docs.stripe.com/api/payment-link/line_items), which must be in the currency and fit
+// one page.
+func stripeLinkAmount(ctx context.Context, creds Credentials, c *Client, id, currency string) (int64, error) {
+	body, status, err := stripeGet(ctx, creds, c, "/v1/payment_links/"+id+"/line_items?limit="+strconv.Itoa(findPageSize))
+	if err != nil {
+		return 0, err
+	}
+	var items struct {
+		Object  string `json:"object"`
+		HasMore bool   `json:"has_more"`
+		Data    *[]struct {
+			Currency    string `json:"currency"`
+			AmountTotal int64  `json:"amount_total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &items); err != nil || items.Object != "list" || items.Data == nil {
+		return 0, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	if items.HasMore {
+		return 0, &CallError{Kind: CallRefused, Status: status}
+	}
+	var sum int64
+	for _, it := range *items.Data {
+		if !strings.EqualFold(it.Currency, currency) {
+			return 0, &CallError{Kind: CallRefused, Status: status}
+		}
+		sum += it.AmountTotal
+	}
+	return sum, nil
+}
+
+// stripeGet reads one answer of a list or a retrieval: the body and the status, or a *CallError.
+func stripeGet(ctx context.Context, creds Credentials, c *Client, pathAndQuery string) ([]byte, int, error) {
+	req, err := c.NewRequest(ctx, http.MethodGet, c.BaseURL(stripeHost)+pathAndQuery, nil)
+	if err != nil {
+		return nil, 0, &CallError{Kind: CallUnreachable}
+	}
+	stripeHeaders(req, creds)
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, 0, &CallError{Kind: CallUnreachable}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
+	if err != nil {
+		return nil, resp.StatusCode, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode, stripeLookupFailure(resp.StatusCode)
+	}
+	return body, resp.StatusCode, nil
 }
 
 // stripeLookupFailure classifies an answer to a read: never KeyKept, since a read has no key.

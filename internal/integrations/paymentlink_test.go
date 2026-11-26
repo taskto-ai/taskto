@@ -444,6 +444,13 @@ func (p *pay) mustPost(path string, form url.Values) {
 }
 
 // objects is how many objects of the shape Stripe holds.
+func (p *pay) exec(q string, args ...any) {
+	p.t.Helper()
+	if _, err := p.db.Exec(q, args...); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
 func (p *pay) objects(path string) int {
 	if path == "/v1/payment_links" {
 		return len(p.fake.Links())
@@ -839,6 +846,164 @@ func TestWithoutAPublicURLALinkOnAnotherAddressIsRefused(t *testing.T) {
 				NewLink{Token: strings.Repeat("a", 32), AmountMinor: 100, Currency: "EUR"})
 			if ce, ok := IsCall(err); !ok || ce.Kind != CallRefused {
 				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+// A lookup that rests on an answer that isn't a whole list says nothing about the object: it is an
+// error, never "not found", so no second object is made on it.
+func TestALookupOnAnIncompleteListFindsNothingOut(t *testing.T) {
+	for name, body := range map[string]string{
+		"more and none shown": `{"object":"list","has_more":true,"data":[]}`,
+		"no list":             `{}`,
+		"no data":             `{"object":"list","has_more":false}`,
+		"not a list":          `{"object":"checkout.session","data":[]}`,
+		"not json":            `<html>`,
+	} {
+		for shape, nl := range map[string]NewLink{
+			"a session": {Token: strings.Repeat("a", 32), AmountMinor: 100, Currency: "EUR", SuccessURL: publicURL + PaymentDonePath},
+			"a link":    {Token: strings.Repeat("a", 32), AmountMinor: 100, Currency: "EUR"},
+		} {
+			t.Run(name+"/"+shape, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+				defer srv.Close()
+				c := NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(strings.TrimPrefix(srv.URL, "http://")))
+				_, found, err := stripe{}.FindPaymentLink(context.Background(), Credentials{APIKey: Secret("not-a-key")}, c, nl, time.Now())
+				if ce, ok := IsCall(err); !ok || ce.Kind != CallUnreachable || ce.KeyKept || found {
+					t.Fatalf("found = %v, err = %v", found, err)
+				}
+			})
+		}
+	}
+	// A whole list that holds nothing of the token's is "not found".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","has_more":false,"data":[]}`))
+	}))
+	defer srv.Close()
+	c := NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(strings.TrimPrefix(srv.URL, "http://")))
+	_, found, err := stripe{}.FindPaymentLink(context.Background(), Credentials{APIKey: Secret("not-a-key")}, c, NewLink{Token: strings.Repeat("a", 32), AmountMinor: 100, Currency: "EUR"}, time.Now())
+	if err != nil || found {
+		t.Fatalf("found = %v, err = %v", found, err)
+	}
+}
+
+// An object of the token is adopted only if it asks what the payment asks: the amount and the
+// currency. Another is never given to a payer, and nothing else is made while it stands.
+func TestALookupAdoptsOnlyAnObjectOfTheAskedTerms(t *testing.T) {
+	p := newPay(t, "")
+	form := url.Values{}
+	form.Set("after_completion[type]", "hosted_confirmation")
+	form.Set("line_items[0][quantity]", "1")
+	form.Set("line_items[0][price_data][currency]", "eur")
+	form.Set("line_items[0][price_data][unit_amount]", "1000")
+	form.Set("line_items[0][price_data][product_data][name]", "Invoice")
+	token := strings.Repeat("b", 32)
+	form.Set("metadata[taskto_ref]", token)
+	p.mustPost("/v1/payment_links", form)
+	sess := url.Values{}
+	sess.Set("mode", "payment")
+	sess.Set("success_url", publicURL+PaymentDonePath)
+	sess.Set("client_reference_id", token)
+	sess.Set("line_items[0][quantity]", "1")
+	sess.Set("line_items[0][price_data][currency]", "eur")
+	sess.Set("line_items[0][price_data][unit_amount]", "1000")
+	sess.Set("line_items[0][price_data][product_data][name]", "Invoice")
+	p.mustPost("/v1/checkout/sessions", sess)
+
+	c := NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(p.fake.Host()))
+	creds := Credentials{APIKey: Secret(p.fake.APIKey())}
+	for shape, nl := range map[string]NewLink{
+		"a session": {Token: token, SuccessURL: publicURL + PaymentDonePath},
+		"a link":    {Token: token},
+	} {
+		t.Run(shape, func(t *testing.T) {
+			nl.AmountMinor, nl.Currency = 1000, "EUR"
+			link, found, err := stripe{}.FindPaymentLink(context.Background(), creds, c, nl, time.Now())
+			if err != nil || !found || link.ObjectID == "" || link.URL == "" {
+				t.Fatalf("the object of the terms: %+v, %v, %v", link, found, err)
+			}
+			for what, change := range map[string]func(*NewLink){
+				"another amount":   func(n *NewLink) { n.AmountMinor = 100 },
+				"another currency": func(n *NewLink) { n.Currency = "USD" },
+			} {
+				other := nl
+				change(&other)
+				link, found, err := stripe{}.FindPaymentLink(context.Background(), creds, c, other, time.Now())
+				if ce, ok := IsCall(err); !ok || ce.Kind != CallRefused || found || link.URL != "" {
+					t.Fatalf("%s: %+v, %v, %v", what, link, found, err)
+				}
+			}
+			// Another reference's token is no match at all.
+			nl.Token = strings.Repeat("c", 32)
+			if _, found, err := (stripe{}).FindPaymentLink(context.Background(), creds, c, nl, time.Now()); err != nil || found {
+				t.Fatalf("another token: %v, %v", found, err)
+			}
+		})
+	}
+}
+
+// A late failure of an older call moves the key on only from the key it used: the key a later call
+// is using is not skipped.
+func TestAFailureMovesTheKeyOnOnlyFromTheKeyItUsed(t *testing.T) {
+	p := newPay(t, publicURL)
+	invoice := p.invoice(10, "EUR")
+	p.fake.Fail(testprovider.ServerError().On(http.MethodPost, "/v1/checkout/sessions"))
+	p.startWorker()
+	p.send(invoice, "op-send-0008")
+	p.waitFor("the entry waits after the first call", func() bool {
+		es := p.entries()
+		return len(es) == 1 && es[0].state == "pending" && es[0].attempts == 1
+	})
+	refs := p.refs()
+	if len(refs) != 1 || refs[0].keySeq != 1 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	rec := record{Provider: "stripe"}
+	stale := ref{id: refs[0].id, keySeq: 0}
+	for _, kind := range []CallKind{CallUnreachable, CallRefused} {
+		if err := p.svc.callFailed(context.Background(), stale, rec, &CallError{Kind: kind, Status: 500, KeyKept: true}); err == nil {
+			t.Fatal("no error")
+		}
+		if r := p.refs(); r[0].keySeq != 1 {
+			t.Fatalf("a failure of key 0 (kind %d) moved the key to %d", kind, r[0].keySeq)
+		}
+	}
+	current := ref{id: refs[0].id, keySeq: 1}
+	_ = p.svc.callFailed(context.Background(), current, rec, &CallError{Kind: CallUnreachable, Status: 500, KeyKept: true})
+	if r := p.refs(); r[0].keySeq != 2 {
+		t.Fatalf("a failure of the key in use left it at %d", r[0].keySeq)
+	}
+}
+
+// A key the provider may have forgotten (it keeps one for a day, at least) is not trusted to find
+// the object: it is looked for first, so the call under the same key can't make a second one.
+func TestAnOldRefWithNoObjectLooksBeforeItCallsAgain(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, shape.path))
+			p.startWorker()
+			p.send(record, "op-send-0009")
+			p.waitFor("the entry waits after the first call", func() bool {
+				es := p.entries()
+				return len(es) == 1 && es[0].state == "pending" && es[0].attempts == 1
+			})
+			if r := p.refs(); len(r) != 1 || r[0].keySeq != 0 || r[0].object != "" {
+				t.Fatalf("refs = %+v", r)
+			}
+			p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
+			p.later(time.Minute)
+			p.settled(apps.StateDone)
+			if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+				t.Fatalf("%d calls that make an object, want the first only", n)
+			}
+			if n := p.objects(shape.path); n != 1 {
+				t.Fatalf("%d objects at Stripe, want 1", n)
+			}
+			if refs := p.refs(); len(refs) != 1 || refs[0].object != p.objectID(shape.path) || refs[0].state != "open" {
+				t.Fatalf("refs = %+v", refs)
 			}
 		})
 	}

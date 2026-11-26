@@ -120,11 +120,13 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	// gives for a call it executed: the object may exist. Another under the new key could make a
 	// second payable link for the same payment, so the first is looked for and adopted; and while
 	// the provider can't say, no call is made.
-	if ref.keySeq > 0 {
-		since, err := time.Parse(timeFormat, ref.createdAt)
-		if err != nil {
-			return paylink.Link{}, err
-		}
+	since, err := time.Parse(timeFormat, ref.createdAt)
+	if err != nil {
+		return paylink.Link{}, err
+	}
+	// The same key can't be trusted either once the provider may have forgotten it: a call under it
+	// would then make another object, as a call under a new key would.
+	if ref.keySeq > 0 || s.store.now().Sub(since) >= keyTrusted {
 		found, ok, err := provider.FindPaymentLink(ctx, creds, client, nl, since)
 		if err != nil {
 			return paylink.Link{}, s.callFailed(ctx, ref, rec, err)
@@ -146,6 +148,10 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	}
 	return paylink.Link{URL: link.URL, ObjectID: link.ObjectID, AmountMinor: minor, Currency: cur}, nil
 }
+
+// keyTrusted is how long a key is known to be kept by the provider (Stripe keeps one for at least 24
+// hours, and may remove it after; a margin is left).
+const keyTrusted = 23 * time.Hour
 
 // providerDoes says whether the registry's provider id implements the kind.
 func providerDoes(id, kind string) bool {
@@ -326,13 +332,15 @@ func (s *Service) callFailed(ctx context.Context, r ref, rec record, err error) 
 	}
 	switch {
 	case ce.Kind != CallUnreachable:
-		// A refusal is for good: the ref is failed (a retry of the entry starts it anew).
-		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'failed', key_seq = key_seq + ?
-			WHERE id = ? AND provider_object_id IS NULL`, boolInt(ce.KeyKept), r.id); uerr != nil {
+		// A refusal is for good: the ref is failed (a retry of the entry starts it anew). The key moves
+		// on only from the one the failed call used, so a late failure of an older call (an entry
+		// done twice) can't skip a key that a later call is using.
+		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'failed', key_seq = key_seq + (? AND key_seq = ?)
+			WHERE id = ? AND provider_object_id IS NULL`, boolInt(ce.KeyKept), r.keySeq, r.id); uerr != nil {
 			return uerr
 		}
 	case ce.KeyKept:
-		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1 WHERE id = ? AND provider_object_id IS NULL`, r.id); uerr != nil {
+		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1 WHERE id = ? AND provider_object_id IS NULL AND key_seq = ?`, r.id, r.keySeq); uerr != nil {
 			return uerr
 		}
 	}

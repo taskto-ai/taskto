@@ -143,6 +143,44 @@ func (s *Stripe) listLinks(_ *http.Request, form url.Values, _ string) reply {
 	return jsonReply(http.StatusOK, listOf("/v1/payment_links", more, data))
 }
 
+var linkLineItemParams = compileAll([]string{`limit`, `starting_after`, `ending_before`})
+
+// linkLineItems lists what a link asks for, in the order it was made, as Stripe's line items of a
+// payment link: the amounts that are the payer's.
+func (s *Stripe) linkLineItems(_ *http.Request, form url.Values, id string) reply {
+	if rp := unknownParam(form, linkLineItemParams); rp != nil {
+		return *rp
+	}
+	l, ok := s.links[id]
+	if !ok {
+		return noSuch("payment link", id, "payment_link")
+	}
+	type item struct {
+		ID          string  `json:"id"`
+		Object      string  `json:"object"`
+		AmountTotal int64   `json:"amount_total"`
+		Currency    string  `json:"currency"`
+		Description *string `json:"description"`
+		Quantity    int64   `json:"quantity"`
+	}
+	ids := make([]string, len(l.items))
+	byID := make(map[string]item, len(l.items))
+	for i, it := range l.items {
+		ids[i] = "li_" + id + "_" + strconv.Itoa(i)
+		byID[ids[i]] = item{ID: ids[i], Object: "item", AmountTotal: it.UnitAmount * it.Quantity, Currency: l.Currency,
+			Description: optional(it.Name), Quantity: it.Quantity}
+	}
+	page, more, rp := paginate(ids, form, "line item")
+	if rp != nil {
+		return *rp
+	}
+	data := make([]item, 0, len(page))
+	for _, id := range page {
+		data = append(data, byID[id])
+	}
+	return jsonReply(http.StatusOK, listOf("/v1/payment_links/"+l.ID+"/line_items", more, data))
+}
+
 func (s *Stripe) retrieveLink(_ *http.Request, form url.Values, id string) reply {
 	if rp := unknownParam(form, nil); rp != nil {
 		return *rp

@@ -284,8 +284,12 @@ write.
   made, so before that call the integration lists what the account made (the open Checkout Sessions
   created since the reference, matched on `client_reference_id`, or the active Payment Links, newest
   first, matched on `metadata[taskto_ref]`; neither has a filter for them and the search API doesn't
-  cover them) and adopts an object of the token as if a call had answered it. When the listing can't
-  be read in full, nothing is made: the entry waits and tries again.
+  cover them) and adopts an object of the token as if a call had answered it, if it asks the amount
+  and the currency of the payment (an object of the token that doesn't is never given to a payer, and
+  the entry fails with the provider's refusal for a person to settle). The same look comes before a
+  call under the same key once the reference is a day old, when Stripe may have forgotten the key.
+  When the listing can't be read in full (a failed read, an answer that isn't a whole list, more
+  pages than a lookup reads), nothing is made: the entry waits and tries again.
 - **The server's own pages, or none.** With `-public-url` the payer comes back to
   `<public URL>/payment/done` or `/payment/cancelled`, web app pages that show a short message and
   call nothing; without it the payer stays on Stripe's confirmation page and no URL of ours is sent.

@@ -709,11 +709,11 @@ func TestListingPaymentLinksAndSessionsByCreation(t *testing.T) {
 	var l linkList
 	a.get("/v1/payment_links", url.Values{"limit": {"2"}}).into(t, &l)
 	if l.Object != "list" || l.URL != "/v1/payment_links" || !l.HasMore || len(l.Data) != 2 || l.Data[0].ID != ids[3] || l.Data[0].Metadata["taskto_ref"] != "tok3" {
-		t.Errorf("first page, newest first: %+v", l)
+		t.Fatalf("first page, newest first: %+v", l)
 	}
 	a.get("/v1/payment_links", url.Values{"limit": {"2"}, "starting_after": {l.Data[1].ID}}).into(t, &l)
 	if l.HasMore || len(l.Data) != 2 || l.Data[1].ID != ids[0] {
-		t.Errorf("second page: %+v", l)
+		t.Fatalf("second page: %+v", l)
 	}
 	a.get("/v1/payment_links", url.Values{"active": {"true"}}).into(t, &l)
 	if len(l.Data) != 3 {
@@ -721,7 +721,21 @@ func TestListingPaymentLinksAndSessionsByCreation(t *testing.T) {
 	}
 	a.get("/v1/payment_links", url.Values{"active": {"false"}}).into(t, &l)
 	if len(l.Data) != 1 || l.Data[0].ID != ids[2] {
-		t.Errorf("inactive links: %+v", l)
+		t.Fatalf("inactive links: %+v", l)
+	}
+	var items struct {
+		Data []struct {
+			AmountTotal int64 `json:"amount_total"`
+			Currency    string
+		}
+		HasMore bool `json:"has_more"`
+	}
+	a.get("/v1/payment_links/"+ids[1]+"/line_items", nil).into(t, &items)
+	if len(items.Data) != 1 || items.Data[0].AmountTotal != 1001 || items.Data[0].Currency != "eur" || items.HasMore {
+		t.Errorf("line items: %+v", items)
+	}
+	if ans := a.get("/v1/payment_links/plink_nope/line_items", nil); ans.status != http.StatusNotFound {
+		t.Errorf("line items of an unknown link: %d", ans.status)
 	}
 	for name, q := range map[string]url.Values{"a metadata filter": {"metadata[taskto_ref]": {"tok1"}}, "a bad boolean": {"active": {"maybe"}}, "a bad cursor": {"starting_after": {"plink_nope"}}} {
 		if ans := a.get("/v1/payment_links", q); ans.status != http.StatusBadRequest {
