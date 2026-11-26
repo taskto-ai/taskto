@@ -10,7 +10,7 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
-import { sameSession } from '../session'
+import { sameSession, sessionUser } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { toast } from '../ui/Toast'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
@@ -454,4 +454,21 @@ test('a record that appears after the person was asked is never deleted by the s
   stale.close()
   expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
   expect(await runtime.store.listItems()).toHaveLength(1)
+})
+
+test('another account signing in while this tab checks for unsent records before logging out ends its session for good', async () => {
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  logOut()
+  // While the tab looks for unsent records, another tab signs in as someone else.
+  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  expect((await screen.findByRole('alertdialog')).textContent).toMatch(/The account changed/)
+  await new Promise((r) => setTimeout(r, 50))
+  // The records found don't bring this account's session back.
+  expect(sessionUser()).toBeNull()
 })

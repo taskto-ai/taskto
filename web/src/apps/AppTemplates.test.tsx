@@ -477,3 +477,27 @@ test('a copy that answers after the page went opens nothing', async () => {
   await act(async () => answer())
   expect(window.location.pathname).toBe('/w/1/apps')
 })
+
+test('an install whose session changed while it waited leaves its button ready, and opens nothing', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...base,
+    'POST /api/workspaces/1/spaces/2/app-templates/expense-tracker/install': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: app() })
+      }),
+  })
+  window.history.replaceState(null, '', '/w/1/apps/templates')
+  beginSession(1)
+  render(<Routed />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Use the template Expense tracker' }))
+  const form = await screen.findByRole('dialog', { name: 'Use the template Expense tracker' })
+  fireEvent.click(within(form).getByRole('button', { name: 'Install as a draft' }))
+  endSession()
+  beginSession(1)
+  await act(async () => answer())
+  await waitFor(() =>
+    expect(within(form).getByRole('button', { name: 'Install as a draft' }).getAttribute('aria-busy')).toBeNull(),
+  )
+  expect(window.location.pathname).toBe('/w/1/apps/templates')
+})

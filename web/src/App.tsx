@@ -4,7 +4,7 @@
 // without, and then the workspace it joined. A password reset link (/reset-password#<token>)
 // sets the password, and signs in.
 
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ACCOUNT_CHANGED_EVENT, ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen, StartingScreen } from './auth/AuthScreens'
 import { ServerUnreachable } from './auth/ServerUnreachable'
@@ -19,7 +19,7 @@ import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
 import { navigate } from './router'
-import { beginSession, endSession, sessionUser } from './session'
+import { beginSession, endSession } from './session'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -118,14 +118,18 @@ export function App() {
   // (a private window, storage refused); and when the server refuses a request of this account as
   // another's.
   const [changed, setChanged] = useState(false)
+  // Read by the sign-out's waits: once the account changed, nothing begins this session again.
+  const changedHere = useRef(false)
+  const accountChanged = useCallback(() => {
+    changedHere.current = true
+    endSession()
+    setChanged(true)
+  }, [])
   useEffect(() => {
     if (account === null) return
-    const over = () => {
-      // Already over (signing out here): this tab's own change, not another's.
-      if (sessionUser() !== account) return
-      endSession()
-      setChanged(true)
-    }
+    // Heard while this tab is signing out too (its session already ended): the change is another
+    // tab's all the same, and the sign-out must not bring this account's session back after it.
+    const over = accountChanged
     watchAccount()
     const off = onAccountSignal((who) => {
       if (who !== account) over()
@@ -138,7 +142,12 @@ export function App() {
       off()
       window.removeEventListener(ACCOUNT_CHANGED_EVENT, refused)
     }
-  }, [account])
+  }, [account, accountChanged])
+  // The session of someone who turned out not to be signing out after all (records to ask about)
+  // begins again, unless the browser's account changed meanwhile.
+  const resume = useCallback((user: number) => {
+    if (!changedHere.current) beginSession(user)
+  }, [])
   // The offline runtime found it out first (while activating): the same.
   useLayoutEffect(() => {
     if (problem === 'account') endSession()
@@ -168,46 +177,49 @@ export function App() {
   // and a person with records not yet sent is asked first: every sign-out goes through here.
   // `keep`: the account's database is not deleted (the person chose so, since this version
   // couldn't tell whether it holds unsent records).
-  const signOut = useCallback(async ({ user, next, items }: Leaving & Partial<Pick<Unsent, 'items'>>, keep = false) => {
-    // The person has asked to go: their session is over from here, before anything below waits, so
-    // nothing of theirs still on its way (a toast's button, a save) acts meanwhile. If it turns out
-    // they don't sign out after all (records to ask about again), it begins again.
-    endSession()
-    const approved = approvalOf(items ?? [])
-    // What the device holds is decided first and in one step: if a record that was not shown to the
-    // person has appeared since (another tab of the account, a stale one), nothing is deleted and
-    // nobody is signed out: they are asked again about what is there now.
-    if (!keep) {
-      const left = await settle(user, approved)
+  const signOut = useCallback(
+    async ({ user, next, items }: Leaving & Partial<Pick<Unsent, 'items'>>, keep = false) => {
+      // The person has asked to go: their session is over from here, before anything below waits, so
+      // nothing of theirs still on its way (a toast's button, a save) acts meanwhile. If it turns out
+      // they don't sign out after all (records to ask about again), it begins again.
+      endSession()
+      const approved = approvalOf(items ?? [])
+      // What the device holds is decided first and in one step: if a record that was not shown to the
+      // person has appeared since (another tab of the account, a stale one), nothing is deleted and
+      // nobody is signed out: they are asked again about what is there now.
+      if (!keep) {
+        const left = await settle(user, approved)
+        if (left.length > 0) {
+          resume(user)
+          setLeaving({ user, next, count: left.length, items: left, unreadable: null })
+          return
+        }
+      }
+      // This device's push subscription goes first, while the session can still say whose it is.
+      await leavePush()
+      // The request says whose session it is for: a tab that is stale (another account signed in
+      // since) never signs that account out; the server refuses it.
+      const refused = await api('/api/logout', { method: 'POST', headers: forAccount(user) }).then(
+        () => false,
+        (e) => e instanceof ApiError && e.code === 'session_account_changed',
+      )
+      // Refused: the browser's session is another account's now (another tab). Nothing of this one is
+      // shown any more; the page is reloaded to go on as whoever that is.
+      if (refused) {
+        accountChanged()
+        return
+      }
+      forgetDrafts()
+      const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
       if (left.length > 0) {
-        beginSession(user)
         setLeaving({ user, next, count: left.length, items: left, unreadable: null })
         return
       }
-    }
-    // This device's push subscription goes first, while the session can still say whose it is.
-    await leavePush()
-    // The request says whose session it is for: a tab that is stale (another account signed in
-    // since) never signs that account out; the server refuses it.
-    const refused = await api('/api/logout', { method: 'POST', headers: forAccount(user) }).then(
-      () => false,
-      (e) => e instanceof ApiError && e.code === 'session_account_changed',
-    )
-    // Refused: the browser's session is another account's now (another tab). Nothing of this one is
-    // shown any more; the page is reloaded to go on as whoever that is.
-    if (refused) {
-      setChanged(true)
-      return
-    }
-    forgetDrafts()
-    const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
-    if (left.length > 0) {
-      setLeaving({ user, next, count: left.length, items: left, unreadable: null })
-      return
-    }
-    setLeaving(null)
-    setSession(next)
-  }, [])
+      setLeaving(null)
+      setSession(next)
+    },
+    [resume, accountChanged],
+  )
   const logOut = useCallback(
     async (who: Leaving) => {
       // Asked to log out, the session is over from this moment (see signOut); if they are asked
@@ -216,11 +228,11 @@ export function App() {
       // A database that can't be checked is not an empty one: the person is told, and chooses.
       const unsent = await unsentOf(who.user)
       if (unsent.count > 0 || unsent.unreadable) {
-        beginSession(who.user)
+        resume(who.user)
         setLeaving({ ...who, ...unsent })
       } else await signOut(who)
     },
-    [signOut],
+    [signOut, resume],
   )
   // Joined: on to the workspace the invite was for, the one that is new, and the token
   // leaves the address bar and the history entry.

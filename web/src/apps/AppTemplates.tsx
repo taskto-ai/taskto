@@ -229,13 +229,12 @@ function InstallDialog({
         method: 'POST',
         body: { name: name.trim(), ...(template.needs_board && target ? { board: target } : {}) },
       })
-      if (!s.ok()) return
-      navigate(installedPath(workspace, space.id, made.id))
+      if (s.ok()) return navigate(installedPath(workspace, space.id, made.id))
     } catch (err) {
-      if (!s.ok()) return
-      setError(appError(err))
-      setBusy(false)
+      if (s.ok()) setError(appError(err))
     }
+    // The button is this dialog's: ready again while it is here, whatever became of the session.
+    if (mounted.current) setBusy(false)
   }
 
   return (
@@ -442,13 +441,11 @@ export function DuplicateDialog({
         method: 'POST',
         body: { name: name.trim(), space_id: Number(to) },
       })
-      if (!s.ok()) return
-      navigate(installedPath(workspace, made.space_id, made.id))
+      if (s.ok()) return navigate(installedPath(workspace, made.space_id, made.id))
     } catch (err) {
-      if (!s.ok()) return
-      setError(errorText(err))
-      setBusy(false)
+      if (s.ok()) setError(errorText(err))
     }
+    if (mounted.current) setBusy(false)
   }
 
   return (

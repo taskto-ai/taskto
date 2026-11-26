@@ -32,6 +32,9 @@ interface Queue {
   // The pick the account has, and the latest one asked for.
   saved: string
   wanted: string
+  // The account's value as the menu last saw it (/api/me): a menu drawn again sees the same one,
+  // which is nothing new and must not overwrite the save the queue knows was accepted since.
+  seen: string
   saving: boolean
   // The menus drawn now, told what to show.
   shown: Set<(tag: string) => void>
@@ -43,7 +46,15 @@ let queue: Queue | null = null
 
 function queueOf(initial: string): Queue {
   if (queue?.same()) return queue
-  queue = { same: sameSession(), saved: initial, wanted: initial, saving: false, shown: new Set(), refused: () => {} }
+  queue = {
+    same: sameSession(),
+    saved: initial,
+    wanted: initial,
+    seen: initial,
+    saving: false,
+    shown: new Set(),
+    refused: () => {},
+  }
   return queue
 }
 
@@ -95,6 +106,8 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
   // which can come after a pick made at once, or /api/me confirming the pick just saved) is
   // nothing new: acting on it would undo that pick.
   useEffect(() => {
+    if (initial === q.seen) return
+    q.seen = initial
     if (initial === q.saved) return
     q.saved = initial
     if (q.saving) return

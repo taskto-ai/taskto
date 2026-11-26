@@ -6,6 +6,7 @@ import { type ReactNode, type Ref, useCallback, useEffect, useId, useRef, useSta
 import { errorText } from '../api'
 import { format, useT } from '../i18n'
 import { useMounted } from '../mounted'
+import { sameSession } from '../session'
 import { Button } from '../ui/Button'
 import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
@@ -32,11 +33,12 @@ export function useAction(labels?: ReadonlyMap<string, string>) {
     async (change: () => Promise<unknown>): Promise<boolean> => {
       setBusy(true)
       setError(null)
+      const same = sameSession()
       try {
         await change()
-        return mounted.current
+        return mounted.current && same()
       } catch (e) {
-        if (mounted.current) setError(errorText(e, named.current))
+        if (mounted.current && same()) setError(errorText(e, named.current))
         return false
       } finally {
         if (mounted.current) setBusy(false)

@@ -1523,3 +1523,36 @@ test('a menu drawn again while a pick is saved shows that pick and joins its que
   await act(async () => held.shift()?.())
   await act(() => setPreferences({ user: null }))
 })
+
+test('a menu drawn again with the account’s older value keeps the save the queue knows was accepted', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const answers: ((ok: boolean) => void)[] = []
+  const calls = fakeFetch({
+    'PATCH /api/me': () =>
+      new Promise((done) =>
+        answers.push((ok) =>
+          done(ok ? { status: 200, body: {} } : { status: 500, body: { error: 'internal error', code: 'internal' } }),
+        ),
+      ),
+    ...pages,
+  })
+  beginSession(1)
+  // The account has no pick ('').
+  const first = render(<Shell me={me as Me} onLogout={() => {}} />)
+  const patches = () => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }]))
+  await act(async () => answers.shift()?.(true))
+  await pickInAccount('English')
+  await waitFor(() => expect(patches()).toHaveLength(2))
+  // Automatic, while English is still being saved: it waits its turn.
+  await pickInAccount(/^Automatic/)
+  // The menu is drawn again, from the account's value as it was loaded (still '').
+  first.unmount()
+  render(<Shell me={me as Me} onLogout={() => {}} />)
+  // English is refused: the account still has Portuguese, so automatic is sent next.
+  await act(async () => answers.shift()?.(false))
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }, { locale: 'en' }, { locale: '' }]))
+  await act(async () => answers.shift()?.(true))
+  await act(() => setPreferences({ user: null }))
+})

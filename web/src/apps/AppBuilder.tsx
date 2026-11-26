@@ -202,7 +202,8 @@ function BuilderStart({
     } catch (err) {
       if (s.ok()) setError(appError(err))
     } finally {
-      if (s.ok()) setBusy(false)
+      // The button is this screen's: ready again while it is here, whatever became of the session.
+      if (mounted.current) setBusy(false)
     }
   }
 

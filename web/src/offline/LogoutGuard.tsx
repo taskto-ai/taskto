@@ -89,7 +89,7 @@ export function LogoutGuard({
       setFailure(e instanceof NotWriter ? t('offline.logout.notWriter') : errorText(e))
     } finally {
       syncing.current = false
-      if (s.ok()) setBusy(false)
+      if (mounted.current) setBusy(false)
     }
   }
   // Escape and the close button are Cancel, but not while a sync runs.

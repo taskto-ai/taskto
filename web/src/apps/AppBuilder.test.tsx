@@ -941,3 +941,15 @@ for (const [hold, page, ending] of [
     expect(window.location.pathname).toBe(page)
   })
 }
+
+test('a build whose session changed while it waited leaves its button ready on the page that is still here', async () => {
+  const started = await startHeld(NEW, '/w/1/apps/build')
+  // Logging out began and was then called off (records to ask about): a new session, same page.
+  endSession()
+  beginSession(USER)
+  await started.release()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Start building' }).getAttribute('aria-busy')).toBeNull(),
+  )
+  expect(window.location.pathname).toBe('/w/1/apps/build')
+})
