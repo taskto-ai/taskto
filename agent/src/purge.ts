@@ -121,6 +121,10 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
         }[]
       ).map((r) => Number(r.id))
       if (chunk.length > 0) {
+        // A document's revisions go with it, in the same transaction: one committed since the
+        // revisions' own step would otherwise be left with no document to find it by.
+        if (step.table === 'documents')
+          db.exec(`DELETE FROM document_revisions WHERE document_id IN (${chunk.join(',')})`)
         db.exec(`DELETE FROM ${step.table} WHERE rowid IN (${chunk.join(',')})`)
         if (step.records) db.exec(`DELETE FROM record_ids WHERE id IN (${chunk.join(',')})`)
       }

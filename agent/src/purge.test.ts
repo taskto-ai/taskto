@@ -109,6 +109,7 @@ describe('runPurge', () => {
     void settled.then(() => {
       done = true
     })
+    const began = performance.now()
     while (!done) {
       const t0 = performance.now()
       insert.run()
@@ -116,9 +117,10 @@ describe('runPurge', () => {
       writes++
       await new Promise((r) => setTimeout(r, 15))
     }
+    const took = performance.now() - began
     clearInterval(timer)
     db.close()
-    return { longest, gap, writes, error: await settled }
+    return { longest, gap, writes, took, error: await settled }
   }
 
   it('waits for a reader off the calling thread, which keeps running meanwhile', async () => {
@@ -180,7 +182,8 @@ describe('runPurge', () => {
     try {
       const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: wait }))
       expect(probe.error).toBeInstanceOf(WalBusyError)
-      expect(probe.longest).toBeLessThan(200)
+      // A checkpoint that waits holding the lock makes a write wait for nearly all of it.
+      expect(probe.longest).toBeLessThan(wait / 4)
       expect(probe.writes).toBeGreaterThan(10)
     } finally {
       reader.close()
@@ -207,8 +210,11 @@ describe('runPurge', () => {
     try {
       const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 5000 }))
       expect(probe.error).toBeUndefined()
-      expect(probe.longest).toBeLessThan(200)
-      expect(probe.gap).toBeLessThan(250)
+      // Measured against the purge itself, which a slower disk makes longer: in one transaction
+      // a write waited for nearly all of it (about 1 s of 1.1 s here), in short ones for a few
+      // hundredths (36 ms of 2.6 s).
+      expect(probe.longest).toBeLessThan(probe.took / 4)
+      expect(probe.gap).toBeLessThan(probe.took / 4)
       expect(probe.writes).toBeGreaterThan(3)
       expect(writer.prepare('SELECT count(*) AS n FROM entries WHERE conversation_id = 1').get()).toEqual({ n: 0 })
       expect(writer.prepare('SELECT count(*) AS n FROM record_ids').get()).toEqual({ n: 3 }) // 2, 11 and 42
@@ -297,6 +303,45 @@ describe('runPurge', () => {
       writer.close()
     }
   })
+
+  // A revision committed to a document after the revisions' own step, and before the document's
+  // row goes, goes with the document: nothing else could find it once the document is gone.
+  it('takes a revision written between the revisions and their document', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    // Enough revisions, and documents, that each step takes several short transactions; the
+    // document written to is the last of its step.
+    const doc = 900_000
+    writer.exec('BEGIN')
+    writer.prepare("INSERT INTO documents (id, scope_kind, owner_id) VALUES (?, 'conversation', 1)").run(doc)
+    const revision = writer.prepare('INSERT INTO document_revisions (document_id, seq, content) VALUES (?, ?, ?)')
+    for (let seq = 1; seq <= 30_000; seq++) revision.run(doc, seq, 'an old version')
+    const other = writer.prepare("INSERT INTO documents (id, scope_kind, owner_id) VALUES (?, 'conversation', 1)")
+    for (let id = 100_000; id < 130_000; id++) other.run(id)
+    writer.exec('COMMIT')
+    const docLeft = writer.prepare('SELECT count(*) AS n FROM documents WHERE id = ?')
+    const oldLeft = writer.prepare(
+      'SELECT count(*) AS n FROM document_revisions WHERE document_id = ? AND seq <= 30000',
+    )
+    let wrote = false
+    try {
+      purgeRecords(path, 1, 1000, () => {
+        const hasDoc = (docLeft.get(doc) as { n: number }).n > 0
+        const oldGone = (oldLeft.get(doc) as { n: number }).n === 0
+        if (wrote || !hasDoc || !oldGone) return
+        wrote = true
+        revision.run(doc, 30_001, WORD)
+      })
+      expect(wrote).toBe(true)
+      expect(writer.prepare('SELECT count(*) AS n FROM document_revisions WHERE document_id = ?').get(doc)).toEqual({
+        n: 0,
+      })
+      expect(writer.prepare('SELECT document_id FROM document_revisions').all()).toEqual([{ document_id: 42 }])
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 30_000)
 
   it('rejects with the failure of a purge that is not about the log', async () => {
     await expect(runPurge({ path: join(dir, 'missing', 'agent.db'), root: 1, timeoutMs: 100 })).rejects.toThrow()
