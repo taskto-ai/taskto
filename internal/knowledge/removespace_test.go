@@ -558,4 +558,12 @@ func TestARemovalOfALaterSpaceWithTheSameIDIsNotSkipped(t *testing.T) {
 	gone(t, dataDir, later)
 	_, err := s.Put(ctx, later, "c.md", []byte("z"), "", alice, "")
 	wantErr(t, err, ErrSpaceRemoved)
+
+	// The earlier space's removal, delayed, comes now: it takes nothing of the later one's mark.
+	if err := s.RemoveSpace(old); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Put(ctx, later, "d.md", []byte("w"), "", alice, "")
+	wantErr(t, err, ErrSpaceRemoved)
+	gone(t, dataDir, later)
 }

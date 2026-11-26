@@ -309,12 +309,17 @@ func (s *Store) admit(st *spaceState, sp access.Space) error {
 			return ErrSpaceRemoved
 		}
 	}
-	for last := st.lastGen.Load(); sp.Generation > last; last = st.lastGen.Load() {
-		if st.lastGen.CompareAndSwap(last, sp.Generation) {
-			break
+	st.serve(sp.Generation)
+	return nil
+}
+
+// serve notes that the state serves a space of generation g: lastGen is the largest it has.
+func (st *spaceState) serve(g int64) {
+	for last := st.lastGen.Load(); g > last; last = st.lastGen.Load() {
+		if st.lastGen.CompareAndSwap(last, g) {
+			return
 		}
 	}
-	return nil
 }
 
 // refusedIfRemoved is err, or ErrSpaceRemoved when err is a missing file and the space was removed

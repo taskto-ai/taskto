@@ -1052,6 +1052,7 @@ func (s *Store) RemoveSpace(sp access.Space) error {
 			}
 		}
 	}
+	st.serve(sp.Generation) // a delayed removal of an older space is then skipped, and cannot take the mark
 	st.removed, st.removedGen = true, sp.Generation
 	st.size, st.unv = -1, -1
 	st.anc.reset()
