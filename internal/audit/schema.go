@@ -182,4 +182,15 @@ var schemas = map[string]map[string]kind{
 	IntegrationDisabled:      {"provider": integrationProviders},
 	IntegrationEnabled:       {"provider": integrationProviders},
 	IntegrationSpacesChanged: {"provider": integrationProviders, "added": number, "removed": number},
+	IntegrationSpacesKept:    {"provider": integrationProviders, "kept": number},
+
+	// An approval names the app and the integration by id, and the slot by its kind: the slot's own
+	// name is the app builder's text, so it is not recorded.
+	AppIntegrationRequested: {"kind": integrationKinds, "app_id": number},
+	AppIntegrationApproved: {
+		"kind": integrationKinds, "app_id": number, "integration_id": number, "provider": integrationProviders,
+		"space_allowed": boolean,
+	},
+	AppIntegrationRejected: {"kind": integrationKinds, "app_id": number},
+	AppIntegrationRevoked:  {"kind": integrationKinds, "app_id": number, "integration_id": number},
 }

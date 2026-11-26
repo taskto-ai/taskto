@@ -89,10 +89,14 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, spaces *access.Che
 func (s *Service) view(rec record, visible map[int64]bool) Integration {
 	out := rec.Integration
 	out.Spaces = []int64{}
+	out.ApprovalSpaces = []int64{}
 	out.OtherSpaces = 0
 	for _, sp := range rec.Spaces {
 		if visible[sp] {
 			out.Spaces = append(out.Spaces, sp)
+			if slices.Contains(rec.ApprovalSpaces, sp) {
+				out.ApprovalSpaces = append(out.ApprovalSpaces, sp)
+			}
 		} else {
 			out.OtherSpaces++
 		}
@@ -302,9 +306,12 @@ func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// spacesRequest is the body of a PUT of the allowed spaces.
+// spacesRequest is the body of a PUT of the allowed spaces. Keep names the spaces, among Spaces,
+// whose allowance an app's approval made and that the admin keeps after the approval ends: saving
+// the list does not do it.
 type spacesRequest struct {
 	Spaces []int64 `json:"spaces"`
+	Keep   []int64 `json:"keep"`
 }
 
 func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
@@ -335,8 +342,17 @@ func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	keep := slices.Clone(req.Keep)
+	slices.Sort(keep)
+	keep = slices.Compact(keep)
+	for _, sp := range keep {
+		if !slices.Contains(want, sp) {
+			writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "keep names only spaces in spaces")
+			return
+		}
+	}
 	// Only the caller's manageable spaces change; the integration's others stay as they are.
-	rec, err := s.store.setSpaces(r.Context(), workspaceOf(r), actorOf(r), id, want, manageable)
+	rec, err := s.store.setSpaces(r.Context(), workspaceOf(r), actorOf(r), id, want, keep, manageable)
 	if err != nil {
 		fail(w, r, err)
 		return

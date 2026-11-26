@@ -56,12 +56,6 @@ export const ALLOWED = new Map([
         "a card on the board: the whole card (its title, badges, labels and who it is for, on several lines) is the button that opens it, which no button component's one-line shape holds",
     },
   ],
-  ['src/App.tsx', { button: 1, reason: OUTSIDE_SHELL }],
-  ['src/auth/AuthScreens.tsx', { button: 15, input: 15, reason: OUTSIDE_SHELL }],
-  ['src/pwa/UpdateBanner.tsx', { button: 2, reason: OUTSIDE_SHELL }],
-  ['src/offline/AccountChanged.tsx', { button: 1, reason: OUTSIDE_SHELL }],
-  ['src/offline/ForeignGuard.tsx', { button: 1, reason: OUTSIDE_SHELL }],
-  ['src/offline/LogoutGuard.tsx', { button: 3, reason: OUTSIDE_SHELL }],
   ['src/offline/ConfirmButton.tsx', { button: 3, reason: OUTSIDE_SHELL }],
 ])
 

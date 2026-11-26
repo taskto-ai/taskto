@@ -427,7 +427,11 @@ test('a reset link sets the password and signs in, without the token in the URL'
   await screen.findByRole('heading', { name: 'Set a new password' })
   fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'fake-new-password' } })
   fireEvent.change(screen.getByLabelText('New password again'), { target: { value: 'fake-typo-password' } })
-  expect(screen.getByRole('alert').textContent).toBe("The passwords don't match.")
+  // Said with the field (its description), not as an alert on every character typed.
+  const again = screen.getByLabelText('New password again')
+  expect(again.getAttribute('aria-invalid')).toBe('true')
+  const described = (again.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id))
+  expect(described.map((el) => el?.textContent ?? '').join(' ')).toContain("The passwords don't match.")
   fireEvent.change(screen.getByLabelText('New password again'), { target: { value: 'fake-new-password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Set the password' }))
   await screen.findByRole('navigation', { name: 'Sections' })

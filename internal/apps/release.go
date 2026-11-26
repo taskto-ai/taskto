@@ -386,6 +386,11 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		if err != nil {
 			return err
 		}
+		// Every integration the release declares needs an admin's approval of its contract, as it
+		// stands in the release (integration_approvals.go).
+		if err := s.checkApprovals(ctx, tx, appID, checked); err != nil {
+			return err
+		}
 		var base *Collection
 		if cur.liveDef != nil {
 			if sameDefinition(*cur.liveDef, checked) {
@@ -477,6 +482,11 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 		}
 		// An earlier release's effects are the one who makes it live's to use, as at publishing.
 		if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, *target.Definition); err != nil {
+			return err
+		}
+		// And so is the approval of what it asks of integrations: an earlier release's contract may
+		// never have been approved, or have been revoked since.
+		if err := s.checkApprovals(ctx, tx, appID, *target.Definition); err != nil {
 			return err
 		}
 		// A release with the live release's collection changes nothing about how the rows are
