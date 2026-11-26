@@ -93,6 +93,13 @@ test('Home and the Apps page load the renderer only when they draw an app (LazyA
   }
 })
 
+test('the lazy screen’s loading shape is laid out before the renderer’s stylesheet arrives', () => {
+  const lazy = readFileSync(join(src, 'apps/LazyAppView.tsx'), 'utf8')
+  expect(staticImports(lazy)).toContain('./AppLoading.css')
+  expect(readFileSync(join(src, 'apps/AppLoading.css'), 'utf8')).toMatch(/\.ui-app-loading\s*\{/)
+  expect(readFileSync(join(src, 'apps/AppView.css'), 'utf8')).not.toMatch(/\.ui-app-loading\s*\{/)
+})
+
 test('the walk sees an import a comment with a quote sits in, and a package’s subpath', () => {
   const entry = join(src, 'main.tsx')
   const download = join(src, 'offline/download.ts')

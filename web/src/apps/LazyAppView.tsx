@@ -7,6 +7,7 @@ import { type ComponentProps, lazy, Suspense } from 'react'
 import { useT } from '../i18n'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import './AppLoading.css'
 
 const AppView = lazy(() => import('./AppView').then((m) => ({ default: m.AppView })))
 

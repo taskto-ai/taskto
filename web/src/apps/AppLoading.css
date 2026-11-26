@@ -1,0 +1,10 @@
+/* The shape an app's screen shows while it loads: AppView's own, and LazyAppView's while the
+   renderer itself is on its way. Both import this, so the shape is laid out before the renderer's
+   stylesheet arrives. */
+
+@layer screens {
+  .ui-app-loading {
+    display: grid;
+    gap: var(--space-3);
+  }
+}

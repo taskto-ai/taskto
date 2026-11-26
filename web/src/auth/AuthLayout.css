@@ -141,12 +141,17 @@
     margin-block: auto;
   }
 
-  /* On a touch screen a button is the touch target's height, the field's too: the button inside the
-     field keeps a space's clearance from its edges, so its fill and its focus ring sit inside the
-     field's edge, not over it. The field's whole height around it still takes the tap. */
+  /* On a touch screen a button is the touch target's height, and so is the field: the Show button
+     keeps the whole 44px to tap, while what it draws (its hover fill and its focus ring) keeps a
+     space's clearance inside the field's edges, not over them. */
   @media (pointer: coarse) {
     .ui-auth-password > .ui-button {
-      block-size: calc(var(--control-touch) - var(--space-2));
+      padding-block: var(--space-1);
+      background-clip: content-box;
+    }
+
+    .ui-auth-password > .ui-button:focus-visible {
+      outline-offset: calc(var(--space-1) * -1);
     }
   }
 

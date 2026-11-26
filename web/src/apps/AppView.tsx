@@ -22,6 +22,7 @@ import { fieldLabels, keepLabelsLinked } from './labels'
 import { AppFilesContext } from './PhotoInput'
 import { SubmitCaptures, SubmitCapturesContext } from './submit'
 import { TextDictation, workspaceOf } from './TextDictation'
+import './AppLoading.css'
 import './AppView.css'
 import type { ActionPayload, AppTransport } from './transport'
 

@@ -37,11 +37,6 @@
     overflow-wrap: anywhere;
   }
 
-  .ui-app-loading {
-    display: grid;
-    gap: var(--space-3);
-  }
-
   /* A number (the Stat component): a tile with its label small and muted over the value, large with
      figures that line up. Tiles side by side in a row share it and wrap onto the next line when
      there isn't room; one alone takes the width it needs. */
