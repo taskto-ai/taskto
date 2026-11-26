@@ -240,6 +240,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// With none set (the default) the check does nothing.
 	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
 	kb.SetQuota(quotas.KnowledgeCheck())
+	// A call that resolved a space before its account was purged is refused once the rows are
+	// gone, whatever the order it arrives in (it would make the directory again).
+	kb.SetSpaceCheck(access.SpaceRowCheck(sqlDB))
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err

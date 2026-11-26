@@ -224,8 +224,10 @@ type Service struct {
 	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
 	// the service keeps no files.
 	dataDir string
-	locks   fileLocks
-	thumbs  chan struct{}
+	// holder orders the writes in a space's directory against its removal (WithSpaceHolder); nil for none.
+	holder SpaceHolder
+	locks  fileLocks
+	thumbs chan struct{}
 	// quota refuses an upload that would take its space or workspace over a storage quota
 	// (WithQuota); nil for none.
 	quota *quota.Service

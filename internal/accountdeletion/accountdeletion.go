@@ -83,7 +83,11 @@ type Apps interface {
 type Knowledge interface {
 	// planned is called with the number of commits to rewrite before the rewrite is journaled.
 	AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(n int) error) (int, error)
+	// RemoveSpace removes a space's files, and refuses every later call on it until ForgetSpace.
 	RemoveSpace(sp access.Space) error
+	// ForgetSpace drops the refusal once the space's rows are deleted: a space made later may be
+	// given its ID.
+	ForgetSpace(sp access.Space)
 }
 
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
@@ -323,11 +327,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 	// What is to go, read once the purge has begun: nothing new can be made by an account that
 	// is switched off, and what the steps below delete is found again by a retry.
-	private, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
+	private, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
-	shared, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE kind = 'shared' ORDER BY id`)
+	shared, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE kind = 'shared' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -431,8 +435,12 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
-		return err
+	finishErr := s.finish(ctx, userID, private, acct, &res)
+	// Whatever finish returned: a transaction that committed and then failed to report it has
+	// deleted the rows, and a space made later with the ID must not stay refused until a restart.
+	s.forgetGone(ctx, private)
+	if finishErr != nil {
+		return finishErr
 	}
 	// The providers file and the key files, now that the database has no account of theirs. A
 	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.
@@ -451,6 +459,19 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 			"conversations", res.Conversations, "documents_anonymized", res.DocumentsAnonymized)
 	}
 	return nil
+}
+
+// forgetGone tells the knowledge base to forget the removal of each of spaces whose row is gone
+// (knowledge.Store.ForgetSpace): the refusal is kept for a space that is still recorded, since the
+// purge is then still to finish it, and a database that can't be read leaves it all as it is.
+func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
+	for _, sp := range spaces {
+		var one int
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			s.o.Knowledge.ForgetSpace(sp)
+		}
+	}
 }
 
 type account struct {
@@ -505,7 +526,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 	var out []access.Space
 	for rows.Next() {
 		sp := access.Space{Access: access.Write}
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)
