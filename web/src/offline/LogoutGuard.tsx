@@ -77,14 +77,13 @@ export function LogoutGuard({
         }
       }
       await runtime.engine.retry()
-      if (!s.ok()) return
       const unsent = await runtime.store.unsynced()
+      // Gone, or its session over, while it synced: nobody is signed out.
       if (!s.ok()) return
       setLeft(unsent.length)
       if (unsent.length === 0) onSignOut()
       else setStuck(true)
     } catch (e) {
-      if (!s.ok()) return
       // The right was lost while this ran (another tab took it), or the device refused.
       setFailure(e instanceof NotWriter ? t('offline.logout.notWriter') : errorText(e))
     } finally {

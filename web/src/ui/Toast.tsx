@@ -22,7 +22,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncEx
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { useT } from '../i18n'
-import { onSessionChange, sameSession } from '../session'
+import { onSessionChange } from '../session'
 import { Button } from './Button'
 import { focusVisible } from './focusInput'
 import { Icon } from './Icon'
@@ -76,20 +76,11 @@ function set(change: Partial<State>) {
 export function toast(options: ToastOptions | string): number {
   const o = typeof options === 'string' ? { message: options } : options
   const tone = o.tone ?? 'neutral'
-  // A toast is the session's it was said in (session.ts): they all go when it ends, and its button
-  // does nothing if pressed after that.
-  const still = sameSession()
-  const action = o.action && {
-    label: o.action.label,
-    onClick: () => {
-      if (still()) o.action?.onClick()
-    },
-  }
   const item: ToastItem = {
     id: next++,
     message: o.message,
     tone,
-    action,
+    action: o.action,
     duration: o.duration ?? (o.action || tone === 'danger' ? 10_000 : 5_000),
   }
   ensureToaster()

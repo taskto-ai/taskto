@@ -5,11 +5,12 @@
 // downloaded apps open.
 
 import 'fake-indexeddb/auto'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
+import { setPreferences } from '../i18n'
 import { sameSession, sessionUser } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { toast } from '../ui/Toast'
@@ -471,4 +472,43 @@ test('another account signing in while this tab checks for unsent records before
   await new Promise((r) => setTimeout(r, 50))
   // The records found don't bring this account's session back.
   expect(sessionUser()).toBeNull()
+})
+
+test('Log out, asked about unsent records, Cancel: nothing ended, and a language pick on its way finishes as it would', async () => {
+  let saved: (() => void) | null = null
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 204 },
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        saved = () => done({ body: { ...me, user: { ...me.user, locale: 'pt-BR' } } })
+      }),
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  // Work started before Log out: a language pick, its save on its way; and anything else that
+  // checks its session (a build, say).
+  fireEvent.click(screen.getByRole('button', { name: /^Account: / }))
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'Português (Brasil)' }))
+  await vi.waitFor(() => expect(saved).not.toBeNull())
+  const started = sameSession()
+  fireEvent.click(screen.getByRole('button', { name: /^(Account|Conta): / }))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Sair' }))
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+  // Nothing ended: the same session, so what was on its way goes on.
+  expect(started()).toBe(true)
+  expect(sessionUser()).toBe(7)
+  await act(async () => saved?.())
+  fireEvent.click(screen.getByRole('button', { name: /^Conta: / }))
+  const checked = screen
+    .getAllByRole('menuitemradio')
+    .filter((r) => r.getAttribute('aria-checked') === 'true')
+    .map((r) => r.textContent)
+  expect(checked).toContain('Português (Brasil)')
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  await act(() => setPreferences({ user: null }))
 })

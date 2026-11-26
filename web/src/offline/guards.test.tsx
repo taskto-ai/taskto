@@ -181,3 +181,33 @@ test('a guard whose session ends while its sync runs (another account in another
   })
   expect(onSignOut).not.toHaveBeenCalled()
 })
+
+test('a guard that goes away while this tab asks for the right to send sends nothing when it gets it', async () => {
+  let granted: () => void = () => {}
+  let holds = false
+  const retry = vi.fn(async () => {})
+  const runtime = {
+    user: 7,
+    writer: {
+      holds: () => holds,
+      takeOver: () =>
+        new Promise<void>((resolve) => {
+          granted = () => {
+            holds = true
+            resolve()
+          }
+        }),
+    },
+    engine: { retry },
+    store: { unsynced: async () => [] },
+    stop: () => {},
+  } as unknown as Runtime
+  const { unmount } = render(<LogoutGuard runtime={runtime} count={1} onSignOut={() => {}} onCancel={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+  unmount()
+  await act(async () => {
+    granted()
+    await new Promise((r) => setTimeout(r))
+  })
+  expect(retry).not.toHaveBeenCalled()
+})
