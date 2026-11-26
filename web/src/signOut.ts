@@ -18,6 +18,7 @@ import { leavePush } from './notifications/push'
 import {
   browserLogin,
   forgetLogin,
+  loginIsCurrent,
   type PendingSignOut,
   pendingSignOuts,
   rememberLogin,
@@ -177,9 +178,8 @@ export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()
     await cleanUpAfterSignOut(p.user, p.session, decisionOf(p))
   }
   // Asked again after those waits: another tab may have signed someone in, or this login out, since.
-  if (!me || remembered === 'unkept' || !me.session) return true
-  const now = browserLogin()
-  return now?.user === me.user.id && now.session === me.session
+  if (!me || remembered === 'unkept') return true
+  return loginIsCurrent(me.user.id, me.session)
 }
 
 export const decisionOf = (p: PendingSignOut): Decision => ({

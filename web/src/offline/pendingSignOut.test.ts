@@ -3,7 +3,7 @@
 // The record of a sign-out not finished yet: only a whole, well-formed record is acted on, and one
 // account's never stands in another's way.
 
-import { beforeEach, expect, test } from 'vitest'
+import { beforeEach, expect, test, vi } from 'vitest'
 import {
   backFromSignOut,
   browserLogin,
@@ -115,4 +115,27 @@ test('the browser keeps the login it learned last of an account, whatever order 
   expect(browserLogin()).toMatchObject({ user: 2, session: 't1' })
   forgetLogin(2, 't1')
   expect(browserLogin()).toBeNull()
+})
+
+test("two tabs recording sign-outs of two logins at once keep both: neither writes back the other's from what it read", () => {
+  const set = Storage.prototype.setItem
+  let raced = false
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    // Another tab records its login's sign-out between this tab's reading and its writing.
+    if (!raced && key.startsWith(KEY)) {
+      raced = true
+      recordSignOut(1, 's2', false, new Map([['r2', { version: 1, operation: 'op-2' }]]))
+    }
+    set.call(this, key, value)
+  })
+  recordSignOut(1, 's1', false, new Map())
+  vi.restoreAllMocks()
+  expect(
+    pendingSignOuts()
+      .map((p) => p.session)
+      .sort(),
+  ).toEqual(['s1', 's2'])
+  expect(pendingSignOuts().find((p) => p.session === 's2')?.approved).toEqual([
+    ['r2', { version: 1, operation: 'op-2' }],
+  ])
 })

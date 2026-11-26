@@ -12,6 +12,7 @@ import { App } from '../App'
 import { api } from '../api'
 import { cleanUpAfterSignOut, finishUnfinishedSignOuts } from '../signOut'
 import { fakeFetch } from '../test/fakes'
+import { pendingSignOuts } from './pendingSignOut'
 import { activate, deactivate, lastUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
 
@@ -69,10 +70,7 @@ const queued = (): Omit<OutboxItem, 'seq' | 'version'> => ({
   updatedAt: '2026-11-02T10:00:00.000Z',
 })
 
-const pending = () =>
-  (JSON.parse(localStorage.getItem('taskto:sign-out-pending') ?? '[]') as { user: number; session: string }[]).map(
-    (p) => `${p.user}:${p.session}`,
-  )
+const pending = () => pendingSignOuts().map((p) => `${p.user}:${p.session}`)
 const databases = async () => (await indexedDB.databases()).map((d) => d.name)
 
 beforeEach(() => {

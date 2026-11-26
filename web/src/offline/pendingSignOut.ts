@@ -57,7 +57,13 @@ function valid(p: unknown): p is PendingSignOut {
   )
 }
 
-function read(): PendingSignOut[] {
+// Each login's record is a key of its own (`KEY:<user>:<session>`), so a tab changing one never
+// writes back another tab's from what it read before (two tabs at once, which nothing orders).
+// Records an earlier version kept together under `KEY`, as a list, are still read, and move to their
+// own key when they change.
+const keyOf = (user: number, session: string) => `${KEY}:${user}:${session}`
+
+function legacy(): PendingSignOut[] {
   let raw: unknown
   try {
     raw = JSON.parse(window.localStorage.getItem(KEY) ?? '[]')
@@ -67,10 +73,37 @@ function read(): PendingSignOut[] {
   return Array.isArray(raw) ? raw.filter(valid) : []
 }
 
-function write(list: PendingSignOut[]) {
+function read(): PendingSignOut[] {
+  const own: PendingSignOut[] = []
   try {
-    if (list.length === 0) window.localStorage.removeItem(KEY)
-    else window.localStorage.setItem(KEY, JSON.stringify(list))
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (!key?.startsWith(`${KEY}:`)) continue
+      try {
+        const p = JSON.parse(window.localStorage.getItem(key) ?? 'null') as unknown
+        if (valid(p) && key === keyOf(p.user, p.session)) own.push(p)
+      } catch {
+        // Not a record: not acted on.
+      }
+    }
+  } catch {
+    return legacy()
+  }
+  const has = (p: PendingSignOut) => own.some((o) => o.user === p.user && o.session === p.session)
+  return [...legacy().filter((p) => !has(p)), ...own]
+}
+
+// The record of one login: written (`p`), or removed (null).
+function put(user: number, session: string, p: PendingSignOut | null) {
+  try {
+    if (p) window.localStorage.setItem(keyOf(user, session), JSON.stringify(p))
+    else window.localStorage.removeItem(keyOf(user, session))
+    const old = legacy()
+    const rest = old.filter((r) => !(r.user === user && r.session === session))
+    if (rest.length !== old.length) {
+      if (rest.length === 0) window.localStorage.removeItem(KEY)
+      else window.localStorage.setItem(KEY, JSON.stringify(rest))
+    }
   } catch {
     // Not kept: the sign-out still goes on in this tab.
   }
@@ -96,28 +129,30 @@ export function recordSignOut(
   // never takes away the decision of a newer one (recorded in another tab, perhaps gone back from and
   // still waiting on a logout that got no answer). A logout of this same login that got no answer
   // before may still reach the server: that stays known, whatever becomes of this one.
-  const same = (p: PendingSignOut) => p.user === user && p.session === session
-  const before = read().find(same)
+  const before = read().find((p) => p.user === user && p.session === session)
   const unanswered = !!before?.unanswered && session !== ''
-  write([
-    ...read().filter((p) => !same(p)),
-    {
-      user,
-      session,
-      phase: 'requested',
-      keep,
-      approved: [...approved],
-      ...(discardUnreadable ? { discardUnreadable } : {}),
-      ...(unanswered ? { unanswered } : {}),
-      at: Date.now(),
-    },
-  ])
+  put(user, session, {
+    user,
+    session,
+    phase: 'requested',
+    keep,
+    approved: [...approved],
+    ...(discardUnreadable ? { discardUnreadable } : {}),
+    ...(unanswered ? { unanswered } : {}),
+    at: Date.now(),
+  })
+}
+
+// Changes the record of one login, when there is one.
+function change(user: number, session: string, to: (p: PendingSignOut) => PendingSignOut | null) {
+  const p = read().find((r) => r.user === user && r.session === session)
+  if (p) put(user, session, to(p))
 }
 
 // A logout of `user`'s login `session` got no answer: it may reach the server yet. A record of
 // another login of the account (a newer one's, from another tab) stays as it is.
 export function unansweredSignOut(user: number, session: string): void {
-  write(read().map((p) => (p.user === user && p.session === session ? { ...p, unanswered: true } : p)))
+  change(user, session, (p) => ({ ...p, unanswered: true }))
 }
 
 // Back: `user`'s login `session` is this browser's still. Its sign-out is over, unless a logout of
@@ -125,11 +160,7 @@ export function unansweredSignOut(user: number, session: string): void {
 // it does. Only that login's record: another login's of the account (signing out in another tab)
 // stays.
 export function backFromSignOut(user: number, session: string): void {
-  const mine = (r: PendingSignOut) => r.user === user && r.session === session
-  const p = read().find(mine)
-  if (!p) return
-  if (p.unanswered) write(read().map((r) => (mine(r) ? { ...r, phase: 'backed' } : r)))
-  else write(read().filter((r) => !mine(r)))
+  change(user, session, (p) => (p.unanswered ? { ...p, phase: 'backed' } : null))
 }
 
 // The sign-out the person went back from, of the login `session`, if its logout may still end it.
@@ -141,13 +172,14 @@ export function backedSignOut(user: number, session: string | undefined): Pendin
 // device's cleanup. A record of another login of the account (a newer one's, which the person went
 // back from) stays as it is.
 export function confirmSignOut(user: number, session: string): void {
-  write(read().map((p) => (p.user === user && p.session === session ? { ...p, phase: 'confirmed' } : p)))
+  change(user, session, (p) => ({ ...p, phase: 'confirmed' }))
 }
 
 // The sign-out is over: finished and verified, or cancelled by the same login. With `session`, only
 // that login's: the sign-out of another login of the account (recorded meanwhile) stays.
 export function settleSignOut(user: number, session?: string): void {
-  write(read().filter((p) => !(p.user === user && (session === undefined || p.session === session))))
+  for (const p of read())
+    if (p.user === user && (session === undefined || p.session === session)) put(p.user, p.session, null)
 }
 
 // Whether `user`'s data on this device belongs to a sign-out that isn't resolved: not to be opened
@@ -215,6 +247,15 @@ export function forgetLogin(user: number, session: string | undefined): void {
       // Not removed: a later cleanup of an older login is shielded by it, and leaves the device.
     }
   }
+}
+
+// Whether `user`'s login `session` is still what this browser knows of last: no other login since,
+// for this account or another, and not seen to end. True when nothing is known (it couldn't be kept,
+// or the server names no login).
+export function loginIsCurrent(user: number, session: string | undefined): boolean {
+  const known = readLogin()
+  if (!session || !known) return true
+  return known.user === user && known.session === session
 }
 
 // The login the browser holds now, as far as it knows; null when none (or it ended).

@@ -813,3 +813,15 @@ test("a start that isn't stale still leaves a sign-out another login recorded af
   // Recorded after this start asked: that login's to finish, not this start's to drop.
   expect(pendingSignOuts().find((p) => p.session === 's2')).toBeTruthy()
 })
+
+test('a start whose login another tab replaced while it took the account up opens nothing for it', async () => {
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  // While the start takes the account's offline data up, the same person signs in again in another
+  // tab: a newer login is the browser's.
+  during.activate = () => {
+    rememberLogin(7, 's2', Date.now() + 1)
+  }
+  render(<App />)
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+})

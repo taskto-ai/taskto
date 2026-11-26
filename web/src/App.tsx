@@ -40,6 +40,7 @@ import {
   browserLogin,
   confirmSignOut,
   forgetLogin,
+  loginIsCurrent,
   recordSignOut,
   settleSignOut,
   signOutPending,
@@ -129,7 +130,10 @@ export function App() {
     if (!still()) return false
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
-    return true
+    // Asked again once the account is taken up: a newer login (of this account too, which the
+    // offline data doesn't tell apart) may have started in another tab meanwhile. The page then
+    // goes on as that one, after a reload.
+    return loginIsCurrent(me.user.id, me.session)
   }, [])
   // Whichever way they signed in, an account with no time zone gets this browser's, once.
   const enter = useCallback(

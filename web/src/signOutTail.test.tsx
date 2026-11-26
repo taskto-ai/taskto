@@ -7,6 +7,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Me } from './api'
+import { pendingSignOuts } from './offline/pendingSignOut'
 import { fakeFetch } from './test/fakes'
 
 // The sign-out waits a short time here, and the device's cleanup can be made to fail.
@@ -126,9 +127,7 @@ test('a cleanup that fails after the server confirmed still reaches the login, s
   // Said once, in one toast.
   const said = (await screen.findAllByText(/couldn't be fully cleared/)).filter((el) => el.closest('.ui-toast'))
   expect(said).toHaveLength(1)
-  expect(
-    JSON.parse(localStorage.getItem('taskto:sign-out-pending') ?? '[]').map((p: { user: number }) => p.user),
-  ).toEqual([1])
+  expect(pendingSignOuts().map((p) => p.user)).toEqual([1])
   expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
 
   // The next start, with nobody signed in: the cleanup is done this time, and forgotten.
@@ -137,13 +136,10 @@ test('a cleanup that fails after the server confirmed still reaches the login, s
   fakeFetch({ ...pages, 'GET /api/me': { status: 401, body: { error: 'not logged in' } } })
   render(<App />)
   await screen.findByRole('heading', { name: 'Log in' })
-  await waitFor(() => expect(localStorage.getItem('taskto:sign-out-pending')).toBeNull())
+  await waitFor(() => expect(pendingSignOuts()).toEqual([]))
 })
 
-const pendingOf = () =>
-  (JSON.parse(localStorage.getItem('taskto:sign-out-pending') ?? '[]') as { user: number; session: string }[]).map(
-    (p) => `${p.user}:${p.session}`,
-  )
+const pendingOf = () => pendingSignOuts().map((p) => `${p.user}:${p.session}`)
 
 test('Back after a refused logout, the browser still on the same login, starts the app afresh and drops the sign-out', async () => {
   fakeFetch({
