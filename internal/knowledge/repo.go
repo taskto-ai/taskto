@@ -162,6 +162,13 @@ type ancestry struct {
 	idx   map[plumbing.Hash]int
 }
 
+// reset forgets the chain: the repository it was of is gone.
+func (a *ancestry) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.chain, a.idx = nil, nil
+}
+
 // reaches reports whether want is head or one of its ancestors.
 func (a *ancestry) reaches(ctx context.Context, r *repo, head *object.Commit, want plumbing.Hash) (bool, error) {
 	a.mu.Lock()

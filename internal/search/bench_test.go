@@ -64,13 +64,13 @@ func (w *world) fillVectors(sp access.Space, key string, n, perDoc, dims int, se
 	return docs
 }
 
-// spacesJSON is the spaces' IDs as nearest takes them.
+// spacesJSON is the spaces as nearest takes them: the identities a search was authorized for.
 func spacesJSON(t testing.TB, spaces ...access.Space) string {
-	ids := make([]int64, len(spaces))
+	entries := make([]scopeEntry, len(spaces))
 	for i, sp := range spaces {
-		ids[i] = sp.ID
+		entries[i] = scopeEntry{ID: sp.ID, Workspace: sp.WorkspaceID, Generation: sp.Generation}
 	}
-	raw, err := json.Marshal(ids)
+	raw, err := json.Marshal(entries)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -866,10 +866,16 @@ A private space's files go under the knowledge base's own lock for that space, w
 photo writes in it held too: a write already under way finishes first, and one that comes after
 is refused as a space that isn't there, so nothing of the space is written again once it is
 removed. A call that had found the space before the purge is told from a space made later with the
-same number (the database can give a purged space's number again) by its creation time, and its row
-is checked once more under the lock, so it can't make the directory again either. The directory is renamed aside in one step and then deleted, so a server that stops in the
+same number (the database can give a purged space's number again) by its generation, and its row
+is checked once more under the lock, so it can't make the directory again either. The generation is
+a number no space has twice: a counter in the database (`space_generations`) gives each new space
+the next one, and never goes down, so it doesn't depend on the clock the way a creation time does.
+The counter is in the database, which a restore brings back together with the data directory, so
+the two are always consistent; spaces made after the backup are gone with it, and their numbers
+may be given again. The directory is renamed aside in one step and then deleted, so a server that stops in the
 middle leaves no half-deleted repository at the space's path; the purge's next try deletes what
-was left.
+was left. A removal that comes late, for a space that is no longer the one with the number, leaves
+the directory alone, since the files there are the new space's.
 
 **What stays: what they made for others.** Cards, comments, documents and app records in shared
 spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records

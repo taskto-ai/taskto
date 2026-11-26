@@ -291,29 +291,33 @@ func TestForgetGoneLiftsTheRefusalOfSpacesWhoseRowIsGone(t *testing.T) {
 	}
 }
 
-// created reads a space's creation time, as the purge does when it loads the spaces it removes.
-func (w *world) created(sp access.Space) access.Space {
+// withGeneration reads a space's generation, as the purge does when it loads the spaces it removes.
+func (w *world) withGeneration(sp access.Space) access.Space {
 	w.t.Helper()
-	if err := w.db.QueryRow(`SELECT created_at FROM spaces WHERE id = ?`, sp.ID).Scan(&sp.CreatedAt); err != nil {
+	if err := w.db.QueryRow(`SELECT generation FROM spaces WHERE id = ?`, sp.ID).Scan(&sp.Generation); err != nil {
 		w.t.Fatal(err)
 	}
 	return sp
 }
 
 // A space made after a purge deleted a space's rows may be given the purged space's ID, and its row
-// then exists. The mark of the removal is about the space that was removed, told by its creation
+// then exists. The mark of the removal is about the space that was removed, told by its generation
 // time, so it is lifted; a mark kept until a restart would refuse the new space's callers that
-// carry no creation time (the search index's sync).
+// carry no generation (the search index's sync).
 func TestForgetGoneLiftsTheRefusalWhenANewSpaceTookTheID(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
-	purged := w.created(w.private)
+	purged := w.withGeneration(w.private)
+	var purgedCreated string // the new space is made in the same millisecond, as far as its creation time says
+	if err := w.db.QueryRow(`SELECT created_at FROM spaces WHERE id = ?`, purged.ID).Scan(&purgedCreated); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.kb.RemoveSpace(purged); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, w.db, `DELETE FROM spaces WHERE id = ?`, purged.ID)
-	exec(t, w.db, `INSERT INTO spaces (id, workspace_id, kind, name, created_at) VALUES (?, ?, 'shared', 'New', '2099-01-01T00:00:00.000Z')`, purged.ID, w.ws)
+	exec(t, w.db, `INSERT INTO spaces (id, workspace_id, kind, name, created_at) VALUES (?, ?, 'shared', 'New', ?)`, purged.ID, w.ws, purgedCreated)
 
 	w.svc.forgetGone(ctx, []access.Space{purged})
 

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -86,7 +87,7 @@ func TestCleanupInsideAHeldSpaceDoesNotWaitForAPendingRemoval(t *testing.T) {
 	a := w.createPhotos(w.alice, s, "Photos")
 	id := w.start(w.alice, s, a, "photos", 10)
 
-	root, done, err := w.e.s.filesRoot(context.Background(), s.ID)
+	root, done, err := w.e.s.filesRootAs(context.Background(), s.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,10 +119,10 @@ func TestCleanupInsideAHeldSpaceDoesNotWaitForAPendingRemoval(t *testing.T) {
 	}
 }
 
-func (w *world) created(s int64) string {
+func (w *world) generation(s int64) int64 {
 	w.e.t.Helper()
-	var c string
-	if err := w.e.db.QueryRow(`SELECT created_at FROM spaces WHERE id = ?`, s).Scan(&c); err != nil {
+	var c int64
+	if err := w.e.db.QueryRow(`SELECT generation FROM spaces WHERE id = ?`, s).Scan(&c); err != nil {
 		w.e.t.Fatal(err)
 	}
 	return c
@@ -143,7 +144,7 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 	before := w.files(from, a)
 
 	// The app is back in its first space: a move to the other is no longer wanted.
-	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID)); err != nil {
+	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.files(to, a); len(got) != 0 {
@@ -158,11 +159,11 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 	}
 
 	// The app's home is the other space now (its move is recorded, its files not yet): a relocation
-	// that knew the other space by a creation time it no longer has is for a space that is gone.
+	// that knew the other space by a generation it no longer has is for a space that is gone.
 	if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
 		t.Fatal(err)
 	}
-	err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, "1999-01-01T00:00:00.000Z")
+	err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID)+1000)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a relocation to a space that was replaced: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 	}
 
 	// The same relocation with the spaces as they are does the move.
-	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID)); err != nil {
+	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.files(to, a); len(got) != len(before) {
@@ -239,7 +240,7 @@ func TestAFilesRootOfAGoneSpaceIsNotFound(t *testing.T) {
 	if _, err := w.e.db.Exec(`DELETE FROM spaces WHERE id = ?`, s.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := w.e.s.filesRoot(ctx, s.ID)
+	_, _, err := w.e.s.filesRootAs(ctx, s.ID, 0)
 	if !errors.Is(err, ErrNotFound) || !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("filesRoot of a space with no row: %v", err)
 	}
@@ -404,7 +405,7 @@ func TestARelocationHoldsItsSpacesInOrderAndNeverMovesToItself(t *testing.T) {
 		held.mu.Lock()
 		held.order = nil
 		held.mu.Unlock()
-		if err := w.e.s.relocateOne(ctx, a.ID, id, dir[0].ID, w.created(dir[0].ID), dir[1].ID, w.created(dir[1].ID)); err != nil {
+		if err := w.e.s.relocateOne(ctx, a.ID, id, dir[0].ID, w.generation(dir[0].ID), dir[1].ID, w.generation(dir[1].ID)); err != nil {
 			t.Fatal(err)
 		}
 		held.mu.Lock()
@@ -416,7 +417,7 @@ func TestARelocationHoldsItsSpacesInOrderAndNeverMovesToItself(t *testing.T) {
 	}
 
 	files := w.files(w.alicePrivate, a)
-	if err := w.e.s.relocateOne(ctx, a.ID, id, w.alicePrivate.ID, w.created(w.alicePrivate.ID), w.alicePrivate.ID, w.created(w.alicePrivate.ID)); err != nil {
+	if err := w.e.s.relocateOne(ctx, a.ID, id, w.alicePrivate.ID, w.generation(w.alicePrivate.ID), w.alicePrivate.ID, w.generation(w.alicePrivate.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.files(w.alicePrivate, a); !slices.Equal(got, files) || len(got) == 0 {
@@ -438,7 +439,7 @@ func TestCleanupsOfARemovedSpaceHaveNothingToDo(t *testing.T) {
 	if err := kb.RemoveSpace(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.e.s.unlinkFiles(ctx, s.ID, a.ID, id); err != nil {
+	if err := w.e.s.unlinkFiles(ctx, s.ID, w.generation(s.ID), a.ID, id); err != nil {
 		t.Fatalf("removing the files of an attachment in a removed space: %v", err)
 	}
 	if err := w.e.s.sweepSpace(ctx, s, time.Now().Add(time.Hour)); err != nil {
@@ -484,10 +485,14 @@ func TestARelocationThatLosesTheAppWhileWaitingForTheDatabaseMovesNothing(t *tes
 	<-holding
 	relocated := make(chan error, 1)
 	go func() {
-		relocated <- w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID))
+		relocated <- w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID))
 	}()
 	// The relocation has checked and copied, and waits for the write lock.
 	spin(t, "the relocation to wait for the database", func() bool { return goroutineWith("relocateOne", "(*Service).write") })
+	// It did copy: the cleanup below is of a copy that was made, not of nothing.
+	if got := w.files(to, a); !slices.Equal(got, before) {
+		t.Fatalf("the relocation waits for the database with %v in the other space, want its copy of %v", got, before)
+	}
 	close(release)
 	if err := <-moved; err != nil {
 		t.Fatal(err)
@@ -530,7 +535,7 @@ func TestARelocationMovesTheFilesWhicheverSpaceHasTheLowerID(t *testing.T) {
 		if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
 			t.Fatal(err)
 		}
-		if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID)); err != nil {
+		if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID)); err != nil {
 			t.Fatal(err)
 		}
 		if got := w.files(to, a); !slices.Equal(got, want) {
@@ -574,5 +579,125 @@ func TestHoldingAnAttachmentsSpaceKeepsADatabaseError(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) || root != nil || done != nil {
 		t.Fatalf("the error was not kept: %v", err)
+	}
+}
+
+// The Store's check of a space's row reads the database, and a hold of the space that fails because
+// that read failed says nothing about the space: the chunk answers the failure (a 500), never "no
+// such upload", and the next one, with the database well again, is taken as if nothing had
+// happened. (A hold refused because the space was removed is still the 404 it always was:
+// TestNothingMakesARemovedSpaceAgain.)
+func TestAChunkWhoseSpaceHoldFailsOnTheDatabaseIsNotNotFound(t *testing.T) {
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	var failing atomic.Bool
+	kb.SetSpaceCheck(func(sp access.Space) (bool, error) {
+		if failing.Load() {
+			return false, errors.New("disk I/O error")
+		}
+		return access.SpaceRowCheck(w.e.db)(sp)
+	})
+	w.e.s.WithSpaceHolder(kb)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.start(w.alice, s, a, "photos", len(picture))
+
+	failing.Store(true)
+	rec := w.chunk(w.alice, s, a, id, 0, picture)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a chunk whose space hold failed on the database: status %d (%s), want 500", rec.Code, rec.Body.String())
+	}
+	failing.Store(false)
+	expect(t, w.chunk(w.alice, s, a, id, 0, picture), http.StatusOK)
+}
+
+// The cleanups that work on files by what they found in the database (an attachment's, the sweep's
+// list of spaces) carry the generation of the space they found it in, and do nothing for a space
+// that has been removed and whose ID another has since: its files are the other's.
+func TestFileCleanupOfAReplacedSpaceLeavesTheReplacementsFiles(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.e.s.WithSpaceHolder(knowledge.New(w.e.dataDir, knowledge.Options{}))
+	space := w.shared
+	old := access.Space{ID: space.ID, WorkspaceID: space.WorkspaceID, Generation: w.generation(space.ID)}
+
+	// The space is removed and another is made with its ID.
+	if _, err := w.e.db.Exec(`DELETE FROM spaces WHERE id = ?`, space.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.db.Exec(`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (?, ?, 'shared', 'Replacement')`, space.ID, space.WorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	fresh := w.generation(space.ID)
+	if fresh == old.Generation {
+		t.Fatalf("fixture: the replacement has the generation %d too", fresh)
+	}
+	// Its file, a stray one as far as the sweep can tell (no row has it), made long ago.
+	const id = "0123456789abcdef0123456789abcdef"
+	root, done, err := w.e.s.filesRootAs(ctx, space.ID, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(root, fileName(7, id, ""), []byte("the replacement's picture")); err != nil {
+		t.Fatal(err)
+	}
+	done()
+	name := filepath.Join(space.Dir(w.e.dataDir), fileName(7, id, ""))
+	still := func(what string) {
+		t.Helper()
+		if _, err := os.Stat(name); err != nil {
+			t.Fatalf("%s took the replacement's file: %v", what, err)
+		}
+	}
+
+	if err := w.e.s.unlinkFiles(ctx, space.ID, old.Generation, 7, id); err != nil {
+		t.Fatalf("removing the files of an attachment of the space that was: %v", err)
+	}
+	still("removing the files of an attachment of the space that was")
+	if err := w.e.s.sweepSpace(ctx, old, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("sweeping the space that was: %v", err)
+	}
+	still("sweeping the space that was")
+	if _, _, err := w.e.s.filesRootAs(ctx, space.ID, old.Generation); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the files of the space that was: %v", err)
+	}
+
+	// For the space that has the ID now, the same calls are the cleanup they are.
+	if err := w.e.s.unlinkFiles(ctx, space.ID, fresh, 7, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(name); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the replacement's own cleanup left the file: %v", err)
+	}
+}
+
+// What an attachment is read with carries the generation of its space, so the files it is about
+// are the files of that space and not of one that has its ID later.
+func TestAnAttachmentIsLoadedWithItsSpacesGeneration(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	id := w.start(w.alice, s, a, "photos", 10)
+	u, err := loadAttachment(context.Background(), w.e.db, a.ID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.spaceID != s.ID || u.spaceGen == 0 || u.spaceGen != w.generation(s.ID) {
+		t.Fatalf("the attachment's space %d, generation %d; the space's generation is %d", u.spaceID, u.spaceGen, w.generation(s.ID))
+	}
+}
+
+// The sweep lists the spaces with their generations, and sweeps each as the space it listed.
+func TestTheSweepListsSpacesWithTheirGenerations(t *testing.T) {
+	w := newWorld(t)
+	spaces, err := w.e.s.spacesToSweep(context.Background())
+	if err != nil || len(spaces) == 0 {
+		t.Fatalf("the spaces to sweep: %v, %v", spaces, err)
+	}
+	for _, sp := range spaces {
+		if sp.Generation == 0 || sp.Generation != w.generation(sp.ID) {
+			t.Fatalf("space %d is listed with generation %d, it has %d", sp.ID, sp.Generation, w.generation(sp.ID))
+		}
 	}
 }

@@ -8,18 +8,20 @@ import (
 )
 
 // A space made after a purge may be given the purged space's ID, and the knowledge base refuses a
-// call that carries no creation time while it still marks that ID removed. The index's sync keeps
-// the creation time of the space it was given, and the catch-up at startup reads it, so the new
+// call that carries no generation while it still marks that ID removed. The index's sync keeps
+// the generation of the space it was given, and the catch-up at startup reads it, so the new
 // space's documents are indexed.
 func TestTheIndexSyncsASpaceThatTookAPurgedSpacesID(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	team := w.team
-	if team.CreatedAt == "" {
-		t.Fatal("fixture: the space has no creation time")
+	var generation int64
+	if err := w.e.db.QueryRow(`SELECT generation FROM spaces WHERE id = ?`, team.ID).Scan(&generation); err != nil || generation == 0 {
+		t.Fatalf("fixture: the space has no generation: %d, %v", generation, err)
 	}
+	team.Generation = generation
 	// The mark of an earlier space with the team's ID, before anything is written to it.
-	earlier := access.Space{ID: team.ID, WorkspaceID: team.WorkspaceID, Kind: team.Kind, Access: access.Write, CreatedAt: "2000-01-01T00:00:00.000Z"}
+	earlier := access.Space{ID: team.ID, WorkspaceID: team.WorkspaceID, Kind: team.Kind, Access: access.Write, Generation: generation - 1}
 	if err := w.e.idx.Knowledge().RemoveSpace(earlier); err != nil {
 		t.Fatal(err)
 	}
