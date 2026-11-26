@@ -68,12 +68,16 @@ export function Resolve({
   download,
   name,
   onClose,
+  onDiscardClosed,
 }: {
   runtime: Runtime
   item: OutboxItem
   download: Download | undefined
   name: string
   onClose: () => void
+  // The Discard question was open when this screen went away (the record started sending in another
+  // tab, or this tab stopped being the writer): this screen is gone with it, so the list says why.
+  onDiscardClosed?: () => void
 }) {
   const t = useT()
   const f = useFormat()
@@ -324,7 +328,14 @@ export function Resolve({
       )}
 
       <div className="ui-resolve-actions">
-        <DiscardButton runtime={runtime} item={item} name={name} onDone={onClose} onError={setError} />
+        <DiscardButton
+          runtime={runtime}
+          item={item}
+          name={name}
+          onDone={onClose}
+          onError={setError}
+          onClosed={onDiscardClosed}
+        />
       </div>
     </section>
   )

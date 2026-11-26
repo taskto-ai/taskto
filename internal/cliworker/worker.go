@@ -131,10 +131,10 @@ func New(cfg Config) (*Worker, error) {
 	rootMode := os.FileMode(0o700)
 	if iso := cfg.Isolation; iso != nil {
 		if !isolationSupported {
-			return nil, errors.New("cliworker: a Unix user per TaskTo user needs Linux")
+			return nil, errors.New("cliworker: a Unix user per taskto user needs Linux")
 		}
 		if os.Geteuid() != 0 {
-			return nil, errors.New("cliworker: a Unix user per TaskTo user needs the worker to run as root")
+			return nil, errors.New("cliworker: a Unix user per taskto user needs the worker to run as root")
 		}
 		if iso.UIDBase == 0 {
 			iso.UIDBase = 100000

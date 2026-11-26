@@ -18,7 +18,9 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
 - **Limits** the admin sets, never an app: the largest amount of one payment and the
   currencies a payment may ask for.
 - **Allowed spaces**: which spaces' apps may use an integration. A new integration has none.
-- The **address of the webhook**, shown when the server has a public URL.
+- The **webhook route**, `POST /hooks/<public id>`, which verifies a provider's signature and
+  keeps the event ([Webhooks and the public URL](#webhooks-and-the-public-url)), and the worker
+  that will apply what it keeps.
 - The **egress policy** for calls to providers and the **request builder** that pins each
   adapter's hosts ([Egress](#egress)).
 - **Audit events** for every change ([audit.md](audit.md)).
@@ -27,11 +29,11 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
   **approval** by an admin of that contract's hash, which a publish and a rollback need
   ([Apps and approval](#apps-and-approval)).
 
-Nothing calls a provider yet: no payment link is made, no event is received, and a
-`create_payment_link` effect that an app declares does nothing when an action runs. Those arrive
-as separate changes, in this order: the payment link; the webhook and its verification; applying a
-payment to a record; polling the provider for payments the webhook missed. The rules below are the
-ones those changes have to keep.
+Nothing calls a provider yet: no payment link is made, a `create_payment_link` effect that an
+app declares does nothing when an action runs, and no stored event is applied to a record.
+Those arrive as separate changes, in this order: the payment link; applying a payment to a
+record; polling the provider for payments the webhook missed. The rules below are the ones
+those changes have to keep.
 
 ## Concepts
 
@@ -88,7 +90,9 @@ validated in Go.
   that a secret was set or changed, never what it is; errors carry codes, never a value or a
   provider's text; a test greps the logs and every reply for the credentials it used.
 - A replaced webhook secret keeps verifying events for a day, so events the provider signed
-  before the change took effect there aren't refused.
+  before the change took effect there aren't refused. Two integrations never share a webhook
+  secret (current or still-valid previous), whatever their workspaces, so a signature opens one
+  integration only.
 - **Backups.** A backup holds `server.key` next to the sealed values, so a backup is as
   sensitive as the credentials. Restic encrypts it ([install.md](install.md#backups)). After
   restoring to another machine, rotate each credential at its provider and here. If the key
@@ -240,9 +244,12 @@ Records, and in later changes payments and events, are never copied.
 ## Checking a connection
 
 `POST …/check` looks at what the server holds: the provider's required secrets are set and
-open with the server's key, and the settings are the provider's. It does **not** call the
-provider yet (`remote` is `false` in the answer). It answers `200` with `ok`, or with a code,
-and never with a provider's reply. The one harmless call that proves the credentials work
+open with the server's key, and the settings are the provider's. It also says when another
+integration's webhook secret was found shared with another (`integration_webhook_secret_shared`,
+which names neither the integration nor its workspace; the other holder may have changed theirs
+since): such a secret verifies no delivery and must be replaced. It does
+**not** call the provider yet (`remote` is `false` in the answer). It answers `200` with `ok`, or
+with a code, and never with a provider's reply. The one harmless call that proves the credentials work
 comes with the first change that calls a provider.
 
 ## Egress
@@ -272,8 +279,131 @@ Each integration has a random 128-bit `public_id`, and its webhook address is
 `<public URL>/hooks/<public_id>`. The settings page shows it when the server has
 `-public-url`; without one it says that webhooks are unavailable and that reconciling payments
 without them isn't built yet. The id is the only thing in the path, and it holds no secret: the
-signature will be the authentication. The reverse proxy must forward `POST /hooks/*` (and
-nothing more has to be exposed for payments). Receiving, verifying and applying events is to come.
+signature is the authentication. The reverse proxy must forward `POST /hooks/*` (and nothing
+more has to be exposed for payments; [install](install.md#webhooks-from-payment-providers)).
+The route is in [api.md](api.md#post-hookspublic_id).
+
+What a delivery goes through, in this order, each step cheaper than the next:
+
+1. **Limits and size.** A limit per client address, counted before anything is looked up (so a
+   limit says nothing of which ids exist), and a body of at most 256 KiB. The limit per id is
+   counted only once the signature has verified, so unsigned requests, from anywhere, can't use
+   up the quota of an integration's real deliveries.
+2. **The integration**, by `public_id`: enabled, of a provider that receives webhooks, with a
+   webhook secret. An id that is none of these is not turned away here: step 3 runs for it
+   anyway.
+3. **The signature, over the raw bytes, before any parsing**: constant-time comparison against
+   the current webhook secret and, for a day after an admin replaces it, the previous one; the
+   provider's timestamp tolerance applies. A delivery for an integration is only ever checked
+   against that integration's own secrets, so a valid signature of one integration opens no
+   other, in this workspace or another. For this to hold, **no two integrations share a webhook
+   secret**: setting or replacing one that another integration (in any workspace) uses as its
+   current secret, or as a previous one that hasn't expired, is refused with
+   `integration_webhook_secret_reused`, which says nothing of whose it is. The test is a lookup
+   of a **fingerprint** stored beside each webhook secret: an HMAC of it under a key derived
+   from the server key (`internal/serverkey`), so the database holds neither the secret nor a
+   plain hash that could be tried against guesses, and nothing is opened under the write lock.
+   A database from before the check can hold the same secret twice; the server fingerprints
+   those secrets when it starts, and a secret that **more than one integration holds is used for
+   none of them**: deliveries signed with it are the plain `404` for each, nothing is stored,
+   and each integration's [check](#checking-a-connection) says so (without naming the other
+   one) until **each** has a fresh secret from its provider. The server records the secret's
+   fingerprint as found shared (`integration_shared_secrets`, written at start and by every
+   change or removal that could take a copy away), so a secret that was ever shared is never
+   used again for any integration: when one holder rotates, or is removed, the other keeps
+   refusing, because the secret is known to the first's workspace, and no integration may be
+   given it again (`integration_webhook_secret_reused`). A rotation doesn't keep such a secret
+   as the previous one either.
+
+   Every well-formed signature costs the same work: the body is MAC'd against exactly two keys,
+   the current and the previous secret, and a slot with none holds a random key of the server's
+   own that nobody has, whose match is never counted even so. An id with no usable secret (unknown, disabled, shared or with none) is
+   verified against a random secret the server made, so the work over the body is the same and
+   the result is thrown away. A header that isn't well formed is refused before any MAC, for
+   every id alike.
+
+   What this does **not** hide: finding an id's integration is a database read that an id that
+   doesn't exist skips, so how long a refusal takes can still tell an existing id from one that
+   doesn't, to a client that measures it finely enough and repeats it (the address limit bounds
+   how often). That an id exists is not a secret worth much on its own, since a delivery is
+   authenticated by its signature, never by the id; what matters is that the answer, the log and
+   the MACs over the body say nothing of it, which tests pin.
+4. **One answer for every refusal**: an unknown id, a disabled integration, no webhook secret, a
+   bad or old signature and a valid signature of another integration are all the same `404`,
+   after the same work. The route logs nothing of a refusal, no id and no reason: the
+   integration's [check](#checking-a-connection) is where an admin sees a secret that doesn't
+   open.
+5. **Normalizing.** The provider's adapter reads the body into closed, typed fields
+   (`Event`: the provider's event id, one of four normalized kinds, the server-issued token the
+   provider echoed back, the provider's object and payment ids, the amount in minor units, the
+   currency, when it happened) and none of the free text around them: a payer's name, email
+   and notes are never decoded, so there is nowhere for them to go. A type the server doesn't
+   act on is answered `200` and not stored, since a provider disables an endpoint that
+   answers errors.
+6. **Storing once.** `integration_events` has `UNIQUE (integration_id, provider_event_id)` and the
+   insert is `ON CONFLICT DO NOTHING`: a replay inside the tolerance, or a provider's retry, is
+   answered `200` like the first delivery and changes nothing. The body is never stored, only
+   its SHA-256 for support. Older than the tolerance, a replay is refused at step 3. The write
+   happens in one transaction that first checks again that the integration is still enabled, of
+   the same mode and with the webhook secrets the delivery was verified against: a delivery
+   that was in flight when an admin disabled the integration or rotated its secret stores
+   nothing (not even `last_event_at`) and is refused like any other.
+
+   Events are purged after a time (below), and the purge forgets their ids: a provider's retry
+   of an event that was purged, signed afresh, is stored again. **Whatever applies events must
+   be idempotent**: the same provider event may reach it twice, and the second must change
+   nothing.
+
+A stored event is applied after the answer, by the **event worker**: leased to one worker at a
+time (a lease that runs out, because the server died, gives the event to the next try), at most
+five tries with growing waits, and finished events are purged after 30 days (failed ones after
+90). The apply step is the next card's: until one is set, events wait in `pending`, untouched.
+
+### What the adapter was written against (Stripe)
+
+Pinned from Stripe's public documentation on the day the adapter was written (the code comments
+in `internal/integrations/stripe_webhook.go` say the same). A change of any of it is a change of
+code and of this section; the real-provider check is manual and never in CI.
+
+- **Signature.** The `Stripe-Signature` header is comma-separated `name=value` entries: `t`, the
+  Unix seconds at which Stripe signed this delivery, and one `v1` per active signing secret
+  (two while a rolled secret is still valid). `v0` is a fake signature of sandbox events and the
+  `secret`, `destination` and `payload` entries are debug metadata that "aren't covered by the
+  HMAC": all are ignored, as is any entry the adapter doesn't know. Only `v1` authenticates:
+  the hex HMAC-SHA256 of `<t>.<exact body>`, keyed with the signing secret's text as it is,
+  `whsec_` prefix included. A header with no `t`, two of them or no `v1` is refused, as is more
+  than one `Stripe-Signature` header.
+- **Tolerance.** Five minutes between `t` and the server's clock, which Stripe's own libraries
+  use by default (and never 0, which turns the check off). The server also refuses a timestamp
+  that far *ahead*. A retried event is signed afresh by Stripe, with a new `t`.
+- **Rotation.** Stripe can keep a rolled secret valid for up to seven days. The previous secret
+  verifies for one day after an admin replaces it in TaskTo.AI, which is enough for the provider
+  to have switched; after it only the new one does.
+- **Delivery.** A non-2xx answer or a redirect is a failed delivery, retried for up to three
+  days in live mode. Events repeat and "aren't in order", and Stripe says to find duplicates by
+  event id and to answer 2xx before doing any work, which is why an event is stored and
+  answered, and applied later.
+- **Events** (snapshot events, the format of an endpoint registered with
+  `event_payload=snapshot`). One Stripe type is authoritative for each normalized event; the
+  rest of what Stripe sends for one payment is ignored.
+
+  | Normalized | Stripe's event | Notes |
+  |---|---|---|
+  | `payment.succeeded` | `checkout.session.completed` with `payment_status` `paid`, and `checkout.session.async_payment_succeeded` | Of one session exactly one of them says `paid`: a delayed payment method's first event says `unpaid` and is ignored. |
+  | `payment.expired` | `checkout.session.expired` | |
+  | `payment.failed` | `checkout.session.async_payment_failed` | A declined card is not a failure: the payer may try another on the same page and the session stays open, so `payment_intent.payment_failed` and `charge.failed` are ignored. |
+  | `payment.refunded` | `charge.refunded` | Partial refunds too: the amount is what has been refunded so far (`amount_refunded`). |
+
+  A session event must be a one-time payment (`mode` `payment`) that carries a
+  `client_reference_id` of the shape of a token the server issues (32 lowercase hex digits):
+  that is how a payment is mapped to what the server made, and a session without one (another
+  use of the same Stripe account) is not ours. A charge has no such reference: its event
+  carries the payment intent's id, which the same verified session events carry, so the apply
+  step can map a refund through it; a charge with no payment intent is not stored. Ids are checked against Stripe's shapes (`evt_`, `cs_test_`
+  or `cs_live_`, `ch_`, `pi_`), the currency is three lower-case letters and the amount a
+  whole number above zero; an event that isn't of the shape is answered `200` and not stored.
+  An event of live money for an integration in test mode, or the other way round, is ignored
+  the same way.
 
 ## The fakes tests use
 
@@ -317,7 +447,7 @@ commit.
 ## Not here, on purpose
 
 - **No model-authored HTTP call.** An app, an effect or an action never holds a URL.
-- **No card data in TaskTo.** Hosted checkout only; TaskTo will keep a link, a provider's
+- **No card data in taskto.** Hosted checkout only; taskto will keep a link, a provider's
   object id and the amount it asked for.
-- **No raw webhook bodies** will be stored, only normalized fields and a hash.
+- **No raw webhook bodies** are stored, only normalized fields and a hash.
 - No refunds, payouts, subscriptions or customer records.

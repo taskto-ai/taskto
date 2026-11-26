@@ -456,24 +456,24 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 	src := io.Reader(br)
 	if magic, _ := br.Peek(len(gzipMagic)); bytes.Equal(magic, gzipMagic) {
 		if gz, err = gzip.NewReader(br); err != nil {
-			return m, fmt.Errorf("not a TaskTo.AI backup: %w", err)
+			return m, fmt.Errorf("not a taskto.ai backup: %w", err)
 		}
 		src = gz
 	}
 	tr := tar.NewReader(src)
 	hdr, err := tr.Next()
 	if err != nil || hdr.Name != manifestName {
-		return m, errors.New("not a TaskTo.AI backup: the manifest is missing")
+		return m, errors.New("not a taskto.ai backup: the manifest is missing")
 	}
 	if err := json.NewDecoder(io.LimitReader(tr, 1<<20)).Decode(&m); err != nil {
-		return m, fmt.Errorf("not a TaskTo.AI backup: %w", err)
+		return m, fmt.Errorf("not a taskto.ai backup: %w", err)
 	}
 	switch {
 	case m.Format != 1 && m.Format != format:
 		return m, fmt.Errorf("backup format %d isn't supported by this version (it reads formats 1 to %d)", m.Format, format)
 	case m.Format == 1 && gz == nil:
 		// Format 1 was always gzipped, and has no end entry: plain, a cut couldn't be seen.
-		return m, errors.New("not a TaskTo.AI backup: a format 1 backup is gzipped")
+		return m, errors.New("not a taskto.ai backup: a format 1 backup is gzipped")
 	}
 
 	var databases []string

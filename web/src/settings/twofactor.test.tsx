@@ -30,7 +30,7 @@ const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 const sent = (calls: Call[], method: string, path: string) =>
   calls.filter((c) => c.method === method && c.path === path).map((c) => c.body ?? null)
 
-const URI = 'otpauth://totp/TaskTo:owner@example.com?secret=AAAABBBBCCCCDDDD&issuer=TaskTo'
+const URI = 'otpauth://totp/taskto:owner@example.com?secret=AAAABBBBCCCCDDDD&issuer=taskto'
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/')

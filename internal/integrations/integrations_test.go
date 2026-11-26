@@ -3,7 +3,9 @@ package integrations
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +65,7 @@ type env struct {
 	dir    string
 	key    *serverkey.Key
 	store  *Store
+	svc    *Service
 	h      http.Handler
 	logs   *logs
 	bodies bytes.Buffer
@@ -70,6 +73,12 @@ type env struct {
 }
 
 func newEnv(t *testing.T, publicURL string) *env {
+	t.Helper()
+	return newEnvWith(t, Options{PublicURL: publicURL})
+}
+
+// newEnvWith is newEnv with the service's options, for a test that moves the clock.
+func newEnvWith(t *testing.T, opts Options) *env {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -95,8 +104,10 @@ func newEnv(t *testing.T, publicURL string) *env {
 	a.Routes(mux)
 	spaces := access.New(sqlDB, a)
 	spaces.Routes(mux)
-	New(e.store, Options{PublicURL: publicURL}).Routes(mux, a, spaces)
-	e.h = auth.CSRF(mux)
+	e.svc = New(e.store, opts)
+	e.svc.Routes(mux, a, spaces)
+	e.svc.HookRoutes(mux)
+	e.h = a.ClientAddr(auth.CSRF(mux))
 	return e
 }
 
@@ -260,13 +271,35 @@ func (e *env) otherWorkspace(owner *client) (*client, int64) {
 
 func wsPath(ws int64, rest string) string { return fmt.Sprintf("/api/workspaces/%d/%s", ws, rest) }
 
+// hookFor is the webhook secret of the test integration called name: no two share one (the server
+// refuses it), so only "main" and "shop", the first of a test, have stripeHook.
+func hookFor(name string) string {
+	if name == "main" || name == "shop" {
+		return stripeHook
+	}
+	sum := sha256.Sum256([]byte(name))
+	return "whsec_" + hex.EncodeToString(sum[:16])
+}
+
 // stripeBody is a valid create of a Stripe integration.
 func stripeBody(name string) map[string]any {
 	return map[string]any{
 		"provider": "stripe", "name": name, "display_name": "Stripe " + name,
-		"secrets":          map[string]string{"api_key": stripeTestKey, "webhook_secret": stripeHook},
+		"secrets":          map[string]string{"api_key": stripeTestKey, "webhook_secret": hookFor(name)},
 		"max_amount_minor": 500000, "currencies": []string{"eur", "USD"},
 	}
+}
+
+// withHook is body with another webhook secret, for a second integration with the same name in
+// another workspace.
+func withHook(body map[string]any, secret string) map[string]any {
+	secrets := map[string]string{}
+	for k, v := range body["secrets"].(map[string]string) {
+		secrets[k] = v
+	}
+	secrets["webhook_secret"] = secret
+	body["secrets"] = secrets
+	return body
 }
 
 func squareBody(name string) map[string]any {
@@ -806,7 +839,7 @@ func TestIsolation(t *testing.T) {
 	// A second workspace, with an admin who belongs to it only.
 	_, ws2 := e.otherWorkspace(owner)
 	admin2 := e.invite(owner, ws2, "admin2@example.com", "admin")
-	in2 := e.create(owner, ws2, stripeBody("main")) // the same name: names are per workspace
+	in2 := e.create(owner, ws2, withHook(stripeBody("main"), stripeHookNew)) // the same name: names are per workspace
 
 	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
 	routes := []struct {
@@ -1058,7 +1091,8 @@ func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
 
 	// The same blob under another workspace's integration doesn't open either.
 	_, ws2 := e.otherWorkspace(owner)
-	other := e.create(owner, ws2, stripeBody("main"))
+	// (With a webhook secret of its own: the first integration's still has its fingerprint.)
+	other := e.create(owner, ws2, withHook(stripeBody("main"), hookFor("elsewhere")))
 	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = ? WHERE integration_id = ? AND name = 'api_key'`, sealed, other.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1251,7 +1285,7 @@ func TestAllowedSpaceCannotMoveToAnotherWorkspace(t *testing.T) {
 	if _, err := e.db.Exec(`UPDATE integration_spaces SET space_id = ? WHERE integration_id = ?`, foreign, in.ID); err == nil {
 		t.Fatal("an allowed space was moved to another workspace's space")
 	}
-	in2 := e.create(owner, ws2, stripeBody("main"))
+	in2 := e.create(owner, ws2, withHook(stripeBody("main"), stripeHookNew))
 	if _, err := e.db.Exec(`UPDATE integration_spaces SET integration_id = ? WHERE integration_id = ?`, in2.ID, in.ID); err == nil {
 		t.Fatal("an allowed space was moved to another workspace's integration")
 	}

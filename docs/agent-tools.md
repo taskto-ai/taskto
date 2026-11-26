@@ -53,7 +53,7 @@ tools again after a crash (`replay: 'safe'`), and never a write. Change a tool i
   effect from the next call. The capability only says which conversation a call is for;
   the sidecar never says whom it is for.
 - **Changes are the owner's, made by the agent.** A document written is committed with
-  the owner as author and the agent (`TaskTo.AI agent`) as committer
+  the owner as author and the agent (`taskto.ai agent`) as committer
   (`knowledge.Author.Agent`), so the history shows both. Board changes are
   `boards.Actor{UserID: owner, Agent: true}`: cards, edits and comments say the owner made
   them through the agent. Apps the agent creates or changes say so the same way

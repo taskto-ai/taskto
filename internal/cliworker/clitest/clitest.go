@@ -72,14 +72,14 @@ type Scenario struct {
 	// no_new_privs is set, Linux), "uid", and "ask:<session>" (its permission hook, asked
 	// about that session).
 	Probes []string `json:"probes,omitempty"`
-	// MCP makes the fake call TaskTo's tools, as the real CLI would: at the endpoint, with the
+	// MCP makes the fake call taskto's tools, as the real CLI would: at the endpoint, with the
 	// token, of the MCP settings the worker wrote, after asking its permission hook. Each call
 	// is reported in the answer as "mcp <tool>: ok <result>", "mcp <tool>: refused <message>",
 	// "mcp <tool>: denied: <why>" or "mcp <tool>: error <what>".
 	MCP []MCPCall `json:"mcp,omitempty"`
 }
 
-// MCPCall is a call of one of TaskTo's tools by a fake (Scenario.MCP).
+// MCPCall is a call of one of taskto's tools by a fake (Scenario.MCP).
 type MCPCall struct {
 	Tool string         `json:"tool"`
 	Args map[string]any `json:"args,omitempty"`
@@ -925,9 +925,9 @@ func runHook(cmd *exec.Cmd, input []byte) ([]byte, error) {
 }
 
 // The fakes' MCP client: what each real CLI does with the settings the worker wrote for
-// TaskTo's tools (docs/cli-tools.md), as checked against the real Claude Code and Codex.
+// taskto's tools (docs/cli-tools.md), as checked against the real Claude Code and Codex.
 
-// toolsServer is how the fake finds TaskTo's MCP server: its URL and Authorization header,
+// toolsServer is how the fake finds taskto's MCP server: its URL and Authorization header,
 // and for Codex whether its own approval lets a tool without readOnlyHint run.
 type toolsServer struct {
 	url, auth      string
@@ -1014,7 +1014,7 @@ func (f *fake) tools() (toolsServer, error) {
 	return s, nil
 }
 
-// callTool calls TaskTo's tool c.Tool, as the i-th tool call of the turn: it shows the call in
+// callTool calls taskto's tool c.Tool, as the i-th tool call of the turn: it shows the call in
 // the CLI's events, asks the permission hook under the CLI's name for it, and calls the
 // endpoint.
 func (f *fake) callTool(session string, i int, c MCPCall) string {

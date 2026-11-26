@@ -21,7 +21,7 @@ function novncReadme(): string {
   return `noVNC ${version}, unmodified, from the npm package @novnc/novnc.
 Its core is licensed under the MPL 2.0 (LICENSE.txt, docs/LICENSE.MPL-2.0); vendor/pako under MIT.
 Source: https://github.com/novnc/noVNC/tree/v${version}
-TaskTo.AI loads core/rfb.js for the agent browser's live view.
+taskto.ai loads core/rfb.js for the agent browser's live view.
 `
 }
 

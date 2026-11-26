@@ -29,7 +29,7 @@ export const SECTION_LABEL: Record<Section, Key> = {
 }
 
 // The product's name, the same in every language.
-export const BRAND = 'TaskTo.AI'
+export const BRAND = 'taskto.ai'
 
 export const SIDEBAR_ID = 'ui-shell-sidebar'
 export const MAIN_ID = 'ui-shell-main'

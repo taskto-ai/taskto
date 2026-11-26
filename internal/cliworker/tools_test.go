@@ -22,7 +22,7 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// TaskTo's tools in a turn (docs/cli-tools.md): the worker writes each CLI's MCP settings for
+// taskto's tools in a turn (docs/cli-tools.md): the worker writes each CLI's MCP settings for
 // the turn's endpoint and token, and the fakes call a tool the way each real CLI does, asking
 // their permission hook first.
 
@@ -168,7 +168,7 @@ func TestTurnWithTaskToTools(t *testing.T) {
 	}
 }
 
-// In ask, TaskTo's read-only tools don't ask and the others ask the owner; allow_all asks
+// In ask, taskto's read-only tools don't ask and the others ask the owner; allow_all asks
 // nothing. A denied call never reaches the endpoint.
 func TestTaskToToolsPermissions(t *testing.T) {
 	h := newHarness(t, nil)
@@ -297,7 +297,7 @@ func TestRemoteHidesTheToolsToken(t *testing.T) {
 	}
 }
 
-// TaskTo's read-only tools are recognised in each CLI's naming, and nothing else is.
+// taskto's read-only tools are recognised in each CLI's naming, and nothing else is.
 func TestTaskToToolsReadOnlyNames(t *testing.T) {
 	tools := &cliworker.Tools{URL: "http://127.0.0.1:8081/cli-mcp", Token: tokenA, ReadOnly: []string{"list_spaces", "read_doc"}}
 	cases := []struct {
@@ -338,7 +338,7 @@ func TestTaskToToolsReadOnlyNames(t *testing.T) {
 			t.Errorf("%s %s %s: %v, want %v", c.cli, c.tool, c.input, got, c.want)
 		}
 	}
-	// A turn without TaskTo's tools has no read-only ones.
+	// A turn without taskto's tools has no read-only ones.
 	if cliworker.ToolsReadOnlyForTest(nil, cliworker.Claude, "mcp__taskto__read_doc", []byte(`{}`)) || cliworker.ToolsReadOnlyForTest(nil, cliworker.Grok, "search_tool", []byte(`{}`)) {
 		t.Error("a turn without tools let one through")
 	}

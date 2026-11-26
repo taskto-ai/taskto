@@ -1,4 +1,4 @@
-# CI for TaskTo.AI: the Go server, the web app and the agent runtime, plus a secret scan.
+# CI for taskto.ai: the Go server, the web app and the agent runtime, plus a secret scan.
 #
 # Every job runs on a GitHub-hosted Ubuntu runner, which is a whole VM with Docker and
 # passwordless sudo. Three jobs depend on that and won't run on a runner without it:

@@ -146,8 +146,8 @@ func TestPick(t *testing.T) {
 func TestEmbedded(t *testing.T) {
 	fsys, built := FS()
 	rec := serve(t, newHandler(t, fsys), http.MethodGet, "/")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>TaskTo.AI</title>") {
-		t.Fatalf("GET / = %d %q, want a TaskTo.AI page", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>taskto.ai</title>") {
+		t.Fatalf("GET / = %d %q, want a taskto.ai page", rec.Code, rec.Body.String())
 	}
 	t.Logf("web app built into the test binary: %v", built)
 }

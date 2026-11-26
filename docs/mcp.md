@@ -1,6 +1,6 @@
 # Your own agents: MCP and access tokens
 
-Claude Code, Codex and any other MCP client can use TaskTo.AI's knowledge base, boards and
+Claude Code, Codex and any other MCP client can use taskto.ai's knowledge base, boards and
 personal apps: search, read and write documents, list, create, move and comment on cards,
 and build apps and read their data. They get
 the same tools as the conversation agent ([agent-tools.md](agent-tools.md)), and act as
@@ -19,7 +19,7 @@ was created, last used and expires, revokes one after asking, and shows the setu
 for your server, with the new token filled in until you leave the page.
 
 Without the web app, make one with your browser session, for example from the browser's
-console on the TaskTo.AI page (workspace `1` here):
+console on the taskto.ai page (workspace `1` here):
 
 ```js
 await (await fetch('/api/workspaces/1/tokens', {
@@ -120,7 +120,7 @@ actions), `create_app` and `update_app`, and the template, copy and diagnostic t
 `run_app_action` runs the app's own action as you, through the code behind the web app's: your roles in the
 app, the records you may modify, the collection's rules, the locks of captured values, the record's history and the
 action's effects all apply, and it is refused (`403`) where your role doesn't allow it. It changes data, so the
-server lists it with `readOnlyHint: false`; whether your MCP client asks you before calling it is up to the client (the protocol doesn't require it, so set your client to confirm tools that change records), separate from the permission prompt of TaskTo's CLI conversations ([cli-tools.md](cli-tools.md)), which
+server lists it with `readOnlyHint: false`; whether your MCP client asks you before calling it is up to the client (the protocol doesn't require it, so set your client to confirm tools that change records), separate from the permission prompt of taskto's CLI conversations ([cli-tools.md](cli-tools.md)), which
 the server doesn't control here. It takes the `expected_release` that `list_app_actions` returned and runs only if that
 is still the live release. `create_app` and
 `update_app` save the app's draft; publishing it, and rolling back, are for a person who may publish
@@ -157,9 +157,9 @@ Changes are yours, marked with the token:
   token is you in that workspace until it expires or you revoke it: treat it like a
   password.
 
-## In TaskTo's own CLI conversations
+## In taskto's own CLI conversations
 
-A conversation that runs on Claude Code, Codex or Grok Build in TaskTo gets these tools
+A conversation that runs on Claude Code, Codex or Grok Build in taskto gets these tools
 without an access token: the server gives each turn's CLI an endpoint of its own and a token
 for that turn ([cli-tools.md](cli-tools.md)). This page is for agents you run yourself.
 

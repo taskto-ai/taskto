@@ -23,6 +23,10 @@ var (
 	errUnknownSecret   = apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "secrets has a name the provider doesn't use")
 	errBadCurrencies   = apierr.New(http.StatusBadRequest, apierr.CodeIntegrationCurrencyInvalid,
 		"currencies must list 1 to 20 different currency codes the server knows", apierr.Params{"max": maxCurrencies})
+	// errWebhookSecretReused is a webhook secret that another integration already verifies with. It
+	// says no more than that: not whose, nor in which workspace.
+	errWebhookSecretReused = apierr.New(http.StatusConflict, apierr.CodeIntegrationWebhookSecretReused,
+		"this webhook secret is already used by another integration")
 	errBadCeiling = apierr.New(http.StatusBadRequest, apierr.CodeIntegrationLimitInvalid,
 		"max_amount_minor must be a whole number from 1 to the largest the server allows", apierr.Params{"max": MaxAmountMinor})
 )

@@ -168,7 +168,7 @@ EOF
 	worker=$($compose ps -q cli-worker)
 	ollama=$($compose ps -q ollama)
 	[ -n "$server" ] && [ -n "$worker" ] && [ -n "$ollama" ] || die "a service didn't start"
-	# A CLI's user: uid 100000 + its TaskTo user's ID (docs/cli-workers.md).
+	# A CLI's user: uid 100000 + its taskto user's ID (docs/cli-workers.md).
 	cli=100001:100001
 
 	# The server's proxy listens once the worker has made its directory.

@@ -94,7 +94,7 @@ func (s *fakeSMTP) sender(cfg SMTPConfig) *SMTP {
 	s.start.Do(func() { go s.serve() })
 	cfg.Host, cfg.Port = s.host(), s.port()
 	if cfg.From == "" {
-		cfg.From = "TaskTo <taskto@example.com>"
+		cfg.From = "taskto <taskto@example.com>"
 	}
 	if cfg.Security == "" && s.implicit {
 		cfg.Security = TLS

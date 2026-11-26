@@ -311,7 +311,7 @@ test('restores an earlier version, and a stale restore says so with a reload', a
           {
             commit: 'c1',
             author: { name: 'A', email: 'a@x' },
-            agent: 'TaskTo.AI agent',
+            agent: 'taskto.ai agent',
             time: '2026-01-01T00:00:00Z',
             message: 'Create',
             change: 'create',
@@ -327,7 +327,7 @@ test('restores an earlier version, and a stale restore says so with a reload', a
   render(<KnowledgePage workspace={1} />)
   const doc = await openPlan()
   fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
-  expect(await within(doc).findByText(/with TaskTo\.AI agent/)).toBeTruthy()
+  expect(await within(doc).findByText(/with taskto\.ai agent/)).toBeTruthy()
   expect(within(doc).getByText('Current')).toBeTruthy()
   fireEvent.click(within(doc).getAllByRole('button', { name: 'View' })[1])
   expect((await within(doc).findByText('old')).tagName).toBe('EM')

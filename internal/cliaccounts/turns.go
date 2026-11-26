@@ -237,7 +237,7 @@ func (s *Service) start(ctx context.Context, p conversations.Principal, req turn
 	if req.Model != "default" && cli == req.CLI {
 		spec.Model = req.Model
 	}
-	// TaskTo's own tools, with this turn's token for them (docs/cli-tools.md).
+	// taskto's own tools, with this turn's token for them (docs/cli-tools.md).
 	if spec.Tools, err = s.toolsFor(id, p); err != nil {
 		return nil, err
 	}

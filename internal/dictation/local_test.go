@@ -258,11 +258,11 @@ func TestLocalCactus(t *testing.T) {
 	waitState(t, e, LocalReady)
 
 	// A known language goes through, with the glossary as keywords.
-	text, err := e.Transcribe(ctx, tone(SampleRate, nil), Options{Language: "de", Terms: []string{"Wurst", "TaskTo"}})
+	text, err := e.Transcribe(ctx, tone(SampleRate, nil), Options{Language: "de", Terms: []string{"Wurst", "taskto"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "--model whistle.cact --language de --keywords keywords.txt --audio piece-000.wav kw=Wurst,TaskTo,"; text != want {
+	if want := "--model whistle.cact --language de --keywords keywords.txt --audio piece-000.wav kw=Wurst,taskto,"; text != want {
 		t.Fatalf("text = %q, want %q", text, want)
 	}
 	// One Whistle doesn't know is left to detect; 40 s is two runs.

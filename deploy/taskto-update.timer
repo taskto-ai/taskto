@@ -2,7 +2,7 @@
 # a drop-in. Nightly, a little after the nightly backup, spread by up to half an hour; a run
 # missed while the VM was off happens when it is next up.
 [Unit]
-Description=TaskTo.AI: look for a new release every night
+Description=taskto.ai: look for a new release every night
 
 [Timer]
 OnCalendar=*-*-* 04:30:00 UTC

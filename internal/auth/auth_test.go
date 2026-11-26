@@ -473,7 +473,7 @@ func TestLoginRateLimitPerIP(t *testing.T) {
 	expect(t, e.client().do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
 	// Unknown addresses are tracked like real ones (so answers don't differ), but the
 	// address limit comes first, so one client adds at most ipAttempts keys per window.
-	if n := len(e.svc.perAccount.hits); n > ipAttempts+1 {
+	if n := e.svc.perAccount.Len(); n > ipAttempts+1 {
 		t.Fatalf("per-account limiter tracks %d keys, want at most %d", n, ipAttempts+1)
 	}
 }

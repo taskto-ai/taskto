@@ -1,6 +1,6 @@
 // The component catalog personal apps may use: A2UI's basic components and functions, without
 // the ones that load or open outside addresses (an app is shared, and a picture from elsewhere
-// would tell that server who opens it), plus TaskTo.AI's own (Stat, Show, PhotoInput, Photos,
+// would tell that server who opens it), plus taskto.ai's own (Stat, Show, PhotoInput, Photos,
 // LocationInput, SignatureInput, BarcodeInput). A surface naming anything outside
 // it is rejected by the renderer, so an app can only ever be built from these. The Go server
 // checks every saved app against the same catalog (internal/apps/catalog.go); its

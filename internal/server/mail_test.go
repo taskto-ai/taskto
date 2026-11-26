@@ -38,7 +38,7 @@ func (r *recorder) messages() []mail.Message {
 	return append([]mail.Message(nil), r.sent...)
 }
 
-var testInfo = mail.Info{Host: "smtp.example.com", Port: 587, Security: "starttls", From: `"TaskTo" <taskto@example.com>`, SignsIn: true}
+var testInfo = mail.Info{Host: "smtp.example.com", Port: 587, Security: "starttls", From: `"taskto" <taskto@example.com>`, SignsIn: true}
 
 func mailStack(t *testing.T, rec *recorder) *stack {
 	t.Helper()

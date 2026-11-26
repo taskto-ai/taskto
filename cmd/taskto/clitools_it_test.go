@@ -2,7 +2,7 @@
 
 package main
 
-// TaskTo's tools in CLI conversations (docs/cli-tools.md), end to end: the server binary with
+// taskto's tools in CLI conversations (docs/cli-tools.md), end to end: the server binary with
 // its real sidecar, and the fake Claude Code, which reads the MCP settings the worker wrote and
 // calls the tools at the endpoint on the proxy's listener with its turn's token. The owner's
 // turn lists their spaces and writes a document once the owner allows it; the member's turn
@@ -221,7 +221,7 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		} `json:"commits"`
 	}
 	decodeInto(owner.expect(http.StatusOK, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces/%d/history/from-claude.md", ws, ownerPrivate), nil), &history)
-	if len(history.Commits) != 1 || history.Commits[0].Author.Name != "Owner" || history.Commits[0].Agent != "TaskTo.AI agent" {
+	if len(history.Commits) != 1 || history.Commits[0].Author.Name != "Owner" || history.Commits[0].Agent != "taskto.ai agent" {
 		t.Fatalf("history = %+v", history)
 	}
 

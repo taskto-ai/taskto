@@ -547,7 +547,7 @@ func TestIntegrationEgressKeepsWhatWasWritten(t *testing.T) {
 
 func TestSMTPSettings(t *testing.T) {
 	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
-		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",
+		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "taskto <taskto@example.com>",
 		"TASKTO_SMTP_USERNAME": "taskto", "TASKTO_SMTP_PASSWORD_FILE": "/run/secrets/smtp",
 		"TASKTO_SMTP_EGRESS": "public",
 	}), io.Discard)

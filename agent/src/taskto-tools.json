@@ -1421,7 +1421,7 @@
                             "open_route",
                             "create_payment_link"
                           ],
-                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document); create_payment_link: asks the integration slot named in integration (kind payments, declared in the definition's integrations) for a link to pay an amount of the record (version 3 of the format; the definition is checked and an admin has to approve the app's contract before it can be published, but the effect does not make a link yet, so don't tell anyone a published app creates payment links)"
+                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in taskto.ai to open (route board, card or document); create_payment_link: asks the integration slot named in integration (kind payments, declared in the definition's integrations) for a link to pay an amount of the record (version 3 of the format; the definition is checked and an admin has to approve the app's contract before it can be published, but the effect does not make a link yet, so don't tell anyone a published app creates payment links)"
                         },
                         "name": {
                           "type": "string",
@@ -1911,7 +1911,7 @@
                             "open_route",
                             "create_payment_link"
                           ],
-                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document); create_payment_link: asks the integration slot named in integration (kind payments, declared in the definition's integrations) for a link to pay an amount of the record (version 3 of the format; the definition is checked and an admin has to approve the app's contract before it can be published, but the effect does not make a link yet, so don't tell anyone a published app creates payment links)"
+                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in taskto.ai to open (route board, card or document); create_payment_link: asks the integration slot named in integration (kind payments, declared in the definition's integrations) for a link to pay an amount of the record (version 3 of the format; the definition is checked and an admin has to approve the app's contract before it can be published, but the effect does not make a link yet, so don't tell anyone a published app creates payment links)"
                         },
                         "name": {
                           "type": "string",

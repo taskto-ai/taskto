@@ -138,7 +138,7 @@ func TestEmbeddedWebAppByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The placeholder or the built app, depending on whether `make build` copied it in.
-	if rec := get(h, "/"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "TaskTo.AI") {
+	if rec := get(h, "/"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "taskto.ai") {
 		t.Fatalf("GET / = %d %q", rec.Code, rec.Body.String())
 	}
 }

@@ -1,6 +1,6 @@
 # Architecture
 
-TaskTo.AI combines three things that feed each other:
+taskto.ai combines three things that feed each other:
 
 1. **Knowledge base:** the docs, decisions, processes and notes of a person or a team.
 2. **Agent:** a chat agent that reads and writes the knowledge base, works the boards and

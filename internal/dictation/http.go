@@ -72,7 +72,7 @@ type statusReply struct {
 	Settings     settingsReply `json:"settings"`
 	// Local is the operator's local engine, or null when it is off.
 	Local *localReply `json:"local"`
-	// Addons are the add-ons TaskTo knows of, and whether the operator installed them.
+	// Addons are the add-ons taskto knows of, and whether the operator installed them.
 	Addons     []addonReply `json:"addons"`
 	Credits    []Credit     `json:"credits"`
 	MaxSeconds int          `json:"max_seconds"`
