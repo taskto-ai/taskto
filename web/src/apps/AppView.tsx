@@ -26,10 +26,6 @@ import './AppLoading.css'
 import './AppView.css'
 import type { ActionPayload, AppTransport } from './transport'
 
-// The transports live apart from the renderer (transport.ts), so a page can make one without
-// loading the renderer; said again here for the modules that have the renderer anyway.
-export { type ActionPayload, type AppTransport, httpTransport, previewTransport } from './transport'
-
 // The code of the server's answer to a change made against a record that has moved on.
 const RECORD_CONFLICT = 'app_record_conflict'
 

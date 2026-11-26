@@ -580,7 +580,8 @@
     "takeOfflineConfirm": {
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
-    }
+    },
+    "rendererFailed": "This screen couldn't be loaded: its code didn't arrive. Check your connection, then try again."
   },
   "auth": {
     "methods": {
@@ -1835,6 +1836,7 @@
       "removeKey": "Remove the API key",
       "onBadge": "On",
       "notReadyBadge": "Not ready yet",
+      "unavailableBadge": "Not available on this server",
       "offBadge": "Off"
     },
     "search": {

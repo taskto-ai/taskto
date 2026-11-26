@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
+import { NoWorkspace } from '../shell/NoWorkspace'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
 import { ServerUnreachable } from './ServerUnreachable'
@@ -593,6 +594,15 @@ test('the server unreachable and no workspace are the frame’s own form: a disp
   const title = screen.getByRole('heading', { level: 1, name: "Can't reach the server" })
   expect(title.getAttribute('data-size')).toBe('display')
   expect(document.querySelector('.ui-auth-card .ui-empty')).toBeNull()
+  cleanup()
+
+  const none = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [] }
+  render(<NoWorkspace me={none as never} onLogout={() => {}} />)
+  const heading = screen.getByRole('heading', { level: 1, name: 'No workspace yet' })
+  expect(heading.getAttribute('data-size')).toBe('display')
+  expect(document.querySelectorAll('h1')).toHaveLength(1)
+  expect(document.querySelector('.ui-auth-card .ui-empty')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy()
 })
 
 test('an invite for someone signed in names the account, joins with one button, and offers to log out', async () => {

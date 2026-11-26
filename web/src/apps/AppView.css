@@ -2,29 +2,6 @@
    components are themed in ui/a2ui.css, outside the layers; what is here is TaskTo.AI's own. */
 
 @layer screens {
-  /* On a panel of its own: the surface, its edge and room around the form; a screen wider than a
-     phone scrolls sideways inside it, and its padding leaves room for a control's focus ring and
-     the primary button's lift, which the scroll box would otherwise cut. */
-  .ui-app[data-frame="panel"] {
-    padding: var(--space-4);
-    background: var(--color-surface);
-    border: var(--line-thin) solid var(--color-border);
-    border-radius: var(--radius-lg);
-    overflow-x: auto;
-  }
-
-  /* Bare inside something that already is a panel (a Home widget, whose body does the scrolling):
-     no edge of its own, no scrolling of its own, and the room a control's focus ring and the
-     primary's lift reach outside it, so the widget's scrolling never cuts them. */
-  .ui-app[data-frame="bare"] {
-    padding: var(--space-2);
-  }
-
-  .ui-app[data-frame] {
-    display: grid;
-    gap: var(--space-3);
-  }
-
   /* The host of an app's screens (catalog.tsx): no wider than the app. */
   .ui-app-screen {
     min-inline-size: 0;

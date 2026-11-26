@@ -175,19 +175,27 @@ test('where the operator turned the local model off, it is still listed, and onl
   expect(again.options[0].disabled).toBe(true)
 })
 
-test('the local model says On only once it is ready; before that, Not ready yet', async () => {
-  for (const [state, badge] of [
-    ['not_downloaded', 'Not ready yet'],
-    ['downloading', 'Not ready yet'],
-    ['failed', 'Not ready yet'],
-    ['ready', 'On'],
+test('the local model says On only once it is ready, Not ready yet before, and that it can’t run where it can’t; other engines are On', async () => {
+  for (const [engine, state, badge] of [
+    ['local', 'not_downloaded', 'Not ready yet'],
+    ['local', 'downloading', 'Not ready yet'],
+    ['local', 'failed', 'Not ready yet'],
+    // A platform with no build of the model: it never will be ready here.
+    ['local', 'unavailable', 'Not available on this server'],
+    ['local', 'ready', 'On'],
+    // The local model's state is the local engine's only: the hosted API and an add-on are on.
+    ['api', 'not_downloaded', 'On'],
+    ['api', 'unavailable', 'On'],
+    ['desertant-voz', 'not_downloaded', 'On'],
   ] as const) {
     fakeFetch({
-      'GET /api/workspaces/1/dictation': { body: status({ local: { model: 'parakeet-v3', state, progress: 0.4 } }) },
+      'GET /api/workspaces/1/dictation': {
+        body: status({ engine, local: { model: 'parakeet-v3', state, progress: 0.4 } }),
+      },
     })
     const { unmount } = render(<SettingsPage me={me} workspace={member} tab="dictation" />)
-    expect(await screen.findByText(badge, { exact: true }), state).toBeTruthy()
-    if (badge !== 'On') expect(screen.queryByText('On', { exact: true }), state).toBeNull()
+    expect(await screen.findByText(badge, { exact: true }), `${engine} ${state}`).toBeTruthy()
+    if (badge !== 'On') expect(screen.queryByText('On', { exact: true }), `${engine} ${state}`).toBeNull()
     unmount()
   }
 })

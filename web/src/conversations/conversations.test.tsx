@@ -679,7 +679,9 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
 
   // The preview is a lazily loaded component that fetches the app and then its screen: wait for
   // each thing it shows (findBy… waits as long as src/test/setup.ts says), never for a time.
-  const app = await screen.findByRole('region', { name: 'Expenses' })
+  // The app's frame is drawn at once with its loading shape, and drawn anew once the renderer is in.
+  await screen.findByText('Expense tracker')
+  const app = screen.getByRole('region', { name: 'Expenses' })
   await within(app).findByText('Expense tracker')
   await within(app).findByText('Coffee')
   // What it shows is labelled: the live release, which everyone uses.

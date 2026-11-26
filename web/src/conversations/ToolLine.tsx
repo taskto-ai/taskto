@@ -14,8 +14,12 @@ import { Spinner } from '../ui/Spinner'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { type AppRef, CLI_TOOL, HELP_TOOL, type ToolUse } from './transcript'
 
-// The A2UI renderer is most of the app's code: loaded when a conversation shows an app.
-const AppPreview = lazy(() => import('../apps/AppPreview').then((m) => ({ default: m.AppPreview })))
+// The A2UI renderer is most of the app's code: loaded when a conversation shows an app, its chunk
+// fetched together with the preview's (the preview draws it lazily), not one after the other.
+const AppPreview = lazy(() => {
+  void import('../apps/AppView').catch(() => {})
+  return import('../apps/AppPreview').then((m) => ({ default: m.AppPreview }))
+})
 
 export function ToolLine({
   tool,

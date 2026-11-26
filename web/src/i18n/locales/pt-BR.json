@@ -585,7 +585,8 @@
     "takeOfflineConfirm": {
       "title": "Tirar {name} do ar?",
       "body": "Ninguém poderá abri-lo até que alguém que possa publicá-lo o restaure. Os registros são mantidos."
-    }
+    },
+    "rendererFailed": "Não foi possível carregar esta tela: o código dela não chegou. Verifique sua conexão e tente de novo."
   },
   "auth": {
     "methods": {
@@ -1848,6 +1849,7 @@
       "removeKey": "Remover a chave de API",
       "onBadge": "Ligado",
       "notReadyBadge": "Ainda não está pronto",
+      "unavailableBadge": "Indisponível neste servidor",
       "offBadge": "Desligado"
     },
     "search": {
