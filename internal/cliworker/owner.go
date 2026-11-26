@@ -113,9 +113,17 @@ func syncDir(path string) error {
 // the way Forget removes one; then the account is recorded as its owner. Introducing the owner
 // again changes nothing. A forgotten user (a deleted account, or one whose old directory couldn't
 // be removed yet) is ErrForgotten.
+//
+// The owner introduced again is answered without closing the user's gate, so a request of theirs
+// admitted meanwhile isn't refused as if a removal ran. If the other account's directory can't be
+// removed yet, its owner record goes all the same: nothing starts for the number until a later
+// introduction has removed it.
 func (w *Worker) Introduce(ctx context.Context, user int64, identity, boot string) error {
 	if user <= 0 || !identityPattern.MatchString(identity) || !identityPattern.MatchString(boot) {
 		return badRequest{errors.New("invalid introduction")}
+	}
+	if rec, ok, err := w.owner(user); err == nil && ok && rec.identity == identity && !w.isForgotten(user) {
+		return nil
 	}
 	sc := scope{user: user, all: true}
 	end, err := w.beginGate(ctx, sc)
@@ -123,6 +131,9 @@ func (w *Worker) Introduce(ctx context.Context, user int64, identity, boot strin
 		return err
 	}
 	defer end()
+	if hook := w.introduceHookForTest; hook != nil {
+		hook()
+	}
 	if w.isForgotten(user) {
 		return ErrForgotten
 	}
@@ -135,6 +146,9 @@ func (w *Worker) Introduce(ctx context.Context, user int64, identity, boot strin
 	}
 	if ok || w.hasDir(user) {
 		if err := w.removeUser(ctx, user); err != nil {
+			if rerr := os.Remove(w.ownerFile(user)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				return errors.Join(err, rerr)
+			}
 			return err
 		}
 	}

@@ -89,3 +89,6 @@ func (w *Worker) GatedForTest(user int64) bool {
 	defer w.mu.Unlock()
 	return w.gated(user, "", "")
 }
+
+// SetIntroduceHookForTest has f run in an introduction once it has closed the user's gate.
+func (w *Worker) SetIntroduceHookForTest(f func()) { w.introduceHookForTest = f }

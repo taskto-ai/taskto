@@ -561,3 +561,55 @@ func TestALiveViewDialDuringARemovalStartsNothing(t *testing.T) {
 	}
 	gone(t, filepath.Join(h.layout.User(4).Root, "work"))
 }
+
+// Introducing the owner again never closes the user's gate: a request of theirs that comes at the
+// same moment (another first request of theirs after a server start) isn't refused as if their
+// files were being removed.
+func TestIntroducingTheOwnerAgainRefusesNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	var refused error
+	h.w.SetIntroduceHookForTest(func() {
+		_, refused = h.w.Status(ctx, 1, cliworker.Claude, "")
+	})
+	if err := h.w.Introduce(ctx, 1, cliworker.IdentityForTest(1), cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	if errors.Is(refused, cliworker.ErrRemoving) {
+		t.Error("a status check was refused while the owner was introduced again")
+	}
+}
+
+// An introduction whose old directory can't be removed yet leaves no owner on the number: nothing
+// starts for it, the old owner's files included, until a later introduction removes them.
+func TestAFailedIntroductionLeavesTheNumberRefused(t *testing.T) {
+	h := newHarness(t, nil)
+	h.w.SetGroupWaitForTest(300 * time.Millisecond)
+	ctx := context.Background()
+	file := mine(t, h.user(t, 6, cliworker.Claude, clitest.Scenario{}, true))
+	leftover := exec.Command("sleep", "60")
+	leftover.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := leftover.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = leftover.Process.Kill(); _ = leftover.Wait() })
+	h.w.TrackGroupForTest(leftover.Process.Pid, 6, cliworker.Claude, "")
+
+	next := strings.Repeat("9", 32)
+	if err := h.w.Introduce(ctx, 6, next, cliworker.TestBoot); !errors.Is(err, cliworker.ErrBusy) {
+		t.Fatalf("Introduce = %v, want ErrBusy", err)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("fixture: the old file went: %v", err)
+	}
+	if _, err := h.w.Status(ctx, 6, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrUnknownOwner) {
+		t.Errorf("the number was served with the old owner's files: %v", err)
+	}
+	_ = leftover.Process.Kill()
+	_ = leftover.Wait()
+	if err := h.w.Introduce(ctx, 6, next, cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, file)
+}

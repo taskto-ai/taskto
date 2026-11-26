@@ -80,9 +80,11 @@ type Worker struct {
 	// passed every check.
 	helperLaunches atomic.Int64
 	helpersBuilt   atomic.Int64
-	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
-	dialHookForTest func()
-	loginRuns       map[*Login]struct{}
+	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper;
+	// introduceHookForTest in an introduction once it has closed the user's gate.
+	dialHookForTest      func()
+	introduceHookForTest func()
+	loginRuns            map[*Login]struct{}
 	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
 	marks sync.Mutex
 	// browsers is the agent browsers that run in this worker (SetBrowsers), or nil.

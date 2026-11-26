@@ -133,8 +133,9 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 		}
 		svcB.worker.CancelLogin(user, cliworker.Claude, "")
 	}
-	// The account that was gone before the backup is still gone.
-	if err := started(gone); !errors.Is(err, cliworker.ErrForgotten) {
+	// The account that was gone before the backup is still gone: the worker itself still refuses
+	// it (the service would refuse it anyway, with no account in its database).
+	if _, err := e.worker.StartLogin(gone, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("an account that is gone for good was let back: %v", err)
 	}
 	// And a turn runs on the restored person's own login, as it did.

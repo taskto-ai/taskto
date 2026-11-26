@@ -1266,7 +1266,10 @@ accounts whose identity it recorded. Everything else is removed before anyone is
 From an archive file:
 
 `docker compose down` stops the backup schedule too when its profile is in `.env`'s
-`COMPOSE_PROFILES`; it uses the data volume, which can't be removed while it runs.
+`COMPOSE_PROFILES`; it uses the data volume, which can't be removed while it runs. The
+`docker compose up -d` at the end starts again the profiles `COMPOSE_PROFILES` names: with the CLI
+worker container, keep `cli` among them (or add `--profile cli`), or the server waits for a worker
+that isn't there, and the CLIs and the agent browser answer `cli_worker_not_ready` until it starts.
 
 ```sh
 docker compose down                       # stops the server; the volume stays
