@@ -453,11 +453,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		return err
 	}
 	// The steps of purges that couldn't be done then (the agent runtime or the CLI workers were
-	// off) are done now if they are on, and again every ten minutes, as is any purge that ran out of
-	// tries.
-	if err := deletions.RunCleanups(ctx); err != nil {
-		slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
-	}
+	// off) are done in the background, at once and then every ten minutes, as is any purge that ran
+	// out of tries: the server's start never waits for the agent runtime.
 	maintaining.Add(1)
 	go func() {
 		defer maintaining.Done()

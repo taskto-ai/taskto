@@ -2050,7 +2050,7 @@
         "access_grants": "Tokens de acesso apagados",
         "cli_accounts": "Contas de CLI removidas",
         "push_subscriptions": "Assinaturas push apagadas",
-        "documents_anonymized": "Commits com autor substituído",
+        "documents_anonymized": "Commits com autor substituído (na última tentativa)",
         "uploads_removed": "Envios inacabados removidos",
         "cleanups_pending": "Etapas à espera do agente ou dos CLI workers",
         "mentions_anonymized": "Menções anonimizadas",

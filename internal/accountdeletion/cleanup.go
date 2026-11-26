@@ -192,17 +192,18 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if err != nil {
 			return failed(failBadTarget, err)
 		}
-		rt, err := s.runtime(ctx)
+		// Bounded from before the runtime is looked up: waiting for a sidecar that keeps
+		// restarting, or one that accepts the call and never answers, must not stop the
+		// maintenance loop's other steps.
+		actx, cancel := context.WithTimeout(ctx, s.agentTimeout())
+		defer cancel()
+		rt, err := s.runtime(actx)
 		if err != nil {
 			return failed(failSidecarUnreachable, err)
 		}
 		if rt == nil {
 			return errWaiting
 		}
-		// Bounded: a runtime that accepts the call and never answers must not stop the
-		// maintenance loop's other steps.
-		actx, cancel := context.WithTimeout(ctx, s.agentTimeout())
-		defer cancel()
 		if err := conversations.PurgeConversation(actx, rt, id); err != nil {
 			return sidecarFailure(err)
 		}
@@ -297,7 +298,22 @@ func (s *Service) RunCleanups(ctx context.Context) error {
 // Maintain does, every interval until ctx ends, what must go on without a restart: the recorded
 // steps that aren't done, and the purge job of an account whose tries ran out or whose job was lost
 // (Reconcile), so a purge that failed is tried again for as long as it takes.
+//
+// It starts with a pass of its own, so the server runs it in the background: the steps pending at
+// start are tried at once and never hold up the server's start.
 func (s *Service) Maintain(ctx context.Context, interval time.Duration) {
+	pass := func() {
+		if err := s.Reconcile(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("account deletion: scheduling a purge failed; it is tried again", "err", err)
+		}
+		if err := s.RunCleanups(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
+		}
+	}
+	// The first pass only does the recorded steps: the server has just reconciled the purges.
+	if err := s.RunCleanups(ctx); err != nil && ctx.Err() == nil {
+		slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -305,12 +321,7 @@ func (s *Service) Maintain(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := s.Reconcile(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("account deletion: scheduling a purge failed; it is tried again", "err", err)
-			}
-			if err := s.RunCleanups(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
-			}
+			pass()
 		}
 	}
 }

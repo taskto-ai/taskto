@@ -71,6 +71,8 @@ test('deleting your account offers the export first, asks for the password, and 
   // Bound to the account whose form it is (the owner, 1), so a stale tab can't delete another's.
   expect(Object.values(sent(calls, 'POST', '/api/me/deletion')[0].headers)).toContain('1')
   await waitFor(() => expect(lost).toHaveBeenCalled())
+  // The end of the session is the owner's (1): a window signed in as another account ignores it.
+  expect((lost.mock.calls[0][0] as CustomEvent).detail).toEqual({ user: 1 })
   // The sign-in screen is told when the account is erased, once.
   expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')
   expect(takeDeletion()).toBeNull()

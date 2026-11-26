@@ -2035,7 +2035,7 @@
         "access_grants": "Access tokens deleted",
         "cli_accounts": "CLI accounts removed",
         "push_subscriptions": "Push subscriptions deleted",
-        "documents_anonymized": "Commits whose author was replaced",
+        "documents_anonymized": "Commits whose author was replaced (in the last attempt)",
         "uploads_removed": "Unfinished uploads removed",
         "cleanups_pending": "Steps waiting for the agent runtime or CLI workers",
         "mentions_anonymized": "Mentions anonymized",

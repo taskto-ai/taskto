@@ -1133,7 +1133,9 @@ deleting is refused while there are any.
 account has two-factor login on; `{}` for an account with no password, which needs a recent login
 (`403 deletion_reauth_required` otherwise). A wrong password is `403 wrong_password` and a wrong
 code `403 wrong_two_factor_code`, both counted by the login limits like a failed login. `202` with
-`{"purge_at": "…"}`; the session is ended and its cookie cleared. `409` with the blocker's code
+`{"purge_at": "…"}`; every session of the account is ended at once. The answer doesn't touch the
+session cookie: one that arrives after another account signed in on the same browser must not sign
+that one out, and the account's own cookie opens nothing any more. `409` with the blocker's code
 above; `409 deletion_pending` if it was asked for already. Recorded in the [audit log](audit.md) as
 `account_deletion_requested`.
 

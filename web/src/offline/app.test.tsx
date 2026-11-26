@@ -5,12 +5,12 @@
 // downloaded apps open.
 
 import 'fake-indexeddb/auto'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
-import { SESSION_LOST } from '../api'
+import { SESSION_LOST, sessionLostFor } from '../api'
 import { fakeFetch } from '../test/fakes'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
@@ -190,6 +190,24 @@ async function deleteAccountHere(refusedFirst: boolean) {
 
 test('deleting the account here clears what the device kept of it: the offline database with its unsent records, and the drafts', async () => {
   await deleteAccountHere(false)
+})
+
+test('the end of another account’s session, heard after this one signed in, leaves it signed in', async () => {
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  // A deleted account's answer arriving late says its own account's session ended: not this one's.
+  act(() => {
+    window.dispatchEvent(sessionLostFor(99))
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
+  expect(screen.getByRole('banner')).toBeTruthy()
+  expect(runtimeState().runtime?.engine.status().paused).not.toBe('session')
+  // The same event for this account (7) takes it to the sign-in screen.
+  act(() => {
+    window.dispatchEvent(sessionLostFor(7))
+  })
+  await screen.findByRole('heading', { name: /sign in|log in/i })
 })
 
 test('the same when a request refused a moment earlier has already taken the app to the sign-in screen', async () => {

@@ -30,6 +30,19 @@ export class ApiError extends Error {
 
 export const SESSION_LOST = 'taskto:session-lost'
 
+// The session of one account ended, as that account's own page learned from its deletion's answer:
+// a window that is signed in as another account by now (a sign-in came after the request was sent)
+// must not be taken to the sign-in screen by it. A refused request ends "the session" without
+// saying whose, with the plain event.
+export const sessionLostFor = (user: number) => new CustomEvent(SESSION_LOST, { detail: { user } })
+
+// Whether a session-lost event concerns the account signed in here: one that names another
+// account doesn't.
+export const concernsAccount = (e: Event, signedIn: number | null | undefined): boolean => {
+  const user = (e as CustomEvent<{ user?: number } | null>).detail?.user
+  return user === undefined || signedIn === null || signedIn === undefined || user === signedIn
+}
+
 // The account a request is meant for (docs/api.md): what is sent on behalf of an account that may
 // not be the one the browser's session belongs to any more (the offline queue) says whose it is,
 // and the server refuses it for anyone else, with `session_account_changed`.

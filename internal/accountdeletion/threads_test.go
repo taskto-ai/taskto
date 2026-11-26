@@ -173,3 +173,46 @@ func TestASilentAgentRuntimeFailsTheStepAtItsDeadline(t *testing.T) {
 		t.Fatalf("%d steps recorded, want the one that failed", n)
 	}
 }
+
+// A runtime that is not ready, because its sidecar keeps restarting, fails the step at the step's
+// deadline: the wait for it is inside the deadline, the step stays recorded and the steps after it
+// still run.
+func TestAnAgentRuntimeThatIsNeverReadyFailsTheStepAtItsDeadlineAndLaterStepsRun(t *testing.T) {
+	w := newWorld(t)
+	w.svc.stepTimeout = 50 * time.Millisecond
+	w.svc.SetAgent(func(ctx context.Context) (conversations.Purger, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	w.deleteAccount()
+	exec(t, w.db, `INSERT INTO purge_cleanups (user_id, kind, target, created_at) VALUES (?, ?, '101', '2026-01-01T00:00:00.000Z')`,
+		w.leaver, cleanAgentConversation)
+	exec(t, w.db, `INSERT INTO purge_cleanups (user_id, kind, target, created_at) VALUES (?, ?, 'feed:1', '2026-01-01T00:00:01.000Z')`,
+		w.leaver, cleanProviders)
+	done := make(chan error, 1)
+	go func() { _, err := w.svc.runCleanups(context.Background(), 0); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a step whose runtime was never ready reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting for the runtime has no deadline")
+	}
+	var kinds []string
+	rows, err := w.db.Query(`SELECT kind FROM purge_cleanups`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		kinds = append(kinds, k)
+	}
+	if len(kinds) != 1 || kinds[0] != cleanAgentConversation {
+		t.Fatalf("steps left %v, want only the agent step (the providers step ran)", kinds)
+	}
+}

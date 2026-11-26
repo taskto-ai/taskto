@@ -282,11 +282,13 @@ func (s *Service) workspaceOf(ctx context.Context, q interface {
 
 // Result is what a purge deleted, in numbers (the audit event's details).
 type Result struct {
-	PrivateSpaces       int64
-	Conversations       int64
-	AccessTokens        int64
-	CLIAccounts         int64
-	PushSubscriptions   int64
+	PrivateSpaces     int64
+	Conversations     int64
+	AccessTokens      int64
+	CLIAccounts       int64
+	PushSubscriptions int64
+	// DocumentsAnonymized counts what this attempt rewrote: after a failed try, the spaces already
+	// done are found rewritten and add nothing (docs/audit.md).
 	DocumentsAnonymized int64
 	MentionsAnonymized  int64
 	UploadsRemoved      int64

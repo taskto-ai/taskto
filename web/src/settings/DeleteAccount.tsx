@@ -6,7 +6,7 @@
 // Looking at the page asks the server nothing: what deleting takes is read when you press the button.
 
 import { type FormEvent, useState } from 'react'
-import { api, type DeletionReply, type DeletionStatus, exportPath, forAccount, SESSION_LOST } from '../api'
+import { api, type DeletionReply, type DeletionStatus, exportPath, forAccount, sessionLostFor } from '../api'
 import { rememberDeletion } from '../auth/deleted'
 import { forgetAccount } from '../auth/forgetAccount'
 import { useFormat, useT } from '../i18n'
@@ -54,8 +54,9 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
       // is no longer listening for the session to end.
       rememberDeletion(reply.purge_at)
       await forgetAccount(user)
-      // On to the sign-in screen, which says when the account is purged.
-      window.dispatchEvent(new Event(SESSION_LOST))
+      // On to the sign-in screen, which says when the account is purged: told for this account,
+      // so a window another account signed in to meanwhile stays as it is.
+      window.dispatchEvent(sessionLostFor(user))
     }
   }
 

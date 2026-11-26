@@ -210,7 +210,10 @@ func (s *Service) handleDeleteOwn(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.InfoContext(r.Context(), "an account was deleted by its person; it is purged after the grace period", "user_id", u.ID)
 	s.endLive(u.ID, "")
-	s.clearSessionCookie(w)
+	// The cookie is left alone. The transaction revoked every session of the account, this one
+	// included, so it opens nothing; and a Set-Cookie that expires it can't tell which session the
+	// browser holds when the answer arrives: a delayed answer would sign out whoever signed in
+	// meanwhile.
 	writeJSON(w, http.StatusAccepted, DeletionReply{PurgeAt: stamp(purgeAt)})
 }
 

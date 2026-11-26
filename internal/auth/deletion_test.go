@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
@@ -433,4 +435,39 @@ func TestCancelingADeletionChecksTheOperatorAgainInItsTransaction(t *testing.T) 
 	if n := e.count(`SELECT count(*) FROM account_deletions`); n != 1 {
 		t.Fatal("a caller who isn't an operator cancelled the deletion")
 	}
+}
+
+// A deletion's answer that arrives after another account signed in on the same browser must not
+// expire that account's cookie: the answer sets no session cookie, and the deleted account's
+// sessions are already revoked.
+func TestADelayedDeletionAnswerLeavesANewerSessionsCookie(t *testing.T) {
+	tm, _ := newDeletionTeam(t)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse("https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The browser holds the member's cookie when the deletion is sent.
+	jar.SetCookies(u, []*http.Cookie{tm.member.cookie})
+	req := tm.member.req(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword})
+	rec := httptest.NewRecorder()
+	tm.e.h.ServeHTTP(rec, req)
+	expect(t, rec, http.StatusAccepted)
+	// Before the answer arrives, the owner signs in here: the jar holds the owner's cookie.
+	jar.SetCookies(u, []*http.Cookie{tm.owner.cookie})
+	jar.SetCookies(u, rec.Result().Cookies())
+	var held string
+	for _, c := range jar.Cookies(u) {
+		if c.Name == tm.owner.cookie.Name {
+			held = c.Value
+		}
+	}
+	if held != tm.owner.cookie.Value {
+		t.Fatalf("the owner's cookie is %q after the old answer, want it kept", held)
+	}
+	// And the deleted account's own cookie opens nothing.
+	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 }
