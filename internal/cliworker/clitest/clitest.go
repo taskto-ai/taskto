@@ -48,6 +48,18 @@ type Scenario struct {
 	Answer string `json:"answer,omitempty"`
 	// SleepMS makes the turn run a tool for that long before it answers.
 	SleepMS int `json:"sleep_ms,omitempty"`
+	// TermWriteMS makes a turn or a sign-in that is stopped with SIGTERM take that long to end
+	// and, on its way out, write a file into its config directory (making the directory if it is
+	// gone), as a real CLI saves its session or a refreshed login as it stops.
+	TermWriteMS int `json:"term_write_ms,omitempty"`
+	// StatusSleepMS makes Claude Code's status check write status.started into its config
+	// directory, wait that long, and then write status.finished there (making the directory if it
+	// is gone), before it answers.
+	StatusSleepMS int `json:"status_sleep_ms,omitempty"`
+	// LogoutSleepMS makes `claude auth logout` write logout.started into its config directory,
+	// wait that long, and then write logout.finished there (making the directory if it is gone),
+	// as a sign-out that is slow and ends by writing to the account's directory.
+	LogoutSleepMS int `json:"logout_sleep_ms,omitempty"`
 	// Background starts a process that outlives the CLI, in its process group.
 	Background bool `json:"background,omitempty"`
 	// HoldStdout makes the background process keep the CLI's stdout open.
@@ -208,6 +220,10 @@ type fake struct {
 	args     []string
 	scenario Scenario
 	out      *json.Encoder
+	// term receives the signals that stop a turn with a tool to run. It is set up before the CLI
+	// says anything, so a stop that comes the moment a test sees the first event is not lost to the
+	// default action of the signal.
+	term chan os.Signal
 }
 
 func run(name string, args []string) int {
@@ -219,6 +235,10 @@ func run(name string, args []string) int {
 	f := &fake{name: name, config: config, args: args, out: json.NewEncoder(os.Stdout)}
 	if b, err := os.ReadFile(filepath.Join(config, "scenario.json")); err == nil {
 		_ = json.Unmarshal(b, &f.scenario)
+	}
+	if f.scenario.SleepMS > 0 {
+		f.term = make(chan os.Signal, 1)
+		signal.Notify(f.term, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	}
 	switch {
 	case name == "claude" && len(args) >= 2 && args[0] == "auth":
@@ -290,19 +310,54 @@ func (f *fake) work() error {
 		_ = os.Rename(pidFile+".tmp", pidFile)
 	}
 	if f.scenario.SleepMS > 0 {
-		interrupted := make(chan os.Signal, 1)
-		signal.Notify(interrupted, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-		defer signal.Stop(interrupted)
+		defer signal.Stop(f.term)
 		timer := time.NewTimer(time.Duration(f.scenario.SleepMS) * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-		case sig := <-interrupted:
+		case sig := <-f.term:
+			f.writeOnTerm()
 			return fmt.Errorf("the tool was interrupted by %v", sig)
 		}
 	}
 	return nil
 }
+
+// writeOnTerm is what a stopped CLI does on its way out when the scenario says so: it takes a
+// moment, then saves a file into its config directory, making the directory again if it is gone.
+func (f *fake) writeOnTerm() {
+	if f.scenario.TermWriteMS <= 0 {
+		return
+	}
+	time.Sleep(time.Duration(f.scenario.TermWriteMS) * time.Millisecond)
+	_ = os.MkdirAll(f.config, 0o700)
+	_ = os.WriteFile(filepath.Join(f.config, LateWrite), []byte("saved on the way out"), 0o600)
+}
+
+// exitOnTerm makes a sign-in that is stopped end the way writeOnTerm says.
+func (f *fake) exitOnTerm() {
+	if f.scenario.TermWriteMS <= 0 {
+		return
+	}
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	go func() {
+		<-interrupted
+		f.writeOnTerm()
+		os.Exit(1)
+	}()
+}
+
+// LateWrite is the file a stopped fake writes on its way out (Scenario.TermWriteMS), and
+// StatusStarted and StatusFinished the ones a slow status check writes (Scenario.StatusSleepMS),
+// in the config directory.
+const (
+	LateWrite      = "late-write"
+	StatusStarted  = "status.started"
+	StatusFinished = "status.finished"
+	LogoutStarted  = "logout.started"
+	LogoutFinished = "logout.finished"
+)
 
 func (f *fake) answer(prompt, session string) string {
 	answer := "echo: " + prompt
@@ -680,6 +735,7 @@ func (f *fake) claudeAuth(cmd string) int {
 	creds := filepath.Join(f.config, credentials["claude"])
 	switch cmd {
 	case "login":
+		f.exitOnTerm()
 		fmt.Println("Opening browser to sign in…")
 		fmt.Println("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=00000000-0000-4000-8000-000000000000" +
 			"&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&code_challenge=fake&code_challenge_method=S256&state=fake")
@@ -702,6 +758,12 @@ func (f *fake) claudeAuth(cmd string) int {
 		if f.scenario.Warn != "" {
 			fmt.Fprintln(os.Stderr, f.scenario.Warn)
 		}
+		if f.scenario.StatusSleepMS > 0 {
+			_ = os.WriteFile(filepath.Join(f.config, StatusStarted), nil, 0o600)
+			time.Sleep(time.Duration(f.scenario.StatusSleepMS) * time.Millisecond)
+			_ = os.MkdirAll(f.config, 0o700)
+			_ = os.WriteFile(filepath.Join(f.config, StatusFinished), nil, 0o600)
+		}
 		_, err := os.Stat(creds)
 		method := "none"
 		if err == nil {
@@ -713,6 +775,12 @@ func (f *fake) claudeAuth(cmd string) int {
 		}
 		return 0
 	case "logout":
+		if f.scenario.LogoutSleepMS > 0 {
+			_ = os.WriteFile(filepath.Join(f.config, LogoutStarted), nil, 0o600)
+			time.Sleep(time.Duration(f.scenario.LogoutSleepMS) * time.Millisecond)
+			_ = os.MkdirAll(f.config, 0o700)
+			_ = os.WriteFile(filepath.Join(f.config, LogoutFinished), nil, 0o600)
+		}
 		_ = os.Remove(creds)
 		fmt.Println("Successfully logged out from your Anthropic account.")
 		return 0
@@ -752,6 +820,7 @@ func (f *fake) deviceAuth(args []string) int {
 		fmt.Println("\n  (Could not open browser automatically — open the URL above manually.)\n\nConfirm this code in your browser:\n\n  GR0K-FAKE")
 		fmt.Println("\n\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m\n\nWaiting for authorization...")
 	}
+	f.exitOnTerm()
 	verdict := filepath.Join(f.config, "device-verdict")
 	for {
 		b, err := os.ReadFile(verdict)

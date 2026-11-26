@@ -390,7 +390,40 @@ The UI shows what the command prints.
   exists, checked by the helper as the user. The server keeps the result in `cli_accounts`
   (below) and never the token.
 - **Logout** runs `claude auth logout`, `codex logout` or `grok logout`, then deletes the
-  account's sessions. Their files go with the config directory when the user disconnects.
+  account's sessions. Their files go with the config directory when the user disconnects. Before
+  anything goes, the account is closed to new turns, sign-ins and checks (`ErrRemoving`, `409`,
+  `cli_account_removing` in the server's API), and what runs on it is stopped and waited for:
+  its turns (a CLI that kept running would hold the login it started with and write its session
+  back into the directory), its sign-ins, its helper requests (cancelled, not waited out) and the
+  process groups they started. Only this account: the user's other accounts, their other CLIs and
+  other users go on, and nothing is marked, so the account works again once it is over. If
+  something is still running after the wait, nothing is removed (`ErrBusy`, `409`,
+  `cli_account_busy`) and the disconnect can be tried again. Removals that cover an account in
+  common run one after the other (a disconnect, a second one, a `Forget` of the user): the helper
+  requests of one, the sign-out and the removal of the files, never overlap another's. A caller
+  that has already given up (its context ended) starts none.
+- **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account: it
+  removes the user's whole directory. It first records the user as forgotten in the worker's own
+  state directory (`.worker/forgotten-u<user>`, so it outlives a worker's restart), which refuses
+  every turn, sign-in, status check and helper request for them (`ErrForgotten`, `410 Gone` with
+  the code `forgotten` over the worker's API, `cli_account_forgotten` in the server's). It then
+  stops what runs for the user and waits for it, the same way a disconnect does for one account
+  (their turns, the ones waiting for a place too, their sign-ins, their helper requests and the
+  process groups they started), so a CLI that was using the login has ended before its files go and
+  nothing writes into them or makes them again. If something doesn't end in time it fails
+  (`ErrBusy`) and the purge tries again (the purge gives each attempt two minutes); the mark stays.
+  The agent browser's own long-lived processes are not stopped by it.
+- **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) takes marks back. User
+  numbers are never reused within one database's history, but a restore of the server's data goes
+  back in it: a person whose account was purged since the backup is back, and the numbers after it
+  are given again, while the worker's directory (the `cli-homes` volume in container mode) is not
+  part of the backup and keeps its marks. So at every start the server tells the worker which
+  numbers are live and which one comes next (`Service.StartReconcile`, retried in the background
+  while the worker isn't reachable yet), and the worker removes the marks of the live ones and of
+  the next and later ones, apart from a mark made after the server read its database (a purge
+  running now). The marks of accounts that are gone for good stay, and so do those of accounts
+  whose purge has begun (it forgets the worker's files before it deletes the account). Until it has been told, a
+  restored person may be refused with `cli_account_forgotten`.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

@@ -223,12 +223,20 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if err != nil || user <= 0 {
 			return failed(failBadTarget, nil)
 		}
-		return s.forgetCLI(ctx, user)
+		// Bounded, so one attempt's time is known: the worker stops the user's turns (a grace
+		// period) and waits for the requests in flight; a cut call is made again.
+		cctx, cancel := context.WithTimeout(ctx, cliForgetTimeout)
+		defer cancel()
+		return s.forgetCLI(cctx, user)
 	case cleanProviders:
 		return s.syncProviders(ctx)
 	}
 	return failed(failUnknownStep, nil)
 }
+
+// cliForgetTimeout bounds one attempt at the CLI worker's step: the worker's own waits add up to
+// about 70 seconds.
+const cliForgetTimeout = 2 * time.Minute
 
 // defaultAgentTimeout bounds one attempt at an agent runtime step: longer than the runtime's own wait
 // for a pinned log, so its busy answer arrives first.
