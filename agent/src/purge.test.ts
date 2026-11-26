@@ -85,7 +85,8 @@ describe('runPurge', () => {
   }
 
   // Writes on the calling thread, as the harness's commits are, every 15 ms while work is pending,
-  // each on a connection that waits up to 5 s for the write lock: how long the longest one took.
+  // each on a connection that waits up to 5 s for the write lock: how long the longest one took,
+  // and the longest gap between two ticks of a 10 ms timer there (what a health check would wait).
   const writesDuring = async (work: Promise<unknown>) => {
     const db = new DatabaseSync(path, { timeout: 5000 })
     // Its own commits don't fold the log in: only how long it waits for the purge is measured.
@@ -94,6 +95,13 @@ describe('runPurge', () => {
     let longest = 0
     let writes = 0
     let done = false
+    let last = performance.now()
+    let gap = 0
+    const timer = setInterval(() => {
+      const now = performance.now()
+      gap = Math.max(gap, now - last)
+      last = now
+    }, 10)
     const settled = work.then(
       () => undefined,
       (error: unknown) => error,
@@ -108,8 +116,9 @@ describe('runPurge', () => {
       writes++
       await new Promise((r) => setTimeout(r, 15))
     }
+    clearInterval(timer)
     db.close()
-    return { longest, writes, error: await settled }
+    return { longest, gap, writes, error: await settled }
   }
 
   it('waits for a reader off the calling thread, which keeps running meanwhile', async () => {
@@ -179,11 +188,12 @@ describe('runPurge', () => {
     }
   })
 
-  // A large conversation is deleted a chunk at a time: other writes go through in between.
+  // A large conversation (about 200 MiB) is deleted a chunk at a time: other writes go through in
+  // between, and the calling thread keeps answering.
   it('leaves the write lock to other writes while it deletes a large conversation', async () => {
     const { writer, reader } = fixture()
     reader.exec('COMMIT')
-    const text = 'x'.repeat(400)
+    const text = 'x'.repeat(800)
     writer.exec('BEGIN')
     const insert = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 1, ?)')
     const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
@@ -198,6 +208,7 @@ describe('runPurge', () => {
       const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 5000 }))
       expect(probe.error).toBeUndefined()
       expect(probe.longest).toBeLessThan(200)
+      expect(probe.gap).toBeLessThan(250)
       expect(probe.writes).toBeGreaterThan(3)
       expect(writer.prepare('SELECT count(*) AS n FROM entries WHERE conversation_id = 1').get()).toEqual({ n: 0 })
       expect(writer.prepare('SELECT count(*) AS n FROM record_ids').get()).toEqual({ n: 3 }) // 2, 11 and 42

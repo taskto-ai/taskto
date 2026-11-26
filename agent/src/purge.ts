@@ -82,8 +82,8 @@ export function truncateWalAt(path: string, timeoutMs: number): void {
  */
 export const LIFECYCLE_KIND = 'taskto.lifecycle'
 
-/** How many rows one statement of the purge deletes. */
-const CHUNK = 500
+/** How many rows one statement of the purge deletes: small, so a transaction stays near SLICE_MS. */
+const CHUNK = 100
 
 /** How long one of the purge's transactions goes on deleting before it commits and pauses. */
 const SLICE_MS = 20
@@ -108,6 +108,10 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
     db.exec('PRAGMA secure_delete = ON')
+    // As the harness's own connection: a commit doesn't wait for the disk, which would hold the
+    // write lock for its sync. The checkpoint that ends the purge syncs the database, and the purge
+    // isn't done (the server asks again) until it has.
+    db.exec('PRAGMA synchronous = NORMAL')
     const { steps } = purgeSteps(db, root)
     // A chunk of a step's rows, deleted in the transaction that is open: how many there were.
     const deleteChunk = (step: Step): number => {
