@@ -76,7 +76,7 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
       )
       if (latest.current === mine) setPage({ items: [...page.items, ...r.approvals], next: r.next_cursor })
     } catch (e) {
-      setError(errorText(e))
+      if (latest.current === mine) setError(errorText(e))
     } finally {
       setMore(false)
     }
@@ -227,11 +227,32 @@ function ReviewDialog({
     }
   }
 
+  // Whether the approval's contract is the live release's now, as the server holds it, not as the
+  // list said when it was read: the warning the admin confirms must describe what the revoke does.
+  const liveNow = async (): Promise<boolean> => {
+    let cursor: string | null = null
+    do {
+      const r: IntegrationApprovalList = await api(
+        `${ws(workspace)}/integration-approvals?status=approved${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      )
+      const found = r.approvals.find((x) => x.id === a.id)
+      if (found) return found.live
+      cursor = r.next_cursor
+    } while (cursor)
+    return a.live
+  }
+
   const revoke = async () => {
+    let live = a.live
+    try {
+      live = await liveNow()
+    } catch {
+      // The list's word stands; the server decides the revoke either way.
+    }
     const yes = await confirm({
       title: t('settings.approvals.revokeQuestion', { app: a.app_name }),
       body: [
-        t(a.live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
+        t(live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
         madeGrant ? t('settings.approvals.revokeSpace', { space }) : '',
       ]
         .filter(Boolean)

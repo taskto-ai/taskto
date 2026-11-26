@@ -3166,9 +3166,10 @@ approval is
  "live": false, "integration": null, "requested_by": {…}, "requested_at": "…", "decided_by": null, "decided_at": null}
 ```
 
-It holds what the requester submitted and the names of the app and its space: **no part of the app
-and none of its records**, so an app in a private space, which an admin can't open, is approved the
-same way. `live` says the contract is the live release's.
+It holds what the requester submitted and the names of the app and its space: the contract, which
+includes the handlers' literals and rules the definition gives it (an admin sees that the app sets
+`status` to `"paid"`), but **not the rest of the definition and none of its records**, so an app in
+a private space, which an admin can't open, is approved the same way. `live` says the contract is the live release's.
 
 #### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/approve`
 
@@ -3196,6 +3197,13 @@ Admin only, body `{}`. Withdraws an approval (`409 app_integration_not_approved`
 the app stops using the integration at once, and can't be published or rolled back to with that
 contract until it is approved again. `200` with the approval. An approval of another workspace is
 `404 app_integration_approval_not_found` whoever asks.
+
+An approval is asked for only for the **draft's** contract. To get a revoked contract of an earlier
+release approved again, so that the app can roll back to it, the publisher reads and keeps the
+current draft, replaces the draft (`PATCH` with `definition`) with that release's definition from
+`GET …/apps/{app}/releases/{release}`, asks for the approval and has an admin approve it, rolls back
+to the release, and writes the kept draft back with `PATCH`. A rollback leaves the draft as it
+is, so without the first step the draft is lost.
 
 **The gate.** Publishing and rolling back are refused (`409 app_integration_unapproved`, `slot`) unless
 every slot of the release that would become live has an approval of its contract's hash whose
@@ -3408,8 +3416,8 @@ same checks, answered with at most 25 rows in `/items`.
 An insert or an update may declare **effects**: what the change sets going on boards and documents.
 The kinds are a fixed registry, strictly checked when the definition is saved; a key that isn't one
 of a kind's (a URL, a tool name, a command), an unknown `kind` or a hole in a template that isn't a
-field refuses the definition (`400`). A definition with effects needs `definition_version` 2, and
-its release needs the capability `effect.<kind>` of each kind it uses (`requires`).
+field refuses the definition (`400`). A definition with effects needs `definition_version` 2 or
+later (`create_payment_link` needs 3, which also reads the other effects), and its release needs the capability `effect.<kind>` of each kind it uses (`requires`).
 
 ```json
 "actions": {

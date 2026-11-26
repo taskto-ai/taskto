@@ -389,3 +389,10 @@ test('a preview says the payment link it would ask for as a sum, and never as an
   render(<EffectItems effects={[effect({})]} label="Preview" />)
   expect(screen.getByText('Amount from the record')).toBeTruthy()
 })
+
+test('publishing stays closed when the status of the outside services can’t be read', async () => {
+  fakeFetch({ 'GET /api/x/integrations': { status: 500, body: { error: 'x', code: 'internal' } } })
+  panel(appOf(), { ...team, kind: 'private' })
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+  expect(screen.queryByRole('button', { name: /publish/i })).toBeNull()
+})

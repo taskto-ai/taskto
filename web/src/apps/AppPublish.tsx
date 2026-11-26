@@ -274,7 +274,7 @@ export function PublishPanel({
   // Approved, but the integration was switched off or taken out of the space since: an approval can't
   // mend that, an admin does in Settings.
   const broken = blocked.filter((s) => !undecided(s))
-  const gated = declares && (blocked.length > 0 || (slots.data === undefined && !slots.error))
+  const gated = declares && (blocked.length > 0 || slots.data === undefined)
   // The draft's version an admin is approving and publishing at once, as `reviewed` is for a review.
   const [approving, setApproving] = useState<number | null>(null)
   // The draft's version the person is confirming, which a publish names: the draft they were

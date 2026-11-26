@@ -868,6 +868,15 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 		return decode[IntegrationApproval](t, rec)
 	}
 	req := ask()
+	// A member's decision is refused and leaves no audit event, nor changes the request.
+	audited := func() int { return i.count(`SELECT count(*) FROM audit_events WHERE action LIKE 'app_integration_%'`) }
+	before := audited()
+	expect(t, i.approve(i.bob, req.ID, i.stripe), http.StatusForbidden)
+	expect(t, i.decide(i.bob, i.ws, req.ID, "reject", nil), http.StatusForbidden)
+	expect(t, i.decide(i.bob, i.ws, req.ID, "revoke", nil), http.StatusForbidden)
+	if got := audited(); got != before {
+		t.Fatalf("refused decisions wrote %d audit events", got-before)
+	}
 	expect(t, i.decide(i.owner, i.ws, req.ID, "reject", nil), http.StatusOK)
 	renewed := ask()
 	expect(t, i.approve(i.owner, renewed.ID, i.stripe), http.StatusOK)
@@ -1586,10 +1595,14 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 	// The same through the endpoint that only simulates the effects.
 	rec := i.alice.do(http.MethodPost, appPath(s, i.app.ID, "/actions/preview"), map[string]any{
 		"name": "send", "surfaceId": SurfaceID(i.app.ID), "context": map[string]any{"id": float64(1)}, "rows": rows})
-	if rec.Code == http.StatusOK {
-		if p := decode[Preview](t, rec); len(p.Effects) > 1 {
-			t.Fatalf("simulated = %+v", p)
-		}
+	expect(t, rec, http.StatusOK)
+	p := decode[Preview](t, rec)
+	if len(p.Effects) != 1 {
+		t.Fatalf("simulated = %+v", p)
+	}
+	if e := p.Effects[0]; e.Kind != EffectCreatePaymentLink || e.Status != StateSimulated || e.Detail.Currency != "EUR" ||
+		e.Detail.Amount == nil || *e.Detail.Amount != 120 {
+		t.Fatalf("the simulated link through the actions route = %+v", e)
 	}
 
 	// It made nothing real and queued nothing.

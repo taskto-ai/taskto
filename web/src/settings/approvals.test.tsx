@@ -318,7 +318,7 @@ test('a revoke of an approval that is no longer one is said above the list, whic
   expect(await screen.findByText('Only an approval can be revoked.')).toBeTruthy()
   expect(screen.queryByRole('dialog', { name: 'Request of Invoices' })).toBeNull()
   await waitFor(() =>
-    expect(calls.filter((c) => c.method === 'GET' && c.path === `${queue}?status=approved`)).toHaveLength(2),
+    expect(calls.filter((c) => c.method === 'GET' && c.path === `${queue}?status=approved`)).toHaveLength(3),
   )
 })
 
@@ -332,4 +332,49 @@ test('another filter asks for that status, and a failed list says why', async ()
   fireEvent.click(screen.getByRole('radio', { name: 'Turned down' }))
   await waitFor(() => expect(calls.some((c) => c.path === `${queue}?status=rejected`)).toBe(true))
   expect(await screen.findByRole('alert')).toBeTruthy()
+})
+
+test('the revoke warning says what the server holds now, not what the list said when it was read', async () => {
+  const stale = approval({
+    status: 'approved',
+    live: false,
+    integration: { id: 7, name: 'shop', display_name: 'Shop', usable: true },
+  })
+  let reads = 0
+  fakeFetch({
+    [`GET ${queue}?status=requested`]: { body: { approvals: [], next_cursor: null } },
+    [`GET ${queue}?status=approved`]: () => {
+      reads++
+      return { body: { approvals: [reads === 1 ? stale : { ...stale, live: true }], next_cursor: null } }
+    },
+    'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  fireEvent.click(await screen.findByRole('radio', { name: 'Approved' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review the request of Invoices' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke approval' }))
+  const sure = await screen.findByRole('alertdialog', { name: 'Revoke the approval of Invoices?' })
+  expect(within(sure).getByText(/though it stays online/)).toBeTruthy()
+})
+
+test('an error of an older page for a filter left behind is not shown over the current queue', async () => {
+  let fail: (() => void) | undefined
+  fakeFetch({
+    [`GET ${queue}?status=requested`]: {
+      body: { approvals: [approval({ id: 6, app_name: 'Newer' })], next_cursor: 'c/2' },
+    },
+    [`GET ${queue}?status=requested&cursor=c%2F2`]: () =>
+      new Promise((resolve) => {
+        fail = () => resolve({ status: 500, body: { error: 'Old page failed', code: 'internal' } })
+      }),
+    [`GET ${queue}?status=approved`]: { body: { approvals: [], next_cursor: null } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Show older requests' }))
+  fireEvent.click(await screen.findByRole('radio', { name: 'Approved' }))
+  await waitFor(() => expect(screen.queryByText('Newer')).toBeNull())
+  fail?.()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByText(/Old page failed|went wrong/i)).toBeNull()
 })
