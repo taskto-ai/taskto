@@ -2653,6 +2653,7 @@
       "discardQuestion": "Descartar este registro? Ele é apagado deste dispositivo e nunca será enviado.",
       "discardTitle": "Descartar {name}?",
       "discardBody": "Ele é apagado deste dispositivo e nunca é enviado.",
+      "discardBodySent": "Isto remove a cópia deste dispositivo e interrompe novas tentativas de envio. Uma tentativa anterior pode já ter chegado ao servidor, então o registro pode existir lá: descartar não desfaz isso.",
       "discardConfirm": "Sim, descartar",
       "discardClosed": "A pergunta sobre descartar um registro foi fechada porque o registro mudou em outra aba ou janela (está sendo enviado, ou essa aba assumiu o controle). Nada foi removido. A lista mostra em que pé ele está.",
       "clearSynced": "Limpar registros sincronizados",

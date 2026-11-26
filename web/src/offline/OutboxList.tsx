@@ -12,6 +12,7 @@ import { Button } from '../ui/Button'
 import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
 import { Row, Rows } from '../ui/Rows'
+import { holdItem, releaseItem, retryItem } from './choices'
 import { DiscardButton } from './DiscardButton'
 import { useWriter } from './hooks'
 import { Resolve } from './Resolve'
@@ -203,7 +204,7 @@ export function OutboxList({
                         <Button
                           size="sm"
                           aria-label={t('offline.queue.retryNamed', { name })}
-                          onClick={() => act(() => runtime.engine.retry(item.id))}
+                          onClick={() => act(() => retryItem(runtime, item))}
                         >
                           {t('offline.queue.retry')}
                         </Button>
@@ -213,7 +214,7 @@ export function OutboxList({
                           size="sm"
                           variant="ghost"
                           aria-label={t('offline.queue.holdNamed', { name })}
-                          onClick={() => act(() => runtime.engine.hold(item.id))}
+                          onClick={() => act(() => holdItem(runtime, item))}
                         >
                           {t('offline.queue.hold')}
                         </Button>
@@ -222,7 +223,7 @@ export function OutboxList({
                         <Button
                           size="sm"
                           aria-label={t('offline.queue.sendNamed', { name })}
-                          onClick={() => act(() => runtime.engine.release(item.id))}
+                          onClick={() => act(() => releaseItem(runtime, item))}
                         >
                           {t('offline.queue.send')}
                         </Button>
@@ -249,6 +250,7 @@ export function OutboxList({
                     download={downloads.find((d) => d.key === item.scopeKey)}
                     name={name}
                     onClose={() => setResolving(null)}
+                    onDiscardClosed={() => setNotice(t('offline.queue.discardClosed'))}
                   />
                 )}
               </Row>

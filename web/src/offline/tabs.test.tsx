@@ -10,11 +10,11 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
-import { keepServer } from './choices'
+import { holdItem, keepServer, releaseItem, retryItem } from './choices'
 import { useOfflineData } from './hooks'
 import { OutboxList } from './OutboxList'
 import { activate, deactivate, type Runtime, rememberUser, setSyncDeps } from './runtime'
-import { OfflineStore, type OutboxItem, scopeKey, seenOf } from './store'
+import { OfflineStore, type OutboxItem, scopeKey, seenAs, seenOf } from './store'
 import { SyncEngine } from './sync'
 import { WriterNotice } from './WriterNotice'
 import { OfflineWriter, type WriterDeps } from './writer'
@@ -417,4 +417,139 @@ test('an answer given in the same render that takes the row’s actions away is 
   await screen.findByText('Syncing…')
   await waitFor(async () => expect(await a.store.listItems()).toEqual([]))
   expect(screen.queryByText(/question about discarding a record was closed/)).toBeNull()
+})
+
+const NEVER_SENT = /never sent/
+const MAY_BE_THERE = /may already have reached the server/
+
+test('after a send whose answer was lost, the question no longer says the record was never sent', async () => {
+  const { a, b } = await twoTabs({ announce: false })
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  render(<Harness runtime={a.runtime} />)
+  await screen.findByText(QUEUED)
+
+  // The other tab's send reached the server and its answer was lost: the item is back in the queue,
+  // one send more, with the same version and key.
+  await b.store.updateItem('item-1', (i) => ({ ...i, state: 'queued', sends: 1, unconfirmed: true }), { bump: false })
+
+  // This tab's confirmation, made on the stale question, is refused; the list reads again.
+  fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
+  expect(screen.getByText(NEVER_SENT)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/changed in another tab/)
+  expect(await a.store.listItems()).toHaveLength(1)
+
+  // The next question says what is true: the server may have the record.
+  await waitFor(() => expect(a.store.getItem('item-1')).resolves.toMatchObject({ sends: 1 }))
+  fireEvent.click(await screen.findByRole('button', { name: /Discard/ }))
+  await screen.findByRole('button', { name: 'Yes, discard' })
+  expect(screen.queryByText(NEVER_SENT)).toBeNull()
+  expect(screen.getByText(MAY_BE_THERE)).toBeTruthy()
+  expect(screen.getByText(/stops any more attempts/)).toBeTruthy()
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+})
+
+test('a record that was only ever queued is still said to be never sent', async () => {
+  const { a } = await twoTabs({ announce: false })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  render(<Harness runtime={a.runtime} />)
+  await screen.findByText(QUEUED)
+  fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
+  await screen.findByRole('button', { name: 'Yes, discard' })
+  expect(screen.getByText(NEVER_SENT)).toBeTruthy()
+  expect(screen.queryByText(MAY_BE_THERE)).toBeNull()
+})
+
+test('Keep as draft on a row another tab has claimed is refused, says so, and sends nothing of its own', async () => {
+  const { a, b } = await twoTabs({ announce: false })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  render(<Harness runtime={a.runtime} />)
+  await screen.findByText(QUEUED)
+
+  // Tab B claimed the send: the item is syncing, under its lease.
+  await b.store.updateItem(
+    'item-1',
+    (i) => ({ ...i, state: 'syncing', sends: 1, lease: { owner: 'tab-b', until: at + 60_000, attempt: 'x' } }),
+    { bump: false },
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: /Keep .* as a draft/ }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/changed in another tab/)
+  // Not turned into a draft: the claim is B's, and the list shows where it stands.
+  expect(await a.store.getItem('item-1')).toMatchObject({ state: 'syncing' })
+  await screen.findByText('Syncing…')
+})
+
+test('a press on a stale row is refused when only the claim, the send count or the state moved', async () => {
+  const { a, b } = await twoTabs({ announce: false })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  const shown = (await a.store.listItems())[0] as OutboxItem
+  const seen = seenAs(shown)
+
+  // A claim that was made and given up again: same version, state and key, and a send more.
+  await b.store.updateItem('item-1', (i) => ({ ...i, sends: 1 }), { bump: false })
+  await expect(holdItem(a.runtime, shown, seen)).rejects.toMatchObject({ code: 'offline_item_changed' })
+  await expect(retryItem(a.runtime, shown, seen)).rejects.toMatchObject({ code: 'offline_item_changed' })
+  expect(await a.store.getItem('item-1')).toMatchObject({ state: 'queued', sends: 1 })
+
+  // A lease alone.
+  const withSends = seenAs((await a.store.getItem('item-1')) as OutboxItem)
+  await b.store.updateItem('item-1', (i) => ({ ...i, lease: { owner: 'tab-b', until: at + 1, attempt: 'y' } }), {
+    bump: false,
+  })
+  await expect(holdItem(a.runtime, shown, withSends)).rejects.toMatchObject({ code: 'offline_item_changed' })
+
+  // The item as it is now is what a press acts on.
+  const now = (await a.store.getItem('item-1')) as OutboxItem
+  await holdItem(a.runtime, now)
+  expect(await a.store.getItem('item-1')).toMatchObject({ state: 'draft' })
+  const draft = (await a.store.getItem('item-1')) as OutboxItem
+  await b.store.updateItem('item-1', (i) => ({ ...i, state: 'queued' }))
+  await expect(releaseItem(a.runtime, draft)).rejects.toMatchObject({ code: 'offline_item_changed' })
+})
+
+test('Try again and Send on a row the other tab moved on are refused and send nothing', async () => {
+  const { a, b } = await twoTabs({ announce: false })
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  await a.store.enqueue(itemOf({ id: 'item-2', operation: 'op-00000002', state: 'draft' }), [])
+  const [queued, draft] = (await a.store.listItems()) as [OutboxItem, OutboxItem]
+
+  // The other tab synced the first and removed the second.
+  await b.store.updateItem(queued.id, (i) => ({ ...i, state: 'synced' }))
+  await b.store.removeItem(draft.id)
+  await expect(retryItem(a.runtime, queued)).rejects.toMatchObject({ code: 'offline_item_changed' })
+  await expect(releaseItem(a.runtime, draft)).rejects.toMatchObject({ code: 'offline_item_changed' })
+  expect(await a.store.getItem(queued.id)).toMatchObject({ state: 'synced' })
+  await a.runtime.engine.idle()
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+})
+
+test('Try again from a stale row says so on screen', async () => {
+  const { a, b } = await twoTabs({ announce: false })
+  fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await a.store.enqueue(itemOf({ state: 'queued' }), [])
+  render(<Harness runtime={a.runtime} />)
+  await screen.findByText(QUEUED)
+  await b.store.updateItem('item-1', (i) => ({ ...i, state: 'queued', attempts: 3 }))
+  fireEvent.click(screen.getByRole('button', { name: /again now/ }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/changed in another tab/)
+})
+
+test('a “Discard” question opened from Review, closed because another tab took over, says why', async () => {
+  const { a, b } = await twoTabs({ announce: true })
+  await a.store.enqueue(itemOf({ state: 'attention', attention: 'refused' } as Partial<OutboxItem>), [])
+  render(<Harness runtime={a.runtime} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^Review/ }))
+  // Two Discard buttons: the row's and the one on the Review screen, which is the last.
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /Discard/ })).toHaveLength(2))
+  fireEvent.click(screen.getAllByRole('button', { name: /Discard/ })[1] as HTMLElement)
+  await screen.findByRole('button', { name: 'Yes, discard' })
+
+  await b.writer.takeOver()
+  await waitFor(() => expect(a.writer.holds()).toBe(false))
+  await screen.findByText(/question about discarding a record was closed/)
+  expect(screen.queryByRole('button', { name: 'Yes, discard' })).toBeNull()
+  expect(await a.store.listItems()).toHaveLength(1)
 })

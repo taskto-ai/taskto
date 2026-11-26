@@ -315,8 +315,28 @@ export class AccountLapsed extends Refused {
 // `sends` counts the times a send claimed the item: one that went out and came back to the queue
 // (same version, same key) is not the item the person was asked about, since it may be on the
 // server now.
-export type SeenAs = Seen & { state: OutboxState; sends?: number }
-export const seenAs = (item: OutboxItem): SeenAs => ({ ...seenOf(item), state: item.state, sends: item.sends ?? 0 })
+// `lease` is who held the engine's claim on it (empty for none): a claim made and given up since
+// is not the item the person was shown either.
+export type SeenAs = Seen & { state: OutboxState; sends?: number; lease?: string }
+const leaseOf = (item: Pick<OutboxItem, 'lease'>): string =>
+  item.lease ? `${item.lease.owner}/${item.lease.attempt ?? ''}` : ''
+export const seenAs = (item: OutboxItem): SeenAs => ({
+  ...seenOf(item),
+  state: item.state,
+  sends: item.sends ?? 0,
+  lease: leaseOf(item),
+})
+const isSeenAs = (item: OutboxItem, seen: SeenAs) =>
+  isSeen(item, seen) &&
+  item.state === seen.state &&
+  (item.sends ?? 0) === (seen.sends ?? 0) &&
+  leaseOf(item) === (seen.lease ?? '')
+
+// Whether a send was ever started for the item (a claim, or one that was made and gave no answer):
+// the server may already have the record, so what is said of removing it from this device is not
+// "never sent".
+export const mayHaveBeenSent = (item: Pick<OutboxItem, 'sends' | 'lease' | 'unconfirmed'>): boolean =>
+  (item.sends ?? 0) > 0 || item.lease !== undefined || item.unconfirmed === true
 
 // A record's queue as a screen was drawn from it: what an enqueue checks again in its transaction.
 export const queueSignature = (items: readonly OutboxItem[]): string =>
@@ -736,12 +756,15 @@ export class OfflineStore {
   async updateItem(
     id: string,
     change: (item: OutboxItem) => OutboxItem | undefined,
-    { bump = true, guarded = false }: { bump?: boolean; guarded?: boolean } = {},
+    { bump = true, guarded = false, seen }: { bump?: boolean; guarded?: boolean; seen?: SeenAs } = {},
   ): Promise<OutboxItem | undefined> {
     return this.keep(guarded ? [OUTBOX, META] : [OUTBOX], async (tx) => {
       if (guarded) await this.assertWriter(tx)
       const store = tx.store<OutboxItem>(OUTBOX)
       const current = await store.get(id)
+      // A person's press carries the item as it was shown (`seen`): one that moved on since (sent,
+      // claimed, edited, settled), or is gone, is refused, and nothing is applied.
+      if (seen && (!current || !isSeenAs(current, seen))) throw new ItemChanged()
       if (!current) return undefined
       const next = change(current)
       if (!next) return current
@@ -790,8 +813,7 @@ export class OfflineStore {
       await this.assertWriter(tx)
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const current = await outbox.get(id)
-      if (!current || !isSeen(current, seen) || current.state !== seen.state) throw new ItemChanged()
-      if ((current.sends ?? 0) !== (seen.sends ?? 0)) throw new ItemChanged()
+      if (!current || !isSeenAs(current, seen)) throw new ItemChanged()
       if (current.state === 'synced' || current.state === 'syncing') throw new ItemChanged()
       await outbox.delete(id)
       const blobs = tx.store<BlobRow>(BLOBS)

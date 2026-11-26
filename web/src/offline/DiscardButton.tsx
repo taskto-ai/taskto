@@ -11,7 +11,7 @@ import { Button } from '../ui/Button'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { discard } from './choices'
 import type { Runtime } from './runtime'
-import { type OutboxItem, type SeenAs, seenAs } from './store'
+import { mayHaveBeenSent, type OutboxItem, type SeenAs, seenAs } from './store'
 
 export function DiscardButton({
   runtime,
@@ -33,7 +33,9 @@ export function DiscardButton({
   const t = useT()
   // The item as it was when the question was opened, never from a later render: set while the
   // question is on screen, and null otherwise.
-  const [asked, setAsked] = useState<SeenAs | null>(null)
+  // `sent`: a send was started for it before (a claim, or one nobody answered): the server may
+  // already have the record, which the question says.
+  const [asked, setAsked] = useState<{ seen: SeenAs; sent: boolean } | null>(null)
   // What to say if the question is taken away from under the person (this button unmounts while it
   // is open: it is not answered, it is gone). Set by the person's own presses, never from a render:
   // an answer and a list read again can land in one render, and the answer must already count.
@@ -49,7 +51,7 @@ export function DiscardButton({
     [],
   )
   const answer = (yes: boolean) => {
-    const seen = asked
+    const seen = asked?.seen
     open.current = false
     setAsked(null)
     if (!yes || !seen) return
@@ -64,7 +66,7 @@ export function DiscardButton({
         aria-label={t('common.labelFor', { label, name })}
         onClick={() => {
           open.current = true
-          setAsked(seenAs(item))
+          setAsked({ seen: seenAs(item), sent: mayHaveBeenSent(item) })
         }}
       >
         {label}
@@ -79,7 +81,7 @@ export function DiscardButton({
           onConfirm={() => answer(true)}
           onCancel={() => answer(false)}
         >
-          {t('offline.queue.discardBody')}
+          {t(asked.sent ? 'offline.queue.discardBodySent' : 'offline.queue.discardBody')}
         </ConfirmDialog>
       )}
     </>

@@ -203,7 +203,7 @@ The rules:
   acknowledged (those leave with a download that holds their change, or are only cleared from the
   list). Discarding wakes the queue: a later change to the same record that waited for it is sent
   at once.
-- **A list is never left as it was read.** Every write to the database is announced on a
+- **A list is never left as it was read.** Every queue and download write is announced on a
   BroadcastChannel of the account (`OfflineStore.connectTabs`, joined when the runtime starts and
   let go of when it stops), and a tab that hears it reads its lists again, so what another tab
   queued, sent or settled is shown without a reload. A tab that becomes the writer (or stops being
@@ -227,7 +227,25 @@ The rules:
   and to review it again: the list shows it as it is, and the same question can be asked about it.
   A "Discard …?" question that is open when its row stops offering a discard (the record started
   sending in another tab, or this tab is not the writer any more) is closed, and the person is told
-  that it was and why; nothing is removed.
+  that it was and why; nothing is removed. That holds for the question opened from the row and for
+  the one opened from the Review screen: the Review screen goes with its row, and the notice is the
+  list's.
+- **What the question says about a send that may have happened.** When a send was ever started for
+  the item (`sends` above zero, a claim on it, or `unconfirmed`), the record may already be on the
+  server: a send's request can reach it while its answer is lost (a tab's connection drops, the
+  tab is closed), and the item goes back to the queue. Such a question never says the record is
+  "never sent": it says that the discard removes the copy on this device and stops any more
+  attempts, and that the server may already have the record. The sequence that makes it matter: one
+  tab's send reaches the server and its answer is lost; another tab's confirmation, made before
+  that, is refused and its list read again; the question it is asked next is about the item as it is
+  then, and says so.
+- **A press on one row is checked like a discard.** *Try again now*, *Keep as draft* and *Send* on
+  a row carry the item as the row showed it, with its version, operation key, state, `sends` and
+  claim (`updateItem`'s `seen`), and are checked in the transaction that changes it. One that
+  another tab claimed, sent, edited or removed meanwhile is refused with *This changed in another
+  tab or window. Review it again.*: nothing is changed or sent, the lists read again, and the
+  person presses again on what is there. (*Sync now*, for the whole queue, acts on what each item
+  is when it is read, as the engine does.)
 - **Signing out loses only what was shown.** The records the person is told they would lose are
   listed with their versions, and *Discard and sign out* approves exactly those: an item that was
   changed since (a newer edit coalesced into it) or made since is not agreed to, nothing is
