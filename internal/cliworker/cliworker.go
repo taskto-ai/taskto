@@ -1,5 +1,5 @@
 // Package cliworker runs the official coding-agent CLIs (Claude Code, Codex, Grok Build) for
-// TaskTo users, one process per turn, and turns what each prints into one small event stream.
+// taskto users, one process per turn, and turns what each prints into one small event stream.
 // The design is docs/cli-workers.md.
 //
 // A Worker keeps every running turn with a log of its events, so a caller that lost the
@@ -10,7 +10,7 @@
 //
 // In local mode (this package on its own) every CLI runs as the server's OS user: separate
 // directories keep users' sessions and settings apart, not their secrets. The container
-// mode adds a Unix user per TaskTo user around the same turn code.
+// mode adds a Unix user per taskto user around the same turn code.
 package cliworker
 
 import (
@@ -136,7 +136,7 @@ type Tool struct {
 	Input  string `json:"input,omitempty"`
 	Status string `json:"status"` // running, done or failed
 	Output string `json:"output,omitempty"`
-	// Saved is the app a finished create_app or update_app of TaskTo's tools answered with, read
+	// Saved is the app a finished create_app or update_app of taskto's tools answered with, read
 	// from the whole result (Output is cut), so the conversation can show the app the CLI saved.
 	Saved *SavedApp `json:"saved,omitempty"`
 }
@@ -181,7 +181,7 @@ type TurnSpec struct {
 	// account (Slot "s<id>"): the server adds the account's key to its requests, and the CLI
 	// only ever holds the turn's token.
 	Proxy *Proxy `json:"proxy,omitempty"`
-	// Tools, if set, gives the CLI TaskTo's own tools (docs/cli-tools.md): the server's MCP
+	// Tools, if set, gives the CLI taskto's own tools (docs/cli-tools.md): the server's MCP
 	// endpoint for turns, with this turn's token.
 	Tools *Tools `json:"tools,omitempty"`
 	// Model is passed to the CLI's model flag; empty leaves the CLI's default.
@@ -215,7 +215,7 @@ type Proxy struct {
 
 var proxyTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{16,}$`)
 
-// Tools is where a turn's CLI reaches TaskTo's own tools (the knowledge base, boards, apps and
+// Tools is where a turn's CLI reaches taskto's own tools (the knowledge base, boards, apps and
 // the agent browser), and with what (docs/cli-tools.md).
 type Tools struct {
 	// URL is the server's MCP endpoint for turns, as the CLI reaches it
@@ -302,7 +302,7 @@ func (s TurnSpec) check() error {
 	case s.Proxy.check(s.Slot) != nil:
 		return s.Proxy.check(s.Slot)
 	case toolsErr != nil:
-		return fmt.Errorf("TaskTo's tools: %w", toolsErr)
+		return fmt.Errorf("taskto's tools: %w", toolsErr)
 	case s.Conversation <= 0:
 		return fmt.Errorf("a turn needs a conversation")
 	case s.Model != "" && !modelPattern.MatchString(s.Model):

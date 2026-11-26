@@ -1,5 +1,6 @@
 // The workspace's settings, a tab each, found in a side list of three groups: the workspace's
-// (general, members and invites, shared spaces, the audit log, model providers, integrations (admins), CLI accounts,
+// (general, members and invites, shared spaces, the audit log, model providers, integrations and the
+// approvals of apps' use of them (admins), CLI accounts,
 // search, dictation, storage), your own (notifications, your password, your sessions, your data,
 // access tokens) and the server's (about). On a phone the list is a choice at the top of the page.
 // Admins see them all; members see model providers (their own accounts, and the workspace's to
@@ -12,6 +13,7 @@ import { type Key, useT } from '../i18n'
 import { Link, navigate, routePath } from '../router'
 import { Select } from '../ui/Select'
 import { AboutTab } from './AboutTab'
+import { ApprovalsTab } from './ApprovalsTab'
 import { AuditTab } from './AuditTab'
 import { CliAccountsTab } from './CliAccountsTab'
 import { DataTab } from './DataTab'
@@ -36,6 +38,7 @@ type Tab =
   | 'audit'
   | 'providers'
   | 'integrations'
+  | 'integration-approvals'
   | 'cli-accounts'
   | 'search'
   | 'dictation'
@@ -56,6 +59,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean; group: Group }[] = [
   { tab: 'audit', label: 'settings.tabs.audit', admin: true, group: 'workspace' },
   { tab: 'providers', label: 'settings.tabs.providers', admin: false, group: 'workspace' },
   { tab: 'integrations', label: 'settings.tabs.integrations', admin: true, group: 'workspace' },
+  { tab: 'integration-approvals', label: 'settings.tabs.integrationApprovals', admin: true, group: 'workspace' },
   { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false, group: 'workspace' },
   { tab: 'search', label: 'settings.tabs.search', admin: false, group: 'workspace' },
   { tab: 'dictation', label: 'settings.tabs.dictation', admin: false, group: 'workspace' },
@@ -143,7 +147,7 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
     case 'general':
       return <GeneralTab workspace={workspace} email={me.user.email} operator={me.is_operator === true} />
     case 'members':
-      return <MembersTab workspace={workspace.id} me={me.user.id} />
+      return <MembersTab workspace={workspace.id} me={me.user.id} operator={me.is_operator === true} />
     case 'spaces':
       return <SpacesTab workspace={workspace.id} />
     case 'audit':
@@ -154,6 +158,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <ProvidersTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'integrations':
       return <IntegrationsTab workspace={workspace.id} />
+    case 'integration-approvals':
+      return <ApprovalsTab workspace={workspace.id} />
     case 'cli-accounts':
       return <CliAccountsTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'search':
@@ -167,7 +173,7 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
     case 'sessions':
       return <SessionsTab />
     case 'data':
-      return <DataTab workspace={workspace.id} admin={workspace.role === 'admin'} />
+      return <DataTab workspace={workspace.id} user={me.user.id} admin={workspace.role === 'admin'} />
     case 'tokens':
       return <TokensTab workspace={workspace.id} />
     case 'about':

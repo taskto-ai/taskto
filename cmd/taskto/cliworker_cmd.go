@@ -26,7 +26,7 @@ import (
 )
 
 // runCLIWorker is `taskto cli-worker`: the CLI worker of container mode (docs/cli-workers.md),
-// in a container of its own, as root. Each TaskTo user's CLIs run as a Unix user of their own;
+// in a container of its own, as root. Each taskto user's CLIs run as a Unix user of their own;
 // the server reaches the worker on a Unix socket only its user can open.
 func runCLIWorker(args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("cli-worker", flag.ContinueOnError)
@@ -34,7 +34,7 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 	socket := fs.String("socket", "/run/taskto-cli/worker.sock", "the socket the server connects to")
 	owner := fs.String("socket-owner", "65532:65532", "uid:gid of the server, the only one who may open the socket")
 	homes := fs.String("homes", "/homes", "where each user's directory is (a volume of its own)")
-	uidBase := fs.Int("uid-base", 100000, "the first uid: TaskTo user N runs as this plus N")
+	uidBase := fs.Int("uid-base", 100000, "the first uid: taskto user N runs as this plus N")
 	path := fs.String("path", os.Getenv("PATH"), "PATH for the CLIs and the commands they run")
 	unsafe := fs.Bool(privcheck.OverrideFlag, false, "development only: start even if the image has setuid or setgid programs")
 	browserIdle := fs.Duration("browser-idle", 5*time.Minute, "how long an agent browser runs unused before it stops")

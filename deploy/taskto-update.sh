@@ -844,7 +844,7 @@ DESC_DEF='def key($n; $s; $ro): [$n, $s, $ro] | tojson | @base64;
 
 # The running server: its data volume and how it is mounted (from what it has mounted at /data,
 # never a name assumed), and the images the running containers use: by id, as the containers
-# have them, never what a tag points at now. The three of TaskTo's must still be on this machine,
+# have them, never what a tag points at now. The three of taskto's must still be on this machine,
 # or nothing could put them back.
 resolve_running() {
 	local s insp pair svc n cid id c info mount
@@ -886,7 +886,7 @@ resolve_running() {
 }
 
 # data_mounts CONFIG: "service<TAB>what its /data is" for every service of TaskTO's own (the
-# server, the backup jobs, and any service running one of TaskTo's images; not Caddy's, whose
+# server, the backup jobs, and any service running one of taskto's images; not Caddy's, whose
 # /data is its own volume): "service, key, description" for each: the volume's effective Docker
 # name with its subpath and whether it is read-only (DESC_DEF), or what else it is.
 data_mounts() {
@@ -933,7 +933,7 @@ volumes_exist() {
 	done <<<"$names"
 }
 
-# image_problems CONFIG: every service of TaskTo's (by name, or by running one of its images)
+# image_problems CONFIG: every service of taskto's (by name, or by running one of its images)
 # runs the image of the new version, as `prefix + name:version`, which was checked: no override
 # swaps in another, or an older one.
 image_problems() {
@@ -1006,7 +1006,7 @@ preflight() {
 	resolve_running || return 1
 	mapfile -t pargs < <(profile_args "$ROOT")
 	# This install's settings, with the backup services' profiles on too: the data is mounted the
-	# same way in each of TaskTo's services, those that aren't running included.
+	# same way in each of taskto's services, those that aren't running included.
 	cfg=$(compose "${pargs[@]}" config --format json 2>/dev/null) || { reason="docker compose config failed"; return 1; }
 	check_data_volume "$cfg" "this install's Compose project" || return 1
 	# A broken proxy isn't the update's fault: nothing is changed on top of one.
@@ -1030,7 +1030,7 @@ preflight() {
 	volumes_exist "$cfg" || return 1
 	bad=$(image_problems "$out") || { reason="can't read the images of $to's Compose settings"; return 1; }
 	[ -z "$bad" ] || { reason="$to's Compose settings run an image that wasn't checked: $(head -n 1 <<<"$bad")"; return 1; }
-	# The three of TaskTo's are the commit's own (their revision label says so), and are known by their id:
+	# The three of taskto's are the commit's own (their revision label says so), and are known by their id:
 	# the label and the id come from one inspect of one reference.
 	for n in $IMAGE_NAMES; do
 		ref=$prefix$n:$to

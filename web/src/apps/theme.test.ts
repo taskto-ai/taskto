@@ -13,7 +13,7 @@ const all = rules(css)
 const root = all.filter((r) => r.selector === ':root')
 
 // What themes each renderer component an app may use: a variable of its own on :root, or a rule under
-// .ui-app naming its element. TaskTo.AI's own components (drawn by catalog.tsx) are styled with the
+// .ui-app naming its element. taskto.ai's own components (drawn by catalog.tsx) are styled with the
 // components and are not the renderer's.
 const THEMED_BY: Record<string, string[]> = {
   Button: ['.a2ui-button'],

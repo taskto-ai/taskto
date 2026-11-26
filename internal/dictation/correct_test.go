@@ -14,7 +14,7 @@ title: Glossary
 
 Words we use. A paragraph isn't a term.
 
-- **TaskTo**: the product
+- **taskto**: the product
 - Acme — the company
 * ` + "`Parakeet`" + ` - the speech model
 + [Desert Ant](https://desertant.com): a vendor
@@ -30,18 +30,18 @@ Words we use. A paragraph isn't a term.
 ` + "```" + `
 `
 	got := ParseGlossary([]byte(md))
-	want := []string{"TaskTo", "Acme", "Parakeet", "Desert Ant", "Zanzibar", "São Paulo", "Wi-Fi"}
+	want := []string{"taskto", "Acme", "Parakeet", "Desert Ant", "Zanzibar", "São Paulo", "Wi-Fi"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("terms = %q, want %q", got, want)
 	}
 }
 
 func TestCorrect(t *testing.T) {
-	terms := []string{"TaskTo", "Zanzibar", "Parakeet", "Go", "São Paulo", "Wurst", "Kubernetes cluster", "Node.js"}
+	terms := []string{"taskto", "Zanzibar", "Parakeet", "Go", "São Paulo", "Wurst", "Kubernetes cluster", "Node.js"}
 	for _, tc := range []struct{ in, want string }{
 		// Joined words, case and accents.
-		{"I use task to every day.", "I use TaskTo every day."},
-		{"Taskto is great", "TaskTo is great"},
+		{"I use task to every day.", "I use taskto every day."},
+		{"Taskto is great", "taskto is great"},
 		{"we went to sao paulo, then home", "we went to São Paulo, then home"},
 		// One letter off, for a term of 6 to 9 letters.
 		{"a trip to Zansibar", "a trip to Zanzibar"},

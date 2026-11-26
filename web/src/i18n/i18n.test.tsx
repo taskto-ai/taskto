@@ -238,3 +238,14 @@ describe('sizes', () => {
     expect(result.current.bytes(1_500_000)).toBe('1.5 MB')
   })
 })
+
+describe('lists', () => {
+  it('joins short phrases with commas and no "and", and a list of things with "and"', () => {
+    const { result } = renderHook(() => useFormat())
+    expect(result.current.list(['text', 'required', 'up to 80 characters'], 'unit')).toBe(
+      'text, required, up to 80 characters',
+    )
+    expect(result.current.list(['a', 'b', 'c'])).toBe('a, b, and c')
+    expect(result.current.list(['a', 'b', 'c'], 'disjunction')).toBe('a, b, or c')
+  })
+})

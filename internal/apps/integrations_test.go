@@ -867,6 +867,15 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 		return decode[IntegrationApproval](t, rec)
 	}
 	req := ask()
+	// A member's decision is refused and leaves no audit event, nor changes the request.
+	audited := func() int { return i.count(`SELECT count(*) FROM audit_events WHERE action LIKE 'app_integration_%'`) }
+	before := audited()
+	expect(t, i.approve(i.bob, req.ID, i.stripe), http.StatusForbidden)
+	expect(t, i.decide(i.bob, i.ws, req.ID, "reject", nil), http.StatusForbidden)
+	expect(t, i.decide(i.bob, i.ws, req.ID, "revoke", nil), http.StatusForbidden)
+	if got := audited(); got != before {
+		t.Fatalf("refused decisions wrote %d audit events", got-before)
+	}
 	expect(t, i.decide(i.owner, i.ws, req.ID, "reject", nil), http.StatusOK)
 	renewed := ask()
 	expect(t, i.approve(i.owner, renewed.ID, i.stripe), http.StatusOK)
@@ -1559,5 +1568,211 @@ func TestOnlyAnAdminMayKeepAnApprovalsSpace(t *testing.T) {
 	expect(t, i.alice.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}, "keep": []int64{i.shared.ID}}), http.StatusForbidden)
 	if got := i.fromApproval(); !slices.Equal(got, []int64{i.shared.ID}) {
 		t.Fatalf("a member kept the grant: %v", got)
+	}
+}
+
+// The builder's preview says what a payment link would ask for, from the sample record, and does
+// nothing else: no entry queued, no approval needed, no row written.
+func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
+	i := newInv(t)
+	s := i.shared
+	rows := []PreviewRow{{ID: 1, Revision: 1, Data: map[string]any{
+		"number": "A-1", "customer": "Ada", "total": float64(120), "currency": "EUR", "status": "draft"}}}
+	send := &ClientAction{Name: "send", SurfaceID: SurfaceID(i.app.ID), Context: map[string]any{"id": float64(1)}}
+	before := everythingStored(t, i.e)
+
+	// Nothing is approved, and the preview works all the same.
+	reply := i.mustPreview(i.alice, s, i.app, PreviewRequest{Rows: rows, Action: send})
+	if len(reply.Effects) != 1 {
+		t.Fatalf("effects = %+v", reply.Effects)
+	}
+	e := reply.Effects[0]
+	if e.Kind != EffectCreatePaymentLink || e.Status != StateSimulated || e.Error != nil || e.Detail.Currency != "EUR" ||
+		e.Detail.Amount != "120.00" {
+		t.Fatalf("the simulated link = %+v", e)
+	}
+	// The same through the endpoint that only simulates the effects.
+	rec := i.alice.do(http.MethodPost, appPath(s, i.app.ID, "/actions/preview"), map[string]any{
+		"name": "send", "surfaceId": SurfaceID(i.app.ID), "context": map[string]any{"id": float64(1)}, "rows": rows})
+	expect(t, rec, http.StatusOK)
+	p := decode[Preview](t, rec)
+	if len(p.Effects) != 1 {
+		t.Fatalf("simulated = %+v", p)
+	}
+	if e := p.Effects[0]; e.Kind != EffectCreatePaymentLink || e.Status != StateSimulated || e.Detail.Currency != "EUR" ||
+		e.Detail.Amount != "120.00" {
+		t.Fatalf("the simulated link through the actions route = %+v", e)
+	}
+
+	// It made nothing real and queued nothing.
+	if got := everythingStored(t, i.e); got != before {
+		t.Fatalf("the preview changed what is stored:\n%s\n--- now\n%s", before, got)
+	}
+	if n := i.count(`SELECT count(*) FROM app_effects WHERE app_id = ?`, i.app.ID); n != 0 {
+		t.Fatalf("a preview queued %d effects", n)
+	}
+
+	// Only those who may design or publish the app preview it: another member of the space, and
+	// someone outside it, are refused as before.
+	expect(t, i.bob.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusForbidden)
+	expect(t, i.mallory.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusNotFound)
+}
+
+// ----- review fixes: the queue says, for an approval's own space only, how the space is allowed -----
+
+// queued is the approval with this id as the admin's queue shows it, read from the raw reply.
+func (i *inv) queued(id int64) map[string]any {
+	i.e.t.Helper()
+	rec := i.queue(i.owner, i.ws, "?status=all")
+	expect(i.e.t, rec, http.StatusOK)
+	var page struct {
+		Approvals []map[string]any `json:"approvals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		i.e.t.Fatal(err)
+	}
+	for _, a := range page.Approvals {
+		if int64(a["id"].(float64)) == id {
+			return a
+		}
+	}
+	i.e.t.Fatalf("approval %d is not in the queue: %s", id, rec.Body.String())
+	return nil
+}
+
+func (i *inv) spaceGrant(id int64) string {
+	i.e.t.Helper()
+	got, _ := i.queued(id)["space_grant"].(string)
+	return got
+}
+
+func TestTheQueueSaysHowAnApprovalsSpaceIsAllowed(t *testing.T) {
+	i := newInv(t)
+	private := i.privateApp()
+
+	// Waiting: nothing is bound, so there is no grant to speak of, even when an integration is allowed.
+	waiting := i.mustRequest(i.alice, i.alicePrivate, private)
+	if got := i.spaceGrant(waiting.ID); got != "none" {
+		t.Fatalf("a waiting request: space_grant = %q", got)
+	}
+
+	// Approved with the space allowed by the approval itself (another person's private space, which
+	// the admin can't open): the grant is the approval's.
+	expect(t, i.decide(i.owner, i.ws, waiting.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	if got := i.spaceGrant(waiting.ID); got != "approval" {
+		t.Fatalf("approved with allow_space: space_grant = %q", got)
+	}
+	// Approved in a space the admin had allowed in the settings: an approval never takes that away.
+	i.allow(i.stripe, i.shared)
+	shared := i.mustRequest(i.alice, i.shared, i.app)
+	expect(t, i.approve(i.owner, shared.ID, i.stripe), http.StatusOK)
+	if got := i.spaceGrant(shared.ID); got != "settings" {
+		t.Fatalf("approved in a space the admin allowed: space_grant = %q", got)
+	}
+	// Each approval says it of its own space: the private one is still the approval's.
+	if got := i.spaceGrant(waiting.ID); got != "approval" {
+		t.Fatalf("the private space's approval after the shared one: space_grant = %q", got)
+	}
+
+	// An approval whose space an admin took the grant away from (the integration's settings) says none.
+	if _, err := i.e.db.Exec(`DELETE FROM integration_spaces WHERE integration_id = ? AND space_id = ?`, i.stripe, i.shared.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := i.spaceGrant(shared.ID); got != "none" {
+		t.Fatalf("approved, the space no longer allowed: space_grant = %q", got)
+	}
+
+	// Another integration allowed in the space is not this approval's: it reads the one it is bound to.
+	other := i.integration(i.ws, "stripe", "second")
+	i.allow(other, i.shared)
+	if got := i.spaceGrant(shared.ID); got != "none" {
+		t.Fatalf("another integration allowed in the space: space_grant = %q", got)
+	}
+
+	// Revoked: unbound, and the grant it made is gone.
+	expect(t, i.decide(i.owner, i.ws, waiting.ID, "revoke", nil), http.StatusOK)
+	if got := i.spaceGrant(waiting.ID); got != "none" {
+		t.Fatalf("revoked: space_grant = %q", got)
+	}
+}
+
+// The queue's reply carries the one fact about the approval's own space, and nothing about any
+// other: the keys are the approval's, and the decision's reply and the requester's carry the same.
+func TestTheQueueRevealsNothingAboutOtherSpaces(t *testing.T) {
+	i := newInv(t)
+	private := i.privateApp()
+	mine := i.mustRequest(i.alice, i.alicePrivate, private)
+	expect(t, i.decide(i.owner, i.ws, mine.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	// The integration is also allowed in other spaces, which no approval of this queue is in.
+	i.allow(i.stripe, i.shared)
+
+	got := i.queued(mine.ID)
+	keys := make([]string, 0, len(got))
+	for k := range got {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	want := []string{"app_id", "app_name", "contract", "contract_hash", "decided_at", "decided_by", "id", "integration", "kind", "live",
+		"requested_at", "requested_by", "slot", "space_grant", "space_id", "space_kind", "space_name", "status"}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("the approval's keys = %v, want %v", keys, want)
+	}
+	if got["space_grant"] != "approval" || int64(got["space_id"].(float64)) != i.alicePrivate.ID {
+		t.Fatalf("the approval = %v", got)
+	}
+
+	// The decision's own reply says the grant, too.
+	again := i.mustRequest(i.alice, i.shared, i.app)
+	rec := i.approve(i.owner, again.ID, i.stripe)
+	expect(t, rec, http.StatusOK)
+	if got := decode[IntegrationApproval](t, rec); got.SpaceGrant != "settings" {
+		t.Fatalf("the decision's reply: space_grant = %q", got.SpaceGrant)
+	}
+}
+
+// A payment link simulated for a record an insert is making says "new", with no record number, as
+// the other effects of an insert do: the record has no number yet.
+func TestAPreviewedLinkOfAnInsertHasNoRecordNumberAndOfAnUpdateHasIt(t *testing.T) {
+	i := newInv(t)
+	def := invoices(t)
+	link := def.Actions["send"].Effects
+	add := def.Actions["add"]
+	add.Effects = link
+	def.Actions["add"] = add
+	rows := []Row{{ID: 7, Revision: 1, Data: map[string]any{"number": "A-7", "total": float64(50), "currency": "EUR", "status": "draft"}}}
+
+	got := i.e.s.simulatedEffects(i.ctx(), 1, def, Change{Kind: ActionInsert, Name: "add"}, rows)
+	if len(got) != 1 || got[0].Kind != EffectCreatePaymentLink || got[0].Record != 0 {
+		t.Fatalf("the link of an insert = %+v", got)
+	}
+	got = i.e.s.simulatedEffects(i.ctx(), 1, def, Change{Kind: ActionUpdate, Name: "send", ID: 7}, rows)
+	if len(got) != 1 || got[0].Record != 7 {
+		t.Fatalf("the link of an update = %+v", got)
+	}
+}
+
+// Asking for an approval is the publisher's: a space editor whose roles in the app let them design it,
+// or only use it, but not publish it, is refused with the capability that is missing. (A viewer of
+// the space is refused earlier, by the space.)
+func TestAnEditorWithoutThePublishCapabilityCannotRequestAnApproval(t *testing.T) {
+	for name, roles := range map[string][]access.AppRole{
+		"a builder (design)": {access.AppBuilder},
+		"a user (submit)":    {access.AppUser},
+	} {
+		t.Run(name, func(t *testing.T) {
+			i := newInv(t)
+			hash := i.status(i.alice, i.shared, i.app).Slots[0].ContractHash
+			// Another editor keeps the management of the roles, so the one under test is left with only hers.
+			i.e.addMember(i.owner, i.shared, i.mallory, access.RoleEditor)
+			i.mustSetRoles(i.mallory, i.shared, i.app, grant(i.alice.id, roles...), grant(i.mallory.id, access.AppBuilder))
+			rec := i.request(i.alice, i.shared, i.app, "payments", hash)
+			expectForbidden(t, rec, string(access.CapPublish))
+			if n := i.count(`SELECT count(*) FROM app_integration_approvals WHERE app_id = ?`, i.app.ID); n != 0 {
+				t.Fatalf("a refused request left %d approvals", n)
+			}
+			// With the publisher role added she can: it is the capability that decides, not the space role.
+			i.mustSetRoles(i.mallory, i.shared, i.app, grant(i.alice.id, append(roles, access.AppPublisher)...), grant(i.mallory.id, access.AppBuilder))
+			expect(t, i.request(i.alice, i.shared, i.app, "payments", hash), http.StatusOK)
+		})
 	}
 }

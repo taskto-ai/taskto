@@ -25,6 +25,7 @@ import {
   type Problem,
   type Seen,
   type SeenAs,
+  seenAs,
   seenOf,
   versionOf,
 } from './store'
@@ -129,6 +130,24 @@ export async function discard(runtime: Runtime, item: OutboxItem, seen: SeenAs):
   // A later change to the same record that waited for this one is sendable now.
   await runtime.engine.run()
 }
+
+// What a person's press on one row does to the queue, as the row was shown when they pressed it
+// (try again now, keep as a draft, send): refused, and the lists read again, when the item moved on
+// meanwhile (another tab claimed, sent or changed it) or this tab is not the writer. Nothing is
+// changed or sent then.
+async function pressed(runtime: Runtime, go: () => Promise<void>): Promise<void> {
+  if (!runtime.writer.holds()) throw refused(runtime, notWriter())
+  await chosen(go)
+}
+
+export const retryItem = (runtime: Runtime, item: OutboxItem, seen: SeenAs = seenAs(item)) =>
+  pressed(runtime, () => runtime.engine.retry(item.id, seen))
+
+export const holdItem = (runtime: Runtime, item: OutboxItem, seen: SeenAs = seenAs(item)) =>
+  pressed(runtime, () => runtime.engine.hold(item.id, seen))
+
+export const releaseItem = (runtime: Runtime, item: OutboxItem, seen: SeenAs = seenAs(item)) =>
+  pressed(runtime, () => runtime.engine.release(item.id, seen))
 
 // A record as the server has it now, for the person who is signed in: read at the moment it is
 // asked for, under the access they have now, never remembered from an earlier answer (what a

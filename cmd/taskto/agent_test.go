@@ -26,6 +26,7 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 	"taskto.ai/taskto/internal/config"
+	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/privcheck"
 )
 
@@ -50,7 +51,11 @@ func fakeSidecar() int {
 	if err != nil {
 		panic(err)
 	}
-	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("TASKTO_FAKE_SIDECAR_HANG") == "1" && r.URL.Path != "/healthz" {
+			<-r.Context().Done() // a runtime that takes a call and never answers
+			return
+		}
 		_, _ = fmt.Fprintf(w, `{"status":"ok","pid":%d}`, os.Getpid())
 	})}
 	go func() { _ = srv.Serve(ln) }()
@@ -361,5 +366,41 @@ func TestRunRefusesPrivilegedAgents(t *testing.T) {
 				t.Fatalf("with the override: %v", err)
 			}
 		})
+	}
+}
+
+// A purge's recorded steps are done in the background: with a runtime that never answers the
+// server still listens and answers, and the step stays recorded.
+func TestPendingPurgeStepsDoNotHoldUpTheServersStart(t *testing.T) {
+	cfg := fakeAgentConfig(t)
+	t.Setenv("TASKTO_FAKE_SIDECAR_HANG", "1")
+	sqlDB, err := db.Open(context.Background(), filepath.Join(cfg.DataDir, db.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(context.Background(), sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.Exec(`INSERT INTO purge_cleanups (user_id, kind, target) VALUES (7, 'agent_conversation', '101')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	addr, stop := startRun(t, cfg)
+	if h := getHealthz(t, addr); h["status"] != "ok" {
+		t.Fatalf("healthz = %v", h)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	sqlDB, err = db.Open(context.Background(), filepath.Join(cfg.DataDir, db.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	var n int
+	if err := sqlDB.QueryRow(`SELECT count(*) FROM purge_cleanups`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d steps recorded (%v), want the one that never answered", n, err)
 	}
 }

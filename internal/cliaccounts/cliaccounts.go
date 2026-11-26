@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -65,6 +66,9 @@ type Worker interface {
 	CancelLogin(user int64, cli cliworker.CLI, slot cliworker.Slot)
 	Status(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.AuthStatus, error)
 	Logout(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) error
+	// Forget removes everything the worker keeps for a deleted user: logins, sessions, working
+	// directories and the browser's profile.
+	Forget(ctx context.Context, user int64) error
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
@@ -163,7 +167,7 @@ type Service struct {
 	// a new one.
 	tokens map[string]string
 	ended  map[string]time.Time
-	// tools gives turns TaskTo's own tools (SetTools); nil, they get none.
+	// tools gives turns taskto's own tools (SetTools); nil, they get none.
 	tools atomic.Pointer[Tools]
 	// setModel changes a conversation's model after a switch to another CLI; switches holds
 	// the notice of each switch a turn made, by the worker turn it switched to.
@@ -265,6 +269,37 @@ func (s *Service) Providers() []providers.CLIProvider {
 		out = append(out, p)
 	}
 	return out
+}
+
+// Forget removes everything kept for user's CLI accounts, for an account that is deleted
+// (internal/accountdeletion): the worker's directories, with the logins, sessions, working
+// directories and the browser's profile, and what the service remembers of their logins. The
+// rows of their accounts go with the user (the schema's cascade). While CLI workers are off it
+// can't reach the worker and answers ErrOff, which the purge keeps as a step still to do (the
+// worker's directory may hold their files); it is idempotent, so a purge that stopped halfway runs
+// it again.
+func (s *Service) Forget(ctx context.Context, user int64) error {
+	if s.worker == nil {
+		return ErrOff
+	}
+	if err := s.worker.Forget(ctx, user); err != nil {
+		return fmt.Errorf("removing the CLI worker's files of user %d: %w", user, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range []map[watchKey]time.Time{s.started, s.settled} {
+		for k := range m {
+			if k.user == user {
+				delete(m, k)
+			}
+		}
+	}
+	for k := range s.watching {
+		if k.user == user {
+			delete(s.watching, k)
+		}
+	}
+	return nil
 }
 
 // Close stops following logins.

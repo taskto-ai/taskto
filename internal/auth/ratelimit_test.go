@@ -1,58 +1,10 @@
 package auth
 
 import (
-	"fmt"
 	"net/http/httptest"
 	"net/netip"
 	"testing"
-	"time"
 )
-
-func TestLimiter(t *testing.T) {
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(2, time.Minute, func() time.Time { return now })
-
-	for i := range 2 {
-		if ok, _ := l.take("k"); !ok {
-			t.Fatalf("attempt %d refused", i)
-		}
-	}
-	ok, wait := l.take("k")
-	if ok || wait != time.Minute {
-		t.Fatalf("third attempt = %v, %v; want refused for a minute", ok, wait)
-	}
-	if ok, _ := l.take("other"); !ok {
-		t.Fatal("another key was refused")
-	}
-
-	// A given-back attempt frees a place.
-	l.give("k")
-	if ok, _ := l.take("k"); !ok {
-		t.Fatal("refused after give")
-	}
-
-	now = now.Add(30 * time.Second)
-	if ok, wait := l.take("k"); ok || wait != 30*time.Second {
-		t.Fatalf("mid-window = %v, %v", ok, wait)
-	}
-	now = now.Add(30 * time.Second)
-	if ok, _ := l.take("k"); !ok {
-		t.Fatal("refused after the window ended")
-	}
-}
-
-func TestLimiterSweeps(t *testing.T) {
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(1, time.Minute, func() time.Time { return now })
-	for i := range sweepAt {
-		l.take(fmt.Sprint(i))
-	}
-	now = now.Add(time.Minute)
-	l.take("new")
-	if len(l.hits) != 1 {
-		t.Fatalf("%d keys after a sweep, want 1", len(l.hits))
-	}
-}
 
 func TestClientIP(t *testing.T) {
 	for remote, want := range map[string]string{

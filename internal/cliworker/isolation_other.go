@@ -13,7 +13,7 @@ type isolationState struct{} //nolint:unused // isolation needs Linux
 
 func (w *Worker) asUser(_ *exec.Cmd, _ int64) error {
 	if w.cfg.Isolation != nil {
-		return errors.New("a Unix user per TaskTo user needs Linux")
+		return errors.New("a Unix user per taskto user needs Linux")
 	}
 	return nil
 }

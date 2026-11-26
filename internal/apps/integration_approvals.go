@@ -103,10 +103,17 @@ type IntegrationApproval struct {
 	// app's integration at once.
 	Live        bool              `json:"live"`
 	Integration *BoundIntegration `json:"integration"`
-	RequestedBy *Author           `json:"requested_by"`
-	RequestedAt string            `json:"requested_at"`
-	DecidedBy   *Author           `json:"decided_by"`
-	DecidedAt   *string           `json:"decided_at"`
+	// SpaceGrant is whether the approval's own space has a grant for the integration it is bound to
+	// now, and who made it: "none" (no integration is bound, or its space isn't allowed), "approval"
+	// (the approval allowed the space, so it ends with the last approval that needs it) or
+	// "settings" (an admin allowed it in the integration's settings, which an approval never takes
+	// away). It says nothing of any other space: an admin who can't open someone's private space
+	// reads this one fact of it, about the space they are deciding on.
+	SpaceGrant  string  `json:"space_grant"`
+	RequestedBy *Author `json:"requested_by"`
+	RequestedAt string  `json:"requested_at"`
+	DecidedBy   *Author `json:"decided_by"`
+	DecidedAt   *string `json:"decided_at"`
 }
 
 // ApprovalList is a page of the admin's queue, newest first.
@@ -153,6 +160,7 @@ type approvalRow struct {
 	requestedAt                        string
 	decidedAt                          sql.NullString
 	live                               bool
+	spaceGrant                         string
 }
 
 const approvalSelect = `
@@ -161,6 +169,8 @@ const approvalSelect = `
 		a.integration_id, i.name, i.display_name,
 		coalesce(i.disabled_at IS NULL AND EXISTS (SELECT 1 FROM integration_spaces x
 			WHERE x.integration_id = i.id AND x.space_id = ap.space_id), 0),
+		coalesce((SELECT CASE x.from_approval WHEN 1 THEN 'approval' ELSE 'settings' END FROM integration_spaces x
+			WHERE x.integration_id = a.integration_id AND x.space_id = ap.space_id), 'none'),
 		a.requested_by, coalesce(ru.name, ''), a.requested_at, a.decided_by, coalesce(du.name, ''), a.decided_at
 	FROM app_integration_approvals a
 	JOIN apps ap ON ap.id = a.app_id
@@ -173,7 +183,7 @@ func scanApproval(row scanner) (approvalRow, error) {
 	var r approvalRow
 	err := row.Scan(&r.id, &r.appID, &r.spaceID, &r.workspaceID, &r.appName, &r.spaceName, &r.spaceKind,
 		&r.slot, &r.kind, &r.hash, &r.contract, &r.status,
-		&r.integrationID, &r.integrationName, &r.integrationLabel, &r.usable,
+		&r.integrationID, &r.integrationName, &r.integrationLabel, &r.usable, &r.spaceGrant,
 		&r.requestedBy, &r.requestedByName, &r.requestedAt, &r.decidedBy, &r.decidedByName, &r.decidedAt)
 	return r, err
 }
@@ -181,7 +191,7 @@ func scanApproval(row scanner) (approvalRow, error) {
 // view is the row as the API shows it.
 func (r approvalRow) view() IntegrationApproval {
 	v := IntegrationApproval{ID: r.id, AppID: r.appID, AppName: r.appName, SpaceID: r.spaceID, SpaceName: r.spaceName, SpaceKind: r.spaceKind,
-		Slot: r.slot, Kind: r.kind, ContractHash: r.hash, Status: r.status, Live: r.live, Integration: r.bound(),
+		Slot: r.slot, Kind: r.kind, ContractHash: r.hash, Status: r.status, Live: r.live, Integration: r.bound(), SpaceGrant: r.spaceGrant,
 		RequestedBy: author(r.requestedBy, r.requestedByName, false, sql.NullString{}), RequestedAt: r.requestedAt,
 		DecidedBy: author(r.decidedBy, r.decidedByName, false, sql.NullString{})}
 	if r.decidedAt.Valid {

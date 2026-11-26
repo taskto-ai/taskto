@@ -6,6 +6,7 @@ import { setPreferences } from '../i18n'
 import { NoWorkspace } from '../shell/NoWorkspace'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, PaymentReturnScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
+import { rememberDeletion, takeDeletion } from './deleted'
 import { ServerUnreachable } from './ServerUnreachable'
 
 afterEach(async () => {
@@ -454,6 +455,45 @@ test('forgotten password: too many requests is said in words', async () => {
   expect((await screen.findByRole('alert')).textContent).toBe('Too many reset requests: try again later.')
 })
 
+test('after an account is deleted the login says when it is erased, once', async () => {
+  sessionStorage.clear()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const first = render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
+  first.unmount()
+  // The notice is told once: a reload shows the plain login.
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+})
+
+test('a sign-in screen already up when the deletion is answered still says when the account is erased', async () => {
+  sessionStorage.clear()
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+  // A 401 had mounted it; now the deletion succeeds.
+  act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
+  await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
+})
+
+test('the deletion notice is told even when the browser’s storage refuses, once', () => {
+  sessionStorage.clear()
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')
+  expect(takeDeletion()).toBeNull()
+  set.mockRestore()
+  get.mockRestore()
+})
+
 // --- The rework on the component library: what it adds to the screens.
 
 test('the password can be shown and hidden again, and the button says which it does', async () => {
@@ -573,7 +613,7 @@ test('a reset whose two passwords differ says so under the second, and sends not
 test('before the login methods are known, the logo and a still form are shown, not a word alone', async () => {
   fakeFetch({ 'GET /api/login/methods': () => new Promise(() => {}) })
   render(<LoginScreen onDone={() => {}} />)
-  expect(screen.getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'taskto.ai' })).toBeTruthy()
   expect(screen.getByRole('main').getAttribute('aria-busy')).toBe('true')
   expect(screen.queryByRole('heading')).toBeNull()
   expect(screen.queryByLabelText('Password')).toBeNull()

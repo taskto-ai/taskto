@@ -16,7 +16,7 @@ import (
 // Platform effects.
 //
 // An insert or an update may declare effects (Action.Effects): operations on the rest of
-// TaskTo.AI that the record's change sets going. They are a fixed, small registry, checked
+// taskto.ai that the record's change sets going. They are a fixed, small registry, checked
 // strictly when the definition is saved, and nothing in a definition can name anything outside
 // it: not a URL, not a tool, not a command.
 //
@@ -177,7 +177,7 @@ func (e Effect) given() []string {
 	return out
 }
 
-// targetUnset is whether the effect names a space and board of TaskTo.AI to act on, and none has
+// targetUnset is whether the effect names a space and board of taskto.ai to act on, and none has
 // been chosen yet: what a template, or a copy of an app whose boards its copier can't write,
 // holds until someone picks one. Such a definition is a draft that can be saved and read but not
 // published (unsetTargets, checked when it is), and one half chosen is refused like any other.

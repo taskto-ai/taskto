@@ -10,6 +10,7 @@ import (
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/ratelimit"
 )
 
 // Changing a password, and reset links (docs/api.md#passwords).
@@ -67,7 +68,7 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	// is no faster a way to guess the password than the login form.
 	ip := s.clientIP(r)
 	limits := []struct {
-		l   *limiter
+		l   *ratelimit.Limiter
 		key string
 	}{
 		{s.perIP, ip},
@@ -75,9 +76,9 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		{s.perAccount, u.Email},
 	}
 	for i, lim := range limits {
-		if ok, wait := lim.l.take(lim.key); !ok {
+		if ok, wait := lim.l.Take(lim.key); !ok {
 			for _, taken := range limits[:i] {
-				taken.l.give(taken.key)
+				taken.l.Give(taken.key)
 			}
 			limited(w, wait, apierr.CodeTooManyPasswords, "too many wrong passwords: try again later")
 			return
@@ -90,7 +91,7 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if match || err != nil {
 		for _, lim := range limits {
-			lim.l.give(lim.key)
+			lim.l.Give(lim.key)
 		}
 	}
 	if err != nil {

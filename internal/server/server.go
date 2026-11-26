@@ -1,4 +1,4 @@
-// Package server is the HTTP side of the TaskTo.AI binary.
+// Package server is the HTTP side of the taskto.ai binary.
 package server
 
 import (
@@ -198,6 +198,8 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	if opts.Integrations != nil {
 		opts.Integrations.Routes(mux, accounts, spaces)
+		// The providers' webhooks: outside /api, authenticated by the provider's signature alone.
+		opts.Integrations.HookRoutes(mux)
 	}
 	if opts.Browser != nil {
 		opts.Browser.Routes(mux, accounts)

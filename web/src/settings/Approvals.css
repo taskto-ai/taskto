@@ -1,0 +1,57 @@
+/* The approvals queue: the settings frame, a filter and a list of requests, each opened in a dialog.
+   Every part is a component from web/src/ui; this only places them. */
+
+@layer screens {
+  /* The filter sits at the start of the page, as wide as its choices and never wider than the page. */
+  .approvals-filters {
+    justify-self: start;
+    align-self: flex-start;
+    max-inline-size: 100%;
+  }
+
+  /* On a phone the choices wrap onto a second row when the language's words are long, rather than being
+     cut off: the pill keeps its ground, and each segment keeps a control's height. */
+  @media (max-width: 40rem) {
+    .approvals-filters .ui-segmented {
+      flex-wrap: wrap;
+      block-size: auto;
+      max-inline-size: 100%;
+    }
+
+    .approvals-filters .ui-segment-face {
+      padding-inline: var(--space-2);
+      min-block-size: calc(var(--control-md) - var(--space-2));
+    }
+  }
+
+  @media (max-width: 40rem) and (pointer: coarse) {
+    .approvals-filters .ui-segment-face {
+      min-block-size: calc(var(--control-touch) - var(--space-2));
+    }
+  }
+
+  .approvals-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .approvals-more {
+    display: flex;
+    justify-content: center;
+  }
+
+  .approvals-review {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+    overflow-wrap: anywhere;
+  }
+
+  .approvals-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+}

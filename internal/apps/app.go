@@ -69,7 +69,7 @@ const ProtocolVersion = "v0.9"
 const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 
 // DefinitionVersion is the version of the definition's own format, the one this server writes
-// and reads. It is TaskTo.AI's, independent of ProtocolVersion (A2UI's): it grows when the
+// and reads. It is taskto.ai's, independent of ProtocolVersion (A2UI's): it grows when the
 // definition gains something an older reader would misread (a new kind of action, say), while
 // the catalog's growth is told by Definition.Requires. A definition that says a higher version
 // than this is refused, and a client that finds a release in a higher one asks to be updated.
@@ -204,7 +204,7 @@ type Action struct {
 	Screen string `json:"screen,omitempty"`
 	// Then is the screen an insert, update or delete opens once it has run, if any.
 	Then string `json:"then,omitempty"`
-	// Effects are what an insert or an update sets going on the rest of TaskTo.AI once the
+	// Effects are what an insert or an update sets going on the rest of taskto.ai once the
 	// record is changed (effects.go): done by the server's worker, as the user who acted.
 	Effects []Effect `json:"effects,omitempty"`
 }

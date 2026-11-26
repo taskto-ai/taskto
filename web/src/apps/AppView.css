@@ -1,5 +1,5 @@
 /* An app's screen (AppView) and what the app's own catalog draws in it (catalog.tsx). The renderer's
-   components are themed in ui/a2ui.css, outside the layers; what is here is TaskTo.AI's own. */
+   components are themed in ui/a2ui.css, outside the layers; what is here is taskto.ai's own. */
 
 @layer screens {
   /* The host of an app's screens (catalog.tsx): no wider than the app. */

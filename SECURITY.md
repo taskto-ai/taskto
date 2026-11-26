@@ -1,6 +1,6 @@
 # Security policy
 
-TaskTo.AI holds people's documents, their agents' logins and their API keys, so we take
+taskto.ai holds people's documents, their agents' logins and their API keys, so we take
 reports seriously and thank everyone who sends one.
 
 ## Reporting a vulnerability
@@ -29,7 +29,7 @@ action against research done in good faith that respects people's data and this 
 
 ## Supported versions
 
-TaskTo.AI is in early development. Fixes go to `main` and to the latest release; older
+taskto.ai is in early development. Fixes go to `main` and to the latest release; older
 releases aren't patched. Run a current version.
 
 ## Scope
@@ -47,5 +47,5 @@ and the install files in this repository. Of particular interest:
 Out of scope: an instance you don't own, denial of service by volume, findings that need a
 compromised host or an operator's development switches (`-insecure-cookies`,
 `-unsafe-privileged-agents`, `local-unsafe` CLI workers), and issues in third-party
-software that are already public (report those upstream; tell us if TaskTo.AI should pin
+software that are already public (report those upstream; tell us if taskto.ai should pin
 or update something).

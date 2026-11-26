@@ -1,4 +1,4 @@
-// Settings → About → Install the app: what to do on this device to add TaskTo.AI to it. The
+// Settings → About → Install the app: what to do on this device to add taskto.ai to it. The
 // browser's own prompt is offered when it gave one; otherwise the steps for the platform,
 // since iOS has no prompt at all.
 

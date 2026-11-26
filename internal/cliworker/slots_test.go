@@ -4,6 +4,9 @@ package cliworker_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -103,5 +106,43 @@ func TestAccountSlots(t *testing.T) {
 	// A shared account's directory has no login of its own.
 	if _, err := h.w.StartLogin(1, cliworker.Claude, "s3"); err == nil {
 		t.Error("a login started in a shared account's directory")
+	}
+}
+
+// Forgetting a deleted account removes everything the worker kept for it: the logins of every
+// account, their sessions and working directories, and the user's directory; another user's
+// stay. Doing it again is no error.
+func TestForgetRemovesEverythingKeptForAUser(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	mine, err := h.layout.EnsureSlot(1, cliworker.Claude, "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := h.layout.Ensure(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clitest.SignIn(t, "claude", mine.Config(cliworker.Claude))
+	clitest.SignIn(t, "claude", mine.ConfigOf(cliworker.Claude, "2"))
+	clitest.SignIn(t, "claude", other.Config(cliworker.Claude))
+	if st, _ := h.w.Status(ctx, 1, cliworker.Claude, "2"); !st.LoggedIn {
+		t.Fatal("fixture: the second account isn't signed in")
+	}
+
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mine.Root); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the user's directory remains: %v", err)
+	}
+	if st, _ := h.w.Status(ctx, 2, cliworker.Claude, ""); !st.LoggedIn {
+		t.Error("forgetting one user signed another out")
+	}
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Errorf("forgetting again: %v", err)
+	}
+	if err := h.w.Forget(ctx, 0); err == nil {
+		t.Error("user 0 was accepted")
 	}
 }

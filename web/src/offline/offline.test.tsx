@@ -17,6 +17,7 @@ import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { ApiError, forAccount, type OfflineApp } from '../api'
 import { forgetOperations } from '../apps/operations'
 import { UploadCancelled, uploadPhoto } from '../apps/photos'
+import { forgetAccount } from '../auth/forgetAccount'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
 import { AccountChanged } from './account'
@@ -1029,6 +1030,50 @@ test('signing out deletes the account’s database even when it was never opened
   expect(await deactivate({ purge: true, user: 7, approved: approvalOf(shown.items) })).toEqual([])
   expect((await indexedDB.databases()).map((x) => x.name)).not.toContain('taskto-offline-7')
   expect(lastUser()).toBeNull()
+})
+
+test('a deleted account’s late answer removes that account’s database only: the one now signed in here, and its queue, stay', async () => {
+  await activate(1, 'Alice')
+  const alice = runtimeState().runtime
+  if (!alice) throw new Error('no runtime')
+  alice.engine.pause('manual')
+  await queue(alice.store, { description: 'Alice unsent', amount: '1' }, download(1))
+  // Bob signs in on the same tab before Alice's deletion is answered: hers is sealed, his is in use.
+  await activate(2, 'Bob')
+  const bob = runtimeState().runtime
+  if (!bob) throw new Error('no runtime')
+  bob.engine.pause('manual')
+  await queue(bob.store, { description: 'Bob unsent', amount: '2' }, download(2))
+
+  await forgetAccount(1)
+
+  const names = (await indexedDB.databases()).map((x) => x.name)
+  expect(names).not.toContain('taskto-offline-1')
+  expect(names).toContain('taskto-offline-2')
+  expect(runtimeState().runtime?.user).toBe(2)
+  expect((await bob.store.listItems()).map((i) => i.action.context.description)).toEqual(['Bob unsent'])
+  expect((await unsentOf(2)).count).toBe(1)
+  expect(lastUser()?.id).toBe(2)
+  expect(JSON.parse(window.localStorage.getItem('taskto:offline-users') ?? '[]')).toEqual([2])
+})
+
+test('a deleted account’s answer in a tab with no runtime leaves another account’s database alone', async () => {
+  const mine = await openStore(1)
+  await queue(mine, { description: 'Alice unsent', amount: '1' })
+  mine.close()
+  const theirs = await openStore(2)
+  await queue(theirs, { description: 'Bob unsent', amount: '2' })
+  theirs.close()
+  window.localStorage.setItem('taskto:offline-users', '[1,2]')
+  rememberUser({ id: 2, name: 'Bob' })
+
+  await forgetAccount(1)
+
+  const names = (await indexedDB.databases()).map((x) => x.name)
+  expect(names).not.toContain('taskto-offline-1')
+  expect(names).toContain('taskto-offline-2')
+  expect((await unsentOf(2)).count).toBe(1)
+  expect(lastUser()?.id).toBe(2)
 })
 
 const narrowed = { id: 1, name: 'Expenses', access: { read_records: 'own' } }

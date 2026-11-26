@@ -399,15 +399,7 @@ func TestSecondStepAccountLimitDoesNotChargeTheAddress(t *testing.T) {
 	for range codeAccountAndIPAttempts {
 		expect(t, c.second(c.challenge("owner@example.com", ownerPassword), wrongCode), http.StatusUnauthorized)
 	}
-	used := func() int {
-		e.svc.codePerIP.mu.Lock()
-		defer e.svc.codePerIP.mu.Unlock()
-		n := 0
-		for _, w := range e.svc.codePerIP.hits {
-			n += w.count
-		}
-		return n
-	}
+	used := e.svc.codePerIP.Used
 	before := used()
 	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), wrongCode), http.StatusTooManyRequests)
 	if got := used(); got != before {

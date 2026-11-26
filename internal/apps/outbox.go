@@ -94,7 +94,7 @@ const (
 	defaultListed = 100
 )
 
-// Platform is the rest of TaskTo.AI that effects act on. Without one an app's effects can't be done
+// Platform is the rest of taskto.ai that effects act on. Without one an app's effects can't be done
 // (they stay queued); the server builds the apps service with one.
 type Platform struct {
 	Boards *boards.Service
@@ -294,7 +294,8 @@ const effectFrom = `
 	JOIN app_operations o ON o.id = e.operation_id
 	JOIN app_rows r ON r.id = e.record_id`
 
-const effectColumns = `e.id, e.app_id, e.record_id, e.record_revision, e.user_id, e.position, e.attempts, e.lease,
+// An entry whose account was purged has no user (user_id is NULL): 0 here, who nobody is.
+const effectColumns = `e.id, e.app_id, e.record_id, e.record_revision, coalesce(e.user_id, 0), e.position, e.attempts, e.lease,
 	o.operation, o.action, e.name, e.kind, e.action_kind, e.acted_by_agent, e.acted_via, e.payload, e.state,
 	e.next_attempt_at, e.error_code, e.error_params, e.result, e.created_at, e.updated_at, e.done_at`
 
@@ -592,7 +593,8 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 // worked out when it is read, from what they may read then. A failure after a retry is a new
 // notification, one per claim.
 func notifyEffectFailed(ctx context.Context, tx *sql.Tx, effectID int64) error {
-	var userID, appID, lease, spaceID, workspaceID int64
+	var userID sql.NullInt64
+	var appID, lease, spaceID, workspaceID int64
 	err := tx.QueryRowContext(ctx, `
 		SELECT e.user_id, e.app_id, e.lease, a.space_id, sp.workspace_id
 		FROM app_effects e JOIN apps a ON a.id = e.app_id JOIN spaces sp ON sp.id = a.space_id
@@ -603,8 +605,11 @@ func notifyEffectFailed(ctx context.Context, tx *sql.Tx, effectID int64) error {
 	if err != nil {
 		return err
 	}
+	if !userID.Valid {
+		return nil // the account that acted is gone: nobody to tell
+	}
 	return notifications.Add(ctx, tx, notifications.Notice{
-		UserID: userID, WorkspaceID: workspaceID, Kind: notifications.KindAppEffectFailed,
+		UserID: userID.Int64, WorkspaceID: workspaceID, Kind: notifications.KindAppEffectFailed,
 		Ref:       notifications.Ref{Space: spaceID, App: appID, Effect: effectID},
 		DedupeKey: fmt.Sprintf("effect:%d:%d", effectID, lease),
 	})

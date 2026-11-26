@@ -55,6 +55,7 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/search"
@@ -63,7 +64,7 @@ import (
 
 // AgentName is the agent's name in the knowledge base's history: the committer of the
 // changes it makes for a user.
-const AgentName = "TaskTo.AI agent"
+const AgentName = "taskto.ai agent"
 
 const (
 	// MaxResult bounds a tool's reply, in bytes of JSON.
@@ -82,6 +83,8 @@ type Options struct {
 	Apps      *apps.Service
 	Knowledge *knowledge.Store
 	Search    *search.Index
+	// Integrations tells which integrations a space may use (list_integrations); nil means none.
+	Integrations *integrations.Store
 	// Browser runs the agent browser's tools (internal/agentbrowser); nil means the browser
 	// is off, and its tools say so.
 	Browser BrowserTools
@@ -165,6 +168,7 @@ func New(o Options) *Service {
 		"restore_card":         s.restoreCard,
 		"app_catalog":          s.appCatalog,
 		"list_apps":            s.listApps,
+		"list_integrations":    s.listIntegrations,
 		"show_app":             s.showApp,
 		"list_app_rows":        s.listAppRows,
 		"query_app_rows":       s.queryAppRows,

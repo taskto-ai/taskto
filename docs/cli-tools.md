@@ -1,4 +1,4 @@
-# TaskTo's tools in CLI conversations
+# taskto's tools in CLI conversations
 
 A conversation that runs on Claude Code, Codex or Grok Build ([cli-workers.md](cli-workers.md))
 gets the tools the built-in agent has: the knowledge base, the boards, the apps
@@ -52,7 +52,7 @@ Two other shapes were considered:
   while the server runs with `-browser`, the browser tools, which `/mcp` leaves out
   (`conversation_only`): a turn is in a conversation, where the hand-over happens.
 - **Without a proxy listener** (container mode without `-cli-proxy-listen`), turns get no
-  TaskTo tools, and the server says so in its log at start.
+  taskto tools, and the server says so in its log at start.
 
 ### The token
 
@@ -87,13 +87,13 @@ Minted by the server for each worker turn it starts, whatever account it runs on
   `not found`.
 - **What the token is worth.** A command the model runs can read it (spike risk 3), as it can
   read the proxy's token; and in `ask`, a command runs only once the owner allowed it. It lets
-  that command call TaskTo's tools as the conversation's owner, in that conversation, while the
+  that command call taskto's tools as the conversation's owner, in that conversation, while the
   turn runs, without the prompt a write would get through the CLI: what the owner's agent can do
   anyway, and what that allowed command could do through the CLI's own login. It never reaches
   another user's data, and it stops when the turn ends, the conversation is archived or the owner
   leaves the workspace.
 - **Changes are the owner's, made by the agent**, as the sidecar's: a document's commit has the
-  owner as author and `TaskTo.AI agent` as committer; board and app changes are
+  owner as author and `taskto.ai agent` as committer; board and app changes are
   `Actor{Agent: true}`.
 
 ### The CLIs' settings
@@ -136,7 +136,7 @@ settings name the variable, not its value:
 ### Permissions
 
 The prompts of [agent-safety.md](agent-safety.md#3-permission-prompts-unless-the-user-turns-them-off)
-cover TaskTo's tools, with no setting of their own:
+cover taskto's tools, with no setting of their own:
 
 - **`ask`**: a tool that changes nothing (`read_only` in `tools.json`: `list_spaces`,
   `read_doc`, `list_cards`, `browser_snapshot`, …) runs without asking, as reading the working
@@ -144,12 +144,12 @@ cover TaskTo's tools, with no setting of their own:
   other tool (`write_doc`, `create_card`, `browser_open`, …) asks the owner, with the tool and
   its arguments.
 - **`allow_all`**: nothing asks.
-- The worker recognises a read-only TaskTo tool by the names the server put in the spec, in each
+- The worker recognises a read-only taskto tool by the names the server put in the spec, in each
   CLI's form: `mcp__taskto__<tool>` (Claude Code, Codex), `taskto__<tool>` (Grok Build), and
   Grok Build's `use_tool` with `tool_name` `taskto__<tool>` and its input inline. Its
   `search_tool`, which only lists the tools, is read-only too. Anything else asks.
 - This holds for both hook events: Claude Code asks about every MCP tool, read-only or not
-  (checked), so its `PermissionRequest` for a read-only TaskTo tool is answered at once.
+  (checked), so its `PermissionRequest` for a read-only taskto tool is answered at once.
 
 ### The browser's hand-over
 
@@ -164,7 +164,7 @@ now). A CLI turn is one `cli_turn` call, so the card needs to come from it:
   asked, whatever the call's result;
 - Done or Not now sends a message, which starts the next CLI turn, as before.
 
-An app the CLI saves with TaskTo's `create_app` or `update_app` is shown the same way, so the app
+An app the CLI saves with taskto's `create_app` or `update_app` is shown the same way, so the app
 builder's preview fills in after a CLI turn: the worker reads the app's `id` and `space_id` from
 the whole of a finished, successful call's answer (the event's `output` is cut, so it can't be read
 from there; each CLI's form of the name is accepted, as above) and sends them in the tool event's
@@ -212,7 +212,7 @@ so a prompt before it would ask them twice.
 
 1. This note.
 2. **The worker**: the turn's tools in its spec, each CLI's settings and environment, the
-   permission policy for TaskTo's tools, and the fake CLIs' MCP calls.
+   permission policy for taskto's tools, and the fake CLIs' MCP calls.
 3. **The server**: the token, the endpoint on the proxy's listener, starting turns with tools,
    the cross-user and end-to-end tests, and the docs.
 4. **The hand-over**: the sidecar's and the web app's card for a CLI's `browser_help`, and
@@ -227,6 +227,6 @@ Defaults taken, still open to change:
 2. **The browser tools follow `read_only` too**: `browser_tabs` and `browser_snapshot` don't ask,
    nor does `browser_help` (above); the others do. The built-in agent asks for none of them.
 3. **Changes are marked as the agent's**, not as the CLI's. Naming the CLI in the history
-   (`Claude Code (TaskTo.AI agent)`) can come later.
+   (`Claude Code (taskto.ai agent)`) can come later.
 4. **The token can't be revoked before it expires** after a server restart, as the proxy's.
    Archiving the conversation or removing the owner from the workspace stops it at once.

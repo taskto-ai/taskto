@@ -460,7 +460,7 @@ func TestRestoreRefusesBadArchives(t *testing.T) {
 		archive []byte
 		wantErr string
 	}{
-		"not gzip":          {[]byte("plain text"), "not a TaskTo.AI backup"},
+		"not gzip":          {[]byte("plain text"), "not a taskto.ai backup"},
 		"no manifest":       {archiveOf(t, nil, file("taskto.db")), "manifest is missing"},
 		"newer format":      {archiveOf(t, &Manifest{Format: format + 1}), "isn't supported"},
 		"parent path":       {archiveOf(t, ok, file("../escape")), "unexpected path"},
@@ -652,6 +652,46 @@ func TestRestoreRefusesATruncatedFormat1Archive(t *testing.T) {
 	for _, cut := range []int{4, 8, 20} {
 		if _, err := Restore(context.Background(), bytes.NewReader(archive[:len(archive)-cut]), filepath.Join(t.TempDir(), "data")); err == nil {
 			t.Fatalf("a format 1 archive cut by %d bytes restored", cut)
+		}
+	}
+}
+
+// A restore ends every login the backup held, whatever has been revoked since: the rows
+// that stand for a bearer's way in are gone from the restored database, its other rows stay.
+func TestRestoreEndsEveryLogin(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	for _, q := range []string{
+		`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('s1', 1, '2999-01-01T00:00:00Z')`,
+		`INSERT INTO push_subscriptions (user_id, session_id, endpoint, p256dh, auth_sealed) VALUES (1, 1, 'https://push.example/1', x'01', x'02')`,
+		`INSERT INTO workspaces (name) VALUES ('Home')`,
+		`INSERT INTO access_tokens (user_id, workspace_id, name, token_hash) VALUES (1, 1, 'laptop', 't1')`,
+		`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (1, 'r1', '2999-01-01T00:00:00Z')`,
+		`INSERT INTO login_challenges (token_hash, user_id, expires_at) VALUES ('c1', 1, '2999-01-01T00:00:00Z')`,
+		`INSERT INTO invites (workspace_id, token_hash, email, role, expires_at) VALUES (1, 'i1', 'a@example.com', 'member', '2999-01-01T00:00:00Z')`,
+	} {
+		if _, err := f.server.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	archive, _ := backup(t, f.dir)
+	dst := filepath.Join(t.TempDir(), "restored")
+	if _, err := Restore(ctx, archive, dst); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	server, err := db.Open(ctx, filepath.Join(dst, db.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	for _, table := range loginTables {
+		if n := count(t, server, `SELECT count(*) FROM `+table); n != 0 {
+			t.Errorf("%s has %d rows after the restore, want none", table, n)
+		}
+	}
+	for table, want := range map[string]int{"users": 1, "workspaces": 1, "invites": 1} {
+		if n := count(t, server, `SELECT count(*) FROM `+table); n != want {
+			t.Errorf("%s has %d rows after the restore, want %d", table, n, want)
 		}
 	}
 }

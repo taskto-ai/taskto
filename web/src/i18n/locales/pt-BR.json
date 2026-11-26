@@ -63,7 +63,7 @@
       "restoreOp": "Restaurado",
       "version": "{operation} · revisão {revision} · {when} · {name}",
       "agent": "{name} (pelo agente)",
-      "unknownUser": "uma conta removida",
+      "unknownUser": "Usuário excluído",
       "system": {
         "generic": "uma integração",
         "named": "{name} (integração)",
@@ -213,9 +213,9 @@
     },
     "updateRequired": {
       "title": "Atualização necessária",
-      "message": "Este app foi publicado com recursos que esta versão do TaskTo.AI ainda não tem, então não pode ser mostrado aqui.",
+      "message": "Este app foi publicado com recursos que esta versão do taskto.ai ainda não tem, então não pode ser mostrado aqui.",
       "needs": "Precisa de: {needs}",
-      "update": "Atualizar o TaskTo.AI"
+      "update": "Atualizar o taskto.ai"
     },
     "builder": {
       "build": "Criar um app",
@@ -588,6 +588,105 @@
       "title": "Tirar {name} do ar?",
       "body": "Ninguém poderá abri-lo até que alguém que possa publicá-lo o restaure. Os registros são mantidos."
     },
+    "integrations": {
+      "title": "Serviços externos",
+      "intro": "Este app pede algo a estes serviços externos. Um administrador precisa aprovar exatamente o que está listado antes de ele ser publicado, e qualquer mudança exige uma nova aprovação. Para mudar o que ele pede, peça ao agente na conversa.",
+      "slotNamed": "Serviço “{slot}”",
+      "status": {
+        "none": "Ainda não pedida",
+        "requested": "Aguardando um administrador",
+        "approved": "Aprovada",
+        "rejected": "Recusada",
+        "revoked": "Revogada",
+        "unusable": "Aprovada, mas sem uso agora"
+      },
+      "was": {
+        "rejected": "Um administrador recusou isto. Você pode alterar o app e pedir de novo, ou pedir de novo como está.",
+        "revoked": "Um administrador retirou esta aprovação. Peça de novo para recuperá-la."
+      },
+      "waiting": "Um administrador verá este pedido em Configurações, em Aprovações de integrações. A publicação espera a resposta dele.",
+      "openQueue": "Abrir as aprovações para decidir",
+      "request": "Pedir a um administrador que aprove",
+      "requestAgain": "Pedir de novo",
+      "connectedTo": "Conectado a {name}.",
+      "connectedUnusable": "Conectado a {name}, que está desligada ou não é permitida neste espaço agora. Um administrador muda isso em Configurações, em Integrações.",
+      "liveUnusable": "A versão publicada não pode usar este serviço agora: um administrador retirou a aprovação, desligou a integração ou não a permite mais neste espaço.",
+      "publishWaits": "A publicação espera um administrador aprovar o que este app pede a {slots}.",
+      "publishBroken": "A integração de {slots} está desligada ou não é permitida neste espaço. Um administrador precisa mudar isso em Configurações, em Integrações, antes de publicar.",
+      "approveAndPublish": "Aprovar e publicar…",
+      "approve": {
+        "title": "Aprovar e publicar",
+        "intro": "Você é administrador deste workspace, então pode aprovar o que este app pede aos serviços externos abaixo e publicá-lo em um só passo.",
+        "connect": "Conectar a",
+        "choose": "Escolha uma integração",
+        "option": "{name} ({mode})",
+        "none": "Ainda não há integração de {kind} conectada e ligada.",
+        "openSettings": "Abrir as integrações",
+        "allowSpace": "Isso também permite a integração em {space}, enquanto alguma aprovação precisar dela. Um administrador a mantém por mais tempo nos espaços da integração, em Configurações.",
+        "consent": "Ao continuar, você aprova exatamente o que está listado acima, para este app, e o publica.",
+        "confirm": "Aprovar e publicar",
+        "nothingLeft": "Tudo o que este app pede aos serviços externos já está aprovado. Feche isto e publique como de costume.",
+        "kept": "Estas aprovações foram concluídas e continuam ativas: {slots}. Esta recusa não as desfaz; revogue-as em Configurações, em Aprovações de integrações, se não as quiser."
+      },
+      "contract": {
+        "field": "“{name}”",
+        "service": {
+          "payments": "pagamento"
+        },
+        "sends": "Envia ao serviço de {service} os valores de {fields}.",
+        "link": "Quando a ação {action} ({kind}) roda, ela pede um link de pagamento para o valor em {amount}, em {currency}, e grava o link em {url} e o número dele em {id}.",
+        "actionKind": {
+          "insert": "ela adiciona um registro",
+          "update": "ela altera um registro",
+          "delete": "ela exclui um registro"
+        },
+        "describes": "A descrição que ela envia cita {what}.",
+        "recordNumber": "o número do registro",
+        "linkWhen": "{link} Só quando {rule}.",
+        "linkCurrencyField": "a moeda em {field} ({options})",
+        "handlersIntro": "Quando o serviço informa algo sobre um pagamento, ele pode gravar no registro:",
+        "event": "Quando {event}:",
+        "eventWhen": "Quando {event}, só se {rule}:",
+        "events": {
+          "payment": {
+            "succeeded": "um pagamento é concluído",
+            "expired": "um link de pagamento expira",
+            "failed": "um pagamento falha",
+            "refunded": "um pagamento é reembolsado"
+          }
+        },
+        "setValue": "define {field} como {value}",
+        "setFrom": "define {field} como {source}",
+        "source": {
+          "occurred_at": "o momento em que o pagamento aconteceu",
+          "paid_at": "o momento em que foi pago",
+          "amount": "o valor pago",
+          "currency": "a moeda em que foi pago",
+          "receipt_url": "o endereço do recibo",
+          "payment_id": "o número do pagamento no serviço"
+        },
+        "fieldsIntro": "O que cada um destes campos pode conter. Aumentar um limite, incluir uma opção ou retirar uma exigência pede uma nova aprovação:",
+        "fieldLine": "{field}: {rules}.",
+        "constraint": {
+          "required": "obrigatório",
+          "requiredWhen": "obrigatório quando {rule}",
+          "optional": "pode ficar vazio",
+          "maxLength_one": "até {count} caractere",
+          "maxLength_many": "até {count} caracteres",
+          "maxLength_other": "até {count} caracteres",
+          "min": "no mínimo {value}",
+          "max": "no máximo {value}",
+          "options": "um entre {options}",
+          "format": "lê códigos {format}",
+          "editable": "pode ser substituído depois de gravado",
+          "maxFiles_one": "até {count} arquivo",
+          "maxFiles_many": "até {count} arquivos",
+          "maxFiles_other": "até {count} arquivos",
+          "maxBytes": "cada um com até {size}"
+        },
+        "limits": "Nada além disso: nenhum outro campo, nenhum endereço da web, nenhuma chave. Um administrador conecta a conta e define os limites dela."
+      }
+    },
     "rendererFailed": "Não foi possível carregar esta tela: o código dela não chegou. Verifique sua conexão e tente de novo."
   },
   "auth": {
@@ -666,7 +765,8 @@
       "loginSubmit": "Entrar e participar",
       "newIntro": "Você foi convidado. Crie sua conta: seu e-mail é o endereço ao qual o convite foi enviado.",
       "create": "Criar a conta"
-    }
+    },
+    "accountDeleted": "Sua conta foi excluída. Ela está desativada agora e será apagada de vez em {date}; um operador deste servidor pode cancelar isso até lá."
   },
   "boards": {
     "board": "Quadro",
@@ -698,7 +798,7 @@
     "blocked": "Bloqueado",
     "agent": "Agente",
     "assigned": "Atribuído",
-    "someone": "Alguém",
+    "someone": "Usuário excluído",
     "byAgent": "{name} (agente)",
     "byAgentVia": "{name} (agente, {via})",
     "addCard": "Adicionar cartão",
@@ -840,8 +940,8 @@
     "invite_invalid": "O convite é desconhecido, já foi usado ou expirou.",
     "invite_other_email": "Este convite é para outro endereço de e-mail.",
     "invite_account_exists": "Já existe uma conta com este e-mail: entre e depois aceite o convite.",
-    "locale_invalid": "Esse não é um idioma que o TaskTo.AI conhece.",
-    "time_zone_invalid": "Esse não é um fuso horário que o TaskTo.AI conhece. Use um nome como Europe/Lisbon.",
+    "locale_invalid": "Esse não é um idioma que o taskto.ai conhece.",
+    "time_zone_invalid": "Esse não é um fuso horário que o taskto.ai conhece. Use um nome como Europe/Lisbon.",
     "token_not_found": "Token não encontrado.",
     "session_not_found": "Sessão não encontrada: ela pode já ter sido encerrada.",
     "session_current": "Esta é a sessão que você está usando: saia da conta.",
@@ -973,13 +1073,18 @@
     "integration_display_name_invalid": "O nome de exibição pode ter até {max} caracteres imprimíveis.",
     "integration_provider_unknown": "Este provedor não é compatível.",
     "integration_secret_required": "Informe o campo {secret}.",
+    "integration_webhook_secret_reused": "Outra integração já usa este segredo de webhook. Cada endpoint tem o seu: copie o que o provedor mostra para este endpoint.",
     "integration_secret_invalid": "O campo {secret} não parece ser deste provedor: confira se copiou o correto.",
     "integration_secret_unreadable": "O campo {secret} salvo não pode ser lido, porque a chave do servidor mudou. Informe-o de novo.",
+    "integration_webhook_secret_shared": "O {secret} desta integração foi encontrado compartilhado com outra integração, então as entregas assinadas com ele são recusadas e ele precisa ser substituído. Cada endpoint tem o seu: copie o que o provedor mostra para este endpoint e informe aqui.",
     "integration_setting_invalid": "A configuração {setting} está faltando ou não é válida.",
     "integration_limit_invalid": "O teto do valor deve ser um número inteiro de 1 a {max}.",
     "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
     "too_many_integrations": "Você pode ter no máximo {max} integrações em um espaço de trabalho: remova uma antes.",
     "integration_in_use": "Um app ainda usa esta integração: desative-a em vez de removê-la.",
+    "integration_event_gave_up": "Não foi possível aplicar o evento depois de várias tentativas.",
+    "webhook_rate_limited": "Muitas solicitações: tente de novo mais tarde.",
+    "webhook_too_large": "A solicitação é grande demais.",
     "app_integration_unapproved": "Um admin ainda não aprovou o que este app pede à integração \"{slot}\" na forma atual, ou a integração a que ela estava ligada foi desativada ou não é mais permitida neste espaço. Peça a um admin que aprove.",
     "app_integration_slot_unknown": "Este rascunho não declara uma integração chamada \"{slot}\".",
     "app_integration_contract_changed": "O app mudou desde que você leu o que ele pede à integração. Leia de novo e peça a aprovação disso.",
@@ -1146,7 +1251,13 @@
     "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
     "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo.",
     "too_many_resets": "Muitos pedidos de redefinição: tente de novo mais tarde.",
-    "too_many_invite_emails": "Muitos convites enviados por e-mail: tente de novo mais tarde."
+    "too_many_invite_emails": "Muitos convites enviados por e-mail: tente de novo mais tarde.",
+    "deletion_reauth_required": "Entre de novo com seu provedor e tente outra vez: excluir uma conta sem senha exige um login feito nos últimos minutos.",
+    "deletion_last_admin": "Você é a única pessoa administradora de {workspace}: torne outra pessoa administradora primeiro.",
+    "deletion_last_operator": "Esta conta é a única administradora de {workspace}, que administra este servidor: torne outra pessoa administradora lá primeiro.",
+    "deletion_pending": "Esta conta aguarda exclusão: um operador do servidor pode cancelar.",
+    "deletion_not_pending": "Esta conta não aguarda exclusão.",
+    "deletion_purging": "Esta conta está sendo excluída agora: não dá mais para cancelar."
   },
   "payment": {
     "done": {
@@ -1181,11 +1292,12 @@
       "data": "Seus dados",
       "tokens": "Tokens de acesso",
       "about": "Sobre",
-      "notifications": "Notificações"
+      "notifications": "Notificações",
+      "integrationApprovals": "Aprovações de integrações"
     },
     "general": {
       "language": "Idioma padrão",
-      "languageHelp": "Para membros cujo navegador pede um idioma que o TaskTo.AI não tem. Cada pessoa pode escolher o seu no menu da conta.",
+      "languageHelp": "Para membros cujo navegador pede um idioma que o taskto.ai não tem. Cada pessoa pode escolher o seu no menu da conta.",
       "save": "Salvar",
       "saved": "Salvo.",
       "mail": {
@@ -1287,7 +1399,16 @@
       "pending": "Pendente",
       "invitesHelp": "Um convite é um link que funciona uma vez, até expirar.",
       "emailPlaceholder": "nome@empresa.com",
-      "noEmail": "Este servidor não envia convites por e-mail; um convite é um link que você copia e envia."
+      "noEmail": "Este servidor não envia convites por e-mail; um convite é um link que você copia e envia.",
+      "deletionPending": "Exclusão em {date}",
+      "deletions": "Contas aguardando exclusão",
+      "deletionsHelp": "Como operador deste servidor, você vê todas as contas que aguardam o fim do prazo de carência. Cancelar uma exclusão reativa a conta, a menos que um administrador a tenha desativado antes, o que permanece; depois que a limpeza começa, não dá mais para cancelar.",
+      "noDeletions": "Nenhuma conta aguarda exclusão.",
+      "deletionDetails": "Será apagada em {date}",
+      "deletionPurging": "Sendo apagada agora",
+      "cancelDeletion": "Cancelar exclusão",
+      "cancelDeletionQuestion": "Cancelar a exclusão da conta de {name}? Ela é reativada (a menos que um administrador a tenha desativado antes, o que permanece) e a pessoa entra como antes.",
+      "cancelDeletionConfirm": "Sim, cancelar"
     },
     "password": {
       "intro": "Mudar sua senha encerra suas sessões em todos os outros lugares. Este navegador continua conectado. Seus tokens de acesso continuam funcionando: revogue-os em Tokens de acesso.",
@@ -1439,8 +1560,8 @@
       "newTitle": "Novo token de acesso"
     },
     "about": {
-      "title": "Sobre o TaskTo.AI",
-      "licence": "O TaskTo.AI é código aberto, sob a licença MIT.",
+      "title": "Sobre o taskto.ai",
+      "licence": "O taskto.ai é código aberto, sob a licença MIT.",
       "credits": "Créditos",
       "noCredits": "Nada do que este espaço de trabalho usa agora pede um crédito aqui.",
       "credit": "<work>{name}</work>, de {by}, sob <licenceLink>{licence}</licenceLink>.",
@@ -2004,7 +2125,10 @@
         "two_factor_enabled": "Login em duas etapas ativado",
         "two_factor_disabled": "Login em duas etapas desativado",
         "two_factor_recovery_codes_replaced": "Códigos de recuperação substituídos",
-        "two_factor_cleared": "Login em duas etapas removido por um administrador"
+        "two_factor_cleared": "Login em duas etapas removido por um administrador",
+        "account_deletion_requested": "Exclusão de conta solicitada",
+        "account_deletion_cancelled": "Exclusão de conta cancelada",
+        "account_purged": "Conta apagada de vez"
       },
       "targets": {
         "user": "Membro",
@@ -2053,6 +2177,16 @@
         "spaces": "Espaços compartilhados",
         "to": "Para",
         "user_id": "Número do membro",
+        "purge_days": "Dias até a limpeza",
+        "private_spaces": "Espaços privados apagados",
+        "conversations": "Conversas apagadas",
+        "access_grants": "Tokens de acesso apagados",
+        "cli_accounts": "Contas de CLI removidas",
+        "push_subscriptions": "Assinaturas push apagadas",
+        "documents_anonymized": "Commits com autor substituído (na última tentativa)",
+        "uploads_removed": "Envios inacabados removidos",
+        "cleanups_pending": "Etapas à espera do agente ou dos CLI workers",
+        "mentions_anonymized": "Menções anonimizadas",
         "added": "Espaços adicionados",
         "removed": "Espaços removidos",
         "kept": "Espaços mantidos",
@@ -2102,6 +2236,30 @@
       "event": "Evento",
       "when": "Quando"
     },
+    "delete": {
+      "title": "Excluir sua conta",
+      "intro": "Excluir sua conta a desativa na hora e desconecta você de tudo. Ela é mantida por {days} dias, e um operador do servidor pode cancelar a exclusão até lá; depois disso é apagada de vez.",
+      "removed": "O que é apagado:",
+      "removedPrivate": "Seu espaço privado em cada workspace: documentos e arquivos, quadros e apps com seus registros e fotos.",
+      "removedConversations": "Suas conversas com o agente.",
+      "removedLogins": "Seus logins de CLI, tokens de acesso, sessões, assinaturas de notificação push, preferências de notificação, login em duas etapas e identidades de login único.",
+      "kept": "O que você fez para outras pessoas permanece: cartões, comentários, documentos e registros de apps em espaços compartilhados, e o registro de auditoria. Eles aparecem como “Usuário excluído”, e seu nome e e-mail são retirados do histórico.",
+      "cancel": "Até o fim do prazo de carência, um operador do servidor pode cancelar a exclusão.",
+      "blocked": "Você ainda não pode excluir sua conta:",
+      "blockedAdmin": "Você é a única pessoa administradora de {workspace}: torne outra pessoa administradora primeiro.",
+      "blockedOperator": "Você é a única pessoa administradora de {workspace}, que administra este servidor: torne outra pessoa administradora lá primeiro.",
+      "exportFirst": "Baixar meus dados antes",
+      "start": "Excluir minha conta…",
+      "signInAgain": "Entre de novo com seu provedor e volte aqui: excluir uma conta sem senha exige um login feito nos últimos minutos.",
+      "formLabel": "Excluir sua conta",
+      "confirmIntro": "Digite sua senha para excluir sua conta. Você é desconectado na hora.",
+      "confirmIntroFresh": "Você entrou agora há pouco, o que confirma que é você. Excluir a conta desconecta você na hora.",
+      "password": "Sua senha",
+      "code": "Código de duas etapas ou código de recuperação",
+      "confirm": "Excluir minha conta",
+      "deleting": "Excluindo…",
+      "summary": "Exclua sua conta e o que é só seu: espaço privado, conversas e acessos. O que você fez para outras pessoas permanece. Você pode baixar seus dados antes."
+    },
     "groups": {
       "workspace": "Espaço de trabalho",
       "you": "Você",
@@ -2122,31 +2280,73 @@
       "search": "Como a busca encontra documentos e quais espaços consentem com a busca semântica.",
       "integrations": "Contas em provedores de pagamento que os apps podem usar."
     },
-    "actionsColumn": "Ações"
+    "actionsColumn": "Ações",
+    "approvals": {
+      "title": "Aprovações de integrações",
+      "intro": "Os apps pedem aqui para usar um serviço externo, como receber pagamentos. Você vê o que o app pede em palavras simples, quem pediu e onde, e nunca o app nem seus registros. Aprovar conecta o app a uma das integrações do workspace.",
+      "filter": "Mostrar pedidos",
+      "filters": {
+        "requested": "Aguardando",
+        "approved": "Aprovados",
+        "rejected": "Recusados",
+        "revoked": "Revogados"
+      },
+      "empty": {
+        "requested": "Nenhum pedido está aguardando.",
+        "approved": "Nada foi aprovado.",
+        "rejected": "Nada foi recusado.",
+        "revoked": "Nada foi revogado."
+      },
+      "list": "Pedidos",
+      "detail": "{slot} · {space} · pedido por {who}, {when}",
+      "unknownPerson": "alguém que saiu",
+      "review": "Revisar",
+      "view": "Ver",
+      "reviewNamed": "Revisar o pedido de {app}",
+      "older": "Mostrar pedidos mais antigos",
+      "dialogTitle": "Pedido de {app}",
+      "dialogDetail": "Serviço {slot} em {space}. Pedido por {who}, {when}.",
+      "reject": "Recusar",
+      "approve": "Aprovar",
+      "revoke": "Revogar aprovação",
+      "approved": "{app} aprovado. Já pode ser publicado.",
+      "rejected": "O pedido de {app} foi recusado.",
+      "revoked": "A aprovação de {app} foi revogada.",
+      "isLive": "É o que a versão publicada pede.",
+      "decidedBy": "Decidido por {who}, {when}.",
+      "allowSpace": "A integração ainda não é permitida em {space}. Aprovar também a permite ali, enquanto alguma aprovação precisar dela.",
+      "keepLink": "Para mantê-la permitida depois, marque “Manter … depois que a aprovação terminar” nos espaços da integração.",
+      "revokeQuestion": "Revogar a aprovação de {app}?",
+      "revokeBody": "O app deixa de usar a integração na hora. Ele não pode ser publicado, nem revertido para uma versão com este contrato, até ser aprovado de novo.",
+      "revokeLive": "É o que a versão publicada pede. Ela deixa de usar a integração na hora, embora continue no ar, e não pode ser publicada nem restaurada até ser aprovada de novo.",
+      "revokeSpace": "Se nenhuma outra aprovação precisar dele, {space} também deixa de ser permitido para a integração, a menos que seja mantido nos espaços da integração.",
+      "allowSpaceTemporary": "Aprovar também permite a integração nesse espaço, enquanto esta aprovação durar. Não é um espaço que você gerencia, então ele não pode ser mantido depois que a aprovação terminar.",
+      "revokeSpaceTemporary": "Se nenhuma outra aprovação precisar dele, esse espaço também deixa de ser permitido para a integração. Não é um espaço que você gerencia, então ele não pode ser mantido."
+    }
   },
   "pwa": {
     "update": {
-      "message": "Há uma nova versão do TaskTo.AI. Recarregar fecha o que você não salvou.",
+      "message": "Há uma nova versão do taskto.ai. Recarregar fecha o que você não salvou.",
       "reload": "Recarregar para atualizar",
       "later": "Depois"
     },
     "install": {
       "title": "Instalar o app",
-      "intro": "Adicione o TaskTo.AI a este dispositivo para abri-lo como um app, em uma janela própria.",
-      "installed": "O TaskTo.AI está instalado neste dispositivo: você está usando o app instalado.",
+      "intro": "Adicione o taskto.ai a este dispositivo para abri-lo como um app, em uma janela própria.",
+      "installed": "O taskto.ai está instalado neste dispositivo: você está usando o app instalado.",
       "insecure": "Este servidor não está em uma conexão segura (HTTPS), então este navegador não consegue instalá-lo nem guardá-lo para uso offline. Peça a quem administra o servidor que o sirva por HTTPS.",
-      "button": "Instalar o TaskTo.AI",
+      "button": "Instalar o taskto.ai",
       "ios": {
         "share": "Toque no botão Compartilhar, na barra do Safari ou no menu do seu navegador.",
         "add": "Escolha “Adicionar à Tela de Início”.",
-        "confirm": "Toque em Adicionar. O TaskTo.AI abre pela Tela de Início como um app."
+        "confirm": "Toque em Adicionar. O taskto.ai abre pela Tela de Início como um app."
       },
       "android": {
         "menu": "Abra o menu do navegador (⋮) e escolha “Instalar app” ou “Adicionar à tela inicial”.",
-        "confirm": "Confirme. O TaskTo.AI abre pelos seus apps como qualquer outro."
+        "confirm": "Confirme. O taskto.ai abre pelos seus apps como qualquer outro."
       },
       "desktop": {
-        "menu": "Procure o ícone de instalação no fim da barra de endereço, ou abra o menu do navegador e escolha “Instalar TaskTo.AI” (no Safari: Arquivo, depois “Adicionar ao Dock”)."
+        "menu": "Procure o ícone de instalação no fim da barra de endereço, ou abra o menu do navegador e escolha “Instalar taskto.ai” (no Safari: Arquivo, depois “Adicionar ao Dock”)."
       },
       "offline": "Offline, as telas do app ainda abrem, mas suas conversas, documentos e quadros precisam da conexão com o servidor."
     }
@@ -2193,7 +2393,9 @@
     "copy": "Copiar",
     "copied": "Copiado",
     "copyNamed": "Copiar {name}",
-    "labelFor": "{label} {name}"
+    "labelFor": "{label} {name}",
+    "deletedUser": "Usuário excluído",
+    "close": "Fechar"
   },
   "knowledge": {
     "new": "Novo",
@@ -2534,7 +2736,7 @@
     "hideNamed": "Ocultar {name}",
     "showNamed": "Mostrar {name} de novo",
     "pins": "Fixados no menu",
-    "pinsIntro": "Os apps fixados aparecem no menu, depois das páginas do TaskTo.AI.",
+    "pinsIntro": "Os apps fixados aparecem no menu, depois das páginas do taskto.ai.",
     "noPins": "Nenhum app fixado.",
     "pinNamed": "Fixar {name}",
     "unpinNamed": "Desafixar {name}",
@@ -2669,7 +2871,7 @@
     "disabled": "Um administrador desativou os downloads offline deste espaço.",
     "onlineOnly": "Criar com IA, publicar e compartilhar exigem conexão. Offline, você abre apps baixados e adiciona registros.",
     "unavailable": "O armazenamento offline não está disponível neste navegador, então os apps não podem ser baixados.",
-    "schemaNewer": "Este dispositivo guarda dados offline gravados por uma versão mais nova do TaskTo.AI. Atualize o app para usá-los. Nada foi alterado.",
+    "schemaNewer": "Este dispositivo guarda dados offline gravados por uma versão mais nova do taskto.ai. Atualize o app para usá-los. Nada foi alterado.",
     "reload": "Recarregar para atualizar",
     "needsConnection": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada.",
     "notSaved": {
@@ -2706,9 +2908,11 @@
       "sendNamed": "Enviar {name}",
       "discard": "Descartar",
       "discardNamed": "Descartar {name}",
-      "discardQuestion": "Descartar este registro? Ele é apagado deste dispositivo e nunca será enviado.",
+      "discardQuestion": "Descartar este registro? Ele é apagado deste dispositivo e não haverá mais tentativas de enviá-lo.",
       "discardTitle": "Descartar {name}?",
-      "discardBody": "Ele é apagado deste dispositivo e nunca é enviado.",
+      "discardBody": "Isto remove a cópia deste dispositivo e interrompe novas tentativas de enviá-lo.",
+      "discardBodySent": "Isto remove a cópia deste dispositivo e interrompe novas tentativas de envio. Uma tentativa anterior pode já ter chegado ao servidor, então o registro pode existir lá: descartar não desfaz isso.",
+      "discardBodySentDelete": "Isto remove a cópia deste dispositivo e interrompe novas tentativas de envio. Uma tentativa anterior pode já ter apagado o registro no servidor: descartar não o restaura.",
       "discardConfirm": "Sim, descartar",
       "discardClosed": "A pergunta sobre descartar um registro foi fechada porque o registro mudou em outra aba ou janela (está sendo enviado, ou essa aba assumiu o controle). Nada foi removido. A lista mostra em que pé ele está.",
       "clearSynced": "Limpar registros sincronizados",
@@ -2744,13 +2948,13 @@
     },
     "shell": {
       "title": "Offline",
-      "intro": "O TaskTo.AI não consegue alcançar o servidor. Os apps que você baixou abrem aqui, e os registros que você adiciona ficam neste dispositivo até você voltar a ficar online.",
+      "intro": "O taskto.ai não consegue alcançar o servidor. Os apps que você baixou abrem aqui, e os registros que você adiciona ficam neste dispositivo até você voltar a ficar online.",
       "none": "Nada foi baixado neste dispositivo. Baixe um app enquanto estiver online para usá-lo aqui.",
       "reconnect": "Tentar reconectar",
       "open": "Abrir",
       "openNamed": "Abrir {name}",
       "back": "Voltar aos apps baixados",
-      "needsUpdate": "Esta versão do TaskTo.AI não consegue mostrar {name}."
+      "needsUpdate": "Esta versão do taskto.ai não consegue mostrar {name}."
     },
     "accountChanged": {
       "title": "A conta mudou",
@@ -2778,7 +2982,7 @@
       "cancel": "Cancelar",
       "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",
       "notWriter": "As alterações estão sendo feitas em outra aba, que não deixou esta assumir. Sincronize naquela aba, ou feche-a e tente de novo.",
-      "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do TaskTo.AI não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
+      "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do taskto.ai não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
       "unreadableStorage": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e o armazenamento do dispositivo não pode ser lido agora para verificar. Você pode mantê-los e sair sem apagar nada, ou descartá-los.",
       "keep": "Mantê-los e sair"
     },
@@ -2878,9 +3082,9 @@
       "inbox": "As notificações sempre aparecem na sua caixa de entrada, mesmo que este navegador não consiga mostrar notificações push.",
       "openInbox": "Abrir a caixa de entrada",
       "pushTitle": "Notificações push neste dispositivo",
-      "pushIntro": "Opcional. Quando ativadas, este dispositivo é avisado de uma nova notificação mesmo com o TaskTo.AI fechado. Nada é enviado a ele até você ativar.",
+      "pushIntro": "Opcional. Quando ativadas, este dispositivo é avisado de uma nova notificação mesmo com o taskto.ai fechado. Nada é enviado a ele até você ativar.",
       "unsupported": "Este navegador não consegue receber notificações push aqui. Suas notificações continuam aparecendo na caixa de entrada.",
-      "iosInstall": "No iPhone e no iPad, as notificações push só funcionam no app instalado. Adicione o TaskTo.AI à Tela de Início (veja Sobre), abra-o por lá e volte a esta página. Suas notificações aparecem na caixa de entrada de qualquer forma.",
+      "iosInstall": "No iPhone e no iPad, as notificações push só funcionam no app instalado. Adicione o taskto.ai à Tela de Início (veja Sobre), abra-o por lá e volte a esta página. Suas notificações aparecem na caixa de entrada de qualquer forma.",
       "denied": "As notificações estão bloqueadas para este site no seu navegador. Para ativar o push, permita notificações para este site nas configurações do navegador e volte aqui. Suas notificações continuam aparecendo na caixa de entrada.",
       "dismissed": "Você não respondeu à pergunta do navegador, então o push continua desativado.",
       "off": "O push está desativado neste dispositivo.",
@@ -2911,7 +3115,7 @@
       "emailDigest": "Incluir em um resumo diário",
       "emailHour": "Enviar o resumo diário às",
       "emailZone": "Fuso horário",
-      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
+      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao taskto.ai, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
       "emailUnavailableOff": "O e-mail não está configurado neste servidor. Você ainda pode desativar o e-mail.",
       "emailAddress": "As notificações vão para {email}.",
       "emailAddressVerified": "Este endereço está confirmado.",

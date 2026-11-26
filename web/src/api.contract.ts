@@ -21,6 +21,9 @@ export type Contract = [
   Is<Check<Gen.Token, Api.Token>>,
   Is<Check<Gen.InviteCreated, Api.InviteCreated>>,
   Is<Check<Gen.TokenCreated, Api.TokenCreated>>,
+  Is<Check<Gen.DeletionStatus, Api.DeletionStatus, 'method' | 'blockers[]'>>,
+  Is<Check<Gen.DeletionReply, Api.DeletionReply>>,
+  Is<Check<Gen.PendingDeletion, Api.PendingDeletion, 'user'>>,
   // Spaces and the knowledge base.
   Is<Check<Gen.Space, Api.Space>>,
   Is<Check<Gen.Doc, Api.Doc>>,
@@ -60,6 +63,11 @@ export type Contract = [
   Is<Check<Gen.IntegrationRegistry, Api.IntegrationRegistry>>,
   Is<Check<Gen.IntegrationCheck, Api.IntegrationCheck>>,
   Is<Check<Gen.SpaceIntegration, Api.SpaceIntegration>>,
+  Is<Check<Gen.AppsContract, Api.IntegrationContract>>,
+  Is<Check<Gen.AppsSlotStatus, Api.SlotStatus>>,
+  Is<Check<Gen.AppIntegrationStatus, Api.IntegrationStatus>>,
+  Is<Check<Gen.AppIntegrationApproval, Api.IntegrationApproval>>,
+  Is<Check<Gen.AppIntegrationApprovalList, Api.IntegrationApprovalList>>,
   // The host's updates, for the server's operators.
   Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
   Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,

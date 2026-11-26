@@ -9,6 +9,8 @@
 //   GET  /conversations                      → { conversations: [{ id, createdAt, retired }] }, oldest first
 //   POST /conversations                      { model?: { provider, modelId } } → { id, model }
 //   POST /conversations/:id/retire           → 204: stops its work; from then on it is unknown (404)
+//   POST /conversations/:id/purge            → 204: deletes a retired conversation's records from the database
+//                                              (409 if it isn't retired; 204 if it is gone already)
 //   POST /conversations/:id/abort            → 204 once idle: withdraws queued input and stops the running work
 //   GET  /conversations/:id/model            → { provider, modelId }
 //   PUT  /conversations/:id/model            { provider, modelId } → { provider, modelId }
@@ -32,7 +34,8 @@
 //
 // Pi Durable never deletes a conversation, so one the server has no use for any more (an orphan,
 // left when the server failed to record it) is retired instead: its work is aborted and every
-// route answers 404 for it, as for one that never existed. Its records stay in the database.
+// route answers 404 for it, as for one that never existed. Its records stay in the database
+// until the server, for an account that was deleted, asks for them to be purged.
 //
 // The watch stream carries Chord operations as they are. A client keeps the view current with
 // applyImmutable(view, ops) from @earendil-works/chord/delta, so nothing in between has to understand them.
@@ -40,6 +43,7 @@
 import { chmodSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
+import { DatabaseSync } from 'node:sqlite'
 import { format } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -59,6 +63,7 @@ import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, 
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
+import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
 
 // Everything this process logs passes redact(), so an API key never reaches its output.
 for (const level of ['error', 'warn', 'log', 'info', 'debug'] as const) {
@@ -166,6 +171,9 @@ class HttpError extends Error {
 
 const MAX_BODY = 1 << 20
 
+/** How long a purge waits for readers of the database before it says it isn't done. */
+const walBusyMs = testHooks.walBusyMs ?? 15_000
+
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   let size = 0
@@ -236,6 +244,69 @@ async function listConversations() {
     cursor = page.next
   } while (cursor)
   return out
+}
+
+// Deletes a conversation's records, and those of the conversations its tasks started, from the
+// database: its entries (what was said), tasks, submissions and documents with their revisions.
+// Pi Durable has no way to delete a conversation, so this is a second connection to its database
+// (WAL: it waits for the harness's writes, and the harness for its). Only a retired conversation
+// is purged: its work has stopped, so nothing writes the rows that go. secure_delete zeroes the
+// deleted content in the file, and the checkpoint takes it out of the write-ahead log.
+function purgeRecords(root: number): void {
+  const db = new DatabaseSync(dbPath as string, { timeout: walBusyMs })
+  try {
+    db.exec('PRAGMA secure_delete = ON')
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const ids = new Set<number>([root])
+      const taskIds = new Set<number>()
+      const list = (set: Set<number>) => [...set].join(',') || 'NULL'
+      for (let grew = true; grew; ) {
+        grew = false
+        const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
+          id: number
+        }[]
+        for (const t of tasks) taskIds.add(Number(t.id))
+        const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
+          id: number
+        }[]
+        for (const c of subs) {
+          if (!ids.has(Number(c.id))) {
+            ids.add(Number(c.id))
+            grew = true
+          }
+        }
+      }
+      const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
+        OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
+      const records = [
+        `SELECT id FROM entries WHERE conversation_id IN (${list(ids)})`,
+        `SELECT id FROM submissions WHERE conversation_id IN (${list(ids)})`,
+        docs,
+      ]
+      const gone = new Set<number>([...ids, ...taskIds])
+      for (const q of records) for (const r of db.prepare(q).all() as { id: number }[]) gone.add(Number(r.id))
+      db.exec(`DELETE FROM document_revisions WHERE document_id IN (${docs})`)
+      db.exec(`DELETE FROM documents WHERE id IN (${docs})`)
+      db.exec(`DELETE FROM submissions WHERE conversation_id IN (${list(ids)})`)
+      db.exec(`DELETE FROM entries WHERE conversation_id IN (${list(ids)})`)
+      db.exec(`DELETE FROM tasks WHERE conversation_id IN (${list(ids)})`)
+      db.exec(`DELETE FROM conversations WHERE id IN (${list(ids)})`)
+      // Deleted in chunks: a long conversation has more records than a statement may name.
+      const all = [...gone]
+      for (let i = 0; i < all.length; i += 500)
+        db.exec(`DELETE FROM record_ids WHERE id IN (${all.slice(i, i + 500).join(',')})`)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+    // What was deleted is still in the log until it is truncated, and a reader (the harness's, or a
+    // watch) can hold it up: then the purge isn't done, and the server asks again.
+    truncateWal(db)
+  } finally {
+    db.close()
+  }
 }
 
 // Entries a page holds by default and at most: a view's window holds 50 to 100.
@@ -405,6 +476,24 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       res.writeHead(204).end()
       return
     }
+    if (req.method === 'POST' && action === 'purge') {
+      const num = parseId(id) as ConversationId
+      const found = await harness.conversation(num, context)
+      if (found) {
+        if ((await harness.snapshot(Lifecycle, num, context))?.retiredAt == null) {
+          throw new HttpError(409, 'retire the conversation before purging it')
+        }
+        await found.abort(context) // idle, as retiring left it
+        purgeRecords(num)
+        console.error(`conversation ${num} purged`)
+      } else {
+        // Gone already, perhaps by an earlier purge that deleted the rows and couldn't truncate the
+        // log: what was said can still be in it, so done means the log is empty too.
+        truncateWalAt(dbPath as string, walBusyMs)
+      }
+      res.writeHead(204).end()
+      return
+    }
     if (req.method === 'POST' && action === 'abort') {
       // Stop: queued input is withdrawn (queued writes stay) and the running work aborted.
       await (await conversation(id)).abort(context)
@@ -454,14 +543,19 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
 const server = createServer((req, res) => {
   route(req, res).catch((error: unknown) => {
-    const status = error instanceof HttpError ? error.status : 500
-    if (status === 500) console.error(error)
+    // A purge that couldn't empty the log is not an error of the sidecar's: it isn't done yet.
+    const status = error instanceof HttpError ? error.status : error instanceof WalBusyError ? 503 : 500
+    // What went wrong goes to the sidecar's own log; the answer says what a caller may act on: a
+    // refusal of ours, or that the purge isn't done, and for anything else only that it failed.
+    if (status === 500 || status === 503) console.error(error)
     const reason = error instanceof HttpError ? error.reason : undefined
-    if (!res.headersSent)
-      send(res, status, {
-        error: error instanceof Error ? error.message : String(error),
-        ...(reason ? { reason } : {}),
-      })
+    const message =
+      error instanceof HttpError
+        ? error.message
+        : error instanceof WalBusyError
+          ? 'the purge is not done: a reader holds the database'
+          : 'internal error'
+    if (!res.headersSent) send(res, status, { error: message, ...(reason ? { reason } : {}) })
     else res.end()
   })
 })

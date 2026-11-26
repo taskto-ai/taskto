@@ -280,7 +280,7 @@ func TestHistoryAndRestore(t *testing.T) {
 
 	r1 := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("one"), "", alice, "First draft"))
 	must[Result](t)(s.Put(ctx, sp, "other.md", []byte("unrelated"), "", bob, ""))
-	r2 := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("two"), r1.Doc.Version, Author{Name: "Bob", Email: "bob@example.com", Agent: "TaskTo agent"}, ""))
+	r2 := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("two"), r1.Doc.Version, Author{Name: "Bob", Email: "bob@example.com", Agent: "taskto agent"}, ""))
 	r3 := must[Result](t)(s.Delete(ctx, sp, "a.md", r2.Doc.Version, alice, ""))
 
 	h := must[History](t)(s.History(ctx, sp, "a.md", "", 0))
@@ -290,7 +290,7 @@ func TestHistoryAndRestore(t *testing.T) {
 	}
 	want := []string{
 		fmt.Sprintf("delete Alice  %q ", "Delete a.md"),
-		fmt.Sprintf("update Bob TaskTo agent %q %s", "Update a.md", r2.Doc.Version),
+		fmt.Sprintf("update Bob taskto agent %q %s", "Update a.md", r2.Doc.Version),
 		fmt.Sprintf("create Alice  %q %s", "First draft", r1.Doc.Version),
 	}
 	if !slices.Equal(got, want) {

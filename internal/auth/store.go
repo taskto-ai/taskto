@@ -46,6 +46,9 @@ type Member struct {
 	// Disabled says the account is switched off (disable.go): it keeps its membership and what it
 	// owns, and can't sign in or act until an admin enables it again.
 	Disabled bool `json:"disabled"`
+	// DeletionAt is when the account is purged, if it was deleted and waits out its grace period
+	// (deletion.go); it is Disabled too.
+	DeletionAt *string `json:"deletion_at"`
 	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
 	// list has it.
 	TwoFactor *bool `json:"two_factor,omitempty"`
@@ -73,6 +76,7 @@ var (
 	errInviteInvalid  = errors.New("the invite is unknown, used or expired")
 	// errAccountDisabled is the answer of every way of signing in, or of acting as an account, for
 	// a disabled one (disable.go).
+	errNotOperator     = errors.New("only the server's operator can do this")
 	errAccountDisabled = errors.New("this account is disabled: ask a workspace admin to enable it")
 )
 
@@ -267,14 +271,20 @@ func (s *Service) checkWorkspaceLimits(ctx context.Context, tx *sql.Tx, userID i
 	return nil
 }
 
+// insertUser adds a user, whose id is above every id there has been: SQLite alone would give a
+// purged account's id to the next one when it was the newest (users_remember_id, migration 0050).
+// What is kept by a user's id (the browser's drafts and offline records, mentions in comments)
+// would then be the new person's.
 func insertUser(ctx context.Context, tx *sql.Tx, email, name, passwordHash string) (User, error) {
-	res, err := tx.ExecContext(ctx, `INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)`,
-		email, name, passwordHash)
+	var id int64
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO users (id, email, name, password_hash)
+		VALUES (max(coalesce((SELECT max(id) FROM users), 0), (SELECT high FROM user_ids WHERE id = 1)) + 1, ?, ?, ?)
+		RETURNING id`, email, name, passwordHash).Scan(&id)
 	if err != nil {
 		return User{}, err
 	}
-	id, err := res.LastInsertId()
-	return User{ID: id, Email: email, Name: name}, err
+	return User{ID: id, Email: email, Name: name}, nil
 }
 
 // userByEmail returns the user with email and their password hash, or errNotFound.
@@ -448,7 +458,8 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 		order = "u.id"
 	}
 	query := `
-		SELECT u.id, u.email, u.name, m.role, m.created_at, u.disabled_at IS NOT NULL
+		SELECT u.id, u.email, u.name, m.role, m.created_at, u.disabled_at IS NOT NULL,
+			(SELECT d.purge_at FROM account_deletions d WHERE d.user_id = u.id)
 		FROM memberships m JOIN users u ON u.id = m.user_id
 		WHERE m.workspace_id = ? AND u.id > ?
 		ORDER BY ` + order
@@ -465,7 +476,7 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 	all := []Member{}
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt, &m.Disabled); err != nil {
+		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt, &m.Disabled, &m.DeletionAt); err != nil {
 			return nil, err
 		}
 		all = append(all, m)
@@ -568,6 +579,9 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 			workspaceID, userID); err != nil {
 			return err
 		}
+		// The scheduler's jobs of the member in this workspace went with it, but not the purge of an
+		// account that is waiting to be deleted: that job doesn't depend on any membership (migration
+		// 0050), so a purge that failed is tried again whoever leaves what.
 		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"role": string(current)}}); err != nil {
 			return err

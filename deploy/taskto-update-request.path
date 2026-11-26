@@ -4,7 +4,7 @@
 # file's existence starts anything; the service never reads it as arguments (docs/install.md#update-now).
 # Step 16 sets another directory (TASKTO_UPDATE_REQUEST in /etc/taskto/install.env) in a drop-in.
 [Unit]
-Description=TaskTo.AI: an operator asked for an update
+Description=taskto.ai: an operator asked for an update
 
 [Path]
 PathExists=/var/lib/taskto-update/request/update-now

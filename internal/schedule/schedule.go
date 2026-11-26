@@ -75,7 +75,9 @@
 // it, as close to the write as it can, and return an error that wraps ErrAccessLost if it is
 // refused. Such a job isn't tried again. An owner whose account is disabled
 // (access.ErrDisabled) has not lost access for good: the job is held, not failed (below). No handler acts with the authority of whoever scheduled
-// it, or of the server.
+// it, or of the server. The one exception is a kind registered with RegisterServer: work the
+// server does about a person (the purge of an account that was deleted), whose jobs run with no
+// check of their owner, disabled or not, by a handler that acts for no one's access.
 //
 // # A disabled owner's jobs wait
 //
@@ -276,9 +278,11 @@ type Service struct {
 
 	mu       sync.Mutex
 	handlers map[Kind]Handler
-	frozen   bool
-	kinds    []Kind // the registered kinds, sorted, once frozen
-	wake     chan struct{}
+	// server is the kinds whose jobs run with no check of their owner's access (RegisterServer).
+	server map[Kind]bool
+	frozen bool
+	kinds  []Kind // the registered kinds, sorted, once frozen
+	wake   chan struct{}
 }
 
 // New returns the scheduler over sqlDB, which must be migrated. access is what jobs' owners are
@@ -288,7 +292,7 @@ func New(sqlDB *sql.DB, checker *access.Checker, opts Options) *Service {
 		db: sqlDB, access: checker, clock: opts.Clock,
 		poll: opts.Poll, lease: opts.Lease, timeout: opts.Timeout, maxAttempts: opts.MaxAttempts,
 		batch: opts.Batch, tidyEvery: opts.TidyEvery, stopWait: opts.StopWait,
-		handlers: map[Kind]Handler{}, wake: make(chan struct{}, 1),
+		handlers: map[Kind]Handler{}, server: map[Kind]bool{}, wake: make(chan struct{}, 1),
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -336,6 +340,27 @@ func (s *Service) Register(kind Kind, h Handler) error {
 	}
 	s.handlers[kind] = h
 	return nil
+}
+
+// RegisterServer is Register for work the server does about a person, not for them: its jobs run
+// when they are due whatever their owner can do then. The worker makes no check of the owner's
+// access, and a disabled account (or one that left its workspace) doesn't hold or fail them, so
+// the handler must not act with the owner's access: it checks and does what it does as the server
+// (the purge of a deleted account, which has to run for an account that is disabled by design).
+func (s *Service) RegisterServer(kind Kind, h Handler) error {
+	if err := s.Register(kind, h); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.server[kind] = true
+	return nil
+}
+
+func (s *Service) isServer(kind Kind) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.server[kind]
 }
 
 // freeze closes the registry and returns what the worker needs of it.
@@ -897,7 +922,9 @@ func (s *Service) runOne(ctx context.Context) (bool, error) {
 	if !ok { // can't be: claim takes only the kinds that have one
 		return false, fmt.Errorf("job %d: no handler for %q", j.ID, j.Kind)
 	}
-	err = s.authorize(ctx, j)
+	if !s.isServer(j.Kind) {
+		err = s.authorize(ctx, j)
+	}
 	if err == nil {
 		err = s.call(ctx, h, j)
 	}

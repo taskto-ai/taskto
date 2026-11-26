@@ -1,16 +1,16 @@
 {
-  "footer": "Enviado pelo TaskTo.AI, o servidor em que você trabalha.",
+  "footer": "Enviado pelo taskto.ai, o servidor em que você trabalha.",
   "messages": {
     "test": {
-      "subject": "E-mail de teste do TaskTo.AI",
+      "subject": "E-mail de teste do taskto.ai",
       "title": "O e-mail funciona",
       "paragraphs": [
-        "Olá, {name}, esta é uma mensagem de teste do seu servidor TaskTo.AI, enviada a seu pedido.",
+        "Olá, {name}, esta é uma mensagem de teste do seu servidor taskto.ai, enviada a seu pedido.",
         "Se você consegue ler isto, o servidor consegue enviar e-mail: convites, redefinições de senha e notificações chegarão às pessoas."
       ]
     },
     "digest": {
-      "subject": "Suas notificações do TaskTo.AI",
+      "subject": "Suas notificações do taskto.ai",
       "title": "Você tem notificações esperando",
       "paragraphs": [
         "{count} das suas notificações não foram lidas desde o último resumo.",
@@ -22,7 +22,7 @@
       "subject": "Um cartão foi atribuído a você",
       "title": "Um cartão foi atribuído a você",
       "paragraphs": [
-        "Abra o TaskTo.AI para vê-lo.",
+        "Abra o taskto.ai para vê-lo.",
         "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
       ],
       "action": "Abrir a notificação"
@@ -31,7 +31,7 @@
       "subject": "Um cartão seu tem um novo comentário",
       "title": "Um cartão seu tem um novo comentário",
       "paragraphs": [
-        "Abra o TaskTo.AI para lê-lo.",
+        "Abra o taskto.ai para lê-lo.",
         "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
       ],
       "action": "Abrir a notificação"
@@ -40,7 +40,7 @@
       "subject": "Você foi mencionado em um comentário",
       "title": "Você foi mencionado em um comentário",
       "paragraphs": [
-        "Abra o TaskTo.AI para vê-lo.",
+        "Abra o taskto.ai para vê-lo.",
         "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
       ],
       "action": "Abrir a notificação"
@@ -49,7 +49,7 @@
       "subject": "Um cartão seu vence",
       "title": "Um cartão seu vence",
       "paragraphs": [
-        "Abra o TaskTo.AI para vê-lo.",
+        "Abra o taskto.ai para vê-lo.",
         "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
       ],
       "action": "Abrir a notificação"
@@ -58,7 +58,7 @@
       "subject": "Um cartão seu está atrasado",
       "title": "Um cartão seu está atrasado",
       "paragraphs": [
-        "Abra o TaskTo.AI para vê-lo.",
+        "Abra o taskto.ai para vê-lo.",
         "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
       ],
       "action": "Abrir a notificação"
@@ -73,28 +73,28 @@
       "action": "Abrir a notificação"
     },
     "verify_email": {
-      "subject": "Confirme seu endereço de e-mail para as notificações do TaskTo.AI",
+      "subject": "Confirme seu endereço de e-mail para as notificações do taskto.ai",
       "title": "Confirme seu endereço de e-mail",
       "paragraphs": [
-        "Você pediu ao TaskTo.AI que envie notificações por e-mail para este endereço. Abra o link para confirmar que ele é seu: até lá, nada é enviado.",
+        "Você pediu ao taskto.ai que envie notificações por e-mail para este endereço. Abra o link para confirmar que ele é seu: até lá, nada é enviado.",
         "O link funciona uma vez e expira em {hours} horas. Se você não pediu isto, ignore esta mensagem e nada será enviado."
       ],
       "action": "Confirmar este endereço"
     },
     "password_reset": {
-      "subject": "Redefina sua senha do TaskTo.AI",
+      "subject": "Redefina sua senha do taskto.ai",
       "title": "Redefina sua senha",
       "paragraphs": [
-        "Olá, {name}, alguém pediu para redefinir a senha da sua conta do TaskTo.AI. Use o botão abaixo para escolher uma nova. O link funciona uma única vez e por {hours} horas.",
+        "Olá, {name}, alguém pediu para redefinir a senha da sua conta do taskto.ai. Use o botão abaixo para escolher uma nova. O link funciona uma única vez e por {hours} horas.",
         "Se não foi você, ignore esta mensagem: sua senha continua a mesma."
       ],
       "action": "Escolher uma nova senha"
     },
     "invite": {
-      "subject": "{inviter} convidou você para {workspace} no TaskTo.AI",
+      "subject": "{inviter} convidou você para {workspace} no taskto.ai",
       "title": "Você foi convidado para {workspace}",
       "paragraphs": [
-        "{inviter} convidou você para o espaço de trabalho {workspace} no TaskTo.AI. Use o botão abaixo para aceitar. O convite é para este endereço de e-mail, funciona uma única vez e por {days} dias.",
+        "{inviter} convidou você para o espaço de trabalho {workspace} no taskto.ai. Use o botão abaixo para aceitar. O convite é para este endereço de e-mail, funciona uma única vez e por {days} dias.",
         "Se você não esperava por isto, ignore esta mensagem: nada acontece até que alguém aceite."
       ],
       "action": "Aceitar o convite"

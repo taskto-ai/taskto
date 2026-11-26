@@ -28,6 +28,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/mail"
+	"taskto.ai/taskto/internal/ratelimit"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -42,6 +43,9 @@ type Options struct {
 	InviteTTL time.Duration
 	// ResetTTL is how long a password reset link works. Default 24 hours.
 	ResetTTL time.Duration
+	// AccountDeletionGrace is how long an account that was deleted is kept, disabled, before its
+	// purge (docs/api.md#deleting-an-account). Default 14 days.
+	AccountDeletionGrace time.Duration
 	// HashParams are the argon2id costs for new password hashes. Default DefaultParams.
 	HashParams Params
 	// SetupToken is the token POST /api/setup requires (see NewSetupToken). Empty means
@@ -109,20 +113,20 @@ type Service struct {
 	setupHash []byte
 	setupDone atomic.Bool
 
-	perIP        *limiter
-	perAccountIP *limiter
-	perAccount   *limiter
+	perIP        *ratelimit.Limiter
+	perAccountIP *ratelimit.Limiter
+	perAccount   *ratelimit.Limiter
 
 	// The second step's limits (twofactor.go), apart from the login's: a wrong code is not a
 	// wrong password.
-	codePerIP        *limiter
-	codePerAccountIP *limiter
-	codePerAccount   *limiter
+	codePerIP        *ratelimit.Limiter
+	codePerAccountIP *ratelimit.Limiter
+	codePerAccount   *ratelimit.Limiter
 
 	key *serverkey.Key
 	// The limits of the emailed reset link (mailer.go).
-	resetPerIP    *limiter
-	resetPerEmail *limiter
+	resetPerIP    *ratelimit.Limiter
+	resetPerEmail *ratelimit.Limiter
 	// resetStarts is the server's own limit on reset emails: how many it starts, never how many
 	// are running, so a refusal can't depend on how long the mail server takes for the accounts
 	// that exist.
@@ -135,8 +139,8 @@ type Service struct {
 	stopWork  context.CancelFunc
 
 	// The limits of invitations sent by email (mailer.go): per admin, and per invited address.
-	invitePerAdmin     *limiter
-	invitePerRecipient *limiter
+	invitePerAdmin     *ratelimit.Limiter
+	invitePerRecipient *ratelimit.Limiter
 
 	sso *sso
 
@@ -146,6 +150,9 @@ type Service struct {
 	// hook is nil outside tests, which set it to make another request land at a named point
 	// of a login route, where a race would.
 	hook func(point string)
+
+	// deletions makes and cancels the timed purge of a deleted account (SetDeletionScheduler).
+	deletions DeletionScheduler
 
 	// memberHooks are told when a person is added to a workspace (OnMemberAdded).
 	memberHooks []MemberHook
@@ -188,20 +195,20 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 		s.setupHash = sum[:]
 	}
 	now := func() time.Time { return s.now() }
-	s.perIP = newLimiter(ipAttempts, attemptWindow, now)
-	s.perAccountIP = newLimiter(accountAndIPAttempts, attemptWindow, now)
-	s.perAccount = newLimiter(accountAttempts, attemptWindow, now)
-	s.codePerIP = newLimiter(codeIPAttempts, attemptWindow, now)
-	s.codePerAccountIP = newLimiter(codeAccountAndIPAttempts, attemptWindow, now)
-	s.codePerAccount = newLimiter(codeAccountAttempts, attemptWindow, now)
+	s.perIP = ratelimit.New(ipAttempts, attemptWindow, now)
+	s.perAccountIP = ratelimit.New(accountAndIPAttempts, attemptWindow, now)
+	s.perAccount = ratelimit.New(accountAttempts, attemptWindow, now)
+	s.codePerIP = ratelimit.New(codeIPAttempts, attemptWindow, now)
+	s.codePerAccountIP = ratelimit.New(codeAccountAndIPAttempts, attemptWindow, now)
+	s.codePerAccount = ratelimit.New(codeAccountAttempts, attemptWindow, now)
 	s.key = opts.Key
-	s.resetPerIP = newLimiter(resetIPAttempts, resetWindow, now)
-	s.resetPerEmail = newLimiter(resetEmailAttempts, resetWindow, now)
+	s.resetPerIP = ratelimit.New(resetIPAttempts, resetWindow, now)
+	s.resetPerEmail = ratelimit.New(resetEmailAttempts, resetWindow, now)
 	s.resetStarts = newBucket(resetStartBurst, resetStartEvery, now)
 	s.mailSlots = make(chan struct{}, mailConcurrency)
 	s.workCtx, s.stopWork = context.WithCancel(context.Background())
-	s.invitePerAdmin = newLimiter(inviteAdminAttempts, inviteWindow, now)
-	s.invitePerRecipient = newLimiter(inviteRecipientAttempts, inviteWindow, now)
+	s.invitePerAdmin = ratelimit.New(inviteAdminAttempts, inviteWindow, now)
+	s.invitePerRecipient = ratelimit.New(inviteRecipientAttempts, inviteWindow, now)
 	s.sso = newSSO(opts.SSO, now)
 	return s
 }
@@ -311,9 +318,9 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (u User, 
 		return User{}, nil, false
 	}
 	if !ok {
-		if s.sessionToken(r) != "" {
-			s.clearSessionCookie(w)
-		}
+		// The cookie is left as it is: a stale session's is inert (its row is revoked or expired),
+		// and expiring it here would wipe a newer one that a sign-in in the same browser set while
+		// this request was on its way. Only logging out clears the cookie.
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return User{}, nil, false
 	}

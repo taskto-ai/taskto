@@ -175,7 +175,7 @@ const COMPONENTS_APP = {
   summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
 }
 
-// An app whose one form holds every capture field TaskTo.AI's catalog has: photos, a location, a
+// An app whose one form holds every capture field taskto.ai's catalog has: photos, a location, a
 // signature and a barcode, each with its own field in the collection.
 const CAPTURE_APP_NAME = 'Every capture field'
 const CAPTURE_APP = {
@@ -240,6 +240,7 @@ export const SETTINGS_HEADINGS = {
   audit: 'Audit log',
   providers: 'Model providers',
   integrations: 'Integrations',
+  'integration-approvals': 'Integration approvals',
   'cli-accounts': 'CLI accounts',
   search: 'Search',
   dictation: 'Dictation',
@@ -249,7 +250,7 @@ export const SETTINGS_HEADINGS = {
   sessions: 'Active sessions',
   data: 'Your data',
   tokens: 'Access tokens',
-  about: 'About TaskTo.AI',
+  about: 'About taskto.ai',
 }
 export const SETTINGS_TABS = Object.keys(SETTINGS_HEADINGS)
 

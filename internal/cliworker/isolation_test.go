@@ -356,7 +356,7 @@ func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	waitDone(t, turn, 20*time.Second)
 }
 
-// Without a Unix user per TaskTo user, a worker running as root would run the CLIs as root:
+// Without a Unix user per taskto user, a worker running as root would run the CLIs as root:
 // the helper refuses, unless the development override is set (docs/agent-safety.md).
 func TestIsolationRefusesRootInLocalMode(t *testing.T) {
 	if os.Geteuid() != 0 {

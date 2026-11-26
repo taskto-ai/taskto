@@ -462,7 +462,7 @@ func TestRewriteIsIdempotent(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		stats, err := r.rewriteHistory(head, []string{"f.bin"})
+		stats, err := r.rewriteHistory(head, []string{"f.bin"}, nil)
 		if stats.rewritten != 0 || stats.head != head.Hash {
 			t.Errorf("a second rewrite changed %d commits", stats.rewritten)
 		}

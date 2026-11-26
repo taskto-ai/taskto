@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
-import { afterEach, expect, test } from 'vitest'
-import { ApiError, errorText } from './api'
+import { afterEach, expect, test, vi } from 'vitest'
+import { ApiError, api, errorText, forAccount, SESSION_LOST } from './api'
 import { setPreferences } from './i18n'
+import { fakeFetch } from './test/fakes'
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await setPreferences({ user: null })
 })
 
@@ -30,4 +32,15 @@ test("a code the web app doesn't know shows the server's words; no words, its st
   expect(errorText(newer)).toBe('something newer')
   expect(errorText(new ApiError(502, '502 Bad Gateway', null))).toBe('The server answered 502.')
   expect(errorText(new Error('boom'))).toBe('boom')
+})
+
+test('a refused request made for an account says whose session ended; one made for none, nobody’s', async () => {
+  fakeFetch({ 'POST /api/x': { status: 401, body: { error: 'log in first', code: 'not_logged_in' } } })
+  const heard: Array<{ user?: number } | undefined> = []
+  const listen = (e: Event) => heard.push((e as CustomEvent<{ user?: number } | undefined>).detail)
+  window.addEventListener(SESSION_LOST, listen)
+  await expect(api('/api/x', { method: 'POST', body: {}, headers: forAccount(5) })).rejects.toBeInstanceOf(ApiError)
+  await expect(api('/api/x', { method: 'POST', body: {} })).rejects.toBeInstanceOf(ApiError)
+  window.removeEventListener(SESSION_LOST, listen)
+  expect(heard).toEqual([{ user: 5 }, undefined])
 })

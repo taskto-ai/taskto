@@ -53,7 +53,7 @@ export function ruleText(rule: Rule, f: Pick<Format, 'list' | 'number'>, nested 
 }
 
 // A literal as people read it: text quoted, a number in the locale's format, a boolean in words.
-function valueText(value: unknown, f: Pick<Format, 'number'>): string {
+export function valueText(value: unknown, f: Pick<Format, 'number'>): string {
   if (typeof value === 'string') return t('apps.builder.rule.text', { value })
   if (typeof value === 'number') return f.number(value)
   if (typeof value === 'boolean') return t(value ? 'apps.builder.rule.yes' : 'apps.builder.rule.no')

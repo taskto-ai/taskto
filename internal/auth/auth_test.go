@@ -404,8 +404,10 @@ func TestSessionsAreStoredHashedAndExpire(t *testing.T) {
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	e.advance(time.Minute)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	if owner.cookie != nil {
-		t.Fatal("an expired session's cookie wasn't cleared")
+	// The answer leaves the cookie alone: an expired session's is inert, and expiring it would
+	// wipe a newer one set by a sign-in in the same browser.
+	if owner.cookie == nil {
+		t.Fatal("an expired session's 401 cleared the cookie")
 	}
 
 	// The next login drops the user's expired sessions.
@@ -473,7 +475,7 @@ func TestLoginRateLimitPerIP(t *testing.T) {
 	expect(t, e.client().do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
 	// Unknown addresses are tracked like real ones (so answers don't differ), but the
 	// address limit comes first, so one client adds at most ipAttempts keys per window.
-	if n := len(e.svc.perAccount.hits); n > ipAttempts+1 {
+	if n := e.svc.perAccount.Len(); n > ipAttempts+1 {
 		t.Fatalf("per-account limiter tracks %d keys, want at most %d", n, ipAttempts+1)
 	}
 }

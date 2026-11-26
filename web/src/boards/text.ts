@@ -13,7 +13,11 @@ export function blockedText(t: T, reason: string | null, cards: string): string 
 }
 
 export const assigneeLabel = (t: T, a: NonNullable<Card['assignee']>) =>
-  a.kind === 'agent' ? t('boards.agent') : (a.name ?? t('boards.assigned'))
+  a.kind === 'agent'
+    ? t('boards.agent')
+    : a.kind === 'deleted'
+      ? t('common.deletedUser')
+      : (a.name ?? t('boards.assigned'))
 
 export const authorLabel = (t: T, a: Author) =>
   !a

@@ -1,6 +1,6 @@
-# Installing TaskTo.AI
+# Installing taskto.ai
 
-TaskTo.AI runs as one container: the Go server, with the web app inside it, and the agent
+taskto.ai runs as one container: the Go server, with the web app inside it, and the agent
 runtime's Node.js sidecar, which the server starts and supervises. Its data lives in one
 volume. This guide takes you from nothing to a server behind HTTPS, with backups, in a few
 minutes. It is the same for one person or a company: a company invites its people after
@@ -157,7 +157,7 @@ link. An admin can make one only for a member whose every workspace they adminis
 ## 3. HTTPS
 
 Browsers only send the session cookie over HTTPS: it is `Secure` and named
-`__Host-taskto_session`. So serve TaskTo.AI over HTTPS, through a reverse proxy. (On the
+`__Host-taskto_session`. So serve taskto.ai over HTTPS, through a reverse proxy. (On the
 machine itself, `http://localhost:8080` works in browsers that treat localhost as secure,
 such as Chrome and Firefox.)
 
@@ -226,9 +226,47 @@ A proxy on the host reaching a published port shows up with the address of Docke
 gateway, which can be shared with other local traffic; prefer running the proxy in the
 Compose project, as the bundled Caddy does.
 
+### Webhooks from payment providers
+
+A payment provider (Stripe) tells the server about a payment by calling an address of the
+integration's own, `https://<your domain>/hooks/<id>`, which Settings → Integrations shows
+(see [integrations.md](integrations.md#webhooks-and-the-public-url)). Two things make it work:
+
+- **`-public-url`** (`TASKTO_PUBLIC_URL`, the server's external https origin) is set. Without it
+  the settings page says webhooks are unavailable, and no address is shown.
+- **The reverse proxy forwards `POST /hooks/*`** to the server. The bundled Caddy and the nginx
+  block above forward every path, so nothing more is needed. A proxy that exposes only some
+  paths needs this one, and nothing else of the server has to be reachable for payments:
+
+  ```nginx
+  location /hooks/ {
+      limit_except POST { deny all; }
+      proxy_pass http://127.0.0.1:8080;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+  ```
+
+  Don't put a login, a client certificate or an IP allowlist other than the provider's own in
+  front of it: the provider can't answer one. The provider's **signature** is what
+  authenticates a delivery, and it is checked by the server.
+
+The route reads at most 256 KiB, answers `404` for everything that isn't an authentic delivery
+(a wrong id and a wrong signature look the same), and limits requests per client address and
+per id. The limit by address uses the address the server finds for the client, so set
+`TASKTO_TRUSTED_PROXIES` as [above](#the-clients-address-behind-a-proxy): behind a proxy that
+isn't trusted every request, the provider's and anyone's, counts against the proxy's address,
+and a flood of bad requests can hold back real deliveries.
+
+A server without a public address (a laptop, a home server) works without webhooks: the
+provider's events don't reach it and payments are reconciled by polling the provider, which
+arrives in a later release. A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
+`POST /hooks/*` to the server gives the same instant updates without opening the server; give
+`-public-url` the tunnel's address.
+
 ### The app on phones and computers
 
-TaskTo.AI is an installable web app (a PWA): from the browser, a person can add it to a phone's
+taskto.ai is an installable web app (a PWA): from the browser, a person can add it to a phone's
 Home Screen or a computer's apps, where it opens in a window of its own
 ([docs/pwa.md](pwa.md) has the design). It works in a plain browser tab too; nothing here is
 required for that.
@@ -253,7 +291,7 @@ their device:
 - **iPhone and iPad (Safari):** the Share button, then **Add to Home Screen**. iOS has no
   install prompt a page can start.
 - **Android (Chrome and others):** the browser's menu, then **Install app** or **Add to Home
-  screen**; Chrome may also offer an **Install TaskTo.AI** button there.
+  screen**; Chrome may also offer an **Install taskto.ai** button there.
 - **Computers (Chrome, Edge):** the install icon at the end of the address bar. Safari: **File →
   Add to Dock**.
 
@@ -262,14 +300,14 @@ from `/api` is cached by the worker: a person's conversations, documents, boards
 always come from the server, so offline the app opens and says it can't reach it.
 
 An upgrade of the server ([Upgrade and rollback](#upgrade-and-rollback)) reaches open apps
-as a prompt, **A new version of TaskTo.AI is ready**, with **Reload to update** and **Later**.
+as a prompt, **A new version of taskto.ai is ready**, with **Reload to update** and **Later**.
 The page is never reloaded for anyone: they update when they have saved their work.
 
 ### Web Push notifications
 
 Notifications always appear in each person's **inbox** (in the sidebar, with its unread count). **Web Push**
 is an optional extra on top: a person turns it on, per device, in **Settings → Notifications**,
-and only then does that device get a prompt when something new arrives while TaskTo.AI is closed.
+and only then does that device get a prompt when something new arrives while taskto.ai is closed.
 Nothing about it is required: with push off, unavailable or blocked, every workflow works, and a
 push is never the way anything is synced. The server makes its VAPID key pair by itself the first
 time it starts (the private key is sealed in the database with `server.key`, so a backup needs both,
@@ -311,7 +349,7 @@ ends (expired sessions are swept every hour, and no push is sent to one in the m
 they leave their last workspace. Finished pushes and old notifications are purged on a schedule of
 their own, which a long queue of pushes doesn't hold up.
 
-On an iPhone or iPad, push works only for TaskTo.AI **installed on the Home Screen** (iOS 16.4 or
+On an iPhone or iPad, push works only for taskto.ai **installed on the Home Screen** (iOS 16.4 or
 later), as in the install steps above: the settings page says so, and in a Safari tab the inbox
 is all there is. The page tells the person when their browser has blocked notifications, and how to
 allow them.
@@ -408,7 +446,7 @@ once webhooks are used).
 | `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port (an IPv6 address is written `2001:db8::25` or `[2001:db8::25]`). Empty means no email. |
 | `smtp_port` | `-smtp-port`, `TASKTO_SMTP_PORT` | `587` with `starttls`, `465` with `tls`, `25` with `none`, unless set. |
 | `smtp_security` | `-smtp-security`, `TASKTO_SMTP_SECURITY` | `starttls` (the default: the connection is upgraded to TLS before anything is sent, and a server that doesn't offer it is refused), `tls` (implicit TLS) or `none` (a relay on the same host or network you trust, **with no sign-in**: a user name and password are never sent without TLS, to any host, `localhost` too, so `none` with `smtp_username` stops the server at startup). The server's certificate is always checked. |
-| `smtp_from` | `-smtp-from`, `TASKTO_SMTP_FROM` | The sender of every message: `taskto@example.com` or `TaskTo <taskto@example.com>`. Required with `smtp_host`; use an address your SMTP server may send as. |
+| `smtp_from` | `-smtp-from`, `TASKTO_SMTP_FROM` | The sender of every message: `taskto@example.com` or `taskto <taskto@example.com>`. Required with `smtp_host`; use an address your SMTP server may send as. |
 | `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
 | `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
 | `smtp_egress` | `-smtp-egress`, `TASKTO_SMTP_EGRESS` | Where the connection may go: `any` (the default), `public`, or a comma-separated list of `public`, hosts, addresses and CIDR prefixes, as for [provider accounts](#where-provider-accounts-may-connect). Every connection is checked after name resolution. An internal relay on a private address needs it listed here, or `any`. |
@@ -443,7 +481,7 @@ services:
 ```sh
 # .env
 TASKTO_SMTP_HOST=smtp.example.com
-TASKTO_SMTP_FROM=TaskTo <taskto@example.com>
+TASKTO_SMTP_FROM=taskto <taskto@example.com>
 TASKTO_SMTP_USERNAME=mailer-account
 TASKTO_SMTP_PASSWORD_FILE=/etc/taskto/smtp/password   # as the container sees it
 ```
@@ -636,14 +674,14 @@ Conversations can run on the official Claude Code, Codex and Grok Build CLIs, si
 with each user's own subscription ([cli-workers.md](cli-workers.md)). It is off by default.
 
 - `-cli-workers local` (`TASKTO_CLI_WORKERS=local`) runs the CLIs found on the server's
-  `PATH`, as the server's own OS user, each TaskTo user in their own directory under
+  `PATH`, as the server's own OS user, each taskto user in their own directory under
   `<data>/cli/`. There is **no OS boundary between users** in this mode: a user's CLI, or a
   command it runs, can read other users' CLI logins and the server's data, `server.key`
   included. So it works only while the server has a single user (a personal install), and
   is refused once a second user joins.
 - `-cli-workers local-unsafe` drops that check, for development only.
 - `-cli-workers container` is the mode for teams. The CLIs run in a worker container of
-  their own, each TaskTo user's as a Unix user of their own (uid 100000 + the user's ID),
+  their own, each taskto user's as a Unix user of their own (uid 100000 + the user's ID),
   with no capabilities and no setuid program to escalate with. The worker container never
   sees the server's data. The server reaches it on a socket only the server's user can open
   (`-cli-worker-socket`).
@@ -658,7 +696,7 @@ docker compose --profile cli up -d --build
 - The `cli-worker` service is built from the same Dockerfile (`--target cli-worker`). It
   installs the Claude Code, Codex and Grok Build versions pinned in
   `deploy/cli-workers.json`, each checked against its sha256. They never update
-  themselves: a TaskTo.AI release moves them (`deploy/cli-workers.sh bump`).
+  themselves: a taskto.ai release moves them (`deploy/cli-workers.sh bump`).
 - It runs as root with only `SETUID`, `SETGID`, `CHOWN` and `KILL` (to make the users and
   run their CLIs as them) and `no-new-privileges`. Its memory and CPUs are capped by
   `TASKTO_CLI_WORKER_MEMORY` (default `4g`) and `TASKTO_CLI_WORKER_CPUS` (default `2`).
@@ -715,9 +753,9 @@ adds the key to its requests.
   worker relays it to its CLIs. The worker's network has no route to the server, so the
   proxy has no network address at all.
 - Without a proxy, shared accounts can be added, but turns on them are refused and say why.
-- The same listener serves TaskTo's own tools (the knowledge base, boards, apps and the agent
+- The same listener serves taskto's own tools (the knowledge base, boards, apps and the agent
   browser) to every CLI turn, at `/cli-mcp`, with a token for that turn
-  ([cli-tools.md](cli-tools.md)). Without a proxy, CLI turns get no TaskTo tools, and the
+  ([cli-tools.md](cli-tools.md)). Without a proxy, CLI turns get no taskto tools, and the
   server says so in its log at start.
 - The proxy connects to the accounts' addresses under the workspace accounts' egress
   policy (`-provider-egress-workspace`).
@@ -764,14 +802,14 @@ to it follow the egress policy of workspaces' provider accounts
 
 ### The Desert Ant Voz add-on
 
-Voz (Desert Ant Labs) is a speech model under a source-available licence, so TaskTo.AI
+Voz (Desert Ant Labs) is a speech model under a source-available licence, so taskto.ai
 doesn't ship it. You can install it yourself:
 
 - **Before you install it, read its licence** (<https://license.desertant.com/>):
   - its licence check contacts Desert Ant Labs every time the model loads, and it can't be
     turned off;
   - each server counts as an install;
-  - attribution is required. TaskTo.AI shows it on the About page while a workspace uses Voz.
+  - attribution is required. taskto.ai shows it on the About page while a workspace uses Voz.
 - Install Voz's SDK and model, then put an executable at `<addons_dir>/desertant-voz/transcribe`
   (`-addons-dir`, default `<data>/addons`). The server looks for it when it starts.
 - The program's contract:
@@ -801,6 +839,69 @@ const voz = await Voz.load({ ort });
 const result = await voz.transcribe(wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.length));
 process.stdout.write(JSON.stringify({ text: result.text }));
 ```
+
+## Privacy and account deletion
+
+A person can delete their own account, and only they can ([api.md](api.md#deleting-an-account)):
+that is the one way personal data leaves the server. An admin who removes a member from a workspace
+leaves the account, and what it owns, as it is. This is what happens, and what doesn't.
+
+**Grace period.** The account is switched off at once and kept for `-account-deletion-days`
+(`TASKTO_ACCOUNT_DELETION_DAYS`, `account_deletion_days`; default 14, at most 365). During it an
+operator can cancel the deletion in Settings → Members ("Accounts waiting to be deleted"); the
+person can't sign in, but nothing is lost. It ends with the purge, which a server that was off at
+the time runs when it starts again. Telling people the period, and that an operator can cancel, is
+part of your own privacy notice: the web app says it where a person deletes their account.
+
+**What the purge deletes** (what the person owned alone): their private spaces in every workspace
+(documents and unversioned files, personal boards, private apps with their records and photos), their
+conversations (with the agent runtime's records of them), their CLI logins and shared-account
+mappings and everything the CLI worker kept for them (including the agent browser's profile), the
+agent runtime's providers file and key files (which hold their provider accounts), their unfinished
+photo uploads in shared apps, their access tokens, sessions, push subscriptions, notification
+settings, email ledger, two-factor data and single sign-on identities, the invitations to their
+address, the search index's rows for all of it, and the account.
+
+**What stays: what they made for others.** Cards, comments, documents and app records in shared
+spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records
+(even when an unfinished move of the app had left their files in the person's private space: the purge
+finishes it first) and what the apps' effects did, without who. A comment's mention of them stops
+naming anyone, and no account is ever given their user number again. The person's name and address are replaced
+in the shared spaces' git history (a history rewrite, in every shared space of the server, so a space
+of a workspace they had left is covered too), and in the audit log. A person who wants their
+contributions to shared spaces gone too asks the space's admins to delete them as content; that
+is a decision about the workspace's records, not an account's.
+
+**What a purge can't reach.**
+
+- **Backups.** A backup made before the purge still holds the data. They age out by your
+  [retention](#backups) (restic's `forget`/`prune`, or deleting old archives): say in your privacy
+  notice how long that is. And a **restore** brings back the accounts the backup had: re-run the
+  deletions of the accounts that were deleted after it (the log, if kept, says which), or a
+  restored account that was purged is a live one again.
+- **Steps that wait for the agent runtime or the CLI workers.** Pi Durable, the runtime, has no way
+  to delete a conversation, so the purge **retires** each one (its work stops and the runtime refuses
+  it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`, with the
+  deleted content zeroed in the file. It also rewrites the runtime's providers file, and removes the
+  CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
+  step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
+  is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
+  need them stay recorded, and are done by the next start with them on and every ten minutes. The log
+  says "purged an account, with steps still to do" while any is left, and the audit event's
+  `cleanups_pending` says how many (the providers file's rewriting, which is done after the account
+  is gone, is one). If the runtime is on and fails, the purge fails and is tried again; the runtime
+  answers `503` while another connection holds its database, so a purge isn't acknowledged until
+  the write-ahead log, which can still hold the transcript, is empty. What failed is in `last_error`
+  of `purge_cleanups`, as a fixed word (`sidecar_busy`, `sidecar_refused`, `sidecar_unreachable`,
+  `cli_worker_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
+  with an HTTP status when the runtime answered one, and never the text of the error, which can hold
+  what a person wrote; the providers' step stays recorded while a removed account's key file is
+  still on disk.
+- **Model providers and CLI vendors.** What a conversation sent to a provider is theirs to delete.
+- **SQLite and the filesystem.** Deleted rows are overwritten as the database is reused, and
+  deleted files are only unlinked; use disk encryption if remnants matter to you.
+- **Authorship you didn't give to the server.** Text a person typed into another person's
+  document or comment (a quotation of their name) is content, not authorship.
 
 ## Deleted records of apps
 
@@ -899,7 +1000,7 @@ here splits the keys:
   day. (That's why the server sends a plain tar, `taskto backup -uncompressed`: a gzipped
   one would be new data every time.)
 
-Two machines, then: the TaskTo.AI server, and a **backup host** that it can reach and that
+Two machines, then: the taskto.ai server, and a **backup host** that it can reach and that
 nothing on the server can log in to. The files for each are in this repository:
 `compose.yaml`'s `backup` service on the server, `deploy/backup-host/compose.yaml` on the
 backup host.
@@ -931,7 +1032,7 @@ next to it:
 | `TASKTO_BACKUP_USER` | `taskto` | the repository the prune job works on |
 | `TASKTO_BACKUP_KEEP` | `90d` | how long the prune job keeps snapshots |
 
-**Let only the TaskTo.AI server reach the port, and use TLS unless the network between
+**Let only the taskto.ai server reach the port, and use TLS unless the network between
 the two is private.** Either a private network (WireGuard, Tailscale) with `TASKTO_BACKUP_ADDR` set to the
 backup host's address on it, or `0.0.0.0` with TLS and a firewall rule for the server's
 address. There is no default, so the choice is made on purpose.
@@ -942,7 +1043,7 @@ network. They can't delete anything either.
 
 #### 2. The server
 
-On the TaskTo.AI server, next to `compose.yaml`, put the repository's address (with the
+On the taskto.ai server, next to `compose.yaml`, put the repository's address (with the
 append-only user) and a password for the repository in `backup/`. Both are placeholders
 here; `backup/` is in `.gitignore`, and nothing else in the checkout holds them:
 
@@ -1067,7 +1168,7 @@ its own: `docker compose run --rm prune key add`, then put the new password in
 
   ```sh
   # /etc/cron.daily/taskto-backup-check, on the backup host
-  find /srv/restic/taskto/snapshots -type f -mmin -1560 | grep -q . || echo "No TaskTo.AI backup in 26 hours"
+  find /srv/restic/taskto/snapshots -type f -mmin -1560 | grep -q . || echo "No taskto.ai backup in 26 hours"
   ```
 
 - Practise a restore every quarter, on a machine that isn't production (below). A
@@ -1117,10 +1218,21 @@ setup isn't covered by the project's tests; rest-server is.
 `taskto restore` writes a backup, gzipped or plain, into an **empty** data directory, and
 checks every database it restores (`PRAGMA integrity_check`). It refuses a directory with
 anything in it (a `taskto.lock` left on its own doesn't count), an archive that isn't a
-TaskTo.AI backup or was cut short, and paths that would leave the directory. Stop the
+taskto.ai backup or was cut short, and paths that would leave the directory. Stop the
 server first: restore takes the data directory's lock, so it refuses a directory a server
 runs on, and a server started on the directory before the restore is done is refused. A
 restore that fails removes what it wrote, so the directory is empty for the next try.
+
+**Everyone signs in again after a restore.** A server ends a login by deleting its row, so a
+backup made before that still holds it, and a restore could bring back a session that was signed
+out, revoked by a password change, or a browser's that kept its cookie. So `taskto restore` empties
+the restored database's browser sessions (and the push subscriptions bound to them), access tokens,
+password reset links and half-done two-factor logins before any server starts on it. People sign
+in again, and make new access tokens for their agents and scripts; an admin makes new reset links.
+What a restore leaves is the account's state as of the backup, which holds no revocation: pending
+invitations (they expire, and accepting one needs the address's own account), and the password
+and two-factor codes, which are as the backup had them (a person who changed them since changes
+them again).
 
 From an archive file:
 
@@ -1366,13 +1478,13 @@ never over an interrupted or stopped update.
    - the data volume is mounted at `/data` as the running server has it (never a name
      assumed): the same Docker volume, the same `volume.subpath` and the same read-only
      setting, in this install's Compose settings and in the new ones, for the server and for
-     every service of TaskTo's, the backup services too, which are rendered with their
+     every service of taskto's, the backup services too, which are rendered with their
      profiles on even when they are off. A candidate that mounts the data differently is
      refused. So is one that would make a volume: every named volume the new settings use must
      exist already, and an anonymous volume is refused, so `docker compose` never creates one;
    - the new settings, rendered with this install's `.env` and `compose.override.yaml`, run
      only the images it checks (an override that swaps in another image, or an older one of
-     TaskTo's, is refused); all three images are pulled by tag and refused unless their
+     taskto's, is refused); all three images are pulled by tag and refused unless their
      `org.opencontainers.image.revision` label is that SHA, and their ids are recorded (the
      switch checks, right before it starts anything, that the tags still have them); every
      other image of the enabled services (Caddy's, pinned by digest) is pulled too, since the
