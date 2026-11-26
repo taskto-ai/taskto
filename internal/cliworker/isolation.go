@@ -19,8 +19,8 @@ const minUIDBase = 65536
 type Isolation struct {
 	// UIDBase is the first uid (default 100000).
 	UIDBase int
-	// Passwd and Group are the account files (default /etc/passwd and /etc/group).
-	Passwd, Group string
+	// UserFile and Group are the account files (default /etc/passwd and /etc/group).
+	UserFile, Group string
 
 	state isolationState //nolint:unused // the users made so far: Linux only (isolation_linux.go)
 }

@@ -163,8 +163,8 @@ func New(cfg Config) (*Worker, error) {
 		if iso.UIDBase < minUIDBase {
 			return nil, fmt.Errorf("cliworker: the first uid must be %d or more", minUIDBase)
 		}
-		if iso.Passwd == "" {
-			iso.Passwd = "/etc/passwd"
+		if iso.UserFile == "" {
+			iso.UserFile = "/etc/passwd"
 		}
 		if iso.Group == "" {
 			iso.Group = "/etc/group"
@@ -434,6 +434,10 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 	}
 	pgid := cmd.Process.Pid
 	defer w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)()
+	// The ID was checked with the spec; checked again where it names a file.
+	if !turnIDPattern.MatchString(spec.ID) {
+		return failed("invalid turn ID")
+	}
 	record := filepath.Join(w.stateDir(), spec.ID+".pid")
 	if start, err := startTime(pgid); err == nil {
 		if err := os.WriteFile(record, []byte(strconv.Itoa(pgid)+" "+start+"\n"), 0o600); err != nil {

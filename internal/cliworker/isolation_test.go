@@ -71,7 +71,7 @@ func newIsolated(t *testing.T) *isoHarness {
 		Helper:    helper,
 		Path:      "/usr/bin:/bin",
 		StopGrace: time.Second,
-		Isolation: &cliworker.Isolation{UIDBase: isoBase, Passwd: filepath.Join(accounts, "passwd"), Group: filepath.Join(accounts, "group")},
+		Isolation: &cliworker.Isolation{UIDBase: isoBase, UserFile: filepath.Join(accounts, "passwd"), Group: filepath.Join(accounts, "group")},
 	}
 	w, err := cliworker.New(cfg)
 	if err != nil {
@@ -170,7 +170,7 @@ func TestIsolationEachUserIsAUnixUser(t *testing.T) {
 		}
 	}
 	// The user exists, and their directory is theirs alone.
-	passwd, err := os.ReadFile(h.cfg.Isolation.Passwd)
+	passwd, err := os.ReadFile(h.cfg.Isolation.UserFile)
 	if err != nil || !strings.Contains(string(passwd), fmt.Sprintf("tt1:x:%d:%d:", isoBase+1, isoBase+1)) {
 		t.Fatalf("passwd = %q %v", passwd, err)
 	}
@@ -216,7 +216,7 @@ func TestIsolationBetweenUsers(t *testing.T) {
 		"list:" + h.layout.Root,
 		"write:" + filepath.Join(one.Work, "planted"),
 		"kill:" + strconv.Itoa(victim),
-		"read:" + h.cfg.Isolation.Passwd,
+		"read:" + h.cfg.Isolation.UserFile,
 	}})
 	done := last(run(t, h.w, spec("probe", 2, cliworker.Codex, "look around")))
 	if done.Status != cliworker.StatusOK {
@@ -231,7 +231,7 @@ func TestIsolationBetweenUsers(t *testing.T) {
 		t.Errorf("user 2 signalled user 1's CLI: %s", got)
 	}
 	// The account files are public, as on any system: they hold no secrets.
-	if got := probeResult(done.Text, "read:"+h.cfg.Isolation.Passwd); !strings.HasPrefix(got, "ok") {
+	if got := probeResult(done.Text, "read:"+h.cfg.Isolation.UserFile); !strings.HasPrefix(got, "ok") {
 		t.Errorf("reading passwd: %s", got)
 	}
 	// User 1's CLI is untouched.
@@ -296,7 +296,7 @@ func TestIsolationRefusesALowUIDBase(t *testing.T) {
 	h := newIsolated(t)
 	for _, base := range []int{-1, 1, 1000, 65534} {
 		cfg := h.cfg
-		cfg.Isolation = &cliworker.Isolation{UIDBase: base, Passwd: h.cfg.Isolation.Passwd, Group: h.cfg.Isolation.Group}
+		cfg.Isolation = &cliworker.Isolation{UIDBase: base, UserFile: h.cfg.Isolation.UserFile, Group: h.cfg.Isolation.Group}
 		if _, err := cliworker.New(cfg); err == nil || !strings.Contains(err.Error(), "first uid") {
 			t.Errorf("uid base %d: %v", base, err)
 		}
@@ -307,7 +307,7 @@ func TestIsolationRefusesALowUIDBase(t *testing.T) {
 // uid with another name) is refused, not duplicated.
 func TestIsolationRefusesAConflictingAccount(t *testing.T) {
 	h := newIsolated(t)
-	f, err := os.OpenFile(h.cfg.Isolation.Passwd, os.O_APPEND|os.O_WRONLY, 0)
+	f, err := os.OpenFile(h.cfg.Isolation.UserFile, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

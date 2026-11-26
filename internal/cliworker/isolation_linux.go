@@ -59,7 +59,7 @@ func (w *Worker) ensureUser(user int64) error {
 	uid := iso.uid(user)
 	dirs := w.cfg.Layout.User(user)
 	name := "tt" + strconv.FormatInt(user, 10)
-	if err := addLine(iso.Passwd, name, uid, fmt.Sprintf("%s:x:%d:%d:TaskTo user %d:%s:/bin/sh", name, uid, uid, user, dirs.Home)); err != nil {
+	if err := addLine(iso.UserFile, name, uid, fmt.Sprintf("%s:x:%d:%d:TaskTo user %d:%s:/bin/sh", name, uid, uid, user, dirs.Home)); err != nil {
 		return fmt.Errorf("adding the Unix user: %w", err)
 	}
 	if err := addLine(iso.Group, name, uid, fmt.Sprintf("%s:x:%d:", name, uid)); err != nil {
