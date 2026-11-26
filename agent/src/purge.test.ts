@@ -53,7 +53,7 @@ describe('runPurge', () => {
     writer.exec('PRAGMA wal_autocheckpoint = 0')
     writer.exec(`
       CREATE TABLE conversations (id INTEGER PRIMARY KEY, owner_task_id INTEGER);
-      CREATE TABLE tasks (id INTEGER PRIMARY KEY, conversation_id INTEGER);
+      CREATE TABLE tasks (id INTEGER PRIMARY KEY, conversation_id INTEGER, record TEXT);
       CREATE TABLE entries (id INTEGER PRIMARY KEY, conversation_id INTEGER, text TEXT);
       CREATE TABLE submissions (id INTEGER PRIMARY KEY, conversation_id INTEGER);
       CREATE TABLE documents (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'notes', scope_kind TEXT, owner_id INTEGER);
@@ -323,12 +323,16 @@ describe('runPurge', () => {
     const oldLeft = writer.prepare(
       'SELECT count(*) AS n FROM document_revisions WHERE document_id = ? AND seq <= 30000',
     )
+    const othersLeft = writer.prepare('SELECT count(*) AS n FROM documents WHERE id BETWEEN 100000 AND 129999')
     let wrote = false
     try {
+      // The reviewer's sequence: the revisions' step is done, a first batch of documents has gone,
+      // and a revision is written for a document still there, whose batch comes later.
       purgeRecords(path, 1, 1000, () => {
         const hasDoc = (docLeft.get(doc) as { n: number }).n > 0
         const oldGone = (oldLeft.get(doc) as { n: number }).n === 0
-        if (wrote || !hasDoc || !oldGone) return
+        const batchGone = (othersLeft.get() as { n: number }).n < 30_000
+        if (wrote || !hasDoc || !oldGone || !batchGone) return
         wrote = true
         revision.run(doc, 30_001, WORD)
       })
@@ -342,6 +346,100 @@ describe('runPurge', () => {
       writer.close()
     }
   }, 30_000)
+
+  // A long task history (60,000 finished tasks of about 4 KB) goes in short transactions too: the
+  // last one, which the harness's writes would wait for, only checks again and takes the root.
+  it('leaves the write lock to other writes while it deletes a long task history', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    const task = writer.prepare('INSERT INTO tasks (id, conversation_id, record) VALUES (?, 1, ?)')
+    const big = 'r'.repeat(4000)
+    writer.exec('BEGIN')
+    for (let id = 1_000_000; id < 1_060_000; id++) {
+      task.run(id, big)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    try {
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000 }))
+      expect(probe.error).toBeUndefined()
+      // In one last transaction a write waited for nearly all of the tasks' removal.
+      expect(probe.longest).toBeLessThan(probe.took / 4)
+      expect(probe.gap).toBeLessThan(probe.took / 4)
+      expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
+      expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 60_000)
+
+  // A purge that stops while it takes the tree apart leaves what is left reachable from the root:
+  // a task goes only once no conversation it started is left, a conversation once no task of it is.
+  it('stops while it takes the tree apart and is finished by the next', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    // Conversation 3 (started by task 20 of the root) has many tasks, one of which started
+    // conversation 6, with tasks of its own.
+    const task = writer.prepare('INSERT INTO tasks (id, conversation_id) VALUES (?, ?)')
+    writer.exec('BEGIN')
+    for (let id = 100_000; id < 120_000; id++) task.run(id, 3)
+    writer.exec('INSERT INTO conversations (id, owner_task_id) VALUES (6, 100000)')
+    for (let id = 200_000; id < 220_000; id++) task.run(id, 6)
+    writer.exec(`INSERT INTO entries (id, conversation_id, text) VALUES (60, 6, '${WORD}')`)
+    writer.exec('COMMIT')
+    const tasksLeft = () => (writer.prepare('SELECT count(*) AS n FROM tasks').get() as { n: number }).n
+    const stop = new Error('stopped')
+    try {
+      expect(() =>
+        purgeRecords(path, 1, 1000, () => {
+          if (tasksLeft() < 30_000) throw stop
+        }),
+      ).toThrow(stop)
+      // Partway through the tree: some tasks are gone, the rest still lead from the root.
+      expect(tasksLeft()).toBeGreaterThan(0)
+      expect(writer.prepare('SELECT id FROM conversations WHERE id IN (1, 3) ORDER BY id').all()).toEqual([
+        { id: 1 },
+        { id: 3 },
+      ])
+      await runPurge({ path, root: 1, timeoutMs: 5000 })
+      expect(tasksLeft()).toBe(0)
+      expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
+      expect(writer.prepare('SELECT id FROM entries').all()).toEqual([{ id: 11 }])
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 60_000)
+
+  // A reader that held an old snapshot while a large backlog was written lets go while the purge
+  // empties the log: the backlog is copied by checkpoints that writers go on beside, and the one
+  // that empties the log, which they wait for, finds it drained.
+  it('copies a large backlog without holding writers up once a reader lets go', async () => {
+    const { writer, reader } = fixture() // the reader holds its snapshot from before the backlog
+    const entry = writer.prepare("INSERT INTO entries (conversation_id, text) VALUES (2, 'a turn of someone else')")
+    const text = 'y'.repeat(400)
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    writer.exec('BEGIN')
+    for (let i = 0; i < 500_000; i++) more.run(text)
+    writer.exec('COMMIT')
+    entry.run()
+    try {
+      const release = setTimeout(() => reader.exec('COMMIT'), 500)
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 20_000 }))
+      clearTimeout(release)
+      expect(probe.error).toBeUndefined()
+      // Copied by the checkpoint that empties the log, which holds the lock, a write waited for
+      // the whole copy (a fifth to most of the purge); copied beside the writers, for a moment.
+      expect(probe.longest).toBeLessThan(probe.took / 8)
+      expect(log()).not.toContain(WORD)
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 60_000)
 
   it('rejects with the failure of a purge that is not about the log', async () => {
     await expect(runPurge({ path: join(dir, 'missing', 'agent.db'), root: 1, timeoutMs: 100 })).rejects.toThrow()

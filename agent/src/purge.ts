@@ -45,22 +45,56 @@ function sleep(ms: number): void {
 const PAUSE_MS = 30
 
 /**
- * truncateWal, tried until timeoutMs has passed, never holding the write lock while it waits: each
- * try holds it only while the checkpoint runs (busy_timeout 0), and the pause between tries is a
- * sleep of this thread. Throws WalBusyError if a reader still holds the log at the end.
+ * How many frames of the log may still be waiting to be copied when the purge empties it: the copy
+ * is done under the write lock, so it is only tried on a log that a passive checkpoint has all but
+ * drained (what the harness wrote since).
+ */
+const DRAINED_FRAMES = 64
+
+/**
+ * Copies what it can of the log into the database by a checkpoint that never waits and never holds
+ * the harness's writes up (PASSIVE), and says how many frames are left to copy: some while a
+ * reader's snapshot still needs them. Infinity when it couldn't run.
+ */
+function backlog(db: DatabaseSync): number {
+  try {
+    const row = db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get() as
+      | { log: number | bigint; checkpointed: number | bigint }
+      | undefined
+    if (!row) return Number.POSITIVE_INFINITY
+    const log = Number(row.log)
+    return log < 0 ? 0 : log - Number(row.checkpointed) // -1: not in WAL mode, nothing to copy
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+}
+
+/**
+ * truncateWal, tried until timeoutMs has passed, never holding the write lock while it waits or
+ * copies much: each round copies the log by a passive checkpoint (which writers go on beside), and
+ * only once it is drained tries the TRUNCATE, which holds the lock while it runs (busy_timeout 0, so
+ * it doesn't wait for readers either). The pause between rounds is a sleep of this thread. A reader
+ * that lets go of its snapshot lets the next round copy the rest. Throws WalBusyError if a reader
+ * still holds the log at the end.
  */
 export function truncateWalWithin(db: DatabaseSync, timeoutMs: number): void {
   db.exec('PRAGMA busy_timeout = 0')
-  // Most of the log is copied into the database first by a checkpoint that lets writers go on
-  // meanwhile, so the one that empties it, which they wait for, has little left to do.
-  db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get()
   const deadline = performance.now() + timeoutMs
+  let last: unknown
   for (;;) {
-    try {
-      truncateWal(db)
-      return
-    } catch (error) {
-      if (!(error instanceof WalBusyError) || performance.now() + PAUSE_MS > deadline) throw error
+    if (backlog(db) <= DRAINED_FRAMES) {
+      try {
+        truncateWal(db)
+        return
+      } catch (error) {
+        if (!(error instanceof WalBusyError)) throw error
+        last = error
+      }
+    }
+    if (performance.now() + PAUSE_MS > deadline) {
+      throw last instanceof WalBusyError
+        ? last
+        : new WalBusyError('a reader holds the write-ahead log, so it could not be copied and truncated')
     }
     sleep(PAUSE_MS)
   }
@@ -94,14 +128,16 @@ const SLICE_MS = 20
 // has stopped, so nothing writes the rows that go. secure_delete zeroes the deleted content in the
 // file, and the checkpoint takes it out of the write-ahead log.
 //
-// What was said (entries, submissions, documents) goes a chunk at a time, in short transactions (see
-// the top of the file). What a purge that stops halfway needs to be finished by the next goes last,
-// in one transaction: the tasks' and conversations' rows, by which the purge finds every
-// conversation's records, and the lifecycle documents, which say the conversations are retired (so
-// the purge goes on, and they stay closed to new input, until they are gone). Those are a few rows
-// per conversation. That last transaction finds the conversations again and takes whatever of
-// theirs is left, so nothing written during the pauses (a task's last entry, a conversation it
-// started) outlives a purge that says it is done.
+// Everything goes a chunk at a time, in short transactions (see the top of the file), in an order
+// that lets a purge that stops halfway be finished by the next, which finds the tree again from the
+// root: first what was said (documents with their revisions, submissions, entries), then the tree
+// itself from the bottom up, a task only once no conversation it started is left and a conversation
+// only once no task of it is left, so whatever is left is still reachable from the root. A
+// conversation's records that were written late go with it, and a document's revisions with it, in
+// the same transaction. The root's row and its lifecycle document, which says it is retired (so the
+// purge goes on, and it stays closed to new input), go last, in a transaction that finds the tree
+// again and takes whatever is left: normally the root alone, so it is short, and nothing written
+// during the pauses outlives a purge that says it is done.
 //
 // afterSlice, for tests, runs after each short transaction commits.
 export function purgeRecords(path: string, root: number, timeoutMs: number, afterSlice?: () => void): void {
@@ -112,24 +148,8 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     // write lock for its sync. The checkpoint that ends the purge syncs the database, and the purge
     // isn't done (the server asks again) until it has.
     db.exec('PRAGMA synchronous = NORMAL')
-    const { steps } = purgeSteps(db, root)
-    // A chunk of a step's rows, deleted in the transaction that is open: how many there were.
-    const deleteChunk = (step: Step): number => {
-      const chunk = (
-        db.prepare(`SELECT rowid AS id FROM ${step.table} WHERE ${step.where} LIMIT ${CHUNK}`).all() as {
-          id: number
-        }[]
-      ).map((r) => Number(r.id))
-      if (chunk.length > 0) {
-        // A document's revisions go with it, in the same transaction: one committed since the
-        // revisions' own step would otherwise be left with no document to find it by.
-        if (step.table === 'documents')
-          db.exec(`DELETE FROM document_revisions WHERE document_id IN (${chunk.join(',')})`)
-        db.exec(`DELETE FROM ${step.table} WHERE rowid IN (${chunk.join(',')})`)
-        if (step.records) db.exec(`DELETE FROM record_ids WHERE id IN (${chunk.join(',')})`)
-      }
-      return chunk.length
-    }
+    const seen = discover(db, root)
+    const steps = purgeSteps(db, root, seen)
     // Transactions of at most about SLICE_MS each, with a pause between them in which the harness's
     // writes get the lock.
     for (let at = 0; at < steps.length; ) {
@@ -137,7 +157,7 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
       try {
         const start = performance.now()
         while (at < steps.length && performance.now() - start < SLICE_MS) {
-          if (deleteChunk(steps[at]) < CHUNK) at++
+          if (steps[at]() === 0) at++
         }
         db.exec('COMMIT')
       } catch (error) {
@@ -149,9 +169,14 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     }
     db.exec('BEGIN IMMEDIATE')
     try {
-      // Found again under the write lock: what was written during the pauses goes too.
-      const now = purgeSteps(db, root)
-      for (const step of [...now.steps, ...now.last]) while (deleteChunk(step) === CHUNK);
+      // Found again under the write lock, from what this purge removed too: what was written during
+      // the pauses goes, even into a conversation whose row went in an earlier transaction.
+      const tree = discover(db, root, seen)
+      for (const step of purgeSteps(db, root, tree)) while (step() > 0);
+      const ids = list(tree.ids)
+      removeDocuments(db, select(db, `SELECT id FROM documents WHERE ${ownedBy(tree)}`))
+      removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE conversation_id IN (${ids})`))
+      removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${ids})`))
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
@@ -165,17 +190,105 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
   }
 }
 
-/** One step of a purge: the rows of a table that match, by rowid (a record's id), with their
- * record_ids rows when they are records (a document's revision isn't). */
-type Step = { table: string; where: string; records: boolean }
+/** A tree of conversations: the root, the conversations its tasks started, theirs, and so on. */
+type Tree = { ids: Set<number>; taskIds: Set<number> }
 
-// The conversations of root's purge, as the database has them now (root, the conversations its tasks
-// started, theirs, and so on), and the steps that delete their rows: steps, what was said; last, what
-// the purge finds them and their retirement by.
-function purgeSteps(db: DatabaseSync, root: number): { steps: Step[]; last: Step[] } {
-  const ids = new Set<number>([root])
-  const taskIds = new Set<number>()
-  const list = (set: Set<number>) => [...set].join(',') || 'NULL'
+/** A set of ids as SQL's list, NULL when empty (which matches nothing). */
+function list(set: Set<number> | number[]): string {
+  return [...set].join(',') || 'NULL'
+}
+
+/** The ids query returns, as numbers. */
+function select(db: DatabaseSync, query: string): number[] {
+  return (db.prepare(query).all() as { id: number | bigint }[]).map((r) => Number(r.id))
+}
+
+/** Deletes rows of table by rowid, and their record_ids rows when they are records. */
+function removeRows(db: DatabaseSync, table: string, ids: number[], records = true): void {
+  if (ids.length === 0) return
+  db.exec(`DELETE FROM ${table} WHERE rowid IN (${ids.join(',')})`)
+  if (records) db.exec(`DELETE FROM record_ids WHERE id IN (${ids.join(',')})`)
+}
+
+/**
+ * Deletes documents with their revisions, in the transaction that is open: a revision written since
+ * the revisions' own step would otherwise be left with no document to find it by.
+ */
+function removeDocuments(db: DatabaseSync, ids: number[]): void {
+  if (ids.length === 0) return
+  db.exec(`DELETE FROM document_revisions WHERE document_id IN (${ids.join(',')})`)
+  removeRows(db, 'documents', ids)
+}
+
+/** Which documents belong to tree: its conversations' and its tasks'. */
+function ownedBy(tree: Tree): string {
+  return `((scope_kind = 'conversation' AND owner_id IN (${list(tree.ids)}))
+    OR (scope_kind = 'task' AND owner_id IN (${list(tree.taskIds)})))`
+}
+
+/**
+ * The steps that delete tree's rows but the root's own row and lifecycle document, each a chunk at
+ * a time in the transaction that is open, saying how many rows it removed (0: that step is done).
+ */
+function purgeSteps(db: DatabaseSync, root: number, tree: Tree): (() => number)[] {
+  const ids = list(tree.ids)
+  const docs = `SELECT id FROM documents WHERE ${ownedBy(tree)} AND kind <> '${LIFECYCLE_KIND}'`
+  const each = (query: string, remove: (chunk: number[]) => void) => () => {
+    const chunk = select(db, `${query} LIMIT ${CHUNK}`)
+    remove(chunk)
+    return chunk.length
+  }
+  // A conversation of the tree that is about to go, with whatever of its was written late.
+  const removeConversations = (chunk: number[]) => {
+    const of = list(chunk)
+    removeDocuments(
+      db,
+      select(db, `SELECT id FROM documents WHERE scope_kind = 'conversation' AND owner_id IN (${of})`),
+    )
+    removeRows(db, 'submissions', select(db, `SELECT id FROM submissions WHERE conversation_id IN (${of})`))
+    removeRows(db, 'entries', select(db, `SELECT id FROM entries WHERE conversation_id IN (${of})`))
+    removeRows(db, 'conversations', chunk)
+  }
+  return [
+    each(`SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (c) =>
+      removeRows(db, 'document_revisions', c, false),
+    ),
+    each(docs, (c) => removeDocuments(db, c)),
+    each(`SELECT id FROM submissions WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'submissions', c)),
+    each(`SELECT id FROM entries WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'entries', c)),
+    // The tree from the bottom up: tasks that started no conversation still there, then the
+    // conversations (but the root) that have no task left, until neither is left.
+    () => {
+      const tasks = select(
+        db,
+        `SELECT id FROM tasks WHERE conversation_id IN (${ids})
+          AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.owner_task_id = tasks.id) LIMIT ${CHUNK}`,
+      )
+      if (tasks.length > 0) {
+        removeDocuments(
+          db,
+          select(db, `SELECT id FROM documents WHERE scope_kind = 'task' AND owner_id IN (${list(tasks)})`),
+        )
+        removeRows(db, 'tasks', tasks)
+        return tasks.length
+      }
+      const conversations = select(
+        db,
+        `SELECT id FROM conversations WHERE id IN (${ids}) AND id <> ${root}
+          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id = conversations.id) LIMIT ${CHUNK}`,
+      )
+      removeConversations(conversations)
+      return conversations.length
+    },
+  ]
+}
+
+// The tree of root's purge as the database has it now, from root and, when given, the conversations
+// and tasks an earlier look found (seen): what refers to one of those goes too, even once its row is
+// gone.
+function discover(db: DatabaseSync, root: number, seen?: Tree): Tree {
+  const ids = new Set<number>([root, ...(seen?.ids ?? [])])
+  const taskIds = new Set<number>(seen?.taskIds ?? [])
   for (let grew = true; grew; ) {
     grew = false
     const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
@@ -192,24 +305,7 @@ function purgeSteps(db: DatabaseSync, root: number): { steps: Step[]; last: Step
       }
     }
   }
-  const owned = `((scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
-    OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)})))`
-  const docs = `SELECT id FROM documents WHERE ${owned} AND kind <> '${LIFECYCLE_KIND}'`
-  const lifecycle = `SELECT id FROM documents WHERE ${owned} AND kind = '${LIFECYCLE_KIND}'`
-  return {
-    steps: [
-      { table: 'document_revisions', where: `document_id IN (${docs})`, records: false },
-      { table: 'documents', where: `id IN (${docs})`, records: true },
-      { table: 'submissions', where: `conversation_id IN (${list(ids)})`, records: true },
-      { table: 'entries', where: `conversation_id IN (${list(ids)})`, records: true },
-    ],
-    last: [
-      { table: 'document_revisions', where: `document_id IN (${lifecycle})`, records: false },
-      { table: 'documents', where: `id IN (${lifecycle})`, records: true },
-      { table: 'tasks', where: `conversation_id IN (${list(ids)})`, records: true },
-      { table: 'conversations', where: `id IN (${list(ids)})`, records: true },
-    ],
-  }
+  return { ids, taskIds }
 }
 
 /** What runPurge does: purge a conversation's records (root), or only truncate the log (no root). */
