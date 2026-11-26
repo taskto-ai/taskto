@@ -107,6 +107,7 @@ func tcpListeners(t *testing.T, min int) []string {
 
 func TestIsolationBrowser(t *testing.T) {
 	h := newIsolated(t)
+	h.introduce(t, 1, 2)
 	bins := browserBins(t)
 	m := browser.NewManager(browser.Config{Host: h.w.BrowserHost(bins), NoSandbox: true, StartTimeout: 60 * time.Second})
 	t.Cleanup(m.Close)

@@ -25,10 +25,7 @@ type isolationState struct {
 }
 
 // uid is user's uid.
-func (iso *Isolation) uid(user int64) int { return iso.uidOf(user) }
-
-// maxIsolatedUser bounds user IDs so uids stay below the 32-bit nobody range.
-const maxIsolatedUser = 1 << 30
+func (iso *Isolation) uid(user int64) int { return iso.UIDBase + int(user) } //nolint:gosec // callers check maxIsolatedUser
 
 // asUser makes cmd run as user's own Unix user, creating it first. Without isolation it
 // does nothing.

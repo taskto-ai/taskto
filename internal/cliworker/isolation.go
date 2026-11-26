@@ -1,5 +1,7 @@
 package cliworker
 
+import "fmt"
+
 // minUIDBase is the lowest first uid the worker accepts.
 const minUIDBase = 65536
 
@@ -25,5 +27,13 @@ type Isolation struct {
 	state isolationState //nolint:unused // the users made so far: Linux only (isolation_linux.go)
 }
 
-// uidOf is user's Unix user: UIDBase plus their number.
-func (i *Isolation) uidOf(user int64) int { return i.UIDBase + int(user) }
+// maxIsolatedUser bounds user IDs so uids stay below the 32-bit nobody range.
+const maxIsolatedUser = 1 << 30
+
+// uidOf is user's Unix user: UIDBase plus their number, for a number that can have one.
+func (i *Isolation) uidOf(user int64) (int, error) {
+	if user <= 0 || user >= maxIsolatedUser {
+		return 0, fmt.Errorf("user %d can't have a Unix user", user)
+	}
+	return i.UIDBase + int(user), nil
+}

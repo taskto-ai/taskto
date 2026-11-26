@@ -174,7 +174,11 @@ func (w *Worker) removeUser(ctx context.Context, user int64) error {
 		return err
 	}
 	if iso := w.cfg.Isolation; iso != nil {
-		if err := killUID(iso.uidOf(user), uidWait); err != nil {
+		uid, err := iso.uidOf(user)
+		if err != nil {
+			return err
+		}
+		if err := killUID(uid, uidWait); err != nil {
 			return err
 		}
 	}
