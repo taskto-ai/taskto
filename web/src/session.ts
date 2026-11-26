@@ -1,3 +1,5 @@
+import { signInSubmitted } from './auth/deleted'
+
 // The signed-in session this page is in: whose it is, and which one (a generation, one more each time
 // a session begins or ends). It is recorded the moment it changes, never later, so no answer that
 // comes after can act in a session that isn't its own:
@@ -30,6 +32,9 @@ function changed() {
 
 // Someone signed in: their session begins (a new one, even for the same person again).
 export function beginSession(id: number): void {
+  // However they got here, a form or a page that loaded signed in: a deletion notice still waiting
+  // for someone to see it was not for them.
+  signInSubmitted()
   user = id
   changed()
 }
