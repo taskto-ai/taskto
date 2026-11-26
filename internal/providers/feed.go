@@ -284,16 +284,23 @@ func (f *Feed) Write(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	removeAll(stale)
+	_ = removeAll(stale) // logged; the files are written again at every start and change
 	return nil
 }
 
 // reloadTimeout bounds one reload request; it reads a few small files.
 const reloadTimeout = 10 * time.Second
 
+// ErrKeyNotRemoved is wrapped by Sync's error when a removed account's key file could not be
+// deleted: the key is still on disk, so a caller that must know it is gone (the purge of a deleted
+// account) retries.
+var ErrKeyNotRemoved = errors.New("a removed provider account's key file could not be deleted")
+
 // Sync writes the files and has the agent runtime reload them. If it doesn't answer (it is
 // starting or restarting), Run retries until it does; a restarted agent runtime reads the
-// new files anyway. A refused file is logged: the agent runtime keeps the providers it had.
+// new files anew anyway. A refused file is logged: the agent runtime keeps the providers it had.
+// The error is that of a refused file, and of a removed account's key file that couldn't be
+// deleted (ErrKeyNotRemoved): never nil while a removed key is still on disk.
 func (f *Feed) Sync(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -303,13 +310,17 @@ func (f *Feed) Sync(ctx context.Context) error {
 	}
 	// Keys of removed accounts go once the agent runtime has stopped using them, and also if
 	// it can't be told: a removed key must not stay on disk.
-	defer removeAll(stale)
+	reloaded := f.reloadLocked(ctx)
+	return errors.Join(reloaded, removeAll(stale))
+}
+
+func (f *Feed) reloadLocked(ctx context.Context) error {
 	if f.reload == nil {
 		return nil
 	}
 	rctx, cancel := context.WithTimeout(ctx, reloadTimeout)
 	defer cancel()
-	err = f.reload(rctx)
+	err := f.reload(rctx)
 	switch {
 	case err == nil:
 		return nil
@@ -388,12 +399,16 @@ func writeFile(path string, data []byte) (err error) {
 	return os.Rename(tmp.Name(), path)
 }
 
-func removeAll(paths []string) {
+// removeAll deletes the files, logging and answering (ErrKeyNotRemoved) the ones it couldn't.
+func removeAll(paths []string) error {
+	var failed []error
 	for _, p := range paths {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("could not remove an unused provider key file", "path", p, "err", err)
+			failed = append(failed, ErrKeyNotRemoved)
 		}
 	}
+	return errors.Join(failed...)
 }
 
 // ownerOnlyDir creates dir with mode 0700, or makes an existing one 0700.

@@ -62,7 +62,7 @@
       "restoreOp": "Restored",
       "version": "{operation} · revision {revision} · {when} · {name}",
       "agent": "{name} (through the agent)",
-      "unknownUser": "a removed account",
+      "unknownUser": "Deleted user",
       "system": {
         "generic": "an integration",
         "named": "{name} (integration)",
@@ -758,7 +758,8 @@
       "loginSubmit": "Log in and join",
       "newIntro": "You were invited. Create your account: your email is the address the invite was sent to.",
       "create": "Create the account"
-    }
+    },
+    "accountDeleted": "Your account was deleted. It is switched off now and will be erased for good on {date}; an operator of this server can cancel that until then."
   },
   "boards": {
     "board": "Board",
@@ -790,7 +791,7 @@
     "blocked": "Blocked",
     "agent": "Agent",
     "assigned": "Assigned",
-    "someone": "Someone",
+    "someone": "Deleted user",
     "byAgent": "{name} (agent)",
     "byAgentVia": "{name} (agent, {via})",
     "addCard": "Add a card",
@@ -1232,7 +1233,13 @@
     "notification_email_verification_too_soon": "A link was sent a moment ago. Check your inbox, or try again in {seconds} seconds.",
     "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again.",
     "too_many_resets": "Too many reset requests: try again later.",
-    "too_many_invite_emails": "Too many invitations emailed: try again later."
+    "too_many_invite_emails": "Too many invitations emailed: try again later.",
+    "deletion_reauth_required": "Sign in again with your provider, then try again: deleting an account that has no password needs a sign-in made in the last few minutes.",
+    "deletion_last_admin": "You are the only admin of {workspace}: make someone else an admin first.",
+    "deletion_last_operator": "This account is the only admin of {workspace}, which runs this server: make someone else an admin there first.",
+    "deletion_pending": "This account is waiting to be deleted: a server operator can cancel that.",
+    "deletion_not_pending": "This account isn’t waiting to be deleted.",
+    "deletion_purging": "This account is being deleted now: it can’t be cancelled any more."
   },
   "language": {
     "label": "Language",
@@ -1363,7 +1370,16 @@
       "pending": "Pending",
       "invitesHelp": "An invite is a link that works once, until it expires.",
       "emailPlaceholder": "name@company.com",
-      "noEmail": "This server doesn't email invites, so an invite is a link you copy and send yourself."
+      "noEmail": "This server doesn't email invites, so an invite is a link you copy and send yourself.",
+      "deletionPending": "Deleting on {date}",
+      "deletions": "Accounts waiting to be deleted",
+      "deletionsHelp": "As an operator of this server you see every account that is waiting out its grace period. Cancelling a deletion switches the account back on, unless an admin had disabled it before, which stays; once the purge has begun it can’t be cancelled.",
+      "noDeletions": "No accounts are waiting to be deleted.",
+      "deletionDetails": "Purged on {date}",
+      "deletionPurging": "Being purged now",
+      "cancelDeletion": "Cancel deletion",
+      "cancelDeletionQuestion": "Cancel the deletion of {name}’s account? It is switched on again (unless an admin had disabled it before, which stays), and they sign in as before.",
+      "cancelDeletionConfirm": "Yes, cancel it"
     },
     "password": {
       "intro": "Changing your password signs you out everywhere else. This browser stays signed in. Your access tokens keep working: revoke them under Access tokens.",
@@ -2071,7 +2087,10 @@
         "two_factor_enabled": "Two-factor login turned on",
         "two_factor_disabled": "Two-factor login turned off",
         "two_factor_recovery_codes_replaced": "Recovery codes replaced",
-        "two_factor_cleared": "Two-factor login cleared by an admin"
+        "two_factor_cleared": "Two-factor login cleared by an admin",
+        "account_deletion_requested": "Account deletion asked for",
+        "account_deletion_cancelled": "Account deletion cancelled",
+        "account_purged": "Account purged"
       },
       "targets": {
         "user": "Member",
@@ -2120,6 +2139,16 @@
         "spaces": "Shared spaces",
         "to": "To",
         "user_id": "Member number",
+        "purge_days": "Days until the purge",
+        "private_spaces": "Private spaces deleted",
+        "conversations": "Conversations deleted",
+        "access_grants": "Access tokens deleted",
+        "cli_accounts": "CLI accounts removed",
+        "push_subscriptions": "Push subscriptions deleted",
+        "documents_anonymized": "Commits whose author was replaced (in the last attempt)",
+        "uploads_removed": "Unfinished uploads removed",
+        "cleanups_pending": "Steps waiting for the agent runtime or CLI workers",
+        "mentions_anonymized": "Mentions anonymized",
         "added": "Spaces added",
         "removed": "Spaces removed",
         "kept": "Spaces kept",
@@ -2168,6 +2197,30 @@
       },
       "event": "Event",
       "when": "When"
+    },
+    "delete": {
+      "title": "Delete your account",
+      "intro": "Deleting your account switches it off at once and signs you out everywhere. It is kept for {days} days, and a server operator can cancel the deletion until then; after that it is deleted for good.",
+      "removed": "What is deleted:",
+      "removedPrivate": "Your private space in every workspace: documents and files, boards, and apps with their records and photos.",
+      "removedConversations": "Your conversations with the agent.",
+      "removedLogins": "Your CLI logins, access tokens, sessions, push subscriptions, notification settings, two-factor login and single sign-on identities.",
+      "kept": "What you made for others stays: cards, comments, documents and app records in shared spaces, and the audit log. They are shown as “Deleted user”, and your name and email are taken out of their history.",
+      "cancel": "Until the grace period ends, a server operator can cancel the deletion.",
+      "blocked": "You can’t delete your account yet:",
+      "blockedAdmin": "You are the only admin of {workspace}: make someone else an admin first.",
+      "blockedOperator": "You are the only admin of {workspace}, which runs this server: make someone else an admin there first.",
+      "exportFirst": "Download my data first",
+      "start": "Delete my account…",
+      "signInAgain": "Sign in again with your provider, then come back here: deleting an account that has no password needs a sign-in made in the last few minutes.",
+      "formLabel": "Delete your account",
+      "confirmIntro": "Enter your password to delete your account. You are signed out right away.",
+      "confirmIntroFresh": "You signed in a moment ago, which confirms it is you. Deleting the account signs you out right away.",
+      "password": "Your password",
+      "code": "Two-factor code or recovery code",
+      "confirm": "Delete my account",
+      "deleting": "Deleting…",
+      "summary": "Delete your account and what you own alone: your private space, conversations and logins. What you made for others stays. You can download your data first."
     },
     "groups": {
       "workspace": "Workspace",
@@ -2303,6 +2356,7 @@
     "copied": "Copied",
     "copyNamed": "Copy {name}",
     "labelFor": "{label} {name}",
+    "deletedUser": "Deleted user",
     "close": "Close"
   },
   "knowledge": {

@@ -133,6 +133,14 @@ var schemas = map[string]map[string]kind{
 	MemberDisabled:    {"logins_ended": number},
 	MemberEnabled:     {},
 
+	AccountDeletionRequested: {"purge_days": number, "logins_ended": number},
+	AccountDeletionCancelled: {},
+	AccountPurged: {
+		"private_spaces": number, "conversations": number, "access_grants": number,
+		"cli_accounts": number, "push_subscriptions": number, "documents_anonymized": number,
+		"mentions_anonymized": number, "uploads_removed": number, "cleanups_pending": number,
+	},
+
 	AccessTokenCreated: {"expires": boolean},
 	AccessTokenRevoked: {"cascade": cascadeFlag},
 	AccessTokenUsed:    {},

@@ -404,8 +404,10 @@ func TestSessionsAreStoredHashedAndExpire(t *testing.T) {
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	e.advance(time.Minute)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	if owner.cookie != nil {
-		t.Fatal("an expired session's cookie wasn't cleared")
+	// The answer leaves the cookie alone: an expired session's is inert, and expiring it would
+	// wipe a newer one set by a sign-in in the same browser.
+	if owner.cookie == nil {
+		t.Fatal("an expired session's 401 cleared the cookie")
 	}
 
 	// The next login drops the user's expired sessions.

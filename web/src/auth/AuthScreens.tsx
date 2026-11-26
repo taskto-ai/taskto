@@ -3,7 +3,7 @@
 
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiError, api, codeText, errorText, type Me } from '../api'
-import { t, useT } from '../i18n'
+import { t, useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { Input } from '../ui/Input'
@@ -11,6 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
+import { DELETION_EVENT, takeDeletion } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -390,6 +391,18 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     return reply
   }, onDone)
   const [forgot, setForgot] = useState(false)
+  // Told once, to a person who has just deleted their account.
+  const [deleted, setDeleted] = useState(takeDeletion)
+  // ...or told now, if the deletion is answered after this screen is up.
+  useEffect(() => {
+    const told = () => {
+      const at = takeDeletion()
+      if (at) setDeleted(at)
+    }
+    window.addEventListener(DELETION_EVENT, told)
+    return () => window.removeEventListener(DELETION_EVENT, told)
+  }, [])
+  const f = useFormat()
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   const methods = loaded.state.methods
@@ -411,6 +424,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
         ))
       }
     >
+      {deleted && <Notice tone="info">{t('auth.accountDeleted', { date: f.date(deleted) })}</Notice>}
       {ssoError && <Notice tone="danger">{ssoError}</Notice>}
       <SsoButtons providers={methods.sso} next={here()} />
       {methods.password && methods.sso.length > 0 && <AuthDivider>{t('auth.sso.or')}</AuthDivider>}

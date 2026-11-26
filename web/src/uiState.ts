@@ -93,6 +93,30 @@ export function forgetDrafts(): void {
   }
 }
 
+// forgetDraftsOf removes the drafts of one account only: the keys that name user (draftKey), and
+// the browser's claim on drafts when it is user's. Another account that signed in here meanwhile,
+// in this tab or another, keeps its drafts and its claim. This page's own claim is let go only if
+// it is user's.
+export function forgetDraftsOf(user: number): void {
+  if (owner === user) {
+    owner = null
+    setOperationUser(null)
+  }
+  const kinds = ['builder', 'builder-pane', 'builder-start', 'message']
+  const prefixes = kinds.map((k) => `taskto:${k}:${user}:`)
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (key && prefixes.some((p) => key.startsWith(p))) keys.push(key)
+    }
+    for (const key of keys) window.localStorage.removeItem(key)
+    if (claimed() === String(user)) window.localStorage.removeItem(DRAFTS_OF)
+  } catch {
+    // Nothing kept, nothing to forget.
+  }
+}
+
 // claimDrafts keeps the drafts in this browser for user, forgetting them first if they were
 // someone else's.
 export function claimDrafts(user: number): void {

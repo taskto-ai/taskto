@@ -17,7 +17,8 @@ Each event is one row of `audit_events` (`internal/db/migrations/0036_audit_even
 |---|---|
 | `at` | when, UTC, to the millisecond |
 | `workspace_id` | the workspace the event belongs to; empty for one that belongs to none (a login, a password change, a personal provider account) |
-| `actor_id` | the user who did it; empty for an anonymous attempt (a login to an account that doesn't exist, a refused single sign-on) or once that user is deleted |
+| `actor_id` | the user who did it; empty for an anonymous attempt (a login to an account that doesn't exist, a refused single sign-on) or once that user is deleted (`actor_deleted` then says which) |
+| `actor_deleted`, `target_deleted` | 1 when the actor's account, or the account the event is about, was [deleted](#deleted-accounts) |
 | `action` | a stable snake_case code, from the table below |
 | `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration` or `workspace`, and when that object was created (see below) |
 | `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed |
@@ -67,6 +68,9 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `invite_emailed` | an admin had an invite's link emailed to its address, and the SMTP server took the message (the invite itself is `invite_created`) | the invite's | invite | |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |
 | `member_role_changed` | an admin changes a member's role | the workspace | user | `from`, `to` |
+| `account_deletion_requested` | a person deletes their own account ([Deleting an account](api.md#deleting-an-account)); one event in each workspace the account belongs to | each of them | user | `purge_days` (the grace period), `logins_ended` |
+| `account_deletion_cancelled` | an operator cancels it before the purge | each of the account's workspaces | user | |
+| `account_purged` | the grace period ended and the account was deleted for good | each of the account's workspaces | user (the account, deleted) | how many of each the purge deleted: `private_spaces`, `conversations`, `access_grants` (access tokens), `cli_accounts`, `push_subscriptions`, `documents_anonymized` (commits whose author was replaced, counted in the purge's last attempt only: a purge that took several tries doesn't add up what the earlier ones rewrote, since a space already done is found already rewritten), `mentions_anonymized` (comments changed), `uploads_removed` (unfinished uploads), and `cleanups_pending` (steps still to do when the account went: the providers file's rewriting, and those that wait for the agent runtime or the CLI workers to be on). No name and no address |
 | `member_disabled`, `member_enabled` | an admin switches a member's account off or on (one already in that state records nothing) | the workspace the admin asked in | user | `logins_ended` on a disable: the sessions it signed out |
 | `member_removed` | an admin removes a member | the workspace | user | `role`; the tokens and shared-space seats that go with it are events of their own (see below) |
 | `access_token_created`, `access_token_revoked` | a member makes or revokes their own token | the token's | access token | `expires`; `cascade` on one revoked by a member's removal |
@@ -156,6 +160,24 @@ what kind of object it was done to and by time, and page back through the events
 - **Pages.** Newest first, 50 events to a page (at most 200), by a cursor that holds the time and
   id of the last event, so events recorded while someone pages don't shift the pages.
 - **Reading is not recorded.** Looking at the log makes no event.
+
+## Deleted accounts
+
+When an account is purged ([Deleting an account](api.md#deleting-an-account)) its events stay, without
+the person, in the same transaction that deletes the account:
+
+- the events it did lose their `actor_id` (the schema sets it to null with the account), which would
+  read like an anonymous attempt; they are marked `actor_deleted`, and the log shows "Deleted user";
+- the events about the account (`target_type` `user`, matched by its id *and* its creation time,
+  since an id is never given again, the creation time makes it certain) are marked `target_deleted`;
+- the network address each of their events was made from (`client_addr`) is cleared;
+- the invitations to the account's address, which hold the address in their details, lose it
+  (`invite_created`, `invite_revoked`);
+- nothing else in an event is about a person: details are typed and name no one but by the number
+  of an account or a space. The purge's own event, `account_purged`, holds counts only.
+
+So after a purge no event holds the person's name or address. Backups made before it still do
+(see [install.md](install.md#privacy-and-account-deletion)).
 
 ## What is never recorded
 

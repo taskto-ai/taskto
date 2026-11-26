@@ -324,8 +324,12 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // here: the person already chose what happens to it.
 export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
+  const users = [...new Set([state.runtime?.user, user].filter((n): n is number => n !== undefined))]
+  return settleUsers(users, approved)
+}
+
+async function settleUsers(users: number[], approved: Approval): Promise<UnsentRef[]> {
   const runtime = state.runtime
-  const users = [...new Set([runtime?.user, user].filter((n): n is number => n !== undefined))]
   const left: UnsentRef[] = []
   for (const id of users) {
     let store = runtime?.user === id ? runtime.store : undefined
@@ -400,6 +404,27 @@ export async function deactivate({
     if (left.length > 0) return left
   }
   await teardown(purge, user)
+  return []
+}
+
+// Deletes one account's database and nothing else's, for the page that deleted that account: its
+// answer can arrive after another account signed in on this tab or another, whose database is then
+// the one in use, and which must stay as it is (`deactivate` lets go of the one in use). The same
+// condition as signing out holds: unsent records the person wasn't shown (`approved`) stop it, and
+// are the answer.
+export async function purgeAccount(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  if (opening) await opening.catch(() => {})
+  const left = await settleUsers([user], approved)
+  if (left.length > 0) return left
+  // Looked at again after the waits above: the one in use may have changed.
+  const runtime = state.runtime
+  if (runtime?.user === user) {
+    await teardown(true, user)
+  } else {
+    await OfflineStore.destroyFor(user).catch(() => {})
+    writeUsers(readUsers().filter((id) => id !== user))
+    forgetLast(user)
+  }
   return []
 }
 

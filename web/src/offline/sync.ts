@@ -33,7 +33,7 @@
 //   a field that doesn't fit the app as it is now (removed, retyped, now required, a choice that
 //   is no longer one): needs attention as a schema problem; the input is kept for repair
 
-import { ApiError, api, forAccount, SESSION_LOST } from '../api'
+import { ApiError, api, concernsAccount, forAccount, SESSION_LOST } from '../api'
 import { storageFull, UploadCancelled, uploadPhoto } from '../apps/photos'
 import {
   type Attachment,
@@ -333,7 +333,7 @@ export class SyncEngine {
     window.addEventListener('online', online)
     const visible = () => document.visibilityState === 'visible' && kick()
     document.addEventListener('visibilitychange', visible)
-    const lost = () => this.pause('session')
+    const lost = (e: Event) => concernsAccount(e, this.store.user) && this.pause('session')
     window.addEventListener(SESSION_LOST, lost)
     // Another tab signed in as someone else: this queue stops being sent from here at once.
     const storage = () => {

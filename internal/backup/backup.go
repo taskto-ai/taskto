@@ -46,6 +46,7 @@ import (
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 
+	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/lockfile"
 )
 
@@ -545,7 +546,66 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 			return m, fmt.Errorf("restored database %s: %w", name, err)
 		}
 	}
+	// The server's own database: no login the backup held may come back (see endLogins).
+	if slices.Contains(databases, db.FileName) {
+		if err := endLogins(ctx, filepath.Join(dataDir, db.FileName)); err != nil {
+			return m, fmt.Errorf("end the restored logins: %w", err)
+		}
+	}
 	return m, nil
+}
+
+// loginTables are the tables of the server's database that hold a bearer's way in, emptied
+// by a restore, in the order that leaves no row pointing at a deleted one: a push
+// subscription and its deliveries depend on a session.
+//
+// A server ends a login by deleting its row (signing out, a password change, revoking a
+// token, using a reset link or a challenge), so a backup made before that holds the row
+// still, and restoring it would bring the login back: a browser that kept its cookie after
+// its session was refused would be signed in again with no password. A restore can't tell
+// which rows were ended after the backup, so it ends them all. Tables a database from an
+// older version doesn't have yet are skipped.
+//
+// What a restore leaves, because it holds no revocation: invites (they expire, and use
+// needs the address's own account) and two-factor recovery codes and TOTP steps (the state
+// of the account as of the backup, like the password itself, which a restore also brings
+// back: a person who changed it since changes it again).
+var loginTables = []string{
+	"push_deliveries",
+	"push_subscriptions",
+	"sessions",
+	"access_tokens",
+	"password_resets",
+	"login_challenges",
+}
+
+// endLogins deletes every row of loginTables in the restored server database at p, in one
+// transaction.
+func endLogins(ctx context.Context, p string) error {
+	sqlDB, err := open(p)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, table := range loginTables {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			continue
+		}
+		// The names are constants of this file, never input.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil { // #nosec G202
+			return fmt.Errorf("%s: %w", table, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // emptyDir makes dir if it doesn't exist, and fails if it isn't an empty directory, so

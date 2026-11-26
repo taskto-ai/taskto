@@ -832,6 +832,69 @@ const result = await voz.transcribe(wav.buffer.slice(wav.byteOffset, wav.byteOff
 process.stdout.write(JSON.stringify({ text: result.text }));
 ```
 
+## Privacy and account deletion
+
+A person can delete their own account, and only they can ([api.md](api.md#deleting-an-account)):
+that is the one way personal data leaves the server. An admin who removes a member from a workspace
+leaves the account, and what it owns, as it is. This is what happens, and what doesn't.
+
+**Grace period.** The account is switched off at once and kept for `-account-deletion-days`
+(`TASKTO_ACCOUNT_DELETION_DAYS`, `account_deletion_days`; default 14, at most 365). During it an
+operator can cancel the deletion in Settings → Members ("Accounts waiting to be deleted"); the
+person can't sign in, but nothing is lost. It ends with the purge, which a server that was off at
+the time runs when it starts again. Telling people the period, and that an operator can cancel, is
+part of your own privacy notice: the web app says it where a person deletes their account.
+
+**What the purge deletes** (what the person owned alone): their private spaces in every workspace
+(documents and unversioned files, personal boards, private apps with their records and photos), their
+conversations (with the agent runtime's records of them), their CLI logins and shared-account
+mappings and everything the CLI worker kept for them (including the agent browser's profile), the
+agent runtime's providers file and key files (which hold their provider accounts), their unfinished
+photo uploads in shared apps, their access tokens, sessions, push subscriptions, notification
+settings, email ledger, two-factor data and single sign-on identities, the invitations to their
+address, the search index's rows for all of it, and the account.
+
+**What stays: what they made for others.** Cards, comments, documents and app records in shared
+spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records
+(even when an unfinished move of the app had left their files in the person's private space: the purge
+finishes it first) and what the apps' effects did, without who. A comment's mention of them stops
+naming anyone, and no account is ever given their user number again. The person's name and address are replaced
+in the shared spaces' git history (a history rewrite, in every shared space of the server, so a space
+of a workspace they had left is covered too), and in the audit log. A person who wants their
+contributions to shared spaces gone too asks the space's admins to delete them as content; that
+is a decision about the workspace's records, not an account's.
+
+**What a purge can't reach.**
+
+- **Backups.** A backup made before the purge still holds the data. They age out by your
+  [retention](#backups) (restic's `forget`/`prune`, or deleting old archives): say in your privacy
+  notice how long that is. And a **restore** brings back the accounts the backup had: re-run the
+  deletions of the accounts that were deleted after it (the log, if kept, says which), or a
+  restored account that was purged is a live one again.
+- **Steps that wait for the agent runtime or the CLI workers.** Pi Durable, the runtime, has no way
+  to delete a conversation, so the purge **retires** each one (its work stops and the runtime refuses
+  it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`, with the
+  deleted content zeroed in the file. It also rewrites the runtime's providers file, and removes the
+  CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
+  step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
+  is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
+  need them stay recorded, and are done by the next start with them on and every ten minutes. The log
+  says "purged an account, with steps still to do" while any is left, and the audit event's
+  `cleanups_pending` says how many (the providers file's rewriting, which is done after the account
+  is gone, is one). If the runtime is on and fails, the purge fails and is tried again; the runtime
+  answers `503` while another connection holds its database, so a purge isn't acknowledged until
+  the write-ahead log, which can still hold the transcript, is empty. What failed is in `last_error`
+  of `purge_cleanups`, as a fixed word (`sidecar_busy`, `sidecar_refused`, `sidecar_unreachable`,
+  `cli_worker_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
+  with an HTTP status when the runtime answered one, and never the text of the error, which can hold
+  what a person wrote; the providers' step stays recorded while a removed account's key file is
+  still on disk.
+- **Model providers and CLI vendors.** What a conversation sent to a provider is theirs to delete.
+- **SQLite and the filesystem.** Deleted rows are overwritten as the database is reused, and
+  deleted files are only unlinked; use disk encryption if remnants matter to you.
+- **Authorship you didn't give to the server.** Text a person typed into another person's
+  document or comment (a quotation of their name) is content, not authorship.
+
 ## Deleted records of apps
 
 Deleting a record of an [app](api.md#apps) is soft: the record stays, with its history, and
@@ -1151,6 +1214,17 @@ taskto.ai backup or was cut short, and paths that would leave the directory. Sto
 server first: restore takes the data directory's lock, so it refuses a directory a server
 runs on, and a server started on the directory before the restore is done is refused. A
 restore that fails removes what it wrote, so the directory is empty for the next try.
+
+**Everyone signs in again after a restore.** A server ends a login by deleting its row, so a
+backup made before that still holds it, and a restore could bring back a session that was signed
+out, revoked by a password change, or a browser's that kept its cookie. So `taskto restore` empties
+the restored database's browser sessions (and the push subscriptions bound to them), access tokens,
+password reset links and half-done two-factor logins before any server starts on it. People sign
+in again, and make new access tokens for their agents and scripts; an admin makes new reset links.
+What a restore leaves is the account's state as of the backup, which holds no revocation: pending
+invitations (they expire, and accepting one needs the address's own account), and the password
+and two-factor codes, which are as the backup had them (a person who changed them since changes
+them again).
 
 From an archive file:
 

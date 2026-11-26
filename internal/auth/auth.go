@@ -43,6 +43,9 @@ type Options struct {
 	InviteTTL time.Duration
 	// ResetTTL is how long a password reset link works. Default 24 hours.
 	ResetTTL time.Duration
+	// AccountDeletionGrace is how long an account that was deleted is kept, disabled, before its
+	// purge (docs/api.md#deleting-an-account). Default 14 days.
+	AccountDeletionGrace time.Duration
 	// HashParams are the argon2id costs for new password hashes. Default DefaultParams.
 	HashParams Params
 	// SetupToken is the token POST /api/setup requires (see NewSetupToken). Empty means
@@ -147,6 +150,9 @@ type Service struct {
 	// hook is nil outside tests, which set it to make another request land at a named point
 	// of a login route, where a race would.
 	hook func(point string)
+
+	// deletions makes and cancels the timed purge of a deleted account (SetDeletionScheduler).
+	deletions DeletionScheduler
 
 	// memberHooks are told when a person is added to a workspace (OnMemberAdded).
 	memberHooks []MemberHook
@@ -312,9 +318,9 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (u User, 
 		return User{}, nil, false
 	}
 	if !ok {
-		if s.sessionToken(r) != "" {
-			s.clearSessionCookie(w)
-		}
+		// The cookie is left as it is: a stale session's is inert (its row is revoked or expired),
+		// and expiring it here would wipe a newer one that a sign-in in the same browser set while
+		// this request was on its way. Only logging out clears the cookie.
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return User{}, nil, false
 	}

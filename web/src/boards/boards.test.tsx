@@ -1463,6 +1463,23 @@ test('a slow comment leaves the focus where the person went meanwhile', async ()
   expect(document.activeElement).toBe(path)
 })
 
+test("a card whose assignee's account was deleted says so, and choosing someone replaces it", async () => {
+  const { sent } = server('write', (cards) => {
+    cards[0].assignee = { kind: 'deleted' }
+  })
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  // It shows as the deleted account, and nothing is sent if the card is left alone.
+  await waitFor(async () =>
+    expect((await menuItems(view, 'Assignee: Deleted user')).names).toEqual(['Nobody', 'Agent', 'Ann', 'Bo', 'Cy\\']),
+  )
+  expect(sent('PATCH', `${C}/1`)).toEqual([])
+  // Choosing someone replaces it.
+  await choose(view, 'Assignee: Deleted user', 'Bo')
+  await within(view).findByRole('button', { name: 'Assignee: Bo' })
+  expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, assignee: { kind: 'user', id: 5 } }])
+})
+
 test('another section (the switcher, the router) asks first over a comment being written, and goes on when it is discarded', async () => {
   server('write')
   window.history.replaceState(null, '', '/w/1/boards')

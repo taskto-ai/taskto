@@ -171,7 +171,7 @@ func listSQL(workspace int64, q Query) (stmt string, args []any, limit int, err 
 		where += ` AND (at, id) < (?, ?)`
 		args = append(args, at, id)
 	}
-	stmt = `SELECT id, at, workspace_id, actor_id, action, target_type, target_id, target_created_at, details, client_addr
+	stmt = `SELECT id, at, workspace_id, actor_id, actor_deleted, action, target_type, target_id, target_deleted, target_created_at, details, client_addr
 		FROM audit_events WHERE ` + where + ` ORDER BY at DESC, id DESC LIMIT ?`
 	return stmt, append(args, limit+1), limit, nil
 }

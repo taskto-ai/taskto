@@ -137,6 +137,9 @@ type Config struct {
 	// StorageQuotaUser caps what each member's private space stores, in bytes. Zero, the
 	// default, is unlimited.
 	StorageQuotaUser int64
+	// AccountDeletionDays is how many days a deleted account is kept, switched off, before it is
+	// purged (docs/api.md#deleting-an-account). Zero means the default, 14.
+	AccountDeletionDays int
 	// SearchVectorCache is the most memory semantic search's vector cache may hold, in
 	// bytes. Zero means the search index's default; negative, "off", turns the cache off.
 	SearchVectorCache int64
@@ -503,6 +506,24 @@ var settings = []setting{
 		usage: "most each member's private space may store (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
 		get:   func(c Config) string { return formatSize(c.StorageQuotaUser) },
 		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaUser }),
+	},
+	{
+		flag: "account-deletion-days", env: "TASKTO_ACCOUNT_DELETION_DAYS", key: "account_deletion_days",
+		usage: "days a deleted account is kept, switched off and cancellable by an operator, before everything it owned alone is purged, from 1 to 365 (default 14)",
+		get: func(c Config) string {
+			if c.AccountDeletionDays == 0 {
+				return ""
+			}
+			return strconv.Itoa(c.AccountDeletionDays)
+		},
+		set: func(c *Config, v string) error {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 365 {
+				return errors.New("want a number of days from 1 to 365")
+			}
+			c.AccountDeletionDays = n
+			return nil
+		},
 	},
 	{
 		flag: "search-vector-cache", env: "TASKTO_SEARCH_VECTOR_CACHE", key: "search_vector_cache",

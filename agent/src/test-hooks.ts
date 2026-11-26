@@ -5,6 +5,8 @@
 import type { ToolSpec } from './taskto-tools.js'
 
 export const testHooks = {
+  /** How long a purge waits for readers of the database (ms); the production wait when unset. */
+  walBusyMs: undefined as number | undefined,
   /** Install the pause tools (tools.ts). */
   spikeTools: false,
   /** Tools added to the server's list, to test how the sidecar picks among them. */

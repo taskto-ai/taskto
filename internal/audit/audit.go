@@ -230,9 +230,14 @@ type Row struct {
 	At          string `json:"at"`
 	WorkspaceID *int64 `json:"workspace_id"`
 	ActorID     *int64 `json:"actor_id"`
-	Action      string `json:"action"`
-	TargetType  string `json:"target_type"`
-	TargetID    *int64 `json:"target_id"`
+	// ActorDeleted says the actor's account was deleted: ActorID is then null, as for an anonymous
+	// event, and this says which it was.
+	ActorDeleted bool   `json:"actor_deleted"`
+	Action       string `json:"action"`
+	TargetType   string `json:"target_type"`
+	TargetID     *int64 `json:"target_id"`
+	// TargetDeleted says the account the event is about (a user target) was deleted.
+	TargetDeleted bool `json:"target_deleted"`
 	// TargetCreatedAt is when the target was created: the object an event is about is the one
 	// with its type, id and creation time (docs/audit.md).
 	TargetCreatedAt *string        `json:"target_created_at"`
@@ -257,7 +262,7 @@ func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
 	}
-	q := `SELECT id, at, workspace_id, actor_id, action, target_type, target_id, target_created_at, details, client_addr FROM audit_events WHERE 1 = 1`
+	q := `SELECT id, at, workspace_id, actor_id, actor_deleted, action, target_type, target_id, target_deleted, target_created_at, details, client_addr FROM audit_events WHERE 1 = 1`
 	var args []any
 	if f.Workspace != 0 {
 		q += ` AND workspace_id = ?`
@@ -288,7 +293,7 @@ func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 func scan(rows *sql.Rows) (Row, error) {
 	var r Row
 	var details string
-	if err := rows.Scan(&r.ID, &r.At, &r.WorkspaceID, &r.ActorID, &r.Action, &r.TargetType, &r.TargetID, &r.TargetCreatedAt, &details, &r.ClientAddr); err != nil {
+	if err := rows.Scan(&r.ID, &r.At, &r.WorkspaceID, &r.ActorID, &r.ActorDeleted, &r.Action, &r.TargetType, &r.TargetID, &r.TargetDeleted, &r.TargetCreatedAt, &details, &r.ClientAddr); err != nil {
 		return Row{}, err
 	}
 	if err := json.Unmarshal([]byte(details), &r.Details); err != nil {

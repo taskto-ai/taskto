@@ -43,6 +43,9 @@ export const AUDIT_ACTIONS = [
   'member_removed',
   'member_disabled',
   'member_enabled',
+  'account_deletion_requested',
+  'account_deletion_cancelled',
+  'account_purged',
   'access_token_created',
   'access_token_revoked',
   'access_token_used',
@@ -95,6 +98,7 @@ export const AUDIT_TARGETS = [
 
 // The names of the facts an event may carry (internal/audit/schema.go).
 export const AUDIT_DETAILS = [
+  'access_grants',
   'account',
   'added',
   'allowed_by',
@@ -106,9 +110,13 @@ export const AUDIT_DETAILS = [
   'base_host',
   'cascade',
   'channel',
+  'cleanups_pending',
   'cli',
+  'cli_accounts',
+  'conversations',
   'created_account',
   'default_mode',
+  'documents_anonymized',
   'email',
   'emailed',
   'enabled',
@@ -124,11 +132,15 @@ export const AUDIT_DETAILS = [
   'logins_ended',
   'members_changed',
   'members_signed_out',
+  'mentions_anonymized',
   'method',
   'mode',
   'notice_confirmed',
   'offline_downloads',
+  'private_spaces',
   'provider',
+  'purge_days',
+  'push_subscriptions',
   'reason',
   'removed',
   'role',
@@ -136,6 +148,7 @@ export const AUDIT_DETAILS = [
   'space_allowed',
   'spaces',
   'to',
+  'uploads_removed',
   'user_id',
   'webhook_secret_changed',
   'webhook_secret_set',
@@ -350,13 +363,14 @@ type Translate = ReturnType<typeof useT>
 
 function who(e: AuditEntry, t: Translate): string {
   if (e.actor) return t('settings.audit.by', { name: e.actor.name })
+  if (e.actor_deleted) return t('settings.audit.by', { name: t('common.deletedUser') })
   if (e.actor_id !== null) return t('settings.audit.byFormer', { id: e.actor_id })
   return t('settings.audit.byNobody')
 }
 
 function what(e: AuditEntry, t: Translate): string {
   const type = has(`settings.audit.targets.${e.target_type}`) ? t(targetKey(e.target_type)) : e.target_type
-  const name = e.target_user?.name ?? e.target_name
+  const name = e.target_user?.name ?? e.target_name ?? (e.target_deleted ? t('common.deletedUser') : null)
   if (name) return t('settings.audit.target', { type, name })
   if (e.target_id !== null) return t('settings.audit.targetGone', { type, id: e.target_id })
   return type

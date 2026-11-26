@@ -28,6 +28,11 @@ import (
 // holds none of the characters that would end or escape a Markdown link's label.
 var mentionPattern = regexp.MustCompile(`@\[[^\]\[\\\n]{1,200}\]\(user:([0-9]{1,18})\)`)
 
+// anonymizedMentionPattern is mentionPattern for the rewriting of a deleted account's mentions,
+// which also takes a label whose pipe is escaped (`\|`, as a table cell needs): the label is what
+// the writer typed, and it names the person all the same.
+var anonymizedMentionPattern = regexp.MustCompile(`@\[(?:[^\]\[\\\n]|\\\|){1,200}\]\(user:([0-9]{1,18})\)`)
+
 // maxMentions bounds how many people one comment tells, so a comment can't be made to notify a
 // whole workspace at once.
 const maxMentions = 20
@@ -480,4 +485,64 @@ func (s *Service) mentionedPeople(ctx context.Context, sp access.Space, viewer i
 		}
 	}
 	return nil
+}
+
+// DeletedMention is the ID a deleted person's mentions are rewritten to: no account has it (IDs
+// start at 1, and Mentions skips it), so the token can never resolve to anyone, now or after
+// another account registers.
+const DeletedMention = 0
+
+// AnonymizeMentions rewrites every mention of userID in the comments of every card to label and
+// DeletedMention, for the purge of an account (internal/accountdeletion): the web app never shows a
+// mention's label, only the name the server resolves from the ID, but the stored text holds what the
+// writer typed, which is the person's name, and the ID would go on naming whoever the number is
+// given to. The ID in a token is read as a number, whatever its digits (user:007 is user 7), so a
+// padded token is found too. It returns how many comments it changed, and runs in tx, with the
+// write lock.
+func AnonymizeMentions(ctx context.Context, tx *sql.Tx, userID int64, label string) (int64, error) {
+	type row struct {
+		id   int64
+		body string
+	}
+	// Every comment with a token; the number inside is compared below, as a number.
+	rows, err := tx.QueryContext(ctx, `SELECT id, body FROM card_comments WHERE instr(body, '(user:') > 0`)
+	if err != nil {
+		return 0, err
+	}
+	var todo []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.body); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		todo = append(todo, r)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, r := range todo {
+		body := anonymizedMentionPattern.ReplaceAllStringFunc(r.body, func(m string) string {
+			sub := anonymizedMentionPattern.FindStringSubmatch(m)
+			if len(sub) != 2 {
+				return m
+			}
+			if id, err := strconv.ParseInt(sub[1], 10, 64); err != nil || id != userID {
+				return m
+			}
+			return "@[" + label + "](user:" + strconv.Itoa(DeletedMention) + ")"
+		})
+		if body == r.body {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE card_comments SET body = ? WHERE id = ?`, body, r.id); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	return n, nil
 }

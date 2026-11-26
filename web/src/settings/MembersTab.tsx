@@ -3,7 +3,17 @@
 // the URL's fragment, which browsers don't send to servers or in Referer.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, api, type Invite, type InviteCreated, type MailStatus, type Member, mailPath, ws } from '../api'
+import {
+  ApiError,
+  api,
+  type Invite,
+  type InviteCreated,
+  type MailStatus,
+  type Member,
+  mailPath,
+  type PendingDeletion,
+  ws,
+} from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Avatar } from '../ui/Avatar'
@@ -31,7 +41,7 @@ export function resetLink(token: string): string {
   return `${window.location.origin}/reset-password#${token}`
 }
 
-export function MembersTab({ workspace, me }: { workspace: number; me: number }) {
+export function MembersTab({ workspace, me, operator = false }: { workspace: number; me: number; operator?: boolean }) {
   const t = useT()
   const f = useFormat()
   const base = ws(workspace)
@@ -52,6 +62,18 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
   )
   const passwordLogin = methods.data?.password === true
 
+  // The accounts waiting to be deleted, which only the server's operators see and can cancel.
+  const deletions = useLoad(
+    () =>
+      operator
+        ? api<{ deletions: PendingDeletion[] }>(`${base}/account-deletions`).then((r) => r.deletions)
+        : Promise.resolve([] as PendingDeletion[]),
+    [base, operator],
+  )
+  const cancelDeletion = (user: number) =>
+    action
+      .run(() => api(`${base}/account-deletions/${user}`, { method: 'DELETE' }))
+      .then(() => Promise.all([members.reload(), deletions.reload()]))
   const setRole = (m: Member, role: Role) =>
     action.run(() => api(`${base}/members/${m.id}`, { method: 'PATCH', body: { role } })).then(members.reload)
   const remove = (m: Member) =>
@@ -93,6 +115,15 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
     })
     if (yes) clearTwoFactor(m)
   }
+  const askCancelDeletion = async (d: PendingDeletion) => {
+    const yes = await confirm({
+      title: t('common.labelFor', { label: t('settings.members.cancelDeletion'), name: d.user.name }),
+      body: t('settings.members.cancelDeletionQuestion', { name: d.user.name }),
+      confirmLabel: t('settings.members.cancelDeletionConfirm'),
+      tone: 'danger',
+    })
+    if (yes) cancelDeletion(d.user.id)
+  }
   const askRemove = async (m: Member) => {
     const yes = await confirm({
       title: t('settings.members.removeQuestion', { name: m.name }),
@@ -132,7 +163,13 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                         <span className="settings-person-name">
                           {m.name}
                           {m.id === me && <Badge>{t('settings.members.youBadge')}</Badge>}
-                          {m.disabled && <Badge tone="warning">{t('settings.members.disabled')}</Badge>}
+                          {m.deletion_at ? (
+                            <Badge tone="warning">
+                              {t('settings.members.deletionPending', { date: f.date(m.deletion_at) })}
+                            </Badge>
+                          ) : (
+                            m.disabled && <Badge tone="warning">{t('settings.members.disabled')}</Badge>
+                          )}
                         </span>
                         <span className="settings-muted">{m.email}</span>
                       </span>
@@ -169,15 +206,18 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                               {t('settings.members.resetLink')}
                             </MenuItem>
                           )}
-                          {m.disabled ? (
-                            <MenuItem icon="check" onSelect={() => setDisabled(m, false)} disabled={action.busy}>
-                              {t('settings.members.enable')}
-                            </MenuItem>
-                          ) : (
-                            <MenuItem icon="block" onSelect={() => askDisable(m)} disabled={action.busy}>
-                              {t('settings.members.disable')}
-                            </MenuItem>
-                          )}
+                          {/* A waiting deletion has already switched the account off: only an operator's
+                              cancel (below) acts on it. */}
+                          {!m.deletion_at &&
+                            (m.disabled ? (
+                              <MenuItem icon="check" onSelect={() => setDisabled(m, false)} disabled={action.busy}>
+                                {t('settings.members.enable')}
+                              </MenuItem>
+                            ) : (
+                              <MenuItem icon="block" onSelect={() => askDisable(m)} disabled={action.busy}>
+                                {t('settings.members.disable')}
+                              </MenuItem>
+                            ))}
                           {m.two_factor && (
                             <MenuItem onSelect={() => askClearTwoFactor(m)} disabled={action.busy}>
                               {t('settings.members.clearTwoFactor')}
@@ -216,6 +256,53 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
         )}
         <p className="settings-muted">{t('settings.members.help')}</p>
       </Section>
+
+      {operator && (
+        <Section title={t('settings.members.deletions')} help={t('settings.members.deletionsHelp')}>
+          <Panel>
+            <Alert error={deletions.error} />
+            {deletions.data?.length === 0 && (
+              <p className="settings-muted settings-panel-note">{t('settings.members.noDeletions')}</p>
+            )}
+            {deletions.data && deletions.data.length > 0 && (
+              <Rows label={t('settings.members.deletions')}>
+                {deletions.data.map((d) => (
+                  <Row
+                    key={d.user.id}
+                    leading={<Avatar name={d.user.name} size="sm" decorative />}
+                    title={d.user.name}
+                    detail={
+                      <>
+                        {d.user.email}
+                        {' · '}
+                        {t(d.purging ? 'settings.members.deletionPurging' : 'settings.members.deletionDetails', {
+                          date: f.date(d.purge_at),
+                        })}
+                      </>
+                    }
+                    actions={
+                      !d.purging && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('common.labelFor', {
+                            label: t('settings.members.cancelDeletion'),
+                            name: d.user.name,
+                          })}
+                          disabled={action.busy}
+                          onClick={() => askCancelDeletion(d)}
+                        >
+                          {t('settings.members.cancelDeletion')}
+                        </Button>
+                      )
+                    }
+                  />
+                ))}
+              </Rows>
+            )}
+          </Panel>
+        </Section>
+      )}
 
       <Section title={t('settings.members.invites')} help={t('settings.members.invitesHelp')}>
         <Panel>

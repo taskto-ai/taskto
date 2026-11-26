@@ -39,6 +39,8 @@ function entry(over: Partial<AuditEntry>): AuditEntry {
     at: '2026-03-05T14:30:00.000Z',
     action: 'space_created',
     actor_id: 1,
+    actor_deleted: false,
+    target_deleted: false,
     actor: { name: 'Owner', email: 'owner@example.com' },
     target_type: 'space',
     target_id: 7,
@@ -225,4 +227,37 @@ test("every action, target type and detail of the server's log has a label in bo
     for (const x of targets) expect(audit.targets[x], `${tag}: target ${x}`).toBeTruthy()
     for (const d of AUDIT_DETAILS) expect(audit.details[d], `${tag}: detail ${d}`).toBeTruthy()
   }
+})
+
+test('an event of a deleted account says so, and its target is not a stray number', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/members': { body: members },
+    'GET /api/workspaces/1/audit?limit=50': {
+      body: {
+        next: '',
+        events: [
+          entry({ id: 5, action: 'space_created', actor: null, actor_id: null, actor_deleted: true }),
+          entry({
+            id: 4,
+            action: 'account_purged',
+            actor: null,
+            actor_id: null,
+            target_type: 'user',
+            target_id: 9,
+            target_name: null,
+            target_user: null,
+            target_deleted: true,
+            details: { private_spaces: 1, conversations: 3 },
+          }),
+        ],
+      },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="audit" />)
+  await screen.findByRole('table', { name: 'Audit log' })
+  expect(screen.getByText('By Deleted user')).toBeTruthy()
+  expect(log().getByText('Account purged')).toBeTruthy()
+  expect(screen.getByText('Member: Deleted user')).toBeTruthy()
+  expect(screen.queryByText(/number 9/)).toBeNull()
+  expect(screen.getByText('Private spaces deleted')).toBeTruthy()
 })

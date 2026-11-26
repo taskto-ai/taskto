@@ -686,3 +686,38 @@ func TestCLIProviders(t *testing.T) {
 		t.Error("a CLI worker isn't usable by everyone: the turn checks the owner's own login")
 	}
 }
+
+// A removed account's key file that can't be deleted is an error of Sync, not a log line: the
+// purge of a deleted account keeps its step recorded and tries again, instead of reporting a key
+// still on disk as gone. A stale key that can be deleted is gone and Sync answers nil.
+func TestSyncAnswersAStaleKeyThatCouldNotBeRemoved(t *testing.T) {
+	e := newEnv(t)
+	if err := e.feed.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A file that can be removed, and a directory that can't (it isn't empty): neither is a key of
+	// an account in the database.
+	if err := os.WriteFile(filepath.Join(e.feed.keyDir(), "removable.key"), []byte("fake-stale-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(e.feed.keyDir(), "stuck.key", "inside"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := e.feed.Sync(context.Background())
+	if !errors.Is(err, ErrKeyNotRemoved) {
+		t.Fatalf("Sync = %v; want ErrKeyNotRemoved", err)
+	}
+	if strings.Contains(err.Error(), e.feed.keyDir()) {
+		t.Errorf("the error names a path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.feed.keyDir(), "removable.key")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the key that could be removed stays: %v", err)
+	}
+	// Once it can be removed, Sync is done.
+	if err := os.RemoveAll(filepath.Join(e.feed.keyDir(), "stuck.key")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.feed.Sync(context.Background()); err != nil {
+		t.Fatalf("Sync after the key went = %v", err)
+	}
+}
