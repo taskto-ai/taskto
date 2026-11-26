@@ -64,11 +64,22 @@ test('storage that is not a list is no record at all', () => {
 test("a confirmation of one login's sign-out leaves the record of a newer login of the account as it is", () => {
   // The person went back from a sign-out of their newer login (its logout got no answer).
   recordSignOut(1, 's2', false, new Map())
-  unansweredSignOut(1)
-  backFromSignOut(1)
+  unansweredSignOut(1, 's2')
+  backFromSignOut(1, 's2')
   // An older login's logout, sent long before, is confirmed now.
   confirmSignOut(1, 's1')
   expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'backed' })
   confirmSignOut(1, 's2')
   expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'confirmed' })
+})
+
+test("an older login's unanswered logout and Back leave the record of a newer login of the account as it is", () => {
+  // Another tab signed the account in again and is signing that newer login out.
+  recordSignOut(1, 's2', false, new Map())
+  // The older login's logout got no answer, and this tab goes back from it.
+  unansweredSignOut(1, 's1')
+  backFromSignOut(1, 's1')
+  expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'requested' })
+  expect(pendingSignOutOf(1)?.unanswered).toBeUndefined()
+  expect(signOutPending(1)).toBe(true)
 })

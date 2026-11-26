@@ -293,7 +293,7 @@ export function App() {
           if (e instanceof ApiError && e.status === 401) return 'out' as const
           // No answer from the server itself (none in time, the connection, a proxy's page): the
           // request may still reach it.
-          if (!(e instanceof ApiError) || !e.code) unansweredSignOut(user)
+          if (!(e instanceof ApiError) || !e.code) unansweredSignOut(user, session)
           return wait.signal.aborted ? translate('app.signOutNoAnswer') : errorText(e)
         },
       )
@@ -405,7 +405,7 @@ export function App() {
         if (invite) await claim(me)
         else now = await enter(me)
         if (!mine()) return
-        backFromSignOut(tail.user)
+        backFromSignOut(tail.user, tail.session)
         const queue = runtimeState().runtime
         if (queue?.user === tail.user && queue.engine.status().paused === 'signing-out') queue.engine.resume()
         setLeaving(null)

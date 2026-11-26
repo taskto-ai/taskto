@@ -102,17 +102,22 @@ export function recordSignOut(
   ])
 }
 
-// A logout of it got no answer: it may reach the server yet.
-export function unansweredSignOut(user: number): void {
-  write(read().map((p) => (p.user === user ? { ...p, unanswered: true } : p)))
+// A logout of `user`'s login `session` got no answer: it may reach the server yet. A record of
+// another login of the account (a newer one's, from another tab) stays as it is.
+export function unansweredSignOut(user: number, session: string): void {
+  write(read().map((p) => (p.user === user && p.session === session ? { ...p, unanswered: true } : p)))
 }
 
-// Back: the same login is this browser's still. The sign-out is over, unless a logout of it got no
-// answer, which may still end the login: then it is kept, as `backed`, to be finished if it does.
-export function backFromSignOut(user: number): void {
-  const p = read().find((r) => r.user === user)
-  if (p?.unanswered) write(read().map((r) => (r.user === user ? { ...r, phase: 'backed' } : r)))
-  else settleSignOut(user)
+// Back: `user`'s login `session` is this browser's still. Its sign-out is over, unless a logout of
+// it got no answer, which may still end the login: then it is kept, as `backed`, to be finished if
+// it does. Only that login's record: another login's of the account (signing out in another tab)
+// stays.
+export function backFromSignOut(user: number, session: string): void {
+  const mine = (r: PendingSignOut) => r.user === user && r.session === session
+  const p = read().find(mine)
+  if (!p) return
+  if (p.unanswered) write(read().map((r) => (mine(r) ? { ...r, phase: 'backed' } : r)))
+  else write(read().filter((r) => !mine(r)))
 }
 
 // The sign-out the person went back from, of the login `session`, if its logout may still end it.
