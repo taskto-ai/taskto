@@ -401,3 +401,49 @@ func (r *stallingReader) Read(p []byte) (int, error) {
 	<-r.unblock
 	return 0, io.EOF
 }
+
+// Staging an upload's file takes the space's lock as a reader, on its own: a writer that holds the
+// space keeps it from making directories and files until it is done, and the removal, which is a
+// writer, can therefore not be overtaken by it.
+func TestStagingAnUploadsFileWaitsForAWriterOfTheSpace(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	sp := writable(1)
+	st := s.state(sp.ID)
+	st.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		sg, f, err := s.openStaged(sp)
+		if err == nil {
+			_ = f.Close()
+			sg.discard()
+		}
+		done <- err
+	}()
+	deadline := time.After(10 * time.Second)
+	for !blockedIn("(*Store).openStaged", "sync.(*RWMutex).RLock") {
+		select {
+		case <-deadline:
+			t.Fatal("staging never waited for the writer")
+		case err := <-done:
+			t.Fatalf("staging made its file while a writer held the space (%v)", err)
+		default:
+			runtime.Gosched()
+		}
+	}
+	st.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// blockedIn reports whether a goroutine's stack has both words.
+func blockedIn(a, b string) bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, a) && strings.Contains(g, b) {
+			return true
+		}
+	}
+	return false
+}

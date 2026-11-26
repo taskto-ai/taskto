@@ -10,9 +10,12 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/knowledge"
 )
 
@@ -269,5 +272,179 @@ func spin(t *testing.T, what string, cond func() bool) {
 		default:
 			runtime.Gosched()
 		}
+	}
+}
+
+// The sequence that stalled the database: a finalize holds the space (it decodes the picture and
+// writes its files), a document write in the space queues for it, a chunk of another photo begins,
+// and the finalize goes on to its transaction. A chunk that took the database's write lock before
+// the space would hold it while it waited behind the document write, and the finalize would wait
+// for it: every write to the database waits with them until it gives up.
+func TestAFinalizeADocumentWriteAndAChunkDoNotWaitOnEachOther(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	w.e.s.WithSpaceHolder(kb)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.start(w.alice, s, a, "photos", len(picture))
+
+	finalizing, err := kb.HoldSpace(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := kb.Put(ctx, s, "note.md", []byte("an agent's note"), "", knowledge.Author{Name: "Agent", Email: "agent@example.com"}, "")
+		wrote <- err
+	}()
+	spin(t, "the document write to queue for the space", func() bool { return goroutineWith("(*Store).Put", "sync.(*RWMutex).Lock") })
+	chunk := make(chan int, 1)
+	go func() { chunk <- w.chunk(w.alice, s, a, id, 0, picture).Code }()
+	spin(t, "the chunk to queue for the space", func() bool { return goroutineWith("putChunk", "sync.(*RWMutex).RLock") })
+
+	// The finalize reaches its transaction.
+	tx := make(chan error, 1)
+	go func() { tx <- w.e.s.write(ctx, func(*sql.Tx) error { return nil }) }()
+	select {
+	case err := <-tx:
+		if err != nil {
+			t.Fatalf("the finalize's transaction: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a finalize waits for the database lock that a chunk holds while it waits for the space")
+	}
+	finalizing()
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	if code := <-chunk; code != http.StatusOK {
+		t.Fatalf("the chunk: status %d", code)
+	}
+}
+
+// holderFunc is a SpaceHolder made of a function.
+type holderFunc func(sp access.Space) (func(), error)
+
+func (f holderFunc) HoldSpace(sp access.Space) (func(), error) { return f(sp) }
+
+// A finalize that finds its upload isn't a picture removes the files through the directory it
+// holds. Tested through the route, with a removal that comes to wait for the finalize's hold as
+// soon as it has it: a second entry into the space would queue behind that removal, which waits for
+// the first, and the finalize would never answer.
+func TestFinalizingANonPictureDoesNotEnterTheSpaceAgain(t *testing.T) {
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	var armed atomic.Bool
+	removed := make(chan error, 1)
+	w.e.s.WithSpaceHolder(holderFunc(func(sp access.Space) (func(), error) {
+		release, err := kb.HoldSpace(sp)
+		if err == nil && armed.CompareAndSwap(true, false) {
+			go func() { removed <- kb.RemoveSpace(sp) }()
+			spin(t, "the removal to wait for the finalize's hold", removalIsWaiting)
+		}
+		return release, err
+	}))
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	notPicture := []byte("this is text, not a picture of anything")
+	id := w.start(w.alice, s, a, "photos", len(notPicture))
+	w.send(w.alice, s, a, id, notPicture, 4096)
+
+	armed.Store(true)
+	answered := make(chan int, 1)
+	go func() {
+		answered <- w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{}).Code
+	}()
+	select {
+	case code := <-answered:
+		if code != http.StatusUnprocessableEntity && code != http.StatusBadRequest {
+			t.Fatalf("finalizing a file that isn't a picture: status %d", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the finalize waits for a removal that waits for the finalize")
+	}
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// recordingHolder notes the order in which spaces are held.
+type recordingHolder struct {
+	*knowledge.Store
+	mu    sync.Mutex
+	order []int64
+}
+
+func (r *recordingHolder) HoldSpace(sp access.Space) (func(), error) {
+	r.mu.Lock()
+	r.order = append(r.order, sp.ID)
+	r.mu.Unlock()
+	return r.Store.HoldSpace(sp)
+}
+
+// A relocation holds its two spaces in the order of their ids, whichever way the file goes, so two
+// moves in opposite directions never each hold one and wait for the other; and between a space and
+// itself it does nothing, rather than copy a file onto itself and remove the copy.
+func TestARelocationHoldsItsSpacesInOrderAndNeverMovesToItself(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	held := &recordingHolder{Store: knowledge.New(w.e.dataDir, knowledge.Options{})}
+	w.e.s.WithSpaceHolder(held)
+	low, high := w.alicePrivate, w.shared
+	if low.ID > high.ID {
+		low, high = high, low
+	}
+	a := w.createPhotos(w.alice, w.alicePrivate, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.upload(w.alice, w.alicePrivate, a, "photos", picture, 4096)
+
+	for _, dir := range [][2]access.Space{{low, high}, {high, low}} {
+		held.mu.Lock()
+		held.order = nil
+		held.mu.Unlock()
+		if err := w.e.s.relocateOne(ctx, a.ID, id, dir[0].ID, w.created(dir[0].ID), dir[1].ID, w.created(dir[1].ID)); err != nil {
+			t.Fatal(err)
+		}
+		held.mu.Lock()
+		order := slices.Clone(held.order)
+		held.mu.Unlock()
+		if !slices.Equal(order, []int64{low.ID, high.ID}) {
+			t.Fatalf("a move from space %d to %d held %v, want %v", dir[0].ID, dir[1].ID, order, []int64{low.ID, high.ID})
+		}
+	}
+
+	files := w.files(w.alicePrivate, a)
+	if err := w.e.s.relocateOne(ctx, a.ID, id, w.alicePrivate.ID, w.created(w.alicePrivate.ID), w.alicePrivate.ID, w.created(w.alicePrivate.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.files(w.alicePrivate, a); !slices.Equal(got, files) || len(got) == 0 {
+		t.Fatalf("a move onto itself changed the files: %v, was %v", got, files)
+	}
+}
+
+// The cleanups that find a space gone, because it was removed, have nothing to do and no failure
+// to report.
+func TestCleanupsOfARemovedSpaceHaveNothingToDo(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	w.e.s.WithSpaceHolder(kb)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.upload(w.alice, s, a, "photos", picture, 4096)
+	if err := kb.RemoveSpace(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.e.s.unlinkFiles(ctx, s.ID, a.ID, id); err != nil {
+		t.Fatalf("removing the files of an attachment in a removed space: %v", err)
+	}
+	if err := w.e.s.sweepSpace(ctx, s, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("sweeping a removed space: %v", err)
+	}
+	if _, err := os.Lstat(s.Dir(w.e.dataDir)); err == nil {
+		t.Fatal("the removed space's directory was made again")
 	}
 }

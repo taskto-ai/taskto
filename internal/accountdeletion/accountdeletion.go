@@ -411,11 +411,12 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
-		return err
-	}
-	for _, sp := range private {
-		s.o.Knowledge.ForgetSpace(sp)
+	finishErr := s.finish(ctx, userID, private, acct, &res)
+	// Whatever finish returned: a transaction that committed and then failed to report it has
+	// deleted the rows, and a space made later with the ID must not stay refused until a restart.
+	s.forgetGone(ctx, private)
+	if finishErr != nil {
+		return finishErr
 	}
 	// The providers file and the key files, now that the database has no account of theirs. A
 	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.
@@ -434,6 +435,19 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 			"conversations", res.Conversations, "documents_anonymized", res.DocumentsAnonymized)
 	}
 	return nil
+}
+
+// forgetGone tells the knowledge base to forget the removal of each of spaces whose row is gone
+// (knowledge.Store.ForgetSpace): the refusal is kept for a space that is still recorded, since the
+// purge is then still to finish it, and a database that can't be read leaves it all as it is.
+func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
+	for _, sp := range spaces {
+		var one int
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			s.o.Knowledge.ForgetSpace(sp)
+		}
+	}
 }
 
 type account struct {
