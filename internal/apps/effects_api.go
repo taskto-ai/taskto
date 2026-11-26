@@ -461,17 +461,17 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 		}
 		// A payment link is only said, never asked for: the preview calls no network, opens no
 		// secret and needs no approval, and shows what the sample record would send.
-		if e.Kind == EffectCreatePaymentLink {
-			out = append(out, EffectView{
-				Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: rec.ID, Status: StateSimulated,
-				Detail: previewLink(e, rec.Data),
-			})
-			continue
-		}
-		// A new record has no number yet: its details say "new".
+		// A new record has no number yet: its details, and the effect's record, say "new".
 		id := rec.ID
 		if ch.Kind == ActionInsert {
 			id = 0
+		}
+		if e.Kind == EffectCreatePaymentLink {
+			out = append(out, EffectView{
+				Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: id, Status: StateSimulated,
+				Detail: previewLink(e, rec.Data),
+			})
+			continue
 		}
 		p := e.payload(def.Collection, rec.Data, id)
 		v := EffectView{

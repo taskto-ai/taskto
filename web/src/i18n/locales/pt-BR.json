@@ -624,7 +624,9 @@
         "openSettings": "Abrir as integrações",
         "allowSpace": "Isso também permite a integração em {space}, enquanto alguma aprovação precisar dela. Um administrador a mantém por mais tempo nos espaços da integração, em Configurações.",
         "consent": "Ao continuar, você aprova exatamente o que está listado acima, para este app, e o publica.",
-        "confirm": "Aprovar e publicar"
+        "confirm": "Aprovar e publicar",
+        "nothingLeft": "Tudo o que este app pede aos serviços externos já está aprovado. Feche isto e publique como de costume.",
+        "kept": "Estas aprovações foram concluídas e continuam ativas: {slots}. Esta recusa não as desfaz; revogue-as em Configurações, em Aprovações de integrações, se não as quiser."
       },
       "contract": {
         "field": "“{name}”",
@@ -2233,7 +2235,9 @@
       "revokeQuestion": "Revogar a aprovação de {app}?",
       "revokeBody": "O app deixa de usar a integração na hora. Ele não pode ser publicado, nem revertido para uma versão com este contrato, até ser aprovado de novo.",
       "revokeLive": "É o que a versão publicada pede. Ela deixa de usar a integração na hora, embora continue no ar, e não pode ser publicada nem restaurada até ser aprovada de novo.",
-      "revokeSpace": "Se nenhuma outra aprovação precisar dele, {space} também deixa de ser permitido para a integração, a menos que seja mantido nos espaços da integração."
+      "revokeSpace": "Se nenhuma outra aprovação precisar dele, {space} também deixa de ser permitido para a integração, a menos que seja mantido nos espaços da integração.",
+      "allowSpaceTemporary": "Aprovar também permite a integração nesse espaço, enquanto esta aprovação durar. Não é um espaço que você gerencia, então ele não pode ser mantido depois que a aprovação terminar.",
+      "revokeSpaceTemporary": "Se nenhuma outra aprovação precisar dele, esse espaço também deixa de ser permitido para a integração. Não é um espaço que você gerencia, então ele não pode ser mantido."
     }
   },
   "pwa": {

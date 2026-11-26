@@ -49,8 +49,8 @@ func (s *Service) listIntegrations(ctx context.Context, c *call, args json.RawMe
 	}
 	out := struct {
 		Integrations []integrationView `json:"integrations"`
-		Slots        []slotView        `json:"slots,omitempty"`
-	}{Integrations: []integrationView{}}
+		Slots        []slotView        `json:"slots"`
+	}{Integrations: []integrationView{}, Slots: []slotView{}}
 	if s.o.Integrations != nil {
 		list, err := s.o.Integrations.ForSpace(ctx, sp.WorkspaceID, sp.ID)
 		if err != nil {

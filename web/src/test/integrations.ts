@@ -81,6 +81,7 @@ export const approval = (over: Partial<IntegrationApproval> = {}): IntegrationAp
   status: 'requested',
   live: false,
   integration: null,
+  space_grant: 'none',
   requested_by: { id: 2, name: 'Alice', agent: false },
   requested_at: '2026-11-24T10:00:00.000Z',
   decided_by: null,

@@ -117,8 +117,9 @@ func TestListIntegrationsNamesKindsAndStatusOnly(t *testing.T) {
 			}
 		}
 	}
-	if _, ok := out["slots"]; ok {
-		t.Errorf("slots without an app: %v", out)
+	// Without an app there are no slots to list, and the reply says so: the key is always there.
+	if slots, ok := out["slots"].([]any); !ok || len(slots) != 0 {
+		t.Errorf("slots without an app = %v, want an empty list: %v", out["slots"], out)
 	}
 
 	// Nothing of the account, however the reply is searched: the provider, the public id, a

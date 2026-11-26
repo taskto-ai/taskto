@@ -13,6 +13,7 @@ import {
   type Integration,
   type IntegrationApproval,
   type IntegrationApprovalList,
+  type Space,
   ws,
 } from '../api'
 import { ApprovalBadge } from '../apps/AppIntegrations'
@@ -25,11 +26,12 @@ import { useConfirm } from '../ui/ConfirmDialog'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
-import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { SegmentedControl } from '../ui/SegmentedControl'
 import { Select } from '../ui/Select'
+import { Loading, SettingsTab } from './parts'
 import './Approvals.css'
 
 type Filter = 'requested' | 'approved' | 'rejected' | 'revoked'
@@ -98,52 +100,56 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
   }
 
   return (
-    <div className="approvals">
-      <Heading level={2} size="title">
-        {t('settings.approvals.title')}
-      </Heading>
-      <p className="approvals-intro">{t('settings.approvals.intro')}</p>
-      <SegmentedControl<Filter>
-        label={t('settings.approvals.filter')}
-        value={filter}
-        onChange={(v) => {
-          setNotice(null)
-          setProblem(null)
-          setFilter(v)
-        }}
-        options={FILTERS.map((v) => ({ value: v, label: t(`settings.approvals.filters.${v}` as Key) }))}
-      />
+    <SettingsTab title={t('settings.approvals.title')} help={t('settings.approvals.intro')}>
+      <div className="approvals-filters">
+        <SegmentedControl<Filter>
+          label={t('settings.approvals.filter')}
+          value={filter}
+          onChange={(v) => {
+            setNotice(null)
+            setProblem(null)
+            setFilter(v)
+          }}
+          options={FILTERS.map((v) => ({ value: v, label: t(`settings.approvals.filters.${v}` as Key) }))}
+        />
+      </div>
       {notice && <Notice tone="success">{notice}</Notice>}
       {problem && <Notice tone="danger">{problem}</Notice>}
       {error && <Notice tone="danger">{error}</Notice>}
-      {!page && !error && <p className="approvals-note">{t('app.loading')}</p>}
-      {page && page.items.length === 0 && <EmptyState title={t(`settings.approvals.empty.${filter}` as Key)} />}
+      {!page && !error && <Loading lines={3} />}
+      {page && page.items.length === 0 && (
+        <Panel>
+          <EmptyState title={t(`settings.approvals.empty.${filter}` as Key)} />
+        </Panel>
+      )}
       {page && page.items.length > 0 && (
-        <Rows label={t('settings.approvals.list')}>
-          {page.items.map((a) => (
-            <Row
-              key={a.id}
-              title={a.app_name}
-              onOpen={() => setReviewing(a)}
-              detail={t('settings.approvals.detail', {
-                slot: a.slot,
-                space: a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name,
-                who: a.requested_by?.name ?? t('settings.approvals.unknownPerson'),
-                when: f.dateTime(a.requested_at),
-              })}
-              status={<ApprovalBadge status={a.status} />}
-              actions={
-                <Button
-                  size="sm"
-                  onClick={() => setReviewing(a)}
-                  aria-label={t('settings.approvals.reviewNamed', { app: a.app_name })}
-                >
-                  {t(a.status === 'requested' ? 'settings.approvals.review' : 'settings.approvals.view')}
-                </Button>
-              }
-            />
-          ))}
-        </Rows>
+        <Panel>
+          <Rows label={t('settings.approvals.list')}>
+            {page.items.map((a) => (
+              <Row
+                key={a.id}
+                title={a.app_name}
+                onOpen={() => setReviewing(a)}
+                detail={t('settings.approvals.detail', {
+                  slot: a.slot,
+                  space: a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name,
+                  who: a.requested_by?.name ?? t('settings.approvals.unknownPerson'),
+                  when: f.dateTime(a.requested_at),
+                })}
+                status={<ApprovalBadge status={a.status} usable={a.integration?.usable ?? true} />}
+                actions={
+                  <Button
+                    size="sm"
+                    onClick={() => setReviewing(a)}
+                    aria-label={t('settings.approvals.reviewNamed', { app: a.app_name })}
+                  >
+                    {t(a.status === 'requested' ? 'settings.approvals.review' : 'settings.approvals.view')}
+                  </Button>
+                }
+              />
+            ))}
+          </Rows>
+        </Panel>
       )}
       {page?.next && (
         <div className="approvals-more">
@@ -161,7 +167,7 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
           onStale={stale}
         />
       )}
-    </div>
+    </SettingsTab>
   )
 }
 
@@ -183,12 +189,18 @@ function ReviewDialog({
   const f = useFormat()
   const waiting = a.status === 'requested'
   const approved = a.status === 'approved'
-  // A request that waits is decided with an integration, and an approval that is revoked may have
-  // made the space's grant: only those two read the integrations.
+  // A request that waits is decided with an integration, which only it reads.
   const integrations = useLoad(
+    () => (waiting ? api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`) : Promise.resolve(null)),
+    [workspace, waiting],
+  )
+  // The spaces the admin manages: the ones whose grant they can keep in the integration's settings.
+  // Another member's private space is not among them, and neither the integrations' lists nor this
+  // one say anything of it, so what its approval made is read from the approval itself.
+  const spaces = useLoad(
     () =>
       waiting || approved
-        ? api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`)
+        ? api<{ spaces: Space[] }>(`${ws(workspace)}/spaces?all=true`).then((r) => r.spaces)
         : Promise.resolve(null),
     [workspace, waiting, approved],
   )
@@ -203,11 +215,13 @@ function ReviewDialog({
   // how they consent to the app using it, so the space is allowed with the approval when it isn't yet.
   const allowing = picked !== undefined && !picked.spaces.includes(a.space_id)
   const space = a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name
+  // Whether the admin can keep the space's grant, in Settings, Integrations: only a space they manage.
+  const keepable = spaces.data?.some((s) => s.id === a.space_id) ?? false
 
   // The grant of the space the approval made: it ends with the last approval that needs it, unless
-  // an admin keeps it in the integration's spaces (Settings, Integrations).
-  const bound = integrations.data?.integrations.find((i) => i.id === a.integration?.id)
-  const madeGrant = a.status === 'approved' && bound !== undefined && bound.approval_spaces.includes(a.space_id)
+  // an admin keeps it in the integration's spaces. The queue says it of this approval's own space, so
+  // it is known for a space the admin can't list too.
+  const madeGrant = a.status === 'approved' && a.space_grant === 'approval'
 
   const decide = async (verb: 'approve' | 'reject' | 'revoke', message: string) => {
     setBusy(true)
@@ -244,16 +258,21 @@ function ReviewDialog({
 
   const revoke = async () => {
     let live = a.live
+    setBusy(true)
     try {
       live = await liveNow()
     } catch {
       // The list's word stands; the server decides the revoke either way.
+    } finally {
+      setBusy(false)
     }
     const yes = await confirm({
       title: t('settings.approvals.revokeQuestion', { app: a.app_name }),
       body: [
         t(live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
-        madeGrant ? t('settings.approvals.revokeSpace', { space }) : '',
+        madeGrant
+          ? t(keepable ? 'settings.approvals.revokeSpace' : 'settings.approvals.revokeSpaceTemporary', { space })
+          : '',
       ]
         .filter(Boolean)
         .join(' '),
@@ -302,11 +321,7 @@ function ReviewDialog({
               </Button>
             )}
             {a.status === 'approved' && (
-              <Button
-                variant="danger"
-                disabled={busy || integrations.loading || integrations.error !== null}
-                onClick={revoke}
-              >
+              <Button variant="danger" disabled={busy} onClick={revoke}>
                 {t('settings.approvals.revoke')}
               </Button>
             )}
@@ -319,7 +334,6 @@ function ReviewDialog({
             {a.live && <span className="approvals-note">{t('settings.approvals.isLive')}</span>}
           </div>
           <ContractSummary contract={a.contract} />
-          {approved && integrations.error && <Notice tone="danger">{integrations.error}</Notice>}
           {a.integration && a.status === 'approved' && (
             <p className="approvals-note">
               {t(a.integration.usable ? 'apps.integrations.connectedTo' : 'apps.integrations.connectedUnusable', {
@@ -364,13 +378,19 @@ function ReviewDialog({
                   {t('apps.integrations.approve.none', { kind: t(`settings.integrations.kind.${a.kind}` as Key) })}
                 </Notice>
               )}
-              {allowing && (
+              {picked && !spaces.loading && keepable && allowing && (
                 <p className="approvals-note">
                   {t('settings.approvals.allowSpace', { space })}{' '}
                   <Link href={routePath({ workspace, section: 'settings', item: 'integrations' })}>
                     {t('settings.approvals.keepLink')}
                   </Link>
                 </p>
+              )}
+              {/* A space the admin doesn't manage (another member's private space) has no setting to keep
+                  its grant in, and the integrations' list doesn't say whether it has one: the grant lasts as
+                  long as the approval, whatever it was before. */}
+              {picked && !spaces.loading && !keepable && (
+                <p className="approvals-note">{t('settings.approvals.allowSpaceTemporary')}</p>
               )}
             </>
           )}

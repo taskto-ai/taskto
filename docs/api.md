@@ -3163,13 +3163,19 @@ approval is
 ```json
 {"id": 4, "app_id": 9, "app_name": "Invoices", "space_id": 3, "space_name": "Team", "space_kind": "shared",
  "slot": "payments", "kind": "payments", "contract": {…}, "contract_hash": "…", "status": "requested",
- "live": false, "integration": null, "requested_by": {…}, "requested_at": "…", "decided_by": null, "decided_at": null}
+ "live": false, "integration": null, "space_grant": "none", "requested_by": {…}, "requested_at": "…", "decided_by": null, "decided_at": null}
 ```
 
 It holds what the requester submitted and the names of the app and its space: the contract, which
 includes the handlers' literals and rules the definition gives it (an admin sees that the app sets
 `status` to `"paid"`), but **not the rest of the definition and none of its records**, so an app in
 a private space, which an admin can't open, is approved the same way. `live` says the contract is the live release's.
+`space_grant` says, for the approval's own space and the integration it is bound to now, whether the
+space has a grant and who made it: `"approval"` (the approval allowed the space, so it ends with the last
+approval that needs it), `"settings"` (an admin allowed it in the integration's settings, which an
+approval never takes away) or `"none"` (no integration is bound, or its space isn't allowed). It is the
+one fact the queue holds about a space an admin can't open, and it says nothing of any other space, which
+is how the admin's screen warns that revoking ends a grant it can't list.
 
 #### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/approve`
 

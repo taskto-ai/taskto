@@ -75,7 +75,7 @@ export function ContractSummary({ contract }: { contract: IntegrationContract })
       )}
       {links.length > 0 && (
         <ul className="apps-contract-list">
-          {links.map((link) => {
+          {links.map((link, n) => {
             const currency = link.currency
               ? link.currency
               : t('apps.integrations.contract.linkCurrencyField', {
@@ -101,7 +101,8 @@ export function ContractSummary({ contract }: { contract: IntegrationContract })
               ? t('apps.integrations.contract.linkWhen', { link: asks, rule: ruleText(link.when, f) })
               : asks
             return (
-              <li key={`${link.action}-${link.amount_field}-${link.url_field}`}>
+              // biome-ignore lint/suspicious/noArrayIndexKey: two links of one action can share every field; the contract's order is their identity
+              <li key={`${link.action}-${link.amount_field}-${link.url_field}-${n}`}>
                 {named.length > 0
                   ? `${text} ${t('apps.integrations.contract.describes', { what: f.list(named) })}`
                   : text}

@@ -774,11 +774,16 @@ export type IntegrationApproval = {
   // Whether the contract is the live release's: revoking it stops the app's use at once.
   live: boolean
   integration: BoundIntegration | null
+  // How the approval's own space is allowed the integration it is bound to: not at all, by this
+  // approval (it ends with the last approval that needs it) or by an admin in the integration's
+  // settings. The one fact the queue holds of a space the admin can't open.
+  space_grant: SpaceGrant
   requested_by: RecordAuthor | null
   requested_at: string
   decided_by: RecordAuthor | null
   decided_at: string | null
 }
+export type SpaceGrant = 'none' | 'approval' | 'settings'
 export type IntegrationApprovalList = { approvals: IntegrationApproval[]; next_cursor: string | null }
 
 // What a space's readers see of an integration allowed there.

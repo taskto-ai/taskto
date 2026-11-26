@@ -619,7 +619,9 @@
         "openSettings": "Open the integrations",
         "allowSpace": "This also allows the integration in {space}, for as long as an approval needs it. An admin keeps it longer in the integration’s spaces, in Settings.",
         "consent": "By continuing you approve exactly what is listed above, for this app, and publish it.",
-        "confirm": "Approve and publish"
+        "confirm": "Approve and publish",
+        "nothingLeft": "Everything this app asks of outside services is approved already. Close this and publish as usual.",
+        "kept": "These approvals went through and stay active: {slots}. They are not undone by this refusal; revoke them in Settings, under Integration approvals, if you don’t want them."
       },
       "contract": {
         "field": "“{name}”",
@@ -2216,7 +2218,9 @@
       "revokeQuestion": "Revoke the approval of {app}?",
       "revokeBody": "The app stops using the integration at once. It can’t be published, or rolled back to, with this contract until it is approved again.",
       "revokeLive": "This is what the live release asks. It stops using the integration at once, though it stays online, and it can’t be published or rolled back to until it is approved again.",
-      "revokeSpace": "If no other approval needs it, {space} also stops being allowed for the integration, unless it is kept in the integration’s spaces."
+      "revokeSpace": "If no other approval needs it, {space} also stops being allowed for the integration, unless it is kept in the integration’s spaces.",
+      "allowSpaceTemporary": "Approving also allows the integration in that space, for as long as this approval lasts. It isn’t a space you manage, so it can’t be kept after the approval ends.",
+      "revokeSpaceTemporary": "If no other approval needs it, that space also stops being allowed for the integration. It isn’t a space you manage, so it can’t be kept."
     }
   },
   "pwa": {

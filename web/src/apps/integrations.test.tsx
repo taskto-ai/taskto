@@ -362,6 +362,187 @@ test('an admin who may not publish the app is offered no approve and publish', a
   expect(screen.queryByRole('button', { name: 'Approve and publish…' })).toBeNull()
 })
 
+// ----- the admin's step when something goes wrong part of the way -----
+
+const approvedShop = { id: 7, name: 'shop', display_name: 'Shop', usable: true }
+const billing = () => slot({ slot: 'billing', contract_hash: 'b'.repeat(64) })
+
+async function openApproveAndPublish() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve and publish…' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Approve and publish' })
+  const confirm = within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement
+  await waitFor(() => expect(confirm.disabled).toBe(false))
+  return { dialog, confirm }
+}
+
+test('a contract that changed under the admin closes the dialog, reads the app and the slots again and says the draft changed', async () => {
+  let first = false
+  const calls = fakeFetch({
+    'GET /api/x/integrations': () =>
+      status(first ? slot({ status: 'approved', integration: approvedShop }) : slot(), billing()),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/workspaces/1/integration-approvals/4/approve': () => {
+      first = true
+      return { body: { id: 4 } }
+    },
+    'POST /api/x/integrations/billing/request': {
+      status: 409,
+      body: { error: 'x', code: 'app_integration_contract_changed' },
+    },
+  })
+  const changed = panel(appOf(), team, true)
+  const { confirm } = await openApproveAndPublish()
+  const slotReads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/x/integrations').length
+  const before = slotReads()
+  fireEvent.click(confirm)
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
+  expect(changed).toHaveBeenCalled()
+  await waitFor(() => expect(slotReads()).toBeGreaterThan(before))
+  expect(screen.getByText(/The draft changed while you were reviewing it/)).toBeTruthy()
+  // The first slot was approved before the second was refused: that stands, and is said.
+  expect(screen.getByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
+  expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
+})
+
+test('a refused approval reads the integrations again, so one switched off is no longer offered', async () => {
+  let reads = 0
+  const calls = fakeFetch({
+    'GET /api/x/integrations': status(slot()),
+    'GET /api/workspaces/1/integrations': () => {
+      reads++
+      return { body: { integrations: [{ ...shop, disabled: reads > 1 }] } }
+    },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/workspaces/1/integration-approvals/4/approve': {
+      status: 409,
+      body: { error: 'x', code: 'app_integration_disabled' },
+    },
+  })
+  panel(appOf(), team, true)
+  const { dialog, confirm } = await openApproveAndPublish()
+  fireEvent.click(confirm)
+  expect(await within(dialog).findByText('This integration is switched off.')).toBeTruthy()
+  expect(await within(dialog).findByText('No integration for Payments is connected and switched on yet.')).toBeTruthy()
+  expect(calls.filter((c) => c.path === '/api/workspaces/1/integrations')).toHaveLength(2)
+  expect((within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+test('when a later slot is refused, the dialog says the earlier approvals went through and a retry leaves them alone', async () => {
+  let firstDone = false
+  let refusedOnce = false
+  let secondOk = false
+  const calls = fakeFetch({
+    'GET /api/x/integrations': () =>
+      status(
+        firstDone ? slot({ status: 'approved', integration: approvedShop }) : slot(),
+        secondOk ? { ...billing(), status: 'approved', integration: approvedShop } : billing(),
+      ),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/x/integrations/billing/request': { body: { id: 5 } },
+    'POST /api/workspaces/1/integration-approvals/4/approve': () => {
+      firstDone = true
+      return { body: { id: 4 } }
+    },
+    'POST /api/workspaces/1/integration-approvals/5/approve': () => {
+      // Refused the first time, accepted the second.
+      if (!refusedOnce) {
+        refusedOnce = true
+        return { status: 409, body: { error: 'x', code: 'app_integration_disabled' } }
+      }
+      secondOk = true
+      return { body: { id: 5 } }
+    },
+    'POST /api/x/publish': { body: { id: 9, live: { number: 1 } } },
+  })
+  panel(appOf(), team, true)
+  const { dialog, confirm } = await openApproveAndPublish()
+  fireEvent.click(confirm)
+  expect(await within(dialog).findByText('This integration is switched off.')).toBeTruthy()
+  expect(within(dialog).getByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
+  expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
+  // Only the slot that is left is offered again, and approving it does not touch the first.
+  await waitFor(() => expect(within(dialog).queryByRole('region', { name: 'Service “payments”' })).toBeNull())
+  expect(within(dialog).getByRole('region', { name: 'Service “billing”' })).toBeTruthy()
+  const again = within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement
+  await waitFor(() => expect(again.disabled).toBe(false))
+  fireEvent.click(again)
+  await waitFor(() => expect(sent(calls, 'POST', '/api/x/publish')).toHaveLength(1))
+  expect(sent(calls, 'POST', '/api/workspaces/1/integration-approvals/4/approve')).toHaveLength(1)
+})
+
+test('when the publish is refused after every approval, the dialog says they went through and has nothing left to approve', async () => {
+  let approved = false
+  const calls = fakeFetch({
+    'GET /api/x/integrations': () =>
+      status(approved ? slot({ status: 'approved', integration: approvedShop }) : slot()),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/workspaces/1/integration-approvals/4/approve': () => {
+      approved = true
+      return { body: { id: 4 } }
+    },
+    'POST /api/x/publish': { status: 409, body: { error: 'x', code: 'app_changed' } },
+  })
+  panel(appOf(), team, true)
+  const { dialog, confirm } = await openApproveAndPublish()
+  fireEvent.click(confirm)
+  expect(await within(dialog).findByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
+  // No empty dialog with a live button: it says why there is nothing to approve, and the button is off.
+  expect(
+    await within(dialog).findByText(/Everything this app asks of outside services is approved already/),
+  ).toBeTruthy()
+  expect((within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(within(dialog).queryByRole('region')).toBeNull()
+  expect(sent(calls, 'POST', '/api/x/publish')).toHaveLength(1)
+})
+
+test('a draft that changed while the approvals were made is not published at the version they started on', async () => {
+  let release: (() => void) | undefined
+  const calls = fakeFetch({
+    'GET /api/x/integrations': status(slot()),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/workspaces/1/integration-approvals/4/approve': () =>
+      new Promise((resolve) => {
+        release = () => resolve({ body: { id: 4 } })
+      }),
+    'POST /api/x/publish': { body: { id: 9, live: { number: 1 } } },
+  })
+  const render1 = (app: App) => (
+    <WorkspaceAdmin value={true}>
+      <PublishPanel base="/api/x" spaceBase="/api/y" app={app} space={team} onChanged={() => {}} />
+    </WorkspaceAdmin>
+  )
+  const view = render(render1(appOf()))
+  const { confirm } = await openApproveAndPublish()
+  fireEvent.click(confirm)
+  await waitFor(() => expect(release).toBeDefined())
+  // Someone changes the draft while the approval is on its way.
+  view.rerender(render1(appOf({ version: 3 })))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
+  release?.()
+  await waitFor(() => expect(screen.getByText(/These approvals went through and stay active: payments\./)).toBeTruthy())
+  expect(screen.getByText(/The draft changed while you were reviewing it/)).toBeTruthy()
+  expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
+})
+
+test('the slots show the shape of a list while they are read', async () => {
+  let release: (() => void) | undefined
+  fakeFetch({
+    'GET /api/x/integrations': () =>
+      new Promise((resolve) => {
+        release = () => resolve(status(slot()))
+      }),
+  })
+  panel(appOf())
+  const loading = await screen.findAllByRole('status')
+  expect(loading.some((l) => l.textContent?.includes('Loading'))).toBe(true)
+  release?.()
+  await screen.findByText('Not asked for yet')
+})
+
 test('a preview says the payment link it would ask for as a sum, and never as an amount it guessed', () => {
   const effect = (detail: { amount?: number; currency?: string }) =>
     ({

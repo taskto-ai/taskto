@@ -21,6 +21,8 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/integrations"
+	"taskto.ai/taskto/internal/serverkey"
 )
 
 // The tokens below are obviously fake: the server only looks at the prefix and the hash.
@@ -93,7 +95,14 @@ func newFixture(t *testing.T) *fixture {
 	}
 
 	spaces := access.New(sqlDB, nil)
-	f.tools = agenttools.New(agenttools.Options{DB: sqlDB, Access: spaces, Boards: boards.New(sqlDB, spaces), Apps: apps.New(sqlDB, spaces)})
+	key, err := serverkey.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.tools = agenttools.New(agenttools.Options{
+		DB: sqlDB, Access: spaces, Boards: boards.New(sqlDB, spaces), Apps: apps.New(sqlDB, spaces),
+		Integrations: integrations.NewStore(sqlDB, key),
+	})
 	accounts := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}})
 	f.endpoint = New("test", accounts, f.tools)
 	for _, d := range agenttools.Definitions() {
@@ -432,6 +441,116 @@ func TestForTurnsAnswersAuthorizeRefusals(t *testing.T) {
 		}
 		if strings.Contains(rec.Body.String(), "disk on fire") || strings.Contains(rec.Body.String(), "/var/lib") {
 			t.Errorf("%s: the reply says what failed: %s", c.name, rec.Body)
+		}
+	}
+}
+
+// invoicing is an app that declares a slot of payments, as an agent would write it.
+const invoicing = `{
+  "definition_version": 3,
+  "components": [{"id":"root","component":"Text","text":"Invoices"}],
+  "collection": {"fields": [
+    {"name": "number", "type": "string", "required": true},
+    {"name": "total", "type": "number", "required": true},
+    {"name": "status", "type": "choice", "options": ["draft", "sent", "paid"]},
+    {"name": "pay_url", "type": "string", "max_length": 2048},
+    {"name": "payment_id", "type": "string", "max_length": 255}
+  ]},
+  "actions": {"send": {"kind": "update", "effects": [{
+      "kind": "create_payment_link", "integration": "payments", "amount_field": "total", "currency": "EUR",
+      "description": "Invoice {{number}}", "url_field": "pay_url", "id_field": "payment_id"}]}},
+  "integrations": {"payments": {"kind": "payments", "on": {"payment.succeeded": {"set": {"status": {"value": "paid"}}}}}}
+}`
+
+// An access token lists the integrations of its own space and the slots of its own apps, by name,
+// kind and status, and nothing of the account behind them; another workspace's space and apps are
+// not found, whoever's token asks.
+func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
+	f := newFixture(t)
+	integration := func(ws, space int64, name string) {
+		t.Helper()
+		var id int64
+		if err := f.db.QueryRow(`INSERT INTO integrations (workspace_id, public_id, provider, name, display_name, mode, settings,
+				max_amount_minor, currencies)
+			VALUES (?, ?, 'stripe', ?, ?, 'test', '{"location_id":"canary-location"}', 123456, '["EUR","USD"]') RETURNING id`,
+			ws, (name + "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4")[:32], name, strings.ToUpper(name[:1])+name[1:]).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.Exec(`INSERT INTO integration_secrets (integration_id, name, sealed) VALUES (?, 'api_key', x'6e6f742d612d726561322d6b6579')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.Exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, id, space); err != nil {
+			t.Fatal(err)
+		}
+	}
+	integration(f.wsA, f.spaceA, "shop")
+	integration(f.wsB, f.spaceB, "elsewhere")
+
+	var def map[string]any
+	if err := json.Unmarshal([]byte(invoicing), &def); err != nil {
+		t.Fatal(err)
+	}
+	made := func(token string, space int64) int64 {
+		t.Helper()
+		code, refused, text := callTool(t, f.endpoint, token, "create_app", map[string]any{"space_id": space, "name": "Invoices", "definition": def})
+		var app struct {
+			ID int64 `json:"id"`
+		}
+		if code != http.StatusOK || refused || json.Unmarshal([]byte(text), &app) != nil || app.ID == 0 {
+			t.Fatalf("create_app = %d %v %q", code, refused, text)
+		}
+		return app.ID
+	}
+	appA, appB := made(tokenA, f.spaceA), made(tokenB, f.spaceB)
+
+	// Her own space: the integrations by name, kind and status, and an empty list of slots without an app.
+	code, refused, text := callTool(t, f.endpoint, tokenA, "list_integrations", map[string]any{"space_id": f.spaceA})
+	if code != http.StatusOK || refused {
+		t.Fatalf("list_integrations = %d %v %q", code, refused, text)
+	}
+	var out struct {
+		Integrations []map[string]any `json:"integrations"`
+		Slots        []map[string]any `json:"slots"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Integrations) != 1 || len(out.Integrations[0]) != 4 || out.Integrations[0]["name"] != "shop" ||
+		out.Integrations[0]["kind"] != "payments" || out.Integrations[0]["status"] != "active" || out.Slots == nil || len(out.Slots) != 0 {
+		t.Fatalf("the reply = %s", text)
+	}
+	for _, leak := range []string{"stripe", "c4c4c4", "canary", "123456", "EUR", "api_key", "secret", "elsewhere", `"id"`} {
+		if strings.Contains(text, leak) {
+			t.Errorf("the reply holds %q: %s", leak, text)
+		}
+	}
+
+	// An app of hers: its slots, as names, kinds and statuses, never the contract.
+	code, refused, text = callTool(t, f.endpoint, tokenA, "list_integrations", map[string]any{"space_id": f.spaceA, "app_id": appA})
+	if code != http.StatusOK || refused || json.Unmarshal([]byte(text), &out) != nil || len(out.Slots) != 1 ||
+		out.Slots[0]["slot"] != "payments" || out.Slots[0]["status"] != "none" || len(out.Slots[0]) != 5 {
+		t.Fatalf("the slots = %d %v %s", code, refused, text)
+	}
+	for _, leak := range []string{"contract", "hash", "pay_url", "total", "canary"} {
+		if strings.Contains(text, leak) {
+			t.Errorf("the slots hold %q: %s", leak, text)
+		}
+	}
+
+	// Another workspace's space and apps are not found, through any space.
+	for _, c := range []struct {
+		why   string
+		token string
+		args  map[string]any
+	}{
+		{"another workspace's space", tokenA, map[string]any{"space_id": f.spaceB}},
+		{"another workspace's app, in its space", tokenA, map[string]any{"space_id": f.spaceB, "app_id": appB}},
+		{"another workspace's app, in her own space", tokenA, map[string]any{"space_id": f.spaceA, "app_id": appB}},
+		{"her app, from the other workspace", tokenB, map[string]any{"space_id": f.spaceA, "app_id": appA}},
+		{"her app, in the other's space", tokenB, map[string]any{"space_id": f.spaceB, "app_id": appA}},
+	} {
+		if code, refused, text := callTool(t, f.endpoint, c.token, "list_integrations", c.args); code != http.StatusOK || !refused || text != "error: not found" {
+			t.Errorf("%s: %d %v %q, want not found", c.why, code, refused, text)
 		}
 	}
 }

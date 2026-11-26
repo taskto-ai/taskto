@@ -77,6 +77,7 @@ export type AppIntegrationApproval = {
   status: string
   live: boolean
   integration: AppsBoundIntegration | null
+  space_grant: string
   requested_by: AppsAuthor | null
   requested_at: string
   decided_by: AppsAuthor | null

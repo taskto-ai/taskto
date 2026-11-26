@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from 'react'
 import {
+  ApiError,
   type App,
   type ApprovalStatus,
   api,
@@ -21,9 +22,10 @@ import {
   type Space,
   ws,
 } from '../api'
-import { type Key, useT } from '../i18n'
+import { type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, routePath } from '../router'
+import { Loading } from '../settings/parts'
 import { spaceLabel } from '../spaces'
 import { Badge, type BadgeTone } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -131,7 +133,7 @@ export function SlotsSection({
   }
 
   if (error) return <Notice tone="danger">{error}</Notice>
-  if (!slots) return <p className="apps-note">{t('app.loading')}</p>
+  if (!slots) return <Loading lines={2} />
   const queue = routePath({ workspace, section: 'settings', item: 'integration-approvals' })
   return (
     <div className="apps-slots">
@@ -186,6 +188,7 @@ export function ApproveAndPublishDialog({
   onClose,
   onApproved,
   onFailed,
+  onContractChanged,
 }: {
   workspace: number
   base: string
@@ -193,18 +196,25 @@ export function ApproveAndPublishDialog({
   // The slots whose approval is still to be asked for or decided, and what the publish needs of the rest.
   slots: SlotStatus[]
   onClose: () => void
-  // Every approval is made: publish. Resolves when that is over.
-  onApproved: () => Promise<void>
+  // Every approval is made (`done` names them): publish. Resolves with what the publish was refused
+  // with, or null when it went through.
+  onApproved: (done: string[]) => Promise<string | null>
   // A step was refused (a request someone decided meanwhile, an integration switched off since): the
   // slots are read again, so a retry starts from what the server holds and never repeats a slot
-  // that was approved before the refusal.
-  onFailed: () => void
+  // that was approved before the refusal. `done` are the ones approved before it.
+  onFailed: (done: string[]) => void
+  // The draft's contract changed while the admin read it: what they approved is not what the app asks
+  // now, so the caller closes this and reads the app again.
+  onContractChanged: (done: string[]) => void
 }) {
   const t = useT()
+  const f = useFormat()
   const list = useLoad(() => api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`), [workspace])
   const [chosen, setChosen] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The slots approved by this dialog so far, across tries: their approvals stay when a later step fails.
+  const [done, setDone] = useState<string[]>([])
 
   const candidates = (s: SlotStatus) => (list.data?.integrations ?? []).filter((i) => i.kind === s.kind && !i.disabled)
   // The one choice there is, taken as the answer until the person picks another.
@@ -213,7 +223,8 @@ export function ApproveAndPublishDialog({
     const id = chosen[s.slot] ?? (options.length === 1 ? String(options[0].id) : '')
     return options.find((i) => String(i.id) === id)
   }
-  const ready = list.data !== undefined && slots.every((s) => pick(s) !== undefined)
+  const nothingLeft = slots.length === 0
+  const ready = list.data !== undefined && !nothingLeft && slots.every((s) => pick(s) !== undefined)
   const allowing = slots.filter((s) => {
     const i = pick(s)
     return i !== undefined && !i.spaces.includes(space.id)
@@ -222,6 +233,7 @@ export function ApproveAndPublishDialog({
   const confirm = async () => {
     setBusy(true)
     setError(null)
+    const approved = [...done]
     try {
       for (const s of slots) {
         const integration = pick(s)
@@ -239,11 +251,20 @@ export function ApproveAndPublishDialog({
           method: 'POST',
           body: { integration_id: integration.id, allow_space: !integration.spaces.includes(space.id) },
         })
+        approved.push(s.slot)
+        setDone([...approved])
       }
-      await onApproved()
+      const refused = await onApproved(approved)
+      if (refused !== null) setError(refused)
     } catch (e) {
+      if (e instanceof ApiError && e.code === 'app_integration_contract_changed') {
+        onContractChanged(approved)
+        return
+      }
       setError(errorText(e))
-      onFailed()
+      // What the refusal may have changed: an integration switched off must not stay selectable.
+      list.reload()
+      onFailed(approved)
     } finally {
       setBusy(false)
     }
@@ -270,6 +291,7 @@ export function ApproveAndPublishDialog({
     >
       <div className="apps-stack">
         {list.error && <Notice tone="danger">{list.error}</Notice>}
+        {nothingLeft && !busy && <Notice tone="neutral">{t('apps.integrations.approve.nothingLeft')}</Notice>}
         {slots.map((s) => (
           <section key={s.slot} className="apps-slot" aria-label={t('apps.integrations.slotNamed', { slot: s.slot })}>
             <Heading level={3} size="subsection">
@@ -313,6 +335,9 @@ export function ApproveAndPublishDialog({
         <p>{t('apps.integrations.approve.consent')}</p>
         {space.kind === 'shared' && <p>{t('apps.builder.publish.confirmShared', { space: spaceLabel(space) })}</p>}
         {error && <Notice tone="danger">{error}</Notice>}
+        {error && done.length > 0 && (
+          <Notice tone="warning">{t('apps.integrations.approve.kept', { slots: f.list(done) })}</Notice>
+        )}
       </div>
     </Dialog>
   )
