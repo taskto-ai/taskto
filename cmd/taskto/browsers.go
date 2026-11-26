@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 
 	"taskto.ai/taskto/internal/agentbrowser"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/config"
@@ -57,6 +60,13 @@ func browserUsable(cli *cliaccounts.Service) func(context.Context) error {
 		if err := cli.Usable(ctx); err != nil {
 			return err
 		}
-		return cli.Ready(ctx)
+		if err := cli.Ready(ctx); err != nil {
+			if errors.Is(err, cliaccounts.ErrNotReady) {
+				// The browser's status and refusals carry the reason's own code, for the web app.
+				return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())
+			}
+			return err
+		}
+		return nil
 	}
 }
