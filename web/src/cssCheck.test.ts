@@ -651,8 +651,10 @@ describe('nested rules in an old stylesheet', () => {
     ])
     // After a compound's start, the parent is a condition on that element, and a parent of
     // wrappers alone scopes nothing.
-    expect(verdicts('body .tt-shell { .tt-page& input { margin: 0; } }').at(-1)).toEqual({
-      selector: '.tt-page:is(body .tt-shell) input',
+    // (Glued on as text, `#tt-main&` would be `#tt-mainbody #root input`, an id of its own that
+    // seems to scope it.)
+    expect(verdicts('body #root { #tt-main& input { margin: 0; } }').at(-1)).toEqual({
+      selector: '#tt-main:is(body #root) input',
       properties: ['margin'],
       refused: true,
     })
@@ -700,6 +702,15 @@ describe('nested rules in an old stylesheet', () => {
       { selector: 'h2', properties: ['margin'], refused: true },
       { selector: '.tt-x', properties: ['margin'], refused: false },
     ])
+  })
+
+  test('a class named only in a nested selector, with & or without it, has a rule', () => {
+    const r = run(
+      '.tt-card { margin: 0; & .tt-inner { padding: 0; } &.tt-on { color: inherit; } .tt-plain { margin: 0; } }\n',
+      { 'A.tsx': 'export const A = () => <p className="tt-card tt-inner tt-on tt-plain">x</p>\n' },
+    )
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
   })
 
   test('inside @keyframes, nothing is a rule', () => {
