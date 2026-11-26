@@ -1091,7 +1091,8 @@ func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
 
 	// The same blob under another workspace's integration doesn't open either.
 	_, ws2 := e.otherWorkspace(owner)
-	other := e.create(owner, ws2, stripeBody("main"))
+	// (With a webhook secret of its own: the first integration's still has its fingerprint.)
+	other := e.create(owner, ws2, withHook(stripeBody("main"), hookFor("elsewhere")))
 	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = ? WHERE integration_id = ? AND name = 'api_key'`, sealed, other.ID); err != nil {
 		t.Fatal(err)
 	}

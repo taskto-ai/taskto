@@ -202,9 +202,11 @@ Records, and in later changes payments and events, are never copied.
 ## Checking a connection
 
 `POST …/check` looks at what the server holds: the provider's required secrets are set and
-open with the server's key, and the settings are the provider's. It does **not** call the
-provider yet (`remote` is `false` in the answer). It answers `200` with `ok`, or with a code,
-and never with a provider's reply. The one harmless call that proves the credentials work
+open with the server's key, and the settings are the provider's. It also says when another
+integration has the same webhook secret (`integration_webhook_secret_shared`, which names neither
+the integration nor its workspace): such a secret verifies no delivery, for either. It does
+**not** call the provider yet (`remote` is `false` in the answer). It answers `200` with `ok`, or
+with a code, and never with a provider's reply. The one harmless call that proves the credentials work
 comes with the first change that calls a provider.
 
 ## Egress
@@ -254,9 +256,31 @@ What a delivery goes through, in this order, each step cheaper than the next:
    other, in this workspace or another. For this to hold, **no two integrations share a webhook
    secret**: setting or replacing one that another integration (in any workspace) uses as its
    current secret, or as a previous one that hasn't expired, is refused with
-   `integration_webhook_secret_reused`, which says nothing of whose it is. An id with no
-   usable secret is verified against a random secret of the server's own that nobody holds, so
-   the work is the same and the result is thrown away.
+   `integration_webhook_secret_reused`, which says nothing of whose it is. The test is a lookup
+   of a **fingerprint** stored beside each webhook secret: an HMAC of it under a key derived
+   from the server key (`internal/serverkey`), so the database holds neither the secret nor a
+   plain hash that could be tried against guesses, and nothing is opened under the write lock.
+   A database from before the check can hold the same secret twice; the server fingerprints
+   those secrets when it starts, and a secret that **more than one integration holds is used for
+   none of them**: deliveries signed with it are the plain `404` for each, nothing is stored,
+   and each integration's [check](#checking-a-connection) says so (without naming the other
+   one) until one of them has another secret. (A rotation doesn't keep such a secret as the
+   previous one, so the integration that still holds it isn't kept from verifying for the
+   overlap.)
+
+   Every well-formed signature costs the same work: the body is MAC'd against exactly two keys,
+   the current and the previous secret, and a slot with none holds a random key of the server's
+   own that nobody has. An id with no usable secret (unknown, disabled, shared or with none) is
+   verified against a random secret the server made, so the work over the body is the same and
+   the result is thrown away. A header that isn't well formed is refused before any MAC, for
+   every id alike.
+
+   What this does **not** hide: finding an id's integration is a database read that an id that
+   doesn't exist skips, so how long a refusal takes can still tell an existing id from one that
+   doesn't, to a client that measures it finely enough and repeats it (the address limit bounds
+   how often). That an id exists is not a secret worth much on its own, since a delivery is
+   authenticated by its signature, never by the id; what matters is that the answer, the log and
+   the MACs over the body say nothing of it, which tests pin.
 4. **One answer for every refusal**: an unknown id, a disabled integration, no webhook secret, a
    bad or old signature and a valid signature of another integration are all the same `404`,
    after the same work. The route logs nothing of a refusal, no id and no reason: the

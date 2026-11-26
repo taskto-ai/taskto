@@ -62,3 +62,19 @@ CREATE INDEX integration_events_due ON integration_events (state, next_attempt_a
 
 -- The purge: finished events by age.
 CREATE INDEX integration_events_by_received ON integration_events (received_at);
+
+-- A keyed fingerprint of each webhook secret (current and previous), so that whether another
+-- integration holds the same secret is an index lookup and not a scan that opens every sealed
+-- secret under the write lock. It is an HMAC of the secret under a key derived from the server
+-- key (internal/serverkey), never the secret and never a plain hash: it says nothing of the
+-- secret to whoever reads the database without the key. NULL for an API key, and for a webhook
+-- secret saved before this column existed, which the server fills in when it starts and before
+-- it checks a secret for reuse.
+--
+-- The index is not UNIQUE: a database from before this check can hold the same secret twice,
+-- and the route refuses both (it verifies with neither) instead of the migration failing. A
+-- previous secret stops counting when it expires, which an index can't express; the writes
+-- check under the write lock that no other unexpired secret has the fingerprint.
+ALTER TABLE integration_secrets ADD COLUMN fingerprint BLOB CHECK (fingerprint IS NULL OR length(fingerprint) = 32);
+
+CREATE INDEX integration_secrets_by_fingerprint ON integration_secrets (fingerprint) WHERE fingerprint IS NOT NULL;

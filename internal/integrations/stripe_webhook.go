@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -131,18 +132,37 @@ var (
 	errMalformedHeader = errors.New("malformed signature header")
 )
 
-// VerifyWebhook checks a Stripe delivery (see the notes above). The comparison covers every v1
-// entry against every secret without stopping at the first match, so the time it takes says
-// nothing about which matched.
+// verifyKeys is how many keys a delivery is verified against: the current secret and the previous
+// one. Every well-formed delivery is checked against exactly this many, a slot with no secret
+// holding verifyPad, so the number of MACs computed over the body is the same whether an
+// integration is in the overlap of a rotation, has one secret, or has none.
+const verifyKeys = 2
+
+// verifyPad is the key of a slot with no secret: random, made when the server starts, known to
+// nobody, so nothing signs for it.
+var verifyPad = func() []byte {
+	pad := make([]byte, 32)
+	if _, err := rand.Read(pad); err != nil {
+		panic("integrations: no randomness for the webhook verifier: " + err.Error())
+	}
+	return pad
+}()
+
+// macHook, when set (by a test), is called for each MAC computed over a delivery's body.
+var macHook func()
+
+// VerifyWebhook checks a Stripe delivery (see the notes above). A header that is well formed
+// costs exactly verifyKeys MACs over the body, whatever secrets there are, and the comparison
+// covers every v1 entry against every key without stopping at the first match, so the time it
+// takes says nothing about which secret matched or how many there are.
 func (stripe) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, now time.Time) error {
-	keys := make([][]byte, 0, 2)
+	keys := [verifyKeys][]byte{verifyPad, verifyPad}
+	real := 0
 	for _, s := range []Secret{secrets.Current, secrets.Previous} {
 		if s != "" {
-			keys = append(keys, []byte(s.Reveal()))
+			keys[real] = []byte(s.Reveal())
+			real++
 		}
-	}
-	if len(keys) == 0 {
-		return errNoSecret
 	}
 	values := h.Values(StripeSignatureHeader)
 	if len(values) != 1 || len(values[0]) > maxSignatureHeader {
@@ -160,6 +180,9 @@ func (stripe) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, 
 				match = 1 // no early exit
 			}
 		}
+	}
+	if real == 0 {
+		return errNoSecret
 	}
 	if match == 0 {
 		return errBadSignature
@@ -207,6 +230,9 @@ func parseStripeSignature(header string) (stamp string, sigs [][]byte, ok bool) 
 var digitsRe = regexp.MustCompile(`^[0-9]{1,15}$`)
 
 func stripeMAC(key []byte, stamp string, body []byte) []byte {
+	if macHook != nil {
+		macHook()
+	}
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte(stamp))
 	m.Write([]byte("."))

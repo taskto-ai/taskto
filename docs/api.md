@@ -303,6 +303,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_secret_required` | 400 | A secret the provider needs (`secret`) isn't given. In a check's answer: it isn't set. |
 | `integration_secret_invalid` | 400 | The value given for a secret (`secret`) isn't one the provider's credentials look like. It never quotes the value. |
 | `integration_secret_unreadable` | 200 | In a check's answer (`code`): a sealed secret (`secret`) doesn't open, usually because the server key changed since it was saved: set it again. |
+| `integration_webhook_secret_shared` | 200 | In a check's answer (`code`): another integration, in this workspace or another, has the same webhook secret (`secret` says which of this one's), so deliveries signed with it open neither and are refused. It says nothing of which. Set a different one at the provider and here. |
 | `integration_webhook_secret_reused` | 409 | The webhook secret is already used by another integration (of any workspace): each integration needs its own, so a delivery's signature opens one only. It says nothing of which. |
 | `integration_setting_invalid` | 400 | A setting (`setting`) is unknown, missing, or not a value the provider accepts. |
 | `integration_limit_invalid` | 400 | The amount ceiling must be a whole number from 1 to `max`. |
@@ -4109,7 +4110,10 @@ Admin only, no body. Looks at what the server holds: the provider's required sec
 open with the server's key and the settings are the provider's. It doesn't call the
 provider in this version (`remote` is `false`). `200`, always, with
 `{"ok": true, "remote": false}` or `{"ok": false, "remote": false, "code": "…", "params": {…}}`
-(`integration_secret_required`, `integration_secret_unreadable`, `integration_setting_invalid`).
+(`integration_secret_required`, `integration_secret_unreadable`, `integration_webhook_secret_shared`,
+`integration_setting_invalid`). The `shared` one says another integration has this one's webhook
+secret (an old install can: it is refused now), so deliveries signed with it open neither; it names
+neither the integration nor its workspace.
 It never carries a provider's reply or a secret. `404` for another workspace's integration.
 
 ### `DELETE /api/workspaces/{workspace}/integrations/{integration}`

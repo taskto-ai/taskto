@@ -390,7 +390,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// The integrations' webhook route stores the events providers send; their worker applies them
 	// (the apply step is set by the card that adds it, until when events wait), stopped before the
 	// database closes.
-	integrationSvc := integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
+	integrationStore := integrations.NewStore(sqlDB, key)
+	// Webhook secrets saved before they had fingerprints get theirs before the route serves.
+	if err := integrationStore.BackfillFingerprints(ctx); err != nil {
+		return fmt.Errorf("fingerprinting the integrations' webhook secrets: %w", err)
+	}
+	integrationSvc := integrations.New(integrationStore, integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
 	stopIntegrationEvents := integrationSvc.StartEvents(ctx)
 	defer stopIntegrationEvents()
 	var accounts *auth.Service

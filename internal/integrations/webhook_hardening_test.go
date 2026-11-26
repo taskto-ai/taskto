@@ -3,7 +3,6 @@ package integrations
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -332,23 +331,30 @@ func TestAStalledBodyIsCutOff(t *testing.T) {
 	}
 }
 
-// An integration removed after its id was found is an id with nothing behind it: the decoy, the
-// standard refusal, not a server error.
+// An integration removed after its id was found, and before its credentials are read, is an id
+// with nothing behind it: the decoy, the standard refusal, not a server error. The seam is the
+// moment between the route's two reads, so the removal lands exactly there.
 func TestAnIntegrationRemovedDuringLookupGetsTheDecoy(t *testing.T) {
 	r := newRig(t)
-	target, err := r.store.byPublicID(context.Background(), r.id)
+	s, _ := r.session(2500, "eur")
+	r.must(r.fake.Pay(s.ID))
+	ev := r.completed()
+	var removed int
+	r.svc.afterLookup = func() {
+		removed++
+		expect(t, r.owner.do(http.MethodDelete, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)), nil), http.StatusNoContent)
+	}
+	d, err := r.send.Send(context.Background(), ev)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(t, r.owner.do(http.MethodDelete, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)), nil), http.StatusNoContent)
-	if _, _, err := r.store.hookCredentials(context.Background(), target.workspace, target.id); !errors.Is(err, errNotFound) {
-		t.Fatalf("credentials of a removed integration: %v, want errNotFound", err)
-	}
-	d, err := r.send.Send(context.Background(), testprovider.NewEvent("customer.created", map[string]any{"id": "cus_1", "object": "customer"}, r.clock.Now()))
-	if err != nil {
-		t.Fatal(err)
+	if removed != 1 {
+		t.Fatalf("the seam ran %d times, want once: the removal didn't land between the reads", removed)
 	}
 	isNotFound(t, "a removed integration", d.Status, d.Response)
+	if r.total() != 0 {
+		t.Fatal("a delivery to a removed integration stored an event")
+	}
 }
 
 // A request refused for its address's quota is bounded too: its unread body can't hold the

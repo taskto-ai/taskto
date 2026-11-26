@@ -423,6 +423,7 @@ const (
 	CodeIntegrationSecretInvalid       Code = "integration_secret_invalid"        // params: secret
 	CodeIntegrationSecretUnreadable    Code = "integration_secret_unreadable"     // in a check's answer: params: secret
 	CodeIntegrationWebhookSecretReused Code = "integration_webhook_secret_reused" // 409: another integration verifies deliveries with this webhook secret
+	CodeIntegrationWebhookSecretShared Code = "integration_webhook_secret_shared" // in a check's answer: params: secret; another integration has this webhook secret too, so it verifies nothing
 	CodeIntegrationSettingInvalid      Code = "integration_setting_invalid"       // params: setting
 	CodeIntegrationLimitInvalid        Code = "integration_limit_invalid"         // params: max
 	CodeIntegrationCurrencyInvalid     Code = "integration_currency_invalid"      // params: max

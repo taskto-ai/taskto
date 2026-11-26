@@ -186,6 +186,9 @@ func (s *Service) hookSubject(ctx context.Context, publicID string) (hookSubject
 	if err != nil {
 		return sub, err
 	}
+	if s.afterLookup != nil {
+		s.afterLookup() // a test's seam: the moment between the two reads
+	}
 	provider, ok := Lookup(target.provider).(Receiver)
 	if !ok {
 		return sub, nil
