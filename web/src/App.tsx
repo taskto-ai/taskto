@@ -11,8 +11,8 @@ import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
 import { AccountChanged } from './offline/AccountChanged'
-import { ForeignGuard } from './offline/ForeignGuard'
 import { onAccountSignal, watchAccount } from './offline/account'
+import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
@@ -210,10 +210,15 @@ export function App() {
   }, [])
   const logOut = useCallback(
     async (who: Leaving) => {
+      // Asked to log out, the session is over from this moment (see signOut); if they are asked
+      // about records not yet sent first, it begins again while they decide.
+      endSession()
       // A database that can't be checked is not an empty one: the person is told, and chooses.
       const unsent = await unsentOf(who.user)
-      if (unsent.count > 0 || unsent.unreadable) setLeaving({ ...who, ...unsent })
-      else await signOut(who)
+      if (unsent.count > 0 || unsent.unreadable) {
+        beginSession(who.user)
+        setLeaving({ ...who, ...unsent })
+      } else await signOut(who)
     },
     [signOut],
   )

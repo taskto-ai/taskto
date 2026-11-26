@@ -22,8 +22,8 @@ import { browserLocale, useT } from '../i18n'
 import { useLoad } from '../load'
 import { NARROW, useMediaQuery } from '../media'
 import { useMounted } from '../mounted'
-import { steps } from '../session'
 import { Link, navigate, routePath } from '../router'
+import { steps } from '../session'
 import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
 import { Button, ButtonLink } from '../ui/Button'
@@ -189,7 +189,9 @@ function BuilderStart({
       if (!conversation) {
         const title = (app?.name ?? content).replace(/\s+/g, ' ').slice(0, 60)
         s.check(
-          await api(`${ws(workspace)}/conversations/${id}`, { method: 'PATCH', body: { title } }).catch(() => undefined),
+          await api(`${ws(workspace)}/conversations/${id}`, { method: 'PATCH', body: { title } }).catch(
+            () => undefined,
+          ),
         )
       }
       writeDraft(textKey, null)

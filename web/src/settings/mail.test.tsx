@@ -98,3 +98,20 @@ test("an admin who doesn't run the server doesn't see the email settings or ask 
   expect(screen.queryByRole('heading', { name: 'Email' })).toBeNull()
   expect(calls.filter((c) => c.path.includes('/mail'))).toEqual([])
 })
+
+test('a test email sent after the person left the tab is not said: it may be the next person’s screen', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'GET /api/workspaces/1/mail': { body: configured },
+    'POST /api/workspaces/1/mail/test': () =>
+      new Promise((done) => {
+        answer = () => done({ body: { sent_to: 'owner@example.com' } })
+      }),
+  })
+  const { unmount } = render(<SettingsPage me={me} workspace={admin} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Send a test email' }))
+  unmount()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByText(/Test email sent to/)).toBeNull()
+})

@@ -11,6 +11,7 @@ import { has, type Key, useT } from '../i18n'
 import { useLoad } from '../load'
 import { useMounted } from '../mounted'
 import { navigate, routePath } from '../router'
+import { steps } from '../session'
 import { spaceLabel } from '../spaces'
 import { Avatar } from '../ui/Avatar'
 import { Button, ButtonLink } from '../ui/Button'
@@ -209,7 +210,7 @@ function InstallDialog({
   const [shared, setShared] = useState('')
   const [board, setBoard] = useState('')
   const [busy, setBusy] = useState(false)
-  // An app made after the dialog went (the session ended) isn't opened.
+  // An app made after the dialog went, or its session ended, isn't opened.
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
   const boards = useWritableBoards(workspace, template.needs_board ? spaces : undefined)
@@ -222,15 +223,16 @@ function InstallDialog({
     if (!space || busy || !ready) return
     setBusy(true)
     setError(null)
+    const s = steps(mounted)
     try {
       const made = await api<App>(`${ws(workspace)}/spaces/${space.id}/app-templates/${template.id}/install`, {
         method: 'POST',
         body: { name: name.trim(), ...(template.needs_board && target ? { board: target } : {}) },
       })
-      if (!mounted.current) return
+      if (!s.ok()) return
       navigate(installedPath(workspace, space.id, made.id))
     } catch (err) {
-      if (!mounted.current) return
+      if (!s.ok()) return
       setError(appError(err))
       setBusy(false)
     }
@@ -425,7 +427,7 @@ export function DuplicateDialog({
   const [name, setName] = useState(t('apps.duplicate.defaultName', { name: app.name }))
   const [to, setTo] = useState(String((mine ?? spaces[0])?.id ?? space.id))
   const [busy, setBusy] = useState(false)
-  // An app made after the dialog went (the session ended) isn't opened.
+  // An app made after the dialog went, or its session ended, isn't opened.
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
 
@@ -434,15 +436,16 @@ export function DuplicateDialog({
     if (busy || !name.trim()) return
     setBusy(true)
     setError(null)
+    const s = steps(mounted)
     try {
       const made = await api<App>(`${ws(workspace)}/spaces/${space.id}/apps/${app.id}/duplicate`, {
         method: 'POST',
         body: { name: name.trim(), space_id: Number(to) },
       })
-      if (!mounted.current) return
+      if (!s.ok()) return
       navigate(installedPath(workspace, made.space_id, made.id))
     } catch (err) {
-      if (!mounted.current) return
+      if (!s.ok()) return
       setError(errorText(err))
       setBusy(false)
     }
