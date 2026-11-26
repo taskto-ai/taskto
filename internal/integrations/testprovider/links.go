@@ -12,13 +12,26 @@ import (
 type paymentLink struct {
 	PaymentLink
 	items []lineItem
+	// completed is how many Checkout Sessions made through the link have completed, whether or
+	// not it has a limit (yet): the count a limit is measured against.
+	completed int
 }
 
 // linkHosts is the host a link of a submit_type lives on.
 var linkHosts = map[string]string{"auto": "buy", "pay": "buy", "donate": "donate", "book": "book"}
 
+// limitReached is true when the link has taken as many completed sessions as its limit allows.
+func (l *paymentLink) limitReached() bool {
+	r := l.Restrictions
+	return r != nil && l.completed >= r.CompletedSessions.Limit
+}
+
 func (l *paymentLink) snapshot() PaymentLink {
 	out := l.PaymentLink
+	out.Restrictions = copyOf(l.Restrictions)
+	if out.Restrictions != nil {
+		out.Restrictions.CompletedSessions.Count = l.completed
+	}
 	out.Metadata = maps.Clone(l.Metadata)
 	if out.Metadata == nil {
 		out.Metadata = map[string]string{}
@@ -68,6 +81,14 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 	default:
 		return invalid("", "Invalid after_completion[type]: "+t, "after_completion[type]")
 	}
+	var restrictions *LinkRestrictions
+	limit, hasLimit, rp := completedSessionsLimitOf(form)
+	if rp != nil {
+		return *rp
+	}
+	if hasLimit {
+		restrictions = &LinkRestrictions{CompletedSessions: CompletedSessions{Limit: limit}}
+	}
 	submit := form.Get("submit_type")
 	if submit == "" {
 		submit = "auto"
@@ -79,7 +100,7 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 	}
 	l := &paymentLink{items: items, PaymentLink: PaymentLink{
 		ID: id, Object: "payment_link", Active: true, AfterCompletion: after, Currency: currency,
-		Livemode: s.live, Metadata: meta, SubmitType: submit, URL: host + randomID(14),
+		Livemode: s.live, Metadata: meta, Restrictions: restrictions, SubmitType: submit, URL: host + randomID(14),
 	}}
 	s.links[id] = l
 	rp2 := jsonReply(http.StatusOK, l.snapshot())
@@ -98,7 +119,9 @@ func (s *Stripe) retrieveLink(_ *http.Request, form url.Values, id string) reply
 	return jsonReply(http.StatusOK, l.snapshot())
 }
 
-// updateLink changes a link's active flag (the way to stop a link taking payments) and metadata.
+// updateLink changes a link's active flag (the way to stop a link taking payments), its limit of
+// completed sessions and its metadata. A new limit that the link has already reached
+// deactivates it, as reaching the limit does.
 func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 	if rp := unknownParam(form, linkUpdateParamRes); rp != nil {
 		return *rp
@@ -116,6 +139,10 @@ func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 		}
 		active = b
 	}
+	limit, hasLimit, rp := completedSessionsLimitOf(form)
+	if rp != nil {
+		return *rp
+	}
 	meta := maps.Clone(l.Metadata)
 	if meta == nil {
 		meta = map[string]string{}
@@ -129,8 +156,40 @@ func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 	if rp := mergeMetadata(meta, form, "metadata"); rp != nil {
 		return *rp
 	}
-	l.Active, l.Metadata = active, meta
-	rp := jsonReply(http.StatusOK, l.snapshot())
-	rp.executed = true
-	return rp
+	restrictions := copyOf(l.Restrictions)
+	if hasLimit {
+		if restrictions == nil {
+			restrictions = &LinkRestrictions{}
+		}
+		restrictions.CompletedSessions.Limit = limit
+		if l.completed >= limit {
+			active = false
+		}
+	}
+	l.Active, l.Metadata, l.Restrictions = active, meta, restrictions
+	out := jsonReply(http.StatusOK, l.snapshot())
+	out.executed = true
+	return out
+}
+
+// Link returns the payment link as the API would show it now.
+func (s *Stripe) Link(id string) (PaymentLink, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.links[id]
+	if !ok {
+		return PaymentLink{}, false
+	}
+	return l.snapshot(), true
+}
+
+// Links returns every payment link, sorted by id.
+func (s *Stripe) Links() []PaymentLink {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]PaymentLink, 0, len(s.links))
+	for _, id := range slices.Sorted(maps.Keys(s.links)) {
+		out = append(out, s.links[id].snapshot())
+	}
+	return out
 }

@@ -75,7 +75,7 @@ type TotalDetails struct {
 
 // PaymentLink is Stripe's Payment Link object. A link never expires by itself and takes no
 // client reference. At Stripe payments through it are Checkout Sessions that carry its id; the
-// fake doesn't make them, so a link here is created, read, updated and deactivated only.
+// fake makes one when a test calls PayLink.
 type PaymentLink struct {
 	ID              string            `json:"id"`
 	Object          string            `json:"object"`
@@ -84,8 +84,22 @@ type PaymentLink struct {
 	Currency        string            `json:"currency"`
 	Livemode        bool              `json:"livemode"`
 	Metadata        map[string]string `json:"metadata"`
-	SubmitType      string            `json:"submit_type"`
-	URL             string            `json:"url"`
+	// Restrictions is null unless restrictions[completed_sessions][limit] was set.
+	Restrictions *LinkRestrictions `json:"restrictions"`
+	SubmitType   string            `json:"submit_type"`
+	URL          string            `json:"url"`
+}
+
+// LinkRestrictions is a link's restrictions object.
+type LinkRestrictions struct {
+	CompletedSessions CompletedSessions `json:"completed_sessions"`
+}
+
+// CompletedSessions limits how many Checkout Sessions of a link may complete: Count of them
+// have, and the link deactivates when Count reaches Limit.
+type CompletedSessions struct {
+	Count int `json:"count"`
+	Limit int `json:"limit"`
 }
 
 // Event is Stripe's Event object, a snapshot: Data.Object is the object as it was.

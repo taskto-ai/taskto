@@ -20,6 +20,13 @@ const metaKey = `[^\[\]]{1,200}`
 // key for the same line.
 const idx = `(?:0|[1-9]\d*)`
 
+// completedSessionsLimit is the parameter that limits how many times a Payment Link is paid, on
+// create and on update.
+const completedSessionsLimit = `restrictions\[completed_sessions\]\[limit\]`
+
+// limitParam is its name, as errors name it.
+const limitParam = "restrictions[completed_sessions][limit]"
+
 var (
 	lineItemParams = []string{
 		`line_items\[` + idx + `\]\[quantity\]`,
@@ -44,11 +51,12 @@ var (
 		`currency`, `allow_promotion_codes`, `submit_type`,
 		`after_completion\[type\]`, `after_completion\[redirect\]\[url\]`,
 		`after_completion\[hosted_confirmation\]\[custom_message\]`,
+		completedSessionsLimit,
 		`metadata\[` + metaKey + `\]`,
 	}, lineItemParams...))
 
 	// `metadata` on its own, with an empty value, clears all of a link's metadata.
-	linkUpdateParamRes = compileAll([]string{`active`, `metadata`, `metadata\[` + metaKey + `\]`})
+	linkUpdateParamRes = compileAll([]string{`active`, completedSessionsLimit, `metadata`, `metadata\[` + metaKey + `\]`})
 
 	lineItemIndex = regexp.MustCompile(`^line_items\[(` + idx + `)\]`)
 )
@@ -89,6 +97,25 @@ func boolParam(form url.Values, name string) *reply {
 		return &rp
 	}
 	return nil
+}
+
+// completedSessionsLimitOf reads the link's limit: a whole number of at least 1, in its one
+// spelling (not 01). ok is false when the parameter wasn't sent.
+func completedSessionsLimitOf(form url.Values) (limit int, ok bool, rp *reply) {
+	v, sent := form[limitParam]
+	if !sent {
+		return 0, false, nil
+	}
+	text := v[len(v)-1]
+	n, err := strconv.Atoi(text)
+	if err != nil || strconv.Itoa(n) != text {
+		return 0, false, badInteger(limitParam, text)
+	}
+	if n < 1 {
+		r := invalid("", "Invalid "+limitParam+": it must be at least 1.", limitParam)
+		return 0, false, &r
+	}
+	return n, true, nil
 }
 
 func missing(param string) *reply {
@@ -222,6 +249,11 @@ func parseLineItems(form url.Values, maxLines int) (items []lineItem, currency s
 				base+"[price_data][unit_amount]")
 			return nil, "", &r
 		}
+		if wholeUnits[cur] && amount%100 != 0 {
+			r := invalid("", "Invalid amount for "+strings.ToUpper(cur)+": the currency takes whole units only, so the last two digits of the amount must be 00.",
+				base+"[price_data][unit_amount]")
+			return nil, "", &r
+		}
 		qtyText := form.Get(base + "[quantity]")
 		if qtyText == "" {
 			return nil, "", missing(base + "[quantity]")
@@ -256,27 +288,53 @@ func total(items []lineItem, currency string) (int64, *reply) {
 			return 0, &r
 		}
 	}
-	if sum < minAmount {
+	if min := minimumCharge(currency); sum < min {
 		r := invalid("amount_too_small", fmt.Sprintf(
-			"The total amount due must add up to at least 50 in the smallest unit of %s.", currency), "line_items")
+			"The total amount due must add up to at least %d in the smallest unit of %s.", min, currency), "line_items")
 		return 0, &r
 	}
 	return sum, nil
 }
 
-// Amount limits, in the smallest unit of the currency. Stripe's minimum varies by currency
-// (50 cents or 50 yen for the common ones); the fake applies 50 to all, which is the common case.
-const (
-	minAmount = 50
-	maxAmount = 99999999
-)
+// maxAmount is the most a line or a total may be, in the smallest unit: 8 digits, Stripe's limit
+// for every currency but IDR, COP and INR (and for cards, which take more).
+const maxAmount = 99999999
+
+// minimumCharges are Stripe's documented minimum charge amounts, in the smallest unit of the
+// currency, for an account that settles in the charge's own currency (https://docs.stripe.com/currencies,
+// "Minimum charge amount by currency"). Others that settle elsewhere need the equivalent in
+// the settlement currency, which the fake doesn't model.
+var minimumCharges = map[string]int64{
+	"usd": 50, "aed": 200, "ars": 50, "aud": 50, "brl": 50, "cad": 50, "chf": 50, "cop": 50,
+	"czk": 1500, "dkk": 250, "eur": 50, "gbp": 30, "hkd": 400, "huf": 17500, "idr": 50, "ils": 50,
+	"inr": 50, "jpy": 50, "krw": 50, "mxn": 1000, "myr": 200, "nok": 300, "nzd": 50, "php": 50,
+	"pln": 200, "ron": 200, "rub": 50, "sek": 300, "sgd": 50, "thb": 1000, "zar": 50,
+}
+
+// fallbackMinimum is what the fake asks for a currency the documentation lists no minimum for.
+// It is the fake's own choice and not Stripe's rule: a test that depends on a currency's minimum
+// should use one of minimumCharges.
+const fallbackMinimum = 50
+
+func minimumCharge(currency string) int64 {
+	if min, ok := minimumCharges[currency]; ok {
+		return min
+	}
+	return fallbackMinimum
+}
 
 var (
-	zeroDecimal = set("bif clp djf gnf jpy kmf krw mga pyg rwf ugx vnd vuv xaf xof xpf")
+	// zeroDecimal currencies take their amount as it is (500 is 500 yen).
+	zeroDecimal = set("bif clp djf gnf jpy kmf krw mga pyg rwf vnd vuv xaf xof xpf")
+	// wholeUnits currencies are zero-decimal at Stripe, but for backward compatibility an amount
+	// is written with two decimals that are always 00: 500 is 5 shillings, and 501 is refused.
+	wholeUnits = set("isk ugx")
 	// threeDecimal currencies take amounts whose last digit is 0 at Stripe.
 	threeDecimal = set("bhd jod kwd omr tnd")
-	twoDecimal   = set("usd eur gbp cad aud nzd chf sek nok dkk pln czk huf ron bgn brl mxn ars cop pen " +
-		"inr idr myr php sgd thb twd hkd cny aed sar ils zar try uah egp ngn kes mad")
+	// twoDecimal currencies take any amount. HUF and TWD payouts must be whole units, but the
+	// fake has no payouts: a charge in either may have any amount.
+	twoDecimal = set("usd eur gbp cad aud nzd chf sek nok dkk pln czk huf ron bgn brl mxn ars cop pen " +
+		"inr idr myr php rub sgd thb twd hkd cny aed sar ils zar try uah egp ngn kes mad")
 )
 
 func set(words string) map[string]bool {
@@ -287,7 +345,9 @@ func set(words string) map[string]bool {
 	return m
 }
 
-func knownCurrency(c string) bool { return zeroDecimal[c] || threeDecimal[c] || twoDecimal[c] }
+func knownCurrency(c string) bool {
+	return zeroDecimal[c] || wholeUnits[c] || threeDecimal[c] || twoDecimal[c]
+}
 
 func validURL(s string) bool {
 	u, err := url.Parse(s)

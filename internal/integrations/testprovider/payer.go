@@ -3,6 +3,7 @@ package testprovider
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -22,11 +23,34 @@ var (
 	ErrNotOpen       = errors.New("testprovider: the session isn't open")
 	ErrNotPaid       = errors.New("testprovider: the session isn't paid")
 	ErrOverRefund    = errors.New("testprovider: the refund is more than what is left")
+	ErrNoSuchLink    = errors.New("testprovider: no such payment link")
+	ErrLinkInactive  = errors.New("testprovider: the payment link isn't active")
 )
 
-// Payer is the person on Stripe's page, whose details end up on the session. They are personal
-// data the integration must never keep.
-var Payer = CustomerDetails{Email: "payer@example.test", Name: "A. Payer"}
+// DefaultPayer is the person on Stripe's page unless a fake is given another (WithPayer,
+// SetPayer): their details end up on the session. They are personal data the integration must
+// never keep. Each call returns a value of its own, and each fake keeps its own copy, so a test
+// that changes one fake's payer changes no other's.
+func DefaultPayer() CustomerDetails {
+	return CustomerDetails{Email: "payer@example.test", Name: "A. Payer"}
+}
+
+// WithPayer sets the details of the payer on this fake's sessions.
+func WithPayer(d CustomerDetails) Option { return func(s *Stripe) { s.payer = d } }
+
+// Payer returns the details the fake's payer gives.
+func (s *Stripe) Payer() CustomerDetails {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.payer
+}
+
+// SetPayer changes the payer for the sessions paid from now on, on this fake only.
+func (s *Stripe) SetPayer(d CustomerDetails) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.payer = d
+}
 
 // openSession finds an open session, expiring those whose time has come. It returns the time it
 // read from the clock, which the caller uses for what it makes: the decision that the session is
@@ -63,7 +87,7 @@ func (s *Stripe) chargeOf(ss *session, status string) map[string]any {
 		"refunded": ss.refunded >= ss.AmountTotal, "status": status, "payment_intent": ss.piID,
 		"livemode": s.live, "metadata": ss.piMetadata,
 		"receipt_url":     nullable(ss.receiptURL),
-		"billing_details": map[string]any{"email": Payer.Email, "name": Payer.Name},
+		"billing_details": map[string]any{"email": s.payer.Email, "name": s.payer.Name},
 	}
 }
 
@@ -102,18 +126,65 @@ func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	return values(s.payLocked(ss, at)), nil
+}
+
+// payLocked pays an open session by card at time at, and returns the events. The caller holds s.mu.
+func (s *Stripe) payLocked(ss *session, at time.Time) []*Event {
 	evs := s.begin(ss, at)
 	ss.chargeID = "ch_" + randomID(24)
 	ss.receiptURL = "https://pay.stripe.com/receipts/payment/" + randomID(40)
 	ss.Status, ss.PaymentStatus, ss.URL = SessionComplete, PaymentPaid, nil
-	d := Payer
+	d := s.payer
 	ss.CustomerDetails = &d
-	evs = append(evs,
+	return append(evs,
 		s.emit(EventChargeSucceeded, s.chargeOf(ss, "succeeded"), at),
 		s.emit(EventIntentSucceeded, s.intentOf(ss, "succeeded"), at),
 		s.emit(EventChargeUpdated, s.chargeOf(ss, "succeeded"), at),
 		s.emit(EventSessionCompleted, ss.snapshot(), at),
 	)
+}
+
+// PayLink is a payer paying through a payment link with a card: a Checkout Session that carries
+// the link's id is made and completes at once, with the events of a card payment. A link that
+// isn't active, or has taken its limit of completed sessions (restrictions[completed_sessions]),
+// takes no payment. The session that reaches the limit deactivates the link.
+func (s *Stripe) PayLink(linkID string) ([]Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.links[linkID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoSuchLink, linkID)
+	}
+	if !l.Active || l.limitReached() {
+		return nil, fmt.Errorf("%w: %s", ErrLinkInactive, linkID)
+	}
+	at := s.clock.Now()
+	var sum int64
+	for _, it := range l.items {
+		sum += it.UnitAmount * it.Quantity
+	}
+	id := "cs_" + s.livemodeWord() + "_" + randomID(58)
+	link := linkID
+	ss := &session{
+		piMetadata: map[string]string{},
+		Session: Session{
+			ID: id, Object: "checkout.session", AmountSubtotal: sum, AmountTotal: sum,
+			Created: at.Unix(), Currency: l.Currency, CustomFields: []any{}, CustomerCreation: "if_required",
+			ExpiresAt: at.Add(24 * time.Hour).Unix(), Livemode: s.live, Metadata: maps.Clone(l.Metadata),
+			Mode: "payment", PaymentLink: &link, PaymentMethodCollection: "always",
+			PaymentMethodTypes: []string{"card"}, PaymentStatus: PaymentUnpaid, Status: SessionOpen,
+			SubmitType: ptr(l.SubmitType), UIMode: "hosted_page",
+		},
+	}
+	s.sessions[id] = ss
+	s.sessionOrder = append(s.sessionOrder, id)
+	evs := s.payLocked(ss, at)
+	l.completed++
+	if l.limitReached() {
+		l.Active = false
+	}
+
 	return values(evs), nil
 }
 
@@ -129,7 +200,7 @@ func (s *Stripe) PayDelayed(sessionID string) ([]Event, error) {
 	evs := s.begin(ss, at)
 	ss.Status, ss.URL = SessionComplete, nil
 	ss.delayed = true
-	d := Payer
+	d := s.payer
 	ss.CustomerDetails = &d
 	evs = append(evs,
 		s.emit(EventIntentProcessing, s.intentOf(ss, "processing"), at),

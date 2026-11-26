@@ -11,9 +11,10 @@
 //     POST /v1/checkout/sessions/{id}/expire: hosted Checkout in payment mode, the way to a link
 //     that carries a reference of ours (client_reference_id) and expires by itself.
 //   - POST /v1/payment_links, GET and POST /v1/payment_links/{id}: Payment Links. A link takes
-//     no client reference and never expires. At Stripe a payment through one is a Checkout
-//     Session that carries the link's id; the fake doesn't make those, so a link here is created,
-//     read, updated and deactivated only.
+//     no client reference and never expires, and may take at most so many payments
+//     (restrictions[completed_sessions][limit]: it deactivates when they are made). At Stripe a
+//     payment through one is a Checkout Session that carries the link's id; the fake makes one
+//     when a test calls PayLink.
 //   - GET /v1/events and GET /v1/events/{id}: the events of the last 30 days, newest first.
 //   - GET /v1/balance: a harmless authenticated call, for a connection check.
 //
@@ -29,8 +30,10 @@
 // payment_intent_data, a session's statement_descriptor and receipt_email: refused, so a test that
 // sends one finds out), and concurrent requests
 // with one idempotency key (requests are served one at a time, so the second finds the first's
-// answer). The money rules are Stripe's common cases: amounts in whole minor units with a
-// minimum of 50 and a maximum of 99999999 for every currency.
+// answer). The money rules are Stripe's common cases: amounts in whole minor units, a maximum of
+// 99999999, the documented minimum of each currency for an account that settles in it
+// (minimumCharges in params.go), amounts of ISK and UGX in whole units (the last two digits 00)
+// and of the three-decimal currencies ending in 0.
 //
 // What the sender does is in sender.go.
 package testprovider
@@ -74,6 +77,7 @@ type Stripe struct {
 	version    string
 	anyVersion bool
 	live       bool
+	payer      CustomerDetails
 
 	mu           sync.Mutex
 	sessions     map[string]*session
@@ -113,6 +117,7 @@ func NewStripe(t testing.TB, opts ...Option) *Stripe {
 		sessions: map[string]*session{},
 		links:    map[string]*paymentLink{},
 		idem:     map[string]*idemEntry{},
+		payer:    DefaultPayer(),
 	}
 	for _, o := range opts {
 		o(s)

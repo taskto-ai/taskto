@@ -90,7 +90,7 @@ func (h *hook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unreadable body", http.StatusBadRequest)
 		return
 	}
-	if err := verifyStripe(r.Header.Get(testprovider.SignatureHeader), body, h.secrets, h.clock.Now(), testprovider.Tolerance); err != nil {
+	if err := verifyStripe(r.Header.Get("Stripe-Signature"), body, h.secrets, h.clock.Now(), testprovider.Tolerance); err != nil {
 		h.mu.Lock()
 		h.refused++
 		h.mu.Unlock()
@@ -174,7 +174,10 @@ func TestSignedDeliveriesAreAcceptedAndBadOnesAreNot(t *testing.T) {
 		ok   bool
 	}{
 		{"the right secret", nil, true},
-		{"the unsigned debug entries and a v0", []testprovider.SignOption{testprovider.WithDebugEntries()}, true},
+		{"the unsigned debug entries", []testprovider.SignOption{testprovider.WithDebugEntries()}, true},
+		{"a sandbox event's v0 beside the v1", []testprovider.SignOption{testprovider.WithTestModeV0()}, true},
+		{"everything Stripe may add", []testprovider.SignOption{testprovider.WithTestModeV0(), testprovider.WithDebugEntries()}, true},
+		{"an invalid v1 and a v0 that matches", []testprovider.SignOption{testprovider.ForgedV1WithValidV0()}, false},
 		{"a wrong secret", []testprovider.SignOption{testprovider.WrongSecret()}, false},
 		{"a timestamp 4 minutes old", []testprovider.SignOption{testprovider.OldBy(4 * time.Minute)}, true},
 		{"a timestamp 6 minutes old", []testprovider.SignOption{testprovider.OldBy(6 * time.Minute)}, false},
@@ -208,6 +211,111 @@ func TestSignedDeliveriesAreAcceptedAndBadOnesAreNot(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The header's name is Stripe's, written out here and not read from the package's constant, so a
+// wrong constant can't pass: a handler reading "Stripe-Signature" sees the signature, over HTTP too.
+func TestTheSignatureIsInTheHeaderStripeUses(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	var got []string
+	capture := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Stripe-Signature"))
+		w.WriteHeader(http.StatusOK)
+	})
+	for kind, s := range senders(t, capture, clock) {
+		got = nil
+		d, err := s.Send(context.Background(), someEvent(clock))
+		if err != nil || len(got) != 1 {
+			t.Fatalf("%s: %v, %d requests", kind, err, len(got))
+		}
+		if got[0] == "" || got[0] != d.Signature || !strings.HasPrefix(got[0], "t=") {
+			t.Errorf("%s: the handler saw %q, the delivery says %q", kind, got[0], d.Signature)
+		}
+	}
+	if testprovider.SignatureHeader != "Stripe-Signature" {
+		t.Errorf("SignatureHeader is %q", testprovider.SignatureHeader)
+	}
+}
+
+// Stripe sends v0 only for sandbox events, and as another scheme: the sender doesn't repeat the
+// valid v1 digest as v0, which would hide a verifier that accepts v0.
+func TestV0IsNotTheV1DigestAndOnlyComesWhenAsked(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	h := newHook(clock)
+	s := testprovider.NewHandlerSender(h, "/h", testprovider.WithSenderClock(clock))
+	d, err := s.Send(context.Background(), someEvent(clock))
+	if err != nil || !d.OK() {
+		t.Fatalf("%v %d", err, d.Status)
+	}
+	if strings.Contains(d.Signature, "v0=") {
+		t.Errorf("a default delivery carries a v0: %s", d.Signature)
+	}
+	sandbox, err := s.Send(context.Background(), someEvent(clock), testprovider.WithTestModeV0())
+	if err != nil || !sandbox.OK() {
+		t.Fatalf("%v %d", err, sandbox.Status)
+	}
+	entries := map[string]string{}
+	for _, part := range strings.Split(sandbox.Signature, ",") {
+		k, v, _ := strings.Cut(part, "=")
+		entries[k] = v
+	}
+	if len(entries["v0"]) != 64 || entries["v0"] == entries["v1"] {
+		t.Errorf("v0 must be a digest of its own, not v1's: %s", sandbox.Signature)
+	}
+}
+
+// The header an attacker can make without the secret: a v1 that doesn't match and a v0 that does.
+// A correct verifier ignores v0 and refuses it; one that accepts a match in any scheme (the
+// control, written the wrong way on purpose) takes it, which is what makes the case a real trap.
+func TestAnInvalidV1BesideAMatchingV0IsRefused(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	h := newHook(clock)
+	for kind, s := range senders(t, h, clock) {
+		d, err := s.Send(context.Background(), someEvent(clock), testprovider.ForgedV1WithValidV0())
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if d.OK() {
+			t.Errorf("%s: a handler accepted an invalid v1 beside a matching v0", kind)
+		}
+		if !strings.Contains(d.Signature, ",v1=") || !strings.Contains(d.Signature, ",v0=") {
+			t.Fatalf("%s: the header is %q", kind, d.Signature)
+		}
+		now := clock.Now()
+		if err := verifyStripe(d.Signature, d.Body, []string{testprovider.TestWebhookSecret}, now, testprovider.Tolerance); err == nil {
+			t.Errorf("%s: the reference verifier accepts it", kind)
+		}
+		if !acceptsAnyScheme(d.Signature, d.Body, testprovider.TestWebhookSecret) {
+			t.Errorf("%s: the header doesn't carry a matching v0, so the case proves nothing", kind)
+		}
+	}
+	if applied, refused := h.count(); applied != 0 || refused != 2 {
+		t.Errorf("applied %d refused %d", applied, refused)
+	}
+}
+
+// acceptsAnyScheme is the mistake Stripe's documentation warns about (downgrade): a match in any
+// v-entry is taken for a signature.
+func acceptsAnyScheme(header string, body []byte, secret string) bool {
+	var t string
+	var sigs []string
+	for _, part := range strings.Split(header, ",") {
+		k, v, _ := strings.Cut(part, "=")
+		if k == "t" {
+			t = v
+		} else if strings.HasPrefix(k, "v") {
+			sigs = append(sigs, v)
+		}
+	}
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(t + "." + string(body)))
+	want := hex.EncodeToString(h.Sum(nil))
+	for _, got := range sigs {
+		if hmac.Equal([]byte(want), []byte(got)) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestARolledSecretIsAcceptedUntilItExpires(t *testing.T) {

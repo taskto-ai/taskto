@@ -70,6 +70,13 @@ type Signing struct {
 	Malformed bool
 	// V0Only sends only the v0 test scheme, which a verifier must ignore.
 	V0Only bool
+	// TestModeV0 adds a v0 entry beside the v1 one, as Stripe does for sandbox events. Its value
+	// is a different digest from v1's: v0 is another scheme, and a verifier must ignore it.
+	TestModeV0 bool
+	// ForgedV1 puts a v1 signature that doesn't match (made with another secret) beside a v0
+	// that is the digest the right secret would give as v1: a verifier that takes any scheme's
+	// match as a signature accepts it, and a correct one refuses it.
+	ForgedV1 bool
 	// DebugEntries adds the secret=, destination= and payload= entries Stripe may add. They
 	// aren't signed and a verifier must ignore them.
 	DebugEntries bool
@@ -113,6 +120,14 @@ func MalformedSignature() SignOption { return func(s *Signing) { s.Malformed = t
 
 // V0Only sends the v0 test scheme and no v1.
 func V0Only() SignOption { return func(s *Signing) { s.V0Only = true } }
+
+// WithTestModeV0 adds the v0 entry Stripe sends beside v1 for sandbox events. The default is v1
+// alone, which is what live events carry.
+func WithTestModeV0() SignOption { return func(s *Signing) { s.TestModeV0 = true } }
+
+// ForgedV1WithValidV0 sends an invalid v1 and, as v0, the digest that would have been the valid
+// v1. A handler must refuse the delivery: only v1 authenticates.
+func ForgedV1WithValidV0() SignOption { return func(s *Signing) { s.ForgedV1 = true } }
 
 // WithDebugEntries adds the unsigned debug entries Stripe may send.
 func WithDebugEntries() SignOption { return func(s *Signing) { s.DebugEntries = true } }
@@ -268,13 +283,19 @@ func (s *Sender) SendBody(ctx context.Context, id, typ string, body []byte, opts
 	case sg.V0Only:
 		t := strconv.FormatInt(at.Unix(), 10)
 		header = "t=" + t + ",v0=" + mac(secret, t, body)
+	case sg.ForgedV1:
+		t := strconv.FormatInt(at.Unix(), 10)
+		header = "t=" + t + ",v1=" + mac(OtherWebhookSecret+"forged", t, body) + ",v0=" + mac(secret, t, body)
 	default:
 		t := strconv.FormatInt(at.Unix(), 10)
 		parts := []string{"t=" + t, "v1=" + mac(secret, t, body)}
 		for _, also := range sg.Also {
 			parts = append(parts, "v1="+mac(also, t, body))
 		}
-		parts = append(parts, "v0="+mac(secret, t, body)) // Stripe adds one in sandboxes
+		if sg.TestModeV0 {
+			// Another scheme, so another value than v1's: Stripe's v0 isn't v1's digest.
+			parts = append(parts, "v0="+mac("v0:"+secret, t, body))
+		}
 		if sg.DebugEntries {
 			sum := sha256.Sum256(body)
 			parts = append(parts, "secret=whsec_****************************FAKE",
