@@ -14,7 +14,8 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
   await page.getByLabel('Email').fill(owner.email)
   await page.getByLabel('Password', { exact: true }).fill(owner.password)
   await page.getByRole('button', { name: 'Create the owner' }).click()
-  await page.getByRole('alert').waitFor()
+  // The refusal is said with the token's field, which is marked invalid.
+  await page.getByLabel('Setup token').and(page.locator('[aria-invalid="true"]')).waitFor()
   assert.equal(await page.getByRole('navigation', { name: 'Sections' }).count(), 0)
 
   // The right token signs the owner in, to their workspace.
@@ -38,12 +39,12 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
   await page.getByRole('heading', { name: 'Log in' }).waitFor()
   assert.equal((await fetch(`${base}/api/me`, { headers: { cookie } })).status, 401)
   await page.getByLabel('Email').fill(owner.email)
-  await page.getByLabel('Password').fill('not the password at all')
+  await page.getByLabel('Password', { exact: true }).fill('not the password at all')
   await page.getByRole('button', { name: 'Log in' }).click()
   await page.getByRole('alert').waitFor()
   assert.equal(await page.getByRole('navigation', { name: 'Sections' }).count(), 0)
 
-  await page.getByLabel('Password').fill(owner.password)
+  await page.getByLabel('Password', { exact: true }).fill(owner.password)
   await page.getByRole('button', { name: 'Log in' }).click()
   await page.getByRole('navigation', { name: 'Sections' }).waitFor()
 })

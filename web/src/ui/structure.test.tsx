@@ -114,6 +114,8 @@ describe('Rows', () => {
     )
     const list = screen.getByRole('list', { name: 'Apps' })
     expect(list.querySelectorAll('li')).toHaveLength(2)
+    // Said explicitly, so Safari keeps it a list though its markers are styled away.
+    expect(list.getAttribute('role')).toBe('list')
     const link = screen.getByRole('link', { name: 'Equipment' })
     expect(link.getAttribute('href')).toBe('/w/1/apps/3')
     fireEvent.click(screen.getByRole('button', { name: 'Open' }))
@@ -260,6 +262,12 @@ describe('EmptyState', () => {
     )
     expect(screen.getByText('No apps in Product team yet')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Build an app' })).toBeTruthy()
+    expect(screen.queryByRole('heading')).toBeNull()
+  })
+
+  test('its title can be the page’s heading, of the level asked for', () => {
+    render(<EmptyState title="You aren't a member of any workspace" level={1} />)
+    expect(screen.getByRole('heading', { level: 1, name: "You aren't a member of any workspace" })).toBeTruthy()
   })
 })
 

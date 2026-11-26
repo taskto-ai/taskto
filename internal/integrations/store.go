@@ -67,9 +67,13 @@ type Integration struct {
 	// change.
 	Spaces      []int64 `json:"spaces" apitypes:"nonnull"`
 	OtherSpaces int     `json:"other_spaces"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
-	LastEventAt *string `json:"last_event_at"`
+	// ApprovalSpaces are the ones of Spaces an app's approval allowed (not an admin): they go with
+	// the approval, unless an admin keeps them (PUT .../spaces, "keep"). Saving the list never
+	// keeps them.
+	ApprovalSpaces []int64 `json:"approval_spaces" apitypes:"nonnull"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	LastEventAt    *string `json:"last_event_at"`
 }
 
 // The values of Integration.Secrets.
@@ -161,6 +165,7 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 		}
 		r.Secrets = map[string]string{SecretAPIKey: secretNotSet, SecretWebhookSecret: secretNotSet}
 		r.Spaces = []int64{}
+		r.ApprovalSpaces = []int64{}
 		recs = append(recs, r)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
@@ -190,7 +195,7 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 	if err := errors.Join(srows.Err(), srows.Close()); err != nil {
 		return nil, err
 	}
-	prows, err := q.QueryContext(ctx, `SELECT s.integration_id, s.space_id FROM integration_spaces s
+	prows, err := q.QueryContext(ctx, `SELECT s.integration_id, s.space_id, s.from_approval FROM integration_spaces s
 		JOIN integrations i ON i.id = s.integration_id
 		WHERE i.workspace_id = ? AND (? = 0 OR i.id = ?) ORDER BY s.space_id`, workspace, id, id)
 	if err != nil {
@@ -198,12 +203,16 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 	}
 	for prows.Next() {
 		var rid, space int64
-		if err := prows.Scan(&rid, &space); err != nil {
+		var fromApproval bool
+		if err := prows.Scan(&rid, &space, &fromApproval); err != nil {
 			_ = prows.Close()
 			return nil, err
 		}
 		if r := at[rid]; r != nil {
 			r.Spaces = append(r.Spaces, space)
+			if fromApproval {
+				r.ApprovalSpaces = append(r.ApprovalSpaces, space)
+			}
 		}
 	}
 	if err := errors.Join(prows.Err(), prows.Close()); err != nil {
@@ -633,16 +642,35 @@ func isForeignKey(err error) bool {
 // manage (manageable): the integration's spaces outside it, another person's private space, are
 // kept as they are. The caller has checked that spaces are all manageable; the schema checks
 // that they are in the workspace.
-func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces []int64, manageable []int64) (record, error) {
+//
+// A space an app's approval allowed stays the approval's when the list names it: only a space in
+// keep (a subset of spaces, the admin's explicit word) becomes the admin's own, which no approval
+// takes away, and each such change is an audit event of its own.
+func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces, keep []int64, manageable []int64) (record, error) {
 	var rec record
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		old, err := s.get(ctx, tx, workspace, id)
 		if err != nil {
 			return err
 		}
-		var added, removed int64
+		var added, removed, kept int64
 		for _, sp := range spaces {
-			if !slices.Contains(old.Spaces, sp) {
+			if slices.Contains(old.Spaces, sp) {
+				if !slices.Contains(keep, sp) {
+					continue // already allowed, and left as it is: an approval's grant stays its own
+				}
+				// Kept by the admin who named it: it is theirs now, and no approval takes it away.
+				res, err := tx.ExecContext(ctx, `UPDATE integration_spaces SET from_approval = 0, allowed_by = ?, allowed_at = ?
+					WHERE integration_id = ? AND space_id = ? AND from_approval = 1`, user, s.stamp(s.now()), id, sp)
+				if err != nil {
+					return err
+				}
+				n, err := res.RowsAffected()
+				if err != nil {
+					return err
+				}
+				kept += n
+			} else {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id, allowed_by, allowed_at)
 					VALUES (?, ?, ?, ?)`, id, sp, user, s.stamp(s.now())); err != nil {
 					return err
@@ -658,13 +686,22 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 				removed++
 			}
 		}
-		if added+removed > 0 {
+		if added+removed+kept > 0 {
 			if _, err := tx.ExecContext(ctx, `UPDATE integrations SET updated_at = ? WHERE id = ?`, s.stamp(s.now()), id); err != nil {
 				return err
 			}
+		}
+		if added+removed > 0 {
 			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspace, Actor: user, Action: audit.IntegrationSpacesChanged,
 				TargetType: audit.TargetIntegration, Target: id,
 				Details: audit.Details{"provider": old.Provider, "added": added, "removed": removed}}); err != nil {
+				return err
+			}
+		}
+		if kept > 0 {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspace, Actor: user, Action: audit.IntegrationSpacesKept,
+				TargetType: audit.TargetIntegration, Target: id,
+				Details: audit.Details{"provider": old.Provider, "kept": kept}}); err != nil {
 				return err
 			}
 		}

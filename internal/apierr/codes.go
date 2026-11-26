@@ -438,4 +438,16 @@ const (
 	CodeUpdateChannelOff         Code = "update_channel_off"         // 409: the updater's channel is off
 	CodeUpdateRequestPending     Code = "update_request_pending"     // 409: a request waits for the host to take it
 	CodeUpdateRunning            Code = "update_running"             // 409: a run is changing the install
+
+	// Apps' use of integrations: the contract an admin approves (internal/apps, integration_approvals.go).
+
+	CodeAppIntegrationUnapproved      Code = "app_integration_unapproved"       // 409: params: slot
+	CodeAppIntegrationSlotUnknown     Code = "app_integration_slot_unknown"     // 404: the draft declares no such slot; params: slot
+	CodeAppIntegrationContractChanged Code = "app_integration_contract_changed" // 409: the draft's contract is no longer the one the request named
+	CodeAppIntegrationNotPending      Code = "app_integration_not_pending"      // 409: the request was already decided
+	CodeAppIntegrationNotApproved     Code = "app_integration_not_approved"     // 409: only an approval can be revoked
+	CodeAppIntegrationNotFound        Code = "app_integration_approval_not_found"
+	CodeAppIntegrationKindMismatch    Code = "app_integration_kind_mismatch"     // 422: the integration's provider doesn't do the slot's kind; params: kind
+	CodeAppIntegrationDisabled        Code = "app_integration_disabled"          // 409: the integration is switched off
+	CodeAppIntegrationSpaceNotAllowed Code = "app_integration_space_not_allowed" // 409: the integration is not allowed in the app's space
 )

@@ -4,7 +4,7 @@
 // Inspection template's own actions, with where they go as the person may see it.
 
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import inspection from '../../../internal/apps/templates/inspection.json'
 import type { App, AppDraft, EffectTarget, Space } from '../api'
 import { setPreferences } from '../i18n'
@@ -12,6 +12,7 @@ import { PublishPanel } from './AppPublish'
 
 afterEach(async () => {
   cleanup()
+  vi.unstubAllGlobals()
   await setPreferences({ user: null })
 })
 
@@ -201,4 +202,27 @@ test('a rule’s numbers, booleans and a column are said in the user’s languag
     'level é no mínimo 1.234,5, urgent é sim e checked é não',
   )
   expect(lines).toContain('Move para constructor o cartão que este registro criou.')
+})
+
+test('who may use a restricted app is a skeleton while it loads, said to a screen reader, not a line of text', () => {
+  // The roles' request never answers in this test: the panel stays waiting for them.
+  vi.stubGlobal('fetch', () => new Promise(() => {}))
+  const app = {
+    id: 9,
+    space_id: 3,
+    name: 'Inspection',
+    archived_at: null,
+    version: 1,
+    rows: 0,
+    access: { ...all, restricted: true },
+    live: null,
+    unpublished_changes: true,
+    draft: inspections(),
+    effect_targets: [],
+  } as unknown as App
+  render(<PublishPanel base="/api/x" spaceBase="/api/y" app={app} space={team} onChanged={() => undefined} />)
+  const waiting = screen.getByRole('status')
+  expect(waiting.getAttribute('aria-busy')).toBe('true')
+  expect(waiting.textContent).toBe('Loading…')
+  expect(waiting.querySelector('.ui-skeleton')).toBeTruthy()
 })

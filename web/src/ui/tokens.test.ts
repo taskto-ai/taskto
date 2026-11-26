@@ -181,7 +181,7 @@ describe('the tokens', () => {
     expect(style?.[1]).toBe(index.trim().split('\n')[0])
   })
 
-  test('the stacking levels are in their order, and the skip link is above every z-index there is', () => {
+  test('the stacking levels are in their order, and every z-index is one of them', () => {
     const order = ['sticky', 'sidebar', 'scrim', 'drawer', 'overlay', 'toast', 'skip']
     const props = propsOf(rules(read('tokens.css')), ':root')
     const declared = [...props.keys()].filter((k) => k.startsWith('--z-'))
@@ -191,10 +191,13 @@ describe('the tokens', () => {
       levels.every((v, i) => Number.isInteger(v) && (i === 0 || v > levels[i - 1])),
       levels.join(' < '),
     ).toBe(true)
-    const found = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
-    // The scan reads the stylesheets that declare them (the scrim's, the guards').
-    expect(found.length).toBeGreaterThan(0)
-    expect(levels.at(-1)).toBeGreaterThanOrEqual(Math.max(...found))
+    // A level is a token: no stylesheet writes a z-index as a bare number, so none can climb over the
+    // skip link without saying so in tokens.css.
+    const numbers = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(-?\d+)/g)].map((m) => m[0]))
+    expect(numbers).toEqual([])
+    const used = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*var\((--z-[a-z]+)\)/g)].map((m) => m[1]))
+    expect(used.length).toBeGreaterThan(0)
+    expect(used.filter((name) => !declared.includes(name))).toEqual([])
   })
 
   test('every scale resolves', () => {
@@ -217,21 +220,13 @@ const OLD_NAMES = [
   'line',
   'line-strong',
   'accent',
-  'accent-hover',
   'on-accent',
-  'accent-edge',
   'accent-soft',
   'focus',
   'link',
   'logo-dot',
   'danger',
-  'success',
-  'warning',
   'clear-icon',
-  'scrim',
-  'shadow-lift',
-  'shadow-lift-hover',
-  'shadow-pop',
   'font',
   'display',
   'mono',
@@ -250,25 +245,17 @@ const OLD_COLORS: Record<string, [string, string]> = {
   line: ['rgba(17, 17, 16, 0.15)', 'rgba(250, 248, 244, 0.14)'],
   'line-strong': ['#7e7b74', '#8a877f'],
   accent: ['#4cefa8', '#4cefa8'],
-  'accent-hover': ['#6bf5b8', '#6bf5b8'],
   'on-accent': ['#111110', '#111110'],
-  'accent-edge': ['#111110', '#1fc98a'],
   'accent-soft': ['#dcfceb', 'rgba(76, 239, 168, 0.14)'],
   focus: ['#111110', '#4cefa8'],
   link: ['#006b45', '#4cefa8'],
   'logo-dot': ['#00a86b', '#00a86b'],
   danger: ['#b42318', '#ff8a82'],
-  success: ['#006b45', '#4cefa8'],
-  warning: ['#9a4700', '#ffb04d'],
-  scrim: ['rgba(17, 17, 16, 0.42)', 'rgba(0, 0, 0, 0.6)'],
 }
 
 // And the others, resolved as they were, light then dark: lengths, shadows, font stacks, the icon.
 const SANS = '"Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
 const OLD_VALUES: Record<string, [string, string]> = {
-  'shadow-lift': ['0 2px 0 #111110', '0 2px 0 #1fc98a'],
-  'shadow-lift-hover': ['0 3px 0 #111110', '0 3px 0 #1fc98a'],
-  'shadow-pop': ['0 12px 32px -12px rgba(17, 17, 16, 0.35)', '0 12px 32px -12px rgba(0, 0, 0, 0.8)'],
   font: [SANS, SANS],
   display: [`"Bricolage Grotesque Variable", ${SANS}`, `"Bricolage Grotesque Variable", ${SANS}`],
   mono: [
@@ -283,9 +270,7 @@ const OLD_VALUES: Record<string, [string, string]> = {
   'text-h2': ['1rem', '1rem'],
   'text-h3': ['0.95rem', '0.95rem'],
   'text-code': ['0.9em', '0.9em'],
-  'text-small': ['0.85rem', '0.85rem'],
   'field-padding': ['0.45rem 0.6rem', '0.45rem 0.6rem'],
-  'error-margin': ['0.25rem 0', '0.25rem 0'],
   'clear-icon': Array(2).fill(
     `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E")`,
   ) as [string, string],

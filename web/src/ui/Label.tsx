@@ -53,7 +53,9 @@ export const hueClass = (hue: LabelHue) => HUE_CLASS[hue]
 
 export interface LabelProps {
   name: string
-  // The words shown, when they are not the name itself (a count after it, a remove button).
+  // The words shown, when they are not the name itself (a count after it). Words only: the label
+  // is one short line and cuts what doesn't fit, so a control (a remove button) goes beside it,
+  // not in it.
   children?: ReactNode
   className?: string
 }

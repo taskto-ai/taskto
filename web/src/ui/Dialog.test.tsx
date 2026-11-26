@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode, useState } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { closesDelivered } from '../test/dialogEvents'
 import { Button } from './Button'
 import { ConfirmDialog, useConfirm } from './ConfirmDialog'
 import { Dialog } from './Dialog'
@@ -97,7 +98,7 @@ describe('Dialog', () => {
     open()
     await act(async () => {
       dialog().close()
-      await new Promise((r) => setTimeout(r))
+      await closesDelivered()
     })
     expect(onClose).toHaveBeenCalledOnce()
   })
@@ -129,9 +130,7 @@ test('stays open under StrictMode, whose second mount follows a close', async ()
   )
   open()
   // The close event of the first mount's cleanup arrives in a later task.
-  await act(async () => {
-    await new Promise((r) => setTimeout(r))
-  })
+  await act(() => closesDelivered())
   expect(onClose).not.toHaveBeenCalled()
   expect(dialog()?.open).toBe(true)
   expect(modalOpen()).toBe(true)
@@ -218,10 +217,12 @@ function BusyScreen() {
 }
 
 const pressEscape = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-const nextTasks = () =>
-  act(async () => {
-    await new Promise((r) => setTimeout(r))
-    await new Promise((r) => setTimeout(r))
+// Waits until the dialog is open again with the focus inside, however long the browser's close
+// event and the dialog's reopening take: not a count of tasks, which a loaded machine outruns.
+const openAgain = () =>
+  waitFor(() => {
+    expect(dialog()?.open).toBe(true)
+    expect(dialog().contains(document.activeElement)).toBe(true)
   })
 
 describe('a dialog the browser closes while the screen keeps it open', () => {
@@ -229,15 +230,30 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
     render(<BusyScreen />)
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete the app' }))
-    // The first Escape the page may refuse; the next ones without a press in between it can't.
+    // The first Escape the page may refuse; the next ones without a press in between it can't,
+    // and the browser closes it each time.
+    let closed = 0
     for (let i = 0; i < 3; i++) {
       pressEscape()
-      await nextTasks()
+      if (!dialog().open) closed++
+      await act(() => closesDelivered())
+      await openAgain()
     }
+    expect(closed).toBe(2)
     expect(dialog().open).toBe(true)
     expect(dialog().contains(document.activeElement)).toBe(true)
     expect(modalOpen()).toBe(true)
     expect(screen.getByRole('alertdialog', { name: 'Delete Equipment?' }).textContent).toContain('Deleting…')
+  })
+
+  test('turning busy, it keeps the focus inside: on the action, not on the Cancel it disables', () => {
+    render(<BusyScreen />)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }))
+    const action = screen.getByRole('button', { name: /Delete the app/ })
+    fireEvent.click(action)
+    expect(document.activeElement).toBe(action)
+    expect(action.getAttribute('aria-busy')).toBe('true')
   })
 
   test('when the screen lets it go, it goes, and no modal is left behind', async () => {
@@ -246,8 +262,7 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
     opener.focus()
     fireEvent.click(opener)
     pressEscape()
-    await nextTasks()
-    expect(dialog()).toBeNull()
+    await waitFor(() => expect(dialog()).toBeNull())
     expect(modalOpen()).toBe(false)
     expect(document.activeElement).toBe(opener)
   })
@@ -260,14 +275,50 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
       </Dialog>,
     )
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    // The first Escape is refused; the second the browser carries out, closing it under the
+    // screen, and it opens again.
     pressEscape()
+    expect(dialog().open).toBe(true)
     pressEscape()
+    expect(dialog().open).toBe(false)
+    // The browser took the focus out with it; opening again puts it back inside.
+    expect(dialog().contains(document.activeElement)).toBe(false)
+    await act(() => closesDelivered())
+    await openAgain()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload this page' }))
+  })
+
+  test('one that is not dismissible, reopened by the browser, gives the focus back to its chosen button', async () => {
+    render(
+      <Dialog
+        open
+        onClose={() => {}}
+        title="Records of another account"
+        role="alertdialog"
+        dismissible={false}
+        actions={
+          <>
+            <Button variant="danger">Discard them</Button>
+            <Button data-autofocus>Sign out</Button>
+          </>
+        }
+      />,
+    )
+    // A real browser that reopens a dialog focuses its first button, here the destructive one;
+    // jsdom moves no focus, so the test puts it there.
+    screen.getByRole('button', { name: 'Discard them' }).focus()
     await act(async () => {
+      dialog().close()
       await new Promise((r) => setTimeout(r))
     })
-    expect(onClose).not.toHaveBeenCalled()
     expect(dialog().open).toBe(true)
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload this page' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Sign out' }))
+  })
+
+  test('its top is not a banner of the page', () => {
+    render(<Dialog open onClose={() => {}} title="Rename the app" />)
+    expect(screen.queryByRole('banner')).toBeNull()
   })
 
   test('a press outside closes it only when asked to', () => {
@@ -276,8 +327,24 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
     fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
     expect(onClose).not.toHaveBeenCalled()
     rerender(<Dialog open onClose={onClose} title="Move the card" closeOnOutsidePress />)
+    fireEvent.mouseDown(dialog(), { clientX: -10, clientY: -10 })
     fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  test('a drag that begins inside and ends on the backdrop leaves it open', () => {
+    const onClose = vi.fn()
+    render(
+      <Dialog open onClose={onClose} title="Move the card" closeOnOutsidePress>
+        <p>Some words to select</p>
+      </Dialog>,
+    )
+    // Selecting the words: pressed on them, released outside the box. The click goes to the
+    // <dialog>, the nearest element both are in, at the release's place.
+    fireEvent.mouseDown(screen.getByText('Some words to select'), { clientX: 0, clientY: 0 })
+    fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(dialog().open).toBe(true)
   })
 })
 

@@ -7,24 +7,6 @@
    and their order with the other files is styles.css's (docs/design.md, "Where styles live").
    Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
 
-.tt-center {
-  min-height: 100%;
-  display: grid;
-  place-content: center;
-  gap: 1rem;
-  padding: 1rem;
-  /* Screens without the shell (setup, login, errors) keep clear of the status and home bars. */
-  padding-block-start: max(1rem, env(safe-area-inset-top));
-  padding-block-end: max(1rem, env(safe-area-inset-bottom));
-  text-align: center;
-}
-
-.tt-brand {
-  display: inline-flex;
-  align-items: center;
-  margin: 0;
-}
-
 /* The website's logo (BrandLogo.tsx): the arrow and the name in the page's ink, the dot and
    ".ai" in the logo's own green. Its height is set; the width follows the drawing (238 by 64). */
 .tt-logo {
@@ -65,43 +47,6 @@
   cursor: default;
 }
 
-/* The one thing you press: mint, outlined in ink, on a short hard lift that rises on hover and
-   presses in, as on the website. */
-.tt-primary {
-  background: var(--tt-accent);
-  color: var(--tt-on-accent);
-  border: 1.5px solid var(--tt-accent-edge);
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  box-shadow: var(--tt-shadow-lift);
-  transition:
-    transform 0.14s ease,
-    box-shadow 0.14s ease,
-    background-color 0.14s ease;
-}
-
-.tt-primary:hover:not(:disabled) {
-  background: var(--tt-accent-hover);
-  transform: translateY(-1px);
-  box-shadow: var(--tt-shadow-lift-hover);
-}
-
-.tt-primary:active:not(:disabled) {
-  transform: translateY(2px);
-  box-shadow: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tt-primary {
-    transition: none;
-  }
-
-  .tt-primary:hover:not(:disabled),
-  .tt-primary:active:not(:disabled) {
-    transform: none;
-  }
-}
-
 .tt-icon {
   flex-shrink: 0;
 }
@@ -113,53 +58,6 @@
   }
 }
 
-.tt-form {
-  display: grid;
-  gap: 0.85rem;
-}
-
-.tt-form label {
-  display: grid;
-  gap: 0.3rem;
-  font-weight: 500;
-}
-
-.tt-hint {
-  margin-top: -0.55rem;
-  font-weight: 400;
-  font-size: 0.85rem;
-  color: var(--tt-muted);
-}
-
-.tt-pane-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.tt-pane-head h1,
-.tt-pane-head h2 {
-  margin-inline-end: auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.tt-inline-field {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.9rem;
-  color: var(--tt-muted);
-}
-
-/* Lists. */
-
-.tt-pane-head > .tt-error {
-  flex-basis: 100%;
-  order: 1;
-}
-
 /* Editing the knowledge base and boards, and search. */
 
 a.tt-button {
@@ -167,87 +65,7 @@ a.tt-button {
   text-decoration: none;
 }
 
-a.tt-button.tt-primary {
-  color: var(--tt-on-accent);
-}
-
-.tt-panel {
-  display: grid;
-  gap: 0.75rem;
-  align-content: start;
-  padding: 1rem;
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-line);
-  border-radius: var(--tt-radius);
-  min-width: 0;
-}
-
-.tt-panel p {
-  margin: 0;
-}
-
-.tt-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-}
-
-.tt-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  padding: 0.6rem 0;
-  border-top: 1px solid var(--tt-line);
-}
-
-.tt-row:first-child {
-  border-top: 0;
-}
-
-.tt-row-main {
-  flex: 1 1 16rem;
-  display: grid;
-  gap: 0.1rem;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.tt-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.tt-form textarea {
-  resize: vertical;
-}
-
 .tt-danger {
   color: var(--tt-danger);
   border-color: var(--tt-danger);
-}
-
-.tt-warning {
-  color: var(--tt-warning);
-}
-
-.tt-field {
-  display: grid;
-  gap: 0.25rem;
-}
-
-.tt-field textarea {
-  inline-size: 100%;
-  resize: vertical;
-}
-
-/* Phones: the sidebar is a drawer, and one pane at a time. */
-
-@media (max-width: 48rem) {
-  .tt-panel {
-    padding: 0.75rem;
-  }
 }
