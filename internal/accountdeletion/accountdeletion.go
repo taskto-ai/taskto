@@ -83,12 +83,19 @@ type Apps interface {
 type Knowledge interface {
 	// planned is called with the number of commits to rewrite before the rewrite is journaled.
 	AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(n int) error) (int, error)
+	// RemoveSpace removes a space's files, and refuses every later call on it until ForgetSpace.
 	RemoveSpace(sp access.Space) error
+	// ForgetSpace drops the refusal once the space's rows are deleted: a space made later may be
+	// given its ID.
+	ForgetSpace(sp access.Space)
 }
 
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
 type CLIWorkers interface {
 	Forget(ctx context.Context, user int64) error
+	// WorkerKind is where this server's worker keeps a user's files: "local", "container", or ""
+	// when CLI workers are off (cliaccounts.WorkerKind).
+	WorkerKind() string
 }
 
 // Browsers is what the purge needs of the agent browsers: browser.Browsers.
@@ -117,8 +124,8 @@ type Options struct {
 	// ready (the purge is tried again). Nil when the agent runtime is off: a conversation's records
 	// stay recorded as a step to do when it is on.
 	Agent func(ctx context.Context) (conversations.Purger, error)
-	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
-	// CLI workers are off: that step stays recorded for when they are on.
+	// CLI forgets the CLI worker's files of the person. Nil when CLI workers are off: a step that
+	// needs a worker that isn't running stays recorded for when it is.
 	CLI CLIWorkers
 	// Browsers stops the account's agent browsers and removes their profile (a durable step, tried
 	// again until it is done). Nil when this server has no agent browser to stop: local mode with the
@@ -323,11 +330,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 	// What is to go, read once the purge has begun: nothing new can be made by an account that
 	// is switched off, and what the steps below delete is found again by a retry.
-	private, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
+	private, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
-	shared, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE kind = 'shared' ORDER BY id`)
+	shared, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE kind = 'shared' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -345,11 +352,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 				return err
 			}
 		}
-		// The browsers first: the CLI home holds their directory, and is left until they are gone.
+		// The browsers first: the CLI homes hold their directory, and are left until they are gone.
 		if err := s.record(ctx, tx, userID, cleanBrowser, strconv.FormatInt(userID, 10)); err != nil {
 			return err
 		}
-		return s.record(ctx, tx, userID, cleanCLIHome, strconv.FormatInt(userID, 10))
+		return s.recordCLIHomes(ctx, tx, userID)
 	})
 	if err != nil {
 		return err
@@ -431,8 +438,12 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
-		return err
+	finishErr := s.finish(ctx, userID, private, acct, &res)
+	// Whatever finish returned: a transaction that committed and then failed to report it has
+	// deleted the rows, and a space made later with the ID must not stay refused until a restart.
+	s.forgetGone(ctx, private)
+	if finishErr != nil {
+		return finishErr
 	}
 	// The providers file and the key files, now that the database has no account of theirs. A
 	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.
@@ -451,6 +462,19 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 			"conversations", res.Conversations, "documents_anonymized", res.DocumentsAnonymized)
 	}
 	return nil
+}
+
+// forgetGone tells the knowledge base to forget the removal of each of spaces whose row is gone
+// (knowledge.Store.ForgetSpace): the refusal is kept for a space that is still recorded, since the
+// purge is then still to finish it, and a database that can't be read leaves it all as it is.
+func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
+	for _, sp := range spaces {
+		var one int
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			s.o.Knowledge.ForgetSpace(sp)
+		}
+	}
 }
 
 type account struct {
@@ -505,7 +529,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 	var out []access.Space
 	for rows.Next() {
 		sp := access.Space{Access: access.Write}
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)

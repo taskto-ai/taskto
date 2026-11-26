@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/knowledge"
@@ -74,11 +75,21 @@ type fakeCLI struct {
 	mu    sync.Mutex
 	users []int64
 	fail  error
+	kind  string // the worker this server runs: "local", "container" or "" (off)
+}
+
+func (f *fakeCLI) WorkerKind() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.kind
 }
 
 func (f *fakeCLI) Forget(_ context.Context, user int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.kind == "" {
+		return cliaccounts.ErrOff // as the service answers with no worker
+	}
 	if f.fail != nil {
 		return f.fail
 	}
@@ -131,7 +142,7 @@ func newWorld(t *testing.T) *world {
 	if _, err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
-	w := &world{t: t, db: sqlDB, dir: dir, agent: &fakeAgent{gone: map[int64]bool{}}, cli: &fakeCLI{}}
+	w := &world{t: t, db: sqlDB, dir: dir, agent: &fakeAgent{gone: map[int64]bool{}}, cli: &fakeCLI{kind: cliContainer}}
 	w.kb = knowledge.New(dir, knowledge.Options{})
 	user := func(email, name string) int64 {
 		return exec(t, sqlDB, `INSERT INTO users (email, name, password_hash) VALUES (?, ?, 'x')`, email, name)
@@ -205,6 +216,9 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	exec(t, sqlDB, `UPDATE audit_events SET client_addr = '203.0.113.9'`) // as events made over HTTP carry
+
+	// The server runs the container worker, which has run before (as the server records at start).
+	exec(t, sqlDB, `INSERT INTO cli_worker_history (worker, since) VALUES ('container', '2025-01-01T00:00:00.000Z')`)
 
 	w.sched = schedule.New(sqlDB, access.New(sqlDB, nil), schedule.Options{Poll: 10 * time.Millisecond})
 	w.apps = apps.New(sqlDB, access.New(sqlDB, nil)).WithFiles(dir)

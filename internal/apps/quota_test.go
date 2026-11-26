@@ -202,11 +202,11 @@ func TestFinalizeThatCannotBeMeasuredLeavesNoFilesAndCanBeRetried(t *testing.T) 
 	w.send(w.alice, s, a, id, picture, 4096)
 	w.e.s.WithQuota(quota.New(w.e.db, quota.Limits{User: 1 << 30}, failingFiles{}))
 	expectCode(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{}), http.StatusServiceUnavailable, "quota_unavailable")
-	root, err := w.e.s.filesRoot(context.Background(), s.ID)
+	root, done, err := w.e.s.filesRoot(context.Background(), s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer done()
 	for _, ext := range []string{".thumb", ""} {
 		if _, err := root.Stat(fileName(a.ID, id, ext)); err == nil {
 			t.Errorf("the attempt left %q behind", ext)

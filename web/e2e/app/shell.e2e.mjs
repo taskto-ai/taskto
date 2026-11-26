@@ -64,3 +64,138 @@ scenario(
     assert.equal(await main.locator('.settings-path').isVisible(), false)
   },
 )
+
+// --- Layout that only a browser can tell ------------------------------------------------------
+
+// A workspace name of one long word (the most a name may be is 100 characters).
+const LONG = 'Northwind'.repeat(9)
+
+// The switcher's menu, opened by keyboard, with a long name in it: nothing scrolls sideways, every
+// check mark is inside the list and in the text's colour, and wrapped items keep room between them.
+async function menuFacts(page) {
+  const switcher = page.getByRole('button', { name: /^Workspace: / })
+  await switcher.focus()
+  await page.keyboard.press('Enter')
+  const menu = page.getByRole('menu')
+  await menu.waitFor()
+  return menu.evaluate((list) => {
+    const box = list.getBoundingClientRect()
+    const checked = list.querySelector('[aria-checked="true"]')
+    const check = checked.querySelector('.ui-menu-item-check')
+    const c = check.getBoundingClientRect()
+    const long = [...list.querySelectorAll('[role="menuitemradio"]')].find((i) => i.textContent.length > 50)
+    const label = long.querySelector('.ui-menu-item-label').getBoundingClientRect()
+    const item = long.getBoundingClientRect()
+    const group = list.querySelector('.ui-menu-group')
+    return {
+      groupGap: group ? getComputedStyle(group).rowGap : null,
+      sideways: list.scrollWidth - list.clientWidth,
+      checkInside: c.left >= box.left && c.right <= box.right,
+      checkColour: getComputedStyle(check).color === getComputedStyle(checked).color,
+      wrapped: label.height > parseFloat(getComputedStyle(long).lineHeight) * 1.5,
+      roomAbove: label.top - item.top,
+      roomBelow: item.bottom - label.bottom,
+    }
+  })
+}
+
+for (const width of [390, 1440]) {
+  scenario(
+    `at ${width}px a long workspace name wraps inside the switcher's menu, and the check marks stay in sight`,
+    async (s) => {
+      const { page, context } = s
+      const SIZE = { width, height: 900 }
+      await setUp(s)
+      await page.setViewportSize(SIZE)
+      await api(context, 'POST', '/api/workspaces', { name: LONG })
+      await page.goto('/w/1/conversations')
+      if (width < 768) await page.getByRole('button', { name: 'Open the menu' }).click()
+      const facts = await menuFacts(page)
+      assert.equal(facts.sideways, 0, 'the menu does not scroll sideways')
+      assert.ok(facts.checkInside, 'the check mark is inside the menu')
+      assert.ok(facts.checkColour, "the check mark has the item's text colour, not the icons' muted one")
+      assert.ok(facts.wrapped, 'the long name wraps')
+      // The items of a group are a thin line apart (--line-thin), as the menu's items are.
+      assert.equal(facts.groupGap, '1px', 'the gap between grouped items is the thin line')
+      // --space-2 above and below a wrapped label.
+      assert.ok(facts.roomAbove >= 7 && facts.roomBelow >= 7, `room around a wrapped item: ${JSON.stringify(facts)}`)
+    },
+  )
+}
+
+scenario(
+  'in the rail nothing overflows sideways, the count sits on the bell’s corner, and the switcher has a hover ground',
+  async (s) => {
+    const { page } = s
+    const SIZE = { width: 820, height: 1100 }
+    await setUp(s)
+    await page.setViewportSize(SIZE)
+    await page.route('**/notifications/count', (r) => r.fulfill({ json: { unread: 150 } }))
+    await page.goto('/w/1/conversations')
+    const nav = page.getByRole('navigation', { name: 'Sections' })
+    const count = nav.locator('.ui-shell-count')
+    await count.waitFor()
+    assert.equal(await count.textContent(), '99+')
+    const facts = await page.evaluate(() => {
+      const sidebar = document.querySelector('.ui-shell-sidebar')
+      const pill = document.querySelector('.ui-shell-count').getBoundingClientRect()
+      const bell = document.querySelector('.ui-shell-count').parentElement.querySelector('svg').getBoundingClientRect()
+      return { overflow: sidebar.scrollWidth - sidebar.clientWidth, overTop: Math.max(0, pill.bottom - bell.top) }
+    })
+    assert.equal(facts.overflow, 0, 'the rail does not overflow sideways')
+    // On the corner: at most a few pixels of the bell's top under the count, not half of it.
+    assert.ok(facts.overTop <= 4, `the count covers ${facts.overTop}px of the bell`)
+    const switcher = page.getByRole('button', { name: /^Workspace: / })
+    await switcher.hover()
+    await page.waitForTimeout(200)
+    const ground = await switcher.evaluate((b) => getComputedStyle(b).backgroundColor)
+    assert.notEqual(ground, 'rgba(0, 0, 0, 0)', 'a hovered switcher has a ground')
+  },
+)
+
+for (const width of [390, 820]) {
+  scenario(
+    `at ${width}px, with a 20px root font, the box cut to the logo's mark is as wide as the mark is high`,
+    async (s) => {
+      const { page } = s
+      const SIZE = { width, height: 900 }
+      await setUp(s)
+      await page.setViewportSize(SIZE)
+      await page.goto('/w/1/conversations')
+      await page.locator('.ui-shell').waitFor()
+      await page.evaluate(() => document.documentElement.style.setProperty('font-size', '20px'))
+      const { box, mark } = await page.evaluate(() => {
+        const cut = document.querySelector(window.innerWidth <= 768 ? '.ui-shell-bar-mark' : '.ui-shell-logo')
+        return { box: cut.getBoundingClientRect().width, mark: cut.querySelector('svg').getBoundingClientRect().height }
+      })
+      assert.ok(Math.abs(box - mark) < 0.5, `the box is ${box}px for a mark ${mark}px high`)
+    },
+  )
+}
+
+for (const dir of ['ltr', 'rtl']) {
+  scenario(`at 320px (${dir}) the switcher's tooltip is never drawn over the switcher`, async (s) => {
+    const { page, context } = s
+    const SIZE = { width: 320, height: 800 }
+    await setUp(s)
+    await page.setViewportSize(SIZE)
+    const made = await api(context, 'POST', '/api/workspaces', { name: 'Northwind Studio Design' })
+    await page.goto(`/w/${made.workspace.id}/conversations`)
+    await page.locator('.ui-shell').waitFor()
+    await page.evaluate((d) => document.documentElement.setAttribute('dir', d), dir)
+    await page.getByRole('button', { name: 'Open the menu' }).click()
+    // Past the drawer's slide.
+    await page.waitForTimeout(500)
+    await page.getByRole('button', { name: /^Workspace: / }).focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+    const tip = page.locator('.ui-shell-switcher [role="tooltip"][data-open]')
+    await tip.waitFor()
+    const over = await page.evaluate(() => {
+      const b = document.querySelector('.ui-shell-switcher-button').getBoundingClientRect()
+      const r = document.querySelector('.ui-shell-switcher [role="tooltip"]').getBoundingClientRect()
+      return !(r.bottom <= b.top || r.top >= b.bottom || r.right <= b.left || r.left >= b.right)
+    })
+    assert.equal(over, false, 'the tooltip is beside, above or below the switcher, not over it')
+  })
+}

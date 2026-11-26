@@ -15,6 +15,7 @@ import {
   type Me,
   SESSION_LOST,
 } from './api'
+import { forgetOperationsOf } from './apps/operations'
 import {
   InviteScreen,
   LoginScreen,
@@ -133,7 +134,11 @@ export function App() {
   // (a private window, storage refused); and when the server refuses a request of this account as
   // another's.
   const [changed, setChanged] = useState(false)
+  // Whether this page has heard the browser's account change already: a later "nobody" is then
+  // another account's sign-out, not this one's.
+  const heardChange = useRef(false)
   const accountChanged = useCallback(() => {
+    heardChange.current = true
     endSession()
     setChanged(true)
   }, [])
@@ -146,6 +151,10 @@ export function App() {
     watchAccount()
     const off = onAccountSignal((who) => {
       if (who === account) return
+      // The account signed out in another tab: what this tab kept of its app submissions waiting
+      // for an answer goes too, as in the tab that signed out (each tab keeps its own).
+      // Only while nothing else was heard since: then the account that left is this page's.
+      if (who === null && !heardChange.current) forgetOperationsOf(account)
       // Nobody signed in, while this page signs the account out: another tab finished the same
       // sign-out (its cleanup forgot the account). Not another account: on to where it leads.
       const next = leavingTo.current
@@ -183,7 +192,7 @@ export function App() {
       if (!concernsAccount(e, signedInUser)) return
       // Ended here too, not only by a refused request: the deletion's answer says so without one.
       endSession()
-      void leavePush()
+      if (signedInUser !== null) void leavePush(signedInUser)
       // What this device kept of an account its person deleted is removed by the page that deleted
       // it (forgetAccount), not here: a session that ends any other way leaves the queue for the
       // next sign-in to send.

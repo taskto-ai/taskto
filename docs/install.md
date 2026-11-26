@@ -862,6 +862,15 @@ photo uploads in shared apps, their access tokens, sessions, push subscriptions,
 settings, email ledger, two-factor data and single sign-on identities, the invitations to their
 address, the search index's rows for all of it, and the account.
 
+A private space's files go under the knowledge base's own lock for that space, with the apps'
+photo writes in it held too: a write already under way finishes first, and one that comes after
+is refused as a space that isn't there, so nothing of the space is written again once it is
+removed. A call that had found the space before the purge is told from a space made later with the
+same number (the database can give a purged space's number again) by its creation time, and its row
+is checked once more under the lock, so it can't make the directory again either. The directory is renamed aside in one step and then deleted, so a server that stops in the
+middle leaves no half-deleted repository at the space's path; the purge's next try deletes what
+was left.
+
 **What stays: what they made for others.** Cards, comments, documents and app records in shared
 spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records
 (even when an unfinished move of the app had left their files in the person's private space: the purge
@@ -885,8 +894,21 @@ is a decision about the workspace's records, not an account's.
   deleted content zeroed in the file. It also rewrites the runtime's providers file, stops the
   person's agent browsers (none starts meanwhile, and their live views close) and, once their
   processes are gone, removes their profile, and then removes the CLI worker's directory of the
-  person (`<data>/cli/u<id>`, or the worker container's own copy), which is left alone while a
-  browser step is still recorded. Each
+  person, which is left alone while a browser step is still recorded: `<data>/cli/u<id>` if the
+  local worker ever ran here, and
+  the worker container's own copy if the container worker ever did, which only that worker can
+  remove, so that step waits for a start with `-cli-workers container` (a start in local mode doesn't
+  clear it). The server records each kind of worker it starts (`cli_worker_history`); an install that
+  never ran CLI workers has no such step. For an install from before that record, and after a
+  **restore**, the history is unknown: the accounts that existed then wait for both. The record
+  keeps a kind once it has run, even if you switch the mode later (a server that stops doesn't
+  say for good that a kind will never run again), so accounts made after a switch still get its
+  step. The log says what the waiting steps wait for (`waits_for=cli_worker_container`, with the
+  number of accounts). If the worker container's volume (`cli-homes`) is gone for good, its copies
+  went with it: start the server once with `-cli-workers container` and the worker container on
+  a new, empty volume, and each waiting step closes (the worker's removal of a directory that
+  doesn't exist succeeds). Don't delete the steps by hand: the container step is the only record
+  that a person's files may still be in a volume. Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
   need them stay recorded, and are done by the next start with them on and every ten minutes. The log

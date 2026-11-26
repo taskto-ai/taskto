@@ -1019,18 +1019,63 @@ func (r *repo) countAuthored(ctx context.Context, head *object.Commit, set map[s
 // RemoveSpace deletes everything sp keeps on disk: its git repository, its unversioned files
 // and the large files' bytes, and whatever the apps stored in its directory (photos), for a
 // private space whose owner's account is purged (internal/accountdeletion). It takes the space's
-// lock, so no write is half-way through, and forgets what the Store cached of it. The space's
+// lock, so no write is half-way through, and a call that comes after it, or was waiting for the
+// lock, is refused with ErrSpaceRemoved: the space is marked removed first, so a removal that
+// fails part-way leaves it refused, not half there for a write to commit into, and nothing makes
+// its directory again. The directory is renamed away in one step before it is deleted, so a
+// crash in the middle leaves no half-deleted repository at the space's path (a write then makes
+// a new, whole one, which the retry removes); the leftover is removed by the retry. The space's
 // rows are deleted by the caller, after: the directory goes first, so a purge that stops between
-// the two still finds the space to finish. Removing what is gone already succeeds.
+// the two still finds the space to finish, and the caller then calls ForgetSpace. Removing what
+// is gone already succeeds.
 func (s *Store) RemoveSpace(sp access.Space) error {
-	st := s.state(sp.ID)
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
-	if err := os.RemoveAll(sp.Dir(s.dataDir)); err != nil {
+	st.removed, st.removedCreated = true, sp.CreatedAt
+	dir := sp.Dir(s.dataDir)
+	leftover := dir + removingSuffix
+	// What an earlier removal renamed and didn't finish deleting, first: the rename below
+	// needs the name free.
+	if err := os.RemoveAll(leftover); err != nil {
 		return fmt.Errorf("knowledge: removing space %d: %w", sp.ID, err)
+	}
+	if err := os.Rename(dir, leftover); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("knowledge: removing space %d: %w", sp.ID, err)
+	}
+	if err := os.RemoveAll(leftover); err != nil {
+		return fmt.Errorf("knowledge: removing space %d: %w", sp.ID, err)
+	}
+	return nil
+}
+
+// removingSuffix names, next to a space's directory, what RemoveSpace has renamed and not yet
+// deleted. It isn't a number, so nothing that lists the spaces' directories takes it for one.
+const removingSuffix = ".removing"
+
+// HoldSpace holds sp's directory for a caller that writes in it besides the knowledge base (the
+// apps' attachments): until release is called, RemoveSpace waits for it, so such a write is
+// finished before the removal begins; once the space is removed, it is ErrSpaceRemoved, and the
+// caller makes nothing in the directory. It holds the same lock as the Store's reads, shared with
+// them and with other holders, so a caller keeps it for the writes only.
+func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
+	st := s.lockSpace(sp, false, false)
+	if err := s.admit(st, sp); err != nil {
+		st.mu.RUnlock()
+		return nil, err
+	}
+	return st.mu.RUnlock, nil
+}
+
+// ForgetSpace drops what the Store keeps of a space removed by RemoveSpace, once its rows are
+// deleted: nothing can reach the space then, and a space made later may be given its ID. A space
+// that isn't marked removed is left alone.
+func (s *Store) ForgetSpace(sp access.Space) {
+	st := s.lockSpace(sp, true, false)
+	defer st.mu.Unlock()
+	if !st.removed {
+		return
 	}
 	s.mu.Lock()
 	delete(s.spaces, sp.ID)
 	s.mu.Unlock()
-	return nil
 }

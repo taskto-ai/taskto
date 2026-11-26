@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"taskto.ai/taskto/internal/config"
@@ -58,4 +60,52 @@ func testKey(t *testing.T) *serverkey.Key {
 		t.Fatal(err)
 	}
 	return k
+}
+
+// The server records the kind of CLI worker it runs before the worker is used: a purge waits for
+// each kind that ran to remove a deleted person's files (cli_worker_history), so a server that
+// recorded nothing would let a purge complete while the worker still holds their logins. Off
+// records nothing; local and local-unsafe are the local kind; container is the container kind.
+func TestStartCLIWorkersRecordsTheWorkerKind(t *testing.T) {
+	for _, c := range []struct {
+		mode string
+		want []string
+	}{
+		{"", nil},
+		{"off", nil},
+		{"local", []string{"local"}},
+		{"local-unsafe", []string{"local"}},
+		{"container", []string{"container"}},
+	} {
+		cfg := config.Default()
+		cfg.DataDir = t.TempDir()
+		cfg.CLIWorkers = c.mode
+		cfg.CLIWorkerSocket = filepath.Join(t.TempDir(), "worker.sock") // only a client is made
+		sqlDB := cliWorkersDB(t)
+		_, stop, err := startCLIWorkers(context.Background(), cfg, sqlDB, testKey(t))
+		if err != nil {
+			t.Fatalf("%q: %v", c.mode, err)
+		}
+		if err := stop(); err != nil {
+			t.Errorf("%q: stop: %v", c.mode, err)
+		}
+		rows, err := sqlDB.Query(`SELECT worker FROM cli_worker_history ORDER BY worker`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var w string
+			if err := rows.Scan(&w); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, w)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%q recorded %v, want %v", c.mode, got, c.want)
+		}
+	}
 }

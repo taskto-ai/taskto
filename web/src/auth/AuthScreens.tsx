@@ -11,7 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
-import { ackDeletion, DELETION_EVENT, peekDeletion } from './deleted'
+import { ackDeletion, DELETION_EVENT, peekDeletion, signInSubmitted } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -113,6 +113,9 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     inFlight.current = true
     setBusy(true)
     setFailure(null)
+    // Someone is signing in here: a deletion notice still waiting is not for them, whoever they are,
+    // and a deletion answered from now on is not told to them either.
+    signInSubmitted()
     // The mark goes where `busy` goes, never earlier: after a success the screen is on its way out
     // (onDone may still be opening the account's offline data), and a submit meanwhile would make
     // a second session or be refused.
@@ -398,6 +401,9 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   // The challenge of a login whose password was right and that now asks for a code.
   const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, failure, submit, edited } = useSubmit(async () => {
+    // Someone is signing in: the notice is not for them, and not for the form they come back to
+    // after a failure or from the code step, whenever the page is seen.
+    setDeleted(null)
     const reply = await api<Me | Challenged>('/api/login', {
       method: 'POST',
       body: { email, password },
@@ -442,7 +448,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   if (!methods) return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   if (forgotShown) {
-    return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} />
+    return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} onAsk={() => setDeleted(null)} />
   }
   const errors = placed(failure, ['email', 'password'])
   return (
@@ -559,7 +565,15 @@ function TwoFactorStep({
 
 // Asking for a reset link by email, from the login page. The server answers the same whether or
 // not an account has the address, and so does this: it never says which.
-function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+function ForgotPasswordScreen({
+  initialEmail,
+  onBack,
+  onAsk,
+}: {
+  initialEmail: string
+  onBack: () => void
+  onAsk: () => void
+}) {
   const t = useT()
   const [email, setEmail] = useState(initialEmail)
   const [busy, setBusy] = useState(false)
@@ -574,6 +588,10 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
     inFlight.current = true
     setBusy(true)
     setFailure(null)
+    // Someone is at this screen with their own address: as a login, it ends a notice still waiting,
+    // here and on the login they come back to.
+    signInSubmitted()
+    onAsk()
     try {
       await api('/api/password-reset/request', { method: 'POST', body: { email } })
       setSentTo(email.trim())

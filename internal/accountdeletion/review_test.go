@@ -13,7 +13,6 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/audit"
-	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 )
 
@@ -344,49 +343,6 @@ func TestPurgeRefreshesTheProvidersFileAndKeys(t *testing.T) {
 	}
 	if calls != 2 || w2.count(`SELECT count(*) FROM purge_cleanups`) != 0 {
 		t.Errorf("calls = %d, steps left = %d", calls, w2.count(`SELECT count(*) FROM purge_cleanups`))
-	}
-}
-
-// What the CLI workers kept for the person goes even with the workers off: the local worker's
-// directory under the data directory is removed, and the worker's own is recorded for when they are on.
-func TestPurgeRemovesTheLocalCLIDirectoryWithWorkersOffAndRecordsTheRest(t *testing.T) {
-	ctx := context.Background()
-	w := newWorld(t)
-	home := filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver), "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, "login"), []byte("a login"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	other := filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.carol), "home")
-	if err := os.MkdirAll(other, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	w.cli.fail = cliaccounts.ErrOff // CLI workers are off
-	w.deleteAccount()
-	if err := w.svc.Purge(ctx, w.leaver); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver))); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("their CLI directory remains: %v", err)
-	}
-	if _, err := os.Stat(other); err != nil {
-		t.Errorf("someone else's CLI directory: %v", err)
-	}
-	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ? AND target = ?`, cleanCLIHome, fmt.Sprint(w.leaver)); n != 1 {
-		t.Fatal("the worker's own directory isn't recorded for when the workers are on")
-	}
-	// The workers come on: it is forgotten there.
-	w.cli.fail = nil
-	if err := w.svc.RunCleanups(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.cli.users) != 1 || w.cli.users[0] != w.leaver {
-		t.Errorf("the CLI worker forgot %v", w.cli.users)
-	}
-	if n := w.count(`SELECT count(*) FROM purge_cleanups`); n != 0 {
-		t.Errorf("%d steps remain", n)
 	}
 }
 

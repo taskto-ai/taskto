@@ -100,7 +100,8 @@ func TestPurgeCleanupsGainTheBrowserStep(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	if _, err := Migrate(ctx, sqlDB); err != nil {
+	// Up to this migration only: the CLI step's target changes in a later one (0059, its own test).
+	if _, err := migrate(ctx, sqlDB, upTo(t, 58)); err != nil {
 		t.Fatal(err)
 	}
 	var kinds []string

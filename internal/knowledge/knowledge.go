@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path"
 	"strings"
@@ -105,6 +106,11 @@ var (
 	ErrRepoFull = errors.New("the space's knowledge base is full")
 	// ErrReadOnly is for a write to a space the caller may only read.
 	ErrReadOnly = errors.New("you can only read this space")
+
+	// ErrSpaceRemoved is for a call on a space that RemoveSpace removed (an account's purge): it
+	// is refused, and never made again, until the caller has deleted the space's rows
+	// (ForgetSpace). It is access.ErrNotFound's, so the API answers it as a space that isn't there.
+	ErrSpaceRemoved = fmt.Errorf("%w: the space was removed", access.ErrNotFound)
 
 	// errNoRepo is for a space without a repository: nothing was ever written to it.
 	errNoRepo = fmt.Errorf("%w: this space has no documents yet", ErrNotFound)
@@ -215,6 +221,13 @@ type Store struct {
 
 	// afterMeasure is for tests: it runs once a space's first measurement is made, before it is stored.
 	afterMeasure func(sp access.Space)
+
+	// spaceExists is SetSpaceCheck's; nil for none.
+	spaceExists func(sp access.Space) (bool, error)
+
+	// beforeLock is for tests: it runs in a write after the space's state is taken and before
+	// its lock is, the moment a removal can slip in between.
+	beforeLock func(sp access.Space)
 }
 
 // spaceState is what the Store keeps per space while it runs.
@@ -228,6 +241,15 @@ type spaceState struct {
 	// unv is the bytes of the unversioned files, counted when a write needs them; -1 when
 	// unknown (usage.go). Only a writer, holding mu, reads or sets it.
 	unv int64
+	// removed is set by RemoveSpace, under mu, and read by every call under mu once it has the
+	// lock: a call that took the state before the removal and got the lock after it sees it here,
+	// and so does one that arrives later, so nothing makes the space's directory again. It stays
+	// set, in the Store's map, until ForgetSpace.
+	removed bool
+	// removedCreated is the creation time of the space that was removed (access.Space.CreatedAt;
+	// empty when the caller didn't have it). A space made later with the same ID has another, so
+	// the mark never refuses it, whether or not ForgetSpace has run.
+	removedCreated string
 
 	// cache is the usage the last write published, under cacheMu, which no one holds for
 	// long and a writer may take while holding mu.
@@ -255,6 +277,79 @@ func New(dataDir string, opts Options) *Store {
 
 // MaxFileSize is the largest file the Store accepts.
 func (s *Store) MaxFileSize() int64 { return s.opts.MaxFileSize }
+
+// SetSpaceCheck sets the check of a space's row that every call makes once it has the space's
+// lock: false is a space that is gone, or is not the one the caller was authorized for (a space
+// made later with a purged one's ID), and is refused as ErrSpaceRemoved. It closes the gap that is
+// left when the purge has deleted the rows and the Store has forgotten the removal (ForgetSpace), for
+// a call that resolved the space before: it would make the directory again. It is for the server's
+// start, before the Store is used (access.SpaceRowCheck); without one, the removal's mark is all
+// there is.
+func (s *Store) SetSpaceCheck(exists func(sp access.Space) (bool, error)) { s.spaceExists = exists }
+
+// admit is what every call that has st's lock asks first: it refuses sp when it was removed (and is
+// the space that was: a space made later with the same ID, whose creation time differs, is not
+// refused by the mark) or when its row is gone.
+func (s *Store) admit(st *spaceState, sp access.Space) error {
+	if st.removed && (st.removedCreated == "" || sp.CreatedAt == "" || sp.CreatedAt == st.removedCreated) {
+		return ErrSpaceRemoved
+	}
+	if s.spaceExists != nil {
+		ok, err := s.spaceExists(sp)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrSpaceRemoved
+		}
+	}
+	return nil
+}
+
+// refusedIfRemoved is err, or ErrSpaceRemoved when err is a missing file and the space was removed
+// meanwhile: an upload staged its bytes, and the removal took them with the rest.
+func (s *Store) refusedIfRemoved(sp access.Space, err error) error {
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	st := s.lockSpace(sp, false, false)
+	defer st.mu.RUnlock()
+	if refused := s.admit(st, sp); refused != nil {
+		return refused
+	}
+	return err
+}
+
+// lockSpace takes the lock of sp's state, for writing or reading, and returns the state with the
+// lock held, once it is the state the Store has for the space. A state that was forgotten
+// (ForgetSpace) while its lock was waited for is left, and the current one is taken: a call must
+// never hold the lock of a state that no one else will find, or it would run beside a call that holds
+// the lock of the new one. hook is for the calls whose test pauses them before the lock
+// (Store.beforeLock).
+func (s *Store) lockSpace(sp access.Space, write, hook bool) *spaceState {
+	for {
+		st := s.state(sp.ID)
+		if hook && s.beforeLock != nil {
+			s.beforeLock(sp)
+		}
+		if write {
+			st.mu.Lock()
+		} else {
+			st.mu.RLock()
+		}
+		s.mu.Lock()
+		current := s.spaces[sp.ID] == st
+		s.mu.Unlock()
+		if current {
+			return st
+		}
+		if write {
+			st.mu.Unlock()
+		} else {
+			st.mu.RUnlock()
+		}
+	}
+}
 
 func (s *Store) state(spaceID int64) *spaceState {
 	s.mu.Lock()
@@ -459,7 +554,7 @@ func (s *Store) PutFile(ctx context.Context, sp access.Space, name string, src i
 	if !s.unversioned(name, sg.ptr.size) {
 		content, err := sg.bytes()
 		if err != nil {
-			return Result{}, err
+			return Result{}, s.refusedIfRemoved(sp, err)
 		}
 		if _, isPtr := parsePointer(content); !isPtr {
 			return s.put(sp, name, int64(len(content)), base, by, message, func(r *repo, _ *object.TreeEntry) (plumbing.Hash, error) {
@@ -905,9 +1000,11 @@ func (s *Store) read(sp access.Space, fn func(*repo) error) error {
 	if !sp.Access.Allows(access.Read) {
 		return access.ErrNotFound
 	}
-	st := s.state(sp.ID)
-	st.mu.RLock()
+	st := s.lockSpace(sp, false, false)
 	defer st.mu.RUnlock()
+	if err := s.admit(st, sp); err != nil {
+		return err
+	}
 	r, err := openRepo(s.dataDir, sp, st, false)
 	if err != nil {
 		return err
@@ -942,9 +1039,11 @@ func (s *Store) writeQ(sp access.Space, adding int64, quotaFirst, create bool, f
 }
 
 func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bool, fn func(*repo) error) error {
-	st := s.state(sp.ID)
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
+	if err := s.admit(st, sp); err != nil {
+		return err
+	}
 	r, err := openRepo(s.dataDir, sp, st, create)
 	if err != nil {
 		return err
