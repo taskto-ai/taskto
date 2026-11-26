@@ -75,12 +75,14 @@ type Apps interface {
 	// left in it, and fails if one is.
 	FinishMoves(ctx context.Context, space int64) error
 	// PurgeUploads removes the account's unfinished uploads and unattached photos, with files.
-	PurgeUploads(ctx context.Context, owner int64) (int, error)
+	// removed is called in the transaction that deletes each one's row.
+	PurgeUploadsNoting(ctx context.Context, owner int64, removed func(ctx context.Context, tx *sql.Tx) error) (int, error)
 }
 
 // Knowledge is what the purge needs of the knowledge base: *knowledge.Store.
 type Knowledge interface {
-	AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error)
+	// planned is called with the number of commits to rewrite before the rewrite is journaled.
+	AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(n int) error) (int, error)
 	RemoveSpace(sp access.Space) error
 }
 
@@ -288,8 +290,8 @@ type Result struct {
 	CLIAccounts       int64
 	PushSubscriptions int64
 	// DocumentsAnonymized and UploadsRemoved are done before the account's transaction, and can be
-	// done by an earlier try than the one that completes: each try adds what it did to the deletion's
-	// row (account_deletions), and these are its totals (docs/audit.md).
+	// done by an earlier try than the one that completes: their counts are kept with the work
+	// (account_deletions.uploads_removed, purge_anonymized), and these are the totals (docs/audit.md).
 	DocumentsAnonymized int64
 	MentionsAnonymized  int64
 	UploadsRemoved      int64
@@ -361,11 +363,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	}
 	// Their unfinished uploads in any app (a shared app's are theirs alone): with files. The photos
 	// already on records stay with the records.
-	n, err := apps.PurgeUploads(ctx, userID)
-	if err != nil {
+	// Each is counted in the transaction that removes it, so a retry neither loses nor repeats it.
+	if _, err := apps.PurgeUploadsNoting(ctx, userID, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE account_deletions SET uploads_removed = uploads_removed + 1 WHERE user_id = ?`, userID)
 		return err
-	}
-	if err := s.addTotal(ctx, userID, "uploads_removed", n); err != nil {
+	}); err != nil {
 		return err
 	}
 
@@ -397,13 +399,14 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		n, err := s.o.Knowledge.AnonymizeAuthors(ctx, sp, []string{acct.email})
-		if err != nil {
+		// The space's count is kept before its rewrite is journaled: a rewrite that stops after that
+		// is finished by the next try (or start), which finds nothing left to count.
+		if _, err := s.o.Knowledge.AnonymizeAuthorsNoting(ctx, sp, []string{acct.email}, func(n int) error {
+			_, err := s.o.DB.ExecContext(ctx, `INSERT INTO purge_anonymized (user_id, space_id, commits) VALUES (?, ?, ?)
+				ON CONFLICT (user_id, space_id) DO UPDATE SET commits = excluded.commits`, userID, sp.ID, n)
+			return err
+		}); err != nil {
 			anonErrs = append(anonErrs, fmt.Errorf("replacing the account's name in space %d's history: %w", sp.ID, err))
-			continue
-		}
-		if err := s.addTotal(ctx, userID, "documents_anonymized", n); err != nil {
-			anonErrs = append(anonErrs, err)
 		}
 	}
 	if err := errors.Join(anonErrs...); err != nil {
@@ -531,8 +534,8 @@ func (s *Service) finish(ctx context.Context, userID int64, private []access.Spa
 			return fmt.Errorf("%d attachments of apps in other spaces are still recorded in the account's private spaces", stranded)
 		}
 		// What the steps before this transaction did, over every try.
-		if err := tx.QueryRowContext(ctx, `SELECT uploads_removed, documents_anonymized FROM account_deletions WHERE user_id = ?`,
-			userID).Scan(&res.UploadsRemoved, &res.DocumentsAnonymized); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT d.uploads_removed, (SELECT coalesce(sum(a.commits), 0) FROM purge_anonymized a WHERE a.user_id = d.user_id)
+			FROM account_deletions d WHERE d.user_id = ?`, userID).Scan(&res.UploadsRemoved, &res.DocumentsAnonymized); err != nil {
 			return err
 		}
 		for _, c := range []struct {
@@ -607,26 +610,6 @@ func (s *Service) finish(ctx context.Context, userID int64, private []access.Spa
 		}
 		return nil
 	})
-	return err
-}
-
-// addTotal adds n to column, one of the totals of userID's deletion (account_deletions), for a step
-// of the purge that has just done its work. The work is done even if the purge's context ended
-// meanwhile, so its count is written regardless: a retry would find nothing left to count.
-func (s *Service) addTotal(ctx context.Context, userID int64, column string, n int) error {
-	if n <= 0 {
-		return nil
-	}
-	var query string
-	switch column {
-	case "uploads_removed":
-		query = `UPDATE account_deletions SET uploads_removed = uploads_removed + ? WHERE user_id = ?`
-	case "documents_anonymized":
-		query = `UPDATE account_deletions SET documents_anonymized = documents_anonymized + ? WHERE user_id = ?`
-	default:
-		return fmt.Errorf("no total %q", column)
-	}
-	_, err := s.o.DB.ExecContext(context.WithoutCancel(ctx), query, n, userID)
 	return err
 }
 

@@ -1392,6 +1392,12 @@ func (s *Service) FinishMoves(ctx context.Context, spaceID int64) error {
 // (internal/accountdeletion): an upload of a shared app belongs to the uploader alone, and a photo
 // already on a record belongs to the record, which stays. It returns how many it removed.
 func (s *Service) PurgeUploads(ctx context.Context, owner int64) (int, error) {
+	return s.PurgeUploadsNoting(ctx, owner, nil)
+}
+
+// PurgeUploadsNoting is PurgeUploads, and calls removed (if set) in the transaction that deletes each
+// upload's row, so what the caller keeps of it is written with the removal or not at all.
+func (s *Service) PurgeUploadsNoting(ctx context.Context, owner int64, removed func(ctx context.Context, tx *sql.Tx) error) (int, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, app_id FROM app_attachments WHERE owner = ? AND row_id IS NULL`, owner)
 	if err != nil {
 		return 0, err
@@ -1417,7 +1423,7 @@ func (s *Service) PurgeUploads(ctx context.Context, owner int64) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return n, err
 		}
-		done, err := s.deleteUpload(ctx, u.id, u.app, owner)
+		done, err := s.deleteUpload(ctx, u.id, u.app, owner, removed)
 		if err != nil {
 			return n, err
 		}
@@ -1433,7 +1439,7 @@ func (s *Service) PurgeUploads(ctx context.Context, owner int64) (int, error) {
 // row is what says a file is still to be removed, so a file that can't be removed leaves it, and
 // the error, for the purge to try again; the attachment's lock keeps it from being attached in
 // between.
-func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int64) (bool, error) {
+func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int64, removed func(context.Context, *sql.Tx) error) (bool, error) {
 	defer s.lock(id)()
 	var spaceID int64
 	err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL`,
@@ -1454,8 +1460,16 @@ func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int6
 			return err
 		}
 		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n > 0 && removed != nil {
+			if err := removed(ctx, tx); err != nil {
+				return err
+			}
+		}
 		gone = n > 0
-		return err
+		return nil
 	})
 	return gone, err
 }

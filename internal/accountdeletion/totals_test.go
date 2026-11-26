@@ -2,8 +2,12 @@ package accountdeletion
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
+
+	"taskto.ai/taskto/internal/access"
 )
 
 // purgedDetails is the account_purged event's details.
@@ -63,6 +67,66 @@ func TestPurgeTotalsInOneTry(t *testing.T) {
 	w.attachment(photoA, app, w.team.ID, w.leaver, 0)
 	w.putFile(w.team, app, photoA+".part", "half a picture")
 	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	got := w.purgedDetails()
+	if got["uploads_removed"] != float64(1) || got["documents_anonymized"] != float64(2) {
+		t.Errorf("uploads_removed = %v, documents_anonymized = %v, want 1 and 2", got["uploads_removed"], got["documents_anonymized"])
+	}
+}
+
+// stopsAfterKB does the rewrite and then fails, as a rewrite that published its new history and
+// stopped before it had cleaned up does; the next try finishes it and finds nothing to count.
+type stopsAfterKB struct {
+	Knowledge
+	stop bool
+}
+
+func (k *stopsAfterKB) AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(int) error) (int, error) {
+	n, err := k.Knowledge.AnonymizeAuthorsNoting(ctx, sp, emails, planned)
+	if err == nil && k.stop {
+		return n, errors.New("stopped after the new history was published")
+	}
+	return n, err
+}
+
+// stopsAfterApps removes the uploads and then fails, as a removal that stops partway does.
+type stopsAfterApps struct {
+	Apps
+	stop bool
+}
+
+func (a *stopsAfterApps) PurgeUploadsNoting(ctx context.Context, owner int64, removed func(context.Context, *sql.Tx) error) (int, error) {
+	n, err := a.Apps.PurgeUploadsNoting(ctx, owner, removed)
+	if err == nil && a.stop {
+		return n, errors.New("stopped after removing some")
+	}
+	return n, err
+}
+
+// The steps' own failures after their work was done: the counts are kept with the work, not with
+// what the failing call returned.
+func TestPurgeTotalsSurviveAStepThatFailsAfterItsWork(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	app, _ := w.newApp(w.team.ID, "Site visits")
+	w.attachment(photoA, app, w.team.ID, w.leaver, 0)
+	w.putFile(w.team, app, photoA+".part", "half a picture")
+	apps := &stopsAfterApps{Apps: w.apps, stop: true}
+	kb := &stopsAfterKB{Knowledge: w.kb, stop: true}
+	w.svc.SetApps(apps)
+	w.svc.o.Knowledge = kb
+	w.deleteAccount()
+
+	if err := w.svc.Purge(ctx, w.leaver); err == nil {
+		t.Fatal("the uploads' failure was passed over")
+	}
+	apps.stop = false
+	if err := w.svc.Purge(ctx, w.leaver); err == nil {
+		t.Fatal("the rewrite's failure was passed over")
+	}
+	kb.stop = false
 	if err := w.svc.Purge(ctx, w.leaver); err != nil {
 		t.Fatal(err)
 	}
