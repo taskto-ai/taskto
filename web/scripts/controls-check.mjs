@@ -29,8 +29,6 @@ export const ELEMENTS = ['button', 'select', 'input', 'textarea']
 // The hand-written controls a screen may keep: per file, how many of each element, and why no
 // component fits. A count, not a yes, so a new one in the same file still fails; an entry the file
 // no longer needs fails too, so the list stays true.
-const OUTSIDE_SHELL =
-  'a screen outside the shell (sign-in, the offline guards, the update banner), not yet rebuilt on the components: the rework of those screens takes these out, and this entry with them'
 export const ALLOWED = new Map([
   [
     'src/apps/PhotoInput.tsx',
@@ -56,7 +54,6 @@ export const ALLOWED = new Map([
         "a card on the board: the whole card (its title, badges, labels and who it is for, on several lines) is the button that opens it, which no button component's one-line shape holds",
     },
   ],
-  ['src/offline/ConfirmButton.tsx', { button: 3, reason: OUTSIDE_SHELL }],
 ])
 
 // The hand-written controls in a module's source: each element's name and line. `lang` is the

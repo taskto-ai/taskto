@@ -61,9 +61,8 @@ that needs one (a shadow, the lift) takes it from a role. **No colour literal is
 `web/src/ui/themes/`**: `web/scripts/css-check.mjs` fails on a hex colour, a colour function or a
 named colour in any other stylesheet's declarations.
 
-**The older names.** What is left of the old stylesheets (the screens outside the shell, the
-base's element rules in `ui/base.css`, Markdown outside the knowledge base, and the rules a screen
-still in the middle of its move keeps) still uses `--tt-surface`, `--tt-fg`, `--tt-radius` and a few
+**The older names.** What is left of the old stylesheets (the base's element rules in
+`ui/base.css`, the logo's proportions, and Markdown outside the knowledge base) still uses `--tt-surface`, `--tt-fg`, `--tt-radius` and a few
 others. `legacy.css` keeps each such name as an alias of its role or scale (`--tt-surface:
 var(--color-surface)`), and only those: `css-check` fails on an alias nothing reads (so a deleted one
 can't come back unread), and a test checks that every one left still resolves, to the value it had. New CSS uses the roles and scales; the file goes
@@ -75,7 +74,7 @@ with the last old rule.
 |---|---|
 | Space | `--space-1` 4px, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-10` 40, `-12` 48, `-16` 64 |
 | Type sizes | `--text-xs` 12px, `-sm` 13, `-md` 14 (the interface), `-lg` 16 (reading), `-xl` 20, `-2xl` 24 |
-| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for what the old stylesheets still draw (the base's fields, Markdown, the screens outside the shell) |
+| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for what the old stylesheets still draw (the base's fields, Markdown outside the knowledge base) |
 | Control height | `--control-sm` 28px, `--control-md` 36, `--control-touch` 44 (the touch target) |
 | Elevation | `--shadow-lift` and `--shadow-lift-hover` (the primary button's hard lift), `--shadow-pop` (a menu, a popover), `--shadow-dialog` |
 | Motion | `--duration-fast` 120ms, `-base` 160, `-slow` 240; `--ease-out`, `--ease-in-out`; all of it stops under `prefers-reduced-motion` |
@@ -122,8 +121,8 @@ better at small sizes. JetBrains Mono is for code, paths, commands and ids.
 | `--type-code` | JetBrains Mono | 13 / 20 | 400 | code, paths |
 
 Every screen in the shell sets its text by these roles. The old base's 15px text and heavy
-display-face headings reach only what the old stylesheets still draw (the screens outside the shell)
-and a bare element a screen writes itself, which is why a screen's heading is `Heading`.
+display-face headings reach only Markdown outside the knowledge base (a message, a card's
+description and comments) and a bare element a screen writes itself, which is why a screen's heading is `Heading`.
 
 ### The colour roles
 
@@ -271,7 +270,7 @@ dark-mode badge ended up white on salmon.
 | `web/src/ui/base.css` | `base`, and two parts in none | the elements (the page, headings, links, the focus ring, form fields) and three utilities (`tt-muted`, `tt-small`, `tt-error`); in no layer, what reaches every element on purpose and the touch screen's checkbox rules (below) |
 | `web/src/ui/<Name>.css` | `components` | a component's rules, beside `<Name>.tsx`, which imports it |
 | `web/src/<screen>/<Name>.css` | `screens` | a screen's own layout, beside the screen's components, which import it (`boards/boards.css`, `settings/Settings.css`) |
-| `web/src/legacy-shared.css`, `web/src/<screen>/<screen>.legacy.css`, `web/src/markdown.legacy.css` | none | the old stylesheet's rules that something still uses: the screens outside the shell (sign-in, the offline guards, the update banner: `auth`, `offline`, `pwa`), Markdown outside the knowledge base, and what a screen still in the middle of its move keeps. Nothing new goes in; each goes when its last user moves onto the components |
+| `web/src/legacy-shared.css`, `web/src/markdown.legacy.css` | none | the old stylesheet's rules that something still uses: the logo's proportions (`BrandLogo.tsx`), and the Markdown of a message, a card's description and its comments (the knowledge base's documents use the components' `ui-prose`). Nothing new goes in; each goes when its last user moves onto the components |
 | `web/src/styles.css` | | the list of `@import`s of the old stylesheets, in the order of the cascade, and nothing else |
 
 `web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components and
@@ -375,8 +374,8 @@ a `<button>`, an `<input>`, a `<select>` or a `<textarea>` of its own:
 `web/scripts/controls-check.mjs`, run with css-check (`pnpm --filter @taskto/web run css`), fails on
 one written outside `web/src/ui/`, found by parsing each module. Its `ALLOWED` list names the few
 files that may keep one, how many and why: a file picker, which only `<input type="file">` opens; a
-read-only checkbox in a rendered document; a board's card, whose whole surface is the button that
-opens it; and the screens outside the shell until they are rebuilt.
+read-only checkbox in a rendered document; and a board's card, whose whole surface is the button
+that opens it.
 
 - **One height per size.** Buttons, fields, selects and segmented controls of one size are one
   height (36px regular, 28px small), so they line up in a row; on a touch screen every one of
@@ -449,6 +448,11 @@ knowledge base, settings) is two panes, the detail a `Page` of its own.
   (`errorText`). Something off or unavailable is `tone="neutral"`, not the success colour.
 - **Lists** are `Rows` of `Row` (a title, a line of detail, a status badge, the actions) in a
   `Panel`; a table of many columns is `Table`.
+- **An open card** is a `Drawer` over its board, not modal: the board stays usable beside it. On a
+  wide window the columns keep the width they have with the card closed and lie under it; the
+  board's head (Add a card, the filters) stays clear of it; the columns' sideways scroll brings the
+  last one out from under it; the open card's tile, and a tile that takes the keyboard, are scrolled
+  beside it. Up to 1,024px the drawer takes the screen.
 
 ## Adding a screen
 
@@ -517,8 +521,8 @@ sections (Home, Conversations, Knowledge base, Boards, Apps), the current one ma
 its unread count; the pinned apps, in a group of their own, each with a small avatar; then, at the
 foot, Settings and the account (avatar, name and email), whose menu has the theme, the language,
 "Install the app" while it isn't installed, and log out. The page owns its title: the shell never
-repeats the section's name over it, except in the phone's bar, where the page's own heading may be
-scrolled away.
+repeats the section's name over it, not even in the phone's bar: the page's own title is the one
+place the section's name appears.
 
 - **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
 - **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's
@@ -531,8 +535,9 @@ scrolled away.
   gives a page with its own list and detail (conversations, the knowledge base, settings) the
   room for both; the labels would take a fifth of the width. The end to end suite
   (`web/e2e/app/shell.e2e.mjs`) checks in Chromium that every link of the rail has a name.
-- **Phone** (48rem and narrower): a slim bar with the menu button, the logo's mark and the current
-  section's name. The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
+- **Phone** (48rem and narrower): a slim bar with the menu button and the logo's mark, a landmark
+  named "App bar"; the section's name is the page's own title under it (in Settings, whose title is
+  the tab's, the line above it says "Settings"). The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
   the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
   closes it, and focus goes back to the button, or to the page when a link in it was followed.
 
@@ -546,9 +551,8 @@ cream, cream on night, as the website's `logo-dark.svg`); the dot and ".ai" are 
 The rail and the phone's bar show the mark alone: a square box crops the drawing to its first 64
 units.
 
-**The shell never overflows**, from 320px up, whatever the workspace is called. In the phone's bar
-the menu button and the mark keep their size and the section's name gives way (`min-inline-size:
-0`, an ellipsis). In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
+**The shell never overflows**, from 320px up, whatever the workspace is called. The phone's bar holds
+only the menu button and the mark, which keep their size. In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
 theirs and the workspace's name gives way the same way, with the whole name as the switcher's
 tooltip and in its accessible name; a long account name or email is cut the same way. Names
 people write (a workspace's, a person's, a pin's) keep their own direction (`dir="auto"`), so a

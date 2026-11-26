@@ -212,7 +212,6 @@ describe('the tokens', () => {
 // The names the stylesheet had before the tokens had two layers. They stay until the screens move.
 const OLD_NAMES = [
   'canvas',
-  'stone',
   'surface',
   'hover',
   'fg',
@@ -225,7 +224,6 @@ const OLD_NAMES = [
   'focus',
   'link',
   'logo-dot',
-  'danger',
   'clear-icon',
   'font',
   'display',
@@ -237,7 +235,6 @@ const OLD_NAMES = [
 // Their values before, resolved, for the colours: an alias must give the same colour.
 const OLD_COLORS: Record<string, [string, string]> = {
   canvas: ['#faf8f4', '#111110'],
-  stone: ['#f1efe9', '#181816'],
   surface: ['#ffffff', '#1b1b19'],
   hover: ['rgba(17, 17, 16, 0.05)', 'rgba(250, 248, 244, 0.07)'],
   fg: ['#111110', '#faf8f4'],
@@ -250,7 +247,6 @@ const OLD_COLORS: Record<string, [string, string]> = {
   focus: ['#111110', '#4cefa8'],
   link: ['#006b45', '#4cefa8'],
   'logo-dot': ['#00a86b', '#00a86b'],
-  danger: ['#b42318', '#ff8a82'],
 }
 
 // And the others, resolved as they were, light then dark: lengths, shadows, font stacks, the icon.

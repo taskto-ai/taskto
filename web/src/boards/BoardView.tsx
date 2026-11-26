@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react'
 import { api, type Card, type Space } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -105,9 +105,9 @@ export function BoardView({
     ;((column && focusables(column)[0]) ?? (board && focusables(board)[0]))?.focus()
   }, [cards.data, open])
 
-  // The open card's own tile, brought into view beside the drawer (the board made room for the
-  // drawer in the same commit), once per opening: when it opens, or when the board's cards arrive
-  // for a card opened from its address.
+  // The open card's own tile, brought into view beside the drawer (the columns' scroll box ends at
+  // the drawer's edge, boards.css), once per opening: when it opens, or when the board's
+  // cards arrive for a card opened from its address.
   const shownTile = useRef<number | null>(null)
   useEffect(() => {
     if (open === null) {
@@ -120,6 +120,26 @@ export function BoardView({
     shownTile.current = open
     tile.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [open, cards.data])
+
+  // What takes the keyboard in the columns is in their visible box: Chromium scrolls a nested box
+  // for a Tab, not always for a focus() from a script (assistive technology's included), and with a
+  // card open the box ends at the drawer's edge, so something focused past it would be out of sight.
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const hasCards = cards.data !== undefined
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the columns are drawn only once the cards have come (hasCards)
+  useEffect(() => {
+    const columns = columnsRef.current
+    if (!columns) return
+    const onFocus = (e: FocusEvent) => {
+      if (!(e.target instanceof HTMLElement)) return
+      const box = columns.getBoundingClientRect()
+      const here = e.target.getBoundingClientRect()
+      if (here.left < box.left || here.right > box.right)
+        e.target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    }
+    columns.addEventListener('focusin', onFocus)
+    return () => columns.removeEventListener('focusin', onFocus)
+  }, [hasCards])
 
   // The same element around the board whatever it shows, so its head isn't drawn anew (and its
   // menu closed) when the cards arrive.
@@ -167,7 +187,7 @@ export function BoardView({
       <div role="status" className="ui-board-said">
         <VisuallyHidden key={said.n}>{said.text}</VisuallyHidden>
       </div>
-      <div className="ui-board-columns">
+      <div ref={columnsRef} className="ui-board-columns" style={{ '--board-columns': COLUMNS.length } as CSSProperties}>
         {COLUMNS.map((col) => (
           <BoardColumn
             key={col.id}

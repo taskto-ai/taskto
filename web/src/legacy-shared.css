@@ -1,7 +1,5 @@
-/* The rules several screens share, from before the component library: buttons, lists, panels
-   and rows, notices, labels, the editor and the form pattern. Each is what a component in ui/
-   replaces (a button, a list, a panel …): when a component takes over a class's last use,
-   its rules go from here. Nothing new goes in this file.
+/* What is left of the rules several screens shared before the component library: the logo's.
+   Nothing new goes in this file; it goes when the logo's rules move to a stylesheet of its own.
 
    These rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
    and their order with the other files is styles.css's (docs/design.md, "Where styles live").
@@ -19,53 +17,4 @@
 
 .tt-logo .tt-logo-dot {
   fill: var(--tt-logo-dot);
-}
-
-/* Buttons. */
-
-.tt-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  min-height: 2.4rem;
-  padding: 0.4rem 1rem;
-  border: 1px solid var(--tt-line-strong);
-  /* Pills, as on the website. */
-  border-radius: 999px;
-  background: var(--tt-surface);
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.tt-button:hover:not(:disabled) {
-  background: var(--tt-stone);
-}
-
-.tt-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.tt-icon {
-  flex-shrink: 0;
-}
-
-/* Fingers: every control is at least 44px each way (--tt-touch). */
-@media (pointer: coarse) {
-  .tt-button {
-    min-height: var(--tt-touch);
-  }
-}
-
-/* Editing the knowledge base and boards, and search. */
-
-a.tt-button {
-  color: inherit;
-  text-decoration: none;
-}
-
-.tt-danger {
-  color: var(--tt-danger);
-  border-color: var(--tt-danger);
 }
