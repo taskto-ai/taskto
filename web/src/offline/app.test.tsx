@@ -605,3 +605,24 @@ test('one sign-out asks about a draft and then the records, each once; Cancel at
   expect(ask).toHaveBeenCalledTimes(3)
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
 })
+
+test('"Discard and sign out" with a logout the server refuses discards nothing: the records are still there', async () => {
+  fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 500, body: { error: 'internal error', code: 'internal' } },
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  logOut()
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // Nothing of this device was touched before the server confirmed: the record waits as it was.
+  expect(await runtime.store.listItems()).toHaveLength(1)
+  expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
+})

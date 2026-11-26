@@ -3,7 +3,7 @@
 // What api() does for the session (session.ts): the account it names, and the 401 it acts on.
 
 import { afterEach, expect, test, vi } from 'vitest'
-import { api, SESSION_LOST } from './api'
+import { ACCOUNT_CHANGED_EVENT, api, SESSION_LOST } from './api'
 import { beginSession, endSession, SessionEnded, sameSession, sessionUser, steps } from './session'
 import { fakeFetch } from './test/fakes'
 
@@ -82,4 +82,26 @@ test('steps go on while the session and the screen are there, and stop at the fi
   expect(t.check(1)).toBe(1)
   endSession()
   expect(() => t.check(2)).toThrow(SessionEnded)
+})
+
+test("a refusal as another account's, answered after the same account signed in again, says nothing to the new session", async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'POST /api/x': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 409, body: { error: 'another account', code: 'session_account_changed' } })
+      }),
+  })
+  beginSession(1)
+  const old = api('/api/x', { method: 'POST', body: {} }).catch(() => {})
+  await vi.waitFor(() => expect(answer).not.toBeNull())
+  // Signed out, someone else in and out, and the first account in again: a session of its own.
+  endSession()
+  beginSession(1)
+  const changed = vi.fn()
+  window.addEventListener(ACCOUNT_CHANGED_EVENT, changed)
+  answer()
+  await old
+  window.removeEventListener(ACCOUNT_CHANGED_EVENT, changed)
+  expect(changed).not.toHaveBeenCalled()
 })
