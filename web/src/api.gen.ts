@@ -63,6 +63,35 @@ export type AppEffectList = {
   failed: number
 }
 
+export type AppIntegrationApproval = {
+  id: number
+  app_id: number
+  app_name: string
+  space_id: number
+  space_name: string
+  space_kind: string
+  slot: string
+  kind: string
+  contract: AppsContract
+  contract_hash: string
+  status: string
+  live: boolean
+  integration: AppsBoundIntegration | null
+  requested_by: AppsAuthor | null
+  requested_at: string
+  decided_by: AppsAuthor | null
+  decided_at: string | null
+}
+
+export type AppIntegrationApprovalList = {
+  approvals: AppIntegrationApproval[]
+  next_cursor: string | null
+}
+
+export type AppIntegrationStatus = {
+  slots: AppsSlotStatus[]
+}
+
 export type AppRecord = {
   id: number
   revision: number
@@ -122,8 +151,80 @@ export type AppsAvailableDefault = {
   widget?: string
 }
 
+export type AppsBoundIntegration = {
+  id: number
+  name: string
+  display_name: string
+  usable: boolean
+}
+
 export type AppsCollection = {
   fields: AppsField[]
+}
+
+export type AppsContract = {
+  version: number
+  kind: string
+  operations: string[]
+  sends: string[]
+  currencies: string[]
+  events: string[]
+  writes: AppsContractWrite[]
+  only_if: AppsContractRule[]
+  links: AppsContractLink[]
+  handlers: AppsContractHandler[]
+  fields: AppsContractField[]
+}
+
+export type AppsContractField = {
+  name: string
+  type: string
+  required?: boolean
+  required_when?: AppsRule
+  max_length?: number
+  min?: number
+  max?: number
+  options?: string[]
+  format?: string
+  editable?: boolean
+  max_files?: number
+  max_bytes?: number
+}
+
+export type AppsContractHandler = {
+  event: string
+  sets: AppsContractSet[]
+}
+
+export type AppsContractLink = {
+  action: string
+  action_kind: string
+  amount_field: string
+  describes: string[]
+  describes_id: boolean
+  currency?: string
+  currency_field?: string
+  currency_options?: string[]
+  url_field: string
+  id_field: string
+  when?: AppsRule
+}
+
+export type AppsContractRule = {
+  event: string
+  rule: AppsRule
+}
+
+export type AppsContractSet = {
+  field: string
+  value?: unknown
+  from?: string
+}
+
+export type AppsContractWrite = {
+  field: string
+  values: unknown[]
+  from: string[]
 }
 
 export type AppsContributions = {
@@ -142,6 +243,7 @@ export type AppsDefinition = {
   actions: Record<string, AppsAction>
   summaries?: Record<string, AppsSummary>
   contributions?: AppsContributions
+  integrations?: Record<string, AppsIntegrationSlot>
 }
 
 export type AppsEffect = {
@@ -158,6 +260,13 @@ export type AppsEffect = {
   path?: string
   content?: string
   route?: string
+  integration?: string
+  amount_field?: string
+  currency?: string
+  currency_field?: string
+  description?: string
+  url_field?: string
+  id_field?: string
 }
 
 export type AppsEffectDetail = {
@@ -195,6 +304,21 @@ export type AppsHomeRelease = {
   requires: string[]
 }
 
+export type AppsIntegrationHandler = {
+  only_if?: AppsRule
+  set: Record<string, AppsIntegrationSet>
+}
+
+export type AppsIntegrationSet = {
+  value?: unknown
+  from?: string
+}
+
+export type AppsIntegrationSlot = {
+  kind: string
+  on?: Record<string, AppsIntegrationHandler>
+}
+
 export type AppsOfflineAction = {
   kind: string
   screen?: string
@@ -229,6 +353,23 @@ export type AppsScreen = {
   root: string
   record?: boolean
   components: unknown[] | null
+}
+
+export type AppsSlotLive = {
+  contract_hash: string
+  status: string
+  usable: boolean
+}
+
+export type AppsSlotStatus = {
+  slot: string
+  kind: string
+  contract: AppsContract
+  contract_hash: string
+  status: string
+  approval_id: number | null
+  integration: AppsBoundIntegration | null
+  live: AppsSlotLive | null
 }
 
 export type AppsSummary = {
@@ -465,6 +606,7 @@ export type Integration = {
   disabled_at: string | null
   spaces: number[]
   other_spaces: number
+  approval_spaces: number[]
   created_at: string
   updated_at: string
   last_event_at: string | null

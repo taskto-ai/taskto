@@ -1,7 +1,9 @@
 {
   "app": {
     "loading": "Loading…",
-    "unreachable": "Can't reach the server: {error}",
+    "unreachableTitle": "Can't reach the server",
+    "unreachableHelp": "Check your connection, or ask whoever runs this server whether it is up, then try again.",
+    "unreachableDetail": "What went wrong: {error}",
     "tryAgain": "Try again"
   },
   "apps": {
@@ -81,7 +83,8 @@
         "create_card": "Create a card",
         "update_card": "Move a card",
         "create_document": "Create a document",
-        "open_route": "Open a place"
+        "open_route": "Open a place",
+        "create_payment_link": "Create a payment link"
       },
       "status": {
         "pending": "Waiting",
@@ -594,7 +597,6 @@
       "intro": "Your password was right. Enter the code from your authenticator app to finish logging in.",
       "introReset": "Your new password is set. Enter the code from your authenticator app to finish logging in.",
       "code": "Code from your app, or a recovery code",
-      "busy": "Checking…",
       "submit": "Log in",
       "back": "Back to the password",
       "toLogin": "Go to the login",
@@ -604,7 +606,6 @@
     "login": {
       "forgot": "Forgot your password? Ask a workspace admin for a reset link.",
       "title": "Log in",
-      "busy": "Logging in…",
       "submit": "Log in",
       "forgotByEmail": "Forgot your password?"
     },
@@ -612,7 +613,6 @@
       "title": "Reset your password",
       "intro": "Enter your account's email address. If an account has it, we'll email a link to choose a new password.",
       "submit": "Email me a link",
-      "busy": "Sending…",
       "sentTitle": "Check your email",
       "sent": "If an account has {email}, a link to choose a new password is on its way.",
       "sentHelp": "The link works once and expires. If nothing arrives in a few minutes, look in the spam folder, or ask a workspace admin for a reset link.",
@@ -627,27 +627,29 @@
       "hint": "At least 12 characters.",
       "again": "New password again",
       "mismatch": "The passwords don't match.",
-      "setting": "Setting…",
       "submit": "Set the password"
     },
     "email": "Email",
     "password": "Password",
     "yourName": "Your name",
     "passwordHint": "At least {min} characters.",
+    "show": "Show",
+    "hide": "Hide",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
     "setup": {
       "title": "Set up this server",
-      "intro": "Create the owner's account. The setup token is in the server's log, on the line with <code>setup_token=</code>, printed while no account exists. It changes at every start.",
+      "lede": "Create the owner's account and the first workspace.",
       "token": "Setup token",
+      "tokenHint": "It's in the server's log, on the line with <code>setup_token=</code>, printed while no account exists. It changes at every start.",
       "workspaceName": "Workspace name",
       "defaultWorkspace": "Home",
-      "busy": "Setting up…",
       "submit": "Create the owner"
     },
     "invite": {
       "title": "Join a workspace",
       "incomplete": "This invite link is incomplete: open the whole link you were sent.",
       "loggedInAs": "You're logged in as {email}. The invite works for the address it was sent to.",
-      "joining": "Joining…",
       "join": "Join the workspace",
       "logOut": "Log out, to use another account",
       "ssoIntro": "You were invited. Sign in with your provider, using the address the invite was sent to.",
@@ -655,7 +657,6 @@
       "loginIntro": "Log in to the account of the address the invite was sent to.",
       "loginSubmit": "Log in and join",
       "newIntro": "You were invited. Create your account: your email is the address the invite was sent to.",
-      "creating": "Creating…",
       "create": "Create the account"
     },
     "accountDeleted": "Your account was deleted. It is switched off now and will be erased for good on {date}; an operator of this server can cancel that until then."
@@ -972,6 +973,15 @@
     "integration_currency_invalid": "Choose 1 to {max} currencies from the list.",
     "too_many_integrations": "You can have at most {max} integrations in a workspace: remove one first.",
     "integration_in_use": "An app still uses this integration: switch it off instead of removing it.",
+    "app_integration_unapproved": "An admin hasn't approved what this app asks of the integration \"{slot}\" in its current form, or the integration it was connected to is switched off or no longer allowed in this space. Ask an admin to approve it.",
+    "app_integration_slot_unknown": "This draft doesn't declare an integration called \"{slot}\".",
+    "app_integration_contract_changed": "The app changed since you read what it asks of the integration. Read it again and ask for that.",
+    "app_integration_not_pending": "This request was already decided.",
+    "app_integration_not_approved": "Only an approval can be revoked.",
+    "app_integration_approval_not_found": "Approval request not found.",
+    "app_integration_kind_mismatch": "This integration can't be used for {kind}.",
+    "app_integration_disabled": "This integration is switched off.",
+    "app_integration_space_not_allowed": "This integration isn't allowed in the app's space yet.",
     "base_url_invalid": "Enter an http or https URL of up to {max} characters, without a query or fragment.",
     "base_url_credentials": "The URL can't contain a user name or password: put the key in the API key field.",
     "base_url_insecure": "Use https: a key is only sent over plain http to this machine.",
@@ -1661,6 +1671,9 @@
       "spacesHint": "Apps in the spaces you choose may use this account, once you approve them. Another person's private space can't be chosen.",
       "privateSpace": "{name} (private)",
       "archivedSpace": "{name} (archived)",
+      "approvalSpace": "{name} (by an app's approval)",
+      "approvalSpaceNote": "Allowed by an app's approval: it ends when the approval does, unless you keep it.",
+      "keepSpace": "Keep {name} after the approval ends",
       "otherSpaces_one": "And {count} private space of another member, which you can't see.",
       "otherSpaces_other": "And {count} private spaces of other members, which you can't see.",
       "removeQuestion": "Remove {name}? Its credentials are deleted with it."
@@ -1953,6 +1966,11 @@
         "integration_disabled": "Integration switched off",
         "integration_enabled": "Integration switched on",
         "integration_spaces_changed": "Integration's spaces changed",
+        "integration_spaces_kept": "Integration's spaces kept after an approval",
+        "app_integration_requested": "App's use of an integration requested",
+        "app_integration_approved": "App's use of an integration approved",
+        "app_integration_rejected": "App's use of an integration turned down",
+        "app_integration_revoked": "App's use of an integration revoked",
         "data_export_started": "Data export started",
         "workspace_export_started": "Workspace export started",
         "server_update_requested": "Update requested",
@@ -1972,7 +1990,8 @@
         "access_token": "Access token",
         "provider_account": "Model provider account",
         "shared_cli_account": "Shared CLI account",
-        "integration": "Integration"
+        "integration": "Integration",
+        "app_integration_approval": "App integration approval"
       },
       "details": {
         "account": "Account",
@@ -2022,9 +2041,13 @@
         "mentions_anonymized": "Mentions anonymized",
         "added": "Spaces added",
         "removed": "Spaces removed",
+        "kept": "Spaces kept",
         "mode": "Mode",
         "webhook_secret_set": "Webhook secret set",
-        "webhook_secret_changed": "Webhook secret changed"
+        "webhook_secret_changed": "Webhook secret changed",
+        "app_id": "App number",
+        "integration_id": "Integration number",
+        "space_allowed": "Space allowed too"
       },
       "values": {
         "admin": "Admin",
@@ -2752,7 +2775,6 @@
       "body_one": "{count} record on this device hasn’t reached the server. Signing out now would lose it unless you sync or discard it.",
       "body_other": "{count} records on this device haven’t reached the server. Signing out now would lose them unless you sync or discard them.",
       "sync": "Sync now",
-      "syncing": "Syncing…",
       "discard": "Discard and sign out",
       "cancel": "Cancel",
       "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",

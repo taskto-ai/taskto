@@ -84,9 +84,16 @@ const (
 	IntegrationDisabled      = "integration_disabled"
 	IntegrationEnabled       = "integration_enabled"
 	IntegrationSpacesChanged = "integration_spaces_changed"
+	IntegrationSpacesKept    = "integration_spaces_kept"
 
 	// An operator asks the host's updater to update the server now (Settings → About).
 	ServerUpdateRequested = "server_update_requested"
+
+	// The approval of an app's use of an integration (internal/apps).
+	AppIntegrationRequested = "app_integration_requested"
+	AppIntegrationApproved  = "app_integration_approved"
+	AppIntegrationRejected  = "app_integration_rejected"
+	AppIntegrationRevoked   = "app_integration_revoked"
 )
 
 // Target types.
@@ -99,4 +106,6 @@ const (
 	TargetProvider      = "provider_account"
 	TargetSharedAccount = "shared_cli_account"
 	TargetIntegration   = "integration"
+	// TargetAppIntegration is an approval of an app's use of an integration.
+	TargetAppIntegration = "app_integration_approval"
 )

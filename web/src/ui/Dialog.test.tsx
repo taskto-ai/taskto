@@ -289,6 +289,38 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload this page' }))
   })
 
+  test('one that is not dismissible, reopened by the browser, gives the focus back to its chosen button', async () => {
+    render(
+      <Dialog
+        open
+        onClose={() => {}}
+        title="Records of another account"
+        role="alertdialog"
+        dismissible={false}
+        actions={
+          <>
+            <Button variant="danger">Discard them</Button>
+            <Button data-autofocus>Sign out</Button>
+          </>
+        }
+      />,
+    )
+    // A real browser that reopens a dialog focuses its first button, here the destructive one;
+    // jsdom moves no focus, so the test puts it there.
+    screen.getByRole('button', { name: 'Discard them' }).focus()
+    await act(async () => {
+      dialog().close()
+      await new Promise((r) => setTimeout(r))
+    })
+    expect(dialog().open).toBe(true)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Sign out' }))
+  })
+
+  test('its top is not a banner of the page', () => {
+    render(<Dialog open onClose={() => {}} title="Rename the app" />)
+    expect(screen.queryByRole('banner')).toBeNull()
+  })
+
   test('a press outside closes it only when asked to', () => {
     const onClose = vi.fn()
     const { rerender } = render(<Dialog open onClose={onClose} title="Move the card" />)

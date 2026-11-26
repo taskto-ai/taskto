@@ -94,6 +94,10 @@ const (
 type Platform struct {
 	Boards *boards.Service
 	Docs   *knowledge.Store
+	// ProviderKinds says which kinds of integration (KindPayments) a provider of the integrations'
+	// registry does, so an admin can't bind a slot to one that doesn't. It is a function, not the
+	// registry, because package integrations is built on this one. Without it no slot can be bound.
+	ProviderKinds func(provider string) []string
 }
 
 // WithPlatform gives the service what its effects act on, and returns it.
@@ -204,7 +208,9 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	}
 	var queued []int
 	for i, e := range action.Effects {
-		if e.applies(def.Collection, ap.data) {
+		// A payment link is asked of an integration, not done to boards and documents: the entries
+		// for it are the integrations' (their table admits the kind), so none is queued here.
+		if e.Kind != EffectCreatePaymentLink && e.applies(def.Collection, ap.data) {
 			queued = append(queued, i)
 		}
 	}
