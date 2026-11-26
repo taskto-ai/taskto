@@ -240,6 +240,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// With none set (the default) the check does nothing.
 	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
 	kb.SetQuota(quotas.KnowledgeCheck())
+	// A write that had resolved a space before its account was purged is refused once the rows are
+	// gone, whatever the order it arrives in.
+	kb.SetSpaceCheck(spaceRowExists(sqlDB))
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err
@@ -592,4 +595,16 @@ func dictationService(cfg config.Config, sqlDB *sql.DB, key *serverkey.Key, kb *
 func integrationEgress(cfg config.Config) *egress.Policy {
 	p := cfg.IntegrationEgressPolicy()
 	return &p
+}
+
+// spaceRowExists is knowledge.Store.SetSpaceCheck's check: whether the space's row is still there.
+func spaceRowExists(sqlDB *sql.DB) func(sp access.Space) (bool, error) {
+	return func(sp access.Space) (bool, error) {
+		var one int
+		err := sqlDB.QueryRowContext(context.Background(), `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ?`, sp.ID, sp.WorkspaceID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return err == nil, err
+	}
 }

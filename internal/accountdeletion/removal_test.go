@@ -2,6 +2,7 @@ package accountdeletion
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
@@ -63,5 +64,36 @@ func TestAWriteBetweenTheRemovalAndTheRowsDoesNotMakeThePrivateSpaceAgain(t *tes
 	exec(t, w.db, `INSERT INTO spaces (id, workspace_id, kind, name) VALUES (?, ?, 'shared', 'Reused')`, w.private.ID, w.ws)
 	if _, err := w.kb.Put(ctx, w.private, "fresh.md", []byte("fresh"), "", author, ""); err != nil {
 		t.Fatalf("a write to a space made with a purged space's ID: %v", err)
+	}
+}
+
+// The writer that reaches the space only after the purge has deleted the rows and lifted the
+// removal mark (a request that had resolved the space before) is refused too, with the server's
+// check of the space's row set as the server sets it.
+func TestAWriterThatArrivesAfterThePurgeIsRefused(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.kb.SetSpaceCheck(func(sp access.Space) (bool, error) {
+		var one int
+		err := w.db.QueryRow(`SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ?`, sp.ID, sp.WorkspaceID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return err == nil, err
+	})
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	author := knowledge.Author{Name: "Late", Email: "late@example.com"}
+	_, err := w.kb.Put(ctx, w.private, "late.md", []byte("late"), "", author, "")
+	if !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("a write after the purge: %v, want the space not found", err)
+	}
+	if _, err := os.Stat(w.private.Dir(w.dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the purged space's directory was made again: %v", err)
+	}
+	if _, err := w.kb.Put(ctx, w.otherPrv, "after.md", []byte("after"), "", author, ""); err != nil {
+		t.Fatalf("another account's space after the purge: %v", err)
 	}
 }

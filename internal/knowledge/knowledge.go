@@ -213,6 +213,9 @@ type Store struct {
 	// quota is the storage quotas' check (SetQuota); nil for none.
 	quota func(sp access.Space, adding int64) (release func(), err error)
 
+	// spaceExists is SetSpaceCheck's; nil for none.
+	spaceExists func(sp access.Space) (bool, error)
+
 	// afterMeasure is for tests: it runs once a space's first measurement is made, before it is stored.
 	afterMeasure func(sp access.Space)
 }
@@ -255,6 +258,34 @@ func New(dataDir string, opts Options) *Store {
 
 // MaxFileSize is the largest file the Store accepts.
 func (s *Store) MaxFileSize() int64 { return s.opts.MaxFileSize }
+
+// SetSpaceCheck sets the check of a space's row that every access to its files makes once it has
+// entered the space (access.EnterSpace): false is a space that is gone, which is refused as not
+// found. It closes the gap a removal leaves once the purge has deleted the rows and lifted its
+// mark (access.ForgetRemoved), for a writer that had resolved the space before. It is for the
+// server's start, before the Store is used; without one, the mark is all there is.
+func (s *Store) SetSpaceCheck(exists func(sp access.Space) (bool, error)) { s.spaceExists = exists }
+
+// enter holds sp's directory against removal until leave is called, and refuses a space that is
+// removed, or whose row is gone, with access.ErrNotFound. The space's lock, when the caller takes one,
+// comes before the gate.
+func (s *Store) enter(sp access.Space) (leave func(), err error) {
+	leave, err = access.EnterSpace(s.dataDir, sp)
+	if err != nil {
+		return nil, err
+	}
+	if s.spaceExists != nil {
+		ok, err := s.spaceExists(sp)
+		if err != nil || !ok {
+			leave()
+			if err == nil {
+				err = access.ErrNotFound
+			}
+			return nil, err
+		}
+	}
+	return leave, nil
+}
 
 func (s *Store) state(spaceID int64) *spaceState {
 	s.mu.Lock()
@@ -910,7 +941,7 @@ func (s *Store) read(sp access.Space, fn func(*repo) error) error {
 	defer st.mu.RUnlock()
 	// A space removed while this waited for the lock is gone: opening it would make its
 	// directory again.
-	leave, err := access.EnterSpace(s.dataDir, sp)
+	leave, err := s.enter(sp)
 	if err != nil {
 		return err
 	}
@@ -954,7 +985,7 @@ func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bo
 	defer st.mu.Unlock()
 	// A space removed while this waited for the lock is gone: writing to it would make its
 	// directory, and a repository in it, again (RemoveSpace).
-	leave, err := access.EnterSpace(s.dataDir, sp)
+	leave, err := s.enter(sp)
 	if err != nil {
 		return err
 	}

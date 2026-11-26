@@ -298,7 +298,7 @@ func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) 
 	// finding its directory made again under it. After ensureRepo, which takes the space's lock:
 	// the lock comes before the gate. The staged file is adopted later under the lock, which
 	// refuses a space that was removed since.
-	leave, err := access.EnterSpace(s.dataDir, sp)
+	leave, err := s.enter(sp)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +360,7 @@ func (s *Store) ensureRepo(sp access.Space) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	leave, err := access.EnterSpace(s.dataDir, sp)
+	leave, err := s.enter(sp)
 	if err != nil {
 		return err
 	}

@@ -213,15 +213,23 @@ func (s *Service) filesRoot(ctx context.Context, spaceID int64) (root *os.Root, 
 	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id FROM spaces WHERE id = ?`, spaceID).Scan(&workspace); err != nil {
 		return nil, nil, err
 	}
-	return s.openSpaceFiles(access.Space{ID: spaceID, WorkspaceID: workspace})
+	return s.openSpaceFiles(ctx, access.Space{ID: spaceID, WorkspaceID: workspace})
 }
 
-func (s *Service) openSpaceFiles(sp access.Space) (*os.Root, func(), error) {
+// openSpaceFiles enters sp and opens its directory. The space's row is read again once inside: a
+// removal that finished, and whose mark was lifted because the rows were gone (access.ForgetRemoved),
+// between the caller's read of the row and here would otherwise let this make the directory again.
+func (s *Service) openSpaceFiles(ctx context.Context, sp access.Space) (*os.Root, func(), error) {
 	leave, err := access.EnterSpace(s.dataDir, sp)
 	if errors.Is(err, access.ErrNotFound) {
 		return nil, nil, sql.ErrNoRows
 	}
 	if err != nil {
+		return nil, nil, err
+	}
+	var one int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ?`, sp.ID, sp.WorkspaceID).Scan(&one); err != nil {
+		leave()
 		return nil, nil, err
 	}
 	root, err := access.OpenRoot(s.dataDir, sp)
@@ -540,7 +548,7 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if errors.Is(err, errNotPicture) || errors.Is(err, errNotPNG) {
 		// Not a picture (or, for a signature, not a PNG), so not an attachment: it is removed, and the
 		// client starts over.
-		if derr := s.deleteAttachment(ctx, id, appID); derr != nil {
+		if derr := s.deleteAttachment(ctx, id, appID, root); derr != nil {
 			slog.Warn("apps: removing a file that isn't a picture", "app", appID, "err", derr)
 		}
 		return Attachment{}, err
@@ -700,7 +708,11 @@ func (s *Service) abandonUpload(ctx context.Context, sp access.Space, a Actor, a
 
 // deleteAttachment removes an attachment that isn't attached, whoever's: the server's own clearing
 // of what can't be used.
-func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64) error {
+//
+// held is the space's directory when the caller has it open already (and so has entered the space,
+// access.EnterSpace): the files go through it, since entering again while a removal waits for the
+// caller to leave would wait for the removal, which waits for the caller. Nil opens it.
+func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64, held *os.Root) error {
 	var spaceID int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND row_id IS NULL RETURNING space_id`, id).Scan(&spaceID)
@@ -711,6 +723,12 @@ func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64) 
 	})
 	if err != nil || spaceID == 0 {
 		return err
+	}
+	if held != nil {
+		if err := unlinkIn(held, appID, id); err != nil {
+			slog.Warn("apps: removing attachment files", "app", appID, "err", err)
+		}
+		return nil
 	}
 	s.removeFiles(ctx, spaceID, appID, id)
 	return nil
@@ -735,6 +753,11 @@ func (s *Service) unlinkFiles(ctx context.Context, spaceID, appID int64, id stri
 		return err
 	}
 	defer done()
+	return unlinkIn(root, appID, id)
+}
+
+// unlinkIn deletes an attachment's files from root, all of them tried.
+func unlinkIn(root *os.Root, appID int64, id string) error {
 	var errs []error
 	for _, suffix := range []string{"", ".part", ".thumb", ".thumb.tmp", ".tmp"} {
 		if err := root.Remove(fileName(appID, id, suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -1263,7 +1286,7 @@ func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 }
 
 func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.Time) error {
-	root, done, err := s.openSpaceFiles(sp)
+	root, done, err := s.openSpaceFiles(ctx, sp)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // removed since the list of spaces: nothing left to sweep
 	}

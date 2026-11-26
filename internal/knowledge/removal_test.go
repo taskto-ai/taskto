@@ -154,3 +154,37 @@ func TestRemovingASpaceNeverAffectsAnothersWrites(t *testing.T) {
 		t.Fatalf("a space made with a removed one's ID: %q", got)
 	}
 }
+
+// A space whose row is gone is refused even when its removal mark was lifted (the purge lifts it
+// once the rows are deleted): the writer that had resolved the space before reaches a fresh gate.
+func TestASpaceWhoseRowIsGoneIsRefusedWithoutTheRemovalMark(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	sp := writable(1)
+	must[Result](t)(s.Put(ctx, sp, "a.md", []byte("x"), "", alice, ""))
+	rows := map[int64]bool{1: true, 2: true}
+	var mu sync.Mutex
+	s.SetSpaceCheck(func(sp access.Space) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return rows[sp.ID], nil
+	})
+	if err := s.RemoveSpace(sp); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	delete(rows, 1) // the rows are deleted ...
+	mu.Unlock()
+	access.ForgetRemoved(dataDir, sp) // ... and the mark lifted
+
+	_, err := s.Put(ctx, sp, "late.md", []byte("late"), "", bob, "")
+	wantErr(t, err, access.ErrNotFound)
+	_, err = s.Read(ctx, sp, "a.md", "")
+	wantErr(t, err, access.ErrNotFound)
+	_, err = s.PutFile(ctx, sp, "big.bin", bytes.NewReader(make([]byte, 64)), "", bob, "")
+	wantErr(t, err, access.ErrNotFound)
+	noDir(t, dataDir, sp)
+
+	// Another space, whose row is there, is not affected.
+	other := writable(2)
+	must[Result](t)(s.Put(ctx, other, "a.md", []byte("x"), "", alice, ""))
+}
