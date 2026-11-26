@@ -8,9 +8,9 @@ import (
 )
 
 // Fault is a failure the fake injects into the next matching requests: Stripe being down, rate
-// limiting, refusing, or going silent. Build one with the constructors (ServerError,
-// RateLimited, Timeout, ConnectionReset, Refusal, Unauthorized) and adjust it with the methods;
-// every method returns a changed copy.
+// limiting, refusing, or going silent. Build one with the constructors (ServerError, Unavailable,
+// RateLimited, LockTimeout, KeyInUse, Timeout, ConnectionReset, Refusal, Unauthorized) and adjust it
+// with the methods; every method returns a changed copy.
 //
 // By default a fault strikes before the operation runs: nothing is created and nothing is
 // remembered under the request's idempotency key (Stripe doesn't save a result for a request
@@ -18,7 +18,8 @@ import (
 // after: the operation took effect, but the client sees the failure. That is the case that
 // matters for idempotency: a retry with the same key must find the object, not make another.
 // An error answer is then saved under the key as Stripe does for a 500; a timeout or a dropped
-// connection saves the success.
+// connection saves the success. KeptUnderKey saves a fault that strikes before the operation ran:
+// execution began, made nothing, and the key answers the failure from then on.
 type Fault struct {
 	// Status is the HTTP status of the answer (500 when 0). It is unused with Hang and Drop.
 	Status int
@@ -32,6 +33,10 @@ type Fault struct {
 	Drop bool
 	// After makes the fault strike after the operation ran.
 	After bool
+	// Kept, for a fault that strikes before the operation ran, saves its answer under the request's
+	// idempotency key as Stripe does for a request whose execution began and failed without making
+	// anything: the same key gets the same answer again, and nothing is ever made under it.
+	Kept bool
 
 	method, path string
 	times        int // 0 means once; negative means forever
@@ -73,6 +78,24 @@ func Unauthorized() Fault {
 	return Fault{Status: http.StatusUnauthorized, Type: "invalid_request_error",
 		Message: "Invalid API Key provided: sk_test_****"}
 }
+
+// KeyInUse is the 409 Stripe answers while another request with the same idempotency key is still
+// running: refused before it ran, so asking again later under the key is safe.
+func KeyInUse() Fault {
+	return Fault{Status: http.StatusConflict, Type: "invalid_request_error", Code: "idempotency_key_in_use",
+		Message: "There is currently another in-progress request using this idempotency key."}
+}
+
+// LockTimeout is a 429 for an object lock that timed out: refused before it ran.
+func LockTimeout() Fault {
+	return Fault{Status: http.StatusTooManyRequests, Type: "invalid_request_error", Code: "lock_timeout",
+		Message: "This object cannot be accessed right now because another API request is using it."}
+}
+
+// KeptUnderKey makes a fault that strikes before the operation ran save its answer under the
+// request's idempotency key: execution began, made nothing, and the key answers the same failure
+// from then on.
+func (f Fault) KeptUnderKey() Fault { f.Kept = true; return f }
 
 // AfterExecuting makes the fault strike after the operation took effect.
 func (f Fault) AfterExecuting() Fault { f.After = true; return f }

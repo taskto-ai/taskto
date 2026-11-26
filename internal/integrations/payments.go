@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -20,19 +21,22 @@ import (
 
 // PaymentProvider is the part of a provider that makes payment links.
 type PaymentProvider interface {
-	// CreatePaymentLink asks the provider for a hosted page on which one payer pays one amount.
-	// Its failures are *CallError, which never holds the provider's words: they could name a
-	// customer, and what the provider says is not for a person or a record to read.
+	// CreatePaymentLink asks the provider for a hosted page on which one payer pays one amount, in one
+	// request that is never sent twice by the HTTP client itself. Its failures are *CallError, which
+	// never holds the provider's words: they could name a customer, and what the provider says is not
+	// for a person or a record to read. A failure is NotExecuted only when the request certainly never
+	// ran (it never left, or the provider documents the answer as given before execution); any other
+	// is OutcomeUnknown.
 	CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error)
-	// FindPaymentLink looks for the object an earlier call for the same reference may have made
-	// without its answer being noted: a call that failed with an indeterminate result (a 5xx, a
-	// timeout, a dropped connection) may have been executed, and a call under a new key would make a
-	// second object. since is when the reference was first made; nothing of it was created before.
-	// found is false only when the provider was read in full and has no such object that a payer can
-	// use: a read that couldn't be finished is an error, never "not found". expired says that it
-	// saw an object of the reference that no payer can use and that was never paid (an expired
-	// Checkout Session): the earlier call's outcome is then known, and another may be made. Its
-	// failures are *CallError that are never KeyKept.
+	// FindPaymentLink looks for the object a call under one key may have made without its answer
+	// being noted: an object that carries l.Token, the key's own token, and nothing of any other key.
+	// A call whose outcome is unknown (a 5xx, a timeout, a dropped connection, any error after the
+	// request may have run) may have made one, and a call under a new key would make a second. since
+	// is when the reference was first made; nothing of it was created before. found is false only when
+	// the provider was read in full and has no such object that a payer can use: a read that couldn't
+	// be finished is an error, never "not found". expired says that it saw an object of the token that
+	// no payer can use and that was never paid (an expired Checkout Session): the key's outcome is then
+	// known. Its failures are *CallError.
 	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found, expired bool, err error)
 	// LinkState reads, from the provider, whether the object (the one a call answered or a lookup
 	// found) can take a payment now. What a call answered, and above all what the provider replays for
@@ -47,16 +51,15 @@ type PaymentProvider interface {
 }
 
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
-// exact, in the currency's smallest unit; the token is the ref's; the two addresses are the
+// exact, in the currency's smallest unit; the token is the key's; the two addresses are the
 // server's own pages, never a definition's, and both are empty when the server has no public
 // address: the payer then stays on a confirmation page the provider hosts.
 type NewLink struct {
-	// Token is the reference the provider echoes back with the payment and, with KeySeq, the
-	// idempotency key of the call.
+	// Token is the key's own token: the idempotency key of the call, the reference the provider echoes
+	// back with the payment, and what a lookup for the key's object matches. Every key of a ref has
+	// its own (the first key's is the ref's), so what one key made is never taken for another's.
 	Token string
-	// KeySeq is how many times the provider answered an error to this reference: from the second
-	// try on, a call that was answered with a saved failure has a key of its own (Provider keeps
-	// the failure under the key and answers it again to the same one).
+	// KeySeq is the number of the key among the ref's (0 for the first). It is not part of the key.
 	KeySeq      int
 	AmountMinor int64
 	// Currency is the code, upper case.
@@ -69,13 +72,8 @@ type NewLink struct {
 	CancelURL  string
 }
 
-// IdempotencyKey is the key the call is sent with: the token on the first try.
-func (l NewLink) IdempotencyKey() string {
-	if l.KeySeq == 0 {
-		return l.Token
-	}
-	return l.Token + "-" + strconv.Itoa(l.KeySeq)
-}
+// IdempotencyKey is the key the call is sent with: the key's own token.
+func (l NewLink) IdempotencyKey() string { return l.Token }
 
 // Link is what the provider made.
 type Link struct {
@@ -111,8 +109,8 @@ const (
 	// CallCredentials: the provider doesn't accept the integration's key.
 	CallCredentials
 	// CallLookupIncomplete: the provider was read, every read worked, and the account holds more
-	// than a lookup reads, so it can't be said whether an earlier try made the object. Asking again
-	// reads the same, so the call is not tried again: a person settles it.
+	// than a lookup reads, so it can't be said whether the key made the object. It tells nothing: a
+	// key whose outcome was unknown stays so.
 	CallLookupIncomplete
 	// CallSettled: the lookup found an object of the reference that was paid, or that no payer can
 	// use any more for a reason that doesn't say it wasn't paid (a completed session, a Payment Link
@@ -125,14 +123,18 @@ type CallError struct {
 	Kind CallKind
 	// Status is the HTTP status answered, 0 for none.
 	Status int
-	// KeyKept is whether the provider may have kept this failure under the call's idempotency key,
-	// so that asking again under the same key would get the same failure.
-	KeyKept bool
-	// OutcomeUnknown is whether the call may have been executed, and what it made, if anything, is not
-	// known: a 5xx, a request that may have reached the provider and got no answer, an answer that
-	// could not be read. The provider documents it as indeterminate and says to resolve the original
-	// outcome before another call under a new key (https://docs.stripe.com/error-low-level#server-errors),
-	// so the reference gets no new key until it is resolved.
+	// NotExecuted, for a call that makes an object, is that the request certainly never ran: it never
+	// left (no connection was made), or the provider answered with a refusal it documents as given
+	// before execution, which keeps nothing under the key (a rate limit, a lock timeout, the key in use
+	// by a request still running). The same key is asked again later, never a new one.
+	NotExecuted bool
+	// OutcomeUnknown, for a call that makes an object, is that it may have run and what it made, if
+	// anything, is not known: every failure after the request may have left that isn't NotExecuted
+	// (any 4xx or 5xx, 408 and 409 included, a timeout, a dropped connection, an answer that can't be
+	// read). The provider says to resolve the original outcome before a call under a new key
+	// (https://docs.stripe.com/error-low-level#server-errors), and may keep even a 4xx under the key
+	// once execution began (https://docs.stripe.com/error-low-level#content-errors), so the reference
+	// gets no new key until it is resolved.
 	OutcomeUnknown bool
 }
 
@@ -208,8 +210,8 @@ var (
 // and in the address as ?client_reference_id=, the documented way a link's sessions carry one. A
 // link doesn't expire by itself.
 //
-// Either way the parameters are the same on every try of one reference, so Stripe's idempotency
-// (the token as the key) finds the first call's object.
+// Either way the parameters are the same on every call under one key, so Stripe's idempotency (the
+// key's token as the key) answers a repeated call with what the first one made.
 //
 // Stripe's documentation relied on, at the pinned API version (StripeAPIVersion):
 //   - Create a Checkout Session, https://docs.stripe.com/api/checkout/sessions/create: success_url
@@ -255,18 +257,20 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 
 	req, err := c.NewRequest(ctx, http.MethodPost, c.BaseURL(stripeHost)+endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return Link{}, &CallError{Kind: CallRefused}
+		return Link{}, &CallError{Kind: CallRefused, NotExecuted: true}
 	}
 	stripeHeaders(req, creds)
 	req.Header.Set("Idempotency-Key", l.IdempotencyKey())
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := c.Do(req)
+	resp, sent, err := sendOnce(c, req)
 	if err != nil {
-		// The call may or may not have been made: unless the connection was never made, the request
-		// may have reached the provider, which then holds what it made and says nothing of it. Nothing
-		// of err is kept: it can quote the address.
-		return Link{}, &CallError{Kind: CallUnreachable, OutcomeUnknown: !notSent(err)}
+		// Unless no connection was ever made, the request may have reached the provider, which then
+		// holds what it made and says nothing of it. Nothing of err is kept: it can quote the address.
+		if !sent {
+			return Link{}, &CallError{Kind: CallUnreachable, NotExecuted: true}
+		}
+		return Link{}, &CallError{Kind: CallUnreachable, OutcomeUnknown: true}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
@@ -293,12 +297,23 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 	return link, nil
 }
 
-// notSent says whether a failed call certainly never reached the provider: the connection was not
-// made (the address didn't resolve, nothing listened, the egress policy refused it). Any other
-// failure may have come after the request was written.
-func notSent(err error) bool {
-	var op *net.OpError
-	return errors.As(err, &op) && op.Op == "dial"
+// sendOnce sends a request that makes an object exactly once, and says whether it may have left.
+//
+// Go's transport sends a request again by itself, on a new connection, when a reused one breaks
+// before the answer and the request is "replayable": its body can be read again (GetBody) and it has an
+// Idempotency-Key header, which ours has. The first copy may have reached the provider and run, and
+// the error returned is then the second's, a failed dial that says nothing left. So the body is made
+// one that can't be read again, which stops every such resend (only a request that wrote nothing at
+// all could be, and with a body it isn't either). And whether anything may have left is told by the
+// connection, not by the error: sent is false only if no connection was ever handed to the request,
+// so not a byte of it was written.
+func sendOnce(c *Client, req *http.Request) (*http.Response, bool, error) {
+	req.GetBody = nil
+	var sent atomic.Bool
+	trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { sent.Store(true) }}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	resp, err := c.Do(req)
+	return resp, sent.Load(), err
 }
 
 func stripeHeaders(req *http.Request, creds Credentials) {
@@ -342,7 +357,7 @@ const (
 	// reads, newest first: the object looked for is among the newest, since its call was one of
 	// the last the integration's account saw (a Checkout Session is also bounded by its creation
 	// time). A lookup that reaches the last page with more behind it finds nothing out: it fails
-	// with CallLookupIncomplete, which is not tried again (the next one reads the same pages).
+	// with CallLookupIncomplete, which tells nothing of the key's outcome.
 	findPageSize = 100
 	findMaxPages = 20
 	// findSkew is how far before the ref's creation a session may have been created by the
@@ -350,15 +365,15 @@ const (
 	findSkew = 10 * time.Minute
 )
 
-// FindPaymentLink lists what the account made and picks the object that has the ref's token. Stripe
+// FindPaymentLink lists what the account made and picks the object that has the key's token. Stripe
 // documents the outcome of a request answered with a 5xx as indeterminate, "the operation might
 // have produced side effects even though you received an error", and says not to "retry with a
 // new idempotency key until you've resolved the original outcome", by retrieving the object and
 // matching it on a local identifier kept in its metadata
 // (https://docs.stripe.com/error-low-level#server-errors). A 500 is saved under the idempotency
-// key and answered again to that key (https://docs.stripe.com/api/idempotent_requests), which is
-// why the next call has a key of its own. So before it, the object a lost call made is looked
-// for, at the pinned API version (StripeAPIVersion):
+// key and answered again to that key (https://docs.stripe.com/api/idempotent_requests), so asking
+// again under the key can say nothing more. So the object a lost call made is looked for, by the
+// key's own token, at the pinned API version (StripeAPIVersion):
 //   - List Checkout Sessions, https://docs.stripe.com/api/checkout/sessions/list: filters by
 //     created, status, payment_intent and payment_link, and none by client_reference_id or
 //     metadata, so the sessions created since the ref was made are read and matched on
@@ -578,7 +593,7 @@ func stripeGet(ctx context.Context, creds Credentials, c *Client, pathAndQuery s
 	return body, resp.StatusCode, nil
 }
 
-// stripeLookupFailure classifies an answer to a read: never KeyKept, since a read has no key.
+// stripeLookupFailure classifies an answer to a read, which makes nothing.
 func stripeLookupFailure(status int) error {
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return &CallError{Kind: CallCredentials, Status: status}
@@ -586,32 +601,37 @@ func stripeLookupFailure(status int) error {
 	return &CallError{Kind: CallUnreachable, Status: status}
 }
 
-// stripeFailure classifies an answer that isn't a success, from its status and the kind of error
-// Stripe names, never from its words.
+// stripeFailure classifies an answer to a call that makes an object and isn't a success, from its
+// status and the code Stripe names, never from its words. Only what Stripe documents as refused before
+// the request ran is NotExecuted:
+//   - 429 with the code rate_limit (https://docs.stripe.com/rate-limits) or lock_timeout, an object lock
+//     that timed out (https://docs.stripe.com/rate-limits#object-lock-timeouts);
+//   - 409 with the code idempotency_key_in_use: another request with the same key is still running
+//     (https://docs.stripe.com/error-codes#idempotency-key-in-use). That request may make the object, so
+//     the same key is asked again later, and its answer is what the first one made.
+//
+// Every other answer leaves the outcome unknown. A 5xx is indeterminate
+// (https://docs.stripe.com/error-low-level#server-errors); Stripe saves the result of a request whose
+// execution began under its key, a 4xx included (https://docs.stripe.com/error-low-level#content-errors,
+// https://docs.stripe.com/api/idempotent_requests), so a refusal may follow side effects; a 429 of
+// another kind, a 409 that is not the key in use and a 408 say nothing documented of execution.
 func stripeFailure(status int, body []byte) error {
 	var e struct {
 		Error struct {
-			Type string `json:"type"`
+			Code string `json:"code"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &e)
 	switch {
+	case status == http.StatusTooManyRequests && (e.Error.Code == "rate_limit" || e.Error.Code == "lock_timeout"),
+		status == http.StatusConflict && e.Error.Code == "idempotency_key_in_use":
+		return &CallError{Kind: CallUnreachable, Status: status, NotExecuted: true}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return &CallError{Kind: CallCredentials, Status: status}
-	case status == http.StatusTooManyRequests || status == http.StatusConflict || status == http.StatusRequestTimeout:
-		// Not executed: asked again under the same key, it runs.
-		return &CallError{Kind: CallUnreachable, Status: status}
-	case status >= 500:
-		// Stripe saves a failure of an executed request under its key: the same key gets it again.
-		return &CallError{Kind: CallUnreachable, Status: status, KeyKept: true, OutcomeUnknown: true}
-	case e.Error.Type == "idempotency_error":
-		return &CallError{Kind: CallRefused, Status: status, KeyKept: true}
+		return &CallError{Kind: CallCredentials, Status: status, OutcomeUnknown: true}
+	case status >= 500 || status == http.StatusTooManyRequests || status == http.StatusConflict || status == http.StatusRequestTimeout:
+		return &CallError{Kind: CallUnreachable, Status: status, OutcomeUnknown: true}
 	}
-	// Any other refusal. Stripe saves the result of a request it executed under its key, a 4xx
-	// included (only a request that failed validation before it ran is not saved), so the same key may
-	// answer the same refusal again: a retry of the entry looks for what the call made and takes a key
-	// of its own, not this one.
-	return &CallError{Kind: CallRefused, Status: status}
+	return &CallError{Kind: CallRefused, Status: status, OutcomeUnknown: true}
 }
 
 // AccountID is the id of the account the key belongs to: Stripe's "Retrieve account" with no id

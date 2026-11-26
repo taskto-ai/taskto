@@ -10,6 +10,7 @@ import type { App, AppDraft, IntegrationStatus, Space } from '../api'
 import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
 import { shop, slot } from '../test/integrations'
+import { EffectItems } from './AppEffects'
 import { PublishPanel } from './AppPublish'
 import { WorkspaceAdmin } from './admin'
 
@@ -770,6 +771,41 @@ test('the slots show the shape of a list while they are read', async () => {
   expect(loading.some((l) => l.textContent?.includes('Loading'))).toBe(true)
   release?.()
   await screen.findByText('Not asked for yet')
+})
+
+test('a preview says the payment link it would ask for as a sum, and never as an amount it guessed', () => {
+  const effect = (detail: { amount?: string; currency?: string; title?: string }) =>
+    ({
+      id: 0,
+      operation: '',
+      position: 0,
+      kind: 'create_payment_link',
+      action: 'send',
+      record: 1,
+      record_revision: 1,
+      status: 'simulated',
+      attempts: 0,
+      next_attempt_at: null,
+      error: null,
+      detail,
+      done_at: null,
+      can_retry: false,
+    }) as const
+  render(<EffectItems effects={[effect({ amount: '120.00', currency: 'EUR' })]} label="Preview" />)
+  const item = within(screen.getByRole('list', { name: 'Preview' })).getByRole('listitem')
+  expect(item.textContent).toContain('Create a payment link')
+  expect(item.textContent).toContain('Simulated')
+  expect(item.textContent).toContain('€120.00')
+  cleanup()
+  // No amount, or no currency: the preview says where the amount comes from, never a sum, a title or nothing.
+  for (const detail of [{}, { currency: 'EUR' }, { amount: '120.00' }, { title: 'Invoice A-1', currency: 'EUR' }]) {
+    render(<EffectItems effects={[effect(detail)]} label="Preview" />)
+    const only = within(screen.getByRole('list', { name: 'Preview' })).getByRole('listitem')
+    expect(within(only).getByText('Amount from the record')).toBeTruthy()
+    expect(only.textContent).not.toContain('Invoice A-1')
+    expect(only.textContent).not.toMatch(/\d/)
+    cleanup()
+  }
 })
 
 test('publishing stays closed when the status of the outside services can’t be read', async () => {

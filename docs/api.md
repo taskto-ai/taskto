@@ -225,9 +225,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
 | `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now: nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
 | `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
-| `integration_lookup_incomplete` | — | A failed `create_payment_link` entry whose earlier try's link could not be looked for in full (the account holds more objects than a lookup reads): nothing is made. An admin looks in the provider's account for an object of the reference (a Payment Link's `metadata.taskto_ref`, a Checkout Session's `client_reference_id`) and reconciles it as above before running the action again; deactivating other links does not help, since the lookup reads inactive ones too. |
-| `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing else is made (a second link could be paid twice), and the entry looked for 6 hours without finding one. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
-| `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): the provider didn't say whether an earlier call made the link, so only a lookup is repeated, for at most 6 hours, and nothing is made meanwhile. |
+| `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing under another key is made (a second link could be paid twice), and for 6 hours the entry looked for the call's object by its own token and asked again under the same key without learning it. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
+| `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): a call may have run at the provider and nothing said what it made, so only the call's object is looked for and the call asked again under the same key, for at most 6 hours, and nothing under another key is made meanwhile. Failed reads and calls in that time don't end it early or use up the entry's tries. |
 | `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
@@ -3774,27 +3773,28 @@ above the integration's ceiling fails with `integration_amount_above_max` (`para
 reference made, for a refused amount.
 
 **The link is made once.** Each entry has one **reference** (`integration_refs`, unique by the
-entry's number) with a random 128-bit token, the provider's idempotency key and the reference the
-provider echoes back with the payment, and it keeps the provider's answer. An entry done again after
-a crash finds its reference: with the provider's object noted, the provider is not asked again; with
-none, it is asked again under the same key, which the provider answers with the object it already
-made. A call whose **outcome is unknown** (a `5xx`, which the provider documents as indeterminate; a
-request that may have reached it and got no answer) never gets a new key by itself: the entry only
-looks for an object of the reference's token, with a growing wait (`integration_link_lookup_pending`),
-and adopts the one it finds; if none shows within **6 hours** the entry fails with
-`integration_outcome_unknown`, and an admin checks the provider's account and either has the entry
-retried once the link is visible (which adopts it) or confirms that none exists
-([below](#confirm-that-no-payment-link-exists)), which allows exactly one new key. Nothing is saved as
-the link before its state is read from the provider and a payer can use it (an expired session is never
-given); a lookup that worked but can't see all the account holds
-fails the entry with `integration_lookup_incomplete`. A reference keeps the provider account and the
-pages of its first try: after the integration's key is replaced by another account's, an unfinished
-reference's entry fails with `integration_account_changed` (so does a key of the same account's other
-mode, test or live), and a reference made under another integration than the slot's, finished or
-not, is not used (`integration_changed`). A retry of a failed reference looks for what the failed call may have made and
-moves on to a key of its own before it calls again, and so does a try that looks and finds only an
-expired Checkout Session (the key would answer with that dead session); an object of the reference
-that was paid fails the entry with `integration_link_already_paid`. A newer entry for the same record and fields
+entry's number), which keeps the provider's answer, and the reference has **keys**
+(`integration_ref_attempts`): each an idempotency key with a random 128-bit token of its own, which the
+call puts in the object and the payment echoes back (the first key's token is the reference's). Every
+call is **written ahead** on its key before it leaves, and that record is never taken back. A key is
+resolved only by an answer whose object was then read at the provider, by a lookup that finds an object
+carrying that key's own token, or by an answer the provider documents as given before the call ran
+(a `429` `rate_limit` or `lock_timeout`, a `409` `idempotency_key_in_use`), after which the same key is
+asked again, never a new one. Anything else, any other `4xx` or `5xx`, a timeout, a dropped connection,
+a crash, leaves the key's **outcome unknown**, and the reference then never gets a new key by itself:
+each try looks for the key's object by its token and asks again under the same key while the provider
+keeps it (the provider answers with what the first call made), with a growing wait
+(`integration_link_lookup_pending`) that failed reads don't end; if nothing resolves it within **6
+hours** the entry fails with `integration_outcome_unknown`, and an admin checks the provider's account
+and either has the entry retried once the link is visible (which adopts it) or confirms that none exists
+([below](#confirm-that-no-payment-link-exists)), the only way to a new key. Nothing is saved as the link
+before its state is read from the provider and a payer can use it: a key whose object expired unpaid is
+accounted for, and the reference moves on to the next key by itself. A reference keeps the provider
+account and the pages of its first try: after the integration's key is replaced by another account's,
+an unfinished reference's entry fails with `integration_account_changed` (so does a key of the same
+account's other mode, test or live), and a reference made under another integration than the slot's,
+finished or not, is not used (`integration_changed`). An object of a key that was paid fails the entry
+with `integration_link_already_paid`. A newer entry for the same record and fields
 supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
@@ -4418,9 +4418,10 @@ integration.
 
 Admin only, body `{}`. For a payment link whose entry failed with `integration_outcome_unknown`: the
 admin checked the provider's account for an object of the reference (a Payment Link's
-`metadata.taskto_ref`, a Checkout Session's `client_reference_id`) and found none. Allows **exactly one**
-new key for the reference and queues the entry again as it was, run as the user who acted with their
-access then; the next try still looks before it calls. Recorded in the audit log
+`metadata.taskto_ref`, a Checkout Session's `client_reference_id`, holding any of the reference's
+tokens) and found none. The key whose outcome was unknown is recorded as abandoned (its record stays),
+**exactly one** new key is allowed for the reference, and the entry is queued again as it was, run as
+the user who acted with their access then. Recorded in the audit log
 (`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
 integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
 entry isn't waiting for this decision (not failed with that code, the link was found, or it was

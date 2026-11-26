@@ -118,7 +118,8 @@
         "intro": "Esta ação colocaria em andamento:",
         "none": "Esta ação não colocaria nada em andamento.",
         "wouldFail": "Falharia para você: {error}"
-      }
+      },
+      "paymentLinkNoAmount": "Valor vindo do registro"
     },
     "roles": {
       "open": "Papéis",
@@ -1189,7 +1190,6 @@
     "integration_provider_unreachable": "O provedor de pagamentos não respondeu. Tente de novo em alguns minutos.",
     "integration_account_changed": "Este link de pagamento foi iniciado em outra conta do provedor de pagamentos, porque a chave da integração foi trocada. Um administrador precisa verificar essa conta primeiro: se o link anterior foi pago, nada deve ser recriado; se não, ele deve ser impedido de receber pagamento antes de a ação ser executada de novo.",
     "integration_changed": "Este link de pagamento foi criado em outra integração de pagamentos que não a que este app usa agora. Um administrador precisa verificar se esse link foi pago e, se não, impedi-lo de receber pagamento antes de a ação ser executada de novo.",
-    "integration_lookup_incomplete": "A conta do provedor de pagamentos tem links de pagamento demais para o servidor conferir se uma tentativa anterior já criou este; por isso nenhum foi criado. Um administrador precisa procurar nessa conta um link deste pagamento e resolvê-lo (pago: nada é recriado; não pago: impedi-lo de receber pagamento) antes de a ação ser executada de novo.",
     "integration_link_already_paid": "Uma tentativa anterior deste link de pagamento foi paga ou não pode mais receber pagamento (foi paga, foi encerrada por uma pessoa ou atingiu o limite), então nenhum link novo foi criado. Um administrador precisa conciliar esse pagamento na conta do provedor de pagamentos antes de a ação ser executada de novo.",
     "integration_outcome_unknown": "O provedor de pagamentos nunca informou se criou este link de pagamento, então nenhum outro foi criado: um segundo link poderia ser pago duas vezes. Um administrador precisa verificar, na conta do provedor, se há um link deste pagamento. Se houver, tente este pagamento de novo; se não houver, o administrador confirma que nenhum link existe e um novo é criado.",
     "integration_link_lookup_pending": "O provedor de pagamentos não informou se criou este link de pagamento. O servidor continua procurando por ele, e não cria outro, por algumas horas.",

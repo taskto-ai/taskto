@@ -320,23 +320,27 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	}
 	rec.Form = form
 
+	key := r.Header.Get("Idempotency-Key")
+	fp := r.Method + " " + r.URL.Path + "?" + form.Encode()
+	if e, ok := s.idem[key]; ok && s.clock.Now().Sub(e.at) >= idemTTL {
+		delete(s.idem, key) // forgotten: the request runs as a new one
+	}
 	fault := s.peekFault(r)
 	if fault != nil && !fault.After {
 		s.useFault(fault)
 		rec.Faulted = true
-		return fault.reply()
+		fr := fault.reply()
+		if _, saved := s.idem[key]; fault.Kept && r.Method == http.MethodPost && key != "" && !saved && !fr.drop && !fr.hang {
+			s.idem[key] = &idemEntry{fingerprint: fp, reply: fr.clone(), at: s.clock.Now()}
+		}
+		return fr
 	}
 
-	key := r.Header.Get("Idempotency-Key")
 	var rp reply
 	switch {
 	case r.Method == http.MethodPost && key != "":
 		if len(key) > 255 {
 			return invalid("", "Keys for idempotent requests can only be up to 255 characters.", "")
-		}
-		fp := r.Method + " " + r.URL.Path + "?" + form.Encode()
-		if e, ok := s.idem[key]; ok && s.clock.Now().Sub(e.at) >= idemTTL {
-			delete(s.idem, key) // forgotten: the request runs as a new one
 		}
 		if e, ok := s.idem[key]; ok {
 			if e.fingerprint != fp {

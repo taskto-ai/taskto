@@ -66,12 +66,13 @@ CREATE INDEX app_effects_by_record ON app_effects (record_id, id);
 
 -- One row per payment link the server asked a provider for.
 --
--- token is 128 random bits: the idempotency key of the call that makes the link and the reference
--- the provider echoes back with the payment, so a payment is found by what the server issued and
--- never by anything the provider's side says of a record. effect_id is unique: an outbox entry has
--- one reference, so an entry done again after a crash finds it and never makes a second link. The
--- entry may be cleaned up while the payment is still open, so the reference outlives it: effect_id
--- is only forgotten then (an entry's number is never given again).
+-- token is 128 random bits: the token of the ref's first key (its row in integration_ref_attempts,
+-- seq 0), which is that call's idempotency key and the reference the provider echoes back with the
+-- payment, so a payment is found by what the server issued and never by anything the provider's side
+-- says of a record. effect_id is unique: an outbox entry has one reference, so an entry done again
+-- after a crash finds it and never makes a second link. The entry may be cleaned up while the payment
+-- is still open, so the reference outlives it: effect_id is only forgotten then (an entry's number is
+-- never given again).
 --
 -- Deleting an app or a record deletes its references with it, as they take their payments' history
 -- with them. An integration that made links can't be deleted (the store answers that it is in
@@ -87,18 +88,14 @@ CREATE TABLE integration_refs (
     -- What the provider made, once it has answered: its object's id and the address the payer opens.
     provider_object_id TEXT,
     url                TEXT,
-    -- The amount asked for in the currency's smallest unit (exact, never rounded) and its currency.
+    -- The amount asked for in the currency's smallest unit (exact, never rounded) and its currency:
+    -- what the entry asks, every time (its payload is fixed when it is queued).
     amount_minor       INTEGER NOT NULL CHECK (amount_minor > 0),
     currency           TEXT NOT NULL CHECK (length(currency) = 3),
-    -- How many times the provider answered with an error that it may have kept under the key: the
-    -- next call uses a key of its own (a provider that saved a failure answers it again to the same
-    -- key), so a call whose answer never came back is the only one that is repeated under its key.
+    -- The number of the ref's current key (integration_ref_attempts.seq). It moves on only from a key
+    -- whose outcome is known and left nothing a payer can use (its object was seen expired and never
+    -- paid), or that an admin confirmed made nothing.
     key_seq            INTEGER NOT NULL DEFAULT 0 CHECK (key_seq >= 0),
-    -- The highest key_seq a call was made under (-1: none yet). A key a call was made under may hold the
-    -- provider's saved answer to it, a failure or an object that has expired since, which the same key
-    -- would answer again, so a try that found no object of the reference moves on from a key that was
-    -- used and not from one that was not.
-    key_called_seq     INTEGER NOT NULL DEFAULT -1 CHECK (key_called_seq >= -1),
     -- The provider's account the reference was made under (read from the provider with the integration's
     -- key when the reference was made) and the mode of that key (test or live: one account has both,
     -- with the same id, and what a test key made is not in the live objects), and the shape of the
@@ -111,16 +108,6 @@ CREATE TABLE integration_refs (
     account_mode       TEXT NOT NULL DEFAULT '',
     success_url        TEXT NOT NULL DEFAULT '',
     cancel_url         TEXT NOT NULL DEFAULT '',
-    -- A lookup for an object of the reference must finish before any call: set when a call was
-    -- refused (a refusal may be kept under its key too) and cleared only by a lookup that read the
-    -- provider in full, so a try that ends before its lookup does can't be followed by one that skips it.
-    lookup_required    INTEGER NOT NULL DEFAULT 0 CHECK (lookup_required IN (0, 1)),
-    -- When the outcome of a call became unknown: a 5xx the provider keeps under the key, or a request
-    -- that may have reached it and got no answer. The provider may still make the object, so the
-    -- reference gets no new key while this is set: only the lookup is repeated, for a bounded time, and
-    -- then an admin decides (an admin who confirms that no link exists allows exactly one new key, which
-    -- clears it). NULL: the outcome is known.
-    outcome_unknown_at TEXT,
     -- Only forward: creating, then open, then one of paid, expired, failed (and paid, then refunded).
     state              TEXT NOT NULL DEFAULT 'creating' CHECK (state IN ('creating', 'open', 'paid', 'expired', 'failed', 'refunded')),
     created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -129,6 +116,43 @@ CREATE TABLE integration_refs (
     next_poll_at       TEXT,
     polls              INTEGER NOT NULL DEFAULT 0 CHECK (polls >= 0),
     UNIQUE (integration_id, provider_object_id)
+) STRICT;
+
+-- One row per idempotency key of a ref: written before the first call under the key goes out, and never
+-- deleted (the write-ahead log of the calls that make objects; internal/integrations paymentlink.go).
+--
+-- token is the key's own 128 random bits: the call's idempotency key and the reference it puts in the
+-- object (client_reference_id, metadata[taskto_ref]), so a lookup for what this key made matches only
+-- its own object and never another key's of the same ref. The first key's token is the ref's.
+--
+-- sends counts the calls written ahead under the key (each before its request leaves), clean_sends
+-- those the provider answered as refused before it executed them. A key whose sends exceed its
+-- clean_sends, with no outcome, may have made an object nobody has seen: its outcome is unknown, and
+-- the ref gets no new key until it is resolved, by an answer whose object was read at the provider, by
+-- a lookup that finds an object carrying the token, or by an admin who confirms that none exists.
+-- first_sent_at is when the provider's idempotency window for the key began at the earliest (a call
+-- under the key is repeated, which the provider answers with what it kept, only within it), and
+-- unknown_since when the outcome became unknown (the reconciliation's six hours run from it); both are
+-- cleared only when every call under the key was refused before it ran, which keeps nothing under it.
+--
+-- outcome: made (its object is the ref's link), expired (its object was seen expired and never paid:
+-- the ref may take the next key), settled (its object was paid or can't be used for a reason that
+-- doesn't say it wasn't: a person reconciles it, and no other key is taken), abandoned (an admin
+-- confirmed that it made nothing: the ref takes the next key). object_id and url are the object an
+-- answer named, kept before its state is read, so a try that can't read it doesn't lose it.
+CREATE TABLE integration_ref_attempts (
+    ref_id        INTEGER NOT NULL REFERENCES integration_refs (id) ON DELETE CASCADE,
+    seq           INTEGER NOT NULL CHECK (seq >= 0),
+    token         TEXT NOT NULL UNIQUE CHECK (length(token) = 32),
+    sends         INTEGER NOT NULL DEFAULT 0 CHECK (sends >= 0),
+    clean_sends   INTEGER NOT NULL DEFAULT 0 CHECK (clean_sends >= 0 AND clean_sends <= sends),
+    first_sent_at TEXT,
+    unknown_since TEXT,
+    outcome       TEXT CHECK (outcome IS NULL OR outcome IN ('made', 'expired', 'settled', 'abandoned')),
+    object_id     TEXT CHECK (object_id IS NULL OR length(object_id) BETWEEN 1 AND 255),
+    url           TEXT CHECK (url IS NULL OR length(url) BETWEEN 1 AND 2048),
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (ref_id, seq)
 ) STRICT;
 
 -- The newest create_payment_link entry of each field a link is written to, by app, record and field. An

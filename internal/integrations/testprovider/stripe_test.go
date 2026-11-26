@@ -550,6 +550,30 @@ func TestAFailureAfterTheWorkWasDone(t *testing.T) {
 	})
 }
 
+// A failure kept under the key before anything was made (execution began and failed) is answered
+// again to the same key, and nothing is ever made under it; a key in use and a lock timeout are refused
+// before anything ran, and keep nothing.
+func TestAFailureKeptUnderTheKeyMakesNothing(t *testing.T) {
+	f, _, a := newFake(t)
+	form := sessionForm(12000, "eur", "r")
+	f.Fail(testprovider.Refusal("amount_too_small").KeptUnderKey())
+	first := a.post("/v1/checkout/sessions", form, "key-c")
+	retry := a.post("/v1/checkout/sessions", form, "key-c")
+	if first.status != 400 || retry.status != 400 || retry.header.Get("Idempotent-Replayed") != "true" || len(f.Sessions()) != 0 {
+		t.Fatalf("first %d, retry %d replayed %q, sessions %d", first.status, retry.status, retry.header.Get("Idempotent-Replayed"), len(f.Sessions()))
+	}
+	for _, fault := range []testprovider.Fault{testprovider.KeyInUse(), testprovider.LockTimeout()} {
+		f.Fail(fault)
+		refused := a.post("/v1/checkout/sessions", form, "key-d")
+		if _, code := refused.errorCode(); code != fault.Code || refused.status != fault.Status {
+			t.Fatalf("refused: %d %q", refused.status, code)
+		}
+	}
+	if made := a.post("/v1/checkout/sessions", form, "key-d"); made.status != 200 || made.header.Get("Idempotent-Replayed") != "" || len(f.Sessions()) != 1 {
+		t.Fatalf("after the refusals: %d, sessions %d", made.status, len(f.Sessions()))
+	}
+}
+
 func TestASessionThroughItsStates(t *testing.T) {
 	f, clock, a := newFake(t)
 	retrieve := func(id string) testprovider.Session {

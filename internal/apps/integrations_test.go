@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -1727,6 +1728,46 @@ func TestTheQueueRevealsNothingAboutOtherSpaces(t *testing.T) {
 	expect(t, rec, http.StatusOK)
 	if got := decode[IntegrationApproval](t, rec); got.SpaceGrant != "settings" {
 		t.Fatalf("the decision's reply: space_grant = %q", got.SpaceGrant)
+	}
+}
+
+// A preview says the amount a payment link would ask for, exactly as the money rules read the sample
+// record's number (decimal text with the currency's decimals), and in the currency the record chose or
+// else the effect's own. It never guesses one: no amount is shown for a record with none, a null, text
+// that reads like a number, or a number that isn't finite.
+func TestThePreviewedLinkNeverGuessesAnAmount(t *testing.T) {
+	def := invoices(t)
+	e := def.Actions["send"].Effects[0]
+	e.CurrencyField, e.Currency = "currency", "USD"
+	for name, tc := range map[string]struct {
+		data     map[string]any
+		amount   string // "" for none shown
+		currency string
+	}{
+		"a number":                  {map[string]any{"total": 12.5, "currency": "EUR"}, "12.50", "EUR"},
+		"a whole number":            {map[string]any{"total": float64(7), "currency": "EUR"}, "7.00", "EUR"},
+		"cents":                     {map[string]any{"total": 120.1}, "120.10", "USD"},
+		"a json number":             {map[string]any{"total": json.Number("3.25")}, "3.25", "USD"},
+		"no amount":                 {map[string]any{"currency": "EUR"}, "", "EUR"},
+		"a null amount":             {map[string]any{"total": nil}, "", "USD"},
+		"text for a number":         {map[string]any{"total": "120"}, "", "USD"},
+		"text for a decimal number": {map[string]any{"total": "120.50"}, "", "USD"},
+		"not a number":              {map[string]any{"total": math.NaN()}, "", "USD"},
+		"infinite":                  {map[string]any{"total": math.Inf(1)}, "", "USD"},
+		"minus infinite":            {map[string]any{"total": math.Inf(-1)}, "", "USD"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, code := previewPaymentLink(e.payload(def.Collection, tc.data, 1))
+			if d.Amount != tc.amount || d.Currency != tc.currency {
+				t.Fatalf("preview = %+v (%s), want %q %s", d, code, tc.amount, tc.currency)
+			}
+			if tc.amount == "" && code != apierr.CodeIntegrationAmountRefused {
+				t.Fatalf("an amount not shown has code %q", code)
+			}
+			if tc.amount != "" && code != "" {
+				t.Fatalf("code = %q", code)
+			}
+		})
 	}
 }
 

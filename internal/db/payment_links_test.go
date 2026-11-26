@@ -133,6 +133,26 @@ func TestIntegrationRefsAreOnePerEntryAndSurviveItsCleanup(t *testing.T) {
 	if err := insert("test-token-not-real-000000000003", nil, 0); err == nil {
 		t.Fatal("an amount of zero")
 	}
+	// A ref's keys: one row per key, each with a token of its own; a call is never counted as clean more
+	// often than it was sent, and an outcome is one of the four.
+	key := func(seq int, token string, sends, clean int, outcome any) error {
+		_, err := sqlDB.ExecContext(ctx, `INSERT INTO integration_ref_attempts (ref_id, seq, token, sends, clean_sends, outcome)
+			SELECT id, ?, ?, ?, ?, ? FROM integration_refs WHERE effect_id = 7`, seq, token, sends, clean, outcome)
+		return err
+	}
+	if err := key(0, token, 1, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	for what, err := range map[string]error{
+		"a key twice":               key(0, "test-token-not-real-000000000004", 1, 0, nil),
+		"a token of two keys":       key(1, token, 1, 0, nil),
+		"more clean calls than any": key(1, "test-token-not-real-000000000005", 1, 2, nil),
+		"an outcome not said":       key(1, "test-token-not-real-000000000006", 1, 0, "lost"),
+	} {
+		if err == nil {
+			t.Fatalf("%s was stored", what)
+		}
+	}
 	// The entry is cleaned up: the ref stays, forgetting only the entry.
 	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM app_effects WHERE id = 7`); err != nil {
 		t.Fatal(err)
@@ -151,5 +171,8 @@ func TestIntegrationRefsAreOnePerEntryAndSurviveItsCleanup(t *testing.T) {
 	var n int
 	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM integration_refs`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("refs left after the app: %d %v", n, err)
+	}
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM integration_ref_attempts`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("keys left after their ref: %d %v", n, err)
 	}
 }

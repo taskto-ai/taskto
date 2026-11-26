@@ -743,8 +743,14 @@ func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
 func (e Effect) moneyOf(c Collection, data map[string]any) (amount, code string) {
 	if f, ok := c.field(e.AmountField); ok {
 		if v, set := data[e.AmountField]; set && ofType(f, v) {
-			if n, ok := v.(float64); ok {
+			// A JSON number only: text that reads like one is not an amount (nothing is guessed).
+			switch n := v.(type) {
+			case float64:
 				amount, _ = currency.Decimal(n)
+			case json.Number:
+				if f, err := n.Float64(); err == nil {
+					amount, _ = currency.Decimal(f)
+				}
 			}
 		}
 	}

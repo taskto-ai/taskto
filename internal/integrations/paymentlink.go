@@ -19,27 +19,45 @@ import (
 
 // The create_payment_link effect's side of the integrations (apps/paymentlink.go asks for it).
 //
-// One outbox entry makes at most one payment link. The entry has one ref (integration_refs, unique
-// by the entry's number) whose random token is the provider's idempotency key and the reference its
-// payment echoes back, and the ref keeps the provider's answer. So an entry done again after a
-// crash finds its ref, and
+// One outbox entry makes at most one payment link a payer can use. The entry has one ref
+// (integration_refs, unique by the entry's number), and the ref has keys (integration_ref_attempts):
+// each an idempotency key with a random token of its own, which the call under it puts in the object
+// (client_reference_id, metadata[taskto_ref]) and the payment echoes back. The first key's token is
+// the ref's.
 //
-//   - if the ref has the provider's object, the provider isn't asked again: the link is the ref's;
-//   - if it has none, the call may or may not have been made: it is made again under the same key,
-//     which the provider answers with the first call's object when there was one (Stripe keeps a
-//     key for at least a day; a retry after longer than that, with no object noted, is the one case
-//     that can make a second payable link, and its payment is recorded as a duplicate).
+// The rule is never to risk a second payable link for one ref, so the server never decides after the
+// fact that a call didn't reach the provider. Before every call under a key, the call is written
+// ahead on the key's row (sends), durably, and that record is never taken back. A key is resolved
+// only by
 //
-// An answer the provider keeps under the key (a 5xx), and a request that may have reached it and got
-// no answer, leave the outcome unknown: the call may have made the object, now or a moment later.
-// Stripe says not to "retry with a new idempotency key until you've resolved the original outcome"
-// (https://docs.stripe.com/error-low-level#server-errors). So a ref whose outcome is unknown never gets
-// a new key by itself: its entry repeats only the lookup, which reads the provider for an object of the
-// ref's token, with a growing wait between reads and for at most outcomeWait. An object that turns up
-// is adopted as if the call had answered it. If none does, the entry fails with
-// integration_outcome_unknown, and an admin checks the provider's account and either confirms that no
-// link exists, which allows exactly one new key and runs the entry again (ConfirmNoPaymentLink), or
-// retries the entry once the object is visible, which adopts it.
+//   - an answer (2xx) whose object was then read at the provider (LinkState);
+//   - a lookup that finds an object carrying the key's own token (FindPaymentLink), never another
+//     key's; or
+//   - an answer the provider documents as given before execution (CallError.NotExecuted: a rate
+//     limit, a lock timeout, the key in use by a request still running), or a request that never
+//     left (no connection was handed to it): such a call counts as clean (clean_sends), and the same
+//     key is asked again later, never a new one.
+//
+// Every other end of a call (any 4xx or 5xx, a timeout, a dropped connection, an answer that can't be
+// read, a crash between the write-ahead and the answer being noted) leaves the key's outcome unknown:
+// sends exceed clean_sends. A ref whose key's outcome is unknown never gets a new key by itself. Each
+// try of its entry looks for the key's object by its token and, while the provider still keeps the key
+// (keyTrusted from its first call), asks again under the same key with the same parameters, which the
+// provider answers with what the first call made, or runs if it never ran. A failed lookup or call
+// changes nothing: the entry waits and tries again on the reconciliation schedule (a growing wait,
+// outcomeWait in all from when the outcome became unknown), which nothing ends early. If that ends
+// with the outcome still unknown, the entry fails with integration_outcome_unknown, and an admin who
+// finds no link at the provider confirms it (ConfirmNoPaymentLink): the only way to a new key for such
+// a ref.
+//
+// A key moves on by itself only once its outcome is known and left nothing a payer can use: its object
+// was seen expired and never paid. One that was paid, or can't be used for a reason that doesn't say it
+// wasn't, stops the entry (integration_link_already_paid) for a person to reconcile.
+//
+// Nothing is saved as the link before its state is read from the provider and says open (a Checkout
+// Session) or active (a Payment Link): what a call answers, and a replay of a kept key above all, is the
+// object as it was made, and it may have expired since. An object an answer named is kept on the key
+// before its state is read, so a try that can't read it doesn't lose it.
 //
 // A ref belongs to what its first try was: the provider's account (read from the provider with the
 // integration's key when the ref is made) with the mode of that key (a test key and a live key of
@@ -52,20 +70,6 @@ import (
 // where an object the old one made could not be found. A slot bound to another integration since
 // the ref was made is refused too, whether or not the ref has its link (integration_changed): a
 // ref's calls are its first integration's, which is the one whose key an admin reconciles it with.
-//
-// A key the provider may still hold an answer under is not reused once that answer is no use: the
-// provider replays a call's saved answer to the same key, a failure and an object that has expired
-// since included. So a try that looks for the ref's object (a ref with a refusal kept under its key,
-// a failed ref tried again, one with a key of its own) and finds none that a payer can use moves the
-// ref on to a key of its own before it makes one, but only when the earlier call's outcome is known: it
-// was refused, or the object it made is seen expired and unpaid. The need to look is kept on the ref
-// (lookup_required) until a lookup has read the provider in full, so a try that ends before its lookup
-// does is followed by one that looks.
-//
-// Nothing is saved as the link before its state is read from the provider and says open (a Checkout
-// Session) or active (a Payment Link): what a call answers, and a replay of a kept key above all, is the
-// object as it was made, and it may have expired since. An expired one is never given; a completed one
-// stops the call (nothing is made, a person reconciles the payment).
 //
 // The ref is made before the call and the money is checked before the ref, so a refused amount
 // leaves nothing behind. The key of the integration is opened here, for the call, and goes nowhere
@@ -120,6 +124,16 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if found && ref.integrationID != req.IntegrationID {
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged} // before anything is asked of anyone
 	}
+	// A failure that tells nothing (the provider didn't answer) waits on the reconciliation's schedule
+	// while the ref's key has an unknown outcome, and is an ordinary transient failure otherwise.
+	var pending *attempt
+	if found {
+		if a, ok, err := s.attemptOf(ctx, ref); err != nil {
+			return paylink.Link{}, err
+		} else if ok && a.unknown() {
+			pending = &a
+		}
+	}
 
 	cur := strings.ToUpper(strings.TrimSpace(req.Currency))
 	minor, err := s.checkMoney(rec, req.Amount, cur)
@@ -140,11 +154,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
 	account, err := provider.AccountID(ctx, creds, client)
 	if err != nil {
-		ce, ok := IsCall(err)
-		if !ok {
-			return paylink.Link{}, err
-		}
-		return paylink.Link{}, s.callFailed(ctx, nil, rec, ce, false)
+		return paylink.Link{}, s.failed(ctx, rec, pending, err)
 	}
 	// With no public URL there are no pages of ours: both are empty and the provider hosts the
 	// payer's confirmation (a link is made all the same). A ref already made keeps its own.
@@ -165,130 +175,268 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if err != nil {
 		return paylink.Link{}, err
 	}
-	hosted := ref.successURL == ""
+	t := try{s: s, provider: provider, creds: creds, client: client, rec: rec, req: req, since: since, hosted: ref.successURL == ""}
 	for range maxKeysPerTry {
-		// What has to be settled before any call. A key of its own, a refusal kept, and a lookup that never
-		// finished each mean an earlier call may have made an object, and so does an outcome that is
-		// unknown; and a call made under a key the provider may have forgotten (a crash, with nothing
-		// said of it) may have made one that its key no longer finds. Another call could make a second
-		// payable link for the same payment, so the object is looked for first, and adopted.
-		stale := !ref.lookupRequired && ref.keyCalledSeq >= ref.keySeq && s.store.now().Sub(since) >= keyTrusted
-		if ref.keySeq > 0 || ref.lookupRequired || ref.unknownAt != "" || stale {
-			nl := ref.newLink(minor, cur, req.Description)
-			found, ok, expired, err := provider.FindPaymentLink(ctx, creds, client, nl, since)
-			if err != nil {
-				return paylink.Link{}, s.callFailed(ctx, &ref, rec, err, false)
+		a, err := s.currentAttempt(ctx, ref)
+		if err != nil {
+			return paylink.Link{}, err
+		}
+		switch a.outcome {
+		case attemptSettled:
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+		case attemptExpired, attemptAbandoned:
+			// The key is accounted for and left nothing a payer can use: the ref takes the next one.
+			if ref, err = s.nextAttempt(ctx, ref, a); err != nil {
+				return paylink.Link{}, err
 			}
-			if ok {
-				state, link, err := s.settle(ctx, provider, creds, client, rec, &ref, req, hosted, found)
-				if err != nil {
-					return paylink.Link{}, err
-				}
-				if state == LinkOpen {
-					slog.Info("integrations: a payment link made by an earlier call was adopted", "integration", ref.integrationID, "provider", rec.Provider)
-					return link, nil
-				}
-				expired = true // it was open a moment ago and is not now: the call that made it is accounted for
-			}
-			switch {
-			case expired:
-				// Seen, expired and never paid: the earlier call's outcome is known, whatever it was before.
-				if ref, err = s.nextKey(ctx, ref, true); err != nil {
-					return paylink.Link{}, err
-				}
-			case ref.unknownAt != "" || stale:
-				// The provider shows nothing of the call whose outcome is unknown. It may still make the
-				// object, so nothing is called: the lookup is repeated until the wait ends.
-				return paylink.Link{}, s.stillUnknown(ctx, ref)
-			default:
-				// Nothing a payer can use is the ref's, and the earlier call's outcome is known. The key may
-				// still hold the provider's answer to it (a refusal, or an object that has expired since),
-				// which the same key would replay: the call is made under a key of its own.
-				if ref, err = s.nextKey(ctx, ref, false); err != nil {
-					return paylink.Link{}, err
-				}
-			}
-			if ref.objectID != "" { // made by a call that finished meanwhile
+			if ref.objectID != "" {
 				return madeLink(ref, req)
 			}
+			continue
+		case attemptMade:
+			// Its object was noted on the ref in the same transaction: another try finished meanwhile.
+			return s.refHolds(ctx, ref, req)
 		}
-		// The key is used from here on, whatever becomes of the call: noted first, so that a try that finds
-		// nothing of it moves on from it.
-		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_called_seq = ?
-			WHERE id = ? AND provider_object_id IS NULL AND key_called_seq < ?`, ref.keySeq, ref.id, ref.keySeq); err != nil {
+
+		if a.unknown() {
+			// Resolve the key before anything else: an object an answer named, or one carrying its token.
+			res, link, err := t.resolve(ctx, &ref, a)
+			switch {
+			case err != nil:
+				return paylink.Link{}, err
+			case res == resolvedOpen:
+				return link, nil
+			case res == resolvedExpired:
+				continue
+			}
+			// Nothing of the key was seen. Only the same key is asked again, and only while the provider
+			// still keeps it: it answers with what the first call made, or runs a call that never ran.
+			if !s.keyKept(a) {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+		}
+
+		// The call is written ahead before it leaves, and that record is never taken back.
+		if ok, err := s.writeAhead(ctx, ref, a); err != nil {
+			return paylink.Link{}, err
+		} else if !ok {
+			// Another try resolved the key or moved the ref on meanwhile: read it again.
+			if ref, err = s.refByID(ctx, ref.id); err != nil {
+				return paylink.Link{}, err
+			}
+			if ref.objectID != "" {
+				return madeLink(ref, req)
+			}
+			continue
+		}
+		if s.afterWriteAhead != nil {
+			if err := s.afterWriteAhead(); err != nil {
+				return paylink.Link{}, err
+			}
+		}
+		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(a, req.Description))
+		if err != nil {
+			ce, ok := IsCall(err)
+			if !ok {
+				return paylink.Link{}, err
+			}
+			logFailure(rec, ce)
+			if ce.NotExecuted {
+				if a, err = s.noteNotExecuted(ctx, a); err != nil {
+					return paylink.Link{}, err
+				}
+			} else if a, err = s.attemptByKey(ctx, a.refID, a.seq); err != nil {
+				return paylink.Link{}, err
+			}
+			if a.unknown() {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+			// Nothing ran under the key: it is asked again later, as any failure that may pass.
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+		}
+		if s.afterCall != nil {
+			if err := s.afterCall(); err != nil {
+				return paylink.Link{}, err
+			}
+		}
+		// The answer's object is kept on the key before its state is read: a try that can't read it finds
+		// it there, and never loses it.
+		if err := s.noteObject(ctx, a, made); err != nil {
 			return paylink.Link{}, err
 		}
-		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(minor, cur, req.Description))
-		if err != nil {
-			return paylink.Link{}, s.callFailed(ctx, &ref, rec, err, true)
-		}
-		state, link, err := s.settle(ctx, provider, creds, client, rec, &ref, req, hosted, made)
-		if err != nil {
+		res, link, err := t.settle(ctx, &ref, a, made)
+		switch {
+		case err != nil:
 			return paylink.Link{}, err
-		}
-		if state == LinkOpen {
+		case res == resolvedOpen:
 			return link, nil
 		}
-		// What the call answered (a replay of a kept key, a day on) has expired: not given. Its outcome is
-		// known, and the call is made again under a key of its own.
-		if ref, err = s.nextKey(ctx, ref, true); err != nil {
-			return paylink.Link{}, err
-		}
-		if ref.objectID != "" {
-			return madeLink(ref, req)
-		}
+		// What the call answered (a replay of a kept key, a day on) has expired: not given. The key is
+		// accounted for, and the loop moves on to the next.
 	}
 	return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
 }
 
-// settle reads the state of an object a call answered or a lookup found, at the provider, and saves
-// it as the ref's link only if a payer can use it now: open, for a Checkout Session; active, for a
-// Payment Link. It returns the state it found and, for LinkOpen, the link. An expired object is not
-// saved (its caller moves on); a settled one stops the entry (a person reconciles it). If the state can't
-// be read, the object is not saved either, and the ref's outcome is marked unknown: the object is there
-// (a call answered it) but no call may be made for another until a lookup finds it.
-func (s *Service) settle(ctx context.Context, provider PaymentProvider, creds Credentials, client *Client, rec record, r *ref, req paylink.Request, hosted bool, l Link) (LinkState, paylink.Link, error) {
-	state, err := provider.LinkState(ctx, creds, client, hosted, l.ObjectID)
+// try is what one try of an entry calls the provider with.
+type try struct {
+	s        *Service
+	provider PaymentProvider
+	creds    Credentials
+	client   *Client
+	rec      record
+	req      paylink.Request
+	since    time.Time
+	hosted   bool
+}
+
+// resolution is what a try learned of a key.
+type resolution int
+
+const (
+	// unresolved: nothing was seen of the key's object; its outcome is as it was.
+	unresolved resolution = iota
+	// resolvedOpen: its object can take a payment, and is the ref's link now.
+	resolvedOpen
+	// resolvedExpired: its object was seen expired and never paid; the ref may take the next key.
+	resolvedExpired
+)
+
+// resolve looks for what a key whose outcome is unknown made: the object an answer named, read again
+// at the provider, or else one carrying the key's token, found by a lookup. A lookup that fails, or
+// can't read the whole account, tells nothing: the outcome stays unknown. It fails the try only for
+// what a person must see now: an object of the key that was paid or can't be given, or a key the
+// provider doesn't accept.
+func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylink.Link, error) {
+	if a.objectID != "" {
+		return t.settle(ctx, r, a, Link{ObjectID: a.objectID, URL: a.url})
+	}
+	found, ok, expired, err := t.provider.FindPaymentLink(ctx, t.creds, t.client, r.newLink(a, t.req.Description), t.since)
 	if err != nil {
-		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET outcome_unknown_at = coalesce(outcome_unknown_at, ?)
-			WHERE id = ? AND provider_object_id IS NULL`, s.store.stamp(s.store.now()), r.id); uerr != nil {
-			return 0, paylink.Link{}, uerr
+		ce, isCall := IsCall(err)
+		if !isCall {
+			return unresolved, paylink.Link{}, err
 		}
-		return 0, paylink.Link{}, s.callFailed(ctx, r, rec, err, false)
+		logFailure(t.rec, ce)
+		switch ce.Kind {
+		case CallSettled:
+			return unresolved, paylink.Link{}, t.s.settleAttempt(ctx, a)
+		case CallCredentials:
+			return unresolved, paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationCredentialsRefused}
+		case CallRefused:
+			// An object of the key's token that is not a link a payer can be given (another amount, a
+			// state not said): never given, and no other key while it stands.
+			return unresolved, paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
+		}
+		return unresolved, paylink.Link{}, nil // unreachable, or more than a lookup reads: nothing learned
+	}
+	switch {
+	case ok:
+		slog.Info("integrations: a payment link made by an earlier call was found", "integration", r.integrationID, "provider", t.rec.Provider)
+		return t.settle(ctx, r, a, found)
+	case expired:
+		return resolvedExpired, paylink.Link{}, t.s.markAttempt(ctx, a, attemptExpired)
+	}
+	return unresolved, paylink.Link{}, nil
+}
+
+// settle reads the state of an object of the key (one a call answered or a lookup found) at the
+// provider, and saves it as the ref's link only if a payer can use it now: open, for a Checkout
+// Session; active, for a Payment Link. An expired object resolves the key as expired, and a settled one
+// stops the entry (a person reconciles it). If the state can't be read, nothing is resolved: the
+// object stays on the key, and the entry waits on the reconciliation's schedule.
+func (t try) settle(ctx context.Context, r *ref, a attempt, l Link) (resolution, paylink.Link, error) {
+	state, err := t.provider.LinkState(ctx, t.creds, t.client, t.hosted, l.ObjectID)
+	if err != nil {
+		ce, isCall := IsCall(err)
+		if !isCall {
+			return unresolved, paylink.Link{}, err
+		}
+		logFailure(t.rec, ce)
+		if ce.Kind == CallCredentials {
+			return unresolved, paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationCredentialsRefused}
+		}
+		if a, err = t.s.attemptByKey(ctx, a.refID, a.seq); err != nil {
+			return unresolved, paylink.Link{}, err
+		}
+		return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
 	}
 	switch state {
 	case LinkOpen:
-		link, err := s.noteLink(ctx, *r, req, l)
-		return state, link, err
+		link, err := t.s.noteLink(ctx, *r, a, t.req, l)
+		if err != nil {
+			return unresolved, paylink.Link{}, err
+		}
+		return resolvedOpen, link, nil
 	case LinkSettled:
-		return state, paylink.Link{}, s.callFailed(ctx, r, rec, &CallError{Kind: CallSettled}, false)
+		return unresolved, paylink.Link{}, t.s.settleAttempt(ctx, a)
 	}
-	return state, paylink.Link{}, nil
+	return resolvedExpired, paylink.Link{}, t.s.markAttempt(ctx, a, attemptExpired)
 }
 
-// stillUnknown is the entry's answer while a ref's outcome is unknown and the lookup shows nothing:
-// wait and look again, and once outcomeWait has passed, fail for a person. Neither makes a call that
-// creates anything.
-func (s *Service) stillUnknown(ctx context.Context, r ref) error {
+// settleAttempt notes that the key's object was paid, or can't be used for a reason that doesn't say it
+// wasn't, and is the entry's failure: nothing else is made for the ref, and a person reconciles it.
+func (s *Service) settleAttempt(ctx context.Context, a attempt) error {
+	if err := s.markAttempt(ctx, a, attemptSettled); err != nil {
+		return err
+	}
+	return &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+}
+
+// failed is the entry's answer to a failed read made before the ref is ready (whose account the key
+// is). While the ref's key has an unknown outcome, a failure that tells nothing waits on the
+// reconciliation's schedule, which it never ends early; otherwise it is the failure's own code.
+func (s *Service) failed(ctx context.Context, rec record, pending *attempt, err error) error {
+	ce, ok := IsCall(err)
+	if !ok {
+		return err
+	}
+	logFailure(rec, ce)
+	switch ce.Kind {
+	case CallCredentials:
+		return &paylink.Error{Code: apierr.CodeIntegrationCredentialsRefused}
+	case CallRefused:
+		if pending == nil {
+			return &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
+		}
+	}
+	if pending != nil {
+		return s.stillUnknown(ctx, *pending)
+	}
+	return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+}
+
+// logFailure logs what happened, never what was said: not the key, not the provider's words.
+func logFailure(rec record, ce *CallError) {
+	slog.Warn("integrations: a call for a payment link failed", "integration", rec.ID, "provider", rec.Provider,
+		"kind", int(ce.Kind), "status", ce.Status, "not_executed", ce.NotExecuted, "outcome_unknown", ce.OutcomeUnknown)
+}
+
+// stillUnknown is the entry's answer while a key's outcome is unknown and nothing resolved it: wait
+// and try again, and once outcomeWait has passed since the outcome became unknown, fail for a person
+// with integration_outcome_unknown (what ConfirmNoPaymentLink accepts). Neither takes a new key.
+func (s *Service) stillUnknown(ctx context.Context, a attempt) error {
 	now := s.store.now()
 	since := now
-	if r.unknownAt == "" {
-		// A call under a key the provider may have forgotten, whose answer was never noted: the wait
-		// begins now.
-		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET outcome_unknown_at = ? WHERE id = ? AND outcome_unknown_at IS NULL AND provider_object_id IS NULL`,
-			s.store.stamp(now), r.id); err != nil {
-			return err
-		}
-	} else if t, err := time.Parse(timeFormat, r.unknownAt); err == nil {
+	if t, err := time.Parse(timeFormat, a.unknownSince); err == nil {
 		since = t
+	} else if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET unknown_since = ?
+		WHERE ref_id = ? AND seq = ? AND unknown_since IS NULL AND sends > clean_sends`, s.store.stamp(now), a.refID, a.seq); err != nil {
+		return err
 	}
 	elapsed := now.Sub(since)
 	if elapsed >= outcomeWait {
-		slog.Warn("integrations: a payment link's outcome is still unknown; an admin decides", "integration", r.integrationID)
+		slog.Warn("integrations: a payment link's outcome is still unknown; an admin decides", "ref", a.refID)
 		return &paylink.Error{Code: apierr.CodeIntegrationOutcomeUnknown}
 	}
 	wait := min(max(elapsed/2, lookupWaitMin), lookupWaitMax, outcomeWait-elapsed)
 	return &paylink.Error{Code: apierr.CodeIntegrationLinkLookupPending, Wait: max(wait, time.Second)}
+}
+
+// keyKept says whether the provider still keeps the key's first call, so that a call under the same
+// key is answered with what that call made (or runs, if it never did) and can't make a second object.
+func (s *Service) keyKept(a attempt) bool {
+	first, err := time.Parse(timeFormat, a.firstSentAt)
+	return err == nil && s.store.now().Sub(first) < keyTrusted
 }
 
 // madeLink is the link a ref already has. It belongs to the integration that made it: another one,
@@ -301,23 +449,37 @@ func madeLink(r ref, req paylink.Request) (paylink.Link, error) {
 	return r.link(), nil
 }
 
+// refHolds is what the ref holds now, read again: its link, checked as any finished ref is, or
+// nothing to give.
+func (s *Service) refHolds(ctx context.Context, r ref, req paylink.Request) (paylink.Link, error) {
+	now, err := s.refByID(ctx, r.id)
+	if err != nil {
+		return paylink.Link{}, err
+	}
+	if now.objectID == "" {
+		return paylink.Link{}, unavailable()
+	}
+	return madeLink(now, req)
+}
+
 const (
-	// outcomeWait is how long a ref whose outcome is unknown is only looked for: Stripe's own
+	// outcomeWait is how long a key whose outcome is unknown is reconciled by itself: Stripe's own
 	// reconciliation of a request answered with an error is within its day of idempotency, and the lookup
 	// reads a list that includes the newest objects at once, so six hours is long past the time an
 	// object that was going to appear has. Then the entry fails (integration_outcome_unknown).
 	outcomeWait = 6 * time.Hour
-	// The wait between two lookups is half of the time the outcome has been unknown, within these:
+	// The wait between two tries is half of the time the outcome has been unknown, within these:
 	// quickly at first (the object usually shows at once), then rarely.
 	lookupWaitMin = 30 * time.Second
 	lookupWaitMax = 30 * time.Minute
-	// maxKeysPerTry bounds how many calls one try makes: a call whose object turns out expired is
-	// followed by one under a key of its own, once.
+	// maxKeysPerTry bounds how many keys one try goes through: a call whose object turns out expired
+	// is followed by one under a key of its own.
 	maxKeysPerTry = 3
 )
 
-// keyTrusted is how long a key is known to be kept by the provider (Stripe keeps one for at least 24
-// hours, and may remove it after; a margin is left).
+// keyTrusted is how long from its first call a key is known to be kept by the provider (Stripe keeps
+// one for at least 24 hours, and may remove it after; a margin is left). Past it, a call under the
+// key could run again and make a second object, so it is not made.
 const keyTrusted = 23 * time.Hour
 
 // providerDoes says whether the registry's provider id implements the kind.
@@ -380,7 +542,7 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-// ----- the refs -----
+// ----- the refs and their keys -----
 
 // ref is a row of integration_refs.
 type ref struct {
@@ -389,24 +551,20 @@ type ref struct {
 	objectID, url                      string
 	amountMinor                        int64
 	currency                           string
-	keySeq, keyCalledSeq               int
-	state                              string
-	createdAt                          string
+	// keySeq is the number of the ref's current key (integration_ref_attempts.seq).
+	keySeq    int
+	state     string
+	createdAt string
 	// accountID is the provider's account the ref was made under and accountMode the mode of the key
 	// that read it (test or live), and successURL and cancelURL the pages its calls ask the payer to
 	// return to, both empty for a link that is hosted by the provider.
 	accountID, accountMode, successURL, cancelURL string
-	// lookupRequired and unknownAt are the stored needs of the ref's next try: a lookup that read the
-	// provider in full before any call, and when the outcome of a call became unknown ("" when it is
-	// known) (the schema has the whole account).
-	lookupRequired bool
-	unknownAt      string
 }
 
-// newLink is what the provider is asked for, from the ref and what this try asks: the ref's token
-// and key, the pages of its first try.
-func (r ref) newLink(minor int64, cur, description string) NewLink {
-	return NewLink{Token: r.token, KeySeq: r.keySeq, AmountMinor: minor, Currency: cur, Description: description,
+// newLink is what the provider is asked for under key a: the key's token, the ref's money and the
+// pages of its first try, and the entry's description (fixed when it was queued).
+func (r ref) newLink(a attempt, description string) NewLink {
+	return NewLink{Token: a.token, KeySeq: a.seq, AmountMinor: r.amountMinor, Currency: r.currency, Description: description,
 		SuccessURL: r.successURL, CancelURL: r.cancelURL}
 }
 
@@ -417,20 +575,33 @@ func (r ref) link() paylink.Link {
 	return paylink.Link{URL: r.url, ObjectID: r.objectID, AmountMinor: r.amountMinor, Currency: r.currency}
 }
 
+// refColumns are integration_refs' own, so a query of that table alone reads a ref.
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
-	amount_minor, currency, key_seq, key_called_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
-	lookup_required, coalesce(outcome_unknown_at, '')`
+	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
-		&r.amountMinor, &r.currency, &r.keySeq, &r.keyCalledSeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL, &r.lookupRequired, &r.unknownAt)
+		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL)
 	return r, err
 }
 
 // refOf finds the ref of the outbox entry.
 func (s *Service) refOf(ctx context.Context, effectID int64) (ref, bool, error) {
 	r, err := scanRef(s.store.db.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, effectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ref{}, false, nil
+	}
+	return r, err == nil, err
+}
+
+// refByToken finds the ref a token the server issued belongs to: the token of any of its keys (the
+// first key's is the ref's own). A payment echoes the token of the key whose object was paid, which is
+// a later key's after an expired one, so this, and never integration_refs.token alone, is how a
+// payment finds its ref.
+func (s *Service) refByToken(ctx context.Context, token string) (ref, bool, error) {
+	r, err := scanRef(s.store.db.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs
+		WHERE token = ? OR id = (SELECT ref_id FROM integration_ref_attempts WHERE token = ?)`, token, token))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ref{}, false, nil
 	}
@@ -446,20 +617,17 @@ func newToken() (string, error) {
 }
 
 // beginRef makes the entry's ref, or finds it, ready for a call: in one transaction that holds the
-// write lock, so two workers that took the same entry find one ref. A ref that has no object is
-// updated to what this try asks (the entry's amount is fixed, but what the record holds may have
-// been corrected); a failed one starts anew and is looked into before it is called again (the need is
-// stored on it).
+// write lock, so two workers that took the same entry find one ref.
 // What a ref was made with is the first try's and is never updated: its account and the key's mode,
-// its integration and its pages. A ref with no object that was made in another account or mode than
-// who is left exactly as it is and the try is refused (whatever its calls made is where they were
-// made), and so is one made under another integration than the request's (integration_changed).
+// its integration, its pages and its money (an entry asks the same every time: its payload is fixed
+// when it is queued). A ref with no object that was made in another account or mode than who is left
+// exactly as it is and the try is refused (whatever its calls made is where they were made), and so is
+// one made under another integration than the request's (integration_changed), or for other money.
 func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string, who whose, successURL, cancelURL string) (ref, error) {
 	token, err := newToken()
 	if err != nil {
 		return ref{}, err
 	}
-	var out ref
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ref{}, err
@@ -472,7 +640,7 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 		token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at, who.account, who.mode, successURL, cancelURL); err != nil {
 		return ref{}, err
 	}
-	out, err = scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
+	out, err := scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
 	if err != nil {
 		return ref{}, err
 	}
@@ -482,17 +650,8 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 	if out.objectID == "" && out.integrationID != req.IntegrationID {
 		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
 	}
-	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur || out.state == "failed") {
-		// A failed ref starts anew and must be looked into before it is called again: what the provider kept
-		// of its failed call is not to be asked again under the same key. That is kept on the ref, not in
-		// this try, which may end before its lookup does.
-		if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET amount_minor = ?, currency = ?, state = 'creating',
-				lookup_required = max(lookup_required, state = 'failed')
-			WHERE id = ? AND provider_object_id IS NULL`, minor, cur, out.id); err != nil {
-			return ref{}, err
-		}
-		out.lookupRequired = out.lookupRequired || out.state == "failed"
-		out.amountMinor, out.currency, out.state = minor, cur, "creating"
+	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur) {
+		return ref{}, unavailable() // not what the ref was made for: its keys ask what it asked
 	}
 	return out, tx.Commit()
 }
@@ -502,29 +661,141 @@ func (s *Service) refByID(ctx context.Context, id int64) (ref, error) {
 	return scanRef(s.store.db.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE id = ?`, id))
 }
 
-// nextKey ends a lookup that found nothing a payer can use: the need to look is met, and if a call was
-// made under the current key (a key that was never used holds no answer) the ref moves on to the next.
-// resolved says that the lookup saw an object of the ref that no payer can use, which accounts for the
-// call whose outcome was unknown: it is no longer. Only from the key the try used: another try that
-// moved it first is followed, and one that noted an object meanwhile is returned with it.
-func (s *Service) nextKey(ctx context.Context, r ref, resolved bool) (ref, error) {
-	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET lookup_required = 0,
-			outcome_unknown_at = CASE WHEN ? THEN NULL ELSE outcome_unknown_at END,
-			key_seq = key_seq + (key_called_seq >= key_seq)
-		WHERE id = ? AND provider_object_id IS NULL AND key_seq = ?`, resolved, r.id, r.keySeq); err != nil {
+// The outcomes of a key (integration_ref_attempts.outcome); "" while it has none.
+const (
+	attemptMade      = "made"
+	attemptExpired   = "expired"
+	attemptSettled   = "settled"
+	attemptAbandoned = "abandoned"
+)
+
+// attempt is a row of integration_ref_attempts: one idempotency key of a ref and the calls under it.
+type attempt struct {
+	refID int64
+	seq   int
+	token string
+	// sends is how many calls were written ahead under the key, cleanSends how many of them certainly
+	// never ran.
+	sends, cleanSends         int
+	firstSentAt, unknownSince string
+	outcome                   string
+	// objectID and url are the object an answer named, before its state was read.
+	objectID, url string
+}
+
+// unknown says whether the key may have made an object nobody has seen: a call under it may have run,
+// and nothing resolved it.
+func (a attempt) unknown() bool { return a.outcome == "" && a.sends > a.cleanSends }
+
+const attemptColumns = `ref_id, seq, token, sends, clean_sends, coalesce(first_sent_at, ''), coalesce(unknown_since, ''),
+	coalesce(outcome, ''), coalesce(object_id, ''), coalesce(url, '')`
+
+func scanAttempt(row interface{ Scan(...any) error }) (attempt, error) {
+	var a attempt
+	err := row.Scan(&a.refID, &a.seq, &a.token, &a.sends, &a.cleanSends, &a.firstSentAt, &a.unknownSince, &a.outcome, &a.objectID, &a.url)
+	return a, err
+}
+
+// attemptByKey reads a key's row.
+func (s *Service) attemptByKey(ctx context.Context, refID int64, seq int) (attempt, error) {
+	return scanAttempt(s.store.db.QueryRowContext(ctx, `SELECT `+attemptColumns+` FROM integration_ref_attempts WHERE ref_id = ? AND seq = ?`, refID, seq))
+}
+
+// attemptOf reads the ref's current key, if it has a row yet.
+func (s *Service) attemptOf(ctx context.Context, r ref) (attempt, bool, error) {
+	a, err := s.attemptByKey(ctx, r.id, r.keySeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return attempt{}, false, nil
+	}
+	return a, err == nil, err
+}
+
+// currentAttempt is the ref's current key, its row made if it has none yet: the first key takes the
+// ref's token, a later one a token of its own. Two tries that make it at once find one row.
+func (s *Service) currentAttempt(ctx context.Context, r ref) (attempt, error) {
+	token := r.token
+	if r.keySeq > 0 {
+		var err error
+		if token, err = newToken(); err != nil {
+			return attempt{}, err
+		}
+	}
+	if _, err := s.store.db.ExecContext(ctx, `INSERT INTO integration_ref_attempts (ref_id, seq, token, created_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (ref_id, seq) DO NOTHING`, r.id, r.keySeq, token, s.store.stamp(s.store.now())); err != nil {
+		return attempt{}, err
+	}
+	return s.attemptByKey(ctx, r.id, r.keySeq)
+}
+
+// writeAhead records, before a call under the key leaves, that it is sent: the key's outcome is unknown
+// from here until something resolves it, whatever becomes of this process. It says false, and records
+// nothing, when the key is no longer the ref's current one or has an outcome (another try moved on).
+func (s *Service) writeAhead(ctx context.Context, r ref, a attempt) (bool, error) {
+	at := s.store.stamp(s.store.now())
+	res, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET sends = sends + 1,
+			first_sent_at = coalesce(first_sent_at, ?), unknown_since = coalesce(unknown_since, ?)
+		WHERE ref_id = ? AND seq = ? AND outcome IS NULL
+			AND EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL)`,
+		at, at, a.refID, a.seq, r.id, a.seq)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// noteNotExecuted records that a call under the key certainly never ran, and returns the key as it is
+// now. Only when every call under it is such does the key hold nothing at the provider: its outcome is
+// known again, and its window starts with its next call.
+func (s *Service) noteNotExecuted(ctx context.Context, a attempt) (attempt, error) {
+	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET clean_sends = clean_sends + 1,
+			first_sent_at = CASE WHEN clean_sends + 1 = sends THEN NULL ELSE first_sent_at END,
+			unknown_since = CASE WHEN clean_sends + 1 = sends THEN NULL ELSE unknown_since END
+		WHERE ref_id = ? AND seq = ? AND clean_sends < sends`, a.refID, a.seq); err != nil {
+		return attempt{}, err
+	}
+	return s.attemptByKey(ctx, a.refID, a.seq)
+}
+
+// noteObject keeps the object an answer under the key named, before its state is read.
+func (s *Service) noteObject(ctx context.Context, a attempt, l Link) error {
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = ?, url = ?
+		WHERE ref_id = ? AND seq = ? AND outcome IS NULL`, l.ObjectID, l.URL, a.refID, a.seq)
+	return err
+}
+
+// markAttempt gives the key an outcome, if it has none.
+func (s *Service) markAttempt(ctx context.Context, a attempt, outcome string) error {
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = ? WHERE ref_id = ? AND seq = ? AND outcome IS NULL`,
+		outcome, a.refID, a.seq)
+	return err
+}
+
+// nextAttempt moves the ref on from key a, whose outcome is known and left nothing a payer can use,
+// and reads the ref again. Only from that key: another try that moved it first is followed, and one
+// that noted an object meanwhile is returned with it.
+func (s *Service) nextAttempt(ctx context.Context, r ref, a attempt) (ref, error) {
+	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1
+		WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
+			AND EXISTS (SELECT 1 FROM integration_ref_attempts WHERE ref_id = ? AND seq = ? AND outcome IN ('expired', 'abandoned'))`,
+		r.id, a.seq, r.id, a.seq); err != nil {
 		return ref{}, err
 	}
 	return s.refByID(ctx, r.id)
 }
 
-// noteLink keeps the provider's answer on the ref: the object, the address, and that it is open, and
-// returns the link to give. An answer that made an object is recorded whatever another try (one whose
-// lease ran out, still working) noted of the ref meanwhile, a failure included: the link is about to
-// be returned, and a ref that doesn't have it would let a later try make a second one. If the ref
-// was changed by another try so that this answer was not recorded, the ref is read again and what it
-// holds is the link, under the check every finished ref is given with (madeLink).
-func (s *Service) noteLink(ctx context.Context, r ref, req paylink.Request, l Link) (paylink.Link, error) {
-	res, err := s.store.db.ExecContext(ctx, `
+// noteLink keeps the key's object on the ref as its link, and the key's outcome as made, in one
+// transaction, and returns the link to give. An answer that made an object is recorded whatever another
+// try noted of the ref meanwhile: the link is about to be returned, and a ref that doesn't have it would
+// let a later try make a second one. If another try noted the ref's link first, what the ref holds is
+// given, under the check every finished ref is given with (madeLink).
+func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Request, l Link) (paylink.Link, error) {
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return paylink.Link{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
 		UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'
 		WHERE id = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed')`, l.ObjectID, l.URL, r.id)
 	if err != nil {
@@ -534,82 +805,22 @@ func (s *Service) noteLink(ctx context.Context, r ref, req paylink.Request, l Li
 		}
 		return paylink.Link{}, err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return paylink.Link{}, err
-	} else if n == 1 {
-		return paylink.Link{URL: l.URL, ObjectID: l.ObjectID, AmountMinor: r.amountMinor, Currency: r.currency}, nil
-	}
-	// Another try noted its answer first (the same object, since the key is the same), or moved the ref
-	// on: what the ref holds now is what is given, checked as any finished ref is.
-	now, err := s.refByID(ctx, r.id)
+	n, err := res.RowsAffected()
 	if err != nil {
 		return paylink.Link{}, err
 	}
-	if now.objectID == "" {
-		return paylink.Link{}, unavailable() // the ref has no object to give: the answer is not used
-	}
-	return madeLink(now, req)
-}
-
-// callFailed notes what a failed call means for the ref (nothing, when r is nil: a read made before
-// the ref) and turns it into the entry's failure. created says that the failure is of the call that
-// makes the object, not of a read.
-func (s *Service) callFailed(ctx context.Context, r *ref, rec record, err error, created bool) error {
-	ce, ok := IsCall(err)
-	if !ok {
-		return err
-	}
-	if r != nil {
-		switch {
-		case ce.OutcomeUnknown:
-			// The call may have been executed: the provider may still make the object. No new key is taken
-			// until that is resolved, whichever key the call used (the older call of an entry done twice
-			// is as unknown as the newer one).
-			if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET outcome_unknown_at = coalesce(outcome_unknown_at, ?)
-				WHERE id = ? AND provider_object_id IS NULL`, s.store.stamp(s.store.now()), r.id); uerr != nil {
-				return uerr
-			}
-		case ce.Kind != CallUnreachable:
-			// A refusal ends the try: the ref is failed, and a retry of the entry starts it anew, which looks
-			// for what the call may have made and moves to a key of its own before it calls again (the
-			// provider may have kept even a 4xx under the key). The key moves here, from the one the
-			// failed call used, when the provider said it kept the failure, so a late failure of an older
-			// call (an entry done twice) can't skip a key that a later call is using.
-			if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'failed', lookup_required = 1, key_seq = key_seq + (? AND key_seq = ?)
-				WHERE id = ? AND provider_object_id IS NULL`, boolInt(ce.KeyKept), r.keySeq, r.id); uerr != nil {
-				return uerr
-			}
-		case created:
-			// An answer that says the call was not executed (rate limited, a conflict, a timeout of the
-			// provider's own): the key was not used.
-			if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_called_seq = key_seq - 1
-				WHERE id = ? AND provider_object_id IS NULL AND key_called_seq = ? AND key_seq = ?`, r.id, r.keySeq, r.keySeq); uerr != nil {
-				return uerr
-			}
+	if n == 1 {
+		if _, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'made', object_id = ?, url = ?
+			WHERE ref_id = ? AND seq = ? AND (outcome IS NULL OR outcome = 'made')`, l.ObjectID, l.URL, a.refID, a.seq); err != nil {
+			return paylink.Link{}, err
 		}
+		if err := tx.Commit(); err != nil {
+			return paylink.Link{}, err
+		}
+		return paylink.Link{URL: l.URL, ObjectID: l.ObjectID, AmountMinor: r.amountMinor, Currency: r.currency}, nil
 	}
-	// What is logged is what happened, never what was said: not the key, not the provider's words.
-	slog.Warn("integrations: a payment link wasn't made", "integration", rec.ID, "provider", rec.Provider,
-		"kind", int(ce.Kind), "status", ce.Status)
-	if ce.OutcomeUnknown {
-		return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
-	}
-	switch ce.Kind {
-	case CallCredentials:
-		return &paylink.Error{Code: apierr.CodeIntegrationCredentialsRefused}
-	case CallRefused:
-		return &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
-	case CallLookupIncomplete:
-		return &paylink.Error{Code: apierr.CodeIntegrationLookupIncomplete}
-	case CallSettled:
-		return &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
-	}
-	return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
+	_ = tx.Rollback()
+	// Another try noted its answer first (the same object, since the key is the same), or moved the ref
+	// on: what the ref holds now is what is given, checked as any finished ref is.
+	return s.refHolds(ctx, r, req)
 }

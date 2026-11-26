@@ -476,10 +476,9 @@ const (
 	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable" // the provider didn't answer, or answered with an error that may pass: tried again, then waits for a retry
 	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
 	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
-	CodeIntegrationLookupIncomplete    Code = "integration_lookup_incomplete"    // the provider's account has more objects than a lookup for an earlier try's link reads: an admin must settle it
 	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
 	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"      // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
-	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"  // the provider didn't say whether the payment link was made: only a lookup is retried, for a bounded time, and no second link is made meanwhile
+	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"  // a call may have run and nobody knows what it made: only its object is looked for and the call asked again under its own key, for a bounded time, and no other key is used meanwhile
 	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"   // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
 	CodeIntegrationConditionChanged    Code = "integration_condition_changed"    // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
 )

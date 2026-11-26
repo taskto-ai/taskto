@@ -62,6 +62,12 @@ type Service struct {
 	// beforeBeginRef is for tests: it runs between reading an entry's ref and making it ready for a
 	// call, where another worker's call may finish.
 	beforeBeginRef func()
+	// afterWriteAhead is for tests: it runs after a call is written ahead and before it leaves, and an
+	// error it returns ends the try there, as a crash would.
+	afterWriteAhead func() error
+	// afterCall is for tests: it runs after a call answered with an object and before anything of the
+	// answer is noted, and an error it returns ends the try there, as a crash would.
+	afterCall func() error
 
 	now func() time.Time
 	// hookIP and hookID limit the webhook route (webhook.go); applier applies stored events and

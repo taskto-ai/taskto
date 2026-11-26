@@ -283,9 +283,10 @@ function detail(e: AppEffect, t: ReturnType<typeof useT>, f: Pick<Format, 'numbe
     case 'create_payment_link': {
       // The amount is exact decimal text; only its showing is the locale's. An amount the server
       // refused is shown as it is, exactly (a number would round 120.123 to 120.12, which is not what
-      // the record holds), and so is one that is not a number.
+      // the record holds), and so is one that is not a number. With no amount or currency, nothing is
+      // guessed: it comes from the record.
       const n = Number(d.amount)
-      if (!d.amount || !d.currency) return d.title ?? ''
+      if (!d.amount || !d.currency) return t('apps.effects.paymentLinkNoAmount')
       if (!Number.isFinite(n) || e.error?.code === 'integration_amount_refused') return `${d.amount} ${d.currency}`
       try {
         return f.number(n, { style: 'currency', currency: d.currency })
