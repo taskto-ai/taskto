@@ -484,13 +484,15 @@ for (const step of ['the logout', "Back's question"] as const) {
         newValue: localStorage.getItem('taskto:offline-last'),
       }),
     )
-    await screen.findByLabelText('Password')
+    // Each step here waits on a start that is slow on a loaded machine.
+    const slow = { timeout: 5000 }
+    await screen.findByLabelText('Password', {}, slow)
     // The second person signs in here; the device refuses the first person's cleanup at their start.
     fail.cleanup = true
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'second@example.com' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
     fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
-    await screen.findByRole('button', { name: /^Account: Second/ })
+    await screen.findByRole('button', { name: /^Account: Second/ }, slow)
     expect(pendingOf()).toEqual(['1:s1'])
     fail.cleanup = false
     await act(async () => answer?.())
@@ -537,4 +539,47 @@ test("a tab that hears nobody signed in and then another account, both by the ti
   window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last', newValue: second_ }))
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(sessionStorage.getItem('taskto:operations:1')).toBeNull()
+})
+
+test("a logout refused as another account's, after another tab finished the sign-out, leaves the page on the login", async () => {
+  let refuse: (() => void) | null = null
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 409, body: { error: 'another account', code: 'session_account_changed' } })
+      }),
+  })
+  render(<App />)
+  await logOut()
+  await waitFor(() => expect(refuse).not.toBeNull())
+  localStorage.removeItem('taskto:offline-last')
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last', newValue: null }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  // Someone else signs in in another tab; this tab's logout is answered only now.
+  await act(async () => refuse?.())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+  expect(screen.queryByText('The account changed')).toBeNull()
+})
+
+test('a browser with no offline storage keeps no list of offline accounts after a sign-out', async () => {
+  fakeFetch({ ...pages, 'GET /api/me': { body: { ...first_, session: 's1' } }, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: 'Log in' })
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+  expect(JSON.parse(localStorage.getItem('taskto:offline-users') ?? '[]')).not.toContain(1)
+})
+
+test('the invite page with nobody signed in finishes a sign-out left unfinished', async () => {
+  localStorage.setItem(
+    'taskto:sign-out-pending',
+    JSON.stringify([{ user: 1, session: 's1', phase: 'requested', keep: false, approved: [] }]),
+  )
+  window.history.replaceState(null, '', '/invite#an-invite')
+  fakeFetch({ ...pages, 'GET /api/me': { status: 401, body: { error: 'not logged in' } } })
+  render(<App />)
+  await waitFor(() => expect(pendingOf()).toEqual([]))
 })

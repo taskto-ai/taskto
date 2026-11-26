@@ -1454,3 +1454,38 @@ test('without Web Locks, a start that registers the device again stops when anot
   expect(await synced).toBe(false)
   expect(calls.some((c) => c.method === 'PUT')).toBe(false)
 })
+
+test("a sign-out's removal of push stops when a newer login of the account started while it waited", async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  const registration = await navigator.serviceWorker.getRegistration()
+  let answer: () => void = () => {}
+  vi.mocked(registration?.pushManager.getSubscription as () => Promise<unknown>).mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        answer = () => done(sub)
+      }),
+  )
+  let older = true
+  const leaving = leavePush(1, () => older)
+  await new Promise((r) => setTimeout(r, 0))
+  // The same person signs in again in another tab, and push goes on for that login.
+  older = false
+  localStorage.setItem('taskto.push', '1')
+  answer()
+  await leaving
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+})
+
+test('marks of unsubscribes long over, or that are no time at all, are removed when looked at', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
+  localStorage.setItem('taskto.push', '1')
+  localStorage.setItem('taskto.push-unsubscribing:closed-tab', String(Date.now() - 120_000))
+  localStorage.setItem('taskto.push-unsubscribing:garbled', 'not a time')
+  expect(await syncPush(1)).toBe(true)
+  expect(localStorage.getItem('taskto.push-unsubscribing:closed-tab')).toBeNull()
+  expect(localStorage.getItem('taskto.push-unsubscribing:garbled')).toBeNull()
+})

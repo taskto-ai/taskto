@@ -89,6 +89,10 @@ export function recordSignOut(
   approved: Approval,
   discardUnreadable = false,
 ): void {
+  // A logout of this same login that got no answer before may still reach the server: that stays
+  // known, whatever becomes of this one.
+  const before = read().find((p) => p.user === user)
+  const unanswered = !!before?.unanswered && session !== '' && before.session === session
   write([
     ...read().filter((p) => p.user !== user),
     {
@@ -98,6 +102,7 @@ export function recordSignOut(
       keep,
       approved: [...approved],
       ...(discardUnreadable ? { discardUnreadable } : {}),
+      ...(unanswered ? { unanswered } : {}),
     },
   ])
 }
@@ -132,9 +137,10 @@ export function confirmSignOut(user: number, session: string): void {
   write(read().map((p) => (p.user === user && p.session === session ? { ...p, phase: 'confirmed' } : p)))
 }
 
-// The sign-out is over: finished and verified, or cancelled by the same login.
-export function settleSignOut(user: number): void {
-  write(read().filter((p) => p.user !== user))
+// The sign-out is over: finished and verified, or cancelled by the same login. With `session`, only
+// that login's: the sign-out of another login of the account (recorded meanwhile) stays.
+export function settleSignOut(user: number, session?: string): void {
+  write(read().filter((p) => !(p.user === user && (session === undefined || p.session === session))))
 }
 
 // Whether `user`'s data on this device belongs to a sign-out that isn't resolved: not to be opened
@@ -155,6 +161,18 @@ export function rememberLogin(user: number, session: string | undefined): void {
     else window.localStorage.removeItem(LOGIN)
   } catch {
     // Not kept: a late sign-out of an older login clears the device as it would have.
+  }
+}
+
+// The login `session` of `user` is over: it is no longer the browser's, if it was. Compared before it
+// is removed, so a newer login remembered meanwhile stays.
+export function forgetLogin(user: number, session: string | undefined): void {
+  const now = browserLogin()
+  if (!now || now.user !== user || !session || now.session !== session) return
+  try {
+    window.localStorage.removeItem(LOGIN)
+  } catch {
+    // Not removed: a later cleanup of an older login is shielded by it, and leaves the device.
   }
 }
 

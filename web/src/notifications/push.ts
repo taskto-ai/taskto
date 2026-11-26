@@ -122,18 +122,24 @@ const UNSUBSCRIBING = 'taskto.push-unsubscribing:'
 const UNSUBSCRIBE_UNRESOLVED_MS = 60_000
 
 // Whether an unsubscribe of the browser's subscription isn't resolved yet, in this tab or another.
+// Marks that are over (a tab closed in the middle) or that hold no time are removed as they are found.
 function unsubscribeUnresolved(): boolean {
+  let unresolved = false
   try {
+    const over: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
       if (!key?.startsWith(UNSUBSCRIBING)) continue
-      const at = Number(localStorage.getItem(key))
-      if (Number.isFinite(at) && Date.now() - at < UNSUBSCRIBE_UNRESOLVED_MS) return true
+      const raw = localStorage.getItem(key)
+      const at = raw === null || raw.trim() === '' ? Number.NaN : Number(raw)
+      if (Number.isFinite(at) && Math.abs(Date.now() - at) < UNSUBSCRIBE_UNRESOLVED_MS) unresolved = true
+      else over.push(key)
     }
+    for (const key of over) localStorage.removeItem(key)
   } catch {
     // Nothing kept: where storage is refused, Web Locks (or this tab's chain) still order the changes.
   }
-  return false
+  return unresolved
 }
 
 function mark(key: string, on: boolean) {
@@ -342,25 +348,29 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
  */
 //
 // It is part of the sign-out of `userId`, whose session is already over here (session.ts): the
-// request names them, so it can't remove the device of someone who signed in since.
-export async function leavePush(userId: number): Promise<void> {
+// request names them, so it can't remove the device of someone who signed in since. `still` says
+// whether the sign-out is still the one of the browser's login: a newer login of the same account,
+// started in another tab while this waits, has the subscription from then on.
+export async function leavePush(userId: number, still: () => boolean = () => true): Promise<void> {
   if (!pushSupported()) return
   // The sign-out this is part of: once another session has begun here, or someone else turned push
-  // on (the flag names them), this browser's subscription is theirs, and is left alone. That is
-  // checked again at the moment it would be ended, since the browser is shared by its tabs.
+  // on (the flag names them), or a newer login of the account started, this browser's subscription
+  // is theirs, and is left alone. That is checked again at the moment it would be ended, since the
+  // browser is shared by its tabs.
   const mine = sameSession()
+  const ours = () => mine() && still()
   const theirs = () => {
     const flag = ownerOf(read())
     return flag !== null && flag !== String(userId)
   }
-  if (!theirs()) write(null)
+  if (!theirs() && still()) write(null)
   const leave = () =>
     withPushLock(async () => {
       // Its turn may come after another account's claim failed and gave the flag back to this one:
       // the sign-out has the last word on it, unless a session began here since.
-      if (!theirs() && mine()) write(null)
+      if (!theirs() && ours()) write(null)
       const sub = await (await registration())?.pushManager.getSubscription()
-      if (!sub || !mine() || theirs()) return
+      if (!sub || !ours() || theirs()) return
       await unsubscribe(sub).catch(() => {})
     })
   // Bounded: signing out never waits long on a browser that is slow to answer. What is still on

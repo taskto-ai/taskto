@@ -575,8 +575,17 @@ signing in is dealt with when it signs in:
   only once the app has started again; a step that fails leaves the person on *Couldn't sign out*.
   A logout confirmed after the same account signed in with a **newer login** (in another tab, after
   the request was sent) touches nothing on the device: the drafts, the database and the push
-  subscription are that login's. A tab whose own sign-out another tab finished goes to the login
-  screen, not *The account changed*.
+  subscription are that login's. The browser remembers the login it started with last, and forgets it
+  as soon as that login is known to be over (a `401`, a lost session, its own sign-out), so a login
+  that has ended shields nothing. Every step of the cleanup asks again, after each wait, whether a
+  newer login started, and settles only its own login's record. Its deletion of the database is
+  **one at a time with opening it** (a Web Lock per account; where the browser has none, only the
+  moment between the check and the deletion is unguarded), and removes only the database it retired:
+  one a newer start of the account made again since, with whatever was saved in it, stays. A cleanup
+  that couldn't read the database it kept, or couldn't delete it, is not verified clear: it is said,
+  and finished at a later start. A tab whose own sign-out another tab finished goes to the login
+  screen, not *The account changed*; Back stops, and lets go of what it had claimed, when another
+  tab finished the sign-out or someone else signed in while it waited.
 - **Another tab changes the account.** A tab learns that the account signed in on this browser
   changed (another tab signed in as someone else, or out: the browser's `storage` event and a
   BroadcastChannel, each change heard as it was made, so a tab that was frozen across a sign-out

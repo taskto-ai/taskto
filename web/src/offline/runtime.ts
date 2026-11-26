@@ -187,7 +187,9 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   if (opening) await opening.catch(() => {})
   if (state.runtime?.user === user) {
     if (name) rememberUser({ id: user, name })
-    state.runtime.engine.resume()
+    // Not while a sign-out of the account is unresolved (Back starting the app again): the queue goes
+    // on once that is let go.
+    if (!signOutPending(user)) state.runtime.engine.resume()
     // The same person back after the server couldn't be reached (the app opened offline): what they
     // downloaded is asked about again, since what they may keep may have changed meanwhile.
     void revalidate(state.runtime.store).catch(() => {})
@@ -356,6 +358,8 @@ async function checkUnsent(
   ask: (store: OfflineStore) => Promise<UnsentRef[]>,
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   if (opening) await opening.catch(() => {})
+  // A browser with no IndexedDB at all holds nothing: that is none, not unknown.
+  if (typeof indexedDB === 'undefined') return { left: [], unreadable: false }
   const runtime = state.runtime
   // Only the account signing out (`user`), never another that is open here meanwhile.
   const users = user !== undefined ? [user] : runtime ? [runtime.user] : []
@@ -381,30 +385,36 @@ async function checkUnsent(
   return { left, unreadable }
 }
 
-async function teardown(purge: boolean, user?: number): Promise<void> {
+// What a purge is for: `still`, whether it is still the account's to remove (a sign-out asks whether
+// a newer login of the account started since); `force`, removing the database even if it isn't the
+// retired one (the person chose to discard one that couldn't be read).
+type PurgeOptions = { still?: () => boolean; force?: boolean }
+
+async function teardown(purge: boolean, user?: number, { still = () => true, force = false }: PurgeOptions = {}) {
   // The runtime open here is let go only if it is the account signing out's: another's (signed in
   // since) is left as it is.
   const runtime = user === undefined || state.runtime?.user === user ? state.runtime : null
   if (runtime) {
     runtime.stop()
-    if (purge) {
-      await runtime.store.destroy()
-      writeUsers(readUsers().filter((id) => id !== runtime.user))
-      forgetLast(runtime.user)
-    } else {
-      runtime.store.close()
-    }
+    runtime.store.close()
     set({ runtime: null, problem: null, foreign: state.foreign })
   }
   // Signing out deletes the account's database whether or not it was opened here (the invite
-  // page, a database of a newer version, one that could not be opened).
-  if (purge && user !== undefined && user !== runtime?.user) {
-    await OfflineStore.destroyFor(user).catch(() => {})
-    writeUsers(readUsers().filter((id) => id !== user))
-    forgetLast(user)
-  }
+  // page, a database of a newer version, one that could not be opened): the one it retired, never
+  // one a newer start of the account made again since (store.ts, `deleteRetired`).
+  const id = runtime?.user ?? user
+  if (purge && id !== undefined) await purgeDatabase(id, { still, force })
   if (purge && !runtime && user === undefined) forgetLast()
   if (purge && state.problem) set({ runtime: null, problem: null, foreign: state.foreign })
+}
+
+async function purgeDatabase(user: number, { still = () => true, force = false }: PurgeOptions) {
+  const outcome = await OfflineStore.deleteRetired(user, { still, force }).catch(() => 'failed' as const)
+  if (outcome === 'removed') writeUsers(readUsers().filter((id) => id !== user))
+  // The browser is no longer the account's, unless a newer start of it made the database again (it
+  // is that login's) or it is someone's to keep now. A deletion that failed still lets go of the
+  // marker: the sign-out is not verified clear, and is finished later.
+  if ((outcome === 'removed' || outcome === 'failed') && still()) forgetLast(user)
 }
 
 // Lets go of the user's database: it is closed, and with `purge` deleted, which is what signing
@@ -420,18 +430,22 @@ export async function deactivate({
   keep,
   approved,
   discardUnreadable,
+  still = () => true,
 }: {
   purge: boolean
   user?: number
   keep?: boolean
   approved?: Approval
   discardUnreadable?: boolean
+  // Whether the database is still the departing login's to let go of: asked after every wait.
+  still?: () => boolean
 }): Promise<UnsentRef[] | 'unreadable'> {
   if (opening) await opening.catch(() => {})
+  if (!still()) return []
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])
     await teardown(false, user)
-    forgetLast(user)
+    if (still()) forgetLast(user)
     return []
   }
   // Deleting is conditional on there being nothing unsent that the person didn't approve: if some
@@ -440,8 +454,9 @@ export async function deactivate({
     const { left, unreadable } = await settle(user, approved, discardUnreadable)
     if (left.length > 0) return left
     if (unreadable) return 'unreadable'
+    if (!still()) return []
   }
-  await teardown(purge, user)
+  await teardown(purge, user, { still, force: discardUnreadable })
   return []
 }
 
@@ -455,15 +470,9 @@ export async function purgeAccount(user: number, approved: Approval = new Map())
   if (opening) await opening.catch(() => {})
   const { left } = await settle(user, approved, true)
   if (left.length > 0) return left
-  // Looked at again after the waits above: the one in use may have changed.
-  const runtime = state.runtime
-  if (runtime?.user === user) {
-    await teardown(true, user)
-  } else {
-    await OfflineStore.destroyFor(user).catch(() => {})
-    writeUsers(readUsers().filter((id) => id !== user))
-    forgetLast(user)
-  }
+  // Looked at again after the waits above: the one in use may have changed. The account is gone:
+  // its database goes whatever it is (`force`).
+  await teardown(true, user, { force: true })
   return []
 }
 

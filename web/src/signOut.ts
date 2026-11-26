@@ -17,8 +17,8 @@ import type { Me } from './api'
 import { leavePush } from './notifications/push'
 import {
   browserLogin,
+  forgetLogin,
   type PendingSignOut,
-  pendingSignOutOf,
   pendingSignOuts,
   rememberLogin,
   settleSignOut,
@@ -48,20 +48,25 @@ function bounded<T>(work: Promise<T>, ms = SIGN_OUT_WAIT_MS): Promise<T> {
 
 // Whether the device holds nothing more of `user`'s that the sign-out was to remove: no unsent record
 // the person agreed to lose, and no marker that would let an offline start open the account. What is
-// left is only what they did not agree to lose (made after they were asked), kept for the account.
-// A database that can't be read is not verified clear of what they agreed to lose.
-async function verifiedClear(user: number, approved: Approval): Promise<boolean> {
+// left is only what they did not agree to lose (made after they were asked), kept for the account
+// with the database. (A database the cleanup retired was emptied as it was, so one whose deletion
+// didn't follow holds nothing of theirs.) Not verified: a database that can't be read, and one the
+// person chose to discard whatever it held that is still there.
+async function verifiedClear(user: number, { keep, approved, discardUnreadable }: Decision): Promise<boolean> {
   if (lastUser()?.id === user) return false
+  // A browser with no IndexedDB holds no database; one the person chose to keep is theirs.
+  if (typeof indexedDB === 'undefined' || keep) return true
   // Gone altogether (the usual end). Asked without opening it, since opening one makes it again.
-  const names = await globalThis.indexedDB?.databases?.().catch(() => undefined)
-  if (names && !names.some((d) => d.name === OfflineStore.databaseName(user))) return true
-  if (approved.size === 0) return true
+  const names = await indexedDB.databases?.().catch(() => undefined)
+  const present = names?.some((d) => d.name === OfflineStore.databaseName(user))
+  if (present === false) return true
+  if (present && discardUnreadable) return false
   const { left, unreadable } = await unsentState(user, new Map())
   return !unreadable && !left.some((r) => approved.has(r.id))
 }
 
-// Whether the browser started with a newer login of `user`'s than `session` since: the device is
-// that login's then.
+// Whether the browser started with a newer login of `user`'s than `session` since, which isn't known
+// to be over (`forgetLogin` lets go of one that ended): the device is that login's then.
 function newerLogin(user: number, session: string): boolean {
   const now = browserLogin()
   return !!session && now?.user === user && now.session !== session
@@ -87,33 +92,38 @@ export async function cleanUpAfterSignOut(
   { keep, approved, discardUnreadable = false }: Decision,
 ): Promise<boolean> {
   // A newer login of the account started here since: nothing on the device is this sign-out's.
-  // Asked again after every wait, right before what it would remove: the drafts, removed at once,
-  // and the database, whose deletion keeps anything unsent it wasn't agreed to lose, so what the
-  // newer login saves after that is kept, or refused and said, never lost unseen.
+  // Asked before every step, and again after every wait inside one (`still`): the push subscription,
+  // the drafts, the database (whose deletion is one at a time with opening it, and removes only the
+  // database it retired: store.ts), the marker. Only this login's record is ever settled.
+  const still = () => !newerLogin(user, session)
   const superseded = () => {
-    if (!newerLogin(user, session)) return false
-    if (pendingSignOutOf(user)?.session === session) settleSignOut(user)
+    if (still()) return false
+    settleSignOut(user, session)
     return true
   }
   if (superseded()) return true
+  // This login is over: it shields nothing from here on.
+  forgetLogin(user, session)
   try {
     await bounded(
       (async () => {
-        await leavePush(user)
+        await leavePush(user, still)
         if (superseded()) return
         forgetDraftsOf(user)
         const left = await deactivate(
-          keep ? { purge: false, keep: true, user } : { purge: true, user, approved, discardUnreadable },
+          keep ? { purge: false, keep: true, user, still } : { purge: true, user, approved, discardUnreadable, still },
         )
+        if (superseded()) return
         // Records made since the person was asked (another tab of the account), or a database that
         // can't be read now: not theirs to lose unseen, so the database stays, listed for the
         // account's next sign-in to deal with.
-        if (left === 'unreadable' || left.length > 0) await deactivate({ purge: false, keep: true, user })
+        if (left === 'unreadable' || left.length > 0) await deactivate({ purge: false, keep: true, user, still })
       })(),
     )
     if (superseded()) return true
-    if (!(await bounded(verifiedClear(user, approved)))) return false
-    settleSignOut(user)
+    if (!(await bounded(verifiedClear(user, { keep, approved, discardUnreadable })))) return false
+    if (superseded()) return true
+    settleSignOut(user, session)
     return true
   } catch {
     return false
@@ -138,10 +148,13 @@ export function signOutToResume(me: Me): PendingSignOut | undefined {
 // The login found is remembered first, for a cleanup of an older one that is still on its way.
 export async function finishUnfinishedSignOuts(me: Me | null): Promise<void> {
   if (me) rememberLogin(me.user.id, me.session)
-  for (const p of pendingSignOuts()) {
+  for (const listed of pendingSignOuts()) {
+    // Read again: an earlier cleanup waited, and another tab may have settled or replaced it since.
+    const p = pendingSignOuts().find((r) => r.user === listed.user && r.session === listed.session)
+    if (!p) continue
     if (me && sameLogin(p, me)) continue
     if (me && p.user === me.user.id) {
-      settleSignOut(p.user)
+      settleSignOut(p.user, p.session)
       continue
     }
     await cleanUpAfterSignOut(p.user, p.session, decisionOf(p))

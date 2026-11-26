@@ -398,7 +398,13 @@ export class OfflineStore {
     return `taskto-offline-${user}`
   }
 
-  static async open(user: number): Promise<OfflineStore> {
+  // Opening is one at a time with a sign-out's deletion of the same account's database (`withLock`):
+  // a retired database made again here is never the one that deletion then removes.
+  static open(user: number): Promise<OfflineStore> {
+    return withLock(user, () => OfflineStore.openNow(user))
+  }
+
+  private static async openNow(user: number): Promise<OfflineStore> {
     const name = OfflineStore.databaseName(user)
     const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
     // A database whose purge began (it was found empty, and marked) but did not finish: it is empty
@@ -916,6 +922,58 @@ export class OfflineStore {
 
   static destroyFor(user: number): Promise<void> {
     return deleteDatabase(OfflineStore.databaseName(user))
+  }
+
+  // A sign-out's deletion of `user`'s database, which its first step retired (emptied and marked):
+  // one at a time with opening it (`withLock`), and only while `still()` holds, it removes that
+  // database and no other. One that isn't retired any more was made again since, by a newer start of
+  // the account, and stays with whatever was saved in it ('newer'). `force` removes it retired or not
+  // (the person chose to discard a database that couldn't be read), still only while `still()`
+  // holds ('stopped' otherwise). A deletion the browser refused throws.
+  static deleteRetired(
+    user: number,
+    { force = false, still = () => true }: { force?: boolean; still?: () => boolean } = {},
+  ): Promise<'removed' | 'newer' | 'stopped'> {
+    return withLock(user, async () => {
+      if (!still()) return 'stopped'
+      // A browser with no IndexedDB holds no database to remove.
+      if (typeof indexedDB === 'undefined') return 'removed'
+      const name = OfflineStore.databaseName(user)
+      if (!force && !(await retiredOrNew(name))) return 'newer'
+      if (!still()) return 'stopped'
+      await deleteDatabase(name)
+      return 'removed'
+    })
+  }
+}
+
+// One at a time per account, across the browser's tabs: opening its database, and a sign-out's
+// deletion of it. Where the browser has no Web Locks, the deletion still removes only a retired
+// database, which leaves only the moment between that check and the deletion unguarded.
+function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  if (!locks?.request) return work()
+  return locks.request(`taskto-offline-db:${user}`, () => work()) as Promise<T>
+}
+
+// Whether the database is retired, or didn't exist (opening it here made it, empty).
+async function retiredOrNew(name: string): Promise<boolean> {
+  let made = false
+  const db = await openDatabase(name, SCHEMA_VERSION, {
+    ...MIGRATIONS,
+    1: (d, tx) => {
+      made = true
+      MIGRATIONS[1]?.(d, tx)
+    },
+  })
+  try {
+    if (made) return true
+    return (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
+  } catch {
+    // Not read: not known to be retired, so not removed.
+    return false
+  } finally {
+    db.close()
   }
 }
 

@@ -83,3 +83,17 @@ test("an older login's unanswered logout and Back leave the record of a newer lo
   expect(pendingSignOutOf(1)?.unanswered).toBeUndefined()
   expect(signOutPending(1)).toBe(true)
 })
+
+test('a sign-out of the same login again keeps that an earlier logout of it got no answer', () => {
+  recordSignOut(1, 's1', false, new Map())
+  unansweredSignOut(1, 's1')
+  backFromSignOut(1, 's1')
+  // Signed out again from the same login: this logout is refused, and the person goes back.
+  recordSignOut(1, 's1', false, new Map())
+  backFromSignOut(1, 's1')
+  // The first logout may still reach the server: the sign-out is kept, as gone back from.
+  expect(pendingSignOutOf(1)).toMatchObject({ session: 's1', phase: 'backed', unanswered: true })
+  // Not for another login of the account.
+  recordSignOut(1, 's2', false, new Map())
+  expect(pendingSignOutOf(1)?.unanswered).toBeUndefined()
+})
