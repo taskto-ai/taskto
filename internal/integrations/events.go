@@ -387,6 +387,9 @@ func (s *Service) claimEvent(ctx context.Context) (ev StoredEvent, lease int64, 
 					string(apierr.CodeIntegrationEventGaveUp), at, id); err != nil {
 					return err
 				}
+				if err := s.store.notifyEventAdmins(ctx, tx, id); err != nil {
+					return err
+				}
 				continue
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE integration_events
@@ -464,10 +467,20 @@ func (s *Service) finishEvent(ctx context.Context, id, lease int64, state string
 	if code != "" {
 		c = string(code)
 	}
-	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_events
-		SET state = ?, error_code = ?, error_params = ?, lease_until = NULL, processed_at = ?
-		WHERE id = ? AND state = 'running' AND lease = ?`, state, c, paramsJSON(params), at, id, lease)
-	return err
+	// The end state and the admins' notification of it are one transaction, so a failure that nobody
+	// was told of can't be the one that was stored.
+	return s.store.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE integration_events
+			SET state = ?, error_code = ?, error_params = ?, lease_until = NULL, processed_at = ?
+			WHERE id = ? AND state = 'running' AND lease = ?`, state, c, paramsJSON(params), at, id, lease)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err // the event is another worker's now
+		}
+		return s.store.notifyEventAdmins(ctx, tx, id)
+	})
 }
 
 func paramsJSON(p apierr.Params) any {

@@ -129,6 +129,22 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 			params["due"] = due.String
 		}
 		return params, Target{Section: "boards", Item: item}, true, nil
+	case KindIntegrationEvent:
+		// For admins of the workspace, now: the integration's name, from one statement that also checks
+		// the role and that the event is the integration's, so a person who is no longer an admin, or an
+		// event that was purged, is shown nothing.
+		var name string
+		err := r.s.db.QueryRowContext(ctx, `SELECT i.display_name FROM integration_events e
+			JOIN integrations i ON i.id = e.integration_id
+			JOIN memberships m ON m.workspace_id = i.workspace_id AND m.user_id = ? AND m.role = 'admin'
+			WHERE e.id = ? AND i.id = ? AND i.workspace_id = ?`, r.userID, n.ref.Event, n.ref.Integration, n.workspaceID).Scan(&name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, Target{}, false, nil
+		}
+		if err != nil {
+			return nil, Target{}, false, err
+		}
+		return map[string]string{"integration": name}, Target{Section: "settings"}, true, nil
 	case KindAppEffectFailed:
 		// The right to view the app and its name come from one snapshot (access.Checker.AppNamed).
 		sp, acc, name, err := r.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)

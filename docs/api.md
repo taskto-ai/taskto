@@ -232,6 +232,23 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
+| `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
+| `integration_event_integration_changed` | — | A failed payment event: the app's slot is bound to another integration than the one whose payment this is. |
+| `integration_event_app_offline` | — | A failed payment event: the app is offline or not published, or its space is archived. |
+| `integration_event_record_gone` | — | A failed payment event: the record or its app is gone, or is in another workspace. |
+| `integration_event_record_refused` | — | A failed payment event: the record, as the payment would change it, doesn't fit the app. |
+| `integration_amount_mismatch` | — | A failed payment event: the amount or currency isn't what the payment link asked (a refund: another currency, or more than was paid). Not applied. |
+| `integration_event_payment_unknown` | — | A refund of a payment no ref has been paid by yet: tried again, then failed. |
+| `integration_event_ref_unknown` | — | An ignored event: no payment link of this integration has its token or payment. |
+| `integration_event_mode_mismatch` | — | An ignored event: live money for a link made in test mode, or the other way round. |
+| `integration_event_duplicate` | — | An ignored event: the payment or end the ref already has. |
+| `integration_event_late` | — | An ignored event: the ref has moved past what it says. |
+| `integration_event_no_handler` | — | An ignored event: the app declares nothing for it; the ref moved, the record didn't. |
+| `integration_event_condition_unmet` | — | An ignored event: the record didn't meet the handler's `only_if` rule; the ref moved, the record didn't. |
+| `integration_event_partial_refund` | — | An ignored refund of part of the payment. |
+| `integration_event_second_payment` | — | An ignored payment on a ref that was paid already, kept for the admins to reconcile. |
+| `integration_event_not_found` | 404 | The retry names an event that isn't this integration's. |
+| `integration_event_not_retriable` | 409 | The retry names an event that didn't fail. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -2514,7 +2531,11 @@ workspace's home as its target, and a push for it says the same. Notifications a
   `params.title`; target: the card). One per comment: a person who is both the assignee and
   mentioned in a comment is told of the mention only. No notification holds the comment's text;
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
-  it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
+  it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one;
+- `integration_event`: for the admins of a workspace only: a payment event of an integration wasn't
+  applied to a record (it failed, was a second payment, or left a record the app's rule refused;
+  `params.integration` is its name; target: Settings). No notification holds the payment or the
+  record; one is shown as `changed` to someone who is no longer an admin. It can't be mailed.
 
 Leaving a workspace deletes the person's notifications of it. Old ones are removed after 90 days
 (read) or 180 days, and past 500 per person and workspace. These routes take a session only (`403`
@@ -4438,6 +4459,28 @@ provider in this version (`remote` is `false`). `200`, always, with
 secret (an old install can: it is refused now), so deliveries signed with it open neither; it names
 neither the integration nor its workspace.
 It never carries a provider's reply or a secret. `404` for another workspace's integration.
+
+### `GET /api/workspaces/{workspace}/integrations/{integration}/events`
+
+Admin only. The integration's stored events, newest first
+([applying events](integrations.md#applying-events)): `{"events": [{"id", "kind", "source", "state",
+"code", "amount_minor", "currency", "livemode", "attempts", "occurred_at", "received_at",
+"processed_at", "retriable"}], "next_before": 0}`. `state` is `pending`, `running`, `applied`,
+`ignored` or `failed`; `code` (absent for an applied event) is why it was not applied, one of the
+`integration_event_*` codes and `integration_amount_mismatch`; `retriable` is true for a failed
+event. `?state=` narrows to one state, `?limit=` (1 to 100, 50 without it) bounds the page and
+`?before=` continues after a page with `next_before`, which is `0` on the last. An event holds no
+record, app, space, token or provider id, and no body. `400` for a bad parameter; `404` for another
+workspace's integration; `403` for a member.
+
+### `POST /api/workspaces/{workspace}/integrations/{integration}/events/{event}/retry`
+
+Admin only, no body. Puts a **failed** event of this integration back to wait for the worker, with
+its tries counted anew, for once what was wrong is fixed (an approval, a switched-off integration, an
+app that was offline). Applying it again is safe whatever happened before. `200` with the event;
+`404 integration_event_not_found` for an event that isn't this integration's (and
+`integration_not_found` for another workspace's integration); `409 integration_event_not_retriable`
+for one that didn't fail.
 
 ### `GET /api/workspaces/{workspace}/integrations/{integration}/payment-links/unresolved`
 
