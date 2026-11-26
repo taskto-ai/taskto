@@ -22,7 +22,7 @@ export default function EmptyStateGallery() {
         >
           {t('gallery.layout.noAppsHelp')}
         </EmptyState>
-        <EmptyState icon={<Icon name="search" size={24} />} title={t('gallery.layout.noMatch')}>
+        <EmptyState icon={<Icon name="search" size={24} />} title={t('gallery.layout.noMatch')} level={2}>
           {t('gallery.layout.noMatchHelp')}
         </EmptyState>
       </div>

@@ -13,9 +13,13 @@ export interface EmptyStateProps {
   actions?: ReactNode
   // A visual above the title.
   icon?: ReactNode
+  // The title as a heading of this level, where the empty state is what the page is (a screen of
+  // its own, such as "you are in no workspace"): it looks the same, and is in the outline.
+  level?: 1 | 2 | 3 | 4 | 5 | 6
 }
 
-export function EmptyState({ title, children, actions, icon }: EmptyStateProps) {
+export function EmptyState({ title, children, actions, icon, level }: EmptyStateProps) {
+  const Title = level ? (`h${level}` as const) : 'p'
   return (
     <div className="ui-empty">
       {icon && (
@@ -23,7 +27,7 @@ export function EmptyState({ title, children, actions, icon }: EmptyStateProps) 
           {icon}
         </span>
       )}
-      <p className="ui-empty-title">{title}</p>
+      <Title className="ui-empty-title">{title}</Title>
       {children && <div className="ui-empty-body">{children}</div>}
       {actions && <div className="ui-empty-actions">{actions}</div>}
     </div>

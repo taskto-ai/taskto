@@ -1,7 +1,9 @@
 {
   "app": {
     "loading": "Carregando…",
-    "unreachable": "Não foi possível falar com o servidor: {error}",
+    "unreachableTitle": "Não foi possível falar com o servidor",
+    "unreachableHelp": "Verifique a sua conexão, ou pergunte a quem cuida deste servidor se ele está no ar, e tente de novo.",
+    "unreachableDetail": "O que deu errado: {error}",
     "tryAgain": "Tentar de novo"
   },
   "apps": {
@@ -82,7 +84,8 @@
         "create_card": "Criar um cartão",
         "update_card": "Mover um cartão",
         "create_document": "Criar um documento",
-        "open_route": "Abrir um lugar"
+        "open_route": "Abrir um lugar",
+        "create_payment_link": "Criar um link de pagamento"
       },
       "status": {
         "pending": "Aguardando",
@@ -599,7 +602,6 @@
       "intro": "Sua senha está certa. Digite o código do seu app autenticador para concluir o login.",
       "introReset": "Sua nova senha foi definida. Digite o código do seu app autenticador para concluir o login.",
       "code": "Código do app ou código de recuperação",
-      "busy": "Verificando…",
       "submit": "Entrar",
       "back": "Voltar para a senha",
       "toLogin": "Ir para o login",
@@ -609,7 +611,6 @@
     "login": {
       "forgot": "Esqueceu sua senha? Peça um link de redefinição a um administrador do espaço de trabalho.",
       "title": "Entrar",
-      "busy": "Entrando…",
       "submit": "Entrar",
       "forgotByEmail": "Esqueceu sua senha?"
     },
@@ -617,7 +618,6 @@
       "title": "Redefina sua senha",
       "intro": "Informe o e-mail da sua conta. Se houver uma conta com ele, enviaremos um link para escolher uma nova senha.",
       "submit": "Enviar o link por e-mail",
-      "busy": "Enviando…",
       "sentTitle": "Veja seu e-mail",
       "sent": "Se houver uma conta com {email}, um link para escolher uma nova senha está a caminho.",
       "sentHelp": "O link funciona uma única vez e expira. Se nada chegar em alguns minutos, olhe a caixa de spam ou peça um link de redefinição a um administrador do espaço de trabalho.",
@@ -632,27 +632,29 @@
       "hint": "Pelo menos 12 caracteres.",
       "again": "Repita a nova senha",
       "mismatch": "As senhas não coincidem.",
-      "setting": "Definindo…",
       "submit": "Definir a senha"
     },
     "email": "E-mail",
     "password": "Senha",
     "yourName": "Seu nome",
     "passwordHint": "Pelo menos {min} caracteres.",
+    "show": "Mostrar",
+    "hide": "Ocultar",
+    "showPassword": "Mostrar senha",
+    "hidePassword": "Ocultar senha",
     "setup": {
       "title": "Configurar este servidor",
-      "intro": "Crie a conta do proprietário. O token de configuração está no log do servidor, na linha com <code>setup_token=</code>, impresso enquanto não existe nenhuma conta. Ele muda a cada inicialização.",
+      "lede": "Crie a conta do proprietário e o primeiro espaço de trabalho.",
       "token": "Token de configuração",
+      "tokenHint": "Está no log do servidor, na linha com <code>setup_token=</code>, impresso enquanto não existe nenhuma conta. Ele muda a cada inicialização.",
       "workspaceName": "Nome do espaço de trabalho",
       "defaultWorkspace": "Início",
-      "busy": "Configurando…",
       "submit": "Criar o proprietário"
     },
     "invite": {
       "title": "Entrar em um espaço de trabalho",
       "incomplete": "Este link de convite está incompleto: abra o link inteiro que você recebeu.",
       "loggedInAs": "Você está conectado como {email}. O convite vale para o endereço ao qual foi enviado.",
-      "joining": "Entrando…",
       "join": "Entrar no espaço de trabalho",
       "logOut": "Sair, para usar outra conta",
       "ssoIntro": "Você foi convidado. Entre com o seu provedor, usando o endereço para o qual o convite foi enviado.",
@@ -660,7 +662,6 @@
       "loginIntro": "Entre na conta do endereço ao qual o convite foi enviado.",
       "loginSubmit": "Entrar e participar",
       "newIntro": "Você foi convidado. Crie sua conta: seu e-mail é o endereço ao qual o convite foi enviado.",
-      "creating": "Criando…",
       "create": "Criar a conta"
     }
   },
@@ -976,6 +977,15 @@
     "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
     "too_many_integrations": "Você pode ter no máximo {max} integrações em um espaço de trabalho: remova uma antes.",
     "integration_in_use": "Um app ainda usa esta integração: desative-a em vez de removê-la.",
+    "app_integration_unapproved": "Um admin ainda não aprovou o que este app pede à integração \"{slot}\" na forma atual, ou a integração a que ela estava ligada foi desativada ou não é mais permitida neste espaço. Peça a um admin que aprove.",
+    "app_integration_slot_unknown": "Este rascunho não declara uma integração chamada \"{slot}\".",
+    "app_integration_contract_changed": "O app mudou desde que você leu o que ele pede à integração. Leia de novo e peça a aprovação disso.",
+    "app_integration_not_pending": "Este pedido já foi decidido.",
+    "app_integration_not_approved": "Só uma aprovação pode ser revogada.",
+    "app_integration_approval_not_found": "Pedido de aprovação não encontrado.",
+    "app_integration_kind_mismatch": "Esta integração não pode ser usada para {kind}.",
+    "app_integration_disabled": "Esta integração está desativada.",
+    "app_integration_space_not_allowed": "Esta integração ainda não é permitida no espaço do app.",
     "base_url_invalid": "Informe uma URL http ou https de até {max} caracteres, sem query nem fragmento.",
     "base_url_credentials": "A URL não pode conter usuário nem senha: coloque a chave no campo da chave de API.",
     "base_url_insecure": "Use https: uma chave só é enviada por http simples para esta máquina.",
@@ -1653,6 +1663,9 @@
       "spacesHint": "Os apps dos espaços que você escolher podem usar esta conta, depois que você os aprovar. O espaço privado de outra pessoa não pode ser escolhido.",
       "privateSpace": "{name} (privado)",
       "archivedSpace": "{name} (arquivado)",
+      "approvalSpace": "{name} (pela aprovação de um app)",
+      "approvalSpaceNote": "Permitido pela aprovação de um app: termina com a aprovação, a menos que você o mantenha.",
+      "keepSpace": "Manter {name} depois que a aprovação terminar",
       "otherSpaces_one": "E {count} espaço privado de outro membro, que você não pode ver.",
       "otherSpaces_many": "E {count} de espaços privados de outros membros, que você não pode ver.",
       "otherSpaces_other": "E {count} espaços privados de outros membros, que você não pode ver.",
@@ -1952,6 +1965,11 @@
         "integration_disabled": "Integração desligada",
         "integration_enabled": "Integração ligada",
         "integration_spaces_changed": "Espaços da integração alterados",
+        "integration_spaces_kept": "Espaços da integração mantidos após uma aprovação",
+        "app_integration_requested": "Uso de uma integração por um app solicitado",
+        "app_integration_approved": "Uso de uma integração por um app aprovado",
+        "app_integration_rejected": "Uso de uma integração por um app recusado",
+        "app_integration_revoked": "Uso de uma integração por um app revogado",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "server_update_requested": "Atualização pedida",
@@ -1968,7 +1986,8 @@
         "access_token": "Token de acesso",
         "provider_account": "Conta de provedor de modelos",
         "shared_cli_account": "Conta de CLI compartilhada",
-        "integration": "Integração"
+        "integration": "Integração",
+        "app_integration_approval": "Aprovação de integração de app"
       },
       "details": {
         "account": "Conta",
@@ -2008,9 +2027,13 @@
         "user_id": "Número do membro",
         "added": "Espaços adicionados",
         "removed": "Espaços removidos",
+        "kept": "Espaços mantidos",
         "mode": "Modo",
         "webhook_secret_set": "Segredo do webhook definido",
-        "webhook_secret_changed": "Segredo do webhook alterado"
+        "webhook_secret_changed": "Segredo do webhook alterado",
+        "app_id": "Número do app",
+        "integration_id": "Número da integração",
+        "space_allowed": "Espaço também permitido"
       },
       "values": {
         "admin": "Administrador",
@@ -2722,7 +2745,6 @@
       "body_many": "{count} de registros neste dispositivo não chegaram ao servidor. Sair agora os perderia, a menos que você os sincronize ou descarte.",
       "body_other": "{count} registros neste dispositivo não chegaram ao servidor. Sair agora os perderia, a menos que você os sincronize ou descarte.",
       "sync": "Sincronizar agora",
-      "syncing": "Sincronizando…",
       "discard": "Descartar e sair",
       "cancel": "Cancelar",
       "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",

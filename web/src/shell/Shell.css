@@ -325,11 +325,6 @@
     gap: var(--space-4);
   }
 
-  /* The screen for someone with no workspace: no shell around it, clear of the status bar. */
-  .ui-shell-alone {
-    padding-block-start: max(var(--space-10), env(safe-area-inset-top));
-  }
-
   @media (pointer: coarse) {
     .ui-shell-link {
       min-block-size: var(--control-touch);
