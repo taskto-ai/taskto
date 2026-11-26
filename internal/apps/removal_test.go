@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,7 +73,7 @@ func TestCleanupInsideAHeldSpaceDoesNotWaitForAPendingRemoval(t *testing.T) {
 	}
 	removed := make(chan error, 1)
 	go func() { removed <- access.RemoveSpaceDir(w.e.dataDir, s) }() // queues behind the held space
-	time.Sleep(100 * time.Millisecond)
+	waitUntilRemovalIsQueued(t)
 
 	cleaned := make(chan error, 1)
 	go func() { cleaned <- w.e.s.deleteAttachment(ctx, id, a.ID, root) }()
@@ -106,4 +108,22 @@ func TestAGoneSpacesRowIsRecheckedOnceInside(t *testing.T) {
 	}
 	_ = root
 	done()
+}
+
+// waitUntilRemovalIsQueued waits until a goroutine is blocked taking the exclusive lock in
+// access.RemoveSpaceDir, which the goroutines' stacks show, so a test doesn't guess with a sleep.
+func waitUntilRemovalIsQueued(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	buf := make([]byte, 1<<20)
+	for time.Now().Before(deadline) {
+		n := runtime.Stack(buf, true)
+		for g := range strings.SplitSeq(string(buf[:n]), "\n\n") {
+			if strings.Contains(g, "access.RemoveSpaceDir") && strings.Contains(g, "sync.(*RWMutex).Lock") {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the removal never queued behind the held space")
 }

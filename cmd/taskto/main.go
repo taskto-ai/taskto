@@ -597,11 +597,16 @@ func integrationEgress(cfg config.Config) *egress.Policy {
 	return &p
 }
 
-// spaceRowExists is knowledge.Store.SetSpaceCheck's check: whether the space's row is still there.
+// spaceRowExists is knowledge.Store.SetSpaceCheck's check: whether the space's row is still there,
+// and is the same space: one made later with a purged space's ID (SQLite reuses the largest) has
+// another creation time, so a request that was authorized for the old one is refused. A space
+// without a creation time (not read from its row) is matched by its IDs only.
 func spaceRowExists(sqlDB *sql.DB) func(sp access.Space) (bool, error) {
 	return func(sp access.Space) (bool, error) {
 		var one int
-		err := sqlDB.QueryRowContext(context.Background(), `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ?`, sp.ID, sp.WorkspaceID).Scan(&one)
+		err := sqlDB.QueryRowContext(context.Background(),
+			`SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ? AND (? = '' OR created_at = ?)`,
+			sp.ID, sp.WorkspaceID, sp.CreatedAt, sp.CreatedAt).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
