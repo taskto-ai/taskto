@@ -506,9 +506,9 @@ describe('how the app loads its stylesheets', () => {
   })
 
   test('a stylesheet both listed and imported by a module is loaded twice', () => {
-    const r = app({ 'App.tsx': "import './boards/Board'\n", 'boards/Board.tsx': "import './boards.legacy.css'\n" })
+    const r = app({ 'App.tsx': "import './Md'\n", 'Md.tsx': "import './markdown.legacy.css'\n" })
     expect(r.code).toBe(1)
-    expect(r.err).toContain('src/boards/boards.legacy.css: loaded more than one way')
+    expect(r.err).toContain('src/markdown.legacy.css: loaded more than one way')
   })
 
   test('the list is in its order, plain, and nothing else', () => {

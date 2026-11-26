@@ -26,8 +26,6 @@
     --tt-logo-dot: var(--color-logo);
 
     --tt-danger: var(--color-danger);
-    --tt-success: var(--color-success);
-    --tt-warning: var(--color-warning);
 
     --tt-shadow-lift: var(--shadow-lift);
     --tt-shadow-lift-hover: var(--shadow-lift-hover);
