@@ -485,7 +485,7 @@ export function PublishPanel({
       )}
       {error && !migration && <Notice tone="danger">{error}</Notice>}
       {moved && <Notice tone="danger">{t('apps.builder.publish.moved')}</Notice>}
-      {granted.length > 0 && published === null && (
+      {granted.length > 0 && (
         <Notice tone="warning">{t('apps.integrations.approve.kept', { slots: f.list(granted) })}</Notice>
       )}
       {action}

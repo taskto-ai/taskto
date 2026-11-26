@@ -405,6 +405,44 @@ test('a contract that changed under the admin closes the dialog, reads the app a
   expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
 })
 
+test('approvals that stand after a contract change are said even when the panel published before', async () => {
+  let phase: 'first' | 'second' = 'first'
+  let firstDone = false
+  fakeFetch({
+    'GET /api/x/integrations': () =>
+      phase === 'first'
+        ? status(slot())
+        : status(firstDone ? slot({ status: 'approved', integration: approvedShop }) : slot(), billing()),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/x/integrations/billing/request': {
+      status: 409,
+      body: { error: 'x', code: 'app_integration_contract_changed' },
+    },
+    'POST /api/workspaces/1/integration-approvals/4/approve': () => {
+      if (phase === 'second') firstDone = true
+      return { body: { id: 4 } }
+    },
+    'POST /api/x/publish': { body: { id: 9, live: { number: 1 } } },
+  })
+  const element = (app: App) => (
+    <WorkspaceAdmin value={true}>
+      <PublishPanel base="/api/x" spaceBase="/api/y" app={app} space={team} onChanged={() => {}} />
+    </WorkspaceAdmin>
+  )
+  const view = render(element(appOf()))
+  const first = await openApproveAndPublish()
+  fireEvent.click(first.confirm)
+  expect(await screen.findByText(/Published as release 1|release 1/)).toBeTruthy()
+  // The draft changes, asks for a second service, and the admin starts again: the second is refused.
+  phase = 'second'
+  view.rerender(element(appOf({ version: 3 })))
+  const second = await openApproveAndPublish()
+  fireEvent.click(second.confirm)
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
+  expect(screen.getByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
+})
+
 test('a refused approval reads the integrations again, so one switched off is no longer offered', async () => {
   let reads = 0
   const calls = fakeFetch({
