@@ -22,6 +22,7 @@ import { browserLocale, useT } from '../i18n'
 import { useLoad } from '../load'
 import { NARROW, useMediaQuery } from '../media'
 import { useMounted } from '../mounted'
+import { steps } from '../session'
 import { Link, navigate, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
@@ -140,8 +141,9 @@ function BuilderStart({
       ? mine
       : sharedSpaces.find((s) => String(s.id) === shared)
   const mayEdit = !editing || (target.data?.access.design && chosen?.access === 'write')
-  // A build that starts after the page went (the session ended) keeps no draft and opens nothing:
-  // the drafts are the person's, and this browser may be someone else's by then.
+  // Its steps go on only while the page is there and the session is the one that began them: one
+  // that answers after the person left, logged out, or someone else signed in, sends nothing more
+  // (not their prompt, not its title), keeps no draft and opens nothing.
   const mounted = useMounted()
 
   const start = async (e: FormEvent) => {
@@ -150,13 +152,15 @@ function BuilderStart({
     if (!content || !chosen || busy) return
     setBusy(true)
     setError(null)
+    const s = steps(mounted)
     try {
       const id =
-        conversation ?? (await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })).id
+        conversation ??
+        s.check(await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })).id
       // Where this build begins: what the conversation already holds (it may have saved other apps
       // before) isn't part of it. A conversation made here is empty.
       const since = conversation
-        ? ((await api<History>(`${ws(workspace)}/conversations/${id}/entries`)).entries.at(-1)?.id ?? 0)
+        ? (s.check(await api<History>(`${ws(workspace)}/conversations/${id}/entries`)).entries.at(-1)?.id ?? 0)
         : 0
       const app = target.data ?? undefined
       const place = t(chosen.kind === 'private' ? 'apps.builder.prompt.private' : 'apps.builder.prompt.shared', {
@@ -171,29 +175,32 @@ function BuilderStart({
             description: content,
           })
         : t('apps.builder.prompt.build', { where: place, description: content })
-      await api(`${ws(workspace)}/conversations/${id}/messages`, {
-        method: 'POST',
-        body: {
-          content: prompt,
-          request_id: crypto.randomUUID?.() ?? `${Date.now()}`,
-          browser_locale: browserLocale(),
-        },
-      })
+      s.check(
+        await api(`${ws(workspace)}/conversations/${id}/messages`, {
+          method: 'POST',
+          body: {
+            content: prompt,
+            request_id: crypto.randomUUID?.() ?? `${Date.now()}`,
+            browser_locale: browserLocale(),
+          },
+        }),
+      )
       // The title is a nicety: the conversation is there either way.
       if (!conversation) {
         const title = (app?.name ?? content).replace(/\s+/g, ' ').slice(0, 60)
-        await api(`${ws(workspace)}/conversations/${id}`, { method: 'PATCH', body: { title } }).catch(() => undefined)
+        s.check(
+          await api(`${ws(workspace)}/conversations/${id}`, { method: 'PATCH', body: { title } }).catch(() => undefined),
+        )
       }
-      if (!mounted.current) return
       writeDraft(textKey, null)
       const session: Session = { space: chosen.id, since, ...(app ? { app: app.id } : {}) }
       writeDraft(sessionKey(workspace, id), JSON.stringify(session))
       writeDraft(lastKey(workspace), String(id))
       onStarted(id, session)
     } catch (err) {
-      if (mounted.current) setError(appError(err))
+      if (s.ok()) setError(appError(err))
     } finally {
-      if (mounted.current) setBusy(false)
+      if (s.ok()) setBusy(false)
     }
   }
 

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
-import { type Me, SESSION_LOST } from '../api'
+import { api, type Me } from '../api'
 import { setPreferences } from '../i18n'
 import { type BeforeLeave, navigate, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
@@ -1137,14 +1137,13 @@ test('a workspace made after Cancel and a logout is not said on the login screen
 
 test('a workspace made after the session was lost with the dialog open neither opens it nor says it', async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
-  const held = heldCreate()
+  const held = heldCreate({ 'GET /api/expired': { status: 401, body: { error: 'not logged in' } } })
   render(<App />)
   await screen.findByRole('navigation', { name: 'Sections' })
   await submitNewWorkspace('Secret Project Alpha')
   await waitFor(() => expect(held).toHaveLength(1))
-  act(() => {
-    window.dispatchEvent(new Event(SESSION_LOST))
-  })
+  // Any request of the session that the server answers 401: the session is gone.
+  await act(() => api('/api/expired').catch(() => {}))
   await screen.findByRole('heading', { name: 'Log in' })
 
   await act(async () => held.shift()?.(created(9, 'Secret Project Alpha')))

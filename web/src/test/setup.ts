@@ -1,7 +1,8 @@
 // Runs before every test file (vite.config.ts, test.setupFiles).
 
 import { configure } from '@testing-library/react'
-import { afterEach } from 'vitest'
+import { afterEach, beforeEach } from 'vitest'
+import { resetSession } from '../session'
 
 // How long findBy… and waitFor wait for what the page ends up showing. Testing Library's
 // default, 1 s, is tight on a CI runner shared with other jobs: there, a language switch that
@@ -89,3 +90,7 @@ if (typeof HTMLElement !== 'undefined' && !HTMLElement.prototype.showPopover) {
     return show
   }
 }
+
+// Each test starts with nobody signed in, in a session of its own (src/session.ts): nothing of one
+// test's session (a language being saved, a toast) reaches the next.
+beforeEach(() => resetSession())

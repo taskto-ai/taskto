@@ -4,6 +4,7 @@
 
 import type { Rule } from './apps/rules'
 import { has, type Key, type Params, t } from './i18n'
+import { endSession, sameSession, sessionUser } from './session'
 
 export class ApiError extends Error {
   constructor(
@@ -50,10 +51,24 @@ export type RequestInit = {
   signal?: AbortSignal
 }
 
+// Every request of the app goes through here (a check keeps it so: apiCalls.test.ts). Two things it
+// does for the session (session.ts), whoever the caller:
+// - a request that changes something names the session's account, unless it names one itself (the
+//   offline queue, signing out): the server refuses it (409 session_account_changed) when the
+//   browser's session became another account's meanwhile, so one person's page never changes the
+//   next person's data;
+// - a 401 ends the session only if it is still the one the request was sent in, and ends it before
+//   the caller hears of it: a slow request of the person before never signs the next one out.
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const extra = init.headers ?? {}
+  const method = init.method ?? 'GET'
+  const same = sameSession()
+  const account = sessionUser()
+  const extra =
+    account !== null && method !== 'GET' && method !== 'HEAD' && !(EXPECTED_USER_HEADER in (init.headers ?? {}))
+      ? { ...init.headers, ...forAccount(account) }
+      : (init.headers ?? {})
   const res = await fetch(path, {
-    method: init.method ?? 'GET',
+    method,
     ...(init.signal ? { signal: init.signal } : {}),
     ...(init.bytes !== undefined
       ? { headers: { ...extra, 'Content-Type': 'application/octet-stream' }, body: init.bytes }
@@ -71,8 +86,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     return null
   })
   if (!res.ok) {
-    // A session that ended (logged out elsewhere, expired) sends the app back to the login.
-    if (res.status === 401) window.dispatchEvent(new Event(SESSION_LOST))
+    // A session that ended (logged out elsewhere, expired) sends the app back to the login: the one
+    // this request was sent in, and only if it is still going on.
+    if (res.status === 401 && same()) {
+      endSession()
+      window.dispatchEvent(new Event(SESSION_LOST))
+    }
     if (res.status === 409 && data?.code === ACCOUNT_CHANGED) {
       const expected = Number(extra[EXPECTED_USER_HEADER])
       window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))

@@ -4,7 +4,7 @@
 // save live here, in a hook of the menu, which stays mounted, so closing the menu while a pick is
 // saved loses nothing.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { automaticLocale, LOCALES, localeName, setPreferences, type T, useLocale } from '../i18n'
 import { sameSession } from '../session'
@@ -16,64 +16,96 @@ export interface LanguagePick {
   pick: (tag: string) => Promise<void>
 }
 
+// The picks of one session and their saving. One save is in flight at a time: when it ends, the
+// latest pick is sent if the account doesn't have it yet, so quick picks can't reach the server out
+// of order and leave an older one saved. A pick the server refused is undone, so this browser never
+// shows a language the account doesn't have.
+//
+// It lives as long as the session (session.ts), not as long as the menu: the menu can go and come
+// back within one session (the shell is swapped for a push's notification) while a save is in
+// flight, and the menu drawn again shows that pick and joins that queue rather than starting
+// another from the account's older value. When the session ends the queue stops: a save that ends
+// after that changes nothing in this browser and says nothing, as the language is the next
+// person's now.
+interface Queue {
+  same: () => boolean
+  // The pick the account has, and the latest one asked for.
+  saved: string
+  wanted: string
+  saving: boolean
+  // The menus drawn now, told what to show.
+  shown: Set<(tag: string) => void>
+  // Told once for each pick the server refused (the latest menu's way of saying so).
+  refused: (error: unknown) => void
+}
+
+let queue: Queue | null = null
+
+function queueOf(initial: string): Queue {
+  if (queue?.same()) return queue
+  queue = { same: sameSession(), saved: initial, wanted: initial, saving: false, shown: new Set(), refused: () => {} }
+  return queue
+}
+
+function show(q: Queue, tag: string) {
+  for (const fn of [...q.shown]) fn(tag)
+}
+
+async function save(q: Queue) {
+  q.saving = true
+  try {
+    while (q.same() && q.wanted !== q.saved) {
+      const tag = q.wanted
+      try {
+        await api('/api/me', { method: 'PATCH', body: { locale: tag } })
+        q.saved = tag
+      } catch (e) {
+        if (!q.same()) return
+        if (q.wanted !== tag) continue // a later pick replaced it: send that one
+        q.wanted = q.saved
+        show(q, q.saved)
+        await setPreferences({ user: q.saved || null })
+        if (q.same()) q.refused(e)
+      }
+    }
+  } finally {
+    q.saving = false
+  }
+}
+
 // `onRefused` is told once for each pick the server refused, after the pick was undone and the app
 // is in the language it went back to, so what it says is in that one language.
 export function useLanguagePick(initial: string, onRefused: (error: unknown) => void): LanguagePick {
-  const [choice, setChoice] = useState(initial)
+  const q = queueOf(initial)
+  const [choice, setChoice] = useState(q.wanted)
   const refused = useRef(onRefused)
   refused.current = onRefused
   useLocale() // re-rendered on a change, so the automatic one's name follows the workspace's default
-  // The pick the account has, and the latest pick asked for. One save is in flight at a
-  // time: when it ends, the latest pick is sent if the account doesn't have it yet, so
-  // quick picks can't reach the server out of order and leave an older one saved. A pick
-  // the server refused is undone, so this browser never shows a language the account
-  // doesn't have.
-  const saved = useRef(initial)
-  const wanted = useRef(initial)
-  const saving = useRef(false)
-  // The picks belong to the session they were made in: the queue goes on while it lasts, even if
-  // the menu goes and comes back (opening a push's notification), and stops when it ends (logged
-  // out, the session lost). A save that ends after that changes nothing in this browser and says
-  // nothing, as the language is the next person's now.
+  useLayoutEffect(() => {
+    q.shown.add(setChoice)
+    q.refused = (e) => refused.current(e)
+    setChoice(q.wanted)
+    return () => {
+      q.shown.delete(setChoice)
+    }
+  }, [q])
   // A new value from the server (the account's /api/me again) is the one to show and to go
   // back to, unless a pick is still being saved: that value is from before the pick, which
   // stays the one wanted and shown. A value the account already has (this effect's first run,
   // which can come after a pick made at once, or /api/me confirming the pick just saved) is
   // nothing new: acting on it would undo that pick.
   useEffect(() => {
-    if (initial === saved.current) return
-    saved.current = initial
-    if (saving.current) return
-    wanted.current = initial
-    setChoice(initial)
-  }, [initial])
-  const save = async (still: () => boolean) => {
-    saving.current = true
-    try {
-      while (still() && wanted.current !== saved.current) {
-        const tag = wanted.current
-        try {
-          await api('/api/me', { method: 'PATCH', body: { locale: tag } })
-          saved.current = tag
-        } catch (e) {
-          if (!still()) return
-          if (wanted.current !== tag) continue // a later pick replaced it: send that one
-          wanted.current = saved.current
-          setChoice(saved.current)
-          await setPreferences({ user: saved.current || null })
-          if (still()) refused.current(e)
-        }
-      }
-    } finally {
-      saving.current = false
-    }
-  }
+    if (initial === q.saved) return
+    q.saved = initial
+    if (q.saving) return
+    q.wanted = initial
+    show(q, initial)
+  }, [initial, q])
   const pick = async (tag: string) => {
-    const still = sameSession()
-    wanted.current = tag
-    setChoice(tag)
+    q.wanted = tag
+    show(q, tag)
     await setPreferences({ user: tag || null })
-    if (still() && !saving.current) await save(still)
+    if (q.same() && !q.saving) await save(q)
   }
   return { choice, pick }
 }

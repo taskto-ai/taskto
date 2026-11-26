@@ -22,6 +22,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncEx
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { useT } from '../i18n'
+import { onSessionChange, sameSession } from '../session'
 import { Button } from './Button'
 import { Icon } from './Icon'
 import { IconButton } from './IconButton'
@@ -74,11 +75,20 @@ function set(change: Partial<State>) {
 export function toast(options: ToastOptions | string): number {
   const o = typeof options === 'string' ? { message: options } : options
   const tone = o.tone ?? 'neutral'
+  // A toast is the session's it was said in (session.ts): they all go when it ends, and its button
+  // does nothing if pressed after that.
+  const still = sameSession()
+  const action = o.action && {
+    label: o.action.label,
+    onClick: () => {
+      if (still()) o.action?.onClick()
+    },
+  }
   const item: ToastItem = {
     id: next++,
     message: o.message,
     tone,
-    action: o.action,
+    action,
     duration: o.duration ?? (o.action || tone === 'danger' ? 10_000 : 5_000),
   }
   ensureToaster()
@@ -94,12 +104,13 @@ export function dismissToast(id: number): void {
   set({ items: state.items.filter((i) => i.id !== id) })
 }
 
-// No toast, nothing being said: when the session ends or becomes another account's (App), so one
-// person's toasts never reach the next; and between tests.
+// No toast, nothing being said: when a session begins or ends (session.ts), at that moment, so one
+// person's toasts never reach the next, whichever Toaster draws them; and between tests.
 export function clearToasts(): void {
   set({ items: [], said: [] })
 }
 export const resetToasts = clearToasts
+onSessionChange(clearToasts)
 
 const subscribe = (fn: () => void) => {
   listeners.add(fn)

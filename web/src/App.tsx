@@ -4,23 +4,23 @@
 // without, and then the workspace it joined. A password reset link (/reset-password#<token>)
 // sets the password, and signs in.
 
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { ACCOUNT_CHANGED_EVENT, ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
 import { AccountChanged } from './offline/AccountChanged'
 import { ForeignGuard } from './offline/ForeignGuard'
+import { onAccountSignal, watchAccount } from './offline/account'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
 import { navigate } from './router'
-import { sessionChanged } from './session'
+import { beginSession, endSession, sessionUser } from './session'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
-import { clearToasts } from './ui/Toast'
 import { claimDrafts, forgetDrafts } from './uiState'
 
 // The renderer comes with it: loaded only where it is used, and precached, so it opens offline too.
@@ -61,7 +61,10 @@ export function App() {
     async (me: Me) => {
       await claim(me)
       // Whichever way they signed in, an account with no time zone gets this browser's, once.
-      setSession({ state: 'in', me: await reportTimeZone(me) })
+      const now = await reportTimeZone(me)
+      // The session begins before the shell is drawn, so what the shell starts is in it.
+      beginSession(now.user.id)
+      setSession({ state: 'in', me: now })
     },
     [claim],
   )
@@ -80,7 +83,10 @@ export function App() {
         })
         // Signed in on the invite page is signed in: what this device keeps of the account is
         // theirs from here, and is what signing out from the page takes away.
-        if (me) await claim(me)
+        if (me) {
+          await claim(me)
+          beginSession(me.user.id)
+        }
         return setSession({ state: 'invite', me })
       }
       const me = await api<Me>('/api/me')
@@ -105,24 +111,38 @@ export function App() {
   }, [load])
 
   const signedIn = session.state === 'in'
-  // The toasts are the signed-in person's: when the session ends (logged out, lost) or becomes
-  // another account's, theirs go, so nothing of one person's ("“Plans” was created.", with a way
-  // to open it) is left on the login screen or in the next person's session. Another account signed
-  // in from another tab ends this page's session too (`problem`), though its state still names the
-  // one before.
-  const account =
-    problem === 'account'
-      ? 'changed'
-      : session.state === 'in' || session.state === 'invite'
-        ? (session.me?.user.id ?? null)
-        : null
-  const shown = useRef(account)
+  const account = session.state === 'in' || session.state === 'invite' ? (session.me?.user.id ?? null) : null
+  // Another account signed in on this browser, or this one signed out, in another tab: this page's
+  // session is over at once (session.ts), and nothing of it is shown until the page is reloaded.
+  // Heard here, from the same signals the offline runtime hears, so it holds without a database too
+  // (a private window, storage refused); and when the server refuses a request of this account as
+  // another's.
+  const [changed, setChanged] = useState(false)
   useEffect(() => {
-    if (shown.current === account) return
-    shown.current = account
-    sessionChanged()
-    clearToasts()
+    if (account === null) return
+    const over = () => {
+      // Already over (signing out here): this tab's own change, not another's.
+      if (sessionUser() !== account) return
+      endSession()
+      setChanged(true)
+    }
+    watchAccount()
+    const off = onAccountSignal((who) => {
+      if (who !== account) over()
+    })
+    const refused = (e: Event) => {
+      if ((e as CustomEvent<{ expected?: number }>).detail?.expected === account) over()
+    }
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, refused)
+    return () => {
+      off()
+      window.removeEventListener(ACCOUNT_CHANGED_EVENT, refused)
+    }
   }, [account])
+  // The offline runtime found it out first (while activating): the same.
+  useLayoutEffect(() => {
+    if (problem === 'account') endSession()
+  }, [problem])
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
   // lost while the login is showing.
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
@@ -149,6 +169,10 @@ export function App() {
   // `keep`: the account's database is not deleted (the person chose so, since this version
   // couldn't tell whether it holds unsent records).
   const signOut = useCallback(async ({ user, next, items }: Leaving & Partial<Pick<Unsent, 'items'>>, keep = false) => {
+    // The person has asked to go: their session is over from here, before anything below waits, so
+    // nothing of theirs still on its way (a toast's button, a save) acts meanwhile. If it turns out
+    // they don't sign out after all (records to ask about again), it begins again.
+    endSession()
     const approved = approvalOf(items ?? [])
     // What the device holds is decided first and in one step: if a record that was not shown to the
     // person has appeared since (another tab of the account, a stale one), nothing is deleted and
@@ -156,6 +180,7 @@ export function App() {
     if (!keep) {
       const left = await settle(user, approved)
       if (left.length > 0) {
+        beginSession(user)
         setLeaving({ user, next, count: left.length, items: left, unreadable: null })
         return
       }
@@ -168,7 +193,12 @@ export function App() {
       () => false,
       (e) => e instanceof ApiError && e.code === 'session_account_changed',
     )
-    if (refused) return
+    // Refused: the browser's session is another account's now (another tab). Nothing of this one is
+    // shown any more; the page is reloaded to go on as whoever that is.
+    if (refused) {
+      setChanged(true)
+      return
+    }
     forgetDrafts()
     const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
     if (left.length > 0) {
@@ -236,7 +266,7 @@ export function App() {
 
   // Another account is signed in on this browser than the one this page holds: nothing of the
   // account's is shown, and the page is reloaded to go on as whoever is signed in.
-  if (problem === 'account') return <AccountChanged />
+  if (problem === 'account' || changed) return <AccountChanged />
 
   switch (session.state) {
     case 'loading':

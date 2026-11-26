@@ -3,12 +3,13 @@
 // person would see or keep with the answer: no toast, no change of address, no preference written.
 // What the server did is done either way; the next screen loads it again.
 
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
 export function useMounted() {
   const mounted = useRef(true)
-  // Set again on each mount, so StrictMode's second mount finds it true.
-  useEffect(() => {
+  // Set again on each mount, so StrictMode's second mount finds it true; and in a layout effect, so
+  // it says false as soon as the screen is taken away, before any answer can come after.
+  useLayoutEffect(() => {
     mounted.current = true
     return () => {
       mounted.current = false
