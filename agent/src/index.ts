@@ -59,7 +59,7 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
-import { LIFECYCLE_KIND, runPurge, WalBusyError } from './purge.js'
+import { HARNESS_DB_OPTIONS, LIFECYCLE_KIND, runPurge, startCheckpointer, WalBusyError } from './purge.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
@@ -124,8 +124,10 @@ if (toolsSocket) {
   )
 }
 
+// The commits don't checkpoint the log (HARNESS_DB_OPTIONS): a thread of its own does, so a log a
+// purge or a reader let grow is never copied on this thread.
 const harness = await Harness.open(
-  await openNodeSqliteStorage(dbPath),
+  await openNodeSqliteStorage(dbPath, HARNESS_DB_OPTIONS),
   {
     models,
     registry,
@@ -135,6 +137,7 @@ const harness = await Harness.open(
   context,
 )
 harness.resume() // synchronous: continue whatever the last process left unfinished
+startCheckpointer(dbPath as string)
 // A storage failure closes the Harness for good; exit so the supervisor starts a fresh process,
 // which reopens the storage and recovers (Pi Durable's documented restart pattern).
 void harness.closed.then((end) => {

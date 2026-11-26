@@ -11,11 +11,15 @@
 // connection holds SQLite's write lock. So the purge never holds it for long: it deletes in short
 // transactions, a chunk of rows each, with a pause between them for the harness's writes, and it
 // empties the log by tries that don't wait (a checkpoint that waits for readers holds the write lock
-// all the while), sleeping between them on its own thread.
+// all the while), sleeping between them on its own thread. And the harness's commits don't
+// checkpoint the log either (HARNESS_DB_OPTIONS): one would copy, on the HTTP server's thread, what a
+// purge or a reader let pile up. A thread of its own does (startCheckpointer).
 //
 // This module is also the worker's entry: it imports nothing of the sidecar's, so the same file
 // runs as the worker in the built sidecar (dist/purge.js) and in the tests (src/purge.ts).
 
+import { readFileSync } from 'node:fs'
+import { endianness } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads'
 
@@ -70,6 +74,35 @@ function backlog(db: DatabaseSync): number {
 }
 
 /**
+ * The frames of the log at path that no checkpoint has copied yet, read from SQLite's WAL index
+ * (path-shm, https://www.sqlite.org/walformat.html): the header's mxFrame (offset 16) less the
+ * checkpoint's nBackfill (offset 96), both in the machine's byte order. Reading it copies nothing.
+ * Infinity when the index can't be read as one.
+ */
+export function pendingFrames(path: string): number {
+  let shm: Buffer
+  try {
+    shm = readFileSync(`${path}-shm`).subarray(0, 136)
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+  if (shm.length < 136) return Number.POSITIVE_INFINITY
+  const le = endianness() === 'LE'
+  const u32 = (at: number) => (le ? shm.readUInt32LE(at) : shm.readUInt32BE(at))
+  if (u32(0) !== 3007000) return Number.POSITIVE_INFINITY // the WAL index's version
+  const pending = u32(16) - u32(96)
+  return pending < 0 ? Number.POSITIVE_INFINITY : pending
+}
+
+/** What truncateWalWithin tells a test. */
+export type TruncateHooks = {
+  /** Each round's backlog after its passive checkpoint, before the round decides what to do. */
+  round?: (backlog: number) => void
+  /** Just before the TRUNCATE checkpoint, the frames it has to copy, as read under the write lock. */
+  truncating?: (pending: number) => void
+}
+
+/**
  * truncateWal, tried until timeoutMs has passed, never holding the write lock while it waits or
  * copies much: each round copies the log by a passive checkpoint (which writers go on beside), and
  * only once it is drained tries the TRUNCATE, which holds the lock while it runs (busy_timeout 0, so
@@ -77,39 +110,65 @@ function backlog(db: DatabaseSync): number {
  * that lets go of its snapshot lets the next round copy the rest. Throws WalBusyError if a reader
  * still holds the log at the end.
  *
- * onRound, for tests, is told each round's backlog after its passive checkpoint, before the round
- * decides whether to truncate.
+ * A commit can land between the passive checkpoint and the TRUNCATE (one that was being written while
+ * the passive one ran), which the TRUNCATE would then copy under the lock. So the drained log is
+ * checked again while this thread holds the write lock (on a second connection, lock), from the WAL
+ * index, which copies nothing, and the TRUNCATE is tried the moment the lock is let go: a writer that
+ * takes it first makes the TRUNCATE busy for this round, and none can write much in between.
  */
-export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, onRound?: (backlog: number) => void): void {
+export function truncateWalWithin(db: DatabaseSync, path: string, timeoutMs: number, hooks?: TruncateHooks): void {
   db.exec('PRAGMA busy_timeout = 0')
-  const deadline = performance.now() + timeoutMs
-  let last: unknown
-  for (;;) {
-    const left = backlog(db)
-    onRound?.(left)
-    if (left <= DRAINED_FRAMES) {
-      try {
-        truncateWal(db)
-        return
-      } catch (error) {
-        if (!(error instanceof WalBusyError)) throw error
-        last = error
+  const lock = new DatabaseSync(path, { timeout: 0 })
+  try {
+    const deadline = performance.now() + timeoutMs
+    let last: unknown
+    for (;;) {
+      const left = backlog(db)
+      hooks?.round?.(left)
+      if (left <= DRAINED_FRAMES && drainedUnderLock(lock, path, hooks)) {
+        try {
+          truncateWal(db)
+          return
+        } catch (error) {
+          if (!(error instanceof WalBusyError)) throw error
+          last = error
+        }
       }
+      if (performance.now() + PAUSE_MS > deadline) {
+        throw last instanceof WalBusyError
+          ? last
+          : new WalBusyError('a reader holds the write-ahead log, so it could not be copied and truncated')
+      }
+      sleep(PAUSE_MS)
     }
-    if (performance.now() + PAUSE_MS > deadline) {
-      throw last instanceof WalBusyError
-        ? last
-        : new WalBusyError('a reader holds the write-ahead log, so it could not be copied and truncated')
-    }
-    sleep(PAUSE_MS)
+  } finally {
+    lock.close()
   }
+}
+
+// Whether the log at path is drained while lock holds the write lock (false if a writer has it).
+function drainedUnderLock(lock: DatabaseSync, path: string, hooks?: TruncateHooks): boolean {
+  try {
+    lock.exec('BEGIN IMMEDIATE')
+  } catch {
+    return false // a writer is at it: the next round looks again
+  }
+  let pending: number
+  try {
+    pending = pendingFrames(path)
+  } finally {
+    lock.exec('ROLLBACK')
+  }
+  if (pending > DRAINED_FRAMES) return false
+  hooks?.truncating?.(pending)
+  return true
 }
 
 /** Empties the log of the database at path, on a connection of its own, trying for up to timeoutMs. */
 export function truncateWalAt(path: string, timeoutMs: number): void {
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
-    truncateWalWithin(db, timeoutMs)
+    truncateWalWithin(db, path, timeoutMs)
   } finally {
     db.close()
   }
@@ -153,7 +212,13 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     // write lock for its sync. The checkpoint that ends the purge syncs the database, and the purge
     // isn't done (the server asks again) until it has.
     db.exec('PRAGMA synchronous = NORMAL')
-    const seen = discover(db, root)
+    // Every conversation and task of the tree is remembered before any of their rows go: a retry
+    // after a stop finds the tree again from them too, so a record written for a conversation whose
+    // row went (a child's late entry) is found. Pi Durable never gives an id again (its next_id only
+    // grows), so a remembered id names nothing else.
+    db.exec(REMEMBERED_TABLE)
+    const seen = discover(db, root, remembered(db, root))
+    remember(db, root, seen)
     const steps = purgeSteps(db, root, seen)
     // Transactions of at most about SLICE_MS each, with a pause between them in which the harness's
     // writes get the lock.
@@ -182,6 +247,7 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
       removeDocuments(db, select(db, `SELECT id FROM documents WHERE ${ownedBy(tree)}`))
       removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE conversation_id IN (${ids})`))
       removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${ids})`))
+      db.prepare('DELETE FROM taskto_purge_tree WHERE root = ?').run(root)
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
@@ -189,9 +255,57 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     }
     // What was deleted is still in the log until it is emptied, and a reader (the harness's, or a
     // watch) can hold it up: then the purge isn't done, and the server asks again.
-    truncateWalWithin(db, timeoutMs)
+    truncateWalWithin(db, path, timeoutMs)
   } finally {
     db.close()
+  }
+}
+
+/**
+ * The conversations and tasks of each purge that has begun and not ended, by its root: the
+ * sidecar's own table in Pi Durable's database, which Pi Durable doesn't read. Its rows go in the
+ * transaction that ends the purge.
+ */
+const REMEMBERED_TABLE = `CREATE TABLE IF NOT EXISTS taskto_purge_tree (
+  root INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('conversation', 'task')),
+  id   INTEGER NOT NULL,
+  PRIMARY KEY (root, kind, id)
+) STRICT`
+
+/** How many ids one of remember's transactions writes. */
+const REMEMBER_CHUNK = 2000
+
+// The tree an earlier, unfinished purge of root remembered.
+function remembered(db: DatabaseSync, root: number): Tree {
+  const tree: Tree = { ids: new Set(), taskIds: new Set() }
+  for (const row of db.prepare('SELECT kind, id FROM taskto_purge_tree WHERE root = ?').all(root) as {
+    kind: string
+    id: number | bigint
+  }[]) {
+    ;(row.kind === 'task' ? tree.taskIds : tree.ids).add(Number(row.id))
+  }
+  return tree
+}
+
+// Remembers tree's ids for root, in short transactions with pauses between them.
+function remember(db: DatabaseSync, root: number, tree: Tree): void {
+  const all = [
+    ...[...tree.ids].map((id) => ['conversation', id] as const),
+    ...[...tree.taskIds].map((id) => ['task', id] as const),
+  ]
+  for (let i = 0; i < all.length; i += REMEMBER_CHUNK) {
+    const chunk = all.slice(i, i + REMEMBER_CHUNK)
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const values = chunk.map(([kind, id]) => `(${root}, '${kind}', ${id})`).join(', ')
+      db.exec(`INSERT OR IGNORE INTO taskto_purge_tree (root, kind, id) VALUES ${values}`)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+    sleep(PAUSE_MS)
   }
 }
 
@@ -357,7 +471,65 @@ export function runPurge(job: PurgeJob): Promise<void> {
   })
 }
 
-// The worker's side: only in a thread runPurge started, never on the sidecar's own thread or in a
-// thread someone else (a test runner) started.
-const mine = !isMainThread && (workerData as Record<string, unknown> | null)?.[MARK]
+/**
+ * How the sidecar opens the harness's database (openNodeSqliteStorage's options): a commit never
+ * checkpoints the log, which would copy it on the HTTP server's thread, however large a purge or a
+ * reader let it grow. startCheckpointer copies it instead, on a thread of its own.
+ */
+export const HARNESS_DB_OPTIONS = { walAutoCheckpointPages: 0 } as const
+
+/** How often the checkpointer copies the log into the database. */
+const CHECKPOINT_EVERY_MS = 1000
+
+const CHECKPOINTER = 'taskto.checkpointer'
+
+type CheckpointerJob = { path: string; everyMs: number; stop: Int32Array }
+
+/**
+ * Copies the log of the database at path into the database by a passive checkpoint every everyMs,
+ * on a worker thread of its own (writers go on beside it, and it never waits for readers), until the
+ * function it returns is called. It stands in for the commits' own checkpoints, which
+ * HARNESS_DB_OPTIONS turns off. A thread that fails is started again.
+ */
+export function startCheckpointer(path: string, everyMs = CHECKPOINT_EVERY_MS): () => Promise<void> {
+  const stop = new Int32Array(new SharedArrayBuffer(4))
+  let worker: Worker
+  const start = () => {
+    worker = new Worker(new URL(import.meta.url), { workerData: { [CHECKPOINTER]: { path, everyMs, stop } } })
+    worker.unref()
+    worker.on('error', (error) => console.error('the checkpointer failed; it starts again', error))
+    worker.once('exit', () => {
+      if (Atomics.load(stop, 0) === 0) setTimeout(start, everyMs).unref()
+    })
+  }
+  start()
+  return async () => {
+    Atomics.store(stop, 0, 1)
+    Atomics.notify(stop, 0)
+    await new Promise<void>((resolve) => {
+      worker.once('exit', () => resolve())
+      // Already gone: nothing to wait for.
+      if (worker.threadId === -1) resolve()
+    })
+  }
+}
+
+function checkpoint(job: CheckpointerJob): void {
+  const db = new DatabaseSync(job.path, { timeout: 0 })
+  try {
+    while (Atomics.load(job.stop, 0) === 0) {
+      backlog(db)
+      Atomics.wait(job.stop, 0, 0, job.everyMs)
+    }
+  } finally {
+    db.close()
+  }
+}
+
+// The worker's side: only in a thread runPurge or startCheckpointer started, never on the sidecar's
+// own thread or in a thread someone else (a test runner) started.
+const data = isMainThread ? null : (workerData as Record<string, unknown> | null)
+const mine = data?.[MARK]
 if (mine && parentPort) parentPort.postMessage(run(mine as PurgeJob))
+const checkpointing = data?.[CHECKPOINTER]
+if (checkpointing) checkpoint(checkpointing as CheckpointerJob)

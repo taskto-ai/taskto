@@ -3,7 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { LIFECYCLE_KIND, purgeRecords, runPurge, truncateWalWithin, WalBusyError } from './purge.js'
+import {
+  HARNESS_DB_OPTIONS,
+  LIFECYCLE_KIND,
+  pendingFrames,
+  purgeRecords,
+  runPurge,
+  startCheckpointer,
+  truncateWalWithin,
+  WalBusyError,
+} from './purge.js'
 
 const WORD = 'doomed-marmalade-7731'
 
@@ -84,16 +93,20 @@ describe('runPurge', () => {
     return { writer, reader }
   }
 
+  // A connection set up as Chord sets up the harness's with the sidecar's options.
+  const harnessLike = (db: DatabaseSync) => {
+    db.exec(`PRAGMA wal_autocheckpoint = ${HARNESS_DB_OPTIONS.walAutoCheckpointPages}`)
+    db.exec('PRAGMA synchronous = NORMAL')
+  }
+
   // Writes on the calling thread, as the harness's commits are, every 15 ms while work is pending,
   // each on a connection that waits up to 5 s for the write lock: how long the longest one took,
   // and the longest gap between two ticks of a 10 ms timer there (what a health check would wait).
   const writesDuring = async (work: Promise<unknown>) => {
     const db = new DatabaseSync(path, { timeout: 5000 })
-    // Its own commits don't fold the log in, and don't wait for the disk, as the harness's don't
-    // (synchronous = NORMAL): only how long it waits for the purge's lock is measured, not how long a
-    // busy disk takes to sync.
-    db.exec('PRAGMA wal_autocheckpoint = 0')
-    db.exec('PRAGMA synchronous = NORMAL')
+    // Configured as the sidecar configures the harness's connection (HARNESS_DB_OPTIONS, and
+    // synchronous = NORMAL as Chord sets it).
+    harnessLike(db)
     const insert = db.prepare("INSERT INTO entries (conversation_id, text) VALUES (2, 'another turn')")
     let longest = 0
     let writes = 0
@@ -431,9 +444,11 @@ describe('runPurge', () => {
     const db = new DatabaseSync(path, { timeout: 1000 })
     const rounds: number[] = []
     try {
-      truncateWalWithin(db, 10_000, (backlog) => {
-        rounds.push(backlog)
-        if (rounds.length === 1) reader.exec('COMMIT') // lets go between the round's two checkpoints
+      truncateWalWithin(db, path, 10_000, {
+        round: (backlog) => {
+          rounds.push(backlog)
+          if (rounds.length === 1) reader.exec('COMMIT') // lets go between the round's two checkpoints
+        },
       })
       expect(rounds[0]).toBeGreaterThan(1000) // the reader kept the backlog from being copied
       // The round that emptied the log is the last one: it found the backlog copied.
@@ -442,6 +457,126 @@ describe('runPurge', () => {
       expect(log()).toBe('')
     } finally {
       db.close()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // A commit that lands after the round's passive checkpoint found the log drained, and before the
+  // TRUNCATE: the TRUNCATE would copy it under the write lock. The log is checked again under the
+  // lock, from the WAL index, and the TRUNCATE runs only on what that check found drained.
+  it('does not truncate over a commit that landed after the passive checkpoint', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const text = 'z'.repeat(400)
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    const truncated: number[] = []
+    let committed = false
+    try {
+      truncateWalWithin(db, path, 10_000, {
+        round: (backlog) => {
+          if (committed || backlog > 64) return
+          committed = true
+          writer.exec('BEGIN')
+          for (let i = 0; i < 20_000; i++) more.run(text)
+          writer.exec('COMMIT')
+        },
+        // What the TRUNCATE is about to copy, as the WAL index says at that moment.
+        truncating: () => truncated.push(pendingFrames(path)),
+      })
+      expect(committed).toBe(true)
+      expect(truncated.length).toBeGreaterThan(0)
+      for (const pending of truncated) expect(pending).toBeLessThanOrEqual(64)
+      expect(log()).toBe('')
+    } finally {
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // The reviewer's sequence, with the sidecar's own settings: a reader keeps a purge from emptying
+  // a large log, the purge answers busy, the reader lets go, and one unrelated write commits on the
+  // harness's connection. That commit doesn't copy the log on its thread (it would with SQLite's
+  // automatic checkpoint, which HARNESS_DB_OPTIONS turns off): the log is still there to copy after it.
+  it('leaves the log to the checkpointer when a commit follows a busy purge', async () => {
+    const { writer, reader } = fixture()
+    const text = 'w'.repeat(800)
+    const insert = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 1, ?)')
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    writer.exec('BEGIN')
+    for (let id = 1000; id < 51_000; id++) {
+      insert.run(id, text)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    const harness = new DatabaseSync(path, { timeout: 5000 })
+    harnessLike(harness)
+    try {
+      await expect(runPurge({ path, root: 1, timeoutMs: 300 })).rejects.toBeInstanceOf(WalBusyError)
+      reader.exec('COMMIT')
+      const before = pendingFrames(path)
+      expect(before).toBeGreaterThan(1000)
+      harness.prepare("INSERT INTO entries (conversation_id, text) VALUES (2, 'an unrelated turn')").run()
+      expect(pendingFrames(path)).toBeGreaterThanOrEqual(before)
+    } finally {
+      harness.close()
+      reader.close()
+      writer.close()
+    }
+  }, 60_000)
+
+  // The checkpointer copies the log on its own thread: with the commits' own checkpoints off, the
+  // log a large write left is copied all the same.
+  it('copies the log on a thread of its own when the commits do not', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    harnessLike(writer)
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    writer.exec('BEGIN')
+    for (let i = 0; i < 20_000; i++) more.run('v'.repeat(400))
+    writer.exec('COMMIT')
+    expect(pendingFrames(path)).toBeGreaterThan(1000)
+    const stop = startCheckpointer(path, 20)
+    try {
+      const until = Date.now() + 5000
+      while (pendingFrames(path) > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 20))
+      expect(pendingFrames(path)).toBe(0)
+    } finally {
+      await stop()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // A record committed for a child conversation after its row went, and then the purge stops: the
+  // retry still finds it, from the tree the purge remembered before removing anything.
+  it('finds a late record of a removed child after a stop', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const childGone = () =>
+      (writer.prepare('SELECT count(*) AS n FROM conversations WHERE id = 3').get() as { n: number }).n === 0
+    const stop = new Error('stopped')
+    try {
+      expect(() =>
+        purgeRecords(path, 1, 1000, () => {
+          if (!childGone()) return
+          // A write for the child that was already in flight lands now, and then the purge stops.
+          writer.exec(`INSERT INTO entries (id, conversation_id, text) VALUES (70, 3, '${WORD}')`)
+          writer.exec('INSERT INTO record_ids (id) VALUES (70)')
+          throw stop
+        }),
+      ).toThrow(stop)
+      expect(writer.prepare('SELECT id FROM entries WHERE id = 70').all()).toEqual([{ id: 70 }])
+      await runPurge({ path, root: 1, timeoutMs: 5000 })
+      expect(writer.prepare('SELECT id FROM entries').all()).toEqual([{ id: 11 }])
+      expect(writer.prepare('SELECT id FROM record_ids ORDER BY id').all()).toEqual([{ id: 2 }, { id: 11 }, { id: 42 }])
+      expect(writer.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'taskto_purge_tree'").get()).toEqual({
+        n: 1,
+      })
+      expect(writer.prepare('SELECT count(*) AS n FROM taskto_purge_tree').get()).toEqual({ n: 0 })
+    } finally {
       reader.close()
       writer.close()
     }
