@@ -153,6 +153,13 @@ func TestIntegrationRefsAreOnePerEntryAndSurviveItsCleanup(t *testing.T) {
 			t.Fatalf("%s was stored", what)
 		}
 	}
+	// An object is checked only if there is one: a key with no object can't say its object was checked.
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_verified = 1 WHERE seq = 0`); err == nil {
+		t.Fatal("a key with no object was marked as having a checked one")
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = 'plink_seen', object_verified = 0 WHERE seq = 0`); err != nil {
+		t.Fatalf("an object seen and not checked: %v", err)
+	}
 	// The entry is cleaned up: the ref stays, forgetting only the entry.
 	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM app_effects WHERE id = 7`); err != nil {
 		t.Fatal(err)

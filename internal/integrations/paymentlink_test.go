@@ -419,7 +419,7 @@ func TestAnEntryDoneAgainAfterTheLinkWasNotedDoesNotCallStripe(t *testing.T) {
 	// And one that crashed after its call was written ahead and before the answer was noted finds the
 	// object by the key's token and makes nothing.
 	p.exec(`UPDATE integration_refs SET provider_object_id = NULL, url = NULL, state = 'creating'`)
-	p.exec(`UPDATE integration_ref_attempts SET outcome = NULL, object_id = NULL, url = NULL`)
+	p.exec(`UPDATE integration_ref_attempts SET outcome = NULL, object_id = NULL, url = NULL, object_verified = 0`)
 	third, err := p.svc.OpenPaymentLink(context.Background(), req)
 	if err != nil || third.ObjectID != first.ObjectID || third.URL != first.URL {
 		t.Fatalf("third = %+v, %v", third, err)
@@ -801,7 +801,7 @@ func TestWithoutAPublicURLAnEntryDoneAgainDoesNotMakeASecondLink(t *testing.T) {
 		t.Fatalf("again = %+v, %v, %d calls", again, err, len(p.linkPosts()))
 	}
 	p.exec(`UPDATE integration_refs SET provider_object_id = NULL, url = NULL, state = 'creating'`)
-	p.exec(`UPDATE integration_ref_attempts SET outcome = NULL, object_id = NULL, url = NULL`)
+	p.exec(`UPDATE integration_ref_attempts SET outcome = NULL, object_id = NULL, url = NULL, object_verified = 0`)
 	third, err := p.svc.OpenPaymentLink(context.Background(), req)
 	if err != nil || third != first {
 		t.Fatalf("third = %+v, %v", third, err)
@@ -916,9 +916,10 @@ func TestALookupAdoptsOnlyAnObjectOfTheAskedTerms(t *testing.T) {
 			} {
 				other := nl
 				change(&other)
-				link, found, _, err := stripe{}.FindPaymentLink(context.Background(), creds, c, other, time.Now())
-				if ce, ok := IsCall(err); !ok || ce.Kind != CallRefused || found || link.URL != "" {
-					t.Fatalf("%s: %+v, %v, %v", what, link, found, err)
+				got, found, _, err := stripe{}.FindPaymentLink(context.Background(), creds, c, other, time.Now())
+				// Refused, and the object seen is named, for its key to keep: never a link to give.
+				if ce, ok := IsCall(err); !ok || ce.Kind != CallRefused || found || got.URL != "" || got.ObjectID != link.ObjectID {
+					t.Fatalf("%s: %+v, %v, %v", what, got, found, err)
 				}
 			}
 			// Another reference's token is no match at all.
@@ -2123,6 +2124,100 @@ func TestOnlyAnAdminOfTheWorkspaceMayConfirmNoLink(t *testing.T) {
 	}
 	if n := p.count(`SELECT count(*) FROM audit_events WHERE action = 'integration_new_link_allowed'`); n != 0 {
 		t.Fatalf("%d audit events for refused confirmations", n)
+	}
+}
+
+// A lookup that finds a Payment Link carrying the key's token but can't read its line items can't check
+// its amount: the link is never adopted unchecked, and never taken for "none" either. It is kept on the
+// key, the entry waits and then fails for a person, the admins' list names it, and an admin can't
+// confirm that no link exists (which would allow a new key and a second payable link for the invoice).
+// Once its line items can be read, a retry checks it and adopts it: one key, one link.
+func TestALinkSeenWhoseAmountCannotBeReadBlocksANewKeyUntilItIsAdopted(t *testing.T) {
+	shape := linkShapes["a payment link"]
+	p := newPay(t, shape.public)
+	record := p.unknownOutcome(shape, "op-unchecked-0001")
+	p.appear(shape.path, 0) // Stripe completes the first call after all
+	object := p.objectID(shape.path)
+	p.fake.Fail(testprovider.Unavailable().Forever().On(http.MethodGet, shape.path+"/").
+		When(func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/line_items") }))
+	serverPosts := func() (n int) {
+		for _, r := range p.fake.RequestsTo(http.MethodPost, shape.path) {
+			if r.IdempotencyKey != "" {
+				n++
+			}
+		}
+		return n
+	}
+	seen := func() (id string, verified int) {
+		t.Helper()
+		if err := p.db.QueryRow(`SELECT coalesce(object_id, ''), object_verified FROM integration_ref_attempts WHERE seq = 0`).Scan(&id, &verified); err != nil {
+			t.Fatal(err)
+		}
+		return id, verified
+	}
+
+	p.later(time.Minute)
+	p.waitFor("the line items were asked for", func() bool {
+		return len(p.fake.RequestsTo(http.MethodGet, shape.path+"/"+object+"/line_items")) >= 1
+	})
+	p.looked(shape.path, 1)
+	if id, verified := seen(); id != object || verified != 0 {
+		t.Fatalf("the key's object = %q (verified %d), want %q unchecked", id, verified, object)
+	}
+	if es := p.entries(); es[0].state != apps.StatePending || es[0].code != string(apierr.CodeIntegrationLinkLookupPending) {
+		t.Fatalf("entry = %+v", es[0])
+	}
+	if n := serverPosts(); n != 1 {
+		t.Fatalf("%d calls, want the first only: nothing is asked on top of an object seen", n)
+	}
+
+	p.later(7 * time.Hour)
+	e := p.settled(apps.StateFailed)
+	if e.code != string(apierr.CodeIntegrationOutcomeUnknown) {
+		t.Fatalf("entry = %+v", e)
+	}
+	rec := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 1 || list.PaymentLinks[0].ObjectID != object ||
+		list.PaymentLinks[0].CanConfirm || list.PaymentLinks[0].Waiting {
+		t.Fatalf("list = %+v", list)
+	}
+	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
+	expect(t, rec, http.StatusConflict)
+	if got := decode[struct {
+		Code string `json:"code"`
+	}](t, rec).Code; got != string(apierr.CodeIntegrationLinkNotConfirmable) {
+		t.Fatalf("code = %q", got)
+	}
+	if r := p.refs(); len(r) != 1 || r[0].keySeq != 0 || r[0].object != "" {
+		t.Fatalf("refs = %+v", r)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE outcome IS NOT NULL OR seq > 0`); n != 0 {
+		t.Fatalf("a refused confirmation resolved or added %d keys", n)
+	}
+	if n := p.count(`SELECT count(*) FROM audit_events WHERE action = 'integration_new_link_allowed'`); n != 0 {
+		t.Fatalf("%d audit events for a refused confirmation", n)
+	}
+	if keys, n := p.keysUsed(shape.path), p.objects(shape.path); len(keys) != 1 || n != 1 {
+		t.Fatalf("keys %v, %d objects at Stripe", keys, n)
+	}
+
+	// The line items can be read again: a retry checks the link and adopts it.
+	p.fake.ClearFaults()
+	expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, e.id)), map[string]any{}), http.StatusOK)
+	p.settled(apps.StateDone)
+	refs := p.refs()
+	if len(refs) != 1 || refs[0].state != "open" || refs[0].object != object || refs[0].keySeq != 0 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	if id, verified := seen(); id != object || verified != 1 {
+		t.Fatalf("the key's object = %q (verified %d)", id, verified)
+	}
+	if keys, n := p.keysUsed(shape.path), p.objects(shape.path); len(keys) != 1 || n != 1 || serverPosts() != 1 {
+		t.Fatalf("keys %v, %d objects at Stripe, %d calls", keys, n, serverPosts())
+	}
+	if data, _ := p.record(record); !strings.Contains(data, object) {
+		t.Fatalf("record = %s", data)
 	}
 }
 

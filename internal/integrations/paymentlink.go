@@ -62,7 +62,11 @@ import (
 // Nothing is saved as the link before its state is read from the provider and says open (a Checkout
 // Session) or active (a Payment Link): what a call answers, and a replay of a kept key above all, is the
 // object as it was made, and it may have expired since. An object an answer named is kept on the key
-// before its state is read, so a try that can't read it doesn't lose it.
+// before its state is read, so a try that can't read it doesn't lose it. So is one a lookup found
+// carrying the key's token, in every case: one it couldn't check (a Payment Link whose line items
+// couldn't be read) or that doesn't ask what the ref asks is kept unchecked (object_verified 0), which
+// blocks a new key and an admin's confirmation that none exists as any object on record does, and is
+// adopted only once a later lookup checks it (the entry waits, and then fails for a person).
 //
 // A ref belongs to what its first try was: the provider's account (read from the provider with the
 // integration's key when the ref is made) with the mode of that key (a test key and a live key of
@@ -311,19 +315,33 @@ const (
 	resolvedExpired
 )
 
-// resolve looks for what a key whose outcome is unknown made: the object an answer named, read again
-// at the provider, or else one carrying the key's token, found by a lookup (and kept on the key before
-// its state is read, as an answer's is). A lookup that fails, or can't read the whole account, tells
-// nothing: the outcome stays unknown. One that may pass (unreachable, a list not read whole) lets the
-// same key be asked again; any other (the key refused, a failure that isn't the provider's answer) waits
-// on the reconciliation's schedule at once. It fails the try only for what a person must see now: an
-// object of the key that was paid or can't be given.
+// resolve looks for what a key whose outcome is unknown made: the object an answer named (or a lookup
+// checked), read again at the provider, or else one carrying the key's token, found by a lookup (and
+// kept on the key before its state is read, as an answer's is). A lookup that fails, or can't read the
+// whole account, tells nothing: the outcome stays unknown. One that may pass (unreachable, a list not
+// read whole) lets the same key be asked again; any other (the key refused, a failure that isn't the
+// provider's answer) waits on the reconciliation's schedule at once. It fails the try only for what a
+// person must see now: an object of the key that was paid or can't be given.
+//
+// An object of the key's token the lookup saw and couldn't check (its amount unread) or refused is kept
+// on the key unchecked, whatever happens next: it is on record, so the key's outcome can't be confirmed
+// away and the ref takes no new key. Only a later lookup that checks it adopts it; until then the entry
+// waits on the reconciliation's schedule (and then fails for a person, who checks it at the provider),
+// and the key isn't asked again on top of it.
 func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylink.Link, error) {
-	if a.objectID != "" {
+	if a.objectID != "" && a.objectVerified {
 		return t.settle(ctx, r, a, Link{ObjectID: a.objectID, URL: a.url})
 	}
+	seen := a.objectID != ""
 	found, ok, expired, err := t.provider.FindPaymentLink(ctx, t.creds, t.client, r.newLink(a, t.req.Description), t.since)
 	if err != nil {
+		if found.ObjectID != "" {
+			// Seen, before anything else: never lost, whatever the failure.
+			if err := t.s.noteSeen(ctx, a, found.ObjectID); err != nil {
+				return unresolved, paylink.Link{}, err
+			}
+			seen = true
+		}
 		ce, isCall := IsCall(err)
 		if isCall {
 			switch ce.Kind {
@@ -336,25 +354,32 @@ func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylin
 				logFailure(t.rec, ce)
 				return unresolved, paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
 			case CallUnreachable, CallLookupIncomplete:
-				logFailure(t.rec, ce)
-				return unresolved, paylink.Link{}, nil // nothing learned: the same key may be asked again
+				if !seen {
+					logFailure(t.rec, ce)
+					return unresolved, paylink.Link{}, nil // nothing learned: the same key may be asked again
+				}
 			}
 		}
-		// The key refused, or a failure that isn't the provider's answer: nothing learned, and nothing to
-		// ask the same key with. The entry waits on the reconciliation's schedule.
+		// The key refused, a failure that isn't the provider's answer, or an object of the key that is on
+		// record and still unchecked: nothing to ask the same key with. The entry waits on the
+		// reconciliation's schedule.
 		return unresolved, paylink.Link{}, t.s.readFailed(ctx, t.rec, a, err)
 	}
 	switch {
 	case ok:
 		slog.Info("integrations: a payment link made by an earlier call was found", "integration", r.integrationID, "provider", t.rec.Provider)
-		// Kept on the key before its state is read: a try that can't read it finds it there, and an admin
-		// can't confirm that none exists.
+		// Checked, and kept on the key before its state is read: a try that can't read it finds it there,
+		// and an admin can't confirm that none exists.
 		if err := t.s.noteObject(ctx, a, found); err != nil {
 			return unresolved, paylink.Link{}, err
 		}
 		return t.settle(ctx, r, a, found)
 	case expired:
 		return resolvedExpired, paylink.Link{}, t.s.markAttempt(ctx, a, attemptExpired)
+	}
+	if seen {
+		// The object on record wasn't found this time: nothing says what became of it. The entry waits.
+		return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
 	}
 	return unresolved, paylink.Link{}, nil
 }
@@ -707,8 +732,10 @@ type attempt struct {
 	sends, cleanSends         int
 	firstSentAt, unknownSince string
 	outcome                   string
-	// objectID and url are the object an answer named, before its state was read.
-	objectID, url string
+	// objectID and url are the object an answer named, or a lookup saw, before its state was read, and
+	// objectVerified whether it may be adopted (an answer's, or one a lookup checked; url is "" if not).
+	objectID, url  string
+	objectVerified bool
 }
 
 // unknown says whether the key may have made an object nobody has seen: a call under it may have run,
@@ -716,11 +743,11 @@ type attempt struct {
 func (a attempt) unknown() bool { return a.outcome == "" && a.sends > a.cleanSends }
 
 const attemptColumns = `ref_id, seq, token, sends, clean_sends, coalesce(first_sent_at, ''), coalesce(unknown_since, ''),
-	coalesce(outcome, ''), coalesce(object_id, ''), coalesce(url, '')`
+	coalesce(outcome, ''), coalesce(object_id, ''), coalesce(url, ''), object_verified`
 
 func scanAttempt(row interface{ Scan(...any) error }) (attempt, error) {
 	var a attempt
-	err := row.Scan(&a.refID, &a.seq, &a.token, &a.sends, &a.cleanSends, &a.firstSentAt, &a.unknownSince, &a.outcome, &a.objectID, &a.url)
+	err := row.Scan(&a.refID, &a.seq, &a.token, &a.sends, &a.cleanSends, &a.firstSentAt, &a.unknownSince, &a.outcome, &a.objectID, &a.url, &a.objectVerified)
 	return a, err
 }
 
@@ -785,10 +812,20 @@ func (s *Service) noteNotExecuted(ctx context.Context, a attempt) (attempt, erro
 	return s.attemptByKey(ctx, a.refID, a.seq)
 }
 
-// noteObject keeps the object an answer under the key named, before its state is read.
+// noteObject keeps the object an answer under the key named, or one a lookup found and checked, before
+// its state is read: one that may be adopted.
 func (s *Service) noteObject(ctx context.Context, a attempt, l Link) error {
-	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = ?, url = ?
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = ?, url = ?, object_verified = 1
 		WHERE ref_id = ? AND seq = ? AND outcome IS NULL`, l.ObjectID, l.URL, a.refID, a.seq)
+	return err
+}
+
+// noteSeen keeps an object of the key's token that a lookup saw and couldn't adopt (unchecked, or not
+// what the ref asks): on record, so nothing takes the key for one that made nothing, and never adopted
+// as it is. It never replaces an object that may be adopted.
+func (s *Service) noteSeen(ctx context.Context, a attempt, objectID string) error {
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = ?, url = NULL, object_verified = 0
+		WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND object_verified = 0`, objectID, a.refID, a.seq)
 	return err
 }
 
@@ -803,8 +840,9 @@ func (s *Service) markAttempt(ctx context.Context, a attempt, outcome string) er
 // and reads the ref again. Only from that key: another try that moved it first is followed, and one
 // that noted an object meanwhile is returned with it. And only while every key of the ref left nothing a
 // payer can use: none has an unknown outcome or an object that was made or settled, and none was
-// abandoned with an object on record (an admin's "none exists" that something seen contradicts). A ref
-// refused is read back still on key a.
+// abandoned with an object on record (an admin's "none exists" that something seen contradicts). An
+// object a lookup saw and couldn't check is on record as any other is: the key holding it has no
+// outcome while it stands (or settled), so it blocks the move, until the object itself is seen expired. A ref refused is read back still on key a.
 func (s *Service) nextAttempt(ctx context.Context, r ref, a attempt) (ref, error) {
 	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1
 		WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
@@ -843,7 +881,7 @@ func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Re
 		return paylink.Link{}, err
 	}
 	if n == 1 {
-		if _, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'made', object_id = ?, url = ?
+		if _, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'made', object_id = ?, url = ?, object_verified = 1
 			WHERE ref_id = ? AND seq = ? AND (outcome IS NULL OR outcome = 'made')`, l.ObjectID, l.URL, a.refID, a.seq); err != nil {
 			return paylink.Link{}, err
 		}

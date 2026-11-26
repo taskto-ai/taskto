@@ -36,7 +36,10 @@ type PaymentProvider interface {
 	// the provider was read in full and has no such object that a payer can use: a read that couldn't
 	// be finished is an error, never "not found". expired says that it saw an object of the token that
 	// no payer can use and that was never paid (an expired Checkout Session): the key's outcome is then
-	// known. Its failures are *CallError.
+	// known. Its failures are *CallError. A failure after an object of the token was seen (one that
+	// couldn't be checked, such as a link whose line items couldn't be read, or one that isn't a link a
+	// payer may be given) returns that object's id in link.ObjectID (and no URL): it is not adopted, and it
+	// is kept on the key, so that no one takes the key's outcome for "nothing made".
 	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found, expired bool, err error)
 	// LinkState reads, from the provider, whether the object (the one a call answered or a lookup
 	// found) can take a payment now. What a call answered, and above all what the provider replays for
@@ -442,10 +445,12 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			}
 			// Every state is read, not only the payable ones: an object of the token that was paid, or
 			// that a payer can no longer use for another reason, shows the earlier try did make one, and
-			// must not read as "not made" (the next call would make a second payable link).
+			// must not read as "not made" (the next call would make a second payable link). Whatever
+			// fails from here returns the object seen, unchecked, for the key to keep.
+			seen := Link{ObjectID: seenObjectID(o.ID)}
 			if hosted && (o.Active == nil || !*o.Active) {
 				// Deactivated by a person, or by its limit of payments: no one can say it wasn't paid.
-				return Link{}, false, false, &CallError{Kind: CallSettled, Status: status}
+				return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 			}
 			if !hosted {
 				switch o.Status {
@@ -457,27 +462,28 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 					continue
 				default:
 					if o.Status == "complete" {
-						return Link{}, false, false, &CallError{Kind: CallSettled, Status: status}
+						return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 					}
-					return Link{}, false, false, &CallError{Kind: CallRefused, Status: status} // a state not said
+					return seen, false, false, &CallError{Kind: CallRefused, Status: status} // a state not said
 				}
 			}
 			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
 			if !ok || !strings.EqualFold(o.Currency, l.Currency) {
 				// Ours, and not a link the payer could be given: nothing says what it is.
-				return Link{}, false, false, &CallError{Kind: CallRefused, Status: status}
+				return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			amount := o.AmountTotal
 			if hosted {
-				// A link's list entry has no amount: its line items do.
+				// A link's list entry has no amount: its line items do. If they can't be read, the link
+				// is seen and not checked: it is never adopted unchecked, and never taken for none.
 				if amount, err = stripeLinkAmount(ctx, creds, c, o.ID, l.Currency); err != nil {
-					return Link{}, false, false, err
+					return seen, false, false, err
 				}
 			}
 			if amount != l.AmountMinor {
 				// Made for another amount than the one asked for now: its address is never given
 				// to a payer, and no other is made while it stands.
-				return Link{}, false, false, &CallError{Kind: CallRefused, Status: status}
+				return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			return link, true, false, nil
 		}
@@ -492,6 +498,20 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 	}
 	// Every page read was whole, and there is more behind them: asking again reads the same.
 	return Link{}, false, false, &CallError{Kind: CallLookupIncomplete}
+}
+
+// seenObjectID is what is kept of the id of an object of the token a lookup saw and couldn't adopt: the
+// id as Stripe gave it, cut to what the key's record holds, or a stand-in when it gave none, so that the
+// object is on record (and blocks a new key) even then. It is shown to an admin, never used in a call.
+func seenObjectID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "(no id)"
+	}
+	if len(id) > maxLinkID {
+		return id[:maxLinkID]
+	}
+	return id
 }
 
 // LinkState retrieves the object and says what it can do now: a Checkout Session by its status

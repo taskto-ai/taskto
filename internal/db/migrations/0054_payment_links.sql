@@ -140,6 +140,12 @@ CREATE TABLE integration_refs (
 -- doesn't say it wasn't: a person reconciles it, and no other key is taken), abandoned (an admin
 -- confirmed that it made nothing: the ref takes the next key). object_id and url are the object an
 -- answer named, kept before its state is read, so a try that can't read it doesn't lose it.
+-- object_verified says whether that object may be adopted as the ref's link once its state says a payer
+-- can use it: 1 for one an answer under the key named, or one a lookup found asking the amount and the
+-- currency of the ref; 0 for one a lookup saw carrying the key's token that couldn't be checked (its line
+-- items couldn't be read) or doesn't ask them (url is then NULL). Either way the object is on record: the
+-- key's outcome can't be confirmed away (no admin's "none exists" stands against it) and the ref takes no
+-- new key while it stands; an unchecked one is only ever adopted after a later lookup checks it.
 CREATE TABLE integration_ref_attempts (
     ref_id        INTEGER NOT NULL REFERENCES integration_refs (id) ON DELETE CASCADE,
     seq           INTEGER NOT NULL CHECK (seq >= 0),
@@ -151,6 +157,7 @@ CREATE TABLE integration_ref_attempts (
     outcome       TEXT CHECK (outcome IS NULL OR outcome IN ('made', 'expired', 'settled', 'abandoned')),
     object_id     TEXT CHECK (object_id IS NULL OR length(object_id) BETWEEN 1 AND 255),
     url           TEXT CHECK (url IS NULL OR length(url) BETWEEN 1 AND 2048),
+    object_verified INTEGER NOT NULL DEFAULT 0 CHECK (object_verified IN (0, 1) AND (object_verified = 0 OR object_id IS NOT NULL)),
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (ref_id, seq)
 ) STRICT;

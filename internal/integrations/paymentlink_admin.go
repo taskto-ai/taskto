@@ -20,8 +20,9 @@ import (
 // the link has the entry retried once it is visible, and the lookup adopts it.
 //
 // A confirmation is allowed only for a ref of which nothing was ever seen or settled: no key of it has
-// an object on record (an answer named one, or a lookup found one, and it is kept on its key before its
-// state is read) and no key of it has an outcome. Otherwise the admin's "none exists" can contradict what
+// an object on record (an answer named one, or a lookup found one carrying its token, checked or not: one
+// whose amount couldn't be read is kept all the same, before anything else) and no key of it has an
+// outcome. Otherwise the admin's "none exists" can contradict what
 // the server itself saw, and the new key could make a second payable link: it is refused
 // (integration_link_not_confirmable), checked in the transaction that would allow the new key.
 //
@@ -48,6 +49,11 @@ type PaymentLinkOutcome struct {
 	// CanConfirm is whether the admin may confirm that no link exists: the wait ended, and nothing of the
 	// ref was ever seen at the provider or settled (confirmable).
 	CanConfirm bool `json:"can_confirm"`
+	// ObjectID is the provider's id of an object of the waiting key that the server saw (an answer named
+	// it, or a lookup found it carrying the key's token) and couldn't resolve, such as a Payment Link whose
+	// line items couldn't be read: "" when none was seen. When set, the admin can't confirm that no link
+	// exists; they check this object at the provider, and the entry adopts it once a lookup can.
+	ObjectID string `json:"object_id"`
 }
 
 // PaymentLinkOutcomes is the answer of the list.
@@ -71,7 +77,8 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 	}
 	rows, err := s.store.db.QueryContext(ctx, `
 		SELECT r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
-			coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`
+			coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`,
+			coalesce(k.object_id, '')
 		FROM integration_refs r
 		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
 		JOIN apps a ON a.id = r.app_id
@@ -88,7 +95,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		var minor int64
 		var state, code string
 		var clean bool
-		if err := rows.Scan(&o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &clean); err != nil {
+		if err := rows.Scan(&o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &clean, &o.ObjectID); err != nil {
 			return nil, err
 		}
 		if !spaces[o.SpaceID] || len(out) >= maxOutcomesListed {
