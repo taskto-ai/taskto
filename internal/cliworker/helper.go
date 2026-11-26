@@ -31,7 +31,7 @@ import (
 //     PromptFile it is read into a file the CLI gets instead (Grok Build) and stdin closes.
 //   - "limits": prints the usage limits Codex recorded for a thread, as JSON.
 //   - "authfile": prints whether the CLI's credentials file exists, as JSON.
-//   - "browser", "browser-vnc", "browser-clean": the user's agent browser (browser.go).
+//   - "browser", "browser-vnc", "browser-clean", "browser-purge": the user's agent browser (browser.go).
 //
 // The exec replaces the helper, so the CLI keeps its PID: the worker's process group,
 // records and signals work as if it had started the CLI itself.

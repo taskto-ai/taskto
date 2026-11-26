@@ -25,6 +25,9 @@ type Host interface {
 	DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error)
 	// Clean removes user's testing profile.
 	Clean(user int64) error
+	// Purge removes everything kept for user's browsers, the personal profile included, for a
+	// deleted account. No process of theirs runs by then. Removing what isn't there is not an error.
+	Purge(user int64) error
 }
 
 // Config configures a Manager.
@@ -53,9 +56,12 @@ type Manager struct {
 	// stopping is the browser of each key still being stopped: a new one on the same profile
 	// waits for it to be gone, so the old one has written its cookies first.
 	stopping map[key]*session
-	closed   bool
-	stopTick chan struct{}
-	wg       sync.WaitGroup
+	// forgotten is the users whose accounts are deleted (Forget): no browser of theirs starts. It
+	// is kept as long as the Manager runs, since an account's id is never given to another account.
+	forgotten map[int64]struct{}
+	closed    bool
+	stopTick  chan struct{}
+	wg        sync.WaitGroup
 }
 
 type key struct {
@@ -76,6 +82,7 @@ type session struct {
 	// Under Manager.mu:
 	lastUse time.Time
 	live    int
+	conns   map[*liveConn]struct{} // the live views open on it
 	ending  bool
 	ended   chan struct{} // closed when every process is gone
 }
@@ -97,7 +104,7 @@ func NewManager(cfg Config) *Manager {
 	if cfg.Tick <= 0 {
 		cfg.Tick = 15 * time.Second
 	}
-	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key]*session{}, stopTick: make(chan struct{})}
+	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key]*session{}, forgotten: map[int64]struct{}{}, stopTick: make(chan struct{})}
 	m.wg.Add(1)
 	go m.idleLoop()
 	return m
@@ -190,6 +197,59 @@ func (m *Manager) Stop(_ context.Context, user int64, kind Kind) error {
 	return nil
 }
 
+// Forget removes everything of user's browsers, for an account that is deleted: no browser of
+// theirs starts from the first moment (ErrAccountClosing), their live views are closed, their
+// running browsers are stopped and waited for (a browser still starting or already stopping too),
+// and then the personal profile and the rest of their browser directory are removed. It returns
+// nil only when the processes are gone and the files removed; on an error (ctx ended before they
+// were gone, or a file couldn't be removed) it is safe to call again. Other users' browsers are not
+// touched.
+//
+// The refusal lasts as long as the Manager runs: an account's id is never given to another
+// account. A Manager that restarts forgets it, and then the account's being switched off is what
+// keeps its browsers from starting.
+func (m *Manager) Forget(ctx context.Context, user int64) error {
+	if user <= 0 {
+		return badf("invalid user")
+	}
+	m.mu.Lock()
+	m.forgotten[user] = struct{}{}
+	var wait []*session
+	var conns []*liveConn
+	for _, kind := range []Kind{Personal, Testing} {
+		k := key{user, kind}
+		// A browser already stopping is waited for too, and one whose start waited for it.
+		if prev := m.stopping[k]; prev != nil {
+			wait = append(wait, prev)
+		}
+		if s := m.sessions[k]; s != nil {
+			for c := range s.conns {
+				conns = append(conns, c)
+			}
+			m.endLocked(s)
+			wait = append(wait, s)
+		}
+	}
+	m.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	for _, s := range wait {
+		select {
+		case <-s.ended:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if m.cfg.Host == nil {
+		return nil
+	}
+	if err := m.cfg.Host.Purge(user); err != nil {
+		return fmt.Errorf("removing the browser files: %w", err)
+	}
+	return nil
+}
+
 // Do runs a on user's browser, starting it first unless a only lists the tabs.
 func (m *Manager) Do(ctx context.Context, user int64, a Action) (Result, error) {
 	if err := a.Check(); err != nil {
@@ -237,12 +297,28 @@ func (m *Manager) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser,
 		m.mu.Unlock()
 		return nil, fmt.Errorf("the live view: %w", err)
 	}
-	return &liveConn{ReadWriteCloser: conn, release: func() {
+	lc := &liveConn{ReadWriteCloser: conn}
+	lc.release = func() {
 		m.mu.Lock()
 		s.live--
+		delete(s.conns, lc)
 		s.lastUse = time.Now()
 		m.mu.Unlock()
-	}}, nil
+	}
+	// A browser that began to end while the view was connecting (its account is being deleted,
+	// say) is not shown: the view is closed here, not left to a Forget that has already looked.
+	m.mu.Lock()
+	if s.ending {
+		m.mu.Unlock()
+		_ = lc.Close()
+		return nil, ErrNotRunning
+	}
+	if s.conns == nil {
+		s.conns = map[*liveConn]struct{}{}
+	}
+	s.conns[lc] = struct{}{}
+	m.mu.Unlock()
+	return lc, nil
 }
 
 type liveConn struct {
@@ -290,6 +366,10 @@ func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool
 	if m.closed {
 		m.mu.Unlock()
 		return nil, ErrClosed
+	}
+	if _, gone := m.forgotten[user]; gone {
+		m.mu.Unlock()
+		return nil, ErrAccountClosing
 	}
 	s := m.sessions[k]
 	if s == nil {
