@@ -265,6 +265,13 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 	if req.Op != "forget" && w.isForgotten(user) {
 		return nil, nil, ErrForgotten
 	}
+	// Recorded before anything of the user's is made (asUser makes their directory): Reconcile
+	// tells a directory of someone who had the number before by it (forget.go).
+	if req.Op != "forget" {
+		if err := w.noteBirth(user); err != nil {
+			return nil, nil, fmt.Errorf("recording the user's first use: %w", err)
+		}
+	}
 	req.LayoutRoot, req.User = w.cfg.Layout.Root, user
 	if req.Path == "" {
 		req.Path = w.cfg.Path

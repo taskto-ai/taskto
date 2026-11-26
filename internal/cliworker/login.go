@@ -270,7 +270,7 @@ func (w *Worker) runLogin(ctx context.Context, l *Login, bin string) {
 		finish(LoginFailed, "the CLI could not start: "+err.Error())
 		return
 	}
-	w.trackGroup(cmd.Process.Pid, l.user, l.cli, l.slot)
+	defer w.trackGroup(cmd.Process.Pid, l.user, l.cli, l.slot)()
 	// The helper's request first; what follows is the CLI's stdin (the pasted code).
 	if _, err := stdin.Write(header); err != nil {
 		finish(LoginFailed, "the CLI could not start: "+err.Error())
@@ -595,7 +595,7 @@ func (w *Worker) runHelper(ctx context.Context, user int64, req helperRequest) (
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
-	w.trackGroup(cmd.Process.Pid, user, req.CLI, req.Slot)
+	defer w.trackGroup(cmd.Process.Pid, user, req.CLI, req.Slot)()
 	done := make(chan struct{})
 	go func() {
 		select {

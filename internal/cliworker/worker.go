@@ -81,6 +81,8 @@ type Worker struct {
 	loginRuns      map[*Login]struct{}
 	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
 	marks sync.Mutex
+	// browsers is the agent browsers that run in this worker (SetBrowsers), or nil.
+	browsers Browsers
 
 	// The approval socket (approve.go): its listener, its path and, when it had to go
 	// elsewhere than the layout's root, the directory made for it.
@@ -188,6 +190,27 @@ func New(cfg Config) (*Worker, error) {
 
 // stateDir holds the worker's own records, in the layout's root, where no user can write.
 func (w *Worker) stateDir() string { return filepath.Join(w.cfg.Layout.Root, ".worker") }
+
+// Browsers is the agent browsers that run in the worker (browser.Manager), with their profiles in
+// the users' directories: removing a user's whole directory stops theirs first, and Reconcile takes
+// back their refusals as it takes back the marks.
+type Browsers interface {
+	StopAll(ctx context.Context, user int64) error
+	Unforget(again func(user int64) bool, before time.Time)
+}
+
+// SetBrowsers tells the worker about the agent browsers that run in it, through its BrowserHost.
+func (w *Worker) SetBrowsers(b Browsers) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.browsers = b
+}
+
+func (w *Worker) browserStopper() Browsers {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.browsers
+}
 
 // Available reports whether cli can run here.
 func (w *Worker) Available(cli CLI) bool { return w.cfg.Bins[cli] != "" }
@@ -410,7 +433,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return failed("%v", err)
 	}
 	pgid := cmd.Process.Pid
-	w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)
+	defer w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)()
 	record := filepath.Join(w.stateDir(), spec.ID+".pid")
 	if start, err := startTime(pgid); err == nil {
 		if err := os.WriteFile(record, []byte(strconv.Itoa(pgid)+" "+start+"\n"), 0o600); err != nil {

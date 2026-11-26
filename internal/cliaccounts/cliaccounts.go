@@ -69,9 +69,10 @@ type Worker interface {
 	// Forget removes everything the worker keeps for a deleted user: logins, sessions, working
 	// directories and the browser's profile.
 	Forget(ctx context.Context, user int64) error
-	// Reconcile tells the worker which users exist, which number the next user gets and when
-	// that was read, so that it takes back the forgotten marks a restore made wrong.
-	Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error
+	// Reconcile tells the worker which users exist, when each was made, which number the next
+	// user gets and when that was read, so that it removes the directories and takes back the
+	// forgotten marks a restore made wrong (cliworker.Worker.Reconcile).
+	Reconcile(ctx context.Context, census cliworker.Census) error
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
@@ -167,7 +168,12 @@ func (r remoteWorker) FindTurn(id string) (Turn, bool) {
 type Service struct {
 	db     *sql.DB
 	mode   Mode
-	worker Worker // nil when Off
+	worker Worker // nil when Off; what acts for a user waits for ready (ready.go)
+
+	// reconcileMu serializes telling the worker who exists (ReconcileForgotten); reconciled is
+	// set once it has been told since this server started.
+	reconcileMu sync.Mutex
+	reconciled  atomic.Bool
 
 	// watching holds the logins a goroutine is following to their end, and started when each
 	// account's last login started: an account that isn't connected yet is listed while its
@@ -268,7 +274,11 @@ func New(sqlDB *sql.DB, mode Mode, worker Worker) *Service {
 	if mode == Off {
 		worker = nil
 	}
-	return &Service{db: sqlDB, mode: mode, worker: worker, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	s := &Service{db: sqlDB, mode: mode, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	if worker != nil {
+		s.worker = readyWorker{Worker: worker, s: s}
+	}
+	return s
 }
 
 // Mode returns how CLI workers run: "off", "container", "local" or "local-unsafe".
@@ -334,17 +344,29 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	return nil
 }
 
-// ReconcileForgotten tells the worker which users the database has and which number the next
-// one gets, so that it takes back the marks of users it forgot (Forget) that a restore of the
-// database made wrong: the person whose account was purged may be back in it, and the numbers
-// after the backup are given again. The worker's own directory, in container mode, isn't part of
-// the backup, so it can't know; the database can. Call it at every start (StartReconcile). An
-// account whose purge has begun is not live here: its mark stays until the purge deletes it.
+// ReconcileForgotten tells the worker which users the database has, when each was made and which
+// number the next one gets, so that it removes what a restore of the database left wrong there:
+// the directories of numbers that aren't live users' (the person who had the number in the
+// history the restore went back from left their logins in it, and the number is given again), and
+// the marks of users it forgot (Forget) that are live again or whose numbers are given again. The
+// worker's own directory, in container mode, isn't part of the backup, so it can't know; the
+// database can. Call it at every start (StartReconcile); nothing is asked of the worker for a user
+// before it has been told (ready). An account whose purge has begun is not live here: its mark
+// stays until the purge deletes it.
+//
+// It returns cliworker.ErrIncomplete when the worker was told but couldn't remove everything yet:
+// it refuses those users meanwhile, and the call is made again.
 func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	if s.worker == nil {
 		return nil
 	}
-	before := time.Now()
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	return s.reconcileLocked(ctx)
+}
+
+func (s *Service) reconcileLocked(ctx context.Context) error {
+	census := cliworker.Census{Before: time.Now(), Created: map[int64]time.Time{}}
 	// One transaction: the users and the next number describe the same state, or a person added
 	// in between would be neither live nor below the next number.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -355,41 +377,57 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	// Not the accounts whose purge has begun: it forgets the CLI files before it deletes the
 	// account, and one that stopped between the two is made again from its start, which forgets
 	// them again; until the account is gone its mark must stay.
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM users
+	rows, err := tx.QueryContext(ctx, `SELECT id, created_at FROM users
 		WHERE id NOT IN (SELECT user_id FROM account_deletions WHERE purge_started_at IS NOT NULL)`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	var live []int64
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var created string
+		if err := rows.Scan(&id, &created); err != nil {
 			return err
 		}
-		live = append(live, id)
+		census.Live = append(census.Live, id)
+		// A time that can't be read isn't sent: the worker then keeps the user's directory.
+		if at, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			census.Created[id] = at
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	rows.Close()
 	// What auth's insertUser gives the next user: above every number there has been.
-	var next int64
-	if err := tx.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&next); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&census.Next); err != nil {
 		return err
 	}
 	_ = tx.Rollback() // the worker is called without the read open
-	return s.worker.Reconcile(ctx, live, next, before)
+	err = s.worker.Reconcile(ctx, census)
+	if err == nil || errors.Is(err, cliworker.ErrIncomplete) {
+		s.reconciled.Store(true)
+	}
+	return err
 }
 
-// StartReconcile does ReconcileForgotten now and, if the worker can't be reached yet (in
-// container mode it starts beside the server), again in the background until it has.
+// reconcileTimeout bounds one attempt at telling the worker: it may stop what still runs for a
+// number it removes the directory of, and waits for that.
+const reconcileTimeout = 2 * time.Minute
+
+// reconcileWarnEvery is how many failed attempts in a row StartReconcile logs one warning for.
+const reconcileWarnEvery = 10
+
+// StartReconcile does ReconcileForgotten now and, until it has fully succeeded (in container
+// mode the worker starts beside the server, and may not be reachable yet; or it couldn't remove
+// everything yet), again in the background, with a warning at the first failure and every few
+// after it.
 func (s *Service) StartReconcile() {
 	if s.worker == nil {
 		return
 	}
 	try := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout)
 		defer cancel()
 		return s.ReconcileForgotten(ctx)
 	}
@@ -397,7 +435,10 @@ func (s *Service) StartReconcile() {
 	if err == nil {
 		return
 	}
-	slog.Warn("cliaccounts: telling the CLI worker which users exist failed; trying again", "err", err)
+	warn := func(tries int, err error) {
+		slog.Warn("cliaccounts: telling the CLI worker which users exist failed; trying again", "tries", tries, "err", err)
+	}
+	warn(1, err)
 	s.mu.Lock()
 	select {
 	case <-s.closing:
@@ -410,14 +451,19 @@ func (s *Service) StartReconcile() {
 	go func() {
 		defer s.wg.Done()
 		delay := time.Second
-		for {
+		for tries := 2; ; tries++ {
 			select {
 			case <-s.closing:
 				return
 			case <-time.After(delay):
 			}
-			if err := try(); err == nil {
+			err := try()
+			if err == nil {
+				slog.Info("cliaccounts: the CLI worker was told which users exist", "tries", tries)
 				return
+			}
+			if tries%reconcileWarnEvery == 0 {
+				warn(tries, err)
 			}
 			delay = min(delay*2, 30*time.Second)
 		}

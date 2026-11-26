@@ -694,7 +694,10 @@ docker compose --profile cli up -d --build
   `TASKTO_CLI_WORKER_MEMORY` (default `4g`) and `TASKTO_CLI_WORKER_CPUS` (default `2`).
 - Each user's CLI logins and sessions are on the `cli-homes` volume, which `taskto backup`
   doesn't cover. If it is lost, users sign in again, and their conversations start new CLI
-  sessions with the conversation so far.
+  sessions with the conversation so far. After a restore of the server's data, the server tells
+  the worker at its start which users exist, and the worker removes the directories of the people
+  the restored database doesn't have (and of user numbers it will give again), so a new person
+  never gets someone else's logins ([cli-workers.md](cli-workers.md)).
 - The worker needs the internet to reach Anthropic, OpenAI and xAI. The server's egress
   policies don't apply to it. It reaches the internet and nothing else: it is alone on a
   network of its own (`worker`, the bridge `taskto-worker`), so the other services don't

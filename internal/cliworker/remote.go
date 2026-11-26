@@ -51,6 +51,7 @@ var remoteErrors = map[string]error{
 	"forgotten":      ErrForgotten,
 	"removing":       ErrRemoving,
 	"busy":           ErrBusy,
+	"incomplete":     ErrIncomplete,
 }
 
 // remoteWait bounds how long an events request waits for a new event.
@@ -163,11 +164,7 @@ func (w *Worker) Handler() http.Handler {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Live   []int64   `json:"live"`
-			Next   int64     `json:"next"`
-			Before time.Time `json:"before"`
-		}
+		var req Census
 		if !decodeBody(rw, r, &req) {
 			return
 		}
@@ -175,7 +172,7 @@ func (w *Worker) Handler() http.Handler {
 			refuse(rw, badRequest{errors.New("invalid reconcile")})
 			return
 		}
-		if err := w.Reconcile(r.Context(), req.Live, req.Next, req.Before); err != nil {
+		if err := w.Reconcile(r.Context(), req); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -281,6 +278,10 @@ func reply(rw http.ResponseWriter, v any) {
 func refuse(rw http.ResponseWriter, err error) {
 	status, code := http.StatusBadRequest, "invalid"
 	for name, sentinel := range remoteErrors {
+		// ErrIncomplete holds the errors of the users it is about (ErrBusy, say): it is the answer.
+		if errors.Is(err, ErrIncomplete) && name != "incomplete" {
+			continue
+		}
 		if errors.Is(err, sentinel) {
 			code = name
 			switch {
@@ -290,7 +291,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete):
 				status = http.StatusConflict
 			}
 		}
@@ -456,10 +457,11 @@ func (c *Remote) Forget(ctx context.Context, user int64) error {
 	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
 }
 
-// Reconcile tells the worker which users exist and which number comes next, so that it takes
-// back the forgotten marks a restore of the server's data made wrong (Worker.Reconcile).
-func (c *Remote) Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error {
-	return c.do(ctx, http.MethodPost, "/reconcile", map[string]any{"live": live, "next": next, "before": before}, nil)
+// Reconcile tells the worker which users exist, when each was made and which number comes next,
+// so that it removes the directories and takes back the forgotten marks a restore of the server's
+// data made wrong (Worker.Reconcile).
+func (c *Remote) Reconcile(ctx context.Context, census Census) error {
+	return c.do(ctx, http.MethodPost, "/reconcile", census, nil)
 }
 
 // StartTurn starts spec's turn on the worker, or attaches to the one with its ID.

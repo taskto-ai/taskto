@@ -19,3 +19,5 @@ func (w *Worker) asUser(_ *exec.Cmd, _ int64) error {
 }
 
 func killUIDs(int) int { return 0 }
+
+func (w *Worker) dropUnixUser(int64) {}

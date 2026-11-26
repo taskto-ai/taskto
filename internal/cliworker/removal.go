@@ -129,16 +129,20 @@ func (w *Worker) admit(ctx context.Context, user int64, cli CLI, slot Slot) (con
 // are let go.
 const maxGroups = 256
 
-// trackGroup lists process group pgid, started for the account of user's cli in slot, until a
-// removal sees it hold no live process. A group is not forgotten because its turn is over: what
-// a turn left behind may still be running when it is killed.
-func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) {
+// trackGroup lists process group pgid, started for the account of user's cli in slot, until it
+// is seen to hold no live process. It returns ended, which the caller calls once its turn, sign-in
+// or helper is over and the group was killed: the record goes then if the group holds no live
+// process, so a group ID the system gives again later isn't taken for this account's (a removal
+// of it would wait for an unrelated group). A group is not forgotten only because its turn is
+// over: what a turn left behind may still be running, and then a removal waits for it.
+func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) (ended func()) {
 	if pgid <= 1 || w.groupWait < 0 {
-		return
+		return func() {}
 	}
 	w.mu.Lock()
 	w.groupSeq++
-	w.groups[pgid] = groupRec{scope: scope{user: user, cli: cli, slot: slot}, seq: w.groupSeq}
+	seq := w.groupSeq
+	w.groups[pgid] = groupRec{scope: scope{user: user, cli: cli, slot: slot}, seq: seq}
 	var old []groupSeen
 	if len(w.groups) > maxGroups {
 		for p, rec := range w.groups {
@@ -155,6 +159,11 @@ func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) {
 		}
 	}
 	w.dropGroups(over)
+	return func() {
+		if !groupLive(pgid) {
+			w.dropGroups([]groupSeen{{pgid, seq}})
+		}
+	}
 }
 
 // beginGate closes what sc covers (one account, or all of a user's) to new turns, sign-ins and

@@ -91,6 +91,18 @@ func (w *Worker) ensureUser(user int64) error {
 	return nil
 }
 
+// dropUnixUser lets ensureUser make user's directory again, after it was removed: their Unix user
+// stays, with the same uid.
+func (w *Worker) dropUnixUser(user int64) {
+	iso := w.cfg.Isolation
+	if iso == nil {
+		return
+	}
+	iso.state.mu.Lock()
+	defer iso.state.mu.Unlock()
+	delete(iso.state.known, user)
+}
+
 // addLine appends line to the account file path unless the entry is there: one with name and
 // id. An entry with the name and another id, or the id and another name, is refused rather
 // than duplicated. The file is replaced in one rename. (Each first-time user rewrites the

@@ -57,9 +57,10 @@ type Manager struct {
 	// stopping is the browsers of each key still being stopped: a new one on the same profile
 	// waits for them to be gone, so the old ones have written their cookies first.
 	stopping map[key][]*session
-	// forgotten is the users whose accounts are deleted (Forget): no browser of theirs starts. It
-	// is kept as long as the Manager runs, since an account's id is never given to another account.
-	forgotten map[int64]struct{}
+	// forgotten is the users whose accounts are deleted (Forget), with when: no browser of theirs
+	// starts. It is kept as long as the Manager runs, since an account's id is never given to
+	// another account, unless a restore of the server's data goes back before it (Unforget).
+	forgotten map[int64]time.Time
 	closed    bool
 	stopTick  chan struct{}
 	wg        sync.WaitGroup
@@ -105,7 +106,7 @@ func NewManager(cfg Config) *Manager {
 	if cfg.Tick <= 0 {
 		cfg.Tick = 15 * time.Second
 	}
-	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[int64]struct{}{}, stopTick: make(chan struct{})}
+	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[int64]time.Time{}, stopTick: make(chan struct{})}
 	m.wg.Add(1)
 	go m.idleLoop()
 	return m
@@ -207,14 +208,57 @@ func (m *Manager) Stop(_ context.Context, user int64, kind Kind) error {
 // touched.
 //
 // The refusal lasts as long as the Manager runs: an account's id is never given to another
-// account. A Manager that restarts forgets it, and then the account's being switched off is what
-// keeps its browsers from starting.
+// account, unless a restore of the server's data goes back before the deletion (Unforget). A
+// Manager that restarts forgets it, and then the account's being switched off is what keeps its
+// browsers from starting.
 func (m *Manager) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return badf("invalid user")
 	}
+	if err := m.stopAll(ctx, user, true); err != nil {
+		return err
+	}
+	if m.cfg.Host == nil {
+		return nil
+	}
+	if err := m.cfg.Host.Purge(user); err != nil {
+		return fmt.Errorf("removing the browser files: %w", err)
+	}
+	return nil
+}
+
+// StopAll stops user's browsers and waits until their processes are gone, as Forget does, but
+// neither refuses later starts nor removes a file: the CLI worker does both around it when it
+// removes a user's whole directory, the browser's profile with it (cliworker.Worker.Reconcile).
+// Other users' browsers are not touched.
+func (m *Manager) StopAll(ctx context.Context, user int64) error {
+	if user <= 0 {
+		return badf("invalid user")
+	}
+	return m.stopAll(ctx, user, false)
+}
+
+// Unforget drops the refusals Forget made before `before` of the users again says yes to: an
+// account a restore of the server's data brought back, or a number it gives to someone again
+// (cliworker.Worker.Reconcile). A refusal made after it is a deletion the restored database can't
+// know of, and stays.
+func (m *Manager) Unforget(again func(user int64) bool, before time.Time) {
 	m.mu.Lock()
-	m.forgotten[user] = struct{}{}
+	defer m.mu.Unlock()
+	for user, at := range m.forgotten {
+		if at.Before(before) && again(user) {
+			delete(m.forgotten, user)
+		}
+	}
+}
+
+// stopAll closes user's live views and stops their browsers, and waits for them to be gone (one
+// still starting or already stopping too). With forget, nothing of theirs starts any more.
+func (m *Manager) stopAll(ctx context.Context, user int64, forget bool) error {
+	m.mu.Lock()
+	if forget {
+		m.forgotten[user] = time.Now()
+	}
 	var wait []*session
 	var conns []*liveConn
 	for _, kind := range []Kind{Personal, Testing} {
@@ -240,12 +284,6 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}
-	if m.cfg.Host == nil {
-		return nil
-	}
-	if err := m.cfg.Host.Purge(user); err != nil {
-		return fmt.Errorf("removing the browser files: %w", err)
 	}
 	return nil
 }

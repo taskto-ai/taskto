@@ -98,6 +98,8 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		NoSandbox: true,
 	})
 	defer browsers.Close()
+	// Removing a user's whole directory (Forget, Reconcile) stops their browsers first.
+	w.SetBrowsers(browsers)
 	mux := http.NewServeMux()
 	mux.Handle("/browser/", browser.NewHandler(browsers))
 	mux.Handle("/", w.Handler())

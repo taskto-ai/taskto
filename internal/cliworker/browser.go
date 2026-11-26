@@ -46,6 +46,9 @@ func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File)
 	if bin == "" {
 		return nil, browser.ErrUnavailable
 	}
+	if err := h.w.browserGate(user); err != nil {
+		return nil, err
+	}
 	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser", Bin: bin, Browser: &spec})
 	if err != nil {
 		return nil, err
@@ -70,6 +73,18 @@ func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File)
 	return cmd, nil
 }
 
+// browserGate refuses a browser's process while user's whole directory is being removed: the
+// removal stops their browsers after it closed the gate, so a process that passed here before is
+// one of those it stops (its session was registered first), and none starts after.
+func (w *Worker) browserGate(user int64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.gated(user, "", "") {
+		return ErrRemoving
+	}
+	return nil
+}
+
 // logLines logs what a browser's process writes on stderr, a line at a time.
 func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 	defer r.Close()
@@ -88,6 +103,9 @@ func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 // DialVNC starts the helper as the user to connect to their VNC socket, and returns its
 // stdin and stdout as the stream. The helper says "ok" once it is connected.
 func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
+	if err := h.w.browserGate(user); err != nil {
+		return nil, err
+	}
 	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser-vnc"})
 	if err != nil {
 		return nil, err

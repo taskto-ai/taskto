@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 	if container {
 		slog.Info("agent browser on, in the CLI worker")
 		remote := browser.NewRemote(cfg.CLIWorkerSocket)
-		return agentbrowser.New(remote, cli.Usable), remote, func() {}
+		return agentbrowser.New(remote, browserUsable(cli)), remote, func() {}
 	}
 	bins := browser.FindBins(cfg.BrowserChromium)
 	m := browser.NewManager(browser.Config{Host: &browser.LocalHost{
@@ -45,5 +46,17 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 	if !m.Available(browser.Testing) {
 		slog.Warn("agent browser: no Chromium found (chromium on the PATH, or -browser-chromium)")
 	}
-	return agentbrowser.New(m, cli.Usable), m, m.Close
+	return agentbrowser.New(m, browserUsable(cli)), m, m.Close
+}
+
+// browserUsable is the CLI workers' rule for the agent browser, and, since its profile is in the
+// user's CLI directory, that the worker has been told who exists since this server started: a
+// directory a restore left there may be someone else's until it has (cliaccounts.Service.Ready).
+func browserUsable(cli *cliaccounts.Service) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if err := cli.Usable(ctx); err != nil {
+			return err
+		}
+		return cli.Ready(ctx)
+	}
 }

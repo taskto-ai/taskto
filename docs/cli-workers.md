@@ -410,20 +410,45 @@ The UI shows what the command prints.
   stops what runs for the user and waits for it, the same way a disconnect does for one account
   (their turns, the ones waiting for a place too, their sign-ins, their helper requests and the
   process groups they started), so a CLI that was using the login has ended before its files go and
-  nothing writes into them or makes them again. If something doesn't end in time it fails
-  (`ErrBusy`) and the purge tries again (the purge gives each attempt two minutes); the mark stays.
-  The agent browser's own long-lived processes are not stopped by it.
-- **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) takes marks back. User
-  numbers are never reused within one database's history, but a restore of the server's data goes
-  back in it: a person whose account was purged since the backup is back, and the numbers after it
-  are given again, while the worker's directory (the `cli-homes` volume in container mode) is not
-  part of the backup and keeps its marks. So at every start the server tells the worker which
-  numbers are live and which one comes next (`Service.StartReconcile`, retried in the background
-  while the worker isn't reachable yet), and the worker removes the marks of the live ones and of
-  the next and later ones, apart from a mark made after the server read its database (a purge
-  running now). The marks of accounts that are gone for good stay, and so do those of accounts
-  whose purge has begun (it forgets the worker's files before it deletes the account). Until it has been told, a
-  restored person may be refused with `cli_account_forgotten`.
+  nothing writes into them or makes them again. The agent browsers that run in the worker are
+  stopped too, and waited for, before the directory goes: the profile is in it. If something
+  doesn't end in time it fails (`ErrBusy`) and the purge tries again (the purge gives each attempt
+  two minutes); the mark stays. A process a CLI detached into a group of its own is not tracked.
+- **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) brings the worker in
+  line with the server's database after a restore of the server's data. User numbers are never
+  reused within one database's history, but a restore goes back in it: a person whose account was
+  purged since the backup is back, and the numbers after it are given again, while the worker's
+  directory (the `cli-homes` volume in container mode) is not part of the backup. It still holds
+  the marks of that history, and the directories of the people who had those numbers in it (an
+  account never purged, or one whose removal ended busy): their logins, working files and browser
+  profiles, which a new person given the number must never get. So at every start the server
+  tells the worker which numbers are live, when each live account was made and which number comes
+  next, read in one transaction (`Service.StartReconcile`, retried in the background until it
+  succeeds, with a warning at the first failure and every tenth). The worker then:
+  - removes, the way `Forget` does (what runs for the user stopped and waited for first, their
+    agent browsers too), every user's directory that isn't a live user's own: a number below the
+    next that isn't live (an account gone for good, which stays refused); a number from the next
+    up, unless the worker made the directory after the server read its database (a person added
+    since); and a live number whose directory the worker made before the account was made. The
+    worker records when it first acts for each user, in its own state directory
+    (`.worker/born-u<user>`, written before anything of the user's is made and never by the user);
+    a directory from before it recorded that is judged by the directory's own time, which is never
+    before it was made. Nothing of a live user is removed otherwise;
+  - removes the marks of the live users and of the numbers from the next up, apart from a mark made
+    after the server read its database (a purge running now), and takes back the agent browsers'
+    own refusals the same way. The marks of accounts that are gone for good stay, and so do those
+    of accounts whose purge has begun (it forgets the worker's files before it deletes the
+    account).
+
+  A directory that can't be removed yet (a process of it doesn't end in time) is kept and its user
+  refused (`ErrForgotten`) until a later attempt removes it; the answer is `ErrIncomplete` (`409`,
+  `incomplete`), and the server goes on and tries again. Until the worker has been told, since this
+  server started, the server asks nothing of it for a user: a sign-in, a status check, a sign-out,
+  a turn or the agent browser waits for it, and the first such request tells it if the start
+  couldn't; while the worker can't be reached they are refused with `cli_worker_not_ready`
+  (`503`). In local mode the directories are under `<data>/cli/`, which the backup covers, so a
+  restore brings back the directories that go with its database and there is nothing to remove;
+  the same code runs.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

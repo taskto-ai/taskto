@@ -54,3 +54,19 @@ func (w *Worker) GroupSeqForTest(pgid int) uint64 {
 // a negative time stops the worker from listing groups at all, so that a test of what a removal
 // waits for otherwise (a turn's end, a sign-in's) is not answered by the groups' wait.
 func (w *Worker) SetGroupWaitForTest(d time.Duration) { w.groupWait = d }
+
+// NoteBirthForTest records that the worker acts for user now, as its first helper does, and
+// returns the record's path, whose time is when.
+func (w *Worker) NoteBirthForTest(user int64) string {
+	if err := w.noteBirth(user); err != nil {
+		panic(err)
+	}
+	return w.birthMark(user)
+}
+
+// GroupsForTest is how many process groups the worker lists.
+func (w *Worker) GroupsForTest() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.groups)
+}

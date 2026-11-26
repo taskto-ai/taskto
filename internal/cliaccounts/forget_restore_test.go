@@ -172,11 +172,11 @@ type flakyWorker struct {
 	told  chan struct{}
 }
 
-func (f *flakyWorker) Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error {
+func (f *flakyWorker) Reconcile(ctx context.Context, c cliworker.Census) error {
 	if f.fails.Add(-1) >= 0 {
 		return errors.New("the CLI worker is unreachable")
 	}
-	err := f.Worker.Reconcile(ctx, live, next, before)
+	err := f.Worker.Reconcile(ctx, c)
 	close(f.told)
 	return err
 }

@@ -366,6 +366,7 @@ const (
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
 	CodeCLINotInstalled        Code = "cli_not_installed" // params: cli
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
+	CodeCLIWorkerNotReady      Code = "cli_worker_not_ready"  // the server hasn't told the worker who exists since it started
 	CodeCLIAccountForgotten    Code = "cli_account_forgotten" // the worker removed the account's CLI files and refuses it
 	CodeCLIAccountRemoving     Code = "cli_account_removing"  // 409: the account's CLI files are being removed (it is being disconnected)
 	CodeCLIAccountBusy         Code = "cli_account_busy"      // 409: a process of the account is still running; nothing was removed, try again
