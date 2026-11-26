@@ -1,0 +1,111 @@
+/* The integration events: the settings frame, a filter, a list of events and the payment links that
+   wait for an admin. Every part is a component from web/src/ui; this only places them. */
+
+@layer screens {
+  /* The filter sits at the start of the page, as wide as its choices and never wider than the page. */
+  .events-filters {
+    justify-self: start;
+    align-self: flex-start;
+    max-inline-size: 100%;
+  }
+
+  /* On a phone the choices wrap onto a second row when the language's words are long, rather than being
+     cut off: the pill keeps its ground, and each segment keeps a control's height. */
+  @media (max-width: 40rem) {
+    .events-filters .ui-segmented {
+      flex-wrap: wrap;
+      block-size: auto;
+      max-inline-size: 100%;
+    }
+
+    .events-filters .ui-segment-face {
+      padding-inline: var(--space-2);
+      min-block-size: calc(var(--control-md) - var(--space-2));
+    }
+  }
+
+  @media (max-width: 40rem) and (pointer: coarse) {
+    .events-filters .ui-segment-face {
+      min-block-size: calc(var(--control-touch) - var(--space-2));
+    }
+  }
+
+  .events-more {
+    display: flex;
+    justify-content: center;
+  }
+
+  /* A row's facts, a line each: the amount and time, the reason, the tries. */
+  .events-facts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+    overflow-wrap: anywhere;
+  }
+
+  /* What to check at the provider, in the order to do it. */
+  .events-steps {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding-inline-start: var(--space-5);
+  }
+
+  /* An attempt at a payment: its reference to look for, then the facts of where it was made. */
+  .events-attempts-note {
+    margin: 0;
+    font: var(--type-caption);
+    color: var(--color-text-muted);
+  }
+
+  .events-attempts {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .events-attempt {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .events-attempt-title {
+    font: var(--type-ui-strong);
+  }
+
+  /* The reference in a field that can be selected whole, with its copy button at its end. */
+  .events-reference {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-2);
+  }
+
+  .events-reference .ui-field {
+    flex: 1 1 var(--width-menu-max);
+    min-inline-size: 0;
+  }
+
+  /* The field's empty live region keeps one grid gap below the input (a grid track can't be
+     negative), so the button rises by that gap to sit level with the input. */
+  .events-reference > :not(.ui-field) {
+    margin-block-end: var(--space-2);
+  }
+
+  .events-reference-field {
+    font-family: var(--font-mono);
+  }
+
+  .events-field-name {
+    font-family: var(--font-mono);
+  }
+
+  .events-attempt-facts {
+    display: grid;
+    gap: var(--space-1);
+    overflow-wrap: anywhere;
+  }
+}

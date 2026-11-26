@@ -15,7 +15,7 @@ import {
   type Space,
   ws,
 } from '../api'
-import { type Format, has, type Key, useFormat, useT } from '../i18n'
+import { has, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -30,6 +30,7 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Select } from '../ui/Select'
+import { amounts, type Exponents } from './money'
 import { Alert, CopyButton, FormError, Loading, Section, SettingsTab, useAction, useRefocus } from './parts'
 
 type Translate = ReturnType<typeof useT>
@@ -38,27 +39,6 @@ type Translate = ReturnType<typeof useT>
 function label(t: Translate, group: string, code: string): string {
   const key = `settings.integrations.${group}.${code}`
   return has(key) ? t(key as Key) : code
-}
-
-// The number of decimals of each currency, the server's own table (a ceiling is checked in its
-// unit), never the browser's: they differ for a few currencies, such as the peso and the forint.
-type Exponents = Record<string, number>
-
-// An amount in a currency's smallest unit, written as people write money.
-function money(f: Format, exponents: Exponents, minor: number, currency: string): string {
-  const digits = exponents[currency] ?? 2
-  return f.number(minor / 10 ** digits, {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  })
-}
-
-// What a ceiling comes to in each of the currencies: the same number of smallest units is not the
-// same sum in euros and in yen, so the page says each.
-function amounts(f: Format, exponents: Exponents, minor: number, currencies: string[]): string {
-  return f.list(currencies.map((c) => money(f, exponents, minor, c)))
 }
 
 export function IntegrationsTab({ workspace }: { workspace: number }) {
