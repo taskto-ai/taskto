@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { LIFECYCLE_KIND, purgeRecords, runPurge, WalBusyError } from './purge.js'
+import { LIFECYCLE_KIND, purgeRecords, runPurge, truncateWalWithin, WalBusyError } from './purge.js'
 
 const WORD = 'doomed-marmalade-7731'
 
@@ -417,27 +417,52 @@ describe('runPurge', () => {
     }
   }, 60_000)
 
-  // A reader that held an old snapshot while a large backlog was written lets go while the purge
-  // empties the log: the backlog is copied by checkpoints that writers go on beside, and the one
-  // that empties the log, which they wait for, finds it drained.
-  it('copies a large backlog without holding writers up once a reader lets go', async () => {
+  // A reader that held an old snapshot while a large backlog was written lets go just after a round
+  // found the backlog: the log is emptied (by the TRUNCATE checkpoint, which holds the write lock
+  // for as long as it copies) only in a round that found it drained, after a passive checkpoint,
+  // which writers go on beside, copied the backlog.
+  it('empties the log only once a passive checkpoint has drained it', () => {
     const { writer, reader } = fixture() // the reader holds its snapshot from before the backlog
-    const entry = writer.prepare("INSERT INTO entries (conversation_id, text) VALUES (2, 'a turn of someone else')")
+    const text = 'y'.repeat(400)
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    writer.exec('BEGIN')
+    for (let i = 0; i < 100_000; i++) more.run(text)
+    writer.exec('COMMIT')
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    const rounds: number[] = []
+    try {
+      truncateWalWithin(db, 10_000, (backlog) => {
+        rounds.push(backlog)
+        if (rounds.length === 1) reader.exec('COMMIT') // lets go between the round's two checkpoints
+      })
+      expect(rounds[0]).toBeGreaterThan(1000) // the reader kept the backlog from being copied
+      // The round that emptied the log is the last one: it found the backlog copied.
+      expect(rounds.length).toBeGreaterThan(1)
+      expect(rounds[rounds.length - 1]).toBeLessThanOrEqual(64)
+      expect(log()).toBe('')
+    } finally {
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // The same with the purge on its thread and writes going on beside it: a write never waits for
+  // the copy, only for the drained log's file to be cut short. Measured, not bounded tightly: how
+  // long cutting a large file takes is the disk's.
+  it('copies a large backlog without holding writers up for the copy once a reader lets go', async () => {
+    const { writer, reader } = fixture()
     const text = 'y'.repeat(400)
     const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
     writer.exec('BEGIN')
     for (let i = 0; i < 500_000; i++) more.run(text)
     writer.exec('COMMIT')
-    entry.run()
     try {
       const release = setTimeout(() => reader.exec('COMMIT'), 500)
       const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 20_000 }))
       clearTimeout(release)
       expect(probe.error).toBeUndefined()
-      // Copied by the checkpoint that empties the log, which holds the lock, a write waited for
-      // the whole copy (here about half of the purge); copied beside the writers, it waits only
-      // while the drained log's file is cut short (a few percent).
-      expect(probe.longest).toBeLessThan(probe.took / 4)
+      expect(probe.longest).toBeLessThan(probe.took / 2)
       expect(log()).not.toContain(WORD)
     } finally {
       reader.close()

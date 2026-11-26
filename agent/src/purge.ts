@@ -76,13 +76,18 @@ function backlog(db: DatabaseSync): number {
  * it doesn't wait for readers either). The pause between rounds is a sleep of this thread. A reader
  * that lets go of its snapshot lets the next round copy the rest. Throws WalBusyError if a reader
  * still holds the log at the end.
+ *
+ * onRound, for tests, is told each round's backlog after its passive checkpoint, before the round
+ * decides whether to truncate.
  */
-export function truncateWalWithin(db: DatabaseSync, timeoutMs: number): void {
+export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, onRound?: (backlog: number) => void): void {
   db.exec('PRAGMA busy_timeout = 0')
   const deadline = performance.now() + timeoutMs
   let last: unknown
   for (;;) {
-    if (backlog(db) <= DRAINED_FRAMES) {
+    const left = backlog(db)
+    onRound?.(left)
+    if (left <= DRAINED_FRAMES) {
       try {
         truncateWal(db)
         return
