@@ -8,7 +8,6 @@
     --tt-stone: var(--color-bg-sunken);
     --tt-surface: var(--color-surface);
     --tt-hover: var(--color-hover);
-    --tt-scrim: var(--color-scrim);
 
     --tt-fg: var(--color-text);
     --tt-muted: var(--color-text-muted);
@@ -31,7 +30,6 @@
 
     --tt-shadow-lift: var(--shadow-lift);
     --tt-shadow-lift-hover: var(--shadow-lift-hover);
-    --tt-shadow-pop: var(--shadow-pop);
 
     --tt-font: var(--font-sans);
     --tt-display: var(--font-display);

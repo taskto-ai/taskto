@@ -414,12 +414,10 @@ const THEMES = 'src/ui/themes/'
 export const OLD_STYLESHEETS = [
   'ui/base.css',
   'legacy-shared.css',
-  'auth/auth.legacy.css',
   'boards/boards.legacy.css',
   'markdown.legacy.css',
   'settings/settings.legacy.css',
   'pwa/pwa.legacy.css',
-  'offline/offline.legacy.css',
 ]
 const LIST = 'src/styles.css'
 // The cascade layers, in order, as ui/index.css and index.html declare them.

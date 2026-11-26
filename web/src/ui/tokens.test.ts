@@ -181,7 +181,7 @@ describe('the tokens', () => {
     expect(style?.[1]).toBe(index.trim().split('\n')[0])
   })
 
-  test('the stacking levels are in their order, and the skip link is above every z-index there is', () => {
+  test('the stacking levels are in their order, and every z-index is one of them', () => {
     const order = ['sticky', 'sidebar', 'scrim', 'drawer', 'overlay', 'toast', 'skip']
     const props = propsOf(rules(read('tokens.css')), ':root')
     const declared = [...props.keys()].filter((k) => k.startsWith('--z-'))
@@ -191,10 +191,13 @@ describe('the tokens', () => {
       levels.every((v, i) => Number.isInteger(v) && (i === 0 || v > levels[i - 1])),
       levels.join(' < '),
     ).toBe(true)
-    const found = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
-    // The scan reads the stylesheets that declare them (the scrim's, the guards').
-    expect(found.length).toBeGreaterThan(0)
-    expect(levels.at(-1)).toBeGreaterThanOrEqual(Math.max(...found))
+    // A level is a token: no stylesheet writes a z-index as a bare number, so none can climb over the
+    // skip link without saying so in tokens.css.
+    const numbers = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(-?\d+)/g)].map((m) => m[0]))
+    expect(numbers).toEqual([])
+    const used = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*var\((--z-[a-z]+)\)/g)].map((m) => m[1]))
+    expect(used.length).toBeGreaterThan(0)
+    expect(used.filter((name) => !declared.includes(name))).toEqual([])
   })
 
   test('every scale resolves', () => {
@@ -228,10 +231,8 @@ const OLD_NAMES = [
   'success',
   'warning',
   'clear-icon',
-  'scrim',
   'shadow-lift',
   'shadow-lift-hover',
-  'shadow-pop',
   'font',
   'display',
   'mono',
@@ -260,7 +261,6 @@ const OLD_COLORS: Record<string, [string, string]> = {
   danger: ['#b42318', '#ff8a82'],
   success: ['#006b45', '#4cefa8'],
   warning: ['#9a4700', '#ffb04d'],
-  scrim: ['rgba(17, 17, 16, 0.42)', 'rgba(0, 0, 0, 0.6)'],
 }
 
 // And the others, resolved as they were, light then dark: lengths, shadows, font stacks, the icon.
@@ -268,7 +268,6 @@ const SANS = '"Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sa
 const OLD_VALUES: Record<string, [string, string]> = {
   'shadow-lift': ['0 2px 0 #111110', '0 2px 0 #1fc98a'],
   'shadow-lift-hover': ['0 3px 0 #111110', '0 3px 0 #1fc98a'],
-  'shadow-pop': ['0 12px 32px -12px rgba(17, 17, 16, 0.35)', '0 12px 32px -12px rgba(0, 0, 0, 0.8)'],
   font: [SANS, SANS],
   display: [`"Bricolage Grotesque Variable", ${SANS}`, `"Bricolage Grotesque Variable", ${SANS}`],
   mono: [

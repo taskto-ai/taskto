@@ -19,12 +19,6 @@
   text-align: center;
 }
 
-.tt-brand {
-  display: inline-flex;
-  align-items: center;
-  margin: 0;
-}
-
 /* The website's logo (BrandLogo.tsx): the arrow and the name in the page's ink, the dot and
    ".ai" in the logo's own green. Its height is set; the width follows the drawing (238 by 64). */
 .tt-logo {
