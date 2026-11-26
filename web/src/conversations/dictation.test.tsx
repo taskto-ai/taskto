@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { DictationStatus } from '../api'
 import { parseRoute, usePath } from '../router'
+import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { ConversationsPage } from './ConversationsPage'
 import { clock, DICTATION_RATE, Downsampler, encodeWav, type Recording, toBase64 } from './recorder'
@@ -175,4 +176,19 @@ test('the WAV is 16-bit PCM, mono, 16 kHz', async () => {
   expect(atob(await toBase64(wav)).length).toBe(wav.length)
   expect(clock(75)).toBe('1:15')
   expect(clock(600)).toBe('10:00')
+})
+
+test('a recording whose session ended while it was made ready to send is not sent', async () => {
+  const calls = routes(() => ({ body: { text: 'private words', engine: 'local' } }))
+  beginSession(1)
+  render(<Page />)
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  fireEvent.click(await screen.findByRole('button', { name: 'Dictate' }))
+  const stop = await screen.findByRole('button', { name: 'Stop dictation' })
+  // Stopped, and the session ends before the recording has been made ready to send.
+  fireEvent.click(stop)
+  endSession()
+  await new Promise((r) => setTimeout(r, 50))
+  expect(calls.some((c) => c.path.endsWith('/transcriptions'))).toBe(false)
+  expect(box.value).toBe('')
 })

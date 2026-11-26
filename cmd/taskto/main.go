@@ -240,6 +240,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// With none set (the default) the check does nothing.
 	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
 	kb.SetQuota(quotas.KnowledgeCheck())
+	// A call that resolved a space before its account was purged is refused once the rows are
+	// gone, whatever the order it arrives in (it would make the directory again).
+	kb.SetSpaceCheck(access.SpaceRowCheck(sqlDB))
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err
@@ -260,7 +263,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	defer func() { stuck.note("the CLI workers' proxy", stopCLI()) }()
 	// The agent browser, in the CLI worker (or with it, in local mode).
-	browsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
+	browsers, purgeBrowsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
 	defer stopBrowsers()
 
 	// The knowledge-base, board, app and browser tools, for the sidecar and the MCP endpoint:
@@ -280,7 +283,18 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	if err := boardSvc.ReconcileReminders(ctx); err != nil {
 		return err
 	}
-	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb}).WithDeletedRetention(cfg.AppDeletedRetention())
+	// The integrations are one service for the server's routes and for the apps' payment links, which
+	// the outbox worker makes through it (the key of an integration is opened only there).
+	integrationStore := integrations.NewStore(sqlDB, key)
+	// Webhook secrets saved before they had fingerprints get theirs before the route serves.
+	if err := integrationStore.BackfillFingerprints(ctx); err != nil {
+		return fmt.Errorf("fingerprinting the integrations' webhook secrets: %w", err)
+	}
+	integrationSvc := integrations.New(integrationStore, integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
+	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb, Payments: integrationSvc}).WithDeletedRetention(cfg.AppDeletedRetention())
+	// A verified payment event is applied to the app's record by the apps, as the integration and only as
+	// the app's approved contract allows; until this is set, stored events wait.
+	integrationSvc.UseRecords(appSvc)
 	// The apps' effects (cards, documents) are done in the background, as the users who acted,
 	// so they go on when nobody has the app open. Stopped before the database closes.
 	stopEffects := appSvc.StartOutbox(ctx)
@@ -300,7 +314,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// The purge of a deleted account, after its grace period: a job of the scheduler too, so its
 	// handler is registered before the scheduler starts.
 	deletions := accountdeletion.New(accountdeletion.Options{
-		DB: sqlDB, DataDir: cfg.DataDir, Scheduler: scheduler, Knowledge: kb, CLI: cliAccounts,
+		DB: sqlDB, DataDir: cfg.DataDir, Scheduler: scheduler, Knowledge: kb, CLI: cliAccounts, Browsers: purgeBrowsers,
 	})
 	if err := deletions.Attach(); err != nil {
 		return err
@@ -407,15 +421,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		stopMaintain()
 		maintaining.Wait()
 	}()
-	// The integrations' webhook route stores the events providers send; their worker applies them
-	// (the apply step is set by the card that adds it, until when events wait), stopped before the
-	// database closes.
-	integrationStore := integrations.NewStore(sqlDB, key)
-	// Webhook secrets saved before they had fingerprints get theirs before the route serves.
-	if err := integrationStore.BackfillFingerprints(ctx); err != nil {
-		return fmt.Errorf("fingerprinting the integrations' webhook secrets: %w", err)
-	}
-	integrationSvc := integrations.New(integrationStore, integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
+	// The integrations' webhook route stores the events providers send; their worker applies them to
+	// the apps' records (UseRecords), stopped before the database closes.
 	stopIntegrationEvents := integrationSvc.StartEvents(ctx)
 	defer stopIntegrationEvents()
 	var accounts *auth.Service

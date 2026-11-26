@@ -122,7 +122,7 @@ its lifetime, or for a notification that was read meanwhile, is not sent.
 
 **What a push says.** The worker shows `taskto.ai` with one line for the kind of notification, in
 the person's language, and nothing else. The server sends only `{"id", "kind"}` (the
-notification's own ID, and its kind: `card_assigned`, `card_comment`, `card_mention`, `card_due`, `card_overdue`, `app_effect_failed`, or `changed`), encrypted
+notification's own ID, and its kind: `card_assigned`, `card_comment`, `card_mention`, `card_due`, `card_overdue`, `app_effect_failed`, `integration_event`, or `changed`), encrypted
 to the browser (RFC 8291) and signed with the server's VAPID key (RFC 8292), both done with the
 standard library (`internal/notifications/webpush.go`). No title, no name, no ID of a card or app.
 The worker can't load the app's translations, so the page gives it the lines for each kind when push is

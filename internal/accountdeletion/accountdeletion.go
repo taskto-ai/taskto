@@ -75,17 +75,34 @@ type Apps interface {
 	// left in it, and fails if one is.
 	FinishMoves(ctx context.Context, space int64) error
 	// PurgeUploads removes the account's unfinished uploads and unattached photos, with files.
-	PurgeUploads(ctx context.Context, owner int64) (int, error)
+	// removed is called in the transaction that deletes each one's row.
+	PurgeUploadsNoting(ctx context.Context, owner int64, removed func(ctx context.Context, tx *sql.Tx) error) (int, error)
 }
 
 // Knowledge is what the purge needs of the knowledge base: *knowledge.Store.
 type Knowledge interface {
-	AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error)
+	// planned is called with the number of commits to rewrite before the rewrite is journaled.
+	AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(n int) error) (int, error)
+	// RemoveSpace removes a space's files, and refuses every later call on it until ForgetSpace.
 	RemoveSpace(sp access.Space) error
+	// ForgetSpace drops the refusal once the space's rows are deleted: a space made later may be
+	// given its ID.
+	ForgetSpace(sp access.Space)
 }
 
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
 type CLIWorkers interface {
+	Forget(ctx context.Context, user int64) error
+	// WorkerKind is where this server's worker keeps a user's files: "local", "container", or ""
+	// when CLI workers are off (cliaccounts.WorkerKind).
+	WorkerKind() string
+}
+
+// Browsers is what the purge needs of the agent browsers: browser.Browsers.
+type Browsers interface {
+	// Forget stops the account's browsers, closes their live views, refuses to start new ones while
+	// it runs and removes their files. It returns nil only when the processes are gone and the files
+	// are removed, and is safe to call again.
 	Forget(ctx context.Context, user int64) error
 }
 
@@ -107,9 +124,13 @@ type Options struct {
 	// ready (the purge is tried again). Nil when the agent runtime is off: a conversation's records
 	// stay recorded as a step to do when it is on.
 	Agent func(ctx context.Context) (conversations.Purger, error)
-	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
-	// CLI workers are off: that step stays recorded for when they are on.
+	// CLI forgets the CLI worker's files of the person. Nil when CLI workers are off: a step that
+	// needs a worker that isn't running stays recorded for when it is.
 	CLI CLIWorkers
+	// Browsers stops the account's agent browsers and removes their profile (a durable step, tried
+	// again until it is done). Nil when this server has no agent browser to stop: local mode with the
+	// browser off, or CLI workers off.
+	Browsers Browsers
 	// Clock is the time; time.Now by default.
 	Clock func() time.Time
 }
@@ -287,8 +308,9 @@ type Result struct {
 	AccessTokens      int64
 	CLIAccounts       int64
 	PushSubscriptions int64
-	// DocumentsAnonymized counts what this attempt rewrote: after a failed try, the spaces already
-	// done are found rewritten and add nothing (docs/audit.md).
+	// DocumentsAnonymized and UploadsRemoved are done before the account's transaction, and can be
+	// done by an earlier try than the one that completes: their counts are kept with the work
+	// (account_deletions.uploads_removed, purge_anonymized), and these are the totals (docs/audit.md).
 	DocumentsAnonymized int64
 	MentionsAnonymized  int64
 	UploadsRemoved      int64
@@ -308,11 +330,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 	// What is to go, read once the purge has begun: nothing new can be made by an account that
 	// is switched off, and what the steps below delete is found again by a retry.
-	private, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
+	private, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
-	shared, err := s.spaces(ctx, `SELECT id, workspace_id FROM spaces WHERE kind = 'shared' ORDER BY id`)
+	shared, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE kind = 'shared' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -330,7 +352,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 				return err
 			}
 		}
-		return s.record(ctx, tx, userID, cleanCLIHome, strconv.FormatInt(userID, 10))
+		// The browsers first: the CLI homes hold their directory, and are left until they are gone.
+		if err := s.record(ctx, tx, userID, cleanBrowser, strconv.FormatInt(userID, 10)); err != nil {
+			return err
+		}
+		return s.recordCLIHomes(ctx, tx, userID)
 	})
 	if err != nil {
 		return err
@@ -360,11 +386,13 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	}
 	// Their unfinished uploads in any app (a shared app's are theirs alone): with files. The photos
 	// already on records stay with the records.
-	n, err := apps.PurgeUploads(ctx, userID)
-	if err != nil {
+	// Each is counted in the transaction that removes it, so a retry neither loses nor repeats it.
+	if _, err := apps.PurgeUploadsNoting(ctx, userID, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE account_deletions SET uploads_removed = uploads_removed + 1 WHERE user_id = ?`, userID)
+		return err
+	}); err != nil {
 		return err
 	}
-	res.UploadsRemoved = int64(n)
 
 	// The agent runtime's records, the CLI worker's directory: each is done now, or stays recorded
 	// when what it waits for is off. One that is on and fails fails the purge, which is tried again.
@@ -394,12 +422,15 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		n, err := s.o.Knowledge.AnonymizeAuthors(ctx, sp, []string{acct.email})
-		if err != nil {
+		// The space's count is kept before its rewrite is journaled: a rewrite that stops after that
+		// is finished by the next try (or start), which finds nothing left to count.
+		if _, err := s.o.Knowledge.AnonymizeAuthorsNoting(ctx, sp, []string{acct.email}, func(n int) error {
+			_, err := s.o.DB.ExecContext(ctx, `INSERT INTO purge_anonymized (user_id, space_id, commits) VALUES (?, ?, ?)
+				ON CONFLICT (user_id, space_id) DO UPDATE SET commits = excluded.commits`, userID, sp.ID, n)
+			return err
+		}); err != nil {
 			anonErrs = append(anonErrs, fmt.Errorf("replacing the account's name in space %d's history: %w", sp.ID, err))
-			continue
 		}
-		res.DocumentsAnonymized += int64(n)
 	}
 	if err := errors.Join(anonErrs...); err != nil {
 		return err
@@ -407,8 +438,12 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
-		return err
+	finishErr := s.finish(ctx, userID, private, acct, &res)
+	// Whatever finish returned: a transaction that committed and then failed to report it has
+	// deleted the rows, and a space made later with the ID must not stay refused until a restart.
+	s.forgetGone(ctx, private)
+	if finishErr != nil {
+		return finishErr
 	}
 	// The providers file and the key files, now that the database has no account of theirs. A
 	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.
@@ -427,6 +462,19 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 			"conversations", res.Conversations, "documents_anonymized", res.DocumentsAnonymized)
 	}
 	return nil
+}
+
+// forgetGone tells the knowledge base to forget the removal of each of spaces whose row is gone
+// (knowledge.Store.ForgetSpace): the refusal is kept for a space that is still recorded, since the
+// purge is then still to finish it, and a database that can't be read leaves it all as it is.
+func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
+	for _, sp := range spaces {
+		var one int
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			s.o.Knowledge.ForgetSpace(sp)
+		}
+	}
 }
 
 type account struct {
@@ -481,7 +529,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 	var out []access.Space
 	for rows.Next() {
 		sp := access.Space{Access: access.Write}
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)
@@ -524,6 +572,11 @@ func (s *Service) finish(ctx context.Context, userID int64, private []access.Spa
 		}
 		if stranded > 0 {
 			return fmt.Errorf("%d attachments of apps in other spaces are still recorded in the account's private spaces", stranded)
+		}
+		// What the steps before this transaction did, over every try.
+		if err := tx.QueryRowContext(ctx, `SELECT d.uploads_removed, (SELECT coalesce(sum(a.commits), 0) FROM purge_anonymized a WHERE a.user_id = d.user_id)
+			FROM account_deletions d WHERE d.user_id = ?`, userID).Scan(&res.UploadsRemoved, &res.DocumentsAnonymized); err != nil {
+			return err
 		}
 		for _, c := range []struct {
 			into  *int64

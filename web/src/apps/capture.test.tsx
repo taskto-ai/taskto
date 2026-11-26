@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { ApiError } from '../api'
 import { forgetSharedDictationStatus } from '../conversations/Dictation'
+import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { AppView } from './AppView'
 import { BarcodeField } from './BarcodeInput'
@@ -987,4 +988,60 @@ test('while a submission is being made, a photo’s buttons are held, and only t
   expect(remove.disabled).toBe(true)
   // The location, part of what is being sent, stays usable.
   expect(byHand.disabled).toBe(false)
+})
+
+test('a submit whose location comes after its person signed out and someone else signed in sends nothing', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  // A position that comes in when the test says.
+  let give: PositionCallback = () => {}
+  stubNavigator('geolocation', {
+    getCurrentPosition: vi.fn((ok: PositionCallback) => {
+      give = ok
+    }),
+    watchPosition: vi.fn(),
+    clearWatch: vi.fn(),
+  })
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  const acted = vi.fn(async () => [])
+  beginSession(1)
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{ definition_version: DEFINITION_VERSION, requires: NEEDS }}
+      transport={{ load: async () => structuredClone(screenMessages), act: acted, files }}
+    />,
+  )
+  expect(await screen.findByRole('group', { name: 'Where' })).toBeTruthy()
+  fireEvent.change(screen.getByLabelText(/Code \(type it/), { target: { value: 'PRIVATE-1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  // The first person signs out while the device looks for the location, and the next signs in.
+  endSession()
+  beginSession(2)
+  await act(async () =>
+    give({ coords: { latitude: 1, longitude: 2, accuracy: 5 }, timestamp: Date.now() } as GeolocationPosition),
+  )
+  await new Promise((r) => setTimeout(r, 20))
+  expect(acted).not.toHaveBeenCalled()
+})
+
+test('a signature made into a picture after its session ended is not uploaded', async () => {
+  stubCanvas()
+  // The picture is made when the test says.
+  let made: () => void = () => {}
+  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((cb) => {
+    made = () => cb(new Blob([new Uint8Array(8)], { type: 'image/png' }))
+  })
+  const calls = fakeFetch(uploadRoutes())
+  beginSession(1)
+  render(<Sign onValue={() => {}} />)
+  fireEvent.click(screen.getByRole('radio', { name: 'Type your name' }))
+  fireEvent.change(screen.getByLabelText('Your full name'), { target: { value: 'Ada Lovelace' } })
+  fireEvent.click(screen.getByLabelText(/typing my name here is my signature/))
+  fireEvent.click(screen.getByRole('button', { name: 'Save signature' }))
+  endSession()
+  await act(async () => made())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(calls.some((c) => c.path.endsWith('/uploads'))).toBe(false)
 })

@@ -1,6 +1,10 @@
 package integrations
 
-import "testing"
+import (
+	"testing"
+
+	"taskto.ai/taskto/internal/currency"
+)
 
 // The table is the unit the payment provider's API takes, which isn't always ISO 4217's: Stripe
 // documents COP, HUF and IDR as two-decimal currencies, JPY and its like as zero-decimal, and
@@ -12,7 +16,7 @@ func TestExponentsMatchTheProvidersUnits(t *testing.T) {
 			t.Errorf("%s: exponent %d, listed %v; want %d", code, got, ok, exp)
 		}
 	}
-	if !WholeUnitsOnly("ISK") || WholeUnitsOnly("EUR") || WholeUnitsOnly("HUF") {
+	if !currency.WholeUnitsOnly("ISK") || currency.WholeUnitsOnly("EUR") || currency.WholeUnitsOnly("HUF") {
 		t.Error("only ISK is written with decimals that are always zero")
 	}
 }

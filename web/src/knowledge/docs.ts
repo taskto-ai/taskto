@@ -2,7 +2,7 @@
 // path in a URL, what a refusal means, what kind of file a path names, and the loading of the
 // list and of one document.
 
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 import { ApiError, api, type Doc } from '../api'
 import { has, type T } from '../i18n'
 import { useLoad } from '../load'
@@ -92,16 +92,7 @@ export function useLatest<T>(value: T) {
 // Whether the part that made a request is still on the screen when its answer comes: an action
 // the person asked for is finished either way (the list reloads), but what it would open is
 // opened only for someone who is still there.
-export function useMounted() {
-  const mounted = useRef(true)
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
-  return mounted
-}
+export { useMounted } from '../mounted'
 
 // The space's documents, every page of them; nothing while there is no space.
 export const useDocs = (base: string | null) =>

@@ -1,0 +1,13 @@
+# Installed by deploy/INSTALL.md (step 16). Every six hours, spread by up to half an hour, so
+# Settings → About says an update is waiting well before the nightly run installs it; a look
+# missed while the VM was off happens when it is next up.
+[Unit]
+Description=taskto.ai: look for a newer version every few hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:15:00 UTC
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

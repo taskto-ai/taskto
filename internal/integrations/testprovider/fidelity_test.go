@@ -383,3 +383,48 @@ func TestEachFakeHasItsOwnPayer(t *testing.T) {
 		t.Errorf("delayed: %+v", got.CustomerDetails)
 	}
 }
+
+// A payer who opens a hosted payment link's address with ?client_reference_id= makes a session that
+// carries it, as Stripe's documented URL parameter does; a value Stripe doesn't take is left out, and
+// opening an address that isn't a link's takes no payment.
+func TestAPayerOpeningAHostedLinkAddressBringsItsClientReferenceId(t *testing.T) {
+	f, _, a := newFake(t)
+	l := a.newLink(oneLineLink(5000, "usd"))
+
+	completed := func(evs []testprovider.Event) testprovider.Session {
+		t.Helper()
+		for _, e := range evs {
+			if e.Type == testprovider.EventSessionCompleted {
+				var ss testprovider.Session
+				if err := json.Unmarshal(e.Data.Object, &ss); err != nil {
+					t.Fatal(err)
+				}
+				return ss
+			}
+		}
+		t.Fatal("no completed session")
+		return testprovider.Session{}
+	}
+
+	evs, err := f.PayLinkAt(l.URL + "?client_reference_id=inv_A-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ss := completed(evs); ss.ClientReferenceID == nil || *ss.ClientReferenceID != "inv_A-1" || ss.PaymentLink == nil || *ss.PaymentLink != l.ID {
+		t.Errorf("the session of a payer who came by the address: %+v", ss)
+	}
+
+	// Without the parameter, and with one Stripe doesn't take, the session has none.
+	for name, address := range map[string]string{"none": l.URL, "a space in it": l.URL + "?client_reference_id=a%20b", "a long one": l.URL + "?client_reference_id=" + strings.Repeat("x", 201)} {
+		evs, err := f.PayLinkAt(address)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if ss := completed(evs); ss.ClientReferenceID != nil {
+			t.Errorf("%s: the session has the reference %q", name, *ss.ClientReferenceID)
+		}
+	}
+	if _, err := f.PayLinkAt("https://buy.stripe.com/nothing?client_reference_id=x"); !errors.Is(err, testprovider.ErrNoSuchLink) {
+		t.Errorf("an address that isn't a link's: %v", err)
+	}
+}

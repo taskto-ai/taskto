@@ -294,18 +294,8 @@ func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) 
 	if err := s.ensureRepo(sp); err != nil {
 		return nil, err
 	}
-	root, err := access.OpenRoot(s.dataDir, sp)
+	sg, f, err := s.openStaged(sp)
 	if err != nil {
-		return nil, err
-	}
-	if err := root.MkdirAll(tmpDir, 0o700); err != nil {
-		_ = root.Close()
-		return nil, err
-	}
-	sg := &staged{root: root, tmp: path.Join(tmpDir, "upload-"+randomSuffix())}
-	f, err := root.OpenFile(sg.tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		_ = root.Close()
 		return nil, err
 	}
 	h := sha256.New()
@@ -322,6 +312,33 @@ func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) 
 	}
 	sg.ptr = pointer{oid: hex.EncodeToString(h.Sum(nil)), size: n}
 	return sg, nil
+}
+
+// openStaged makes the file stage copies into. It holds the space's lock as a reader while it
+// makes the directories and the file, only: a removal (RemoveSpace) comes before it, and the
+// space is refused, or after it, and takes the file with the rest. The bytes are then copied into
+// a file that may already be unlinked, which leaves nothing behind.
+func (s *Store) openStaged(sp access.Space) (*staged, *os.File, error) {
+	st := s.lockSpace(sp, false, true)
+	defer st.mu.RUnlock()
+	if err := s.admit(st, sp); err != nil {
+		return nil, nil, err
+	}
+	root, err := access.OpenRoot(s.dataDir, sp)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := root.MkdirAll(tmpDir, 0o700); err != nil {
+		_ = root.Close()
+		return nil, nil, err
+	}
+	sg := &staged{root: root, tmp: path.Join(tmpDir, "upload-"+randomSuffix())}
+	f, err := root.OpenFile(sg.tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		_ = root.Close()
+		return nil, nil, err
+	}
+	return sg, f, nil
 }
 
 // bytes reads the staged file back, for one that turns out to belong in git.
@@ -348,9 +365,11 @@ func (r *repo) adopt(sg *staged) error {
 
 // ensureRepo creates sp's repository if it has none.
 func (s *Store) ensureRepo(sp access.Space) error {
-	st := s.state(sp.ID)
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
+	if err := s.admit(st, sp); err != nil {
+		return err
+	}
 	r, err := openRepo(s.dataDir, sp, st, true)
 	if err != nil {
 		return err

@@ -3,7 +3,7 @@
 // in a private window, and throws then), so every read and write is allowed to fail, and what
 // matters is on the server.
 
-import { setOperationUser } from './apps/operations'
+import { forgetOperations, forgetOperationsOf, keepOperationsOf, setOperationUser } from './apps/operations'
 
 export function readState(key: string): string | null {
   try {
@@ -78,6 +78,14 @@ export function writeDraft(key: string | null, value: string | null): void {
 // forgetDrafts removes every unsent message and builder session kept in this browser, and this
 // page's claim on them.
 export function forgetDrafts(): void {
+  // The app submissions still waiting for an answer hold what was typed in them: they go too.
+  forgetOperations()
+  clearDrafts()
+}
+
+// The browser's drafts and claim, without this tab's pending submissions (which claimDrafts sorts by
+// account itself).
+function clearDrafts(): void {
   owner = null
   setOperationUser(null)
   try {
@@ -102,6 +110,8 @@ export function forgetDraftsOf(user: number): void {
     owner = null
     setOperationUser(null)
   }
+  // The app submissions still waiting for an answer: theirs, and no one else's.
+  forgetOperationsOf(user)
   const kinds = ['builder', 'builder-pane', 'builder-start', 'message']
   const prefixes = kinds.map((k) => `taskto:${k}:${user}:`)
   try {
@@ -120,7 +130,11 @@ export function forgetDraftsOf(user: number): void {
 // claimDrafts keeps the drafts in this browser for user, forgetting them first if they were
 // someone else's.
 export function claimDrafts(user: number): void {
-  if (claimed() !== String(user)) forgetDrafts()
+  if (claimed() !== String(user)) clearDrafts()
+  // The pending submissions are this tab's own (session storage), which the browser-wide claim
+  // above doesn't see: another account's are removed whatever it says. A person signed out by a 401
+  // keeps theirs on the login screen until someone signs in: their own again, or removed then.
+  keepOperationsOf(user)
   owner = user
   setOperationUser(user)
   writeState(DRAFTS_OF, String(user))

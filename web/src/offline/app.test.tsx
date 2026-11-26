@@ -11,8 +11,11 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { ApiError, api, forAccount, SESSION_LOST, sessionLostFor } from '../api'
+import { setPreferences } from '../i18n'
 import { type BeforeLeave, useBeforeLeave } from '../router'
+import { sameSession, sessionUser } from '../session'
 import { fakeFetch } from '../test/fakes'
+import { toast } from '../ui/Toast'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
 
@@ -409,6 +412,19 @@ test('a tab that learns another account signed in shows only that, and nothing o
   expect(screen.getByRole('button', { name: 'Reload this page' })).toBeTruthy()
 })
 
+test('another account signed in from another tab ends this page’s session: its work and toasts stop', async () => {
+  fakeFetch({ ...signedIn })
+  await signedInAs()
+  const still = sameSession()
+  toast('Something of the account before')
+  expect(await screen.findByText('Something of the account before')).toBeTruthy()
+  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  await screen.findByRole('alertdialog')
+  expect(still()).toBe(false)
+  expect(screen.queryByText('Something of the account before')).toBeNull()
+})
+
 test('a send refused because the session is another account’s shows the same, and keeps the record', async () => {
   fakeFetch({
     ...signedIn,
@@ -528,6 +544,62 @@ test('a record that appears after the person was asked is never deleted by the s
   expect(await runtime.store.listItems()).toHaveLength(1)
 })
 
+test('another account signing in while this tab checks for unsent records before logging out ends its session for good', async () => {
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  logOut()
+  // While the tab looks for unsent records, another tab signs in as someone else.
+  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  expect((await screen.findByRole('alertdialog')).textContent).toMatch(/The account changed/)
+  await new Promise((r) => setTimeout(r, 50))
+  // The records found don't bring this account's session back.
+  expect(sessionUser()).toBeNull()
+})
+
+test('Log out, asked about unsent records, Cancel: nothing ended, and a language pick on its way finishes as it would', async () => {
+  let saved: (() => void) | null = null
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 204 },
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        saved = () => done({ body: { ...me, user: { ...me.user, locale: 'pt-BR' } } })
+      }),
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  // Work started before Log out: a language pick, its save on its way; and anything else that
+  // checks its session (a build, say).
+  fireEvent.click(screen.getByRole('button', { name: /^Account: / }))
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'Português (Brasil)' }))
+  await vi.waitFor(() => expect(saved).not.toBeNull())
+  const started = sameSession()
+  fireEvent.click(screen.getByRole('button', { name: /^(Account|Conta): / }))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Sair' }))
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+  // Nothing ended: the same session, so what was on its way goes on.
+  expect(started()).toBe(true)
+  expect(sessionUser()).toBe(7)
+  await act(async () => saved?.())
+  fireEvent.click(screen.getByRole('button', { name: /^Conta: / }))
+  const checked = screen
+    .getAllByRole('menuitemradio')
+    .filter((r) => r.getAttribute('aria-checked') === 'true')
+    .map((r) => r.textContent)
+  expect(checked).toContain('Português (Brasil)')
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  await act(() => setPreferences({ user: null }))
+})
+
 // A page holding a draft: its question when the person would leave.
 function Draft({ ask }: { ask: BeforeLeave }) {
   useBeforeLeave(ask)
@@ -566,4 +638,136 @@ test('signing out over a draft and records not sent asks about the draft first, 
   expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
   expect(ask).toHaveBeenCalledTimes(1)
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+})
+
+test('one sign-out asks about a draft and then the records, each once; Cancel at either leaves the session and the draft as they were', async () => {
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 204 },
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <App />
+      <Draft ask={ask} />
+    </>,
+  )
+  await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
+  await screen.findByRole('banner')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  const started = sameSession()
+  const records = () => screen.queryAllByRole('alertdialog').length
+
+  // Cancel at the draft's question (it never says go): nothing else is asked, nothing has ended.
+  logOut()
+  await act(async () => {})
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(records()).toBe(0)
+  expect(started()).toBe(true)
+
+  // Again, and this time the draft may go: the records' question comes, once, and the draft's
+  // question isn't asked a second time for it.
+  logOut()
+  expect(ask).toHaveBeenCalledTimes(2)
+  act(() => leave?.())
+  await screen.findByRole('alertdialog')
+  await act(async () => {})
+  expect(records()).toBe(1)
+  expect(ask).toHaveBeenCalledTimes(2)
+
+  // Cancel at the records' question: the same session, the draft's page still asks, nothing sent.
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(records()).toBe(0)
+  expect(started()).toBe(true)
+  expect(sessionUser()).toBe(7)
+  logOut()
+  expect(ask).toHaveBeenCalledTimes(3)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+})
+
+test('"Discard and sign out" with a logout the server refuses discards nothing: the records are still there', async () => {
+  fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 500, body: { error: 'internal error', code: 'internal' } },
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  logOut()
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // Nothing of this device was touched before the server confirmed: the record waits as it was.
+  expect(await runtime.store.listItems()).toHaveLength(1)
+  expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
+})
+
+test('while signing out waits for the server, the queue starts no send, even when the connection comes back', async () => {
+  let confirm: (() => void) | null = null
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      }),
+    [`POST ${base}/actions`]: { body: [] },
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  // The device has no connection: the record made waits, unsent.
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
+  await runtime.store.enqueue(queued(), [])
+  const sends = () => calls.filter((c) => c.method === 'POST' && c.path === `${base}/actions`).length
+  logOut()
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await waitFor(() => expect(confirm).not.toBeNull())
+  // The connection comes back while the server hasn't answered the sign-out yet: the record the
+  // person chose to discard is not sent.
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+  act(() => {
+    window.dispatchEvent(new Event('online'))
+  })
+  await new Promise((r) => setTimeout(r, 50))
+  expect(sends()).toBe(0)
+  await act(async () => confirm?.())
+  // The sign-out finishes before the test does.
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  Reflect.deleteProperty(navigator, 'onLine')
+})
+
+test('a sign-out cut short by the tab closing leaves nothing an offline start would open: the account stays closed until it is finished', async () => {
+  let confirm: (() => void) | null = null
+  fakeFetch({
+    ...signedIn,
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      }),
+  })
+  await signedInAs()
+  logOut()
+  await waitFor(() => expect(confirm).not.toBeNull())
+  // The tab closes while the sign-out is on its way; the next start has no server.
+  cleanup()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))),
+  )
+  render(<App />)
+  expect(await screen.findByRole('heading', { name: "Can't reach the server" })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Offline' })).toBeNull()
 })

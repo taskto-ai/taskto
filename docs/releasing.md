@@ -26,7 +26,10 @@ GitHub-hosted runner, the inputs reaching shell commands only as environment var
 4. creates the GitHub Release for that tag (`--verify-tag`) with the notes, and the line
    `manual-upgrade: true` first when **manual_upgrade** is ticked, so the marker is in the
    release from the moment it is published and no server can see it without; an ordinary
-   release has the generated list of pull requests after the notes (a **manual_upgrade**
+   release has the generated list of pull requests after the notes, grouped by their titles'
+   prefixes: `feat:` under **Features**, `fix:` under **Fixes**, everything else under
+   **Other** (`.github/scripts/release-notes.sh`, since GitHub's own grouping goes by labels
+   only), so a pull request's title is what the release notes say of it (a **manual_upgrade**
    release is published with the notes you gave and the marker, and no generated list);
 5. starts the Images workflow on the tag, which publishes `ghcr.io/<owner>/taskto`,
    `taskto-cli-worker` and `taskto-backup` with the tag (`.github/workflows/images.yml`),
@@ -46,7 +49,8 @@ The first time, set each of the three packages to public in its settings
 
 ## Edit the notes
 
-An ordinary release's notes end with the generated list of pull requests. Add what a person running a server should know,
+An ordinary release's notes end with the generated list of pull requests, in Features, Fixes
+and Other by their titles. Add what a person running a server should know,
 in the **notes** input when you cut it, or by editing the release after. Don't publish a draft
 or tick **pre-release** for a version you want servers to take: drafts and pre-releases are
 never installed automatically (a pre-release is the way to let someone try a candidate with

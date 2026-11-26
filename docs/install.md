@@ -433,6 +433,14 @@ to, which someone asking for a reset email could choose. Without `public_url` th
 doesn't email links: it says so in its log at startup, the login page doesn't offer **Forgot
 your password?**, and the invite dialog doesn't offer to email.
 
+**Payment links use it, and work without it.** With `public_url`, the pages a payer returns to from
+Stripe's payment page, `<public_url>/payment/done` and `/payment/cancelled`, are the server's own and
+are built on it. Without one a [payment link](integrations.md#payment-links) is still made, and the
+payer stays on a confirmation page Stripe hosts; but Stripe can't send webhooks to such a server, so
+paid status is to come from polling Stripe (not built yet). The two pages need no session, so a
+reverse proxy that exposes only what payers must reach forwards those two paths (and `POST /hooks/*`
+once webhooks are used).
+
 | Setting | Flag / environment | |
 |---|---|---|
 | `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port (an IPv6 address is written `2001:db8::25` or `[2001:db8::25]`). Empty means no email. |
@@ -854,6 +862,15 @@ photo uploads in shared apps, their access tokens, sessions, push subscriptions,
 settings, email ledger, two-factor data and single sign-on identities, the invitations to their
 address, the search index's rows for all of it, and the account.
 
+A private space's files go under the knowledge base's own lock for that space, with the apps'
+photo writes in it held too: a write already under way finishes first, and one that comes after
+is refused as a space that isn't there, so nothing of the space is written again once it is
+removed. A call that had found the space before the purge is told from a space made later with the
+same number (the database can give a purged space's number again) by its creation time, and its row
+is checked once more under the lock, so it can't make the directory again either. The directory is renamed aside in one step and then deleted, so a server that stops in the
+middle leaves no half-deleted repository at the space's path; the purge's next try deletes what
+was left.
+
 **What stays: what they made for others.** Cards, comments, documents and app records in shared
 spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records
 (even when an unfinished move of the app had left their files in the person's private space: the purge
@@ -883,8 +900,25 @@ is a decision about the workspace's records, not an account's.
   says so at each start: compact it by hand, with the server stopped, and record that it was
   (`sqlite3 <data>/agent/agent.db "VACUUM; INSERT OR REPLACE INTO taskto_maintenance VALUES
   ('secure_delete_vacuum', 0)"`). Removed files' blocks on the disk
-  itself are the file system's (see SQLite and the filesystem below). It also rewrites the runtime's providers file, and removes the
-  CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
+  itself are the file system's (see SQLite and the filesystem below).
+  It also rewrites the runtime's providers file, stops the
+  person's agent browsers (none starts meanwhile, and their live views close) and, once their
+  processes are gone, removes their profile, and then removes the CLI worker's directory of the
+  person, which is left alone while a browser step is still recorded: `<data>/cli/u<id>` if the
+  local worker ever ran here, and
+  the worker container's own copy if the container worker ever did, which only that worker can
+  remove, so that step waits for a start with `-cli-workers container` (a start in local mode doesn't
+  clear it). The server records each kind of worker it starts (`cli_worker_history`); an install that
+  never ran CLI workers has no such step. For an install from before that record, and after a
+  **restore**, the history is unknown: the accounts that existed then wait for both. The record
+  keeps a kind once it has run, even if you switch the mode later (a server that stops doesn't
+  say for good that a kind will never run again), so accounts made after a switch still get its
+  step. The log says what the waiting steps wait for (`waits_for=cli_worker_container`, with the
+  number of accounts). If the worker container's volume (`cli-homes`) is gone for good, its copies
+  went with it: start the server once with `-cli-workers container` and the worker container on
+  a new, empty volume, and each waiting step closes (the worker's removal of a directory that
+  doesn't exist succeeds). Don't delete the steps by hand: the container step is the only record
+  that a person's files may still be in a volume. Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
   need them stay recorded, and are done by the next start with them on and every ten minutes. The log
@@ -894,7 +928,7 @@ is a decision about the workspace's records, not an account's.
   answers `503` while another connection holds its database, so a purge isn't acknowledged until
   the write-ahead log, which can still hold the transcript, is empty. What failed is in `last_error`
   of `purge_cleanups`, as a fixed word (`sidecar_busy`, `sidecar_refused`, `sidecar_unreachable`,
-  `cli_worker_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
+  `cli_worker_failed`, `browser_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
   with an HTTP status when the runtime answered one, and never the text of the error, which can hold
   what a person wrote; the providers' step stays recorded while a removed account's key file is
   still on disk.
@@ -1447,6 +1481,20 @@ reason in the status; none changes anything.
   [When an update fails](#when-an-update-fails): the stack is stopped (or left as it is),
   and nothing runs again until a person has restored the backup and cleared it.
 
+**Looking without installing.** `taskto-update --check` chooses the version a run would install,
+on the same channel and with the same rules (on `release` the newest release whose images are
+published, and whether it, or a release it passes, says `manual-upgrade: true`; on `main` the
+newest green descendant whose images are published), and does nothing else: it pulls no image
+(it asks the registry only whether the images are there), changes nothing on the install, writes
+no run's status and sends no notification. It publishes what it found as `available` (the
+version, its commit, when it was published, and whether a person must install it, with the
+repository the updater reads, `TASKTO_UPDATE_REPO`, for the link to the notes) and when it
+looked. `taskto-update-check.timer` runs it every six hours, and every run refreshes it too. It
+never waits for a run, nor keeps one from starting: while a run holds the lock, it records what
+it found and the run publishes it when it ends. What it found holds only while the install is on
+the version it was found from, and when it can't tell (GitHub's API didn't answer) what it found
+before stays.
+
 `taskto-update --dry-run` chooses and checks and changes nothing on the install (it does pull
 the images, to check them, and logs in to a private registry for that, with a Docker config of
 its own that is removed after, so the operator's isn't changed; it makes no backup directory);
@@ -1542,7 +1590,14 @@ the version the server runs, the version on record in `.env`, the updater's chan
 its last run and last change (the result, when, the versions, a reason, whether it made a
 backup), and, while the install waits for a person, what to do: a stopped or interrupted
 update (`taskto-update --clear-block`, once the install is put right) or a release that needs
-steps by hand (`taskto-update --to VERSION`). The same is at
+steps by hand (`taskto-update --to VERSION`). When the updater has found a newer version
+(`taskto-update --check`, above), the page says **Update available: <version> (published
+<date>)**, next to Update now, with a link to what it brings, which the server builds from the
+updater's repository and the versions only: the release's page on GitHub on the `release`
+channel, or the comparison of the version on record with the new commit on `main`. A version
+that needs a person is badged so, with the `taskto-update --to` command that installs it once its
+notes are followed; with nothing newer it says the server is up to date, and when the updater
+last looked. The same is at
 [`GET /api/workspaces/{workspace}/updates`](api.md). The server gets it without gaining any
 power over the host (the one thing it can do is [ask for a run](#update-now)): on every run (and each night a stop is still waiting) the updater writes
 a copy of its status, made for this, to `/var/lib/taskto-update/public/status.json`
@@ -1590,6 +1645,10 @@ the `main` channel, whose servers run a commit and not a tag, do the same from a
 the commit the host runs (`TASKTO_VERSION` in `/srv/taskto/.env`) or a newer one, with
 `TASKTO_VERSION` in `~/.config/taskto-install.env` set to it for the step: a `main` host that
 isn't reinstalled keeps its old updater, however far it updates the server.
+
+The same goes for the release that added `taskto-update --check` and its timer: until step 16 is
+run again from it (or a newer version), the host has no check timer and its updater publishes no
+`available`, so the page shows no available update, only what the last run did.
 
 ### Update now
 

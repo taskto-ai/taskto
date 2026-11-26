@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Consent, Me, ProviderAccount, SearchSettings, Space, SpaceMember, Token, Workspace } from '../api'
 import { setPreferences } from '../i18n'
+import { beginSession, endSession, resetSession } from '../session'
 import { type Call, fakeFetch } from '../test/fakes'
 import { answer, chooseFromMenu } from '../test/ui'
 import { resetToasts } from '../ui/Toast'
@@ -34,6 +35,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  // No session of one test reaches the next.
+  resetSession()
   act(() => resetToasts())
   vi.unstubAllGlobals()
 })
@@ -174,6 +177,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['Model providers', '/w/1/settings/providers'],
     ['Integrations', '/w/1/settings/integrations'],
     ['Integration approvals', '/w/1/settings/integration-approvals'],
+    ['Integration events', '/w/1/settings/integration-events'],
     ['CLI accounts', '/w/1/settings/cli-accounts'],
     ['Search', '/w/1/settings/search'],
     ['Dictation', '/w/1/settings/dictation'],
@@ -216,6 +220,30 @@ test("admins set the workspace's default language, which members without a pick 
   expect(sent(calls, 'PATCH', '/api/workspaces/1')).toEqual([{ locale: 'pt-BR' }, { locale: '' }])
   vi.restoreAllMocks()
   await act(() => setPreferences({ workspace: null }))
+})
+
+test('a default language saved after the tab went (the session ended) changes nothing and says nothing', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'PATCH /api/workspaces/1': () =>
+      new Promise((done) => {
+        answer = () => done({ body: { ...admin, locale: 'pt-BR' } })
+      }),
+  })
+  vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['fr-FR'])
+  const lang = document.documentElement.lang
+  const { unmount } = render(<SettingsPage me={me} workspace={admin} />)
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Default language' }), { target: { value: 'pt-BR' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  unmount()
+  // Long enough for the answer to reach whatever it would change (the language's file is loaded).
+  await act(async () => {
+    answer()
+    await new Promise((r) => setTimeout(r, 200))
+  })
+  expect(document.documentElement.lang).toBe(lang)
+  expect(screen.queryByText(/^(Salvo|Saved)\.$/)).toBeNull()
+  vi.restoreAllMocks()
 })
 
 test('admins invite, change roles, remove members and withdraw invites', async () => {
@@ -1254,3 +1282,26 @@ test('the new-token dialog stays open while the token is being made, so its one 
   expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe('ttp_fake-test-token-pending')
   expect(screen.queryByRole('dialog')).toBeNull()
 })
+
+for (const ending of ['the person leaves the tab', 'the session ends'] as const) {
+  test(`an export that answers after ${ending} doesn't take the tab to its download`, async () => {
+    const assign = stubAssign()
+    let answer: (() => void) | null = null
+    fakeFetch({
+      'POST /api/workspaces/1/export': () =>
+        new Promise((done) => {
+          answer = () => done({ body: { download: '/api/workspaces/1/export/abc', expires_in: 60 } })
+        }),
+    })
+    beginSession(1)
+    const { unmount } = render(<SettingsPage me={me} workspace={member} tab="data" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Download my data' }))
+    // The export has started: its request is on its way.
+    await waitFor(() => expect(answer).not.toBeNull())
+    if (ending === 'the person leaves the tab') unmount()
+    else endSession()
+    await act(async () => answer?.())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(assign).not.toHaveBeenCalled()
+  })
+}

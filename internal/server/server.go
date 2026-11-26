@@ -149,9 +149,29 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 		accounts.OnTimeZoneChanged(opts.Notifications.SyncTimeZone)
 	}
 	boardSvc.Routes(mux)
+	// The knowledge base is made before the apps' service, which its removal of a space is ordered
+	// with (WithSpaceHolder): the service's background work starts once it is made.
+	var kb *knowledge.Store
+	if opts.Search != nil {
+		kb = opts.Search.Knowledge()
+		kb.Routes(mux, spaces)
+		opts.Search.Routes(mux, accounts, spaces)
+	} else if opts.DataDir != "" {
+		kb = knowledge.New(opts.DataDir, opts.Knowledge)
+		kb.Routes(mux, spaces)
+	}
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
-	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc, ProviderKinds: providerKinds})
+	platform := apps.Platform{Boards: boardSvc, ProviderKinds: providerKinds}
+	if opts.Integrations != nil {
+		platform.Payments = opts.Integrations // not a nil *Service in an interface
+	}
+	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(platform)
+	if kb != nil {
+		// A purged account's private space is removed under the knowledge base's lock for the
+		// space: an attachment's write waits for it, or is refused, and never makes the directory again.
+		appsService.WithSpaceHolder(kb)
+	}
 	if opts.Quota != nil {
 		appsService.WithQuota(opts.Quota)
 		opts.Quota.Routes(mux, accounts)
@@ -165,15 +185,6 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	if opts.Notifications != nil {
 		opts.Notifications.Routes(mux, accounts)
-	}
-	var kb *knowledge.Store
-	if opts.Search != nil {
-		kb = opts.Search.Knowledge()
-		kb.Routes(mux, spaces)
-		opts.Search.Routes(mux, accounts, spaces)
-	} else if opts.DataDir != "" {
-		kb = knowledge.New(opts.DataDir, opts.Knowledge)
-		kb.Routes(mux, spaces)
 	}
 	// A person's export of their own data reads through the same knowledge base, boards, apps and
 	// conversations the rest of the server uses, and writes nothing.

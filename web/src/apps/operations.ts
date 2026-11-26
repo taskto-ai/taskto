@@ -8,7 +8,10 @@
 // The keys still waiting live here, outside any component: a screen that is drawn again (a refresh
 // of the stage, a remount, a new transport) must find the key its predecessor sent, and so must a
 // page that was reloaded, which is why they are mirrored in this tab's session storage. They belong
-// to the signed-in user and say which app, release and action they were made for.
+// to the signed-in user and say which app, release and action they were made for: an answer that
+// comes after that user signed out, or another signed in, changes nothing of anyone's (it never
+// writes one person's pending submissions under the next person's key), and signing out forgets
+// them all (uiState.forgetDrafts).
 
 import { ApiError } from '../api'
 
@@ -53,10 +56,12 @@ function pending(): Map<string, string> {
   return map
 }
 
-function mirror(map: Map<string, string>): void {
-  if (user === null) return
+function mirror(map: Map<string, string>, who: number | null = user): void {
+  // Only the account's current map: one that was forgotten (signed out, even if the same person
+  // signed in again since) is never written over the new one.
+  if (user === null || who !== user || stores.get(String(who)) !== map) return
   try {
-    window.sessionStorage.setItem(STORAGE_PREFIX + owner(), JSON.stringify([...map]))
+    window.sessionStorage.setItem(STORAGE_PREFIX + String(who), JSON.stringify([...map]))
   } catch {
     // Not kept past this page: the keys still hold while it is open.
   }
@@ -101,6 +106,7 @@ export async function withOperation<T>(
   action: Pressed,
   send: (operation: string) => Promise<T>,
 ): Promise<T> {
+  const who = user
   const map = pending()
   const sent = submissionKey(scope, action)
   let operation = map.get(sent)
@@ -113,18 +119,46 @@ export async function withOperation<T>(
   try {
     const answer = await send(operation)
     map.delete(sent)
-    mirror(map)
+    mirror(map, who)
     return answer
   } catch (e) {
     if (isDefinitive(e)) {
       map.delete(sent)
-      mirror(map)
+      mirror(map, who)
     }
     throw e
   }
 }
 
-// For tests: forget every key, here and in the session storage.
+// Forgets the keys of everyone but `user`, here and in this tab's session storage: when an account
+// claims this browser (uiState.claimDrafts), whatever another account left pending in this tab
+// (another tab signed it out and someone else in, this one was reloaded) is not kept.
+export function keepOperationsOf(user: number): void {
+  for (const who of [...stores.keys()]) if (who !== String(user)) stores.delete(who)
+  try {
+    for (let i = window.sessionStorage.length - 1; i >= 0; i--) {
+      const key = window.sessionStorage.key(i)
+      if (key?.startsWith(STORAGE_PREFIX) && key !== STORAGE_PREFIX + String(user))
+        window.sessionStorage.removeItem(key)
+    }
+  } catch {
+    // Nothing kept.
+  }
+}
+
+// Forgets the keys of `user` only, here and in this tab's session storage: their sign-out confirmed,
+// or their account deleted (uiState.forgetDraftsOf). Another account's, signed in since, stay.
+export function forgetOperationsOf(user: number): void {
+  stores.delete(String(user))
+  try {
+    window.sessionStorage.removeItem(STORAGE_PREFIX + String(user))
+  } catch {
+    // Nothing kept.
+  }
+}
+
+// Forgets every key, here and in this tab's session storage: when the person signs out or another
+// account claims this browser (uiState.forgetDrafts), and between tests.
 export function forgetOperations(): void {
   stores.clear()
   try {

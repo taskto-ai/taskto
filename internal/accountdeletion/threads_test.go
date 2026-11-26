@@ -3,12 +3,15 @@ package accountdeletion
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/knowledge"
 )
 
 // failingKB fails the removal and the rewriting of the spaces it is told to, and notes every space it
@@ -32,7 +35,7 @@ func (k *failingKB) RemoveSpace(sp access.Space) error {
 	return k.Knowledge.RemoveSpace(sp)
 }
 
-func (k *failingKB) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error) {
+func (k *failingKB) AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(int) error) (int, error) {
 	k.mu.Lock()
 	k.rewrote = append(k.rewrote, sp.ID)
 	fail := k.failIDs[sp.ID]
@@ -40,7 +43,7 @@ func (k *failingKB) AnonymizeAuthors(ctx context.Context, sp access.Space, email
 	if fail {
 		return 0, errors.New("cannot rewrite")
 	}
-	return k.Knowledge.AnonymizeAuthors(ctx, sp, emails)
+	return k.Knowledge.AnonymizeAuthorsNoting(ctx, sp, emails, planned)
 }
 
 // A private space whose directory can't be removed doesn't keep the leaver's other private spaces
@@ -214,5 +217,75 @@ func TestAnAgentRuntimeThatIsNeverReadyFailsTheStepAtItsDeadlineAndLaterStepsRun
 	}
 	if len(kinds) != 1 || kinds[0] != cleanAgentConversation {
 		t.Fatalf("steps left %v, want only the agent step (the providers step ran)", kinds)
+	}
+}
+
+// A purge refuses every call on a private space it removed until the space's rows are gone, and
+// then forgets it: the database may give the same ID to a space made later (spaces' IDs aren't
+// kept apart from the rows'), and its documents must be writable.
+func TestAPurgedSpaceIDCanBeUsedAgain(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM spaces WHERE id = ?`, w.private.ID); n != 0 {
+		t.Fatalf("fixture: the space's row remains")
+	}
+	if _, err := w.kb.Put(ctx, w.private, "again.md", []byte("a new space with the old ID"), "", by, ""); err != nil {
+		t.Fatalf("the ID of a purged space can't be used again: %v", err)
+	}
+}
+
+// A write that had resolved a private space before its account was purged, and reaches the
+// knowledge base after the purge deleted the rows and forgot the removal, is refused by the
+// space's row and makes nothing: no directory, no repository.
+func TestAWriteThatResolvedASpaceBeforeThePurgeMakesNothingAfterIt(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.kb.SetSpaceCheck(access.SpaceRowCheck(w.db))
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	stale := w.private
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.kb.Put(ctx, stale, "late.md", []byte("from a purged account"), "", by, ""); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("a stale write after the purge: %v", err)
+	}
+	if _, err := os.Stat(stale.Dir(w.dir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the purged space's directory was made again: %v", err)
+	}
+}
+
+// The refusal of a removed space is lifted for the spaces whose row is gone, whatever the purge's
+// last step returned (a transaction that committed and failed to say so), and kept for one that is
+// still recorded.
+func TestForgetGoneLiftsTheRefusalOfSpacesWhoseRowIsGone(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	ws2 := exec(t, w.db, `INSERT INTO workspaces (name) VALUES ('Second')`)
+	exec(t, w.db, `INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, ws2, w.leaver)
+	second := access.Space{Access: access.Write, WorkspaceID: ws2}
+	if err := w.db.QueryRow(`SELECT id FROM spaces WHERE owner_id = ? AND workspace_id = ?`, w.leaver, ws2).Scan(&second.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, sp := range []access.Space{w.private, second} {
+		if err := w.kb.RemoveSpace(sp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(t, w.db, `DELETE FROM spaces WHERE id = ?`, w.private.ID)
+
+	w.svc.forgetGone(ctx, []access.Space{w.private, second})
+
+	if _, err := w.kb.Put(ctx, w.private, "again.md", []byte("x"), "", by, ""); err != nil {
+		t.Fatalf("a space whose row is gone is still refused: %v", err)
+	}
+	if _, err := w.kb.Put(ctx, second, "late.md", []byte("x"), "", by, ""); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("a space that is still recorded was forgotten: %v", err)
 	}
 }

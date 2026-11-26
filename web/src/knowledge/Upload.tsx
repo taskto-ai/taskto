@@ -4,6 +4,7 @@
 import { useId, useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
+import { steps } from '../session'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { Field } from '../ui/Field'
@@ -64,18 +65,23 @@ export function Upload({
     setError(null)
     sending.current = new AbortController()
     const { signal } = sending.current
+    // It goes on when the form goes, but only in the session that started it (session.ts): after a
+    // sign-out, or someone else's sign-in, nothing more is sent, reloaded or said.
+    const s = steps()
     try {
       const url = `${base}/docs/${encodePath(target)}`
-      const text = isMarkdown(target)
-        ? await markdownText(file, t('knowledge.uploadForm.notUtf8', { name: file.name }))
-        : null
+      const text = s.check(
+        isMarkdown(target) ? await markdownText(file, t('knowledge.uploadForm.notUtf8', { name: file.name })) : null,
+      )
       // Gone since it was found: replacing it is creating it.
-      const current = replace
-        ? await api<Doc>(url, { signal }).catch((e: unknown) => {
-            if (e instanceof ApiError && e.status === 404) return null
-            throw e
-          })
-        : null
+      const current = s.check(
+        replace
+          ? await api<Doc>(url, { signal }).catch((e: unknown) => {
+              if (e instanceof ApiError && e.status === 404) return null
+              throw e
+            })
+          : null,
+      )
       if (text !== null) {
         const body = { content: text }
         await api<Change>(url, {
@@ -87,9 +93,11 @@ export function Upload({
         const query = current ? `?base_version=${current.version}` : ''
         await api<Change>(`${url}${query}`, { method: 'PUT', bytes: file, signal })
       }
+      s.check(undefined)
       onChanged()
       if (mounted.current && !signal.aborted) onDone(target)
     } catch (err) {
+      if (!s.ok()) return
       // Cancelled: the server may have finished all the same, so the list is read again.
       if (signal.aborted) return onChanged()
       setExists(isConflict(err) && !replace)
@@ -101,7 +109,8 @@ export function Upload({
           : errorText(err),
       )
     } finally {
-      if (!signal.aborted) setBusy(false)
+      // The form's own state: ready again while it is here, whatever became of the session.
+      if (!signal.aborted && mounted.current) setBusy(false)
     }
   }
 

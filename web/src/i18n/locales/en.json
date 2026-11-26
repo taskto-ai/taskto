@@ -4,7 +4,13 @@
     "unreachableTitle": "Can't reach the server",
     "unreachableHelp": "Check your connection, or ask whoever runs this server whether it is up, then try again.",
     "unreachableDetail": "What went wrong: {error}",
-    "tryAgain": "Try again"
+    "tryAgain": "Try again",
+    "signingOut": "Signing out…",
+    "signOutFailedTitle": "Couldn't sign out",
+    "signOutFailedHelp": "The server didn't confirm it, so you are still signed in on this device. Check your connection and try again.",
+    "backToApp": "Back to the app",
+    "signOutNoAnswer": "The server didn't answer in time.",
+    "deviceNotCleared": "You are signed out, but this device couldn't be fully cleared of your account's copies. It will try again the next time the app starts."
   },
   "apps": {
     "intro": "Personal apps are screens the agent builds for you: ask it in a conversation for one, such as “an expense tracker in my private space”. A shared space’s apps are its members’: move an app to one to share it.",
@@ -280,10 +286,11 @@
           "createCard": "Creates a card on {board}",
           "updateCard": "Moves the card this record made to {column}",
           "createDocument": "Creates a document at {path} in {space}",
+          "createPaymentLink": "Asks the “{slot}” integration for a link to pay {amount} in {currency}, and puts the link in {url} and its id in {id}",
+          "createPaymentLinkField": "Asks the “{slot}” integration for a link to pay {amount} in the currency of {currencyField}, and puts the link in {url} and its id in {id}",
           "openBoard": "Offers a link to {board}",
           "openCard": "Offers a link to the card this record made",
-          "openDocument": "Offers a link to the document {path} in {space}",
-          "createPaymentLink": "Asks the “{slot}” outside service for a link to pay the amount in “{amount}”"
+          "openDocument": "Offers a link to the document {path} in {space}"
         },
         "target": {
           "board": "{board} ({space})",
@@ -1053,6 +1060,7 @@
     "browser_too_many_live": "Too many live views of the browser are open: close one first.",
     "browser_busy": "Too many browsers are open on this server: try again in a few minutes.",
     "browser_shutting_down": "The browser is shutting down on this server.",
+    "browser_account_closing": "This account is being deleted, so its browsers can't be started.",
     "provider_not_found": "Provider account not found.",
     "provider_name_invalid": "The name needs 1 to {max} characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit.",
     "provider_name_taken": "An account with this name already exists.",
@@ -1109,6 +1117,9 @@
     "cli_workers_no_boundary": "CLI workers run in local mode on this server, with no boundary between users, so they work only while the server has a single user. An operator can run the CLI worker container instead.",
     "cli_not_installed": "{cli} isn't installed on this server.",
     "cli_worker_closing": "The CLI worker is shutting down: try again in a moment.",
+    "cli_account_removing": "This account is being disconnected: try again in a moment.",
+    "cli_account_busy": "A process of this account's CLI is still running, so nothing was removed: try again in a moment.",
+    "cli_account_forgotten": "The CLI files of this account were removed from the worker. If you did not ask for that, try again in a moment: taskto.ai is still telling the worker who is here.",
     "cli_no_login": "No sign-in is in progress.",
     "cli_login_code_invalid": "The code needs 1 to {max} printable characters.",
     "cli_login_no_code": "This sign-in doesn't take a code.",
@@ -1172,6 +1183,39 @@
     "app_effect_app_offline": "The app is offline or its space is archived.",
     "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
     "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
+    "app_effect_space_changed": "The app was moved to another space after this payment was started, so it was never approved there. Start the payment again.",
+    "integration_unavailable": "This app’s payments integration can’t be used right now: an admin may have revoked it, switched it off or taken this space away. Ask an admin, then retry.",
+    "integration_amount_refused": "The amount can’t be asked for: it must be more than zero and have no more decimals than the currency. Fix the amount on the record, then run the action again.",
+    "integration_amount_above_max": "The amount is above the {max} {currency} that an admin allows for one payment.",
+    "integration_currency_refused": "{currency} isn’t a currency this payments integration allows.",
+    "integration_credentials_refused": "The payment provider didn’t accept this integration’s key. An admin needs to enter a valid one, then you can retry.",
+    "integration_provider_refused": "The payment provider refused to make the payment link. Check the amount and currency, then retry.",
+    "integration_provider_unreachable": "The payment provider didn’t answer. Try again in a few minutes.",
+    "integration_account_changed": "This payment link was started under another account of the payment provider, since the integration’s key was replaced. An admin needs to check that account first: if the earlier link was paid, nothing should be recreated; if not, it must be made unable to take payment before the action is run again.",
+    "integration_changed": "This payment link was made under another payments integration than the one this app uses now. An admin needs to check whether that link was paid, and make it unable to take payment if not, before the action is run again.",
+    "integration_link_already_paid": "An earlier try of this payment link was paid, or can no longer take payment (it was paid, expired by a person or reached its limit), so no new link was made. An admin needs to reconcile that payment in the payment provider’s account before the action is run again.",
+    "integration_event_unavailable": "A payment arrived, but the app's payments integration can't be used now: its approval was withdrawn, it was switched off or this space was taken away. Fix that, then retry the event.",
+    "integration_event_integration_changed": "A payment arrived through an integration that is no longer the one this app is connected to. Connect the app to it again, or settle the payment by hand.",
+    "integration_event_app_offline": "A payment arrived, but the app is offline, not published or in an archived space. Bring it back, then retry the event.",
+    "integration_event_record_gone": "A payment arrived for a record that no longer exists. Settle the payment by hand.",
+    "integration_event_record_refused": "A payment arrived, but the record, as the payment would change it, doesn't fit the app. Fix the app or the record, then retry the event.",
+    "integration_amount_mismatch": "A payment arrived for another amount or currency than the payment link asked. It was not applied: check it at the provider.",
+    "integration_event_payment_unknown": "A refund arrived for a payment that no payment link has been paid by yet. It waits up to 72 hours for that payment, then waits for you.",
+    "integration_event_ref_unknown": "The event names no payment link of this integration. Nothing was changed.",
+    "integration_event_mode_mismatch": "The event is of live money for a link made in test mode, or the other way round. Nothing was changed.",
+    "integration_event_duplicate": "The event repeats a payment or an end the payment link already has. Nothing was changed.",
+    "integration_event_late": "The payment link had already moved past what this event says. Nothing was changed.",
+    "integration_event_no_handler": "The app declares nothing for this event, so its record was left as it is.",
+    "integration_event_condition_unmet": "The record didn't meet the app's condition for this event, so it was left as it is.",
+    "integration_event_partial_refund": "Part of the payment was refunded. The record is only changed by a refund of all of it.",
+    "integration_event_second_payment": "The payment link was paid a second time. It was not applied: refund it or reconcile it at the provider.",
+    "integration_event_not_found": "This event isn't there any more.",
+    "integration_event_not_retriable": "Only an event that failed can be retried.",
+    "integration_outcome_unknown": "The payment provider never said whether it made this payment link, so none was made: a second one could be paid twice. An admin needs to check the payment provider’s account for a link of this payment. If one is there, retry this payment; if none is, the admin confirms that no link exists and a new one is made.",
+    "integration_link_lookup_pending": "The payment provider didn’t say whether it made this payment link. The server keeps looking for it, and makes no other, for a few hours.",
+    "integration_condition_changed": "The record was changed and no longer meets this action’s condition, so no payment link was made. Nobody needs to approve anything: change the record back, or run the action when it qualifies.",
+    "integration_nothing_to_confirm": "This payment isn’t waiting for a decision about an unknown outcome.",
+    "integration_link_not_confirmable": "A link of this payment was already seen at the payment provider, or an earlier try of it was already accounted for, so confirming that none exists can’t allow a new one: a second link could be paid twice. Check the payment provider’s account and reconcile this payment there.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
     "app_icon_label": "The icon “{component}” is in a button or a trigger that shows only icons, so it needs a name: give it an accessibility label.",
@@ -1208,7 +1252,7 @@
     "app_field_locked": "{field} was captured and can’t be changed afterwards.",
     "app_signature_type": "A signature must be a PNG picture.",
     "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
-    "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
+    "session_account_changed": "This browser is now signed in as another account, in another tab, so nothing was done. Reload the page to go on.",
     "offline_unsupported": "This needs a connection. Offline, you can add records, change or delete downloaded ones, and look around the downloaded copy.",
     "notification_not_found": "That notification isn't available.",
     "notification_email_invalid": "The email choices aren't valid: a kind, a mode, an hour from 0 to 23 and a time zone such as Europe/Lisbon are expected.",
@@ -1241,6 +1285,16 @@
     "deletion_not_pending": "This account isn’t waiting to be deleted.",
     "deletion_purging": "This account is being deleted now: it can’t be cancelled any more."
   },
+  "payment": {
+    "done": {
+      "title": "Thank you",
+      "body": "Your payment was sent to the payment provider. You can close this page: the provider will confirm it to you."
+    },
+    "cancelled": {
+      "title": "Payment cancelled",
+      "body": "Nothing was charged. You can close this page, or open the payment link again to pay."
+    }
+  },
   "language": {
     "label": "Language",
     "automatic": "Automatic: {name}",
@@ -1265,7 +1319,8 @@
       "tokens": "Access tokens",
       "about": "About",
       "notifications": "Notifications",
-      "integrationApprovals": "Integration approvals"
+      "integrationApprovals": "Integration approvals",
+      "integrationEvents": "Integration events"
     },
     "general": {
       "language": "Default language",
@@ -1671,7 +1726,17 @@
           "blocked": "Needs a person",
           "manualUpgrade": "Manual upgrade"
         },
-        "mismatchBadge": "Not the recorded version"
+        "mismatchBadge": "Not the recorded version",
+        "available": {
+          "line": "Update available: {version} (published {date})",
+          "lineUndated": "Update available: {version}",
+          "notes": "Release notes",
+          "compare": "What changed",
+          "needsPerson": "Needs a person",
+          "manual": "It needs steps by hand, so neither the nightly run nor Update now installs it: read its notes, do what they say on the host, then run {command} there.",
+          "upToDate": "Up to date: nothing newer on this channel.",
+          "looked": "Last looked for updates"
+        }
       }
     },
     "actions": {
@@ -2077,6 +2142,7 @@
         "integration_enabled": "Integration switched on",
         "integration_spaces_changed": "Integration's spaces changed",
         "integration_spaces_kept": "Integration's spaces kept after an approval",
+        "integration_new_link_allowed": "New payment link allowed after an unknown outcome",
         "app_integration_requested": "App's use of an integration requested",
         "app_integration_approved": "App's use of an integration approved",
         "app_integration_rejected": "App's use of an integration turned down",
@@ -2157,6 +2223,7 @@
         "webhook_secret_changed": "Webhook secret changed",
         "app_id": "App number",
         "integration_id": "Integration number",
+        "effect_id": "Payment number",
         "space_allowed": "Space allowed too"
       },
       "values": {
@@ -2243,6 +2310,101 @@
       "integrations": "Accounts at payment providers that apps may use."
     },
     "actionsColumn": "Actions",
+    "events": {
+      "title": "Integration events",
+      "intro": "What happened to the payments and other events an integration’s provider sent: what was applied to an app’s records, what was left alone and why, and what needs you. You see each event’s kind, amount and state, never the app or the record it was for.",
+      "integration": "Integration",
+      "noIntegrations": "There is no integration to show events for.",
+      "openIntegrations": "Open integrations",
+      "filter": "Show events that are",
+      "filters": {
+        "all": "All",
+        "failed": "Failed",
+        "ignored": "Ignored",
+        "applied": "Applied",
+        "pending": "Waiting"
+      },
+      "empty": {
+        "all": "No events have arrived yet.",
+        "failed": "No event has failed.",
+        "ignored": "No event was ignored.",
+        "applied": "No event has been applied.",
+        "pending": "No event is waiting."
+      },
+      "state": {
+        "pending": "Waiting",
+        "running": "Being applied",
+        "applied": "Applied",
+        "ignored": "Ignored",
+        "failed": "Failed",
+        "duplicate": "Duplicate payment",
+        "mismatch": "Amount mismatch"
+      },
+      "kind": {
+        "payment_succeeded": "Payment received",
+        "payment_expired": "Payment link expired",
+        "payment_failed": "Payment failed",
+        "payment_refunded": "Payment refunded"
+      },
+      "live": "Live money",
+      "test": "Test mode",
+      "attempts_one": "Tried {count} time.",
+      "attempts_other": "Tried {count} times.",
+      "retry": "Retry",
+      "retryNamed": "Retry the event “{kind}” of {when}",
+      "retried": "“{kind}” will be applied again in a moment.",
+      "retryRefused": "“{kind}” of {when} wasn’t retried: {reason}",
+      "older": "Show older events",
+      "list": {
+        "title": "Events",
+        "intro": "Newest first. A failed event waits until you fix what is wrong, then retry it.",
+        "label": "Events"
+      },
+      "links": {
+        "title": "Payment links to check",
+        "intro": "A payment link whose creation the payment provider never confirmed isn’t made again by itself, so the payer is never sent two links.",
+        "none": "No payment link is waiting for a decision.",
+        "list": "Payment links to check",
+        "row": "Payment link for {amount}",
+        "detail": "Record {record} of app {app} · {space}",
+        "since": "Outcome unknown since {when}.",
+        "looking": "Still looking",
+        "needsYou": "Needs you",
+        "checkTitle": "What to check at Stripe",
+        "checkWhere": "Open the Stripe account the payment link was first asked in (the integration’s account, unless its key was replaced), in the same mode, test or live, as the payment.",
+        "checkSession": "For a Checkout Session, open its details and look for “client_reference_id”.",
+        "checkPaymentLink": "For a Payment Link, look for “metadata[taskto_ref]”.",
+        "checkValue": "The value is the random 32-character reference TaskTo gave each attempt at this payment, and it must be looked for on every attempt, not only the last. Each payment below lists its attempts with the reference to look for. Where Stripe can’t be searched by it, find the candidates by the amount and the time shown, active or not, and read that field on each.",
+        "checkFound": "If you find one, leave it and don’t confirm. The person who ran the original action in the app, not the payer, retries it: the link is found and used.",
+        "checkNone": "If there is none, including an inactive or expired one, confirm below that none exists.",
+        "stopped": "Lookup stopped",
+        "stoppedTitle": "The server stopped looking for this link",
+        "stoppedFallback": "The server stopped looking and gave no reason that can be shown.",
+        "stoppedDo": "Nothing can be confirmed here. Check the Stripe account as described above, and settle what is said before the action is run again.",
+        "confirmAction": "Confirm no link exists",
+        "confirmNamed": "Confirm that no payment link of {amount} exists",
+        "confirmQuestion": "Confirm that Stripe has no payment link for {amount}?",
+        "confirmBody": "You are saying that you checked the Stripe account and found no payment link or checkout session for the {amount} of record {record}, outcome unknown since {since}. One more attempt to make a payment link will be queued, once. It may find and use a link that exists, or fail.",
+        "confirmWarning": "If one does exist and you missed it, the payer ends up with two links and could pay twice. Check Stripe before you confirm.",
+        "confirmed": "Another attempt to make a payment link for {amount} is queued, once. It may find and use a link that exists, or fail; if one exists and you missed it, the payer could end up with two links and pay twice.",
+        "attemptsList": "Attempts at this payment",
+        "attemptTitle": "Attempt {n} · {kind}",
+        "kindCheckoutSession": "Checkout Session",
+        "kindPaymentLink": "Payment Link",
+        "reference": "Reference",
+        "referenceName": "reference of attempt {n}",
+        "searchField": "Field to search for it:",
+        "objectSeenAccepted": "Object seen: {id} (accepted for this attempt)",
+        "objectSeenNotAccepted": "Object seen: {id} (seen, not accepted)",
+        "objectNote": "An object that is seen but not accepted blocks a new payment link until a person checks it at Stripe.",
+        "objectNone": "No object seen",
+        "account": "Account {account}",
+        "accountNone": "Account not recorded",
+        "firstSent": "First sent {when}",
+        "notSent": "Never sent",
+        "space": "Space {id}"
+      }
+    },
     "approvals": {
       "title": "Integration approvals",
       "intro": "Apps ask here to use an outside service, such as taking payments. You see what an app asks in plain words, who asked and where, and never the app or its records. Approving connects the app to one of the workspace’s integrations.",
@@ -3019,6 +3181,7 @@
       "card_comment": "A card of yours has a new comment: {title}",
       "card_mention": "You were mentioned in a comment on a card: {title}",
       "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
+      "integration_event": "A payment from {integration} wasn't applied and needs an admin",
       "changed": "Something changed. Open it to see what you can still see."
     },
     "push": {
@@ -3028,6 +3191,7 @@
       "card_comment": "A card of yours has a new comment",
       "card_mention": "You were mentioned in a comment",
       "app_effect_failed": "An app action needs your attention",
+      "integration_event": "A payment needs an admin",
       "changed": "Something changed"
     },
     "settings": {
@@ -3043,6 +3207,7 @@
       "on": "Push is on for this device.",
       "turnOn": "Turn on push on this device",
       "turnOff": "Turn off push on this device",
+      "busy": "Push is still being changed on this device (in another tab, or by a sign-out). Try again in a moment.",
       "turnOffFailed": "This device's browser wouldn't end its push subscription, so push is still on. Try again.",
       "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device.",
       "timeZoneTitle": "Time zone and reminders",

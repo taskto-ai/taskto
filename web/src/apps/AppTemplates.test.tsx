@@ -2,11 +2,12 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { setPreferences } from '../i18n'
 import { parseRoute, usePath } from '../router'
+import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { AppsPage } from './AppsPage'
 
@@ -408,4 +409,98 @@ test('the apps screens lay out with logical properties, in the screens layer', (
   expect(code).not.toMatch(
     /(margin|padding)-(left|right)|\b(left|right):|text-align: (left|right)|border-(left|right)|\bwidth:|max-width:|\bheight:/,
   )
+})
+
+// --- An install or a copy that answers after the page went ------------------------------------
+
+test('an install that answers after the page went opens nothing', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...base,
+    'POST /api/workspaces/1/spaces/2/app-templates/expense-tracker/install': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: app() })
+      }),
+  })
+  window.history.replaceState(null, '', '/w/1/apps/templates')
+  const { unmount } = render(<Routed />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Use the template Expense tracker' }))
+  const form = await screen.findByRole('dialog', { name: 'Use the template Expense tracker' })
+  fireEvent.click(within(form).getByRole('button', { name: 'Install as a draft' }))
+  unmount()
+  await act(async () => answer())
+  expect(window.location.pathname).toBe('/w/1/apps/templates')
+})
+
+test('a copy that answers after its session ended opens nothing', async () => {
+  const source = app({ id: 1, name: 'Expenses' })
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...base,
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [{ ...source, space_id: 3 }] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': { body: { apps: [] } },
+    'POST /api/workspaces/1/spaces/3/apps/1/duplicate': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: app({ id: 20, space_id: 2, name: 'Copy of Expenses' }) })
+      }),
+  })
+  beginSession(1)
+  render(<Routed />)
+  const team = await screen.findByRole('region', { name: 'Team' })
+  fireEvent.click(await within(team).findByRole('button', { name: 'More actions for Expenses' }))
+  fireEvent.click(within(team).getByRole('menuitem', { name: 'Duplicate as template' }))
+  const form = await screen.findByRole('dialog', { name: 'Duplicate Expenses' })
+  fireEvent.click(within(form).getByRole('button', { name: 'Make the copy' }))
+  endSession()
+  await act(async () => answer())
+  expect(window.location.pathname).toBe('/w/1/apps')
+})
+
+test('a copy that answers after the page went opens nothing', async () => {
+  const source = app({ id: 1, name: 'Expenses' })
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...base,
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [{ ...source, space_id: 3 }] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': { body: { apps: [] } },
+    'POST /api/workspaces/1/spaces/3/apps/1/duplicate': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: app({ id: 20, space_id: 2, name: 'Copy of Expenses' }) })
+      }),
+  })
+  const { unmount } = render(<Routed />)
+  const team = await screen.findByRole('region', { name: 'Team' })
+  fireEvent.click(await within(team).findByRole('button', { name: 'More actions for Expenses' }))
+  fireEvent.click(within(team).getByRole('menuitem', { name: 'Duplicate as template' }))
+  const form = await screen.findByRole('dialog', { name: 'Duplicate Expenses' })
+  fireEvent.click(within(form).getByRole('button', { name: 'Make the copy' }))
+  unmount()
+  await act(async () => answer())
+  expect(window.location.pathname).toBe('/w/1/apps')
+})
+
+test('an install whose session changed while it waited leaves its button ready, and opens nothing', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...base,
+    'POST /api/workspaces/1/spaces/2/app-templates/expense-tracker/install': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: app() })
+      }),
+  })
+  window.history.replaceState(null, '', '/w/1/apps/templates')
+  beginSession(1)
+  render(<Routed />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Use the template Expense tracker' }))
+  const form = await screen.findByRole('dialog', { name: 'Use the template Expense tracker' })
+  fireEvent.click(within(form).getByRole('button', { name: 'Install as a draft' }))
+  endSession()
+  beginSession(1)
+  await act(async () => answer())
+  await waitFor(() =>
+    expect(within(form).getByRole('button', { name: 'Install as a draft' }).getAttribute('aria-busy')).toBeNull(),
+  )
+  expect(window.location.pathname).toBe('/w/1/apps/templates')
 })

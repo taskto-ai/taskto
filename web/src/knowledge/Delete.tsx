@@ -4,6 +4,7 @@
 import { useState } from 'react'
 import { api, type Doc, errorText } from '../api'
 import { useT } from '../i18n'
+import { steps } from '../session'
 import { Button } from '../ui/Button'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Notice } from '../ui/Notice'
@@ -89,18 +90,23 @@ export function Deleted({
   const [error, setError] = useState<string | null>(null)
   const t = useT()
   // A restore the person asked for is finished even if they have moved on (opened another
-  // document, say); only opening the document afterwards is for someone still here.
+  // document, say); only opening the document afterwards is for someone still here. Its steps go
+  // on only in the session that asked (session.ts): after a sign-out, or someone else's sign-in,
+  // nothing more is read, restored or said.
   const mounted = useMounted()
   const restore = async () => {
     setBusy(true)
     setError(null)
+    const s = steps()
     try {
       // The newest version still kept, however far back the history goes: a page at a time.
       const history = `${base}/history/${encodePath(path)}`
       let before: Commit | undefined
       for (let page = '', first = true; !before; first = false) {
-        const res = await api<{ commits: Commit[]; next?: string }>(
-          page ? `${history}?before=${encodeURIComponent(page)}` : history,
+        const res = s.check(
+          await api<{ commits: Commit[]; next?: string }>(
+            page ? `${history}?before=${encodeURIComponent(page)}` : history,
+          ),
         )
         // Someone made it again since: nothing to bring back, it is there.
         if (first && res.commits[0] && res.commits[0].change !== 'delete') {
@@ -112,13 +118,15 @@ export function Deleted({
         if (!before && !res.next) throw new Error(t('knowledge.deleted.noEarlier', { path }))
         page = res.next ?? ''
       }
-      await api<Change>(`${base}/restore/${encodePath(path)}`, { method: 'POST', body: { commit: before.commit } })
+      s.check(
+        await api<Change>(`${base}/restore/${encodePath(path)}`, { method: 'POST', body: { commit: before.commit } }),
+      )
       onChanged()
       if (mounted.current) onRestored(path)
     } catch (err) {
-      setError(errorText(err))
+      if (s.ok() && mounted.current) setError(errorText(err))
     } finally {
-      setBusy(false)
+      if (mounted.current) setBusy(false)
     }
   }
   if (!versioned) {

@@ -51,3 +51,50 @@ func waitLeader(pid int) bool {
 		}
 	}
 }
+
+// groupLive reports whether a process of group pgid can still run: one that exists and is not a
+// zombie. A zombie was killed and waits for its parent to reap it (in a container without an init
+// process, no one does): it holds no file and writes nothing, and signal 0 can't tell it from a
+// live process, so each member's state is read in /proc. Where that can't be read it says true:
+// the caller keeps what it was to remove.
+func groupLive(pgid int) bool {
+	if pgid <= 1 || !groupExists(pgid) {
+		return false
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return true
+	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat") //nolint:gosec // G304: a number in a fixed /proc path
+		if err != nil {
+			continue // gone since the listing
+		}
+		if state, group, ok := parseStat(string(b)); ok && group == pgid && state != 'Z' && state != 'X' {
+			return true
+		}
+	}
+	return false
+}
+
+// parseStat reads the state and the process group out of the contents of /proc/<pid>/stat.
+func parseStat(s string) (state byte, pgrp int, ok bool) {
+	// The command name, field 2, is in parentheses and may hold spaces and parentheses.
+	end := strings.LastIndexByte(s, ')')
+	if end < 0 {
+		return 0, 0, false
+	}
+	fields := strings.Fields(s[end+1:]) // state, ppid, pgrp, …
+	if len(fields) < 3 || len(fields[0]) != 1 {
+		return 0, 0, false
+	}
+	n, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return 0, 0, false
+	}
+	return fields[0][0], n, true
+}

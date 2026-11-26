@@ -224,8 +224,10 @@ type Service struct {
 	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
 	// the service keeps no files.
 	dataDir string
-	locks   fileLocks
-	thumbs  chan struct{}
+	// holder orders the writes in a space's directory against its removal (WithSpaceHolder); nil for none.
+	holder SpaceHolder
+	locks  fileLocks
+	thumbs chan struct{}
 	// quota refuses an upload that would take its space or workspace over a storage quota
 	// (WithQuota); nil for none.
 	quota *quota.Service
@@ -246,6 +248,9 @@ type outboxHooks struct {
 	// afterActionsAccess is called by Actions once it has read what the user may do, before it
 	// reads the release.
 	afterActionsAccess func()
+	// afterPaymentSnapshotRead is called by a payment link entry's pre-call authorization once it has
+	// read where the app is, inside its read transaction, before the rest of its checks.
+	afterPaymentSnapshotRead func()
 }
 
 // New returns the apps service over sqlDB, which must be migrated.

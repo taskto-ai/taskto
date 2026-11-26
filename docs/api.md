@@ -216,6 +216,39 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_integration_kind_mismatch` | 422 | The integration's provider doesn't do the kind `kind`. |
 | `app_integration_disabled` | 409 | The integration is switched off. |
 | `app_integration_space_not_allowed` | 409 | The integration isn't allowed in the app's space (approve with `allow_space`, or allow it first). |
+| `integration_unavailable` | — | A failed `create_payment_link` entry: the live release's approved contract no longer covers it, the integration is switched off or not allowed in the app's space, or its key can't be read. |
+| `integration_amount_refused` | — | A failed `create_payment_link` entry: the amount is zero or less, not a number, or has more decimals than the currency. |
+| `integration_amount_above_max` | — | A failed `create_payment_link` entry: the amount is above the admin's ceiling (params: `max`, `currency`). |
+| `integration_currency_refused` | — | A failed `create_payment_link` entry: the currency isn't one the integration allows (params: `currency`). |
+| `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
+| `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
+| `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
+| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now: nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
+| `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
+| `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing under another key is made (a second link could be paid twice), and for 6 hours the entry looked for the call's object by its own token and asked again under the same key without learning it. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
+| `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): a call may have run at the provider and nothing said what it made, so only the call's object is looked for and the call asked again under the same key, for at most 6 hours, and nothing under another key is made meanwhile. Failed reads and calls in that time don't end it early or use up the entry's tries. |
+| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
+| `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
+| `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
+| `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
+| `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
+| `integration_event_integration_changed` | — | A failed payment event: the app's slot is bound to another integration than the one whose payment this is. |
+| `integration_event_app_offline` | — | A failed payment event: the app is offline or not published, or its space is archived. |
+| `integration_event_record_gone` | — | A failed payment event: the record or its app is gone, or is in another workspace. |
+| `integration_event_record_refused` | — | A failed payment event: the record, as the payment would change it, doesn't fit the app. |
+| `integration_amount_mismatch` | — | A failed payment event: the amount or currency isn't what the payment link asked (a refund: another currency, or more than was paid). Not applied. |
+| `integration_event_payment_unknown` | — | A full refund of a payment no ref has been paid by yet, which a ref of the integration may still be paid by: it waits for that payment (pending) for up to 72 hours, then fails. The payment's arrival tries it again, even after it failed. |
+| `integration_event_ref_unknown` | — | An ignored event: no payment link of this integration has its token or payment. |
+| `integration_event_mode_mismatch` | — | An ignored event: live money for a link made in test mode, or the other way round. |
+| `integration_event_duplicate` | — | An ignored event: the payment or end the ref already has. |
+| `integration_event_late` | — | An ignored event: the ref has moved past what it says. |
+| `integration_event_no_handler` | — | An ignored event: the app declares nothing for it; the ref moved, the record didn't. |
+| `integration_event_condition_unmet` | — | An ignored event: the record didn't meet the handler's `only_if` rule; the ref moved, the record didn't. |
+| `integration_event_partial_refund` | — | An ignored refund of part of the payment. |
+| `integration_event_second_payment` | — | An ignored payment on a ref that was paid already, kept for the admins to reconcile. |
+| `integration_event_not_found` | 404 | The retry names an event that isn't this integration's. |
+| `integration_event_not_retriable` | 409 | The retry names an event that didn't fail. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -296,6 +329,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `browser_too_many_live` | 429 | Too many live views of the browser are open: close one first. |
 | `browser_busy` | 503 | Too many browsers are running on the server: try again in a few minutes. |
 | `browser_shutting_down` | 503 | The browser service is shutting down. |
+| `browser_account_closing` | 409 | The caller's account is being deleted: its browsers are being stopped and removed, and none starts. |
 | `provider_not_found` | 404 | No such provider account of the workspace's, or of the caller's own. |
 | `provider_name_invalid` | 400 | A provider account's name must be 1 to `max` characters of `a-z`, `0-9`, `.`, `_` or `-`. |
 | `provider_name_taken` | 409 | An account with this name exists. |
@@ -343,6 +377,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
 | `cli_worker_closing` | 503 | The CLI worker is shutting down. |
+| `cli_account_removing` | 409 | The account's CLI files are being removed (it is being disconnected): a sign-in or a check can't start on it meanwhile. |
+| `cli_account_busy` | 409 | A process of the account's CLI is still running after it was stopped: nothing was removed, try again. |
+| `cli_account_forgotten` | 410 | The CLI worker removed this account's files (a purge) and refuses it; after a restore of the server's data it says so until the server has told the worker who is here again, a moment after it starts. |
 | `cli_no_login` | 404 | No sign-in is in progress for this account. |
 | `cli_login_code_invalid` | 400 | A sign-in's code must be 1 to `max` printable characters. |
 | `cli_login_no_code` | 409 | This sign-in doesn't take a code. |
@@ -664,7 +701,24 @@ cookie:
 
 ### `POST /api/logout`
 
-Revokes the session and clears the cookie. `204`, also without a session.
+Revokes the session the request carries. `204`, also without a session. It never expires the
+browser's session cookie: by the time the answer arrives, another tab may have signed in and
+replaced it, and an expiring cookie can't be limited to the session it was for. The revoked token
+is refused like any unknown one (`401`, which doesn't touch the cookie either), and the next login
+replaces it.
+
+An optional body names the login the sign-out is for, as `GET /api/me` names it:
+
+```json
+{"session": "c1d2e3"}
+```
+
+The session is then revoked only if it is the one the request carries. If the request carries
+another login that is still going on, nothing is revoked and the answer is
+`409 session_account_changed`: a sign-out tried again after its first answer was
+lost, from a page whose browser has signed in again since (the same account in another tab), never
+ends that newer login. A request whose login is over already (revoked, expired) has nothing to end,
+and is answered `204` whatever it names. The web app always names it.
 
 ### `GET /api/me`
 
@@ -673,9 +727,15 @@ Revokes the session and clears the cookie. `204`, also without a session.
   "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR", "time_zone": "Europe/Lisbon"},
   "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
   "can_create_workspace": true,
-  "is_operator": true
+  "is_operator": true,
+  "session": "4f1c…"
 }
 ```
+
+`session` is the public id of the login the reply is for, as `GET /api/me/sessions` names it: the
+one a login just made (in the replies of the calls that sign in), or the one the request came
+with; empty for an access token. The web app compares it to know a login is still the same one,
+not only the same account.
 
 Workspaces are listed oldest first. Requires a login. `can_create_workspace` is whether
 [`POST /api/workspaces`](#post-apiworkspaces) would let this user in now, which the web
@@ -1087,8 +1147,11 @@ stays disabled). When the period ends, the scheduler runs the **purge**, once, a
 - their conversations, and the agent runtime's copies: each is retired and then purged from the
   runtime's database, which holds what was said (see
   [install.md](install.md#privacy-and-account-deletion));
+- their agent browsers: no browser of theirs starts, their live views are closed, their running
+  browsers are stopped and waited for, and only then their profile (cookies, logins) and the rest of
+  their browser directory are removed ([agent-browser.md](agent-browser.md#deleting-an-account));
 - their CLI logins and shared-account mappings, with everything the CLI worker kept for them
-  (sessions, working directories, the agent browser's profile), and the agent runtime's providers
+  (sessions, working directories), and the agent runtime's providers
   file and key files, which hold their provider accounts;
 - their unfinished uploads of photos in shared apps, with the files (a photo already on a record
   stays with the record);
@@ -1171,9 +1234,11 @@ once the purge has begun, which can't be undone. Recorded as `account_deletion_c
 stopped or failed is tried again (with backoff, every ten minutes after the tries run out, and at the
 next start, whoever joins or leaves a workspace meanwhile); the account itself, with the audit events
 (`account_purged`, which holds only counts), goes last, in one transaction. The steps about files and
-other processes (the agent runtime's records of the conversations, the CLI worker's directory, the
-providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
-the CLI workers to be on stays recorded after the account is gone and is done when they are: the
+other processes (the agent runtime's records of the conversations, the agent browsers' processes and
+profile, the CLI worker's directory, the providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
+the CLI workers to be on stays recorded after the account is gone and is done when they are (the CLI
+step only for each kind of worker that has run on the server, and the container worker's copy only by
+that worker: [privacy and account deletion](install.md#privacy-and-account-deletion)): the
 event says how many are waiting (`cleanups_pending`), and the server doesn't log the purge as complete
 until none is.
 
@@ -2466,7 +2531,11 @@ workspace's home as its target, and a push for it says the same. Notifications a
   `params.title`; target: the card). One per comment: a person who is both the assignee and
   mentioned in a comment is told of the mention only. No notification holds the comment's text;
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
-  it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
+  it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one;
+- `integration_event`: for the admins of a workspace only: a payment event of an integration wasn't
+  applied to a record (it failed, was a second payment, or left a record the app's rule refused;
+  `params.integration` is its name; target: Settings). No notification holds the payment or the
+  record; one is shown as `changed` to someone who is no longer an admin. It can't be mailed.
 
 Leaving a workspace deletes the person's notifications of it. Old ones are removed after 90 days
 (read) or 180 days, and past 500 per person and workspace. These routes take a session only (`403`
@@ -3292,8 +3361,8 @@ workspace admin's choice, made when they approve the app's contract. See
   field), `currency` (a code from the server's closed list) or `currency_field` (a choice field whose
   options are all codes), `description` (a template, at most 400 characters), and two different string
   fields, `url_field` and `id_field`, that the link and its id are written to. The release needs the
-  capability `effect.create_payment_link`. Nothing calls a provider yet: the effect is declared,
-  checked and approved, and does nothing when an action runs.
+  capability `effect.create_payment_link`. When an action runs the effect makes a payment link
+  through the approved integration ([Payment links](#payment-links)).
 
 **The contract.** From the draft the server works out, for each slot, a **contract**: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
@@ -3533,7 +3602,10 @@ space the session can't open is not a `404` then): nothing is read or written as
 account, and the client pauses the queue rather than count a failure. The check is made for
 **every `/api` route** that carries the header, not only an app's (the offline client names the
 account on its downloads, on the space and app checks that revalidate them, and on the queue): the
-answer is the same `409` before the route's own checks. A request without the header
+answer is the same `409` before the route's own checks. The web app also names the signed-in
+account on every request that changes something while its session lasts (`web/src/api.ts`), so a
+page whose browser session became someone else's, in another tab, can't change that person's
+data. A request without the header
 is as it always was; a value that is no account's id is `400`. An insert that names a photo (an attachment id) is accepted only when the
 photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
 uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before
@@ -3627,7 +3699,7 @@ later (`create_payment_link` needs 3, which also reads the other effects), and i
 | `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
 | `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
 | `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
-| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, and a preview says what it would ask for, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
+| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount of the record, and writes the link to `url_field` and its id to `id_field` (see [Payment links](#payment-links)); a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, and it needs the capability `effect.create_payment_link`. An action has at most one |
 
 Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
 effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
@@ -3644,7 +3716,7 @@ the moment of the write, with the write lock held. Every effect runs as the user
 their access **when it runs**.
 
 **The outbox.** When the action changes a record, the change and one entry per effect that applies
-(a `create_payment_link` is declared only, and makes none) are committed **in the same transaction**. The request answers then; the server's worker does the
+are committed **in the same transaction**. The request answers then; the server's worker does the
 entries afterwards, so they go on when nobody has the app open, and a crash loses none. An action
 may carry an `operation`, its **idempotency key** (8 to 64 letters, digits, `-`, `_`), which a
 client makes once for a press of a button and sends again with every retry of it (the web app keeps
@@ -3730,6 +3802,80 @@ record's fields (`detail.title`, `detail.path`, a result's `title` and `path`, a
 error's `params`) is shown only while the live release still declares every field the entry was filled
 from, with the type it had: after a release removes or retypes one, those are left out.
 
+#### Payment links
+
+A `create_payment_link` effect is an entry of the outbox like the others, run as the user who acted
+(`app_effect_app_access`, `app_effect_app_offline` and `app_effect_record_gone` are as above). Its
+`detail` has the `title` (the description filled in), the `amount` and the `currency`; a done entry's
+`result` is `{"workspace_id", "space_id", "amount", "currency"}`, never the link, which is in the
+record. When the entry runs the worker also checks, as of now, that the app's **live** release still
+asks for exactly this link (the same action, amount field, currency and fields to write to) and has an
+approved contract for the slot, that the integration the approval named is switched on and allowed in
+the app's space, and the admin's limits. Anything less fails the entry with
+`integration_unavailable`, and nothing is sent: revoking the approval, switching the integration off
+or taking the space away stops entries that are waiting. Those reads, and the user's access, are of
+one snapshot. An entry runs only in the space it was queued in: an app that was moved since (which
+clears its approvals) fails the entry with `app_effect_space_changed`, and the payment is started
+again. A record edited so that it no longer meets the `when` of the action's link fails it with
+`integration_condition_changed`: nothing was created.
+
+**Money is exact.** The amount is the number field's value written as the shortest decimal text that
+reads back as the same number, read digit by digit into the currency's smallest unit (2 decimals for
+euros, none for yen: a closed table, [`internal/currency`](../internal/currency)). It is **never
+rounded**: an amount with more decimals than the currency has (`0.1 + 0.2` is
+`0.30000000000000004`), zero or less, or not a number fails with `integration_amount_refused`; one
+above the integration's ceiling fails with `integration_amount_above_max` (`params`: `max`,
+`currency`); a currency the integration doesn't list (or one that isn't on the closed list) fails with
+`integration_currency_refused` (`params`: `currency`). Nothing is asked of the provider, and no
+reference made, for a refused amount.
+
+**The link is made once.** Each entry has one **reference** (`integration_refs`, unique by the
+entry's number), which keeps the provider's answer, and the reference has **keys**
+(`integration_ref_attempts`): each an idempotency key with a random 128-bit token of its own, which the
+call puts in the object and the payment echoes back (the first key's token is the reference's). Every
+call is **written ahead** on its key before it leaves, and that record is never taken back. A key is
+resolved only by an answer whose object was then read at the provider, by a lookup that finds an object
+carrying that key's own token, or by an answer the provider documents as given before the call ran
+(a `429` `rate_limit` or `lock_timeout`, a `409` `idempotency_key_in_use`), after which the same key is
+asked again, never a new one. Anything else, any other `4xx` or `5xx`, a timeout, a dropped connection,
+a crash, leaves the key's **outcome unknown**, and the reference then never gets a new key by itself:
+each try looks for the key's object by its token and asks again under the same key while the provider
+keeps it (the provider answers with what the first call made), with a growing wait
+(`integration_link_lookup_pending`) that no failed read ends early or counts against the entry's tries,
+whatever the failure (the provider down, the key refused, an answer that can't be read; the read of the
+key's account, each page of the lookup and the read of an object's state alike); if nothing resolves it within **6
+hours** the entry fails with `integration_outcome_unknown`, and an admin checks the provider's account
+and either has the entry retried once the link is visible (which adopts it) or confirms that none exists
+([below](#confirm-that-no-payment-link-exists)), the only way to a new key. Nothing is saved as the link
+before its state is read from the provider and a payer can use it: a key whose object expired unpaid is
+accounted for, and the reference moves on to the next key by itself. A reference keeps the provider
+account and the pages of its first try: after the integration's key is replaced by another account's,
+an unfinished reference's entry fails with `integration_account_changed` (so does a key of the same
+account's other mode, test or live), and a reference made under another integration than the slot's,
+finished or not, is not used (`integration_changed`). An object of a key that was paid fails the entry
+with `integration_link_already_paid`. A newer entry for the same record and fields
+supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. The link and its
+id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
+record's history says so (`actor_system`), the revision goes up once, and writing the same link
+again changes nothing. A Checkout Session expires by itself within the provider's default of 24
+hours (a Payment Link doesn't, see below); an admin's key is never in a reply, a record, an entry or a
+log.
+
+**The pages the payer returns to** depend on whether the server has a [public URL](install.md)
+(`-public-url`). With one they are the server's own, never a definition's: the web app's
+`/payment/done` and `/payment/cancelled`, which show a short message, call nothing and show nothing of
+the payment; the link is a Stripe Checkout Session (the entry's `id_field` gets its `cs_…` id) that
+expires within 24 hours. Without one the link is made all the same, and the payer stays on a
+confirmation page Stripe hosts after paying: the link is a Stripe Payment Link (`plink_…` id) that
+takes one payment and doesn't expire by itself, and the server's own pages are not used. Webhooks
+can't reach a server with no public URL, so there the paid status is to come from the server asking
+Stripe (reconciliation polling, not built yet); until then the record is not marked paid by itself.
+
+**Other failures**: `integration_credentials_refused` (the provider didn't accept the key),
+`integration_provider_refused` (it refused the request, for good) and
+`integration_provider_unreachable` (no answer, or one that may pass: tried again after 5 s, 10 s, 20 s…,
+at most 5 tries in all, then failed). A failed entry is retried by the person who acted.
+
 #### `GET …/apps/{app}/effects`
 
 Readers of the app: the effects of the records the caller may read (all, or only their own: the
@@ -3762,9 +3908,12 @@ it is worked out against the **draft** and **does nothing**: no record changes, 
 kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
 that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
-target. A `create_payment_link` is only said: its `detail` is the `amount` the sample record has in the
-amount field (in the currency's own units, such as euros, and left out when the record has no number there)
-and its `currency`, and the preview calls no service, opens no secret and needs no approval.
+target. A `create_payment_link` is simulated without any integration: its `detail` has the `title` (the
+description filled in), the `amount` (decimal text with the currency's decimals, such as `"120.10"`) and
+the `currency`, and its `error` is `integration_amount_refused` or `integration_currency_refused` when
+the record's amount can't be asked in that currency. The admin's ceiling and list of currencies are
+checked when the entry runs, since a draft has no integration yet. Nothing is called, no key is opened
+and no reference is made.
 
 Like the preview below, it never reads the app's records: the action is tried on the `rows` of the
 body (the preview's own, as below) or, without them, on sample rows made from the draft's
@@ -3797,8 +3946,8 @@ draft doesn't declare, a value that doesn't fit its field, or a row the sample r
 `updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
 does), and the rows as the action left them, to send with the next step. For an insert or an update
 with effects, `effects` are the ones that would apply to the record, simulated on those rows (a
-`create_payment_link` as an `amount` and a `currency` in its `detail`, nothing more; as
-[`…/actions/preview`](#post-appsappactionspreview) answers; nothing is made). In a preview a
+`create_payment_link` is only simulated, as
+[`…/actions/preview`](#post-appsappactionspreview) answers: nothing is made, and no provider is called). In a preview a
 **signature** or a **photo** is never required, since none is held, so an action whose record would
 carry one is not refused for the lack of it. The answer is the same
 for the draft of an app that was never published, which is how it is tried first. The web
@@ -4311,6 +4460,79 @@ secret (an old install can: it is refused now), so deliveries signed with it ope
 neither the integration nor its workspace.
 It never carries a provider's reply or a secret. `404` for another workspace's integration.
 
+### `GET /api/workspaces/{workspace}/integrations/{integration}/events`
+
+Admin only. The integration's stored events, newest first
+([applying events](integrations.md#applying-events)): `{"events": [{"id", "kind", "source", "state",
+"code", "amount_minor", "currency", "livemode", "attempts", "occurred_at", "received_at",
+"processed_at", "retriable"}], "next_before": 0}`. `state` is `pending`, `running`, `applied`,
+`ignored` or `failed`; `code` (absent for an applied event) is why it was not applied, one of the
+`integration_event_*` codes and `integration_amount_mismatch`; `retriable` is true for a failed
+event. `?state=` narrows to one state, `?limit=` (1 to 100, 50 without it) bounds the page and
+`?before=` continues after a page with `next_before`, which is `0` on the last. An event holds no
+record, app, space, token or provider id, and no body. `400` for a bad parameter; `404` for another
+workspace's integration; `403` for a member.
+
+### `POST /api/workspaces/{workspace}/integrations/{integration}/events/{event}/retry`
+
+Admin only, no body. Puts a **failed** event of this integration back to wait for the worker, with
+its tries counted anew, for once what was wrong is fixed (an approval, a switched-off integration, an
+app that was offline). Applying it again is safe whatever happened before. `200` with the event;
+`404 integration_event_not_found` for an event that isn't this integration's (and
+`integration_not_found` for another workspace's integration); `409 integration_event_not_retriable`
+for one that didn't fail.
+
+### `GET /api/workspaces/{workspace}/integrations/{integration}/payment-links/unresolved`
+
+Admin only. The payment links of this integration whose outcome at the provider is unknown and that
+have no object, in the spaces the admin manages (another person's private space is not listed):
+`{"payment_links": [{"effect_id", "app_id", "space_id", "record_id", "amount", "currency", "since",
+"waiting", "can_confirm", "object_id", "code"?, "params"?, "attempts"}]}`. `effect_id` is the entry's number, as in the app's effects; `amount` is
+decimal text with the currency's decimals; `since` is when the outcome became unknown. `waiting` is
+true while the server still looks (nothing is asked of the admin); `can_confirm` is true once the
+entry failed with `integration_outcome_unknown`, and only if nothing of the reference was ever seen at the
+provider and none of its keys was resolved (otherwise a confirmation is refused, see below).
+`object_id` is the provider's id of an object of the waiting key that the server saw and couldn't
+resolve (an answer named it, or a lookup found it carrying the key's token but couldn't read its amount,
+or found it asking another amount or currency), `""` when none: `can_confirm` is then false, and an
+admin checks that object at the provider; a retry of the entry adopts it once a lookup can check it.
+When `waiting` and `can_confirm` are both false the lookup stopped, and `code` is the code the entry
+failed with (for example `integration_account_changed`), which clients say in words; it is left out
+otherwise. `params` are the values that code's message names, as the entry failed with them (for
+`integration_amount_above_max`, `{"max", "currency"}`), left out when there are none. `attempts` is every try at the payment, oldest first (every idempotency key of the
+reference, not only the current one), for an admin to look for at the provider: `{"reference", "kind",
+"object_id", "object_verified", "account_id", "mode", "first_sent_at"}`. `reference` is the attempt's
+random token, which the call carried as `client_reference_id` (`kind` `checkout_session`) or as
+`metadata[taskto_ref]` (`kind` `payment_link`); `object_id` is an object seen for the attempt (`""`
+when none) and `object_verified` whether TaskTo accepted it for this attempt (`true`: a create response's object, or a lookup that matched the payment's amount and currency) or only saw it (`false`: for example a lookup whose amount or currency did not match). A seen but not accepted object blocks a new payment link until a person checks it at the provider;
+`account_id` and `mode` (`"test"` or `"live"`) are the provider's account and the key's mode the
+reference was made under, `""` when not recorded; `first_sent_at` is when the first call under the
+reference went out, `""` when none did. Nothing sealed is in it, and never a key of the provider's
+account. `403` for a member, `404` for another workspace's integration.
+
+### Confirm that no payment link exists
+
+`POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`
+
+Admin only, body `{}`. For a payment link whose entry failed with `integration_outcome_unknown`: the
+admin checked the provider's account for an object of the reference (a Payment Link's
+`metadata.taskto_ref`, a Checkout Session's `client_reference_id`, holding any of the reference's
+tokens) and found none. The key whose outcome was unknown is recorded as abandoned (its record stays),
+**exactly one** new key is allowed for the reference, and the entry is queued again as it was, run as
+the user who acted with their access then. Recorded in the audit log
+(`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
+integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
+entry isn't waiting for this decision (not failed with that code, the link was found, or it was
+confirmed already: a second request never allows a second key); `409 integration_link_not_confirmable`
+when the server saw something of the reference that contradicts "none exists" (any of its keys has an
+object on record: a call's answer named one, or a lookup found one by the key's token, and its state
+could not be read) or any of its keys was already resolved (an earlier key whose object was seen
+expired, or that an earlier confirmation abandoned). Both are checked in the transaction that allows the
+new key. So a confirmation is possible only once per reference, for its first key: if the new key's call
+too has an unknown outcome, the entry fails with `integration_outcome_unknown` again and a person
+reconciles it in the provider's account. The flow is in
+[integrations.md](integrations.md#payment-links).
+
 ### `DELETE /api/workspaces/{workspace}/integrations/{integration}`
 
 Admin only. `204`, with its secrets and allowed spaces; `404`; `409 integration_in_use` while
@@ -4724,8 +4946,12 @@ server mounts read-only; this only reads that copy, and never runs or changes th
                  "from": "v0.3.0", "code": "manual-upgrade"},
     "last_change": {"at": "2026-03-01T03:12:00Z", "finished": "2026-03-01T03:15:30Z", "result": "updated",
                     "from": "v0.2.0", "to": "v0.3.0", "backed_up": true},
-    "needs_person": {"kind": "manual-upgrade", "code": "manual-upgrade"}
-  }
+    "needs_person": {"kind": "manual-upgrade", "code": "manual-upgrade"},
+    "looked": "2026-03-10T06:20:00Z",
+    "available": {"version": "v0.4.0", "sha": "0123456789abcdef0123456789abcdef01234567",
+                  "published": "2026-03-09T15:00:00Z", "manual_upgrade": true, "repo": "taskto-ai/taskto"}
+  },
+  "notes_url": "https://github.com/taskto-ai/taskto/releases/tag/v0.4.0"
 }
 ```
 
@@ -4768,6 +4994,16 @@ the button: `supported`, and `last`, the outcome of the last requested run (`at`
 `result`, `code`), which also covers a request the updater turned away before it ran (`result`
 `ignored`, `code` `rate-limited` or `bad-request`). A run the operator asked for has
 `requested: true` in `last_run` and `last_change`.
+
+`status.available` is the version the updater would install next, which it found the last time it
+looked (`status.looked`: `taskto-update --check`, every few hours, or a run), or `null` when nothing
+is newer; both are absent from an updater that predates the check. It has the `version` (a
+release, or on the `main` channel a commit's full SHA), its commit `sha`, when it was `published`
+(when the updater could tell), `manual_upgrade` (it, or a release it passes, needs a person), and
+the `repo` the updater reads. The server checks each field again and drops an `available` that is
+the version on record. `notes_url` is the server's own link to what it brings, built from `repo`
+and the versions only: the release's page on the release channel, the comparison of the version
+on record with the commit on `main`.
 
 ### `POST /api/workspaces/{workspace}/updates/request`
 
@@ -5137,7 +5373,8 @@ browsers only: no path names a user. Without a session, a route answers `401`.
 
 The browser is off unless the server runs with `-browser`. It runs where the CLI workers do,
 so it follows their rule ([CLI accounts](#cli-accounts)): with it off, or in local mode on a
-server with more than one user, the status says why, and the other routes answer `409`.
+server with more than one user, the status says why, and the other routes answer `409`. So do they
+(`browser_account_closing`) for an account whose deletion is being purged.
 
 ### `GET /api/me/browser`
 
