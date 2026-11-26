@@ -5,6 +5,7 @@
 // upload can be resumed by giving its id back.
 
 import { ApiError, api } from '../api'
+import { sameSession } from '../session'
 
 export type Attachment = {
   id: string
@@ -96,6 +97,11 @@ export async function uploadPhoto(
 ): Promise<Attachment> {
   const retries = opts.retries ?? 3
   const upload = (id: string, rest = '') => `${base}/uploads/${id}${rest}`
+  // An upload begun in a session goes on only in it: it stops before its next trip once that
+  // session ended (session.ts), and while it lasts api() names its account on every trip. The
+  // offline queue names its own account (`headers`) and is stopped by the queue itself.
+  const same = sameSession()
+  const online = opts.headers === undefined
   const headers = opts.headers
   const signal = opts.signal
   let state: Attachment | undefined
@@ -107,6 +113,7 @@ export async function uploadPhoto(
       if (!(e instanceof ApiError && e.status === 404)) throw e
     }
   }
+  if (online && !same()) throw new UploadCancelled()
   if (!state)
     state = await api<Attachment>(`${base}/uploads`, {
       method: 'POST',
@@ -122,7 +129,7 @@ export async function uploadPhoto(
   let failures = 0
   // A bound on the trips, so a server that never agrees can't keep the upload going for ever.
   for (let trips = 0, max = Math.ceil(file.size / chunk) * 3 + 20; trips < max; trips++) {
-    if (opts.cancelled?.() || signal?.aborted) throw new UploadCancelled()
+    if (opts.cancelled?.() || signal?.aborted || (online && !same())) throw new UploadCancelled()
     opts.onProgress?.(offset, file.size)
     try {
       if (offset >= file.size)
@@ -145,6 +152,7 @@ export async function uploadPhoto(
       }
       if (!transient(e) || ++failures > retries) throw e
       await sleep((opts.backoff ?? 500) * failures)
+      if (online && !same()) throw new UploadCancelled()
       try {
         offset = (await api<Attachment>(upload(id), { headers, signal })).received
       } catch {

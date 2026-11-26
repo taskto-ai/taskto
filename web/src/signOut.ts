@@ -57,7 +57,7 @@ export async function cleanUpAfterSignOut(user: number, keep: boolean, approved:
   try {
     await bounded(
       (async () => {
-        await leavePush()
+        await leavePush(user)
         forgetDraftsOf(user)
         const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
         // Records made since the person was asked (another tab of the account): not theirs to lose

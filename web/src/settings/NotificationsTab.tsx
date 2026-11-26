@@ -9,6 +9,7 @@ import { useT } from '../i18n'
 import {
   disablePush,
   enablePush,
+  PushBusy,
   PushDenied,
   type PushState,
   PushUnsubscribeFailed,
@@ -18,6 +19,7 @@ import {
 import { pushStrings } from '../notifications/strings'
 import { useInstall } from '../pwa/install'
 import { routePath } from '../router'
+import { SessionEnded } from '../session'
 import { Badge } from '../ui/Badge'
 import { Button, ButtonLink } from '../ui/Button'
 import { Notice } from '../ui/Notice'
@@ -51,6 +53,8 @@ export function NotificationsTab({
     void refresh()
   }, [refresh])
 
+  // Turning push on or off waits on the browser and the server; one the session ended in the middle
+  // of stops there (push.ts), and says nothing of it here.
   const turnOn = async () => {
     setDismissed(false)
     await action.run(async () => {
@@ -58,6 +62,8 @@ export function NotificationsTab({
         await enablePush(me)
         await sendPushStrings(pushStrings(t))
       } catch (e) {
+        if (e instanceof SessionEnded) return
+        if (e instanceof PushBusy) throw new Error(t('notifications.settings.busy'))
         if (!(e instanceof PushDenied)) throw e
         setDismissed(Notification.permission === 'default')
       }
@@ -70,7 +76,9 @@ export function NotificationsTab({
       try {
         await disablePush()
       } catch (e) {
+        if (e instanceof SessionEnded) return
         if (e instanceof PushUnsubscribeFailed) throw new Error(t('notifications.settings.turnOffFailed'))
+        if (e instanceof PushBusy) throw new Error(t('notifications.settings.busy'))
         throw e
       }
     })

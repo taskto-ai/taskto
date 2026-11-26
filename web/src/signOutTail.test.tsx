@@ -343,3 +343,33 @@ test('another tab finishing the same sign-out takes this one to the login, not t
   await act(async () => confirm?.())
   expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
 })
+
+test("a tab that hears its account signed out in another tab forgets the account's pending app submissions", async () => {
+  fakeFetch({ ...pages, 'GET /api/me': { body: { ...first, session: 's1' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  // A submission this tab sent had no definite answer.
+  sessionStorage.setItem('taskto:operations:1', JSON.stringify([['k', 'op-unanswered']]))
+  // Another tab of the account signs out: its cleanup forgets the account.
+  localStorage.removeItem('taskto:offline-last')
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(sessionStorage.getItem('taskto:operations:1')).toBeNull()
+})
+
+test("a tab that heard another account sign in keeps its own account's pending submissions when that other account signs out", async () => {
+  fakeFetch({ ...pages, 'GET /api/me': { body: { ...first, session: 's1' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  sessionStorage.setItem('taskto:operations:1', JSON.stringify([['k', 'op-unanswered']]))
+  // Another tab signs the second person in: this one shows the account changed.
+  localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 2, name: 'Second' }))
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  // Then the second person signs out: not this tab's account.
+  localStorage.removeItem('taskto:offline-last')
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  await new Promise((r) => setTimeout(r, 0))
+  expect(sessionStorage.getItem('taskto:operations:1')).toContain('op-unanswered')
+  sessionStorage.removeItem('taskto:operations:1')
+})

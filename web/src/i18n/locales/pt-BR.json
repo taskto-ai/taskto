@@ -3080,6 +3080,7 @@
       "on": "O push está ativado neste dispositivo.",
       "turnOn": "Ativar o push neste dispositivo",
       "turnOff": "Desativar o push neste dispositivo",
+      "busy": "O push ainda está sendo alterado neste dispositivo (em outra aba ou por uma saída da conta). Tente de novo em instantes.",
       "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
       "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo.",
       "timeZoneTitle": "Fuso horário e lembretes",

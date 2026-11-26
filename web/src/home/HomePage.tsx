@@ -18,6 +18,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { type AvailableApp, api, errorText, type HomeItem, type HomeView, ws } from '../api'
 import { useFormat, useT } from '../i18n'
 import { routePath } from '../router'
+import { sameSession } from '../session'
 import { ErrorBoundary } from '../shell/ErrorBoundary'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -98,13 +99,18 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
 
   // Runs a change, then tells everything that shows Home to load it again, whether it worked or not:
   // after a refusal the lists show what is true now. What is shown stays while it loads.
+  // A change answered after its session ended (signed out, someone else signed in) says nothing and
+  // tells nothing to load again: what shows Home then is another session's.
   const run: Run = async (change, after = {}) => {
     pendingFocus.current = null
+    const same = sameSession()
     try {
       await change()
+      if (!same()) return
       setError(null)
       if (after.message) setSaid(after.message)
     } catch (e) {
+      if (!same()) return
       setError(errorText(e))
     }
     homeChanged()

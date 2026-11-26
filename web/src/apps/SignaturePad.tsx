@@ -28,6 +28,7 @@ import { Spinner } from '../ui/Spinner'
 import type { AppFiles } from './PhotoInput'
 import { discardPhoto, photoUrl, thumbnailUrl, uploadPhoto } from './photos'
 import './capture.css'
+import { steps } from '../session'
 
 // A point of a stroke as fractions of the pad's width and height.
 type Point = { x: number; y: number }
@@ -231,8 +232,11 @@ export function SignatureField({
     if (!files) return
     setSaving(true)
     setProblem(null)
+    // The picture is made before it goes up: a session that ended meanwhile uploads nothing.
+    const s = steps()
     try {
       const png = await canvasToPng(picture)
+      if (!s.ok()) return
       if (files.local) {
         onChange(files.local.stage(png))
       } else {
