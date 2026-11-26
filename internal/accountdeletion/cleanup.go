@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -153,18 +155,36 @@ func (s *Service) Pending(ctx context.Context, userID int64) (int, error) {
 	return n, err
 }
 
+// waiting is the steps that wait for something to be on, by what they wait for (waitsFor) and
+// account: how many steps each.
+type waiting map[string]map[int64]int
+
+// waitsFor names what a step that is waiting waits for, for the log.
+func waitsFor(c cleanup) string {
+	switch {
+	case c.kind == cleanAgentConversation:
+		return "agent_runtime"
+	case c.kind == cleanCLIHome && strings.HasPrefix(c.target, cliContainer+":"):
+		return "cli_worker_container"
+	case c.kind == cleanCLIHome:
+		return "cli_worker_local"
+	}
+	return c.kind
+}
+
 // runCleanups does the recorded steps of userID's purge (every account's if userID is 0), and
 // removes each that is done. It returns the steps that were tried and failed; a step that is
 // waiting for a subsystem to be on is neither (it is counted in waiting).
-func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, err error) {
+func (s *Service) runCleanups(ctx context.Context, userID int64) (wait waiting, err error) {
+	wait = waiting{}
 	todo, err := s.pending(ctx, userID)
 	if err != nil {
-		return 0, err
+		return wait, err
 	}
 	var errs []error
 	for _, c := range todo {
 		if err := ctx.Err(); err != nil {
-			return waiting, errors.Join(append(errs, err)...)
+			return wait, errors.Join(append(errs, err)...)
 		}
 		switch rerr := s.runCleanup(ctx, c); {
 		case rerr == nil:
@@ -172,7 +192,11 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, e
 				errs = append(errs, err)
 			}
 		case errors.Is(rerr, errWaiting):
-			waiting++
+			on := waitsFor(c)
+			if wait[on] == nil {
+				wait[on] = map[int64]int{}
+			}
+			wait[on][c.user]++
 		default:
 			// Only the step's reason is kept (last_error: a fixed word, see failSidecarBusy), and
 			// it is not in the error returned, which the server's log prints. The error says which
@@ -183,7 +207,7 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, e
 			errs = append(errs, fmt.Errorf("step %d (%s) of account %d failed: %s", c.id, c.kind, c.user, reason))
 		}
 	}
-	return waiting, errors.Join(errs...)
+	return wait, errors.Join(errs...)
 }
 
 func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
@@ -340,9 +364,14 @@ func (s *Service) syncProviders(ctx context.Context) error {
 // couldn't. Call it at start, once the agent runtime's client is set (SetAgent), and again whenever
 // something a step waits for comes on; Maintain does it on a timer.
 func (s *Service) RunCleanups(ctx context.Context) error {
-	waiting, err := s.runCleanups(ctx, 0)
-	if waiting > 0 {
-		slog.Info("account deletion: steps of purges are waiting for the agent runtime or the CLI workers to be on", "steps", waiting)
+	wait, err := s.runCleanups(ctx, 0)
+	for _, on := range slices.Sorted(maps.Keys(wait)) {
+		steps := 0
+		for _, n := range wait[on] {
+			steps += n
+		}
+		slog.Info("account deletion: steps of purges are waiting for what they need to be on",
+			"waits_for", on, "accounts", len(wait[on]), "steps", steps)
 	}
 	return err
 }

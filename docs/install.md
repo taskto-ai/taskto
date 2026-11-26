@@ -880,7 +880,15 @@ is a decision about the workspace's records, not an account's.
   remove, so that step waits for a start with `-cli-workers container` (a start in local mode doesn't
   clear it). The server records each kind of worker it starts (`cli_worker_history`); an install that
   never ran CLI workers has no such step. For an install from before that record, and after a
-  **restore**, the history is unknown: the accounts that existed then wait for both. Each
+  **restore**, the history is unknown: the accounts that existed then wait for both. The record
+  keeps a kind once it has run, even if you switch the mode later (a server that stops doesn't
+  say for good that a kind will never run again), so accounts made after a switch still get its
+  step. The log says what the waiting steps wait for (`waits_for=cli_worker_container`, with the
+  number of accounts). If the worker container's volume (`cli-homes`) is gone for good, its copies
+  went with it: start the server once with `-cli-workers container` and the worker container on
+  a new, empty volume, and each waiting step closes (the worker's removal of a directory that
+  doesn't exist succeeds). Don't delete the steps by hand: the container step is the only record
+  that a person's files may still be in a volume. Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
   need them stay recorded, and are done by the next start with them on and every ten minutes. The log

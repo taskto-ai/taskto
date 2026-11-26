@@ -1,12 +1,15 @@
 package accountdeletion
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -195,4 +198,26 @@ func TestAnUnknownPastKeepsBothStepsForTheAccountsOfThatPast(t *testing.T) {
 			t.Fatalf("steps = %v, want none", got)
 		}
 	})
+}
+
+// The log says what waiting steps wait for, and for how many accounts.
+func TestRunCleanupsLogsWhatTheWaitingStepsWaitFor(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.history(cliContainer)
+	w.cli.kind = ""
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if err := w.svc.RunCleanups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); !strings.Contains(got, "waits_for=cli_worker_container accounts=1 steps=1") {
+		t.Errorf("log = %q", got)
+	}
 }
