@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/providers"
@@ -138,10 +139,11 @@ var (
 	errConsentEndpointChanged = errors.New("the embeddings endpoint has changed")
 )
 
-// consent returns spaceID's consent, in workspaceID.
-func (x *Index) consent(ctx context.Context, workspaceID, spaceID int64) (Consent, error) {
+// consent returns sp's consent: of the space the access check found, by its workspace and
+// generation (access.ErrNotFound if it is another that has the ID now).
+func (x *Index) consent(ctx context.Context, sp access.Space) (Consent, error) {
 	var c Consent
-	e, ep, err := x.embeddings(ctx, workspaceID)
+	e, ep, err := x.embeddings(ctx, sp.WorkspaceID)
 	switch {
 	case err == nil:
 		c.Endpoint = &ConsentEndpoint{Account: e.Account, Provider: e.Provider, Model: e.Model, BaseURL: ep.BaseURL}
@@ -151,13 +153,21 @@ func (x *Index) consent(ctx context.Context, workspaceID, spaceID int64) (Consen
 	var account int64
 	var model, baseURL, at string
 	var by sql.NullInt64
-	err = x.db.QueryRowContext(ctx, `SELECT account_id, model, base_url, given_by, given_at
-		FROM search_embedding_consent WHERE space_id = ?`, spaceID).Scan(&account, &model, &baseURL, &by, &at)
+	// The space's row and its consent in one read: the consent of another space that has the ID is
+	// not this space's.
+	var there int
+	err = x.db.QueryRowContext(ctx, `SELECT 1, coalesce(c.account_id, 0), coalesce(c.model, ''), coalesce(c.base_url, ''), c.given_by, coalesce(c.given_at, '')
+		FROM spaces sp LEFT JOIN search_embedding_consent c ON c.space_id = sp.id
+		WHERE sp.id = ? AND sp.workspace_id = ? AND (? = 0 OR sp.generation = ?)`,
+		sp.ID, sp.WorkspaceID, sp.Generation, sp.Generation).Scan(&there, &account, &model, &baseURL, &by, &at)
 	if errors.Is(err, sql.ErrNoRows) {
-		return c, nil
+		return Consent{}, fmt.Errorf("%w: the space is gone, or is another space with the ID", access.ErrNotFound)
 	}
 	if err != nil {
 		return Consent{}, err
+	}
+	if at == "" {
+		return c, nil // no consent on record
 	}
 	c.GivenAt = &at
 	if by.Valid {
@@ -172,7 +182,13 @@ func (x *Index) consent(ctx context.Context, workspaceID, spaceID int64) (Consen
 // then the space's vectors are dropped, and its documents are searched by their text only.
 // With want, consent is given only if the endpoint is still want (its account, model and
 // base URL), else errConsentEndpointChanged.
-func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int64, on bool, want *ConsentEndpoint) error {
+//
+// sp is the space the request was authorized for, with its generation: the change is made only
+// if that space is still the one with the ID, checked in the transaction that makes it
+// (access.ErrNotFound otherwise), so a request that was in flight while the space was removed and
+// another made with its ID changes nothing of the new one.
+func (x *Index) setConsent(ctx context.Context, sp access.Space, userID int64, on bool, want *ConsentEndpoint) error {
+	workspaceID, spaceID := sp.WorkspaceID, sp.ID
 	const docs = `SELECT id FROM search_docs WHERE space_id = ?`
 	// dropVectors drops the space's vectors: they are only ever of the endpoint consented to.
 	dropVectors := func(tx *sql.Tx) error {
@@ -237,6 +253,9 @@ func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int
 		return dropVectors(tx)
 	}
 	err := x.write(ctx, func(tx *sql.Tx) error {
+		if err := stillSpace(ctx, tx, sp); err != nil {
+			return err
+		}
 		if err := apply(tx); err != nil {
 			return err
 		}
@@ -256,6 +275,14 @@ func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int
 const embeddableSQL = `EXISTS (SELECT 1 FROM search_embedding_consent c
 	JOIN provider_accounts pa ON pa.id = c.account_id
 	WHERE c.space_id = sp.id AND c.account_id = e.account_id AND c.model = e.model AND c.base_url = pa.base_url)`
+
+// embeddableAtSQL is embeddableSQL for the endpoint at one URL, the one a caller holds and is
+// about to send to (one parameter): the consent names that URL itself, not only the account and
+// model whose provider row has some URL now.
+const embeddableAtSQL = `EXISTS (SELECT 1 FROM search_embedding_consent c
+	JOIN provider_accounts pa ON pa.id = c.account_id
+	WHERE c.space_id = sp.id AND c.account_id = e.account_id AND c.model = e.model AND c.base_url = pa.base_url
+		AND c.base_url = ?)`
 
 // pendingSQL selects, from search_docs d joined to spaces sp and search_settings e, the
 // Markdown documents whose vectors aren't those of their version and model, in spaces
@@ -346,13 +373,16 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 	// version, in the space it was found in (its workspace and generation), whose consent is to
 	// this very endpoint. One read, so nothing changes between the check and the text: a space
 	// removed and made again with the ID, or consent withdrawn, finds no row, and nothing is sent.
+	if x.afterEndpoint != nil {
+		x.afterEndpoint()
+	}
 	var body string
 	err = x.db.QueryRowContext(ctx, `SELECT f.body FROM search_docs d
 		JOIN search_fts f ON f.rowid = d.id
 		JOIN spaces sp ON sp.id = d.space_id
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
 		WHERE d.id = ? AND d.version = ? AND d.markdown AND sp.workspace_id = ? AND sp.generation = ?
-		AND `+keySQL+` = ? AND `+embeddableSQL, p.id, p.version, p.workspace, p.generation, e.key()).Scan(&body)
+		AND `+keySQL+` = ? AND `+embeddableAtSQL, p.id, p.version, p.workspace, p.generation, e.key(), ep.BaseURL).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // changed since the batch was read, or no longer to be sent: the next pass sees what it is now
 	}
@@ -375,13 +405,16 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 	}
 	// Once written, or not: the vector cache reads the document again either way.
 	defer x.vectors.changedDocs(p.space, p.id)
+	if x.beforeStore != nil {
+		x.beforeStore()
+	}
 	return x.write(ctx, func(tx *sql.Tx) error {
 		var version string
 		var key sql.NullString
 		var allowed bool
-		err := tx.QueryRowContext(ctx, `SELECT d.version, `+keySQL+`, `+embeddableSQL+` FROM search_docs d
+		err := tx.QueryRowContext(ctx, `SELECT d.version, `+keySQL+`, `+embeddableAtSQL+` FROM search_docs d
 			JOIN spaces sp ON sp.id = d.space_id LEFT JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE d.id = ? AND sp.workspace_id = ? AND sp.generation = ?`, p.id, p.workspace, p.generation).Scan(&version, &key, &allowed)
+			WHERE d.id = ? AND sp.workspace_id = ? AND sp.generation = ?`, ep.BaseURL, p.id, p.workspace, p.generation).Scan(&version, &key, &allowed)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && (version != p.version || key.String != e.key() || !allowed)) {
 			// Changed meanwhile, or consent withdrawn or no longer for this endpoint: keep
 			// nothing; the next pass embeds what it is now, if it may.

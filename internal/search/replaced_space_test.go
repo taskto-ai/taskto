@@ -1,9 +1,11 @@
 package search
 
 import (
+	"database/sql"
 	"errors"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"testing"
 
 	"taskto.ai/taskto/internal/access"
@@ -269,5 +271,206 @@ func TestTheVectorCacheNeverComparesAReplacementWithTheOldSpacesVectors(t *testi
 	got := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, freshIn, key, qv, 10))
 	if len(got) != 0 {
 		t.Fatalf("the cached comparison finds %d passages in the replacement, which has none: the old space's vectors", len(got))
+	}
+}
+
+// moveEndpoint is what two settings updates do while a worker or a search is between two reads:
+// the provider account's URL changes, and the space consents to the new URL.
+func (w *world) moveEndpoint(account int64, space int64) {
+	w.e.t.Helper()
+	const moved = "https://moved.example.test/v1"
+	w.exec(`UPDATE provider_accounts SET base_url = ? WHERE id = ?`, moved, account)
+	w.exec(`UPDATE search_embedding_consent SET base_url = ? WHERE space_id = ?`, moved, space)
+}
+
+// The consent names a URL, and the text goes only to the URL the consent names: if the account's
+// URL changes and the space consents to the new one while the embeddings job holds the old
+// endpoint, nothing is sent to the old one, and nothing it returns is stored under the new consent.
+func TestAnEmbeddingJobSendsAndStoresOnlyForTheURLTheConsentNames(t *testing.T) {
+	setup := func(t *testing.T) (*world, int64, access.Space) {
+		w := newWorld(t)
+		account := w.setModel() // and consents to it for the team space
+		team := w.generationOf(w.team)
+		w.put(w.owner, team, "fruit.md", "a kumquat in the team space")
+		if _, err := w.e.idx.Sync(ctx, team); err != nil {
+			t.Fatal(err)
+		}
+		return w, account, team
+	}
+	t.Run("before sending", func(t *testing.T) {
+		w, account, team := setup(t)
+		w.e.idx.afterEndpoint = func() { w.e.idx.afterEndpoint = nil; w.moveEndpoint(account, team.ID) }
+		if _, err := w.e.idx.embedPending(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if w.e.embed.sent("kumquat") {
+			t.Fatal("the text was sent to the URL the space no longer consents to")
+		}
+	})
+	t.Run("before storing", func(t *testing.T) {
+		w, account, team := setup(t)
+		w.e.idx.beforeStore = func() { w.e.idx.beforeStore = nil; w.moveEndpoint(account, team.ID) }
+		if _, err := w.e.idx.embedPending(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var chunks int
+		var version sql.NullString
+		if err := w.e.db.QueryRow(`SELECT (SELECT count(*) FROM search_chunks), (SELECT embed_version FROM search_docs WHERE space_id = ?)`, team.ID).Scan(&chunks, &version); err != nil {
+			t.Fatal(err)
+		}
+		if chunks != 0 || version.Valid {
+			t.Fatalf("vectors of the old endpoint were stored under the new consent: %d chunks, embed_version %v", chunks, version)
+		}
+	})
+}
+
+// The query goes to the endpoint the search holds only while the space's consent names that very
+// endpoint: its URL, and the workspace's account and model as they are now.
+func TestASearchSendsItsQueryOnlyToTheEndpointTheConsentNames(t *testing.T) {
+	for name, change := range map[string]func(w *world, account, space int64){
+		"the URL moved": func(w *world, account, space int64) { w.moveEndpoint(account, space) },
+		"the model changed": func(w *world, account, space int64) {
+			w.exec(`UPDATE search_settings SET model = 'another-model' WHERE workspace_id = ?`, w.ws)
+			w.exec(`UPDATE search_embedding_consent SET model = 'another-model' WHERE space_id = ?`, space)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			account := w.setModel()
+			team := w.generationOf(w.team)
+			team.Access = access.Read
+			w.put(w.owner, team, "fruit.md", "a document")
+			w.e.idx.afterQueryEndpoint = func() { w.e.idx.afterQueryEndpoint = nil; change(w, account, team.ID) }
+			if _, err := w.e.idx.Search(ctx, w.ws, []access.Space{team}, Query{Text: "pomelo"}); err != nil {
+				t.Fatal(err)
+			}
+			if w.e.embed.sent("pomelo") {
+				t.Fatal("the query was sent to an endpoint the space's consent no longer names")
+			}
+		})
+	}
+}
+
+// A request that was authorized for a space, and runs after the space was removed and another made
+// with its ID, changes and reads nothing of the new one: not its consent, and no work for the
+// embeddings worker.
+func TestAConsentRequestForAReplacedSpaceTouchesNothingOfTheReplacement(t *testing.T) {
+	w := newWorld(t)
+	w.setModel()
+	old := w.generationOf(w.createShared("Gone"))
+	old.Role = access.RoleOwner
+	fresh := w.replace(old, false)
+	select { // nothing is waiting for the worker yet
+	case <-w.e.idx.embedWake:
+	default:
+	}
+
+	err := w.e.idx.setConsent(ctx, old, w.owner.id, true, nil)
+	if !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("consent given under the old space's authority: %v", err)
+	}
+	var n int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_embedding_consent WHERE space_id = ?`, fresh.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the replacement has %d consents, %v", n, err)
+	}
+	select {
+	case <-w.e.idx.embedWake:
+		t.Fatal("the embeddings worker was woken for a consent that was refused")
+	default:
+	}
+
+	// The replacement has consent of its own: the old space's reads don't see it.
+	w.exec(`INSERT INTO search_embedding_consent (space_id, account_id, model, base_url)
+		SELECT ?, account_id, model, (SELECT base_url FROM provider_accounts WHERE id = account_id) FROM search_settings WHERE workspace_id = ?`, fresh.ID, w.ws)
+	if _, err := w.e.idx.consent(ctx, old); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("the old space read the replacement's consent: %v", err)
+	}
+	if c := must[Consent](t)(w.e.idx.consent(ctx, fresh)); !c.Enabled {
+		t.Fatalf("the replacement's own consent: %+v", c)
+	}
+	// And the space that is current can change its own.
+	if err := w.e.idx.setConsent(ctx, fresh, w.owner.id, false, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two searches, for a space and for the space that took its ID, interleave around the cache's
+// locks: the one for the removed space must not refresh the entry, which is the new one's, with
+// what it finds (nothing), and the new one's search finds its vectors.
+func TestTheVectorCacheOfOverlappingSearchesForReplacedSpacesIsTheNewOnes(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	key := Embeddings{Account: account, Model: fakeModel}.key()
+	old := w.generationOf(w.team)
+	w.fillVectors(old, key, 8, 2, fakeDims, 1)
+	qv := randomVector(rand.New(rand.NewPCG(5, 5)), fakeDims)
+	cache := w.e.idx.vectors
+
+	type pause struct{ reached, release chan struct{} }
+	var mu sync.Mutex
+	pauses := map[int64]*pause{}
+	oldGen := old.Generation
+	cache.beforeRefresh = func(sp spaceRef) { // each generation is paused once
+		mu.Lock()
+		p := pauses[sp.generation]
+		delete(pauses, sp.generation)
+		mu.Unlock()
+		if p != nil {
+			close(p.reached)
+			<-p.release
+		}
+	}
+	oldRef := spaceRef{id: old.ID, generation: oldGen}
+	oldPause := &pause{make(chan struct{}), make(chan struct{})}
+	pauses[oldGen] = oldPause
+	type result struct {
+		found []near
+		err   error
+	}
+	oldDone := make(chan result, 1)
+	go func() {
+		found, _, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{oldRef}, key, qv)
+		oldDone <- result{found, err}
+	}()
+	<-oldPause.reached // the search for the old space has the entry and not its refresh lock
+
+	// The space is purged and another made with its ID, with vectors of its own.
+	fresh := w.replace(old, true)
+	w.fillVectors(fresh, key, 8, 2, fakeDims, 2)
+	freshRef := spaceRef{id: fresh.ID, generation: fresh.Generation}
+	freshPause := &pause{make(chan struct{}), make(chan struct{})}
+	mu.Lock()
+	pauses[fresh.Generation] = freshPause
+	mu.Unlock()
+	freshDone := make(chan result, 1)
+	go func() {
+		found, rest, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{freshRef}, key, qv)
+		if err == nil && len(rest) != 0 { // read from SQLite instead
+			found, err = w.e.idx.nearestBrute(ctx, spacesJSON(t, fresh), key, qv)
+		}
+		freshDone <- result{found, err}
+	}()
+	<-freshPause.reached // both are at the same point, the new one's after the old one's
+
+	close(oldPause.release) // the old one goes first
+	if r := <-oldDone; r.err != nil {
+		t.Fatal(r.err)
+	}
+	close(freshPause.release)
+	r := <-freshDone
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	want := w.e.idx.bruteNearest(t, spacesJSON(t, fresh), key, qv, 10)
+	if len(want) == 0 {
+		t.Fatal("fixture: the replacement has no vectors")
+	}
+	if len(r.found) == 0 {
+		t.Fatal("the new space's search found no vectors: the old space's search installed an empty entry under its generation")
+	}
+	// And the entry that is kept is the new space's: the next search is served from it.
+	again, rest, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{freshRef}, key, qv)
+	if err != nil || len(rest) != 0 || len(again) == 0 {
+		t.Fatalf("the next search of the new space: %d found, %v left to SQLite, %v", len(again), rest, err)
 	}
 }

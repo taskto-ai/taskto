@@ -58,6 +58,10 @@ type vectorCache struct {
 	used   int64  // bytes of every space's snap
 	clock  uint64 // counts searches, for least recently used
 	now    func() time.Time
+
+	// beforeRefresh is for tests: it runs in snapshot after the space's entry is chosen and before
+	// its refresh lock is taken, the moment another search can interleave.
+	beforeRefresh func(sp spaceRef)
 }
 
 // tooBigRetry is how long a space that didn't fit is read from SQLite before a load is tried
@@ -91,9 +95,11 @@ type cachedSpace struct {
 // spaceVectors are a space's vectors of one embeddings model, as SQLite had them. They
 // never change once made: a refresh makes new ones, so a search can read them unlocked.
 type spaceVectors struct {
-	key   string
-	docs  []*docVectors
-	bytes int64
+	// generation is the generation of the space they were loaded for.
+	generation int64
+	key        string
+	docs       []*docVectors
+	bytes      int64
 }
 
 // docVectors are a document's passages' vectors, in the order of their seq.
@@ -219,21 +225,36 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, sp spaceRef, wor
 		s = &cachedSpace{id: id, workspace: workspace, generation: sp.generation}
 		c.spaces[id] = s
 	}
-	if s.generation != sp.generation {
-		// Another space has the ID (or this is the first to say which it is for): what is held is
-		// of a space that isn't the one asked about.
+	switch {
+	case sp.generation < s.generation:
+		// A space made after this one has the ID: nothing held is of the space asked about, and
+		// none is made for it. It is read from SQLite, by its generation, where it is gone.
+		c.mu.Unlock()
+		return nil, nil
+	case sp.generation > s.generation:
+		// Another space has the ID (generations only grow): what is held is of one that isn't the
+		// one asked about.
 		c.resetLocked(s)
 		s.generation = sp.generation
 	}
 	c.clock++
 	s.lastUse = c.clock
 	c.mu.Unlock()
+	if c.beforeRefresh != nil {
+		c.beforeRefresh(sp)
+	}
 
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
 	c.mu.Lock()
+	if s.generation != sp.generation {
+		// A search for another space with the ID took the entry between the two locks: it is
+		// theirs to refresh, and what this one would make is of a space that isn't its.
+		c.mu.Unlock()
+		return nil, nil
+	}
 	cur := s.snap
-	full := s.reset || cur == nil || cur.key != key
+	full := s.reset || cur == nil || cur.key != key || cur.generation != sp.generation
 	docs := s.stale
 	limit := c.budget
 	for _, o := range c.spaces {
@@ -295,6 +316,9 @@ func (c *vectorCache) install(s *cachedSpace, next *spaceVectors, keep map[int64
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.dropLocked(s)
+	if s.generation != next.generation {
+		return false // the entry was taken by another space with the ID while these were loaded
+	}
 	if c.used+next.bytes > c.budget {
 		var victims []*cachedSpace
 		for _, o := range c.spaces {
@@ -326,7 +350,7 @@ func (c *vectorCache) install(s *cachedSpace, next *spaceVectors, keep map[int64
 // with returns sv with the documents in docs replaced by those of changed (a document of
 // docs not in changed has no vectors any more).
 func (sv *spaceVectors) with(changed *spaceVectors, docs map[int64]bool) *spaceVectors {
-	out := &spaceVectors{key: sv.key, docs: make([]*docVectors, 0, len(sv.docs)+len(changed.docs))}
+	out := &spaceVectors{generation: sv.generation, key: sv.key, docs: make([]*docVectors, 0, len(sv.docs)+len(changed.docs))}
 	for _, d := range sv.docs {
 		if !docs[d.id] {
 			out.docs = append(out.docs, d)
@@ -371,7 +395,7 @@ func loadVectors(ctx context.Context, db *sql.DB, space, generation int64, key s
 		return nil, err
 	}
 	defer rows.Close()
-	sv := &spaceVectors{key: key}
+	sv := &spaceVectors{generation: generation, key: key}
 	// A document's vectors are read into one array, then copied into one of their size.
 	type loading struct {
 		*docVectors

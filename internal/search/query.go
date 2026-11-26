@@ -177,11 +177,16 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	e, ep, err := x.embeddings(ctx, workspaceID)
 	var embeddable bool
 	if err == nil {
+		if x.afterQueryEndpoint != nil {
+			x.afterQueryEndpoint()
+		}
 		// Spaces not consented to this endpoint have no vectors from it: a search of only
-		// those doesn't send the query to it either.
+		// those doesn't send the query to it either. The endpoint is the one in hand: its account
+		// and model are the workspace's now, and the consent names its URL itself.
 		err = x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM spaces sp
 			JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE sp.id IN (`+scopeSQL+`) AND `+embeddableSQL+`)`, in).Scan(&embeddable)
+			WHERE sp.id IN (`+scopeSQL+`) AND e.account_id = ? AND e.model = ? AND `+embeddableAtSQL+`)`,
+			in, e.Account, e.Model, ep.BaseURL).Scan(&embeddable)
 	}
 	switch {
 	case errors.Is(err, errNoEmbeddings):

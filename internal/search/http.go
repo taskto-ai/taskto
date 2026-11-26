@@ -306,7 +306,11 @@ func (x *Index) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (x *Index) handleConsent(w http.ResponseWriter, r *http.Request) {
 	sp, _ := access.SpaceFrom(r.Context())
-	c, err := x.consent(r.Context(), sp.WorkspaceID, sp.ID)
+	c, err := x.consent(r.Context(), sp)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -336,7 +340,11 @@ func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, "enabled is required")
 		return
 	}
-	err := x.setConsent(r.Context(), sp.WorkspaceID, sp.ID, u.ID, *req.Enabled, req.Endpoint)
+	err := x.setConsent(r.Context(), sp, u.ID, *req.Enabled, req.Endpoint)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if errors.Is(err, errNoConsentEndpoint) {
 		apierr.Write(w, http.StatusConflict, apierr.CodeConsentNoModel, "this workspace has no embeddings model to consent to")
 		return
@@ -349,7 +357,11 @@ func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	c, err := x.consent(r.Context(), sp.WorkspaceID, sp.ID)
+	c, err := x.consent(r.Context(), sp)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return

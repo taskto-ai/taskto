@@ -74,6 +74,11 @@ type Index struct {
 	// afterPending, when set, is called by the embeddings worker after it has read the documents
 	// waiting and before it embeds the first; tests change the world there.
 	afterPending func()
+	// afterEndpoint, beforeStore and afterQueryEndpoint are for tests, which change the world at
+	// those points: after the embeddings job has the endpoint it will send to and before it reads
+	// the text; after it has the vectors and before it stores them; and after a search has the
+	// endpoint its query would go to and before it checks consent to it.
+	afterEndpoint, beforeStore, afterQueryEndpoint func()
 	// afterCardSync, when set, is called by a card search after it has indexed the cards it
 	// looks in and before it finds them; tests change the world there.
 	afterCardSync func()
