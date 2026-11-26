@@ -57,16 +57,55 @@ describe('runPurge', () => {
       CREATE TABLE entries (id INTEGER PRIMARY KEY, conversation_id INTEGER, text TEXT);
       CREATE TABLE submissions (id INTEGER PRIMARY KEY, conversation_id INTEGER);
       CREATE TABLE documents (id INTEGER PRIMARY KEY, scope_kind TEXT, owner_id INTEGER);
-      CREATE TABLE document_revisions (id INTEGER PRIMARY KEY, document_id INTEGER);
+      CREATE TABLE document_revisions (document_id INTEGER NOT NULL, seq INTEGER NOT NULL, content TEXT,
+        PRIMARY KEY (document_id, seq));
       CREATE TABLE record_ids (id INTEGER PRIMARY KEY);
-      INSERT INTO conversations (id) VALUES (1), (2);
-      INSERT INTO record_ids (id) VALUES (1), (2), (10), (11);
+      -- Pi Durable's indexes of these, by which the purge finds the rows
+      CREATE INDEX entries_by_conversation ON entries (conversation_id, id DESC);
+      CREATE INDEX tasks_by_conversation ON tasks (conversation_id, id);
+      CREATE INDEX conversations_by_owner_task ON conversations (owner_task_id, id);
+      CREATE INDEX submissions_by_conversation ON submissions (conversation_id, id);
+      CREATE INDEX documents_by_scope ON documents (scope_kind, owner_id, id);
+      INSERT INTO conversations (id, owner_task_id) VALUES (1, NULL), (2, NULL), (3, 20);
+      INSERT INTO tasks (id, conversation_id) VALUES (20, 1);
+      INSERT INTO submissions (id, conversation_id) VALUES (30, 3);
+      INSERT INTO documents (id, scope_kind, owner_id) VALUES (40, 'conversation', 1), (41, 'task', 20), (42, 'conversation', 2);
+      INSERT INTO document_revisions (document_id, seq, content) VALUES (40, 1, 'a'), (40, 2, 'b'), (41, 1, 'c'), (42, 1, 'kept');
+      INSERT INTO record_ids (id) VALUES (1), (2), (3), (10), (11), (20), (30), (40), (41), (42);
     `)
     writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (10, 1, ?), (11, 2, ?)').run(WORD, 'kept')
     const reader = new DatabaseSync(path, { timeout: 100 })
     reader.exec('BEGIN')
     reader.prepare('SELECT count(*) FROM entries').get()
     return { writer, reader }
+  }
+
+  // Writes on the calling thread, as the harness's commits are, every 15 ms while work is pending,
+  // each on a connection that waits up to 5 s for the write lock: how long the longest one took.
+  const writesDuring = async (work: Promise<unknown>) => {
+    const db = new DatabaseSync(path, { timeout: 5000 })
+    // Its own commits don't fold the log in: only how long it waits for the purge is measured.
+    db.exec('PRAGMA wal_autocheckpoint = 0')
+    const insert = db.prepare("INSERT INTO entries (conversation_id, text) VALUES (2, 'another turn')")
+    let longest = 0
+    let writes = 0
+    let done = false
+    const settled = work.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    void settled.then(() => {
+      done = true
+    })
+    while (!done) {
+      const t0 = performance.now()
+      insert.run()
+      longest = Math.max(longest, performance.now() - t0)
+      writes++
+      await new Promise((r) => setTimeout(r, 15))
+    }
+    db.close()
+    return { longest, writes, error: await settled }
   }
 
   it('waits for a reader off the calling thread, which keeps running meanwhile', async () => {
@@ -103,15 +142,66 @@ describe('runPurge', () => {
     reader.exec('COMMIT')
     try {
       await runPurge({ path, root: 1, timeoutMs: 1000 })
+      // Conversation 1 goes with its task's conversation (3), their submission and documents.
       expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
       expect(writer.prepare('SELECT id, text FROM entries').all()).toEqual([{ id: 11, text: 'kept' }])
-      expect(writer.prepare('SELECT id FROM record_ids ORDER BY id').all()).toEqual([{ id: 2 }, { id: 11 }])
+      expect(writer.prepare('SELECT id FROM tasks').all()).toEqual([])
+      expect(writer.prepare('SELECT id FROM submissions').all()).toEqual([])
+      expect(writer.prepare('SELECT id FROM documents').all()).toEqual([{ id: 42 }])
+      expect(writer.prepare('SELECT document_id, content FROM document_revisions').all()).toEqual([
+        { document_id: 42, content: 'kept' },
+      ])
+      expect(writer.prepare('SELECT id FROM record_ids ORDER BY id').all()).toEqual([{ id: 2 }, { id: 11 }, { id: 42 }])
       expect(log()).not.toContain(WORD)
     } finally {
       reader.close()
       writer.close()
     }
   })
+
+  // While the purge waits for a reader to let go of the log, it doesn't hold the write lock: the
+  // harness's writes on the calling thread go through at once, not after the purge's wait.
+  it('leaves the write lock to other writes while it waits for a reader', async () => {
+    const { writer, reader } = fixture()
+    const wait = 800
+    try {
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: wait }))
+      expect(probe.error).toBeInstanceOf(WalBusyError)
+      expect(probe.longest).toBeLessThan(200)
+      expect(probe.writes).toBeGreaterThan(10)
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // A large conversation is deleted a chunk at a time: other writes go through in between.
+  it('leaves the write lock to other writes while it deletes a large conversation', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const text = 'x'.repeat(400)
+    writer.exec('BEGIN')
+    const insert = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 1, ?)')
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    // Enough that deleting them in one transaction takes far longer than a write may wait here.
+    for (let id = 1000; id < 251_000; id++) {
+      insert.run(id, text)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    try {
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 5000 }))
+      expect(probe.error).toBeUndefined()
+      expect(probe.longest).toBeLessThan(200)
+      expect(probe.writes).toBeGreaterThan(3)
+      expect(writer.prepare('SELECT count(*) AS n FROM entries WHERE conversation_id = 1').get()).toEqual({ n: 0 })
+      expect(writer.prepare('SELECT count(*) AS n FROM record_ids').get()).toEqual({ n: 3 }) // 2, 11 and 42
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 30_000)
 
   it('rejects with the failure of a purge that is not about the log', async () => {
     await expect(runPurge({ path: join(dir, 'missing', 'agent.db'), root: 1, timeoutMs: 100 })).rejects.toThrow()

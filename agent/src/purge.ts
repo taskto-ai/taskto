@@ -7,6 +7,12 @@
 // the HTTP server's thread that wait would stall every other conversation's turn and /healthz. So
 // the sidecar runs it on a worker thread of its own (runPurge), and the main thread only awaits it.
 //
+// The harness writes on the main thread, also synchronously, and waits there whenever another
+// connection holds SQLite's write lock. So the purge never holds it for long: it deletes in short
+// transactions, a chunk of rows each, with a pause between them for the harness's writes, and it
+// empties the log by tries that don't wait (a checkpoint that waits for readers holds the write lock
+// all the while), sleeping between them on its own thread.
+//
 // This module is also the worker's entry: it imports nothing of the sidecar's, so the same file
 // runs as the worker in the built sidecar (dist/purge.js) and in the tests (src/purge.ts).
 
@@ -30,73 +36,128 @@ export function truncateWal(db: DatabaseSync): void {
   if (busy !== 0) throw new WalBusyError('a reader holds the write-ahead log, so it could not be truncated')
 }
 
-/** Truncates the log of the database at path, on a connection of its own that waits up to timeoutMs. */
+/** Blocks the calling thread for ms: the purge's worker, never the sidecar's own thread. */
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** How long the purge leaves the write lock free between two of its transactions, and between tries. */
+const PAUSE_MS = 30
+
+/**
+ * truncateWal, tried until timeoutMs has passed, never holding the write lock while it waits: each
+ * try holds it only while the checkpoint runs (busy_timeout 0), and the pause between tries is a
+ * sleep of this thread. Throws WalBusyError if a reader still holds the log at the end.
+ */
+export function truncateWalWithin(db: DatabaseSync, timeoutMs: number): void {
+  db.exec('PRAGMA busy_timeout = 0')
+  // Most of the log is copied into the database first by a checkpoint that lets writers go on
+  // meanwhile, so the one that empties it, which they wait for, has little left to do.
+  db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get()
+  const deadline = performance.now() + timeoutMs
+  for (;;) {
+    try {
+      truncateWal(db)
+      return
+    } catch (error) {
+      if (!(error instanceof WalBusyError) || performance.now() + PAUSE_MS > deadline) throw error
+    }
+    sleep(PAUSE_MS)
+  }
+}
+
+/** Empties the log of the database at path, on a connection of its own, trying for up to timeoutMs. */
 export function truncateWalAt(path: string, timeoutMs: number): void {
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
-    truncateWal(db)
+    truncateWalWithin(db, timeoutMs)
   } finally {
     db.close()
   }
 }
 
+/** How many rows one statement of the purge deletes. */
+const CHUNK = 500
+
+/** How long one of the purge's transactions goes on deleting before it commits and pauses. */
+const SLICE_MS = 20
+
 // Deletes a conversation's records, and those of the conversations its tasks started, from the
 // database at path: its entries (what was said), tasks, submissions and documents with their
-// revisions. Only a retired conversation is purged: its work has stopped, so nothing writes the rows
-// that go. secure_delete zeroes the deleted content in the file, and the checkpoint takes it out of
-// the write-ahead log.
+// revisions, each record with its row of record_ids. Only a retired conversation is purged: its work
+// has stopped, so nothing writes the rows that go. secure_delete zeroes the deleted content in the
+// file, and the checkpoint takes it out of the write-ahead log.
+//
+// The rows go a chunk at a time, in short transactions (see the top of the file), the tasks' and
+// conversations' rows last: they are how the purge finds the rest, so a purge that
+// stops halfway is finished by the next, which finds what is left from them.
 export function purgeRecords(path: string, root: number, timeoutMs: number): void {
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
     db.exec('PRAGMA secure_delete = ON')
-    db.exec('BEGIN IMMEDIATE')
-    try {
-      const ids = new Set<number>([root])
-      const taskIds = new Set<number>()
-      const list = (set: Set<number>) => [...set].join(',') || 'NULL'
-      for (let grew = true; grew; ) {
-        grew = false
-        const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
-          id: number
-        }[]
-        for (const t of tasks) taskIds.add(Number(t.id))
-        const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
-          id: number
-        }[]
-        for (const c of subs) {
-          if (!ids.has(Number(c.id))) {
-            ids.add(Number(c.id))
-            grew = true
-          }
+    const ids = new Set<number>([root])
+    const taskIds = new Set<number>()
+    const list = (set: Set<number>) => [...set].join(',') || 'NULL'
+    for (let grew = true; grew; ) {
+      grew = false
+      const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
+        id: number
+      }[]
+      for (const t of tasks) taskIds.add(Number(t.id))
+      const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
+        id: number
+      }[]
+      for (const c of subs) {
+        if (!ids.has(Number(c.id))) {
+          ids.add(Number(c.id))
+          grew = true
         }
       }
-      const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
-        OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
-      const records = [
-        `SELECT id FROM entries WHERE conversation_id IN (${list(ids)})`,
-        `SELECT id FROM submissions WHERE conversation_id IN (${list(ids)})`,
-        docs,
-      ]
-      const gone = new Set<number>([...ids, ...taskIds])
-      for (const q of records) for (const r of db.prepare(q).all() as { id: number }[]) gone.add(Number(r.id))
-      db.exec(`DELETE FROM document_revisions WHERE document_id IN (${docs})`)
-      db.exec(`DELETE FROM documents WHERE id IN (${docs})`)
-      db.exec(`DELETE FROM submissions WHERE conversation_id IN (${list(ids)})`)
-      db.exec(`DELETE FROM entries WHERE conversation_id IN (${list(ids)})`)
-      db.exec(`DELETE FROM tasks WHERE conversation_id IN (${list(ids)})`)
-      db.exec(`DELETE FROM conversations WHERE id IN (${list(ids)})`)
-      // Deleted in chunks: a long conversation has more records than a statement may name.
-      const all = [...gone]
-      for (let i = 0; i < all.length; i += 500)
-        db.exec(`DELETE FROM record_ids WHERE id IN (${all.slice(i, i + 500).join(',')})`)
-      db.exec('COMMIT')
-    } catch (error) {
-      db.exec('ROLLBACK')
-      throw error
     }
-    // What was deleted is still in the log until it is truncated, and a reader (the harness's, or a
+    const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
+      OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
+    // Each step deletes the rows of a table that match, by rowid (a record's id), with their
+    // record_ids rows when they are records (a document's revision isn't).
+    const steps: { table: string; where: string; records: boolean }[] = [
+      { table: 'document_revisions', where: `document_id IN (${docs})`, records: false },
+      { table: 'documents', where: `id IN (${docs})`, records: true },
+      { table: 'submissions', where: `conversation_id IN (${list(ids)})`, records: true },
+      { table: 'entries', where: `conversation_id IN (${list(ids)})`, records: true },
+      { table: 'tasks', where: `conversation_id IN (${list(ids)})`, records: true },
+      { table: 'conversations', where: `id IN (${list(ids)})`, records: true },
+    ]
+    // A chunk of a step's rows, deleted in the transaction that is open: how many there were.
+    const deleteChunk = (step: (typeof steps)[number]): number => {
+      const chunk = (
+        db.prepare(`SELECT rowid AS id FROM ${step.table} WHERE ${step.where} LIMIT ${CHUNK}`).all() as {
+          id: number
+        }[]
+      ).map((r) => Number(r.id))
+      if (chunk.length > 0) {
+        db.exec(`DELETE FROM ${step.table} WHERE rowid IN (${chunk.join(',')})`)
+        if (step.records) db.exec(`DELETE FROM record_ids WHERE id IN (${chunk.join(',')})`)
+      }
+      return chunk.length
+    }
+    // Transactions of at most about SLICE_MS each, with a pause between them in which the harness's
+    // writes get the lock.
+    for (let at = 0; at < steps.length; ) {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const start = performance.now()
+        while (at < steps.length && performance.now() - start < SLICE_MS) {
+          if (deleteChunk(steps[at]) < CHUNK) at++
+        }
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+      if (at < steps.length) sleep(PAUSE_MS)
+    }
+    // What was deleted is still in the log until it is emptied, and a reader (the harness's, or a
     // watch) can hold it up: then the purge isn't done, and the server asks again.
-    truncateWal(db)
+    truncateWalWithin(db, timeoutMs)
   } finally {
     db.close()
   }
