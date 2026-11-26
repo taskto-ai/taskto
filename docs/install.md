@@ -259,8 +259,8 @@ isn't trusted every request, the provider's and anyone's, counts against the pro
 and a flood of bad requests can hold back real deliveries.
 
 A server without a public address (a laptop, a home server) works without webhooks: the
-provider's events don't reach it and payments are reconciled by polling the provider, which
-arrives in a later release. A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
+provider's events don't reach it and payments are reconciled by polling the provider, which the
+server always does for open payments ([integrations](integrations.md#reconciliation-polling)). A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
 `POST /hooks/*` to the server gives the same instant updates without opening the server; give
 `-public-url` the tunnel's address.
 
@@ -437,7 +437,7 @@ your password?**, and the invite dialog doesn't offer to email.
 Stripe's payment page, `<public_url>/payment/done` and `/payment/cancelled`, are the server's own and
 are built on it. Without one a [payment link](integrations.md#payment-links) is still made, and the
 payer stays on a confirmation page Stripe hosts; but Stripe can't send webhooks to such a server, so
-paid status is to come from polling Stripe (not built yet). The two pages need no session, so a
+paid status comes from polling Stripe. The two pages need no session, so a
 reverse proxy that exposes only what payers must reach forwards those two paths (and `POST /hooks/*`
 once webhooks are used).
 

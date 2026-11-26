@@ -3868,8 +3868,8 @@ the payment; the link is a Stripe Checkout Session (the entry's `id_field` gets 
 expires within 24 hours. Without one the link is made all the same, and the payer stays on a
 confirmation page Stripe hosts after paying: the link is a Stripe Payment Link (`plink_…` id) that
 takes one payment and doesn't expire by itself, and the server's own pages are not used. Webhooks
-can't reach a server with no public URL, so there the paid status is to come from the server asking
-Stripe (reconciliation polling, not built yet); until then the record is not marked paid by itself.
+can't reach a server with no public URL, so there the paid status comes from the server asking
+Stripe ([reconciliation polling](integrations.md#reconciliation-polling), always on).
 
 **Other failures**: `integration_credentials_refused` (the provider didn't accept the key),
 `integration_provider_refused` (it refused the request, for good) and

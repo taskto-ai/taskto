@@ -132,7 +132,8 @@ var errHookRefused = errors.New("the integration changed since the delivery was 
 
 // hookGuard is what the route saw of the integration when it verified a delivery: the write
 // checks it again inside its own transaction, so a delivery that was in flight when an admin
-// disabled the integration or rotated its secret stores nothing.
+// disabled the integration or rotated its secret stores nothing. A poll's guard (poll.go) has no
+// revision: it checks the integration and its mode only, since it used no webhook secret.
 type hookGuard struct {
 	mode     string
 	revision string
@@ -155,6 +156,9 @@ func (g *hookGuard) check(ctx context.Context, s *Store, tx *sql.Tx, integration
 	}
 	if disabled || mode != g.mode {
 		return errHookRefused
+	}
+	if g.revision == "" {
+		return nil
 	}
 	rev, err := s.credentialRevision(ctx, tx, integration)
 	if err != nil {
@@ -190,6 +194,10 @@ func (s *Store) recordGuarded(ctx context.Context, integration int64, guard *hoo
 			return err
 		} else if n == 0 {
 			result = storedAgain
+		}
+		// last_event_at tells an admin that the provider's webhook arrives: a poll's event says nothing of it.
+		if source == SourcePoll {
+			return nil
 		}
 		return s.touchEvent(ctx, tx, integration, at)
 	})
