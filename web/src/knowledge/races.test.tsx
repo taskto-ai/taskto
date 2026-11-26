@@ -6,6 +6,7 @@
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { navigate } from '../router'
 import { type Call, fakeFetch } from '../test/fakes'
 import { type Guard, useGuard } from './guard'
 import { KnowledgePage } from './KnowledgePage'
@@ -837,4 +838,23 @@ test('a save that lands late from an editor that is gone does not release what a
   expect(go).not.toHaveBeenCalled()
   call((g) => g.saved('second'))
   expect(go).toHaveBeenCalledOnce()
+})
+
+test('another section or workspace (the switcher, the router) asks first over a draft, and goes on when it is discarded', async () => {
+  kb()
+  window.history.replaceState(null, '', '/w/1/knowledge')
+  render(<KnowledgePage workspace={1} />)
+  const doc = await open()
+  // Nothing changed: the move goes at once.
+  act(() => navigate('/w/1/knowledge/x'))
+  expect(window.location.pathname).toBe('/w/1/knowledge/x')
+  fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(doc).getByLabelText('Text'), { target: { value: 'Mine.' } })
+  act(() => navigate('/w/2/boards'))
+  expect(asked()).toBeTruthy()
+  expect(window.location.pathname).toBe('/w/1/knowledge/x')
+  fireEvent.click(within(doc).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/2/boards'))
+  // Asked once, not again by the router after the page said go.
+  expect(asked()).toBeNull()
 })

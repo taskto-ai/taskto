@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { hueClass, labelHue } from '../ui/Label'
 import { BoardsPage } from './BoardsPage'
@@ -1460,4 +1461,18 @@ test('a slow comment leaves the focus where the person went meanwhile', async ()
   await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
   await within(view).findByText('On my way')
   expect(document.activeElement).toBe(path)
+})
+
+test('another section (the switcher, the router) asks first over a comment being written, and goes on when it is discarded', async () => {
+  server('write')
+  window.history.replaceState(null, '', '/w/1/boards')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(within(view).getByLabelText('Comment'), { target: { value: 'Half a thought' } })
+  const from = window.location.pathname
+  act(() => navigate('/w/1/settings'))
+  const question = await screen.findByRole('alertdialog', { name: 'Discard what you haven’t saved?' })
+  expect(window.location.pathname).toBe(from)
+  fireEvent.click(within(question).getByRole('button', { name: 'Discard' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/settings'))
 })

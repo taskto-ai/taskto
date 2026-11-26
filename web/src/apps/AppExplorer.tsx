@@ -8,6 +8,7 @@ import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { type AppDefinition, type AppField, type AppRecord, api, type RecordPage } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { useBeforeLeave } from '../router'
 import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { EmptyState } from '../ui/EmptyState'
@@ -132,6 +133,9 @@ export function AppExplorer({
     })
   }
   if (leaveRef) leaveRef.current = leaving
+  // Leaving the page (another section, another workspace, the browser's Back) asks the same, while a
+  // record holds unsaved changes.
+  useBeforeLeave(leaving)
   // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
   // says what the list holds now: the row it came from is gone.
   const count = useRef<HTMLParagraphElement>(null)

@@ -113,12 +113,15 @@ export function useGuard(): Guard {
   }, [])
   const discard = useCallback(() => {
     setPending(null)
+    // Discarded: nothing is left to lose, so the move that goes on now (the router asks the page
+    // before it leaves, useBeforeLeave) isn't asked about again.
+    state.current = { dirty: false, saving: false }
     pending?.go()
   }, [pending])
 
   // The page closing or reloading, and a link of the app that would leave this page: both
-  // with a draft that differs. (The router has no hook to stop other navigation, such as the
-  // browser's Back, so that is not covered.)
+  // with a draft that differs. The rest of leaving (the workspace switcher, the browser's Back and
+  // Forward) asks through the router's useBeforeLeave, in KnowledgePage.
   useEffect(() => {
     const unload = (e: BeforeUnloadEvent) => {
       if (!state.current.dirty) return

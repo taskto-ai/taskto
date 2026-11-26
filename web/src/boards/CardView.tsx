@@ -1,6 +1,7 @@
 import { type RefObject, useCallback, useEffect, useMemo } from 'react'
 import type { Card, Space } from '../api'
 import { useT } from '../i18n'
+import { useBeforeLeave } from '../router'
 import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { Drawer } from '../ui/Drawer'
@@ -90,6 +91,11 @@ export function CardView({
   const close = async () => {
     if (await mayLeave()) onClose()
   }
+  // Leaving the page (another section, another workspace, the browser's Back) asks the same, while
+  // a description or a comment is being written.
+  useBeforeLeave((go) => {
+    void mayLeave().then((ok) => ok && go())
+  })
 
   return (
     <DraftsContext.Provider value={drafts}>

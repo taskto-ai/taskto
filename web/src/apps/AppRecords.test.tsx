@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { AppAccess, AppDefinition } from '../api'
+import { navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { AppRecords, RecordsButton } from './AppRecords'
 
@@ -842,4 +843,14 @@ test('a delete that finishes after the same record was opened again closes nothi
   await new Promise((r) => setTimeout(r, 0))
   expect(screen.getByRole('region', { name: 'Record 4' })).toBeTruthy()
   expect((within(drawer(4)).getByLabelText(/^description/) as HTMLInputElement).value).toBe('Lunch with the team')
+})
+
+test('another section (the switcher, the router) asks first over a record not saved, and goes on when it is discarded', async () => {
+  await editing()
+  const from = window.location.pathname
+  act(() => navigate('/w/1/settings'))
+  const ask = await leaving()
+  expect(window.location.pathname).toBe(from)
+  fireEvent.click(within(ask).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/settings'))
 })
