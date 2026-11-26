@@ -106,6 +106,8 @@ type Square struct {
 	idem   map[string]squareIdem
 	faults []squareFault
 	calls  int
+	// ordersDown: every read of an order fails with a 500 (a link is listed, its order can't be read).
+	ordersDown bool
 }
 
 type squareFault struct {
@@ -193,6 +195,14 @@ func squareJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// FailOrderReads makes every read of an order fail with a 500 while down is true: a lookup then sees a
+// link of its token and can't check it.
+func (s *Square) FailOrderReads(down bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ordersDown = down
+}
+
 func (s *Square) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,6 +228,8 @@ func (s *Square) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		squareJSON(w, map[string]any{"payment_link": s.linkJSON(l)})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/orders/") && s.ordersDown:
+		squareError(w, http.StatusInternalServerError, "API_ERROR", "INTERNAL_SERVER_ERROR")
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/orders/"):
 		id, ok := s.byOrd[strings.TrimPrefix(r.URL.Path, "/v2/orders/")]
 		if !ok {

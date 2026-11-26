@@ -251,7 +251,8 @@ func squareLinkOf(settings map[string]string, l NewLink, pl squareLink) (Link, b
 // it is read in full: a lookup that stops with pages left is CallLookupIncomplete, which tells nothing.
 // The one found is adopted only if it asks what is asked now (its order's total and currency, and the
 // same redirect) and its order is unpaid; a paid one, or one whose order was cancelled (a deleted link),
-// is CallSettled, for a person to reconcile. A Square link never expires, so expired is always false.
+// is CallSettled, for a person to reconcile. Every failure after the link of the token was seen returns
+// its id (and no URL), as the interface asks. A Square link never expires, so expired is always false.
 func (square) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, _ time.Time) (Link, bool, bool, error) {
 	q := url.Values{"limit": {strconv.Itoa(squareFindPageSize)}}
 	for range squareFindMaxPages {
@@ -279,26 +280,29 @@ func (square) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			if pl.PaymentNote != l.Token {
 				continue
 			}
+			// Ours: whatever fails from here returns the link seen, unchecked, for the key to keep, so
+			// that a refusal is never taken for "nothing made" and no second link is made beside it.
+			seen := Link{ObjectID: seenObjectID(pl.ID)}
 			link, ok := squareLinkOf(creds.Settings, l, pl)
 			if !ok {
-				// Ours, and not a link the payer could be given: nothing says what it is.
-				return Link{}, false, false, &CallError{Kind: CallRefused, Status: status}
+				// Not a link the payer could be given: nothing says what it is.
+				return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			order, err := squareOrderOf(ctx, creds, c, pl.OrderID)
 			if err != nil {
-				return Link{}, false, false, err
+				return seen, false, false, err
 			}
 			if order.TotalMoney == nil || order.TotalMoney.Amount != l.AmountMinor || order.TotalMoney.Currency != l.Currency ||
 				order.ReferenceID != l.Token {
-				return Link{}, false, false, &CallError{Kind: CallRefused, Status: status}
+				return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			switch squareOrderState(order) {
 			case LinkOpen:
 				return link, true, false, nil
 			case LinkSettled:
-				return Link{}, false, false, &CallError{Kind: CallSettled, Status: status}
+				return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 			}
-			return Link{}, false, false, &CallError{Kind: CallRefused, Status: status} // a state not said
+			return seen, false, false, &CallError{Kind: CallRefused, Status: status} // a state not said
 		}
 		if page.Cursor == "" {
 			return Link{}, false, false, nil

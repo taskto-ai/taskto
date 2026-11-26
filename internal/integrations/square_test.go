@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/integrations/testprovider"
@@ -353,6 +354,44 @@ func TestSquareLinkStateAndLookup(t *testing.T) {
 	}
 }
 
+// A lookup that finds the link of the token and refuses it (other terms, another redirect, paid)
+// names that link with the refusal, and gives no address: the caller keeps it on the key, so a
+// refusal is never "nothing made" and no second payable link is made beside it.
+func TestSquareRefusedLookupNamesTheLinkItSaw(t *testing.T) {
+	ctx := context.Background()
+	r := newSquareRig(t)
+	l := squareNewLink(t, true)
+	made, err := (square{}).CreatePaymentLink(ctx, r.creds, r.client, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(*NewLink){
+		"another amount":   func(n *NewLink) { n.AmountMinor++ },
+		"another currency": func(n *NewLink) { n.Currency = "EUR" },
+		"another redirect": func(n *NewLink) { n.SuccessURL, n.CancelURL = "", "" },
+	}
+	for name, change := range cases {
+		n := l
+		change(&n)
+		got, found, expired, err := (square{}).FindPaymentLink(ctx, r.creds, r.client, n, time.Time{})
+		if !isCall(err, CallRefused) || found || expired || got.URL != "" || got.ObjectID != made.ObjectID {
+			t.Fatalf("%s: %+v, %v, %v, %v; want a refusal naming %s", name, got, found, expired, err, made.ObjectID)
+		}
+	}
+	if _, err := r.fake.PaySquare(made.ObjectID); err != nil {
+		t.Fatal(err)
+	}
+	got, found, _, err := (square{}).FindPaymentLink(ctx, r.creds, r.client, l, time.Time{})
+	if !isCall(err, CallSettled) || found || got.URL != "" || got.ObjectID != made.ObjectID {
+		t.Fatalf("a paid link: %+v, %v, %v; want settled naming %s", got, found, err, made.ObjectID)
+	}
+	// A lookup of a token with no link still finds nothing, and names nothing.
+	got, found, _, err = (square{}).FindPaymentLink(ctx, r.creds, r.client, squareNewLink(t, true), time.Time{})
+	if err != nil || found || got != (Link{}) {
+		t.Fatalf("a token with no link: %+v, %v, %v", got, found, err)
+	}
+}
+
 // What Square sends that isn't a payment of ours, or isn't the end of one, is not an event.
 func TestSquareNormalizeReadsOnlyOurFinishedPayments(t *testing.T) {
 	at := testprovider.DefaultStart
@@ -549,5 +588,50 @@ func TestTheFakeSquareIsTheAdaptersVersion(t *testing.T) {
 	}
 	if http.CanonicalHeaderKey(testprovider.SquareSignatureHeader) != SquareSignatureHeader {
 		t.Fatalf("the fake signs in %q, the adapter reads %q", testprovider.SquareSignatureHeader, SquareSignatureHeader)
+	}
+}
+
+// The binding rule with Square: an invoice never has two payable links. A creation whose answer is lost
+// leaves the key's outcome unknown; past the time Square is relied on to keep the key, a lookup that
+// sees the link of the token but can't check it (its order unreadable) keeps that link on the key. The
+// ref takes no new key, the entry stops for an admin, and the admin's "no link" is refused, since a
+// link was seen: no second link is ever made.
+func TestSquareASeenLinkIsNeverConfirmedAway(t *testing.T) {
+	ctx := context.Background()
+	p := newSquarePay(t, publicURL)
+	record := p.invoice(10, "USD")
+	req := p.direct(record, "op-square-seen-0001")
+	req.Currency = "USD"
+
+	p.sq.FailNext(http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", true)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	if n := len(p.sq.Links()); n != 1 {
+		t.Fatalf("%d links at Square after the lost answer, want 1", n)
+	}
+
+	// Past the key's time, only looked for; the link is listed, its order can't be read.
+	p.later(squareKeyKept + time.Minute)
+	p.sq.FailOrderReads(true)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationLinkLookupPending) {
+		t.Fatalf("a lookup that can't check the link it saw: %v", err)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE seq = 0 AND object_id = ?`, p.sq.Links()[0].ID); n != 1 {
+		t.Fatalf("the link seen was not kept on the key")
+	}
+
+	p.later(7 * time.Hour)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
+		t.Fatalf("at the end of the wait: %v", err)
+	}
+	// What the worker does with that answer.
+	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ?`, string(apierr.CodeIntegrationOutcomeUnknown))
+	p.refusedConfirmation(p.entries()[0], 0)
+
+	// Square answers again: the seen link is the invoice's, and still the only one.
+	p.sq.FailOrderReads(false)
+	if n := len(p.sq.Links()); n != 1 {
+		t.Fatalf("%d links at Square, want 1", n)
 	}
 }

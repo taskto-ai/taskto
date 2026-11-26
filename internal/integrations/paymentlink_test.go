@@ -58,7 +58,9 @@ const invoiceApp = `{
 // (the fake) for payment links, with a worker that can be started and a clock that can be moved.
 type pay struct {
 	*env
-	fake  *testprovider.Stripe
+	fake *testprovider.Stripe
+	// sq is the fake Square of a rig made with newSquarePay (fake is then unused).
+	sq    *testprovider.Square
 	svc   *Service
 	apps  *apps.Service
 	owner *client
@@ -84,15 +86,30 @@ func newPay(t *testing.T, public string) *pay { return newPayWith(t, public, inv
 
 // newPayWith is newPay with the invoicing app's definition, for a test that needs another.
 func newPayWith(t *testing.T, public, definition string) *pay {
+	return newPayFor(t, public, definition, "stripe")
+}
+
+// newSquarePay is newPay with a sandbox Square integration (the fake Square) instead of Stripe's.
+func newSquarePay(t *testing.T, public string) *pay {
+	return newPayFor(t, public, invoiceApp, "square")
+}
+
+func newPayFor(t *testing.T, public, definition, provider string) *pay {
 	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
 	fake := testprovider.NewStripe(t)
+	var sq *testprovider.Square
+	endpoint := fake.Host()
+	if provider == "square" {
+		sq = testprovider.NewSquare(t)
+		endpoint = sq.Host()
+	}
 	// One clock moves the integrations' and the apps' alike.
 	offset := new(atomic.Int64)
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
 		Now:           func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
-		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host()), WithoutConnectionReuse()}})
+		ClientOptions: []ClientOption{WithTestEndpoint(endpoint), WithoutConnectionReuse()}})
 
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
@@ -101,7 +118,7 @@ func newPayWith(t *testing.T, public, definition string) *pay {
 	spaces.Routes(mux)
 	svc.Routes(mux, a, spaces)
 	svc.HookRoutes(mux)
-	p := &pay{env: e, fake: fake, svc: svc, offset: offset}
+	p := &pay{env: e, fake: fake, sq: sq, svc: svc, offset: offset}
 	p.apps = apps.New(e.db, spaces).WithPlatform(apps.Platform{ProviderKinds: providerKinds, Payments: svc}).
 		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) })
 	p.apps.Routes(mux)
@@ -122,6 +139,11 @@ func newPayWith(t *testing.T, public, definition string) *pay {
 	body := stripeBody("main")
 	body["secrets"] = map[string]string{"api_key": fake.APIKey(), "webhook_secret": stripeHook}
 	body["currencies"] = []string{"EUR", "JPY"}
+	if provider == "square" {
+		body = squareBody("main")
+		body["settings"] = squareSettings()
+		body["secrets"] = map[string]string{"api_key": testprovider.SquareTestToken, "webhook_secret": testprovider.SquareSignatureKey}
+	}
 	p.in = e.create(p.owner, p.ws, body)
 	if _, err := e.db.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, p.in.ID, p.space.ID); err != nil {
 		t.Fatal(err)
