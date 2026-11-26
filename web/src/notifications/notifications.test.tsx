@@ -1341,3 +1341,16 @@ test("a sign-out's turn after another account's failed turning on leaves no opt-
   await leaving
   expect(localStorage.getItem('taskto.push')).toBeNull()
 })
+
+test("turning push off ends a subscription whose flag was another account's before the click", async () => {
+  // The first person turned push on, and their session ended with no tab open to clean up: the
+  // second person, signed in now, is shown push on, and turns it off.
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '2')
+  const calls = fakeFetch({ 'DELETE /api/me/push/subscription': { status: 204 } })
+  await disablePush()
+  expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
+  expect(sub.unsubscribe).toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+})

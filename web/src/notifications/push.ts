@@ -300,14 +300,18 @@ export function disablePush(): Promise<void> {
 }
 
 async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<void> {
+  // Who the flag named when the person asked: a flag that was another account's already (their
+  // session ended with no tab to clean up) is what this person turns off, along with the rest.
+  const before = read()
   const sub = s.check(await (await registration())?.pushManager.getSubscription())
   if (sub) {
     await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
     s.check(undefined)
     // Asked at the moment it would be ended: another account (another tab, where the order of
-    // changes isn't kept) may have claimed the browser's subscription meanwhile. It is theirs then,
-    // with their flag; this account's turning off is done with the server's answer.
-    if (someoneElses(who)) return
+    // changes isn't kept) may have claimed the browser's subscription while the server answered.
+    // It is theirs then, with their flag; this account's turning off is done with the server's answer.
+    const now = read()
+    if (now !== null && now !== String(who) && now !== before) return
     if (!(await unsubscribe(sub).catch(() => false))) throw new PushUnsubscribeFailed()
     s.check(undefined)
   }
