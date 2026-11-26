@@ -103,6 +103,9 @@ func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (brow
 	return browser.Result{Tab: &browser.Tab{ID: "T1", URL: a.URL, Agent: true}}, nil
 }
 
+// Forget is not used by the routes: the account's purge calls it.
+func (f *fakeBrowsers) Forget(context.Context, int64) error { return nil }
+
 // OpenLive serves a display that says whose it is, then echoes.
 func (f *fakeBrowsers) OpenLive(_ context.Context, user int64) (io.ReadWriteCloser, error) {
 	f.mu.Lock()

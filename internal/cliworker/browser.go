@@ -177,7 +177,17 @@ func (c *helperConn) Close() error {
 }
 
 func (h *browserHost) Clean(user int64) error {
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser-clean"})
+	return h.quickOp(user, "browser-clean", "removing the testing profile")
+}
+
+// Purge removes the user's whole browser directory, as the user, for a deleted account.
+func (h *browserHost) Purge(user int64) error {
+	return h.quickOp(user, "browser-purge", "removing the browser's files")
+}
+
+// quickOp runs one of the helper's short browser ops as the user, stopping it after 30 s.
+func (h *browserHost) quickOp(user int64, op, what string) error {
+	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: op})
 	if err != nil {
 		return err
 	}
@@ -197,7 +207,7 @@ func (h *browserHost) Clean(user int64) error {
 		return nil
 	case <-time.After(30 * time.Second):
 		_ = signalGroup(cmd.Process.Pid, sigKill)
-		return fmt.Errorf("removing the testing profile took too long, and was stopped: %w", <-done)
+		return fmt.Errorf("%s took too long, and was stopped: %w", what, <-done)
 	}
 }
 
@@ -249,6 +259,12 @@ func runBrowserOp(req helperRequest, layout Layout, stdout io.Writer) error {
 		return nil
 	case "browser-clean":
 		if err := browser.Clean(p); err != nil {
+			return err
+		}
+		_, err := io.WriteString(stdout, "{}\n")
+		return err
+	case "browser-purge":
+		if err := browser.Purge(p); err != nil {
 			return err
 		}
 		_, err := io.WriteString(stdout, "{}\n")

@@ -27,6 +27,9 @@ type Browsers interface {
 	Do(ctx context.Context, user int64, a Action) (Result, error)
 	// OpenLive is the personal browser's display as an RFB stream, for a live view.
 	OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser, error)
+	// Forget stops user's browsers, closes their live views and removes their files, for a deleted
+	// account (Manager.Forget). It returns nil only when the processes are gone and the files removed.
+	Forget(ctx context.Context, user int64) error
 }
 
 var _ Browsers = (*Manager)(nil)
@@ -42,22 +45,24 @@ var _ Browsers = (*Remote)(nil)
 //	POST /browser/users/{user}/stop   {browser}
 //	POST /browser/users/{user}/do     Action → Result
 //	GET  /browser/users/{user}/live   Upgrade: taskto-rfb → 101, then the RFB stream
+//	POST /browser/users/{user}/forget stops every browser of the user and removes their files
 //
 // Refusals are {"error", "code"}, the code naming the sentinel error (remoteErrors) or
 // "invalid" for a BadAction; the message is the Manager's, written for the agent.
 
 // remoteErrorOrder is the order refuse tries remoteErrors in.
-var remoteErrorOrder = []string{"closed", "unavailable", "busy", "not_running", "too_many_live", "no_tab", "stale_ref", "not_agent_tab"}
+var remoteErrorOrder = []string{"closed", "unavailable", "busy", "not_running", "too_many_live", "no_tab", "stale_ref", "not_agent_tab", "account_closing"}
 
 var remoteErrors = map[string]error{
-	"unavailable":   ErrUnavailable,
-	"busy":          ErrBusy,
-	"not_running":   ErrNotRunning,
-	"no_tab":        ErrNoTab,
-	"not_agent_tab": ErrNotAgentTab,
-	"stale_ref":     ErrStaleRef,
-	"closed":        ErrClosed,
-	"too_many_live": ErrTooManyLive,
+	"unavailable":     ErrUnavailable,
+	"busy":            ErrBusy,
+	"not_running":     ErrNotRunning,
+	"no_tab":          ErrNoTab,
+	"not_agent_tab":   ErrNotAgentTab,
+	"stale_ref":       ErrStaleRef,
+	"closed":          ErrClosed,
+	"too_many_live":   ErrTooManyLive,
+	"account_closing": ErrAccountClosing,
 }
 
 // upgradeProtocol is the live view's protocol on the worker's socket.
@@ -113,6 +118,13 @@ func NewHandler(m *Manager) http.Handler {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		}
+	}))
+	mux.HandleFunc("POST /browser/users/{user}/forget", user(func(w http.ResponseWriter, r *http.Request, id int64) {
+		if err := m.Forget(r.Context(), id); err != nil {
+			refuse(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	mux.HandleFunc("POST /browser/users/{user}/do", user(func(w http.ResponseWriter, r *http.Request, id int64) {
 		var a Action
@@ -337,6 +349,11 @@ func (c *Remote) Start(ctx context.Context, user int64, kind Kind) error {
 // Stop implements Browsers.
 func (c *Remote) Stop(ctx context.Context, user int64, kind Kind) error {
 	return c.do(ctx, http.MethodPost, userPath(user, "/stop"), map[string]Kind{"browser": kind}, nil)
+}
+
+// Forget implements Browsers.
+func (c *Remote) Forget(ctx context.Context, user int64) error {
+	return c.do(ctx, http.MethodPost, userPath(user, "/forget"), struct{}{}, nil)
 }
 
 // Do implements Browsers.

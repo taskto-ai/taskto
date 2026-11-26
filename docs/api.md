@@ -296,6 +296,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `browser_too_many_live` | 429 | Too many live views of the browser are open: close one first. |
 | `browser_busy` | 503 | Too many browsers are running on the server: try again in a few minutes. |
 | `browser_shutting_down` | 503 | The browser service is shutting down. |
+| `browser_account_closing` | 409 | The caller's account is being deleted: its browsers are being stopped and removed, and none starts. |
 | `provider_not_found` | 404 | No such provider account of the workspace's, or of the caller's own. |
 | `provider_name_invalid` | 400 | A provider account's name must be 1 to `max` characters of `a-z`, `0-9`, `.`, `_` or `-`. |
 | `provider_name_taken` | 409 | An account with this name exists. |
@@ -1087,8 +1088,11 @@ stays disabled). When the period ends, the scheduler runs the **purge**, once, a
 - their conversations, and the agent runtime's copies: each is retired and then purged from the
   runtime's database, which holds what was said (see
   [install.md](install.md#privacy-and-account-deletion));
+- their agent browsers: no browser of theirs starts, their live views are closed, their running
+  browsers are stopped and waited for, and only then their profile (cookies, logins) and the rest of
+  their browser directory are removed ([agent-browser.md](agent-browser.md#deleting-an-account));
 - their CLI logins and shared-account mappings, with everything the CLI worker kept for them
-  (sessions, working directories, the agent browser's profile), and the agent runtime's providers
+  (sessions, working directories), and the agent runtime's providers
   file and key files, which hold their provider accounts;
 - their unfinished uploads of photos in shared apps, with the files (a photo already on a record
   stays with the record);
@@ -1171,8 +1175,8 @@ once the purge has begun, which can't be undone. Recorded as `account_deletion_c
 stopped or failed is tried again (with backoff, every ten minutes after the tries run out, and at the
 next start, whoever joins or leaves a workspace meanwhile); the account itself, with the audit events
 (`account_purged`, which holds only counts), goes last, in one transaction. The steps about files and
-other processes (the agent runtime's records of the conversations, the CLI worker's directory, the
-providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
+other processes (the agent runtime's records of the conversations, the agent browsers' processes and
+profile, the CLI worker's directory, the providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
 the CLI workers to be on stays recorded after the account is gone and is done when they are: the
 event says how many are waiting (`cleanups_pending`), and the server doesn't log the purge as complete
 until none is.
@@ -5137,7 +5141,8 @@ browsers only: no path names a user. Without a session, a route answers `401`.
 
 The browser is off unless the server runs with `-browser`. It runs where the CLI workers do,
 so it follows their rule ([CLI accounts](#cli-accounts)): with it off, or in local mode on a
-server with more than one user, the status says why, and the other routes answer `409`.
+server with more than one user, the status says why, and the other routes answer `409`. So do they
+(`browser_account_closing`) for an account whose deletion is being purged.
 
 ### `GET /api/me/browser`
 

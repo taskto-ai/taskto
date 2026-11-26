@@ -118,6 +118,11 @@ func Prepare(p Paths, spec ProcSpec) error {
 // Clean removes the testing browser's profile, when it stops.
 func Clean(p Paths) error { return os.RemoveAll(p.Testing()) }
 
+// Purge removes everything of a user's browsers: the personal profile (cookies, logins, history)
+// and the rest of the browser directory. It is for a deleted account, once no process of theirs is
+// left; a file a process still wrote meanwhile makes it fail, and it is tried again.
+func Purge(p Paths) error { return os.RemoveAll(p.Root) }
+
 // ownerOnlyDir makes dir (mode 700), or tightens it if it is there.
 func ownerOnlyDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {

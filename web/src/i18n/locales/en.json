@@ -1053,6 +1053,7 @@
     "browser_too_many_live": "Too many live views of the browser are open: close one first.",
     "browser_busy": "Too many browsers are open on this server: try again in a few minutes.",
     "browser_shutting_down": "The browser is shutting down on this server.",
+    "browser_account_closing": "This account is being deleted, so its browsers can't be started.",
     "provider_not_found": "Provider account not found.",
     "provider_name_invalid": "The name needs 1 to {max} characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit.",
     "provider_name_taken": "An account with this name already exists.",
