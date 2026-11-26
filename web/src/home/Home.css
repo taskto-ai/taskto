@@ -87,22 +87,6 @@
     min-inline-size: 0;
   }
 
-  /* The app's screen sits bare in the widget, which is its frame already. The library's app root
-     (`.ui-app`) is drawn bare here (`frame="bare"`: no edge or surface, and only the room a control's
-     focus ring and the primary button's lift reach outside it, which this body's scrolling would
-     otherwise cut), so nothing here touches it. The old root, `.tt-app`, has its frame in the old,
-     unlayered stylesheet, which only !important outweighs from a layer. */
-  .ui-home-widget-body > .tt-app {
-    /* biome-ignore lint/complexity/noImportantStyles: the old frame is unlayered; only this outweighs it from a layer */
-    padding: 0 !important;
-    /* biome-ignore lint/complexity/noImportantStyles: as above */
-    border: 0 !important;
-    /* biome-ignore lint/complexity/noImportantStyles: as above */
-    border-radius: 0 !important;
-    /* biome-ignore lint/complexity/noImportantStyles: as above */
-    background: none !important;
-  }
-
   .ui-home-widget-foot {
     display: flex;
     justify-content: flex-start;

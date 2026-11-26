@@ -18,6 +18,7 @@ import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, un
 import { approvalOf } from './offline/store'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
+import { reportTimeZone } from './timezone'
 import { claimDrafts, forgetDrafts } from './uiState'
 
 // The renderer comes with it: loaded only where it is used, and precached, so it opens offline too.
@@ -57,7 +58,8 @@ export function App() {
   const signIn = useCallback(
     async (me: Me) => {
       await claim(me)
-      setSession({ state: 'in', me })
+      // Whichever way they signed in, an account with no time zone gets this browser's, once.
+      setSession({ state: 'in', me: await reportTimeZone(me) })
     },
     [claim],
   )

@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, type App, errorText, type Space } from '../api'
-import { unsupportedBy } from '../apps/catalog'
+import { unsupportedBy } from '../apps/capabilities'
 import { useFormat, useT } from '../i18n'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
