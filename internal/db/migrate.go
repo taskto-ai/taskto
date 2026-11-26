@@ -102,7 +102,7 @@ func migrate(ctx context.Context, sqlDB *sql.DB, fsys fs.FS) ([]string, error) {
 	}
 	for version, rec := range done {
 		if !slices.ContainsFunc(all, func(m migration) bool { return m.version == version }) {
-			return nil, fmt.Errorf("the database has migration %s, which this binary doesn't know: it was written by a newer version of TaskTo.AI", rec.name)
+			return nil, fmt.Errorf("the database has migration %s, which this binary doesn't know: it was written by a newer version of taskto.ai", rec.name)
 		}
 	}
 	// A migration is never edited or renamed once it has run anywhere: that database would

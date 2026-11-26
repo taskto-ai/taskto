@@ -1,4 +1,4 @@
-// Package boards is the to-do side of TaskTo.AI: boards of cards in columns, each card
+// Package boards is the to-do side of taskto.ai: boards of cards in columns, each card
 // with an assignee (a person or the agent), a blocked state, a due date, labels, links to
 // docs and conversations, and a comment thread.
 //

@@ -155,7 +155,7 @@ These are the same settings the CLI workers' gateway tests use, with the server 
   - `-cli-proxy-url` (`TASKTO_CLI_PROXY_URL`): its address as the CLIs reach it. It defaults to
     the listen address in `local` mode; Compose sets it to the worker's relay,
     `http://127.0.0.1:8081`.
-  - It serves only `/cli-proxy/v1/…`, and TaskTo's tools for CLI turns at `/cli-mcp`
+  - It serves only `/cli-proxy/v1/…`, and taskto's tools for CLI turns at `/cli-mcp`
     ([cli-tools.md](cli-tools.md)), with no session and no CSRF: a turn's token is the only
     credential of each.
   - Without a proxy, shared accounts are listed, but turns on them are refused and the reason

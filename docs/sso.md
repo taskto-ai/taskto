@@ -181,7 +181,7 @@ Google; they can sign in with another provider or with a password.
 
 ## Who may sign in
 
-TaskTo.AI makes accounts only for invited addresses, so who can get in is who an admin invites.
+taskto.ai makes accounts only for invited addresses, so who can get in is who an admin invites.
 Within that:
 
 - **Invites:** an admin invites `person@example.com` as always. When someone **without an
@@ -224,7 +224,7 @@ set one.
 
 ## Two-factor login
 
-TaskTo's own [two-factor login](api.md#two-factor-login) (a TOTP code after the password) is
+taskto's own [two-factor login](api.md#two-factor-login) (a TOTP code after the password) is
 for **password logins only**. Signing in with a provider makes a session as soon as the
 provider vouches for the person, with no code asked: whether that sign-in needs a second
 factor is for the provider to decide, and for you to turn on there (Google's 2-Step

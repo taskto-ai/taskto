@@ -431,7 +431,7 @@ func TestResetEmailIsInTheRecipientsLanguage(t *testing.T) {
 
 	// Nothing picked, no workspace default: English.
 	e.requestReset(e.client(), "member@example.com")
-	if m := sent.messages(); len(m) != 1 || m[0].Subject != "Reset your TaskTo.AI password" {
+	if m := sent.messages(); len(m) != 1 || m[0].Subject != "Reset your taskto.ai password" {
 		t.Fatalf("english: %+v", m)
 	}
 	// The workspace's default.
@@ -447,7 +447,7 @@ func TestResetEmailIsInTheRecipientsLanguage(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.requestReset(e.client(), "member@example.com")
-	if m := sent.messages(); len(m) != 3 || m[2].Subject != "Reset your TaskTo.AI password" {
+	if m := sent.messages(); len(m) != 3 || m[2].Subject != "Reset your taskto.ai password" {
 		t.Fatalf("picked: %+v", m)
 	}
 }

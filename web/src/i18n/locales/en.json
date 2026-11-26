@@ -209,9 +209,9 @@
     },
     "updateRequired": {
       "title": "Update required",
-      "message": "This app was published with features this version of TaskTo.AI doesn’t have yet, so it can’t be shown here.",
+      "message": "This app was published with features this version of taskto.ai doesn’t have yet, so it can’t be shown here.",
       "needs": "Needs: {needs}",
-      "update": "Update TaskTo.AI"
+      "update": "Update taskto.ai"
     },
     "builder": {
       "build": "Build an app",
@@ -833,8 +833,8 @@
     "invite_invalid": "The invite is unknown, used or expired.",
     "invite_other_email": "This invite is for another email address.",
     "invite_account_exists": "An account with this email exists: log in, then accept the invite.",
-    "locale_invalid": "That isn't a language TaskTo.AI knows.",
-    "time_zone_invalid": "That isn't a time zone TaskTo.AI knows. Use a name such as Europe/Lisbon.",
+    "locale_invalid": "That isn't a language taskto.ai knows.",
+    "time_zone_invalid": "That isn't a time zone taskto.ai knows. Use a name such as Europe/Lisbon.",
     "token_not_found": "Token not found.",
     "session_not_found": "Session not found: it may have been signed out already.",
     "session_current": "That is the session you are using: log out instead.",
@@ -1157,7 +1157,7 @@
     },
     "general": {
       "language": "Default language",
-      "languageHelp": "For members whose browser asks for a language TaskTo.AI doesn't have. Each person can pick their own in the account menu.",
+      "languageHelp": "For members whose browser asks for a language taskto.ai doesn't have. Each person can pick their own in the account menu.",
       "save": "Save",
       "saved": "Saved.",
       "mail": {
@@ -1410,8 +1410,8 @@
       "newTitle": "New access token"
     },
     "about": {
-      "title": "About TaskTo.AI",
-      "licence": "TaskTo.AI is open source, under the MIT licence.",
+      "title": "About taskto.ai",
+      "licence": "taskto.ai is open source, under the MIT licence.",
       "credits": "Credits",
       "noCredits": "Nothing this workspace uses now asks for a credit here.",
       "credit": "<work>{name}</work> by {by}, under <licenceLink>{licence}</licenceLink>.",
@@ -2088,27 +2088,27 @@
   },
   "pwa": {
     "update": {
-      "message": "A new version of TaskTo.AI is ready. Reloading closes anything you haven't saved.",
+      "message": "A new version of taskto.ai is ready. Reloading closes anything you haven't saved.",
       "reload": "Reload to update",
       "later": "Later"
     },
     "install": {
       "title": "Install the app",
-      "intro": "Add TaskTo.AI to this device to open it like an app, in a window of its own.",
-      "installed": "TaskTo.AI is installed on this device: you are using the installed app.",
+      "intro": "Add taskto.ai to this device to open it like an app, in a window of its own.",
+      "installed": "taskto.ai is installed on this device: you are using the installed app.",
       "insecure": "This server isn't on a secure connection (HTTPS), so this browser can't install it or keep it for offline use. Ask whoever runs the server to serve it over HTTPS.",
-      "button": "Install TaskTo.AI",
+      "button": "Install taskto.ai",
       "ios": {
         "share": "Tap the Share button, in Safari's toolbar or your browser's menu.",
         "add": "Choose “Add to Home Screen”.",
-        "confirm": "Tap Add. TaskTo.AI opens from the Home Screen like an app."
+        "confirm": "Tap Add. taskto.ai opens from the Home Screen like an app."
       },
       "android": {
         "menu": "Open the browser's menu (⋮) and choose “Install app” or “Add to Home screen”.",
-        "confirm": "Confirm. TaskTo.AI opens from your apps like any other."
+        "confirm": "Confirm. taskto.ai opens from your apps like any other."
       },
       "desktop": {
-        "menu": "Look for the install icon at the end of the address bar, or open the browser's menu and choose “Install TaskTo.AI” (in Safari: File, then “Add to Dock”)."
+        "menu": "Look for the install icon at the end of the address bar, or open the browser's menu and choose “Install taskto.ai” (in Safari: File, then “Add to Dock”)."
       },
       "offline": "Offline, the app's screens still open, but your conversations, documents and boards need the connection to the server."
     }
@@ -2493,7 +2493,7 @@
     "hideNamed": "Hide {name}",
     "showNamed": "Show {name} again",
     "pins": "Pinned in the menu",
-    "pinsIntro": "Pinned apps are listed in the menu, after the pages of TaskTo.AI.",
+    "pinsIntro": "Pinned apps are listed in the menu, after the pages of taskto.ai.",
     "noPins": "No apps pinned.",
     "pinNamed": "Pin {name}",
     "unpinNamed": "Unpin {name}",
@@ -2628,7 +2628,7 @@
     "disabled": "An admin turned off offline downloads for this space.",
     "onlineOnly": "Building with AI, publishing and sharing need a connection. Offline, you can open downloaded apps and add records.",
     "unavailable": "Offline storage isn’t available in this browser, so apps can’t be downloaded.",
-    "schemaNewer": "This device holds offline data written by a newer version of TaskTo.AI. Update the app to use it. Nothing was changed.",
+    "schemaNewer": "This device holds offline data written by a newer version of taskto.ai. Update the app to use it. Nothing was changed.",
     "reload": "Reload to update",
     "needsConnection": "This needs a connection. Offline, you can add records and look around the downloaded copy.",
     "notSaved": {
@@ -2701,13 +2701,13 @@
     },
     "shell": {
       "title": "Offline",
-      "intro": "TaskTo.AI can’t reach the server. The apps you downloaded open here, and records you add are kept on this device until you are back online.",
+      "intro": "taskto.ai can’t reach the server. The apps you downloaded open here, and records you add are kept on this device until you are back online.",
       "none": "Nothing is downloaded on this device. Download an app while you are online to use it here.",
       "reconnect": "Try to reconnect",
       "open": "Open",
       "openNamed": "Open {name}",
       "back": "Back to the downloaded apps",
-      "needsUpdate": "This version of TaskTo.AI can’t draw {name}."
+      "needsUpdate": "This version of taskto.ai can’t draw {name}."
     },
     "accountChanged": {
       "title": "The account changed",
@@ -2732,7 +2732,7 @@
       "cancel": "Cancel",
       "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
       "notWriter": "Changes are being made in another tab, which didn’t let this one take over. Sync from that tab, or close it and try again.",
-      "unreadableSchema": "Records you made on this device may not have reached the server, and this version of TaskTo.AI can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
+      "unreadableSchema": "Records you made on this device may not have reached the server, and this version of taskto.ai can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
       "unreadableStorage": "Records you made on this device may not have reached the server, and the device’s storage can’t be read right now to check. You can keep them and sign out without deleting anything, or discard them.",
       "keep": "Keep them and sign out"
     },
@@ -2830,9 +2830,9 @@
       "inbox": "Notifications always appear in your inbox, whether or not this browser can show push notifications.",
       "openInbox": "Open the inbox",
       "pushTitle": "Push notifications on this device",
-      "pushIntro": "Optional. When on, this device is told about a new notification even when TaskTo.AI isn't open. Nothing is sent to it until you turn this on.",
+      "pushIntro": "Optional. When on, this device is told about a new notification even when taskto.ai isn't open. Nothing is sent to it until you turn this on.",
       "unsupported": "This browser can't receive push notifications here. Your notifications still appear in the inbox.",
-      "iosInstall": "On iPhone and iPad, push notifications work only in the installed app. Add TaskTo.AI to your Home Screen (see About), open it from there and come back to this page. Your notifications appear in the inbox either way.",
+      "iosInstall": "On iPhone and iPad, push notifications work only in the installed app. Add taskto.ai to your Home Screen (see About), open it from there and come back to this page. Your notifications appear in the inbox either way.",
       "denied": "Notifications are blocked for this site in your browser. To turn push on, allow notifications for this site in the browser's settings, then come back. Your notifications still appear in the inbox.",
       "dismissed": "You didn't answer the browser's question, so push is still off.",
       "off": "Push is off on this device.",
@@ -2863,7 +2863,7 @@
       "emailDigest": "Include in a daily summary",
       "emailHour": "Send the daily summary at",
       "emailZone": "Time zone",
-      "emailCaveat": "An email says only that something happened, never what a card or an app holds, and links back to TaskTo.AI, which checks what you may see. At most 20 are sent to you in an hour, and the inbox is always the record.",
+      "emailCaveat": "An email says only that something happened, never what a card or an app holds, and links back to taskto.ai, which checks what you may see. At most 20 are sent to you in an hour, and the inbox is always the record.",
       "emailUnavailableOff": "Email isn't set up on this server. You can still turn email off.",
       "emailAddress": "Notifications go to {email}.",
       "emailAddressVerified": "This address is confirmed.",

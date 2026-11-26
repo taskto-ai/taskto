@@ -213,9 +213,9 @@
     },
     "updateRequired": {
       "title": "Atualização necessária",
-      "message": "Este app foi publicado com recursos que esta versão do TaskTo.AI ainda não tem, então não pode ser mostrado aqui.",
+      "message": "Este app foi publicado com recursos que esta versão do taskto.ai ainda não tem, então não pode ser mostrado aqui.",
       "needs": "Precisa de: {needs}",
-      "update": "Atualizar o TaskTo.AI"
+      "update": "Atualizar o taskto.ai"
     },
     "builder": {
       "build": "Criar um app",
@@ -838,8 +838,8 @@
     "invite_invalid": "O convite é desconhecido, já foi usado ou expirou.",
     "invite_other_email": "Este convite é para outro endereço de e-mail.",
     "invite_account_exists": "Já existe uma conta com este e-mail: entre e depois aceite o convite.",
-    "locale_invalid": "Esse não é um idioma que o TaskTo.AI conhece.",
-    "time_zone_invalid": "Esse não é um fuso horário que o TaskTo.AI conhece. Use um nome como Europe/Lisbon.",
+    "locale_invalid": "Esse não é um idioma que o taskto.ai conhece.",
+    "time_zone_invalid": "Esse não é um fuso horário que o taskto.ai conhece. Use um nome como Europe/Lisbon.",
     "token_not_found": "Token não encontrado.",
     "session_not_found": "Sessão não encontrada: ela pode já ter sido encerrada.",
     "session_current": "Esta é a sessão que você está usando: saia da conta.",
@@ -1162,7 +1162,7 @@
     },
     "general": {
       "language": "Idioma padrão",
-      "languageHelp": "Para membros cujo navegador pede um idioma que o TaskTo.AI não tem. Cada pessoa pode escolher o seu no menu da conta.",
+      "languageHelp": "Para membros cujo navegador pede um idioma que o taskto.ai não tem. Cada pessoa pode escolher o seu no menu da conta.",
       "save": "Salvar",
       "saved": "Salvo.",
       "mail": {
@@ -1416,8 +1416,8 @@
       "newTitle": "Novo token de acesso"
     },
     "about": {
-      "title": "Sobre o TaskTo.AI",
-      "licence": "O TaskTo.AI é código aberto, sob a licença MIT.",
+      "title": "Sobre o taskto.ai",
+      "licence": "O taskto.ai é código aberto, sob a licença MIT.",
       "credits": "Créditos",
       "noCredits": "Nada do que este espaço de trabalho usa agora pede um crédito aqui.",
       "credit": "<work>{name}</work>, de {by}, sob <licenceLink>{licence}</licenceLink>.",
@@ -2103,27 +2103,27 @@
   },
   "pwa": {
     "update": {
-      "message": "Há uma nova versão do TaskTo.AI. Recarregar fecha o que você não salvou.",
+      "message": "Há uma nova versão do taskto.ai. Recarregar fecha o que você não salvou.",
       "reload": "Recarregar para atualizar",
       "later": "Depois"
     },
     "install": {
       "title": "Instalar o app",
-      "intro": "Adicione o TaskTo.AI a este dispositivo para abri-lo como um app, em uma janela própria.",
-      "installed": "O TaskTo.AI está instalado neste dispositivo: você está usando o app instalado.",
+      "intro": "Adicione o taskto.ai a este dispositivo para abri-lo como um app, em uma janela própria.",
+      "installed": "O taskto.ai está instalado neste dispositivo: você está usando o app instalado.",
       "insecure": "Este servidor não está em uma conexão segura (HTTPS), então este navegador não consegue instalá-lo nem guardá-lo para uso offline. Peça a quem administra o servidor que o sirva por HTTPS.",
-      "button": "Instalar o TaskTo.AI",
+      "button": "Instalar o taskto.ai",
       "ios": {
         "share": "Toque no botão Compartilhar, na barra do Safari ou no menu do seu navegador.",
         "add": "Escolha “Adicionar à Tela de Início”.",
-        "confirm": "Toque em Adicionar. O TaskTo.AI abre pela Tela de Início como um app."
+        "confirm": "Toque em Adicionar. O taskto.ai abre pela Tela de Início como um app."
       },
       "android": {
         "menu": "Abra o menu do navegador (⋮) e escolha “Instalar app” ou “Adicionar à tela inicial”.",
-        "confirm": "Confirme. O TaskTo.AI abre pelos seus apps como qualquer outro."
+        "confirm": "Confirme. O taskto.ai abre pelos seus apps como qualquer outro."
       },
       "desktop": {
-        "menu": "Procure o ícone de instalação no fim da barra de endereço, ou abra o menu do navegador e escolha “Instalar TaskTo.AI” (no Safari: Arquivo, depois “Adicionar ao Dock”)."
+        "menu": "Procure o ícone de instalação no fim da barra de endereço, ou abra o menu do navegador e escolha “Instalar taskto.ai” (no Safari: Arquivo, depois “Adicionar ao Dock”)."
       },
       "offline": "Offline, as telas do app ainda abrem, mas suas conversas, documentos e quadros precisam da conexão com o servidor."
     }
@@ -2511,7 +2511,7 @@
     "hideNamed": "Ocultar {name}",
     "showNamed": "Mostrar {name} de novo",
     "pins": "Fixados no menu",
-    "pinsIntro": "Os apps fixados aparecem no menu, depois das páginas do TaskTo.AI.",
+    "pinsIntro": "Os apps fixados aparecem no menu, depois das páginas do taskto.ai.",
     "noPins": "Nenhum app fixado.",
     "pinNamed": "Fixar {name}",
     "unpinNamed": "Desafixar {name}",
@@ -2646,7 +2646,7 @@
     "disabled": "Um administrador desativou os downloads offline deste espaço.",
     "onlineOnly": "Criar com IA, publicar e compartilhar exigem conexão. Offline, você abre apps baixados e adiciona registros.",
     "unavailable": "O armazenamento offline não está disponível neste navegador, então os apps não podem ser baixados.",
-    "schemaNewer": "Este dispositivo guarda dados offline gravados por uma versão mais nova do TaskTo.AI. Atualize o app para usá-los. Nada foi alterado.",
+    "schemaNewer": "Este dispositivo guarda dados offline gravados por uma versão mais nova do taskto.ai. Atualize o app para usá-los. Nada foi alterado.",
     "reload": "Recarregar para atualizar",
     "needsConnection": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada.",
     "notSaved": {
@@ -2721,13 +2721,13 @@
     },
     "shell": {
       "title": "Offline",
-      "intro": "O TaskTo.AI não consegue alcançar o servidor. Os apps que você baixou abrem aqui, e os registros que você adiciona ficam neste dispositivo até você voltar a ficar online.",
+      "intro": "O taskto.ai não consegue alcançar o servidor. Os apps que você baixou abrem aqui, e os registros que você adiciona ficam neste dispositivo até você voltar a ficar online.",
       "none": "Nada foi baixado neste dispositivo. Baixe um app enquanto estiver online para usá-lo aqui.",
       "reconnect": "Tentar reconectar",
       "open": "Abrir",
       "openNamed": "Abrir {name}",
       "back": "Voltar aos apps baixados",
-      "needsUpdate": "Esta versão do TaskTo.AI não consegue mostrar {name}."
+      "needsUpdate": "Esta versão do taskto.ai não consegue mostrar {name}."
     },
     "accountChanged": {
       "title": "A conta mudou",
@@ -2755,7 +2755,7 @@
       "cancel": "Cancelar",
       "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",
       "notWriter": "As alterações estão sendo feitas em outra aba, que não deixou esta assumir. Sincronize naquela aba, ou feche-a e tente de novo.",
-      "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do TaskTo.AI não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
+      "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do taskto.ai não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
       "unreadableStorage": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e o armazenamento do dispositivo não pode ser lido agora para verificar. Você pode mantê-los e sair sem apagar nada, ou descartá-los.",
       "keep": "Mantê-los e sair"
     },
@@ -2855,9 +2855,9 @@
       "inbox": "As notificações sempre aparecem na sua caixa de entrada, mesmo que este navegador não consiga mostrar notificações push.",
       "openInbox": "Abrir a caixa de entrada",
       "pushTitle": "Notificações push neste dispositivo",
-      "pushIntro": "Opcional. Quando ativadas, este dispositivo é avisado de uma nova notificação mesmo com o TaskTo.AI fechado. Nada é enviado a ele até você ativar.",
+      "pushIntro": "Opcional. Quando ativadas, este dispositivo é avisado de uma nova notificação mesmo com o taskto.ai fechado. Nada é enviado a ele até você ativar.",
       "unsupported": "Este navegador não consegue receber notificações push aqui. Suas notificações continuam aparecendo na caixa de entrada.",
-      "iosInstall": "No iPhone e no iPad, as notificações push só funcionam no app instalado. Adicione o TaskTo.AI à Tela de Início (veja Sobre), abra-o por lá e volte a esta página. Suas notificações aparecem na caixa de entrada de qualquer forma.",
+      "iosInstall": "No iPhone e no iPad, as notificações push só funcionam no app instalado. Adicione o taskto.ai à Tela de Início (veja Sobre), abra-o por lá e volte a esta página. Suas notificações aparecem na caixa de entrada de qualquer forma.",
       "denied": "As notificações estão bloqueadas para este site no seu navegador. Para ativar o push, permita notificações para este site nas configurações do navegador e volte aqui. Suas notificações continuam aparecendo na caixa de entrada.",
       "dismissed": "Você não respondeu à pergunta do navegador, então o push continua desativado.",
       "off": "O push está desativado neste dispositivo.",
@@ -2888,7 +2888,7 @@
       "emailDigest": "Incluir em um resumo diário",
       "emailHour": "Enviar o resumo diário às",
       "emailZone": "Fuso horário",
-      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
+      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao taskto.ai, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
       "emailUnavailableOff": "O e-mail não está configurado neste servidor. Você ainda pode desativar o e-mail.",
       "emailAddress": "As notificações vão para {email}.",
       "emailAddressVerified": "Este endereço está confirmado.",

@@ -1,6 +1,6 @@
-# Installing TaskTo.AI
+# Installing taskto.ai
 
-TaskTo.AI runs as one container: the Go server, with the web app inside it, and the agent
+taskto.ai runs as one container: the Go server, with the web app inside it, and the agent
 runtime's Node.js sidecar, which the server starts and supervises. Its data lives in one
 volume. This guide takes you from nothing to a server behind HTTPS, with backups, in a few
 minutes. It is the same for one person or a company: a company invites its people after
@@ -157,7 +157,7 @@ link. An admin can make one only for a member whose every workspace they adminis
 ## 3. HTTPS
 
 Browsers only send the session cookie over HTTPS: it is `Secure` and named
-`__Host-taskto_session`. So serve TaskTo.AI over HTTPS, through a reverse proxy. (On the
+`__Host-taskto_session`. So serve taskto.ai over HTTPS, through a reverse proxy. (On the
 machine itself, `http://localhost:8080` works in browsers that treat localhost as secure,
 such as Chrome and Firefox.)
 
@@ -228,7 +228,7 @@ Compose project, as the bundled Caddy does.
 
 ### The app on phones and computers
 
-TaskTo.AI is an installable web app (a PWA): from the browser, a person can add it to a phone's
+taskto.ai is an installable web app (a PWA): from the browser, a person can add it to a phone's
 Home Screen or a computer's apps, where it opens in a window of its own
 ([docs/pwa.md](pwa.md) has the design). It works in a plain browser tab too; nothing here is
 required for that.
@@ -253,7 +253,7 @@ their device:
 - **iPhone and iPad (Safari):** the Share button, then **Add to Home Screen**. iOS has no
   install prompt a page can start.
 - **Android (Chrome and others):** the browser's menu, then **Install app** or **Add to Home
-  screen**; Chrome may also offer an **Install TaskTo.AI** button there.
+  screen**; Chrome may also offer an **Install taskto.ai** button there.
 - **Computers (Chrome, Edge):** the install icon at the end of the address bar. Safari: **File →
   Add to Dock**.
 
@@ -262,14 +262,14 @@ from `/api` is cached by the worker: a person's conversations, documents, boards
 always come from the server, so offline the app opens and says it can't reach it.
 
 An upgrade of the server ([Upgrade and rollback](#upgrade-and-rollback)) reaches open apps
-as a prompt, **A new version of TaskTo.AI is ready**, with **Reload to update** and **Later**.
+as a prompt, **A new version of taskto.ai is ready**, with **Reload to update** and **Later**.
 The page is never reloaded for anyone: they update when they have saved their work.
 
 ### Web Push notifications
 
 Notifications always appear in each person's **inbox** (in the sidebar, with its unread count). **Web Push**
 is an optional extra on top: a person turns it on, per device, in **Settings → Notifications**,
-and only then does that device get a prompt when something new arrives while TaskTo.AI is closed.
+and only then does that device get a prompt when something new arrives while taskto.ai is closed.
 Nothing about it is required: with push off, unavailable or blocked, every workflow works, and a
 push is never the way anything is synced. The server makes its VAPID key pair by itself the first
 time it starts (the private key is sealed in the database with `server.key`, so a backup needs both,
@@ -311,7 +311,7 @@ ends (expired sessions are swept every hour, and no push is sent to one in the m
 they leave their last workspace. Finished pushes and old notifications are purged on a schedule of
 their own, which a long queue of pushes doesn't hold up.
 
-On an iPhone or iPad, push works only for TaskTo.AI **installed on the Home Screen** (iOS 16.4 or
+On an iPhone or iPad, push works only for taskto.ai **installed on the Home Screen** (iOS 16.4 or
 later), as in the install steps above: the settings page says so, and in a Safari tab the inbox
 is all there is. The page tells the person when their browser has blocked notifications, and how to
 allow them.
@@ -400,7 +400,7 @@ your password?**, and the invite dialog doesn't offer to email.
 | `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port (an IPv6 address is written `2001:db8::25` or `[2001:db8::25]`). Empty means no email. |
 | `smtp_port` | `-smtp-port`, `TASKTO_SMTP_PORT` | `587` with `starttls`, `465` with `tls`, `25` with `none`, unless set. |
 | `smtp_security` | `-smtp-security`, `TASKTO_SMTP_SECURITY` | `starttls` (the default: the connection is upgraded to TLS before anything is sent, and a server that doesn't offer it is refused), `tls` (implicit TLS) or `none` (a relay on the same host or network you trust, **with no sign-in**: a user name and password are never sent without TLS, to any host, `localhost` too, so `none` with `smtp_username` stops the server at startup). The server's certificate is always checked. |
-| `smtp_from` | `-smtp-from`, `TASKTO_SMTP_FROM` | The sender of every message: `taskto@example.com` or `TaskTo <taskto@example.com>`. Required with `smtp_host`; use an address your SMTP server may send as. |
+| `smtp_from` | `-smtp-from`, `TASKTO_SMTP_FROM` | The sender of every message: `taskto@example.com` or `taskto <taskto@example.com>`. Required with `smtp_host`; use an address your SMTP server may send as. |
 | `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
 | `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
 | `smtp_egress` | `-smtp-egress`, `TASKTO_SMTP_EGRESS` | Where the connection may go: `any` (the default), `public`, or a comma-separated list of `public`, hosts, addresses and CIDR prefixes, as for [provider accounts](#where-provider-accounts-may-connect). Every connection is checked after name resolution. An internal relay on a private address needs it listed here, or `any`. |
@@ -435,7 +435,7 @@ services:
 ```sh
 # .env
 TASKTO_SMTP_HOST=smtp.example.com
-TASKTO_SMTP_FROM=TaskTo <taskto@example.com>
+TASKTO_SMTP_FROM=taskto <taskto@example.com>
 TASKTO_SMTP_USERNAME=mailer-account
 TASKTO_SMTP_PASSWORD_FILE=/etc/taskto/smtp/password   # as the container sees it
 ```
@@ -628,14 +628,14 @@ Conversations can run on the official Claude Code, Codex and Grok Build CLIs, si
 with each user's own subscription ([cli-workers.md](cli-workers.md)). It is off by default.
 
 - `-cli-workers local` (`TASKTO_CLI_WORKERS=local`) runs the CLIs found on the server's
-  `PATH`, as the server's own OS user, each TaskTo user in their own directory under
+  `PATH`, as the server's own OS user, each taskto user in their own directory under
   `<data>/cli/`. There is **no OS boundary between users** in this mode: a user's CLI, or a
   command it runs, can read other users' CLI logins and the server's data, `server.key`
   included. So it works only while the server has a single user (a personal install), and
   is refused once a second user joins.
 - `-cli-workers local-unsafe` drops that check, for development only.
 - `-cli-workers container` is the mode for teams. The CLIs run in a worker container of
-  their own, each TaskTo user's as a Unix user of their own (uid 100000 + the user's ID),
+  their own, each taskto user's as a Unix user of their own (uid 100000 + the user's ID),
   with no capabilities and no setuid program to escalate with. The worker container never
   sees the server's data. The server reaches it on a socket only the server's user can open
   (`-cli-worker-socket`).
@@ -650,7 +650,7 @@ docker compose --profile cli up -d --build
 - The `cli-worker` service is built from the same Dockerfile (`--target cli-worker`). It
   installs the Claude Code, Codex and Grok Build versions pinned in
   `deploy/cli-workers.json`, each checked against its sha256. They never update
-  themselves: a TaskTo.AI release moves them (`deploy/cli-workers.sh bump`).
+  themselves: a taskto.ai release moves them (`deploy/cli-workers.sh bump`).
 - It runs as root with only `SETUID`, `SETGID`, `CHOWN` and `KILL` (to make the users and
   run their CLIs as them) and `no-new-privileges`. Its memory and CPUs are capped by
   `TASKTO_CLI_WORKER_MEMORY` (default `4g`) and `TASKTO_CLI_WORKER_CPUS` (default `2`).
@@ -707,9 +707,9 @@ adds the key to its requests.
   worker relays it to its CLIs. The worker's network has no route to the server, so the
   proxy has no network address at all.
 - Without a proxy, shared accounts can be added, but turns on them are refused and say why.
-- The same listener serves TaskTo's own tools (the knowledge base, boards, apps and the agent
+- The same listener serves taskto's own tools (the knowledge base, boards, apps and the agent
   browser) to every CLI turn, at `/cli-mcp`, with a token for that turn
-  ([cli-tools.md](cli-tools.md)). Without a proxy, CLI turns get no TaskTo tools, and the
+  ([cli-tools.md](cli-tools.md)). Without a proxy, CLI turns get no taskto tools, and the
   server says so in its log at start.
 - The proxy connects to the accounts' addresses under the workspace accounts' egress
   policy (`-provider-egress-workspace`).
@@ -756,14 +756,14 @@ to it follow the egress policy of workspaces' provider accounts
 
 ### The Desert Ant Voz add-on
 
-Voz (Desert Ant Labs) is a speech model under a source-available licence, so TaskTo.AI
+Voz (Desert Ant Labs) is a speech model under a source-available licence, so taskto.ai
 doesn't ship it. You can install it yourself:
 
 - **Before you install it, read its licence** (<https://license.desertant.com/>):
   - its licence check contacts Desert Ant Labs every time the model loads, and it can't be
     turned off;
   - each server counts as an install;
-  - attribution is required. TaskTo.AI shows it on the About page while a workspace uses Voz.
+  - attribution is required. taskto.ai shows it on the About page while a workspace uses Voz.
 - Install Voz's SDK and model, then put an executable at `<addons_dir>/desertant-voz/transcribe`
   (`-addons-dir`, default `<data>/addons`). The server looks for it when it starts.
 - The program's contract:
@@ -891,7 +891,7 @@ here splits the keys:
   day. (That's why the server sends a plain tar, `taskto backup -uncompressed`: a gzipped
   one would be new data every time.)
 
-Two machines, then: the TaskTo.AI server, and a **backup host** that it can reach and that
+Two machines, then: the taskto.ai server, and a **backup host** that it can reach and that
 nothing on the server can log in to. The files for each are in this repository:
 `compose.yaml`'s `backup` service on the server, `deploy/backup-host/compose.yaml` on the
 backup host.
@@ -923,7 +923,7 @@ next to it:
 | `TASKTO_BACKUP_USER` | `taskto` | the repository the prune job works on |
 | `TASKTO_BACKUP_KEEP` | `90d` | how long the prune job keeps snapshots |
 
-**Let only the TaskTo.AI server reach the port, and use TLS unless the network between
+**Let only the taskto.ai server reach the port, and use TLS unless the network between
 the two is private.** Either a private network (WireGuard, Tailscale) with `TASKTO_BACKUP_ADDR` set to the
 backup host's address on it, or `0.0.0.0` with TLS and a firewall rule for the server's
 address. There is no default, so the choice is made on purpose.
@@ -934,7 +934,7 @@ network. They can't delete anything either.
 
 #### 2. The server
 
-On the TaskTo.AI server, next to `compose.yaml`, put the repository's address (with the
+On the taskto.ai server, next to `compose.yaml`, put the repository's address (with the
 append-only user) and a password for the repository in `backup/`. Both are placeholders
 here; `backup/` is in `.gitignore`, and nothing else in the checkout holds them:
 
@@ -1059,7 +1059,7 @@ its own: `docker compose run --rm prune key add`, then put the new password in
 
   ```sh
   # /etc/cron.daily/taskto-backup-check, on the backup host
-  find /srv/restic/taskto/snapshots -type f -mmin -1560 | grep -q . || echo "No TaskTo.AI backup in 26 hours"
+  find /srv/restic/taskto/snapshots -type f -mmin -1560 | grep -q . || echo "No taskto.ai backup in 26 hours"
   ```
 
 - Practise a restore every quarter, on a machine that isn't production (below). A
@@ -1109,7 +1109,7 @@ setup isn't covered by the project's tests; rest-server is.
 `taskto restore` writes a backup, gzipped or plain, into an **empty** data directory, and
 checks every database it restores (`PRAGMA integrity_check`). It refuses a directory with
 anything in it (a `taskto.lock` left on its own doesn't count), an archive that isn't a
-TaskTo.AI backup or was cut short, and paths that would leave the directory. Stop the
+taskto.ai backup or was cut short, and paths that would leave the directory. Stop the
 server first: restore takes the data directory's lock, so it refuses a directory a server
 runs on, and a server started on the directory before the restore is done is refused. A
 restore that fails removes what it wrote, so the directory is empty for the next try.
@@ -1358,13 +1358,13 @@ never over an interrupted or stopped update.
    - the data volume is mounted at `/data` as the running server has it (never a name
      assumed): the same Docker volume, the same `volume.subpath` and the same read-only
      setting, in this install's Compose settings and in the new ones, for the server and for
-     every service of TaskTo's, the backup services too, which are rendered with their
+     every service of taskto's, the backup services too, which are rendered with their
      profiles on even when they are off. A candidate that mounts the data differently is
      refused. So is one that would make a volume: every named volume the new settings use must
      exist already, and an anonymous volume is refused, so `docker compose` never creates one;
    - the new settings, rendered with this install's `.env` and `compose.override.yaml`, run
      only the images it checks (an override that swaps in another image, or an older one of
-     TaskTo's, is refused); all three images are pulled by tag and refused unless their
+     taskto's, is refused); all three images are pulled by tag and refused unless their
      `org.opencontainers.image.revision` label is that SHA, and their ids are recorded (the
      switch checks, right before it starts anything, that the tags still have them); every
      other image of the enabled services (Caddy's, pinned by digest) is pulled too, since the

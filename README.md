@@ -1,4 +1,4 @@
-# TaskTo.AI
+# taskto.ai
 
 An open-source, self-hosted workspace for one person or a whole company:
 
@@ -59,7 +59,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/audit.md](docs/audit.md) | the audit log of security and admin actions: what is recorded, never recorded, and for how long |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |
-| [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with TaskTo's tools |
+| [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with taskto's tools |
 | [docs/agent-safety.md](docs/agent-safety.md), [docs/agent-browser.md](docs/agent-browser.md) | what agents may do, and the agent's browser |
 | [docs/dictation.md](docs/dictation.md), [docs/i18n.md](docs/i18n.md) | dictation, and languages |
 | [docs/credits.md](docs/credits.md) | third-party models and their licences |
@@ -119,7 +119,7 @@ the default.
 | `-agent-providers` | `TASKTO_AGENT_PROVIDERS` | `agent_providers` | | the operator's model providers file ([docs/agent-providers.md](docs/agent-providers.md)), offered to everyone before the providers users and workspaces add; without it, the scripted offline model |
 | `-cli-workers` | `TASKTO_CLI_WORKERS` | `cli_workers` | `off` | run conversations on the users' own Claude Code, Codex and Grok Build logins: `off`, `container` (a worker of its own, see `-cli-worker-socket`), `local` (one-user instances only) or `local-unsafe` (development) ([docs/cli-workers.md](docs/cli-workers.md)) |
 | `-cli-worker-socket` | `TASKTO_CLI_WORKER_SOCKET` | `cli_worker_socket` | | the CLI worker's socket; needed with `-cli-workers container` |
-| `-cli-proxy-listen` | `TASKTO_CLI_PROXY_LISTEN` | `cli_proxy_listen` | `127.0.0.1` on a free port with `local` and `local-unsafe`; none with `container` | where the per-turn proxy listens (workspaces' shared CLI accounts, and TaskTo's tools for CLI turns), apart from the public address: `host:port`, or `unix:/path` in container mode, for the worker to relay ([docs/account-switching.md](docs/account-switching.md)) |
+| `-cli-proxy-listen` | `TASKTO_CLI_PROXY_LISTEN` | `cli_proxy_listen` | `127.0.0.1` on a free port with `local` and `local-unsafe`; none with `container` | where the per-turn proxy listens (workspaces' shared CLI accounts, and taskto's tools for CLI turns), apart from the public address: `host:port`, or `unix:/path` in container mode, for the worker to relay ([docs/account-switching.md](docs/account-switching.md)) |
 | `-cli-proxy-url` | `TASKTO_CLI_PROXY_URL` | `cli_proxy_url` | its listen address with `local` and `local-unsafe` | the per-turn proxy as the CLIs reach it, such as `http://127.0.0.1:8081`; needs `-cli-proxy-listen`; in container mode it is required whenever `-cli-proxy-listen` is set, TCP or `unix:`, and with a `unix:` listener it is the worker's relay's URL |
 | `-browser` | `TASKTO_BROWSER` | `browser` | `false` | give the agent a browser per user, with a live view and hand-over for logins; needs `-cli-workers` ([docs/agent-browser.md](docs/agent-browser.md)) |
 | `-browser-chromium` | `TASKTO_BROWSER_CHROMIUM` | `browser_chromium` | `chromium` | the agent browser's Chromium in local mode, looked up in `PATH`; by default `chromium`, then `chromium-browser` |

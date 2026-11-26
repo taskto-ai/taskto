@@ -183,7 +183,7 @@ export function AppView({
   )
 }
 
-// Shown instead of an app this client can't draw: the person updates TaskTo.AI (the waiting
+// Shown instead of an app this client can't draw: the person updates taskto.ai (the waiting
 // version if there is one, else a reload), and the app is there.
 function UpdateRequired({
   label,

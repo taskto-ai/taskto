@@ -549,7 +549,7 @@ test('a long workspace name is cut in the switcher and whole in its tooltip; the
   // product's name, which the stylesheet crops to its mark.
   const bar = screen.getByRole('banner', { name: 'App bar' })
   expect(within(bar).getByRole('button', { name: 'Open the menu' })).toBeTruthy()
-  expect(within(bar).getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
+  expect(within(bar).getByRole('img', { name: 'taskto.ai' })).toBeTruthy()
   // The page's own title is the one place the section's name appears.
   expect(within(bar).queryByText('Conversations')).toBeNull()
   // The page owns its title: no heading in the bar.

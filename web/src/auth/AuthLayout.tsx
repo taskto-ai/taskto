@@ -10,7 +10,7 @@ import { Heading } from '../ui/Heading'
 import './AuthLayout.css'
 
 // The product's name, the same in every language.
-export const BRAND = 'TaskTo.AI'
+export const BRAND = 'taskto.ai'
 
 export function AuthLayout({
   title,

@@ -1,4 +1,4 @@
-// Package browser runs a Chromium per TaskTo user for the agent, and lets the user watch it and
+// Package browser runs a Chromium per taskto user for the agent, and lets the user watch it and
 // take over (docs/agent-browser.md).
 //
 // Each user has up to two browsers:

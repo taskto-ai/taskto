@@ -46,7 +46,7 @@ the server.
   is the user's own login, in the user's own config directory, or, on a workspace account
   ([account-switching.md](account-switching.md)), a short-lived token for that one turn, which the server's proxy swaps for the
   workspace's API key ([account-switching.md](account-switching.md#the-proxy)). The key
-  itself never reaches the CLI. The other token a CLI holds is for TaskTo's own tools, for
+  itself never reaches the CLI. The other token a CLI holds is for taskto's own tools, for
   that turn alone: it acts as the conversation's owner, in that conversation, until the turn
   ends ([cli-tools.md](cli-tools.md#the-token)). A test lists the exact
   variables a CLI gets, and checks that nothing of the server's environment reaches it.
@@ -102,7 +102,7 @@ program asks the worker, and the worker asks the user:
   lexical: it doesn't follow symlinks, since the worker never opens a path in a user's home.
   A symlink out of the working directory had to be made by a command the user allowed, or
   brought in by one (a clone).
-- **TaskTo's own tools** (the knowledge base, boards, apps and browser, over MCP:
+- **taskto's own tools** (the knowledge base, boards, apps and browser, over MCP:
   [cli-tools.md](cli-tools.md#permissions)) are under the same prompts: the read-only ones
   (`list_spaces`, `read_doc`, …) don't ask, as reading the working directory doesn't, and the
   others (`write_doc`, `create_card`, `browser_open`, …) ask the owner, unless they allowed

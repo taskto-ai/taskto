@@ -460,7 +460,7 @@ func TestRestoreRefusesBadArchives(t *testing.T) {
 		archive []byte
 		wantErr string
 	}{
-		"not gzip":          {[]byte("plain text"), "not a TaskTo.AI backup"},
+		"not gzip":          {[]byte("plain text"), "not a taskto.ai backup"},
 		"no manifest":       {archiveOf(t, nil, file("taskto.db")), "manifest is missing"},
 		"newer format":      {archiveOf(t, &Manifest{Format: format + 1}), "isn't supported"},
 		"parent path":       {archiveOf(t, ok, file("../escape")), "unexpected path"},

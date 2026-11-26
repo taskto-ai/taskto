@@ -491,7 +491,7 @@ type conversationHit struct {
 func (s *Service) searchConversations(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	// Not at the tokens' endpoint (no_token in tools.json): this is the check behind it.
 	if c.Conversation == 0 {
-		return nil, &Refusal{Status: http.StatusForbidden, Message: "search_conversations works only in a TaskTo.AI conversation"}
+		return nil, &Refusal{Status: http.StatusForbidden, Message: "search_conversations works only in a taskto.ai conversation"}
 	}
 	var a searchArgs
 	if err := decode(args, &a); err != nil {

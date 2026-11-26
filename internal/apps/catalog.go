@@ -17,7 +17,7 @@ import (
 // arguments of each: A2UI v0.9's basic catalog, without the components and functions that
 // load or open outside addresses (Image, Video, AudioPlayer, openUrl: an app is shared,
 // and a picture from elsewhere would tell that server who opens it, and could carry the
-// app's data in its address), plus TaskTo.AI's Stat, Show, PhotoInput and Photos. The last two
+// app's data in its address), plus taskto.ai's Stat, Show, PhotoInput and Photos. The last two
 // are how photos get in and out without an outside address: they upload to, and draw from, this
 // server's authenticated attachment routes (attachments.go). The web app's catalog
 // (web/src/apps/catalog.tsx) is the same set; testdata/catalog.json is the contract between
