@@ -45,6 +45,9 @@ func (w *Worker) isForgotten(user int64) bool {
 
 // markForgotten records user as forgotten, durably: a worker that restarts still refuses them.
 func (w *Worker) markForgotten(user int64) error {
+	// Not at the same moment as Reconcile looks at the mark's time and removes it.
+	w.marks.Lock()
+	defer w.marks.Unlock()
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return err
 	}
@@ -70,7 +73,16 @@ func (w *Worker) markForgotten(user int64) error {
 		return err
 	}
 	defer d.Close()
-	return d.Sync()
+	if err := d.Sync(); err != nil {
+		return err
+	}
+	// And the state directory's own entry, in the layout's root.
+	root, err := os.Open(w.cfg.Layout.Root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.Sync()
 }
 
 // beginQuick counts a short helper request for user that is about to run, or refuses it if the
@@ -117,9 +129,11 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 			turns = append(turns, t)
 		}
 	}
+	// Every execution, not only the current login of each account: a cancelled one that a new
+	// sign-in replaced may still be running.
 	var logins []*Login
-	for key, l := range w.logins {
-		if key.user == user {
+	for l := range w.loginRuns {
+		if l.user == user {
 			logins = append(logins, l)
 		}
 	}
@@ -128,7 +142,7 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 		t.stop()
 	}
 	for _, l := range logins {
-		w.CancelLogin(user, l.cli, l.slot)
+		l.stop()
 	}
 
 	wctx, cancel := context.WithTimeout(ctx, w.cfg.StopGrace+forgetWait)
@@ -191,13 +205,24 @@ func (w *Worker) Reconcile(_ context.Context, live []int64, next int64, before t
 		if err != nil || user <= 0 || (!isLive[user] && user < next) {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil || !info.ModTime().Before(before) {
-			continue
-		}
-		if err := os.Remove(filepath.Join(w.stateDir(), e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := w.removeOldMark(e, before); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// removeOldMark removes mark e unless it was made after before. The time is read and the mark
+// removed under the lock that making a mark holds, so a mark made again in between stays.
+func (w *Worker) removeOldMark(e fs.DirEntry, before time.Time) error {
+	w.marks.Lock()
+	defer w.marks.Unlock()
+	info, err := e.Info()
+	if err != nil || !info.ModTime().Before(before) {
+		return nil //nolint:nilerr // a mark that is gone or newer is left as it is
+	}
+	if err := os.Remove(filepath.Join(w.stateDir(), e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }

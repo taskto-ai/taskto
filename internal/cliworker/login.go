@@ -159,11 +159,17 @@ func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
 		info: LoginInfo{CLI: cli, Slot: slot, State: LoginStarting, StartedAt: time.Now().UTC(), NeedsCode: cli == Claude},
 	}
 	w.logins[key] = l
+	w.loginRuns[l] = struct{}{}
 	w.wg.Add(1)
 	w.mu.Unlock()
 
 	go func() {
 		defer w.wg.Done()
+		defer func() {
+			w.mu.Lock()
+			delete(w.loginRuns, l)
+			w.mu.Unlock()
+		}()
 		w.runLogin(ctx, l, bin)
 	}()
 	select {
@@ -206,13 +212,18 @@ func (w *Worker) SubmitLoginCode(user int64, cli CLI, slot Slot, code string) er
 // CancelLogin stops user's login for cli's account in slot, if one is in progress.
 func (w *Worker) CancelLogin(user int64, cli CLI, slot Slot) {
 	if l, ok := w.Login(user, cli, slot); ok {
-		l.mu.Lock()
-		if !l.info.State.Final() {
-			l.info.State = LoginCancelled
-		}
-		l.mu.Unlock()
-		l.cancel()
+		l.stop()
 	}
+}
+
+// stop cancels the login: its state is cancelled, unless it is over, and its CLI is stopped.
+func (l *Login) stop() {
+	l.mu.Lock()
+	if !l.info.State.Final() {
+		l.info.State = LoginCancelled
+	}
+	l.mu.Unlock()
+	l.cancel()
 }
 
 var (

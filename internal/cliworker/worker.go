@@ -70,6 +70,12 @@ type Worker struct {
 	// replaced when one ends: Forget waits for them (forget.go).
 	quick      map[int64]int
 	quickEnded chan struct{}
+	// loginRuns holds every sign-in's execution from its start until it returns, apart from
+	// logins: a new sign-in replaces a cancelled one there while the old one's CLI may still run,
+	// and Forget must wait for that too.
+	loginRuns map[*Login]struct{}
+	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
+	marks sync.Mutex
 
 	// The approval socket (approve.go): its listener, its path and, when it had to go
 	// elsewhere than the layout's root, the directory made for it.
@@ -164,7 +170,7 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
-	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}), quick: map[int64]int{}, quickEnded: make(chan struct{})}
+	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}), quick: map[int64]int{}, quickEnded: make(chan struct{}), loginRuns: map[*Login]struct{}{}}
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return nil, err
 	}

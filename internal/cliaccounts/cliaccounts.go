@@ -315,7 +315,14 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 		return nil
 	}
 	before := time.Now()
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
+	// One transaction: the users and the next number describe the same state, or a person added
+	// in between would be neither live nor below the next number.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a read: nothing to keep
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users`)
 	if err != nil {
 		return err
 	}
@@ -334,9 +341,10 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	rows.Close()
 	// What auth's insertUser gives the next user: above every number there has been.
 	var next int64
-	if err := s.db.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&next); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&next); err != nil {
 		return err
 	}
+	_ = tx.Rollback() // the worker is called without the read open
 	return s.worker.Reconcile(ctx, live, next, before)
 }
 

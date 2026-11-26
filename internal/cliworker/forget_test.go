@@ -106,6 +106,46 @@ func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 	}
 }
 
+// A sign-in that was cancelled and replaced by a new one is still a CLI that may be running (the
+// login of the account is the new one): Forget waits for it too.
+func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
+	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
+	old, err := h.w.StartLogin(1, cliworker.Claude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.w.CancelLogin(1, cliworker.Claude, "")
+	// The replacement stops at once; only the cancelled one takes its time (it read its
+	// scenario when it started).
+	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{})
+	replacement, err := h.w.StartLogin(1, cliworker.Claude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement == old {
+		t.Fatal("fixture: the cancelled sign-in was reused")
+	}
+	select {
+	case <-old.Done():
+		t.Fatal("fixture: the cancelled sign-in had ended already")
+	default:
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	for name, l := range map[string]*cliworker.Login{"the cancelled one": old, "its replacement": replacement} {
+		select {
+		case <-l.Done():
+		default:
+			t.Errorf("Forget returned while %s was still running", name)
+		}
+	}
+	gone(t, dirs.Root)
+}
+
 // A helper request in flight (here a slow status check, which writes into the directory as it
 // ends) is waited for too.
 func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
