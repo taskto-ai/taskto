@@ -2876,6 +2876,7 @@
       "title": "Confirm your email address",
       "working": "Confirming your address…",
       "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
+      "nothing": "There is nothing to confirm here: this page was opened without the email's link. Your notification settings say which address notifications go to, and whether it is confirmed.",
       "settings": "Open notification settings",
       "failed": "Your address couldn't be confirmed: the server didn't answer. Check your connection, then open the link in the email again."
     },

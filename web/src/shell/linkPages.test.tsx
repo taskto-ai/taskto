@@ -5,6 +5,7 @@
 // link, <main>); someone signed out gets the sign-in screen alone, as for any address.
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Me } from '../api'
@@ -132,4 +133,62 @@ test('going from one notification’s link to another closes the phone’s menu,
   act(() => navigate('/notification/1'))
   await waitFor(() => expect(screen.getByRole('main').hasAttribute('inert')).toBe(false))
   expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy()
+})
+
+// The confirming requests sent so far.
+const confirms = (calls: { method: string; path: string }[]) =>
+  calls.filter((c) => c.method === 'POST' && c.path === EMAIL_CONFIRM_API)
+
+test('the confirmation is asked once under StrictMode, and once across the shell drawn again with a new me', async () => {
+  window.history.replaceState(null, '', `${EMAIL_CONFIRM_PATH}#a-token-for-the-test`)
+  const calls = fakeFetch({ [`POST ${EMAIL_CONFIRM_API}`]: { body: {} } })
+  const { rerender } = render(
+    <StrictMode>
+      <Shell me={me} onLogout={() => {}} />
+    </StrictMode>,
+  )
+  await screen.findByText(/Your address is confirmed/)
+  expect(confirms(calls)).toHaveLength(1)
+  // The shell drawn again with a new me (the address without its token now): no second request, and
+  // the page still says what happened, not that there is nothing to confirm.
+  rerender(
+    <StrictMode>
+      <Shell me={{ ...me, user: { ...me.user, name: 'Owner again' } }} onLogout={() => {}} />
+    </StrictMode>,
+  )
+  await act(async () => {})
+  expect(confirms(calls)).toHaveLength(1)
+  expect(screen.getByText(/Your address is confirmed/)).toBeTruthy()
+})
+
+test('the confirmation page marks Settings in the sidebar, not the inbox', async () => {
+  window.history.replaceState(null, '', `${EMAIL_CONFIRM_PATH}#a-token-for-the-test`)
+  fakeFetch({ [`POST ${EMAIL_CONFIRM_API}`]: { body: {} } })
+  render(<Shell me={me} onLogout={() => {}} />)
+  const nav = frame().nav as HTMLElement
+  expect(within(nav).getByRole('link', { name: 'Settings' }).getAttribute('aria-current')).toBe('page')
+  expect(
+    within(nav)
+      .getByRole('link', { name: /Notifications/ })
+      .getAttribute('aria-current'),
+  ).toBeNull()
+})
+
+test('back on the confirmation page after the token left, nothing is sent and nothing is said to be broken', async () => {
+  window.history.replaceState(null, '', `${EMAIL_CONFIRM_PATH}#a-token-for-the-test`)
+  const calls = fakeFetch({
+    [`POST ${EMAIL_CONFIRM_API}`]: { body: {} },
+    'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByText(/Your address is confirmed/)
+  // Away to a section, then Back: the page opens again, its address without the token.
+  act(() => navigate('/w/1/conversations'))
+  await screen.findByRole('heading', { level: 1, name: 'Conversations' })
+  act(() => navigate(EMAIL_CONFIRM_PATH))
+  const main = screen.getByRole('main')
+  expect(await within(main).findByText(/There is nothing to confirm here/)).toBeTruthy()
+  expect(within(main).queryByRole('alert')).toBeNull()
+  expect(within(main).getByRole('link', { name: 'Open notification settings' })).toBeTruthy()
+  expect(confirms(calls)).toHaveLength(1)
 })

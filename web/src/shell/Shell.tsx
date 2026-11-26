@@ -158,6 +158,10 @@ function Frame({
   // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
   // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
+  // The page shown when a link of the drawer was followed: the drawer closes in one draw and the new
+  // page comes in a later one, which draws a new <main> (keyed by its section). The page is focused
+  // at once (in case the move is refused, a draft kept) and again once the page has changed.
+  const followedFrom = useRef<string | null>(null)
   // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
   // click on the menu button before it would be undone. The page is the resolved route, not the
   // address: the shell rewriting an address to its canonical form (a trailing slash, a default
@@ -174,9 +178,12 @@ function Frame({
   }, [shownPage])
   useEffect(() => {
     if (drawer || !focusPage.current) return
-    focusPage.current = false
     main.current?.focus({ preventScroll: true })
-  }, [drawer])
+    // A link's move: done once the page has changed; anything else, done now.
+    if (followedFrom.current !== null && followedFrom.current === shownPage) return
+    focusPage.current = false
+    followedFrom.current = null
+  }, [drawer, shownPage])
   // An open drawer takes focus, Escape closes it and gives focus back to its button.
   useEffect(() => {
     if (!drawer) return
@@ -200,6 +207,7 @@ function Frame({
       const link = e.target instanceof Element ? e.target.closest('a[href]') : null
       if (!link || !sidebar.current?.contains(link)) return
       focusPage.current = true
+      followedFrom.current = drawnAt.current
       setDrawer(false)
     }
     document.addEventListener('keydown', onKey)

@@ -537,7 +537,8 @@ place the section's name appears.
   room for both; the labels would take a fifth of the width. The end to end suite
   (`web/e2e/app/shell.e2e.mjs`) checks in Chromium that every link of the rail has a name.
 - **Phone** (48rem and narrower): a slim bar with the menu button and the logo's mark, a landmark
-  named "App bar"; the section's name is the page's own title under it. The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
+  named "App bar"; the section's name is the page's own title under it (in Settings, whose title is
+  the tab's, the line above it says "Settings"). The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
   the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
   closes it, and focus goes back to the button, or to the page when a link in it was followed.
 

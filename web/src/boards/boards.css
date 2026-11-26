@@ -16,11 +16,13 @@
   }
 
   /* The board: its head, its notices and its columns. While a card is open on a wide board, the
-     card lies over the columns, which keep the width they have with it closed: the head and the
-     notices keep clear of the drawer (its actions, Add a card and the filters, stay in reach), and
-     the columns end with room as wide as the drawer, so their sideways scroll brings the last one
-     out from under it. A card that takes the keyboard is scrolled beside the drawer, not under it
-     (scroll-padding), and so is the open card's own tile. */
+     card lies over the board, and the board keeps its look: its head and its notices keep clear of
+     the drawer (Add a card and the filters stay in reach), and the columns keep the width they have
+     with the card closed while their scroll box ends at the drawer's edge. So the last columns
+     scroll out from beside the drawer, a tile that takes the keyboard is scrolled into the part that
+     is seen, and dragging a card to that edge scrolls the board as it does with the card closed.
+     Only those three are named: what else is drawn in the board (the card's own questions, which
+     are dialogs) keeps its own size. */
   .ui-board {
     display: flex;
     flex-direction: column;
@@ -28,32 +30,23 @@
     min-inline-size: 0;
   }
 
-  .ui-board-drawer-room {
-    display: none;
-  }
-
   @media (min-width: 64.0625rem) {
-    .ui-board[data-drawer] > :not(.ui-board-columns) {
+    .ui-board[data-drawer] > .ui-page-header,
+    .ui-board[data-drawer] > .ui-notice {
       padding-inline-end: var(--width-drawer);
     }
 
-    .ui-board[data-drawer] .ui-board-columns {
-      /* The columns as wide as with the card closed (they share the board's width, none narrower
-         than a column may be), then the drawer's room. */
-      grid-template-columns:
-        repeat(
+    .ui-board[data-drawer] > .ui-board-columns {
+      margin-inline-end: var(--width-drawer);
+      /* As wide as with the card closed: the board's width (this box's and the drawer's) shared out,
+         none narrower than a column may be. */
+      grid-template-columns: repeat(
           var(--board-columns),
           max(
             var(--width-board-column),
-            calc((100% - (var(--board-columns) - 1) * var(--space-3)) / var(--board-columns))
+            calc((100% + var(--width-drawer) - (var(--board-columns) - 1) * var(--space-3)) / var(--board-columns))
           )
-        )
-        var(--width-drawer);
-      scroll-padding-inline-end: calc(var(--width-drawer) + var(--space-3));
-    }
-
-    .ui-board[data-drawer] .ui-board-drawer-room {
-      display: block;
+        );
     }
   }
 
