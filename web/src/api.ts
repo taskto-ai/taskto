@@ -63,8 +63,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? 'GET'
   const same = sameSession()
   const account = sessionUser()
+  // A header's name is the same in any case: one the caller names is found whatever its case.
+  const named = Object.keys(init.headers ?? {}).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
   const extra =
-    account !== null && method !== 'GET' && method !== 'HEAD' && !(EXPECTED_USER_HEADER in (init.headers ?? {}))
+    account !== null && method !== 'GET' && method !== 'HEAD' && named === undefined
       ? { ...init.headers, ...forAccount(account) }
       : (init.headers ?? {})
   const res = await fetch(path, {
@@ -93,7 +95,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       window.dispatchEvent(new Event(SESSION_LOST))
     }
     if (res.status === 409 && data?.code === ACCOUNT_CHANGED) {
-      const expected = Number(extra[EXPECTED_USER_HEADER])
+      const key = Object.keys(extra).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
+      const expected = Number(key === undefined ? undefined : extra[key as keyof typeof extra])
       window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
     }
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`

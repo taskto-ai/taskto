@@ -9,6 +9,7 @@ import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { useMounted } from '../mounted'
 import { navigate, routePath } from '../router'
+import { steps } from '../session'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Heading } from '../ui/Heading'
@@ -52,13 +53,14 @@ export function ConversationsPage({
   const create = async () => {
     setCreating(true)
     setError(null)
+    const s = steps(mounted)
     try {
       const c = await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })
-      if (!mounted.current) return
+      if (!s.ok()) return
       list.reload()
       navigate(link(c.id))
     } catch (e) {
-      if (mounted.current) setError(errorText(e))
+      if (s.ok()) setError(errorText(e))
     } finally {
       if (mounted.current) setCreating(false)
     }

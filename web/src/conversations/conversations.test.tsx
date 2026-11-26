@@ -6,6 +6,7 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
 import { parseRoute, usePath } from '../router'
+import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { wholeText } from '../test/text'
 import { ConversationsPage } from './ConversationsPage'
@@ -75,6 +76,25 @@ test('a conversation made after the page went (the session ended) is not opened'
   window.history.replaceState(null, '', '/')
   await act(async () => answer())
   expect(window.location.pathname).toBe('/')
+})
+
+test('a conversation made after the session ended, the page still showing, is not opened', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
+    'POST /api/workspaces/1/conversations': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: conversation(7, '') })
+      }),
+  })
+  const { factory } = fakeStreams()
+  beginSession(1)
+  render(<Page streams={factory} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'New' }))
+  // Signing out has begun; the shell isn't gone yet.
+  endSession()
+  await act(async () => answer())
+  expect(window.location.pathname).toBe('/w/1/conversations')
 })
 
 test('shows the stream as it comes, and sends a message', async () => {

@@ -25,11 +25,12 @@ test('while a session lasts, a request that changes something names its account;
   await api('/api/x', { method: 'POST', body: {} })
   await api('/api/x', { method: 'PATCH', body: {} })
   await api('/api/x', { method: 'DELETE' })
-  // One that names its own (the offline queue, signing out) keeps it.
+  // One that names its own (the offline queue, signing out) keeps it, in whatever case it is written.
   await api('/api/x', { method: 'POST', body: {}, headers: { 'X-Taskto-Expected-User': '3' } })
+  await api('/api/x', { method: 'POST', body: {}, headers: { 'x-taskto-expected-user': '4' } })
   endSession()
   await api('/api/x', { method: 'POST', body: {} })
-  expect(named()).toEqual([null, null, '7', '7', '7', '3', null])
+  expect(named()).toEqual([null, null, '7', '7', '7', '3', '4', null])
 })
 
 test('a 401 ends the session it was sent in, before its caller hears of it', async () => {
