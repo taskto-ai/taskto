@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/paylink"
 )
 
 // stubLinks stands in for the integrations' side of a payment link (package integrations tests the
@@ -18,26 +19,26 @@ import (
 // what it was asked.
 type stubLinks struct {
 	mu    sync.Mutex
-	calls []PaymentLinkRequest
-	made  map[int64]PaymentLink
+	calls []paylink.Request
+	made  map[int64]paylink.Link
 	fail  error
 }
 
-func (s *stubLinks) OpenPaymentLink(_ context.Context, req PaymentLinkRequest) (PaymentLink, error) {
+func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (paylink.Link, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, req)
 	if s.fail != nil {
-		return PaymentLink{}, s.fail
+		return paylink.Link{}, s.fail
 	}
 	if l, ok := s.made[req.EffectID]; ok {
 		return l, nil
 	}
 	if s.made == nil {
-		s.made = map[int64]PaymentLink{}
+		s.made = map[int64]paylink.Link{}
 	}
 	n := len(s.made) + 1
-	l := PaymentLink{URL: fmt.Sprintf("https://pay.example.test/c/%d", n), ObjectID: fmt.Sprintf("cs_test_%d", n), AmountMinor: 12010, Currency: "EUR"}
+	l := paylink.Link{URL: fmt.Sprintf("https://pay.example.test/c/%d", n), ObjectID: fmt.Sprintf("cs_test_%d", n), AmountMinor: 12010, Currency: "EUR"}
 	s.made[req.EffectID] = l
 	return l, nil
 }
@@ -277,9 +278,9 @@ func TestFailuresOfTheLinkAreTheEntrysCodes(t *testing.T) {
 		code      apierr.Code
 		transient bool
 	}{
-		"refused amount":  {&PaymentLinkError{Code: apierr.CodeIntegrationAmountRefused}, apierr.CodeIntegrationAmountRefused, false},
-		"above the max":   {&PaymentLinkError{Code: apierr.CodeIntegrationAmountAboveMax, Params: apierr.Params{"max": "10.00", "currency": "EUR"}}, apierr.CodeIntegrationAmountAboveMax, false},
-		"provider down":   {&PaymentLinkError{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}, apierr.CodeIntegrationProviderUnreachable, true},
+		"refused amount":  {&paylink.Error{Code: apierr.CodeIntegrationAmountRefused}, apierr.CodeIntegrationAmountRefused, false},
+		"above the max":   {&paylink.Error{Code: apierr.CodeIntegrationAmountAboveMax, Params: apierr.Params{"max": "10.00", "currency": "EUR"}}, apierr.CodeIntegrationAmountAboveMax, false},
+		"provider down":   {&paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}, apierr.CodeIntegrationProviderUnreachable, true},
 		"another failure": {fmt.Errorf("the database was busy"), apierr.CodeAppEffectGaveUp, true},
 	}
 	for name, tc := range cases {

@@ -12,8 +12,8 @@ import (
 	"modernc.org/sqlite"
 
 	"taskto.ai/taskto/internal/apierr"
-	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/currency"
+	"taskto.ai/taskto/internal/paylink"
 )
 
 // The create_payment_link effect's side of the integrations (apps/paymentlink.go asks for it).
@@ -45,38 +45,38 @@ const (
 )
 
 func unavailable() error {
-	return &apps.PaymentLinkError{Code: apierr.CodeIntegrationUnavailable}
+	return &paylink.Error{Code: apierr.CodeIntegrationUnavailable}
 }
 
 // OpenPaymentLink returns the payment link for the request's entry, asking the provider for it only
 // if the entry hasn't made one. It checks, as of now and against the workspace of the app, that the
 // integration exists, is switched on and is allowed in the app's space, and then the admin's
 // limits on the amount and the currency.
-func (s *Service) OpenPaymentLink(ctx context.Context, req apps.PaymentLinkRequest) (apps.PaymentLink, error) {
+func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (paylink.Link, error) {
 	// The integration is looked for in the app's workspace only: another workspace's id is not found.
 	rec, err := s.store.getSnapshot(ctx, req.WorkspaceID, req.IntegrationID)
 	if err != nil {
 		if errors.Is(err, errNotFound) {
-			return apps.PaymentLink{}, unavailable()
+			return paylink.Link{}, unavailable()
 		}
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
 	usable, err := s.store.usable(ctx, req.WorkspaceID, req.IntegrationID, req.SpaceID)
 	if err != nil {
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
 	provider, _ := Lookup(rec.Provider).(PaymentProvider)
 	if !usable || provider == nil || !providerDoes(rec.Provider, KindPayments) {
-		return apps.PaymentLink{}, unavailable()
+		return paylink.Link{}, unavailable()
 	}
 
 	// What the entry already made.
 	ref, found, err := s.refOf(ctx, req.EffectID)
 	if err != nil {
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
 	if found && (ref.appID != req.AppID || ref.recordID != req.RecordID) {
-		return apps.PaymentLink{}, unavailable() // an entry's number is its own: never another's
+		return paylink.Link{}, unavailable() // an entry's number is its own: never another's
 	}
 	if found && ref.objectID != "" {
 		return ref.link(), nil
@@ -85,7 +85,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req apps.PaymentLinkReque
 	cur := strings.ToUpper(strings.TrimSpace(req.Currency))
 	minor, err := s.checkMoney(rec, req.Amount, cur)
 	if err != nil {
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
 	// With no public URL there are no pages of ours: both are empty and the provider hosts the
 	// payer's confirmation (a link is made all the same).
@@ -94,14 +94,14 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req apps.PaymentLinkReque
 	if err != nil || creds.APIKey == "" {
 		var unreadable unreadableError
 		if err == nil || errors.As(err, &unreadable) {
-			return apps.PaymentLink{}, unavailable() // no key, or one the server's key can't open
+			return paylink.Link{}, unavailable() // no key, or one the server's key can't open
 		}
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
 
 	ref, err = s.beginRef(ctx, req, minor, cur)
 	if err != nil {
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
 	if ref.objectID != "" { // made by a call that finished while this one began
 		return ref.link(), nil
@@ -112,12 +112,12 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req apps.PaymentLinkReque
 		SuccessURL: success, CancelURL: cancel,
 	})
 	if err != nil {
-		return apps.PaymentLink{}, s.callFailed(ctx, ref, rec, err)
+		return paylink.Link{}, s.callFailed(ctx, ref, rec, err)
 	}
 	if err := s.noteLink(ctx, ref, link); err != nil {
-		return apps.PaymentLink{}, err
+		return paylink.Link{}, err
 	}
-	return apps.PaymentLink{URL: link.URL, ObjectID: link.ObjectID, AmountMinor: minor, Currency: cur}, nil
+	return paylink.Link{URL: link.URL, ObjectID: link.ObjectID, AmountMinor: minor, Currency: cur}, nil
 }
 
 // providerDoes says whether the registry's provider id implements the kind.
@@ -149,7 +149,7 @@ func (s *Service) pageURLs() (success, cancel string) {
 // currency the admin didn't list are each refused with a code that says which.
 func (s *Service) checkMoney(rec record, amount, cur string) (int64, error) {
 	refused := func(code apierr.Code, params apierr.Params) error {
-		return &apps.PaymentLinkError{Code: code, Params: params}
+		return &paylink.Error{Code: code, Params: params}
 	}
 	if !currency.Known(cur) || !containsString(rec.Currencies, cur) {
 		return 0, refused(apierr.CodeIntegrationCurrencyRefused, apierr.Params{"currency": cur})
@@ -204,8 +204,8 @@ type ref struct {
 	state                              string
 }
 
-func (r ref) link() apps.PaymentLink {
-	return apps.PaymentLink{URL: r.url, ObjectID: r.objectID, AmountMinor: r.amountMinor, Currency: r.currency}
+func (r ref) link() paylink.Link {
+	return paylink.Link{URL: r.url, ObjectID: r.objectID, AmountMinor: r.amountMinor, Currency: r.currency}
 }
 
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
@@ -239,7 +239,7 @@ func newToken() (string, error) {
 // write lock, so two workers that took the same entry find one ref. A ref that has no object is
 // updated to what this try asks (the entry's amount is fixed, but the integration it is bound to
 // may be another since); a failed one starts anew with a key of its own.
-func (s *Service) beginRef(ctx context.Context, req apps.PaymentLinkRequest, minor int64, cur string) (ref, error) {
+func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string) (ref, error) {
 	token, err := newToken()
 	if err != nil {
 		return ref{}, err
@@ -313,11 +313,11 @@ func (s *Service) callFailed(ctx context.Context, r ref, rec record, err error) 
 		"kind", int(ce.Kind), "status", ce.Status)
 	switch ce.Kind {
 	case CallCredentials:
-		return &apps.PaymentLinkError{Code: apierr.CodeIntegrationCredentialsRefused}
+		return &paylink.Error{Code: apierr.CodeIntegrationCredentialsRefused}
 	case CallRefused:
-		return &apps.PaymentLinkError{Code: apierr.CodeIntegrationProviderRefused}
+		return &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
 	}
-	return &apps.PaymentLinkError{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+	return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
 }
 
 func boolInt(b bool) int {

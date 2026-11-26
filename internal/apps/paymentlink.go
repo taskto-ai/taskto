@@ -7,6 +7,7 @@ import (
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/currency"
+	"taskto.ai/taskto/internal/paylink"
 )
 
 // The create_payment_link effect (docs/integrations.md).
@@ -16,7 +17,7 @@ import (
 // contract for the slot that asks for exactly this link, and that the integration it was approved
 // with is switched on and allowed in the app's space (Binding): an admin who revokes the approval,
 // switches the integration off or takes the space away stops the entry at once. Then it asks the
-// integration's side (PaymentLinks) for the link, which is the one that checks the admin's limits
+// integration's side (paylink.Opener) for the link, which is the one that checks the admin's limits
 // (the ceiling, the currencies), keeps the reference that makes the call happen once, and talks to
 // the provider with the integration's key, which never comes here. Last it writes the link and its
 // id to the two fields the effect names through the system writer (system.go), limited to the
@@ -28,51 +29,8 @@ import (
 // its address with the reference), and writing it to the record again sets what is there already,
 // which is no change and no new revision.
 
-// PaymentLinks is what the integrations offer create_payment_link: package integrations, which is
-// built on this one, implements it, and the server hands it to the apps service in Platform.
-type PaymentLinks interface {
-	// OpenPaymentLink returns the link to pay what the request asks, making it at the provider only
-	// if the request's entry has not made one already. Its failures are *PaymentLinkError.
-	OpenPaymentLink(ctx context.Context, req PaymentLinkRequest) (PaymentLink, error)
-}
-
-// PaymentLinkRequest is a payment link as the integration is asked for it. The integration of the
-// workspace is the one the approval bound the slot to, and the limits it checks are its own.
-type PaymentLinkRequest struct {
-	WorkspaceID, IntegrationID, SpaceID, AppID, RecordID int64
-	// EffectID is the outbox entry's number, which the integration's reference is unique by.
-	EffectID int64
-	Slot     string
-	// Amount is the amount as decimal text and Currency its code, as the record held them
-	// (payload): nothing in them was rounded, converted or checked yet.
-	Amount, Currency string
-	// Description is the text the payer reads.
-	Description string
-}
-
-// PaymentLink is what the provider made.
-type PaymentLink struct {
-	// URL is the address the payer opens, on the provider's own domain; ObjectID is the provider's
-	// id of what it made.
-	URL, ObjectID string
-	// AmountMinor and Currency are what the link asks, exactly.
-	AmountMinor int64
-	Currency    string
-}
-
-// PaymentLinkError is a failure of OpenPaymentLink with the code the person who acted is told.
-// Transient failures (the provider didn't answer) are tried again by the outbox before they fail
-// for good.
-type PaymentLinkError struct {
-	Code      apierr.Code
-	Params    apierr.Params
-	Transient bool
-}
-
-func (e *PaymentLinkError) Error() string { return string(e.Code) }
-
 // WithPaymentLinks sets what makes payment links, and returns the service.
-func (s *Service) WithPaymentLinks(p PaymentLinks) *Service {
+func (s *Service) WithPaymentLinks(p paylink.Opener) *Service {
 	s.platform.Payments = p
 	return s
 }
@@ -112,12 +70,12 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 		e.appID).Scan(&spaceID, &workspaceID); err != nil {
 		return nil, err
 	}
-	link, err := s.platform.Payments.OpenPaymentLink(ctx, PaymentLinkRequest{
+	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
 		Slot: p.Slot, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
 	})
 	if err != nil {
-		var pe *PaymentLinkError
+		var pe *paylink.Error
 		if errors.As(err, &pe) {
 			return nil, &effectError{code: pe.Code, params: pe.Params, transient: pe.Transient}
 		}

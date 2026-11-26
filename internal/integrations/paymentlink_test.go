@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/integrations/testprovider"
+	"taskto.ai/taskto/internal/paylink"
 )
 
 const publicURL = "https://tasks.example.com"
@@ -379,7 +380,7 @@ func TestAnEntryDoneAgainAfterTheLinkWasNotedDoesNotCallStripe(t *testing.T) {
 	record := p.invoice(99.99, "EUR")
 	p.send(record, "op-send-0003")
 	entry := p.entries()[0]
-	req := apps.PaymentLinkRequest{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: entry.id,
+	req := paylink.Request{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: entry.id,
 		Slot: "payments", Amount: "99.99", Currency: "EUR", Description: "Invoice"}
 	first, err := p.svc.OpenPaymentLink(context.Background(), req)
 	if err != nil || first.AmountMinor != 9999 || first.ObjectID == "" || first.URL == "" {
@@ -614,7 +615,7 @@ func TestWithoutAPublicURLAnEntryDoneAgainDoesNotMakeASecondLink(t *testing.T) {
 	record := p.invoice(99.99, "EUR")
 	p.send(record, "op-hosted-0004")
 	entry := p.entries()[0]
-	req := apps.PaymentLinkRequest{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: entry.id,
+	req := paylink.Request{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: entry.id,
 		Slot: "payments", Amount: "99.99", Currency: "EUR", Description: "Invoice"}
 	first, err := p.svc.OpenPaymentLink(context.Background(), req)
 	if err != nil || first.AmountMinor != 9999 || !strings.HasPrefix(first.ObjectID, "plink_") || first.URL == "" {
@@ -757,12 +758,12 @@ func TestAnIntegrationOfAnotherWorkspaceIsNeverUsed(t *testing.T) {
 	e := p.entries()[0]
 
 	// The port itself, asked for another workspace's integration, says the same.
-	_, err := p.svc.OpenPaymentLink(context.Background(), apps.PaymentLinkRequest{WorkspaceID: p.ws, IntegrationID: theirs.ID, SpaceID: p.space.ID,
+	_, err := p.svc.OpenPaymentLink(context.Background(), paylink.Request{WorkspaceID: p.ws, IntegrationID: theirs.ID, SpaceID: p.space.ID,
 		AppID: p.app.ID, RecordID: record, EffectID: e.id, Slot: "payments", Amount: "10", Currency: "EUR"})
 	if !isUnavailable(err) {
 		t.Fatalf("err = %v", err)
 	}
-	_, err = p.svc.OpenPaymentLink(context.Background(), apps.PaymentLinkRequest{WorkspaceID: other, IntegrationID: p.in.ID, SpaceID: p.space.ID,
+	_, err = p.svc.OpenPaymentLink(context.Background(), paylink.Request{WorkspaceID: other, IntegrationID: p.in.ID, SpaceID: p.space.ID,
 		AppID: p.app.ID, RecordID: record, EffectID: e.id, Slot: "payments", Amount: "10", Currency: "EUR"})
 	if !isUnavailable(err) {
 		t.Fatalf("err = %v", err)
@@ -779,7 +780,7 @@ func TestAnEntrysRefIsNotAnotherRecordsLink(t *testing.T) {
 	record := p.invoice(10, "EUR")
 	p.send(record, "op-own-0001")
 	entry := p.entries()[0]
-	req := apps.PaymentLinkRequest{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record,
+	req := paylink.Request{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record,
 		EffectID: entry.id, Slot: "payments", Amount: "10", Currency: "EUR"}
 	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err != nil {
 		t.Fatal(err)
@@ -796,7 +797,7 @@ func TestTheIntegrationIsCheckedWhenTheLinkIsAsked(t *testing.T) {
 	record := p.invoice(10, "EUR")
 	p.send(record, "op-gate-0001")
 	entry := p.entries()[0]
-	req := apps.PaymentLinkRequest{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record,
+	req := paylink.Request{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record,
 		EffectID: entry.id, Slot: "payments", Amount: "10", Currency: "EUR"}
 	expectUnavailable := func(why string) {
 		t.Helper()
@@ -863,6 +864,6 @@ func TestTheKeyNeverLeavesTheCall(t *testing.T) {
 
 // isUnavailable says whether err is the port's "integration_unavailable".
 func isUnavailable(err error) bool {
-	var pe *apps.PaymentLinkError
+	var pe *paylink.Error
 	return errors.As(err, &pe) && pe.Code == apierr.CodeIntegrationUnavailable
 }

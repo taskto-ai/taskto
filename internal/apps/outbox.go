@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/paylink"
 	"taskto.ai/taskto/internal/quota"
 )
 
@@ -104,7 +105,7 @@ type Platform struct {
 	ProviderKinds func(provider string) []string
 	// Payments makes the payment links of create_payment_link effects (paymentlink.go). Without it
 	// such an entry can't be done (it is tried again, then fails for a retry).
-	Payments PaymentLinks
+	Payments paylink.Opener
 }
 
 // WithPlatform gives the service what its effects act on, and returns it.
