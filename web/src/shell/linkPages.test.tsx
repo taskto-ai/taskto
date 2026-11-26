@@ -88,3 +88,17 @@ for (const [label, path] of [
     expect(calls.some((c) => c.path === EMAIL_CONFIRM_API || c.path.startsWith('/api/me/notifications'))).toBe(false)
   })
 }
+
+test('the page’s own links go to the workspace the frame shows, the one used last', async () => {
+  localStorage.setItem('taskto.workspace', '4')
+  window.history.replaceState(null, '', `${EMAIL_CONFIRM_PATH}#a-token-for-the-test`)
+  fakeFetch({ [`POST ${EMAIL_CONFIRM_API}`]: { body: {} } })
+  const two = { ...me, workspaces: [...me.workspaces, { id: 4, name: 'Team', role: 'member' }] } as Me
+  render(<Shell me={two} onLogout={() => {}} />)
+  expect(screen.getByRole('button', { name: 'Workspace: Team' })).toBeTruthy()
+  const main = screen.getByRole('main')
+  await within(main).findByText(/Your address is confirmed/)
+  expect(within(main).getByRole('link', { name: 'Open notification settings' }).getAttribute('href')).toBe(
+    '/w/4/settings/notifications',
+  )
+})

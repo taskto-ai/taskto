@@ -46,6 +46,12 @@ function lastWorkspace(): number | null {
   }
 }
 
+// The workspace to show when the address names none of the person's: the one used last, else the
+// first.
+function homeWorkspace(me: Me): Workspace | undefined {
+  return me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
+}
+
 function rememberWorkspace(id: number) {
   try {
     localStorage.setItem(LAST_WORKSPACE, String(id))
@@ -76,7 +82,9 @@ export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; on
 function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   const opening = parseNotificationPath(path)
-  const first = me.workspaces[0]?.id ?? null
+  // The workspace the frame shows (the one used last, else the first): the page's own links (to
+  // the inbox, to the notification settings) go to it too.
+  const first = homeWorkspace(me)?.id ?? null
   if (path === EMAIL_CONFIRM_PATH) {
     const page = <ConfirmEmail token={window.location.hash.slice(1)} workspace={first} />
     return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'settings', page }} />
@@ -109,7 +117,7 @@ function Frame({
   usePushSync(me.user.id, me.workspaces.length > 0)
   const parsed = parseRoute(path)
   const member = (id: number) => me.workspaces.some((w) => w.id === id)
-  const fallback = me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
+  const fallback = homeWorkspace(me)
   const route: Route | null = special
     ? fallback
       ? { workspace: fallback.id, section: special.section }

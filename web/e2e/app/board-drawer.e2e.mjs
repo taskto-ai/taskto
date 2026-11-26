@@ -36,6 +36,10 @@ for (const width of [1440, 1920]) {
       await tile('In done').click()
       const drawer = page.getByRole('region', { name: 'In done' })
       await drawer.waitFor()
+      // Measured where it settles, after its entry (it slides in from the edge).
+      await drawer.evaluate((el) =>
+        Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => {}))),
+      )
       const edge = (await drawer.boundingBox()).x
       assert.deepEqual(await widths(), closed, 'the columns keep the width they have with the card closed')
 
