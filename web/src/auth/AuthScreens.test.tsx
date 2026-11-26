@@ -608,10 +608,10 @@ test('a deletion answered while another account is on the code step is kept out 
   await screen.findByLabelText('Password')
   fillLogin()
   await screen.findByRole('heading', { name: 'Two-factor login' })
-  // 1's answer arrives now: nothing is told on the code step.
+  // 1's answer arrives now, after 2's details were submitted: it is refused, and nothing is told.
   act(() => rememberDeletion(request, DATE))
   expect(screen.queryByText(SHOWN)).toBeNull()
-  expect(peekDeletion()).toBe(DATE)
+  expect(peekDeletion()).toBeNull()
   fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '123456' } })
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
   await vi.waitFor(() => expect(done).toHaveBeenCalled())
@@ -710,6 +710,25 @@ test('a notice is not told again to another account that went to the code step a
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
   expect(peekDeletion()).toBeNull()
+})
+
+test('a deletion answered after other sign-in details were submitted is not told, even after the code step', async () => {
+  sessionStorage.clear()
+  resetDeletion()
+  const request = startDeletion(1)
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { two_factor_required: true, challenge: 'fake-challenge', expires_at: 'x' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'b@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'right horse battery' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await screen.findByRole('button', { name: 'Back to the password' })
+  act(() => rememberDeletion(request, '2026-12-08T10:00:00.000Z'))
+  fireEvent.click(screen.getByRole('button', { name: 'Back to the password' }))
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
 })
 
 // --- The rework on the component library: what it adds to the screens.

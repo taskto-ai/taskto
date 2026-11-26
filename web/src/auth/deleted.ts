@@ -30,7 +30,7 @@ export const DELETION_EVENT = 'taskto:account-deleted'
 type Notice = { user: number; purgeAt: string; shown?: boolean }
 
 // The deletion request of one account, remembered with the sign-ins this page had seen when it was made.
-export type DeletionRequest = { user: number; epoch: number }
+export type DeletionRequest = { user: number; epoch: number; submitted: number }
 
 let memory: Notice | null = null
 // The notice that has been shown or dropped: neither memory nor storage tells it again.
@@ -38,6 +38,8 @@ let spent: string | null = null
 // Which account signed in last on this page, and how many different ones have since it began.
 let signedIn: number | null = null
 let epoch = 0
+// How many times sign-in details were submitted on this page (a password, a single sign-on start).
+let submitted = 0
 
 const keyOf = (n: Notice) => `${n.user}|${n.purgeAt}`
 
@@ -84,13 +86,14 @@ export function noteSignIn(user: number): void {
 
 // Called when the deletion request is made: who made it, and which sign-ins this page had seen.
 export function startDeletion(user: number): DeletionRequest {
-  return { user, epoch }
+  return { user, epoch, submitted }
 }
 
 // The deletion was answered: the notice is kept for the sign-in screen, unless another account has
 // signed in on this page since the request was made.
 export function rememberDeletion(request: DeletionRequest, purgeAt: string): void {
-  if (request.epoch !== epoch || (signedIn !== null && signedIn !== request.user)) return
+  if (request.epoch !== epoch || request.submitted !== submitted || (signedIn !== null && signedIn !== request.user))
+    return
   const notice: Notice = { user: request.user, purgeAt }
   spent = null
   memory = notice
@@ -132,6 +135,8 @@ export function deletionShown(): void {
 // shown. The form does not know whose account the email names, so any submission drops it: telling
 // it too early to the account it belongs to is acceptable, telling it to someone else is not.
 export function dropDeletion(): void {
+  // An answer to a deletion requested before this is for a browser that has moved on: it is refused.
+  submitted++
   const n = current()
   if (n && !n.shown && keyOf(n) !== spent) retire(n)
 }
@@ -142,6 +147,7 @@ export function resetDeletion(): void {
   spent = null
   signedIn = null
   epoch = 0
+  submitted = 0
   try {
     window.sessionStorage.removeItem(KEY)
   } catch {
