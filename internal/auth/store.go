@@ -76,6 +76,7 @@ var (
 	errInviteInvalid  = errors.New("the invite is unknown, used or expired")
 	// errAccountDisabled is the answer of every way of signing in, or of acting as an account, for
 	// a disabled one (disable.go).
+	errNotOperator     = errors.New("only the server's operator can do this")
 	errAccountDisabled = errors.New("this account is disabled: ask a workspace admin to enable it")
 )
 

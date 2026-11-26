@@ -19,8 +19,9 @@ describe('truncateWal', () => {
   const log = () => {
     try {
       return readFileSync(`${path}-wal`).toString('latin1')
-    } catch {
-      return ''
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+      throw error
     }
   }
 

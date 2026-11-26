@@ -485,7 +485,14 @@ func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 		t.Helper()
 		for _, name := range []string{"agent.db", "agent.db-wal"} {
 			b, err := os.ReadFile(filepath.Join(s.dir, name))
-			if err == nil && bytes.Contains(b, []byte(word)) {
+			if err != nil {
+				// The log may be absent (checkpointed away); the database file never is.
+				if name == "agent.db-wal" && errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				t.Fatalf("reading %s: %v", name, err)
+			}
+			if bytes.Contains(b, []byte(word)) {
 				return true
 			}
 		}

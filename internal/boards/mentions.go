@@ -28,6 +28,11 @@ import (
 // holds none of the characters that would end or escape a Markdown link's label.
 var mentionPattern = regexp.MustCompile(`@\[[^\]\[\\\n]{1,200}\]\(user:([0-9]{1,18})\)`)
 
+// anonymizedMentionPattern is mentionPattern for the rewriting of a deleted account's mentions,
+// which also takes a label whose pipe is escaped (`\|`, as a table cell needs): the label is what
+// the writer typed, and it names the person all the same.
+var anonymizedMentionPattern = regexp.MustCompile(`@\[(?:[^\]\[\\\n]|\\\|){1,200}\]\(user:([0-9]{1,18})\)`)
+
 // maxMentions bounds how many people one comment tells, so a comment can't be made to notify a
 // whole workspace at once.
 const maxMentions = 20
@@ -521,8 +526,8 @@ func AnonymizeMentions(ctx context.Context, tx *sql.Tx, userID int64, label stri
 	}
 	var n int64
 	for _, r := range todo {
-		body := mentionPattern.ReplaceAllStringFunc(r.body, func(m string) string {
-			sub := mentionPattern.FindStringSubmatch(m)
+		body := anonymizedMentionPattern.ReplaceAllStringFunc(r.body, func(m string) string {
+			sub := anonymizedMentionPattern.FindStringSubmatch(m)
 			if len(sub) != 2 {
 				return m
 			}

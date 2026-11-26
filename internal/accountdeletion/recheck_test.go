@@ -2,8 +2,8 @@ package accountdeletion
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -207,7 +207,11 @@ func TestAuditCleanupsPendingCountsTheProvidersStep(t *testing.T) {
 	}
 	// Two conversations were handled before the account went, the CLI directory too: only the
 	// providers file's rewriting was still to do, and it is counted.
-	if want := `"cleanups_pending":1`; !strings.Contains(details, want) {
-		t.Errorf("details %s lack %s", details, want)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(details), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["cleanups_pending"] != float64(1) {
+		t.Errorf("cleanups_pending = %v in %s, want 1", got["cleanups_pending"], details)
 	}
 }

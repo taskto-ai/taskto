@@ -64,6 +64,8 @@ func TestAnonymizeMentionsRewritesOnlyTheMentionsOfThatPerson(t *testing.T) {
 		fmt.Sprintf("another person's id that starts the same: @[Bo](user:%d0)", w.bob.id),
 		// The same number written with zeros in front is the same person.
 		fmt.Sprintf("padded @[Bob Smith](user:%03d) and @[Bob](user:0%d)", w.bob.id, w.bob.id),
+		// A table cell escapes the pipe of a label.
+		fmt.Sprintf("| @[Bob\\|Smith](user:%d) | ok |", w.bob.id),
 		"nobody",
 	}
 	ids := make([]int64, len(bodies))
@@ -93,6 +95,7 @@ func TestAnonymizeMentionsRewritesOnlyTheMentionsOfThatPerson(t *testing.T) {
 		"in code: `@[Deleted user](user:0)` is still the person's label",
 		bodies[3],
 		"padded @[Deleted user](user:0) and @[Deleted user](user:0)",
+		"| @[Deleted user](user:0) | ok |",
 		"nobody",
 	}
 	for i, id := range ids {
@@ -104,8 +107,8 @@ func TestAnonymizeMentionsRewritesOnlyTheMentionsOfThatPerson(t *testing.T) {
 			t.Errorf("comment %d = %q, want %q", i, got, want[i])
 		}
 	}
-	if n != 4 {
-		t.Errorf("changed %d comments, want 4", n)
+	if n != 5 {
+		t.Errorf("changed %d comments, want 5", n)
 	}
 	// None of the rewritten ones tells anyone, or resolves to a person.
 	for _, i := range []int{0, 1, 4} {

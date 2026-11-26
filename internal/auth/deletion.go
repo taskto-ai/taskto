@@ -460,6 +460,12 @@ func (s *Service) handleCancelDeletion(w http.ResponseWriter, r *http.Request) {
 		} else if off {
 			return errAccountDisabled
 		}
+		// The route's check ran before this transaction: an operator demoted since can't cancel.
+		if ok, err := isOperator(r.Context(), tx, operator.ID); err != nil {
+			return err
+		} else if !ok {
+			return errNotOperator
+		}
 		return s.cancelDeletion(r.Context(), tx, userID, operator.ID)
 	})
 	switch {
@@ -471,6 +477,9 @@ func (s *Service) handleCancelDeletion(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, errAccountDisabled):
 		accountDisabled(w)
+		return
+	case errors.Is(err, errNotOperator):
+		writeError(w, http.StatusForbidden, apierr.CodeOperatorOnly, "only the server's operator can do this")
 		return
 	case err != nil:
 		serverError(w, r, err)

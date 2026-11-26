@@ -199,7 +199,11 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if rt == nil {
 			return errWaiting
 		}
-		if err := conversations.PurgeConversation(ctx, rt, id); err != nil {
+		// Bounded: a runtime that accepts the call and never answers must not stop the
+		// maintenance loop's other steps.
+		actx, cancel := context.WithTimeout(ctx, s.agentTimeout())
+		defer cancel()
+		if err := conversations.PurgeConversation(actx, rt, id); err != nil {
 			return sidecarFailure(err)
 		}
 		return nil
@@ -213,6 +217,17 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		return s.syncProviders(ctx)
 	}
 	return failed(failUnknownStep, nil)
+}
+
+// defaultAgentTimeout bounds one attempt at an agent runtime step: longer than the runtime's own wait
+// for a pinned log, so its busy answer arrives first.
+const defaultAgentTimeout = time.Minute
+
+func (s *Service) agentTimeout() time.Duration {
+	if s.stepTimeout > 0 {
+		return s.stepTimeout
+	}
+	return defaultAgentTimeout
 }
 
 // forgetCLI removes everything kept for user's CLI logins: the worker's directory (when CLI workers

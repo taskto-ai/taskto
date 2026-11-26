@@ -54,6 +54,9 @@ func (w *world) putFile(sp access.Space, app int64, name, content string) {
 
 func (w *world) hasFile(sp access.Space, app int64, name string) bool {
 	_, err := os.Stat(w.filePath(sp, app, name))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		w.t.Fatalf("can't tell whether %s is there: %v", name, err)
+	}
 	return err == nil
 }
 

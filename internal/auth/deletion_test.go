@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -407,5 +409,28 @@ func TestAPurgedNewestAccountsIDIsNotGivenToTheNextToRegister(t *testing.T) {
 	var after int64
 	if err := e.db.QueryRow(`SELECT high FROM user_ids`).Scan(&after); err != nil || after < before {
 		t.Fatalf("the mark went from %d to %d, %v", before, after, err)
+	}
+}
+
+// The route checks that the caller is an operator before its handler runs; the handler checks again
+// in the transaction that cancels, so an operator demoted in between can't cancel.
+func TestCancelingADeletionChecksTheOperatorAgainInItsTransaction(t *testing.T) {
+	tm, _ := newDeletionTeam(t)
+	e := tm.e
+	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
+	adminElsewhere, _ := e.join(e.invite(tm.owner, tm.ws, "second@example.com", RoleMember), "Second")
+	secondID := e.userID(adminElsewhere) // not an operator: only the setup workspace's admins are
+
+	req := httptest.NewRequest(http.MethodDelete, "/", nil)
+	req.SetPathValue("user", strconv.FormatInt(tm.memberID, 10))
+	req = req.WithContext(context.WithValue(req.Context(), userKey{}, User{ID: secondID}))
+	rec := httptest.NewRecorder()
+	e.svc.handleCancelDeletion(rec, req)
+	expect(t, rec, http.StatusForbidden)
+	if got := errCode(t, rec); got != string(apierr.CodeOperatorOnly) {
+		t.Fatalf("code = %q", got)
+	}
+	if n := e.count(`SELECT count(*) FROM account_deletions`); n != 1 {
+		t.Fatal("a caller who isn't an operator cancelled the deletion")
 	}
 }

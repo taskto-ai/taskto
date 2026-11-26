@@ -126,6 +126,9 @@ type Service struct {
 	// beforeSchedule, for tests, runs in Reconcile between the list of accounts without a job and
 	// the transaction that makes each one's job.
 	beforeSchedule func(user int64)
+
+	// stepTimeout, for tests, replaces defaultAgentTimeout.
+	stepTimeout time.Duration
 }
 
 // New returns the service. Attach it to the scheduler before the scheduler starts, and give it to
@@ -339,13 +342,19 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if apps == nil {
 		return errors.New("the apps service isn't set yet: the purge waits for it, so what the apps keep isn't skipped")
 	}
+	// Each space is tried even when another's fails (they are independent); the purge stops after
+	// the loop, before anything is removed, if one did.
+	var moveErrs []error
 	for _, sp := range private {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if err := apps.FinishMoves(ctx, sp.ID); err != nil {
-			return err
+			moveErrs = append(moveErrs, fmt.Errorf("finishing the app moves of space %d: %w", sp.ID, err))
 		}
+	}
+	if err := errors.Join(moveErrs...); err != nil {
+		return err
 	}
 	// Their unfinished uploads in any app (a shared app's are theirs alone): with files. The photos
 	// already on records stay with the records.
@@ -362,25 +371,36 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	}
 
 	// Files before rows: a purge that stops between the two still finds the spaces to finish.
+	// Every directory is tried even when one can't be removed; the rows stay until all are gone.
+	var removeErrs []error
 	for _, sp := range private {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if err := s.o.Knowledge.RemoveSpace(sp); err != nil {
-			return err
+			removeErrs = append(removeErrs, fmt.Errorf("removing private space %d: %w", sp.ID, err))
 		}
+	}
+	if err := errors.Join(removeErrs...); err != nil {
+		return err
 	}
 	// Their name and address in what they wrote in the shared spaces, of every workspace they have
 	// been in: the history of a space they left holds them too.
+	// Every repository is tried even when one fails; the purge stays pending if any did.
+	var anonErrs []error
 	for _, sp := range shared {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		n, err := s.o.Knowledge.AnonymizeAuthors(ctx, sp, []string{acct.email})
 		if err != nil {
-			return fmt.Errorf("replacing the account's name in space %d's history: %w", sp.ID, err)
+			anonErrs = append(anonErrs, fmt.Errorf("replacing the account's name in space %d's history: %w", sp.ID, err))
+			continue
 		}
 		res.DocumentsAnonymized += int64(n)
+	}
+	if err := errors.Join(anonErrs...); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err

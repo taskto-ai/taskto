@@ -245,12 +245,20 @@ func (w *world) everythingAbout(needle string) []string {
 		}
 		tables = append(tables, n)
 	}
+	if err := rows.Err(); err != nil {
+		w.t.Fatal(err)
+	}
 	_ = rows.Close()
 	var found []string
 	for _, tbl := range tables {
 		r, err := w.db.Query(`SELECT * FROM "` + tbl + `"`) //nolint:gosec // G202: a table name read from sqlite_master
 		if err != nil {
-			continue // a virtual table's shadow
+			// Only a full-text index's shadow tables may be unreadable by name; any other table
+			// that can't be read could hold the needle, so the scan can't say it is gone.
+			if strings.HasPrefix(tbl, "search_") {
+				continue
+			}
+			w.t.Fatalf("scanning %s: %v", tbl, err)
 		}
 		cols, _ := r.Columns()
 		for r.Next() {
@@ -274,6 +282,9 @@ func (w *world) everythingAbout(needle string) []string {
 					found = append(found, tbl+"."+cols[i])
 				}
 			}
+		}
+		if err := r.Err(); err != nil {
+			w.t.Fatalf("scanning %s: %v", tbl, err)
 		}
 		_ = r.Close()
 	}
