@@ -11,6 +11,7 @@ import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
 import { BarcodeField } from './BarcodeInput'
 import { type CaptureInfo, isLocation } from './capture'
+import { iconPath } from './iconPath'
 import { LocationField } from './LocationInput'
 import { PhotoField, PhotoStrip, useAppFiles } from './PhotoInput'
 import { type PhotoLimits, photoIds, signatureId } from './photos'
@@ -214,6 +215,35 @@ const Screens = createComponentImplementation(ScreensApi, ({ props, buildChild }
 // or .*.*.*.* can freeze it; the server refuses both too (internal/apps/catalog.go).
 const LEFT_OUT = new Set(['Image', 'Video', 'AudioPlayer', 'openUrl', 'regex'])
 
+// A2UI's Icon, drawn by us: its name is SVG path data ({"svgPath": "…"}), which the server checked
+// on save and iconPath checks again here. The <svg> and <path> are made here and the string goes
+// only into the path's d attribute, through React: never markup, a URL, a style or a class. The
+// view box is fixed and the fill is the text's colour. A name draws nothing: this client loads no
+// icon font, and the word would read as text. An icon with a label is an image named so (the
+// server requires one for an icon that is all of a button); without one it is decoration, hidden
+// from assistive technology, as beside a label.
+const basicIcon = basicCatalog.components.get('Icon')
+const IconApi = { name: 'Icon', schema: basicIcon?.schema ?? z.object({}).passthrough() }
+
+const Icon = createComponentImplementation(IconApi, ({ props }) => {
+  const { name, accessibility } = props as { name?: unknown; accessibility?: { label?: unknown } }
+  const d = iconPath(name)
+  if (!d) return null
+  const label = typeof accessibility?.label === 'string' ? accessibility.label.trim() : ''
+  return (
+    // biome-ignore lint/a11y/noSvgWithoutTitle: an icon without a label is aria-hidden; one with a label is named by aria-label.
+    <svg
+      className="ui-app-icon"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      focusable="false"
+      {...(label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': true })}
+    >
+      <path d={d} />
+    </svg>
+  )
+})
+
 // A2UI's TextField without its validationRegexp prop, for the same reason.
 const basicTextField = basicCatalog.components.get('TextField')
 const TextField = basicTextField && {
@@ -225,8 +255,11 @@ export const appsCatalog = new Catalog(
   APPS_CATALOG_ID,
   '0.9',
   [
-    ...[...basicCatalog.components.values()].filter((c) => !LEFT_OUT.has(c.name) && c.name !== 'TextField'),
+    ...[...basicCatalog.components.values()].filter(
+      (c) => !LEFT_OUT.has(c.name) && c.name !== 'TextField' && c.name !== 'Icon',
+    ),
     ...(TextField ? [TextField] : []),
+    Icon,
     Stat,
     Show,
     PhotoInput,

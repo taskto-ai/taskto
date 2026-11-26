@@ -3,11 +3,14 @@ package apps
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"taskto.ai/taskto/internal/apierr"
 )
 
 // The catalog is every component and function an app's screen may use, and the props and
@@ -47,7 +50,7 @@ const (
 	kAccessibility             // {label, description}, both dynamic strings
 	kTabs                      // a list of {title, child}
 	kOptions                   // a list of {label, value}
-	kIconName                  // an icon's name, an SVG path, or a binding
+	kIconName                  // an icon's SVG path, its name (drawn as nothing), or a binding
 	kRule                      // a rule (rules.go) over the collection's fields
 	kScreenRefs                // a list of {name, child}: the host of the screens' own
 )
@@ -216,7 +219,7 @@ func Capabilities() []string {
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
-	all = append(all, SummaryMonthCapability, LabelsCapability)
+	all = append(all, SummaryMonthCapability, LabelsCapability, IconPathCapability)
 	sort.Strings(all)
 	return all
 }
@@ -254,9 +257,10 @@ const (
 // screenCheck validates one screen.
 type screenCheck struct {
 	*screenScope
-	used map[string]bool // the capabilities the screen needs
-	ids  map[string]bool
-	refs map[string][]string // component ID → the IDs it refers to
+	used      map[string]bool // the capabilities the screen needs
+	ids       map[string]bool
+	pathIcons map[string]bool     // the Icons given as a path
+	refs      map[string][]string // component ID → the IDs it refers to
 }
 
 // checkComponents validates a screen's components and returns them re-encoded, so what is
@@ -270,7 +274,8 @@ func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, 
 	if len(raw) > MaxComponents {
 		return nil, nil, invalidf("components: at most %d", MaxComponents)
 	}
-	c := &screenCheck{screenScope: scope, used: map[string]bool{}, ids: map[string]bool{}, refs: map[string][]string{}}
+	c := &screenCheck{screenScope: scope, used: map[string]bool{}, ids: map[string]bool{}, refs: map[string][]string{},
+		pathIcons: map[string]bool{}}
 	decoded := make([]map[string]any, len(raw))
 	for i, r := range raw {
 		obj, err := decodeObject(r)
@@ -297,9 +302,21 @@ func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, 
 		return nil, nil, invalidf("components: no component has the id %q", root)
 	}
 	out := make([]json.RawMessage, len(decoded))
+	byID := make(map[string]map[string]any, len(decoded))
 	for i, obj := range decoded {
 		id := obj["id"].(string)
+		byID[id] = obj
 		if err := c.component(id, obj); err != nil {
+			// An icon's refusal keeps its code, with the component it is in, so the web app can say
+			// what is wrong with it.
+			var coded *invalidError
+			if errors.As(err, &coded) && coded.code == apierr.CodeAppIconPath {
+				params := apierr.Params{"component": id}
+				for k, v := range coded.params {
+					params[k] = v
+				}
+				return nil, nil, invalidAs(coded.code, params, "component %q: %v", id, err)
+			}
 			return nil, nil, invalidf("component %q: %v", id, err)
 		}
 		b, err := json.Marshal(obj)
@@ -309,6 +326,9 @@ func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, 
 		out[i] = b
 	}
 	if err := c.references(); err != nil {
+		return nil, nil, err
+	}
+	if err := c.iconLabels(byID); err != nil {
 		return nil, nil, err
 	}
 	return out, sortedKeys(c.used), nil
@@ -441,15 +461,15 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 		switch n := v.(type) {
 		case string:
 			if !slices.Contains(iconNames, n) {
-				return fmt.Errorf("%q is not an icon (they are %s)", n, strings.Join(iconNames, ", "))
+				return fmt.Errorf(`%q is not an icon's name: give the icon {"svgPath": "<path data>"} (icons.go)`, n)
 			}
 		case map[string]any:
 			if _, isPath := n["svgPath"]; isPath {
-				return c.object(id, n, map[string]prop{"svgPath": req(kString)}, depth+1)
+				return c.iconPath(id, n)
 			}
 			return binding(n)
 		default:
-			return fmt.Errorf("must be an icon's name, {svgPath} or a data binding")
+			return fmt.Errorf(`must be {"svgPath": "<path data>"}, an icon's name or a data binding`)
 		}
 	default:
 		return fmt.Errorf("unknown kind of prop")
@@ -776,6 +796,8 @@ func authorable() []string {
 	return slices.DeleteFunc(componentNames(), func(n string) bool { return n == screensComponent })
 }
 
+// iconNames are A2UI's basic catalog's icon names, still accepted so apps saved with one stay
+// valid; the web app draws nothing for them (icons.go).
 var iconNames = []string{"accountCircle", "add", "arrowBack", "arrowForward", "attachFile", "calendarToday",
 	"call", "camera", "check", "close", "delete", "download", "edit", "event", "error", "fastForward", "favorite",
 	"favoriteOff", "folder", "help", "home", "info", "locationOn", "lock", "lockOpen", "mail", "menu", "moreVert",

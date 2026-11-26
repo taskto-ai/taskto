@@ -1,7 +1,7 @@
 {
   "template_version": 1,
   "id": "expense-tracker",
-  "version": 1,
+  "version": 2,
   "name": "Expense tracker",
   "description": "Record what you spend with a photo of the receipt, and see this month's total on your Home page.",
   "recommended_space": "private",
@@ -12,15 +12,19 @@
         "name": "list",
         "root": "list-root",
         "components": [
-          { "id": "list-root", "component": "Column", "children": ["list-title", "list-month", "list-new", "list-items"] },
+          { "id": "list-root", "component": "Column", "children": ["list-head", "list-month", "list-new", "list-items"] },
           { "id": "list-title", "component": "Text", "text": "Expenses", "variant": "h2" },
+          { "id": "list-icon", "component": "Icon", "name": { "svgPath": "M6 2h12v20l-3-2-3 2-3-2-3 2zM8 7v2h8V7zm0 4v2h8v-2zm0 4v2h5v-2z" } },
+          { "id": "list-head", "component": "Row", "align": "center", "children": ["list-icon", "list-title"] },
           { "id": "list-month", "component": "Stat", "label": "Spent this month", "value": { "path": "/month_total" } },
           { "id": "list-new-label", "component": "Text", "text": "New expense" },
+          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" } },
+          { "id": "list-new-content", "component": "Row", "align": "center", "children": ["list-new-icon", "list-new-label"] },
           {
             "id": "list-new",
             "component": "Button",
             "variant": "primary",
-            "child": "list-new-label",
+            "child": "list-new-content",
             "action": { "event": { "name": "new_expense" } }
           },
           { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
@@ -71,10 +75,12 @@
           { "id": "new-receipt", "component": "PhotoInput", "field": "receipt", "label": "Photo of the receipt", "value": { "path": "/draft/receipt" } },
           { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
           { "id": "new-back-label", "component": "Text", "text": "Back" },
+          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" } },
+          { "id": "new-back-content", "component": "Row", "align": "center", "children": ["new-back-icon", "new-back-label"] },
           {
             "id": "new-back",
             "component": "Button",
-            "child": "new-back-label",
+            "child": "new-back-content",
             "action": { "event": { "name": "back_to_list" } }
           },
           { "id": "new-save-label", "component": "Text", "text": "Save expense" },
@@ -115,10 +121,12 @@
           { "id": "detail-receipt", "component": "Photos", "label": "Receipt", "value": { "path": "/record/receipt" } },
           { "id": "detail-actions", "component": "Row", "children": ["detail-back", "detail-delete"] },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" } },
+          { "id": "detail-back-content", "component": "Row", "align": "center", "children": ["detail-back-icon", "detail-back-label"] },
           {
             "id": "detail-back",
             "component": "Button",
-            "child": "detail-back-label",
+            "child": "detail-back-content",
             "action": { "event": { "name": "back_to_list" } }
           },
           { "id": "detail-delete-label", "component": "Text", "text": "Delete" },

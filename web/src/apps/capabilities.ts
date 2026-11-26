@@ -71,6 +71,8 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   'summary.month_of',
   // Drawing a choice by its label: /_labels/<field> of an item or a record (offline/local.ts).
   'data.labels',
+  // Drawing an icon given as SVG path data, which this client checks before it draws (iconPath.ts).
+  'icon.svg_path',
   // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
   // navigation's pin.
   'slot.home_widgets.v1',
