@@ -219,7 +219,10 @@ type Service struct {
 	// clock is the time the outbox's worker goes by: the real one, a test's own otherwise.
 	clock func() time.Time
 	// wake tells the worker, if it runs in this process, that an entry was queued.
-	wake  chan struct{}
+	wake chan struct{}
+	// poll is how often the worker looks for due entries when nothing wakes it: outboxPoll,
+	// or a test's own (WithOutboxPoll).
+	poll  time.Duration
 	hooks outboxHooks
 	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
 	// the service keeps no files.

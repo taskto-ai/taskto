@@ -102,7 +102,9 @@ func newPayWith(t *testing.T, public, definition string) *pay {
 	svc.HookRoutes(mux)
 	p := &pay{env: e, fake: fake, svc: svc, offset: offset}
 	p.apps = apps.New(e.db, spaces).WithPlatform(apps.Platform{ProviderKinds: providerKinds, Payments: svc}).
-		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) })
+		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) }).
+		// The worker sees a moved clock on its next poll: a short one, so a test's wait for it is short.
+		WithOutboxPoll(25 * time.Millisecond)
 	p.apps.Routes(mux)
 	p.apps.ApprovalRoutes(mux, a)
 	svc.UseRecords(p.apps) // stored events are applied (by drainEvents: the tests run the worker by hand)
