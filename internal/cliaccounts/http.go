@@ -312,6 +312,8 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerClosing, err.Error())
 	case errors.Is(err, cliworker.ErrRemoving):
 		writeError(w, http.StatusConflict, apierr.CodeCLIAccountRemoving, err.Error())
+	case errors.Is(err, cliworker.ErrBusy):
+		writeError(w, http.StatusConflict, apierr.CodeCLIAccountBusy, err.Error())
 	default:
 		serverError(w, r, err)
 	}

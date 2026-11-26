@@ -29,21 +29,6 @@ type Turn struct {
 	// from Codex, which prints it on stdout, so a hook can ask before the worker has read it.
 	unnamed bool
 	pending map[string]*pending // permission questions waiting for the owner
-	// pgid is the process group the CLI ran in (0 until it started), which a removal of the
-	// turn's files waits to be empty (beginRemoval).
-	pgid int
-}
-
-func (t *Turn) setGroup(pgid int) {
-	t.mu.Lock()
-	t.pgid = pgid
-	t.mu.Unlock()
-}
-
-func (t *Turn) group() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.pgid
 }
 
 // startSession records the session a run of the CLI starts with: id, or, when id is empty,

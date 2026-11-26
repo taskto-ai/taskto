@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,6 +70,16 @@ type Worker struct {
 	// removals are the accounts whose files are being removed (Forget, Logout): no turn or
 	// login starts on them meanwhile (removal).
 	removals []*removal
+	// What a removal waits for: the helpers running (admit), the process groups started for an
+	// account (trackGroup), and the sign-ins whose process hasn't exited, which
+	// logins no longer lists once a newer one replaced it (loginRuns).
+	helpers   map[*helperRun]struct{}
+	groups    map[int]groupRec
+	loginRuns map[*Login]struct{}
+	// groupWait is how long a removal waits for the process groups of an account to be empty.
+	groupWait time.Duration
+	// helperLaunches counts the helpers started, for tests.
+	helperLaunches atomic.Int64
 
 	// The approval socket (approve.go): its listener, its path and, when it had to go
 	// elsewhere than the layout's root, the directory made for it.
@@ -164,7 +175,8 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
-	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{})}
+	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}),
+		helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, loginRuns: map[*Login]struct{}{}, groupWait: defaultGroupWait}
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return nil, err
 	}
@@ -394,7 +406,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return failed("%v", err)
 	}
 	pgid := cmd.Process.Pid
-	t.setGroup(pgid)
+	w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)
 	record := filepath.Join(w.stateDir(), spec.ID+".pid")
 	if start, err := startTime(pgid); err == nil {
 		if err := os.WriteFile(record, []byte(strconv.Itoa(pgid)+" "+start+"\n"), 0o600); err != nil {

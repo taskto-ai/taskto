@@ -392,12 +392,18 @@ The UI shows what the command prints.
 - **Logout** runs `claude auth logout`, `codex logout` or `grok logout`, then deletes the
   account's sessions. Their files go with the config directory when the user disconnects.
 - **Removing files under a running CLI** never happens. Disconnecting an account, and
-  forgetting a deleted user (everything the worker keeps for them), first refuse new turns and
-  sign-ins on what goes (`ErrRemoving`, `cli_account_removing` for a sign-in), then stop the
-  turns running on it (SIGTERM, the grace time, SIGKILL) and wait for their process groups to
-  end, and only then remove the files. A CLI that doesn't end in time, or a caller that gives
-  up, leaves the files where they are with an error, and the removal can be run again. Another
-  account's turns, and other users', are not stopped.
+  forgetting a deleted user (everything the worker keeps for them), are a gate: first every new
+  turn, sign-in and helper (a status check included, which makes directories and writes the CLI's
+  settings) on what goes is refused (`ErrRemoving`, `cli_account_removing`); then what runs on it
+  is stopped and waited for (the helpers, the turns with SIGTERM, the grace time and SIGKILL,
+  and every sign-in until its process has exited, also one that was cancelled and replaced); then
+  every process group the account started, including those of turns that are over, is waited for
+  until it is empty or holds only zombies (read from `/proc` on Linux, `ps` elsewhere); and only
+  then are the files removed. A group with a live process after the wait, a CLI that doesn't end
+  in time (`ErrBusy`, `cli_account_busy`) or a caller that gives up leaves the files where they
+  are with an error, and the removal can be run again. A caller that has already given up
+  starts no helper. Removals of the same account run one after the other. Another account's
+  turns, and other users', are not stopped.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

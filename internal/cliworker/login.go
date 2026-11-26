@@ -159,6 +159,7 @@ func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
 		info: LoginInfo{CLI: cli, Slot: slot, State: LoginStarting, StartedAt: time.Now().UTC(), NeedsCode: cli == Claude},
 	}
 	w.logins[key] = l
+	w.loginRuns[l] = struct{}{}
 	w.wg.Add(1)
 	w.mu.Unlock()
 
@@ -206,12 +207,17 @@ func (w *Worker) SubmitLoginCode(user int64, cli CLI, slot Slot, code string) er
 // CancelLogin stops user's login for cli's account in slot, if one is in progress.
 func (w *Worker) CancelLogin(user int64, cli CLI, slot Slot) {
 	if l, ok := w.Login(user, cli, slot); ok {
-		l.mu.Lock()
-		if !l.info.State.Final() {
-			l.info.State = LoginCancelled
-		}
-		l.mu.Unlock()
+		l.markCancelled()
 		l.cancel()
+	}
+}
+
+// markCancelled sets the login's state to cancelled, unless it is over already.
+func (l *Login) markCancelled() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.info.State.Final() {
+		l.info.State = LoginCancelled
 	}
 }
 
@@ -222,6 +228,13 @@ var (
 )
 
 func (w *Worker) runLogin(ctx context.Context, l *Login, bin string) {
+	// The sign-in stays listed for a removal until its process has exited, however its state
+	// changed, and whether or not a newer sign-in has replaced it in w.logins.
+	defer func() {
+		w.mu.Lock()
+		delete(w.loginRuns, l)
+		w.mu.Unlock()
+	}()
 	defer close(l.done)
 	defer l.cancel()
 	defer func() {
@@ -255,6 +268,7 @@ func (w *Worker) runLogin(ctx context.Context, l *Login, bin string) {
 		finish(LoginFailed, "the CLI could not start: "+err.Error())
 		return
 	}
+	w.trackGroup(cmd.Process.Pid, l.user, l.cli, l.slot)
 	// The helper's request first; what follows is the CLI's stdin (the pasted code).
 	if _, err := stdin.Write(header); err != nil {
 		finish(LoginFailed, "the CLI could not start: "+err.Error())
@@ -497,36 +511,26 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 		return err
 	}
 	defer end()
-	// A login in progress is stopped, and waited for: one that ends while the files go
-	// could write its credentials back.
-	w.CancelLogin(user, cli, slot)
-	if l, ok := w.Login(user, cli, slot); ok {
-		select {
-		case <-l.Done():
-		case <-time.After(w.cfg.StopGrace + 5*time.Second):
-			return errors.New("the sign-in in progress didn't stop")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	// The removal has also stopped the sign-in in progress, and waited for it: one that ends
+	// while the files go could write its credentials back.
 	// A shared account's directory holds no login to sign out of.
 	if bin := w.cfg.Bins[cli]; bin != "" && !slot.Shared() {
-		if _, _, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: logoutCommand(cli)}); err != nil {
+		if _, _, err := w.runRemovalHelper(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: logoutCommand(cli)}); err != nil {
 			var ee *exec.ExitError
 			if !errors.As(err, &ee) { // "not logged in" is fine
 				slog.Warn("cliworker: logout", "cli", cli, "err", err)
 			}
 		}
 	}
-	_, _, err = w.runQuick(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
+	_, _, err = w.runRemovalHelper(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
 	return err
 }
 
-// Forget removes everything the worker keeps for user, for an account that is deleted: it stops
-// the user's running turns and waits for them (an error, with the files kept, when one doesn't
-// end), refuses new ones, stops the logins in progress, signs the CLIs out (best effort: a login that can't be signed out is
-// still deleted with the directory) and removes the user's directory, with their logins,
-// sessions, working directories and browser profile. Idempotent.
+// Forget removes everything the worker keeps for user, for an account that is deleted: it
+// refuses new turns, sign-ins and helpers, stops what runs for the user and waits for it (an
+// error, with the files kept, when something doesn't end: ErrBusy), and removes the user's
+// directory, with their logins, sessions, working directories and browser profile.
+// Idempotent.
 func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return errors.New("invalid user")
@@ -539,32 +543,11 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 		return err
 	}
 	defer end()
-	var logins []*Login
-	for _, cli := range []CLI{Claude, Codex, Grok} {
-		for _, slot := range allSlots {
-			w.CancelLogin(user, cli, slot)
-			if l, ok := w.Login(user, cli, slot); ok {
-				logins = append(logins, l)
-			}
-		}
-	}
-	// A login that ends while the files go could write its credentials back.
-	grace := time.After(w.cfg.StopGrace + 5*time.Second)
-	for _, l := range logins {
-		select {
-		case <-l.Done():
-		case <-grace:
-			return errors.New("a sign-in in progress didn't stop")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	_, _, err = w.runQuick(ctx, user, helperRequest{Op: "forget"})
+	// The removal has also stopped the logins in progress, and waited for them: one that ends
+	// while the files go could write its credentials back.
+	_, _, err = w.runRemovalHelper(ctx, user, helperRequest{Op: "forget"})
 	return err
 }
-
-// allSlots are the slots of a user's own accounts: the first and 2 to 9.
-var allSlots = []Slot{"", "2", "3", "4", "5", "6", "7", "8", "9"}
 
 // codexLimits asks the helper, as the user, for the usage limits in thread's session file.
 func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
@@ -585,12 +568,33 @@ func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
 	return limits
 }
 
-// runQuick runs a short helper request for user (a status, a logout, a read) and returns its
-// stdout and stderr, apart: the helper's JSON answers and a CLI's JSON are on stdout, and a
-// warning on stderr (a runtime's, a CLI's) must never be parsed with them. A caller reads
-// stderr only for a CLI that answers there, or to say why. It is stopped after 30 s or when
-// ctx ends.
+// runQuick runs a short helper request for user (a status, a read) and returns its stdout and
+// stderr, apart: the helper's JSON answers and a CLI's JSON are on stdout, and a warning on
+// stderr (a runtime's, a CLI's) must never be parsed with them. A caller reads stderr only for
+// a CLI that answers there, or to say why. It is stopped after 30 s or when ctx ends.
+// It goes through the removals' gate: while one covers the account it is ErrRemoving, and one
+// that is running when a removal begins is stopped, and waited for.
 func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
+	ctx, release, err := w.admit(ctx, user, req.CLI, req.Slot)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+	return w.runHelper(ctx, user, req)
+}
+
+// runRemovalHelper runs the helper request a removal itself makes (a logout, the reset or the
+// removal of the files), which the gate it holds would refuse.
+func (w *Worker) runRemovalHelper(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
+	return w.runHelper(ctx, user, req)
+}
+
+func (w *Worker) runHelper(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
+	// Nothing starts for a caller that has given up: a helper that deletes would run before
+	// the cancellation was seen.
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	cmd, header, err := w.helperCommand(user, req)
 	if err != nil {
 		return nil, nil, err
@@ -604,6 +608,7 @@ func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) (s
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
+	w.trackGroup(cmd.Process.Pid, user, req.CLI, req.Slot)
 	done := make(chan struct{})
 	go func() {
 		select {

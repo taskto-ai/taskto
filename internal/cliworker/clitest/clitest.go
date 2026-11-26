@@ -59,6 +59,11 @@ type Scenario struct {
 	// Warn makes the fake print this line on stderr when it answers a status check, as a
 	// runtime or a CLI does with a warning: its answer on stdout must still be read.
 	Warn string `json:"warn,omitempty"`
+	// StatusSleepMS makes `claude auth status` record itself and take that long to answer, as a
+	// slow check does.
+	StatusSleepMS int `json:"status_sleep_ms,omitempty"`
+	// IgnoreTerm makes `claude auth login` ignore SIGTERM, so that it ends only when it is killed.
+	IgnoreTerm bool `json:"ignore_term,omitempty"`
 	// Fail makes the turn fail with this message.
 	Fail string `json:"fail,omitempty"`
 	// Garbage prints lines that aren't JSON among the events.
@@ -680,6 +685,9 @@ func (f *fake) claudeAuth(cmd string) int {
 	creds := filepath.Join(f.config, credentials["claude"])
 	switch cmd {
 	case "login":
+		if f.scenario.IgnoreTerm {
+			signal.Ignore(syscall.SIGTERM)
+		}
 		fmt.Println("Opening browser to sign in…")
 		fmt.Println("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=00000000-0000-4000-8000-000000000000" +
 			"&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&code_challenge=fake&code_challenge_method=S256&state=fake")
@@ -701,6 +709,10 @@ func (f *fake) claudeAuth(cmd string) int {
 	case "status":
 		if f.scenario.Warn != "" {
 			fmt.Fprintln(os.Stderr, f.scenario.Warn)
+		}
+		if f.scenario.StatusSleepMS > 0 {
+			f.record("")
+			time.Sleep(time.Duration(f.scenario.StatusSleepMS) * time.Millisecond)
 		}
 		_, err := os.Stat(creds)
 		method := "none"

@@ -1,6 +1,9 @@
 package cliworker
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // SignInURLForTest exposes signInURL to the package's external tests.
 var SignInURLForTest = signInURL
@@ -27,3 +30,15 @@ func ToolsReadOnlyForTest(t *Tools, cli CLI, tool string, input []byte) bool {
 func (w *Worker) BeginRemovalForTest(ctx context.Context, user int64, all bool, cli CLI, slot Slot) (func(), error) {
 	return w.beginRemoval(ctx, &removal{user: user, all: all, cli: cli, slot: slot})
 }
+
+// TrackGroupForTest lists process group pgid as one the worker started for the account of
+// user's cli in slot.
+func (w *Worker) TrackGroupForTest(pgid int, user int64, cli CLI, slot Slot) {
+	w.trackGroup(pgid, user, cli, slot)
+}
+
+// SetGroupWaitForTest sets how long a removal waits for process groups to be empty.
+func (w *Worker) SetGroupWaitForTest(d time.Duration) { w.groupWait = d }
+
+// HelperLaunchesForTest is how many helpers the worker has started.
+func (w *Worker) HelperLaunchesForTest() int64 { return w.helperLaunches.Load() }

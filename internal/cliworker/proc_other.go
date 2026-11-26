@@ -20,7 +20,7 @@ func startTime(int) (string, error) { return "", errUnsupported }
 
 func waitLeader(int) bool { return false }
 
-func groupAlive(int) bool { return false }
+func groupLive(int) bool { return false }
 
 func execve(string, []string, []string) error { return errUnsupported }
 func closeStdin() error                       { return errUnsupported }

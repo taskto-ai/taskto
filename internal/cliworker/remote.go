@@ -44,6 +44,7 @@ var remoteErrors = map[string]error{
 	"turn_clash":     ErrTurnClash,
 	"closed":         ErrClosed,
 	"removing":       ErrRemoving,
+	"busy":           ErrBusy,
 	"no_login":       ErrNoLogin,
 	"bad_code":       ErrBadCode,
 	"no_code_needed": ErrNoCodeNeeded,
@@ -266,7 +267,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusServiceUnavailable
 			case errors.Is(sentinel, ErrNoLogin), errors.Is(sentinel, ErrNoPermission):
 				status = http.StatusNotFound
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy):
 				status = http.StatusConflict
 			}
 		}

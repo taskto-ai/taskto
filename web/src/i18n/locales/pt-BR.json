@@ -1116,6 +1116,7 @@
     "cli_workers_no_boundary": "Os workers de CLI rodam em modo local neste servidor, sem isolamento entre usuários, então só funcionam enquanto o servidor tiver um único usuário. Um operador pode usar o contêiner do worker de CLI no lugar.",
     "cli_not_installed": "O {cli} não está instalado neste servidor.",
     "cli_worker_closing": "O worker de CLI está sendo desligado: tente de novo daqui a pouco.",
+    "cli_account_busy": "Esta conta ainda está encerrando seus processos, então nada foi removido: tente de novo daqui a pouco.",
     "cli_account_removing": "Esta conta está sendo desconectada: tente de novo daqui a pouco.",
     "cli_no_login": "Nenhum login em andamento.",
     "cli_login_code_invalid": "O código precisa ter de 1 a {max} caracteres imprimíveis.",
