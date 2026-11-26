@@ -108,8 +108,13 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     }
     try {
       const me = await send()
-      if (me) onDone(me)
-      else settle()
+      if (me) {
+        // Someone has signed in (here: the login, its second step, setup, an invite, a reset): a
+        // deletion notice never shown, to a person who came by another page, is not for them or for
+        // the sign-in after theirs.
+        ackDeletion()
+        onDone(me)
+      } else settle()
     } catch (err) {
       setFailure(failureOf(err))
       settle()

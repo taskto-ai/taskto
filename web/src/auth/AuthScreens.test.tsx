@@ -551,6 +551,54 @@ test('the deletion notice waits for a page that can be seen, in this tab or the 
   expect(screen.getByText(NOTICE)).toBeTruthy()
 })
 
+test('a sign-in screen that is gone no longer waits for the page to be seen', async () => {
+  sessionStorage.clear()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  let state: DocumentVisibilityState = 'hidden'
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state)
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const screenUp = render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/will be erased for good on .*2026/)
+  screenUp.unmount()
+  // The page is seen after the screen left: nobody read the notice, so it is kept.
+  state = 'visible'
+  document.dispatchEvent(new Event('visibilitychange'))
+  expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
+})
+
+test('a deletion answered while the forgot-password step is up is told when the login comes back', async () => {
+  sessionStorage.clear()
+  fakeFetch({ 'GET /api/login/methods': { body: { ...both, reset_by_email: true } } })
+  render(<LoginScreen onDone={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Forgot your password?' }))
+  await screen.findByRole('button', { name: 'Email me a link' })
+  act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
+  // Not on the screen that is up: kept.
+  expect(screen.queryByText(NOTICE)).toBeNull()
+  expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
+  fireEvent.click(screen.getByRole('button', { name: 'Back to login' }))
+  await screen.findByText(/will be erased for good on .*2026/)
+  expect(peekDeletion()).toBeNull()
+})
+
+test('a signed-in person is never told a deletion notice nobody saw', async () => {
+  sessionStorage.clear()
+  // A date left by a hidden tab that went to an invite instead of the login.
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  const joined = { ...owner, workspaces: [{ id: 7 }] }
+  const onDone = vi.fn()
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/invites/accept': { body: joined },
+  })
+  render(<InviteScreen token="fake-invite-token" me={null} onDone={onDone} onLogout={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create the account' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalled())
+  expect(peekDeletion()).toBeNull()
+})
+
 test('a deletion remembered after the notice was shown is not lost with it', async () => {
   sessionStorage.clear()
   rememberDeletion('2026-12-08T10:00:00.000Z')
