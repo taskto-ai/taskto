@@ -885,7 +885,12 @@ is a decision about the workspace's records, not an account's.
   and the CLI step waits for container mode (also after a switch to `local`) only when it has: an
   install that never ran a container worker has no copy to wait for, and the step is done at once.
   A database that already had users when that record was added is marked `unknown`, since it may
-  have run one, and keeps the step pending until the server has started in container mode once. The log
+  have run one, and keeps the step pending until the server has started in container mode once. So
+  is a restored one: the `cli-homes` volume isn't part of a backup, and a backup made before the
+  first start in container mode has no record of the worker whose homes the volume now holds, so
+  `taskto restore` marks a restored database with no container record `unknown` too. If the
+  worker doesn't answer, the directory under the data directory is removed all the same, and the
+  step stays until the worker confirms. The log
   says "purged an account, with steps still to do" while any is left, and the audit event's
   `cleanups_pending` says how many (the providers file's rewriting, which is done after the account
   is gone, is one). If the runtime is on and fails, the purge fails and is tried again; the runtime
@@ -1232,6 +1237,13 @@ What a restore leaves is the account's state as of the backup, which holds no re
 invitations (they expire, and accepting one needs the address's own account), and the password
 and two-factor codes, which are as the backup had them (a person who changed them since changes
 them again).
+
+A restore also keeps what the install's CLI worker has kept on `cli-homes`, which a backup doesn't
+hold. A backup made before the server's first start in container mode doesn't record that a
+container worker ran, so `taskto restore` marks the restored database's CLI worker history
+`unknown` where it has no container record: a deleted account's CLI step then stays pending until
+a container worker confirms it removed the person's files, rather than closing with the worker's
+copy still there.
 
 From an archive file:
 

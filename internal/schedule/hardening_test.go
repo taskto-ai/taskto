@@ -708,44 +708,57 @@ func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
 
 const serverKind Kind = "test.server"
 
-// A person who has filled their own bound with jobs can still have the server's work about them
-// scheduled (the purge of an account they deleted), and the reserve is no more room for their own.
-func TestAServerKindHasRoomAtTheBound(t *testing.T) {
+// fillOrdinary gives alice n ordinary jobs that wait.
+func fillOrdinary(t *testing.T, w *world, n int) {
+	t.Helper()
+	exec(t, w.db, `
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
+		SELECT ?, ?, ?, 'k' || i, ?, ?, ? FROM n`,
+		n, string(remind), w.alice, w.ws, at(start.Add(time.Hour)), at(start), at(start))
+}
+
+func serverWorld(t *testing.T) *world {
+	t.Helper()
 	w := newWorld(t)
 	w.register(remind)
 	if err := w.s.RegisterServer(serverKind, func(context.Context, Job) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
+	return w
+}
+
+func (w *world) serverJob(key string) Job {
+	j := w.job(key, time.Hour)
+	j.Kind = serverKind
+	return j
+}
+
+// A person who has filled their own bound with jobs can still have the server's work about them
+// scheduled (the purge of an account they deleted), and the server's work is bounded apart.
+func TestAServerKindHasRoomAtTheBound(t *testing.T) {
+	w := serverWorld(t)
 	ctx := context.Background()
-	exec(t, w.db, `
-		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
-		SELECT ?, ?, ?, 'k' || i, ?, ?, ? FROM n`,
-		MaxPerUser, string(remind), w.alice, w.ws, at(start.Add(time.Hour)), at(start), at(start))
-	serverJob := func(key string) Job {
-		j := w.job(key, time.Hour)
-		j.Kind = serverKind
-		return j
-	}
+	fillOrdinary(t, w, MaxPerUser)
 	if _, err := w.s.Schedule(ctx, w.db, w.job("one-more", time.Hour)); !errors.Is(err, ErrTooMany) {
 		t.Fatalf("an ordinary job at the bound = %v, want ErrTooMany", err)
 	}
-	if created, err := w.s.Schedule(ctx, w.db, serverJob("purge")); err != nil || !created {
+	if created, err := w.s.Schedule(ctx, w.db, w.serverJob("purge")); err != nil || !created {
 		t.Fatalf("a server job at the bound = %v, %v; want it created", created, err)
 	}
 	// Moving it, even once it is done, goes through too.
 	exec(t, w.db, `UPDATE scheduled_jobs SET state = 'done' WHERE kind = ?`, string(serverKind))
-	if _, err := w.s.Reschedule(ctx, w.db, serverJob("purge")); err != nil {
+	if _, err := w.s.Reschedule(ctx, w.db, w.serverJob("purge")); err != nil {
 		t.Fatalf("re-arming a server job at the bound = %v", err)
 	}
-	// The reserve is not room for the person's own jobs.
+	// The server's job is not room for the person's own.
 	if _, err := w.s.Schedule(ctx, w.db, w.job("one-more", time.Hour)); !errors.Is(err, ErrTooMany) {
 		t.Fatalf("an ordinary job after the server's = %v, want ErrTooMany", err)
 	}
-	// And it is bounded: the reserve is not unlimited room.
+	// And it is bounded: server jobs are not unlimited.
 	made := 1
 	for i := 0; i < 2*ServerReserve; i++ {
-		if _, err := w.s.Schedule(ctx, w.db, serverJob(fmt.Sprintf("more-%d", i))); err != nil {
+		if _, err := w.s.Schedule(ctx, w.db, w.serverJob(fmt.Sprintf("more-%d", i))); err != nil {
 			if !errors.Is(err, ErrTooMany) {
 				t.Fatal(err)
 			}
@@ -754,6 +767,54 @@ func TestAServerKindHasRoomAtTheBound(t *testing.T) {
 		made++
 	}
 	if made != ServerReserve {
-		t.Fatalf("server jobs made above the bound = %d, want the reserve, %d", made, ServerReserve)
+		t.Fatalf("server jobs made = %d, want %d", made, ServerReserve)
+	}
+}
+
+// The server's jobs take none of the person's own room: with one server job and MaxPerUser-1
+// ordinary ones, the last ordinary job is made, and so is the reactivation of a finished one.
+func TestAServerJobDoesNotUseThePersonsOwnRoom(t *testing.T) {
+	w := serverWorld(t)
+	ctx := context.Background()
+	fillOrdinary(t, w, MaxPerUser-1)
+	if created, err := w.s.Schedule(ctx, w.db, w.serverJob("purge")); err != nil || !created {
+		t.Fatalf("the server job = %v, %v", created, err)
+	}
+	if created, err := w.s.Schedule(ctx, w.db, w.job("last", time.Hour)); err != nil || !created {
+		t.Fatalf("the last ordinary job with a server job waiting = %v, %v; want it made", created, err)
+	}
+	if _, err := w.s.Schedule(ctx, w.db, w.job("over", time.Hour)); !errors.Is(err, ErrTooMany) {
+		t.Fatalf("an ordinary job over the bound = %v, want ErrTooMany", err)
+	}
+	// A finished ordinary job is reactivated only when there is room among the ordinary ones.
+	exec(t, w.db, `UPDATE scheduled_jobs SET state = 'done' WHERE dedupe_key = 'last'`)
+	if created, err := w.s.Reschedule(ctx, w.db, w.job("last", time.Hour)); err != nil || created {
+		t.Fatalf("reactivating a finished job with a server job waiting = %v, %v; want it moved", created, err)
+	}
+}
+
+// And the other way: ordinary jobs take none of the server's room, which only server jobs fill.
+func TestOrdinaryJobsDoNotUseTheServersRoom(t *testing.T) {
+	w := serverWorld(t)
+	ctx := context.Background()
+	fillOrdinary(t, w, MaxPerUser-1)
+	for i := 0; i < ServerReserve; i++ {
+		if _, err := w.s.Schedule(ctx, w.db, w.serverJob(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatalf("server job %d with ordinary jobs waiting = %v", i, err)
+		}
+	}
+	if _, err := w.s.Schedule(ctx, w.db, w.serverJob("over")); !errors.Is(err, ErrTooMany) {
+		t.Fatalf("a server job over its bound = %v, want ErrTooMany", err)
+	}
+	if created, err := w.s.Schedule(ctx, w.db, w.job("last", time.Hour)); err != nil || !created {
+		t.Fatalf("an ordinary job with the server's bound full = %v, %v; want it made", created, err)
+	}
+	// A finished server job is not reactivated over the server's bound.
+	exec(t, w.db, `UPDATE scheduled_jobs SET state = 'done' WHERE dedupe_key = 's0'`)
+	if _, err := w.s.Schedule(ctx, w.db, w.serverJob("fresh")); err != nil {
+		t.Fatalf("a new server job in the freed room = %v", err)
+	}
+	if _, err := w.s.Reschedule(ctx, w.db, w.serverJob("s0")); !errors.Is(err, ErrTooMany) {
+		t.Fatalf("reactivating a server job over its bound = %v, want ErrTooMany", err)
 	}
 }

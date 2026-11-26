@@ -78,8 +78,8 @@
 // it, or of the server. The one exception is a kind registered with RegisterServer: work the
 // server does about a person (the purge of an account that was deleted), whose jobs run with no
 // check of their owner, disabled or not, by a handler that acts for no one's access. Their jobs
-// also have ServerReserve more room than the owner's bound, so a person who filled it can still
-// have that work scheduled.
+// are counted apart from the owner's own, against a bound of their own (ServerReserve), so a person
+// who filled theirs can still have that work scheduled, and that work takes none of their room.
 //
 // # A disabled owner's jobs wait
 //
@@ -172,10 +172,11 @@ const (
 	// MaxPerUser bounds one person's jobs that wait or run, counted at every change into one of
 	// those states (a new job, and a finished job scheduled again).
 	MaxPerUser = 1000
-	// ServerReserve is the room above MaxPerUser kept for the jobs of server kinds (RegisterServer):
-	// work the server does about a person, such as the purge of an account they deleted, which a
-	// person who filled their own bound with jobs (reminders, say) must not be able to hold up. Their
-	// jobs are counted with the others, so the person's own can only use MaxPerUser of the total.
+	// ServerReserve bounds one person's jobs that wait or run of server kinds (RegisterServer): work
+	// the server does about a person, such as the purge of an account they deleted, which a person
+	// who filled their own bound with jobs (reminders, say) must not be able to hold up. The two
+	// classes are counted apart: server jobs take none of MaxPerUser, and the person's own take
+	// none of this.
 	ServerReserve = 10
 
 	defaultLease       = 2 * time.Minute
@@ -364,13 +365,23 @@ func (s *Service) RegisterServer(kind Kind, h Handler) error {
 	return nil
 }
 
-// bound is how many jobs that wait or run a new job of kind may find its owner with: MaxPerUser,
-// and for a server kind the reserve above it too.
-func (s *Service) bound(kind Kind) int {
-	if s.isServer(kind) {
-		return MaxPerUser + ServerReserve
+// room is what the statements that schedule take of a job of kind to count its owner's jobs
+// against: the server kinds as a JSON array, whether kind is one, and the bound of its class. A
+// job is counted only with the jobs of its class (MaxPerUser, ServerReserve).
+func (s *Service) room(kind Kind) (kinds string, server bool, bound int) {
+	s.mu.Lock()
+	names := make([]string, 0, len(s.server))
+	for k := range s.server {
+		names = append(names, string(k))
 	}
-	return MaxPerUser
+	server = s.server[kind]
+	s.mu.Unlock()
+	slices.Sort(names)
+	b, _ := json.Marshal(names)
+	if server {
+		return string(b), true, ServerReserve
+	}
+	return string(b), false, MaxPerUser
 }
 
 func (s *Service) isServer(kind Kind) bool {
@@ -474,8 +485,11 @@ func exists(ctx context.Context, q DBTX, j Job) (bool, error) {
 	return found, err
 }
 
-// activeCount is the number of jobs of one owner that wait or run: the ones the bound counts.
-const activeCount = `(SELECT count(*) FROM scheduled_jobs WHERE user_id = %s AND state IN ('pending', 'running'))`
+// activeCount is the number of jobs of one owner and one class that wait or run: the ones the
+// bound counts. Its parameters follow the owner's: the server kinds (a JSON array) and whether the
+// class counted is the server's.
+const activeCount = `(SELECT count(*) FROM scheduled_jobs WHERE user_id = %s AND state IN ('pending', 'running')
+	AND (kind IN (SELECT value FROM json_each(?))) = ?)`
 
 const insertColumns = `kind, user_id, workspace_id, space_id, dedupe_key, payload, run_at, every_seconds, created_at, updated_at`
 
@@ -493,6 +507,7 @@ func (s *Service) Schedule(ctx context.Context, q DBTX, j Job) (created bool, er
 		return false, err
 	}
 	at := stamp(s.clock())
+	kinds, server, bound := s.room(j.Kind)
 	var id int64
 	err = q.QueryRowContext(ctx, `
 		INSERT INTO scheduled_jobs (`+insertColumns+`)
@@ -501,7 +516,7 @@ func (s *Service) Schedule(ctx context.Context, q DBTX, j Job) (created bool, er
 		ON CONFLICT (user_id, kind, dedupe_key) DO NOTHING
 		RETURNING id`,
 		string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
-		j.UserID, s.bound(j.Kind)).Scan(&id)
+		j.UserID, kinds, server, bound).Scan(&id)
 	switch {
 	case err == nil:
 		return true, nil
@@ -535,6 +550,7 @@ func (s *Service) Reschedule(ctx context.Context, q DBTX, j Job) (created bool, 
 		return false, err
 	}
 	at := stamp(s.clock())
+	kinds, server, bound := s.room(j.Kind)
 	// The insert is attempted when the owner has room or the job exists (a conflict then updates it);
 	// the update applies when the job is active already, or the owner has room for it to become so.
 	// Both are decided inside the one statement. A revision of 0 is a row that was just inserted.
@@ -552,7 +568,7 @@ func (s *Service) Reschedule(ctx context.Context, q DBTX, j Job) (created bool, 
 			WHERE scheduled_jobs.state IN ('pending', 'running') OR `+fmt.Sprintf(activeCount, "excluded.user_id")+` < ?
 		RETURNING revision`,
 		string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
-		j.UserID, s.bound(j.Kind), j.UserID, string(j.Kind), j.DedupeKey, s.bound(j.Kind)).Scan(&revision)
+		j.UserID, kinds, server, bound, j.UserID, string(j.Kind), j.DedupeKey, kinds, server, bound).Scan(&revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, ErrTooMany

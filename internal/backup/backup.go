@@ -551,8 +551,40 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 		if err := endLogins(ctx, filepath.Join(dataDir, db.FileName)); err != nil {
 			return m, fmt.Errorf("end the restored logins: %w", err)
 		}
+		if err := markWorkerHistory(ctx, filepath.Join(dataDir, db.FileName)); err != nil {
+			return m, fmt.Errorf("mark the restored CLI worker history: %w", err)
+		}
 	}
 	return m, nil
+}
+
+// markWorkerHistory notes, in the restored server database at p, that a container CLI worker may
+// hold files of users that the database doesn't know of. The database records at every start in
+// container mode that the install ran a container worker (cli_worker_history, internal/cliaccounts),
+// but the worker's own volume is not part of a backup and is kept across a restore: a backup made
+// before the first container start, restored on an install whose worker has since made a person's
+// home, has no such record, and a purge of that person with the workers off would take the install
+// for one that never ran a container worker and close its cleanup step with the home still there.
+// A database with no 'container' record is marked 'unknown', which the purge treats as a container
+// worker that may hold files, so the step stays until a container worker confirms the removal. A
+// database from a version before the history has no table to mark; its migration marks it.
+func markWorkerHistory(ctx context.Context, p string) error {
+	sqlDB, err := open(p)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	var n int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cli_worker_history'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker)
+		SELECT 'unknown' WHERE NOT EXISTS (SELECT 1 FROM cli_worker_history WHERE worker = 'container')
+		ON CONFLICT (worker) DO NOTHING`)
+	return err
 }
 
 // loginTables are the tables of the server's database that hold a bearer's way in, emptied

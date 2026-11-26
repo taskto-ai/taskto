@@ -557,3 +557,27 @@ func TestCLIStepStaysPendingWhereTheHistoryIsUnknown(t *testing.T) {
 		t.Fatal("the step was closed without knowing whether a container worker held files")
 	}
 }
+
+// A worker that doesn't answer doesn't leave behind the directory the server can remove itself, and
+// the step stays for the worker.
+func TestAWorkerErrorStillRemovesTheLocalCLIDirectoryAndKeepsTheStep(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.ranContainerWorker()
+	home := filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w.cli.fail = errors.New("the worker's socket is gone")
+	w.deleteAccount()
+	_ = w.svc.Purge(ctx, w.leaver)
+	if _, err := os.Stat(filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("their local CLI directory remains after a worker error: %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ? AND target = ?`, cleanCLIHome, fmt.Sprint(w.leaver)); n != 1 {
+		t.Fatal("the step was closed though the worker never confirmed")
+	}
+	if got := w.svc.forgetCLI(ctx, w.leaver); reasonOf(got) != failCLIWorker {
+		t.Errorf("forgetCLI = %v, want %s", got, failCLIWorker)
+	}
+}

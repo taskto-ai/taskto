@@ -695,3 +695,53 @@ func TestRestoreEndsEveryLogin(t *testing.T) {
 		}
 	}
 }
+
+// A backup made before the server first ran a container CLI worker has no record of one, and a
+// restore keeps the worker's volume: the restored database is marked 'unknown', so the purge of a
+// person doesn't close its CLI step on a guess. A record of a container worker is kept as it is.
+func TestRestoreMarksTheCLIWorkerHistoryUnknownWhereThereIsNoRecord(t *testing.T) {
+	ctx := context.Background()
+	restoredHistory := func(t *testing.T, prepare func(f *fixture)) []string {
+		t.Helper()
+		f := newFixture(t)
+		if _, err := f.server.Exec(`DELETE FROM cli_worker_history`); err != nil {
+			t.Fatal(err)
+		}
+		prepare(f)
+		archive, _ := backup(t, f.dir)
+		dst := filepath.Join(t.TempDir(), "restored")
+		if _, err := Restore(ctx, archive, dst); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		server, err := db.Open(ctx, filepath.Join(dst, db.FileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer server.Close()
+		rows, err := server.Query(`SELECT worker FROM cli_worker_history ORDER BY worker`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	if got := restoredHistory(t, func(*fixture) {}); len(got) != 1 || got[0] != "unknown" {
+		t.Errorf("history after restoring a backup with no record = %v, want [unknown]", got)
+	}
+	got := restoredHistory(t, func(f *fixture) {
+		if _, err := f.server.Exec(`INSERT INTO cli_worker_history (worker) VALUES ('container')`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(got) != 1 || got[0] != "container" {
+		t.Errorf("history after restoring a backup with a container record = %v, want [container]", got)
+	}
+}

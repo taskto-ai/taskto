@@ -843,3 +843,84 @@ func TestEntriesPagesBackThroughTheHistory(t *testing.T) {
 		t.Fatalf("limit 101: err = %v, want a 400", err)
 	}
 }
+
+// A purge of a large conversation deletes its records in short transactions: the harness waits for
+// SQLite's write lock on the thread that serves requests, so a delete that held the lock from its
+// start to its end would stop the sidecar (a health request, every other person's turn) for as long
+// as the delete takes. While the purge runs, writes by the harness and health requests are answered
+// promptly, and the purge still ends with the conversation gone.
+func TestPurgeOfALargeConversationDoesNotHoldTheWriteLock(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+	// Entries with large records, straight into the database as the harness would write them.
+	conn, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA busy_timeout = 10000`); err != nil {
+		t.Fatal(err)
+	}
+	big, err := json.Marshal(map[string]string{"text": strings.Repeat("x", 1<<20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rows = 200 // 200 MiB
+	for i := 0; i < rows; i++ {
+		id := 1_000_000 + i
+		if _, err := conn.ExecContext(ctx, `INSERT INTO record_ids (id, record_type) VALUES (?, 'entry')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, `INSERT INTO entries (id, conversation_id, head, commit_seq, record) VALUES (?, ?, NULL, 1, ?)`,
+			id, doomed, string(big)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	purged := make(chan error, 1)
+	go func() { purged <- s.client.PurgeConversation(ctx, doomed) }()
+	var slowestHealth, slowestWrite time.Duration
+	probes := 0
+	for done := false; !done; {
+		select {
+		case err := <-purged:
+			if err != nil {
+				t.Fatalf("the purge: %v", err)
+			}
+			done = true
+		default:
+			started := time.Now()
+			if err := s.client.Healthy(ctx); err != nil {
+				t.Fatal(err)
+			}
+			slowestHealth = max(slowestHealth, time.Since(started))
+			started = time.Now()
+			if _, err := s.client.CreateConversation(ctx); err != nil {
+				t.Fatalf("a write while the purge ran: %v", err)
+			}
+			slowestWrite = max(slowestWrite, time.Since(started))
+			probes++
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	if probes < 5 {
+		t.Fatalf("fixture: the purge ended after %d probes; it was too short to show anything", probes)
+	}
+	if slowestHealth > 150*time.Millisecond {
+		t.Errorf("a health request took %v while a purge ran: the purge holds the write lock the request thread waits for", slowestHealth)
+	}
+	if slowestWrite > 300*time.Millisecond {
+		t.Errorf("a write took %v while a purge ran: the purge holds the write lock", slowestWrite)
+	}
+	var left int
+	if err := conn.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM entries WHERE conversation_id = ?) + (SELECT count(*) FROM conversations WHERE id = ?)`, doomed, doomed).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("what the purge left: %d, %v", left, err)
+	}
+}

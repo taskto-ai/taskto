@@ -246,18 +246,27 @@ func (s *Service) forgetCLI(ctx context.Context, user int64) error {
 		mode = s.o.CLI.Mode()
 	}
 	reached := false // the container worker was asked, and answered
+	var workerErr error
 	if mode != "off" && mode != "" {
 		switch err := s.o.CLI.Forget(ctx, user); {
 		case err == nil:
 			reached = mode == string(cliaccounts.Container)
 		case !errors.Is(err, cliaccounts.ErrOff):
-			return failed(failCLIWorker, err)
+			// The directory under the data directory is removed all the same: a worker that
+			// doesn't answer must not leave behind what the server can remove itself.
+			workerErr = failed(failCLIWorker, err)
 		}
 	}
 	if s.o.DataDir != "" {
 		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
-			return failed(failFileRemove, err)
+			if workerErr == nil {
+				return failed(failFileRemove, err)
+			}
+			return failed(failCLIWorker, errors.Join(workerErr, err))
 		}
+	}
+	if workerErr != nil {
+		return workerErr
 	}
 	if reached {
 		return nil
