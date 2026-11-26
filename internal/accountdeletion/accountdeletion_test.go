@@ -550,3 +550,30 @@ func TestReconcileSchedulesAPurgeThatHasNoJob(t *testing.T) {
 		t.Errorf("%d jobs after a second reconcile", n)
 	}
 }
+
+// A person who has filled their own bound of scheduled jobs can still delete their account: the
+// purge's job has room of its own, so the deletion is never refused for what the person scheduled.
+func TestPurgeIsScheduledForAPersonAtTheJobBound(t *testing.T) {
+	w := newWorld(t)
+	if err := w.svc.Attach(); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, w.db, `
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
+		SELECT 'test.filler', ?, ?, 'k' || i, '2099-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z' FROM n`,
+		schedule.MaxPerUser, w.leaver, w.ws)
+	tx, err := w.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.svc.SchedulePurge(context.Background(), tx, w.leaver, w.ws, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("scheduling the purge of a person at the bound: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM scheduled_jobs WHERE user_id = ? AND kind = ?`, w.leaver, string(Kind)); n != 1 {
+		t.Fatalf("purge jobs = %d, want 1", n)
+	}
+}

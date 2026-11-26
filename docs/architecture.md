@@ -180,7 +180,8 @@ no extra process); it has no feature of its own.
   scheduled it or of the server, which is the rule the apps' effect outbox follows too.
 - **Bounded.** A person has at most 1000 jobs waiting or running, counted at every change into
   those states (a finished job scheduled again too) by the statement that writes, so concurrent
-  callers can't pass it; a payload is at most 16 KiB; a recurring job repeats at most once a minute;
+  callers can't pass it (the server's own kinds, such as the purge of a deleted account, have a
+  small reserve above it, so a person at the bound can still delete their account); a payload is at most 16 KiB; a recurring job repeats at most once a minute;
   a job is due between the years 2000 and 8999 (its stored time sorts as text, and the database
   refuses any other); and finished jobs are purged after a week.
 - **Cheap to poll.** Partial indexes order the pending jobs by when they are due and the running

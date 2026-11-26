@@ -77,7 +77,9 @@
 // (access.ErrDisabled) has not lost access for good: the job is held, not failed (below). No handler acts with the authority of whoever scheduled
 // it, or of the server. The one exception is a kind registered with RegisterServer: work the
 // server does about a person (the purge of an account that was deleted), whose jobs run with no
-// check of their owner, disabled or not, by a handler that acts for no one's access.
+// check of their owner, disabled or not, by a handler that acts for no one's access. Their jobs
+// also have ServerReserve more room than the owner's bound, so a person who filled it can still
+// have that work scheduled.
 //
 // # A disabled owner's jobs wait
 //
@@ -170,6 +172,11 @@ const (
 	// MaxPerUser bounds one person's jobs that wait or run, counted at every change into one of
 	// those states (a new job, and a finished job scheduled again).
 	MaxPerUser = 1000
+	// ServerReserve is the room above MaxPerUser kept for the jobs of server kinds (RegisterServer):
+	// work the server does about a person, such as the purge of an account they deleted, which a
+	// person who filled their own bound with jobs (reminders, say) must not be able to hold up. Their
+	// jobs are counted with the others, so the person's own can only use MaxPerUser of the total.
+	ServerReserve = 10
 
 	defaultLease       = 2 * time.Minute
 	defaultTimeout     = time.Minute
@@ -357,6 +364,15 @@ func (s *Service) RegisterServer(kind Kind, h Handler) error {
 	return nil
 }
 
+// bound is how many jobs that wait or run a new job of kind may find its owner with: MaxPerUser,
+// and for a server kind the reserve above it too.
+func (s *Service) bound(kind Kind) int {
+	if s.isServer(kind) {
+		return MaxPerUser + ServerReserve
+	}
+	return MaxPerUser
+}
+
 func (s *Service) isServer(kind Kind) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -485,7 +501,7 @@ func (s *Service) Schedule(ctx context.Context, q DBTX, j Job) (created bool, er
 		ON CONFLICT (user_id, kind, dedupe_key) DO NOTHING
 		RETURNING id`,
 		string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
-		j.UserID, MaxPerUser).Scan(&id)
+		j.UserID, s.bound(j.Kind)).Scan(&id)
 	switch {
 	case err == nil:
 		return true, nil
@@ -536,7 +552,7 @@ func (s *Service) Reschedule(ctx context.Context, q DBTX, j Job) (created bool, 
 			WHERE scheduled_jobs.state IN ('pending', 'running') OR `+fmt.Sprintf(activeCount, "excluded.user_id")+` < ?
 		RETURNING revision`,
 		string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
-		j.UserID, MaxPerUser, j.UserID, string(j.Kind), j.DedupeKey, MaxPerUser).Scan(&revision)
+		j.UserID, s.bound(j.Kind), j.UserID, string(j.Kind), j.DedupeKey, s.bound(j.Kind)).Scan(&revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, ErrTooMany
