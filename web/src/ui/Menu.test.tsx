@@ -278,6 +278,19 @@ describe('Menu', () => {
     expect(outer).not.toHaveBeenCalled()
   })
 
+  test("an Escape a tooltip took is not the menu's too: the next one closes it", () => {
+    const { button } = setup()
+    fireEvent.click(button)
+    // What a tooltip that can be seen does (Tooltip.tsx): it hears the key first and takes it.
+    const tooltip = (e: KeyboardEvent) => e.preventDefault()
+    document.addEventListener('keydown', tooltip, true)
+    fireEvent.keyDown(items()[0], { key: 'Escape' })
+    document.removeEventListener('keydown', tooltip, true)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.keyDown(items()[0], { key: 'Escape' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+  })
+
   test('a press outside closes it and leaves the focus where it went', () => {
     const { button } = setup()
     fireEvent.click(button)

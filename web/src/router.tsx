@@ -38,8 +38,11 @@ function subscribe(listener: () => void) {
 // on without the question.
 
 // The page's question: called with what leaving does; it calls `go` when the person may leave (at
-// once when there is nothing to lose), or never.
-export type BeforeLeave = (go: () => void) => void
+// once when there is nothing to lose), or never. `whole` is true when the person would leave the
+// whole app (signing out), not only this page: then the page only answers and changes nothing yet,
+// since more may be asked after it (records not sent) and Cancel there must find the page as it
+// was; what it holds goes when the app's pages do, once the sign-out is certain.
+export type BeforeLeave = (go: () => void, whole?: boolean) => void
 
 // The pages that ask, the latest last: it is the one asked.
 const askers: BeforeLeave[] = []
@@ -195,7 +198,7 @@ export function useBeforeLeave(ask: BeforeLeave | null) {
   useEffect(() => {
     if (!on) return
     watchHistory()
-    const mine: BeforeLeave = (go) => (latest.current ? latest.current(go) : go())
+    const mine: BeforeLeave = (go, whole) => (latest.current ? latest.current(go, whole) : go())
     askers.push(mine)
     return () => {
       const i = askers.lastIndexOf(mine)
@@ -213,7 +216,7 @@ export function beforeLeaving(go: () => void) {
   const mine = generation
   ask(() => {
     if (mine === generation) go()
-  })
+  }, true)
 }
 
 export function navigate(path: string, { replace = false } = {}) {

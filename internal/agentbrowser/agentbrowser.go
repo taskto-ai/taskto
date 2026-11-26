@@ -307,6 +307,8 @@ func browserError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserBusy, err.Error())
 	case errors.Is(err, browser.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserShuttingDown, err.Error())
+	case errors.Is(err, browser.ErrAccountClosing):
+		writeError(w, http.StatusConflict, apierr.CodeBrowserAccountClosing, err.Error())
 	default:
 		serverError(w, r, err)
 	}

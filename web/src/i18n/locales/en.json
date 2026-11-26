@@ -4,7 +4,13 @@
     "unreachableTitle": "Can't reach the server",
     "unreachableHelp": "Check your connection, or ask whoever runs this server whether it is up, then try again.",
     "unreachableDetail": "What went wrong: {error}",
-    "tryAgain": "Try again"
+    "tryAgain": "Try again",
+    "signingOut": "Signing out…",
+    "signOutFailedTitle": "Couldn't sign out",
+    "signOutFailedHelp": "The server didn't confirm it, so you are still signed in on this device. Check your connection and try again.",
+    "backToApp": "Back to the app",
+    "signOutNoAnswer": "The server didn't answer in time.",
+    "deviceNotCleared": "You are signed out, but this device couldn't be fully cleared of your account's copies. It will try again the next time the app starts."
   },
   "apps": {
     "intro": "Personal apps are screens the agent builds for you: ask it in a conversation for one, such as “an expense tracker in my private space”. A shared space’s apps are its members’: move an app to one to share it.",
@@ -1054,6 +1060,7 @@
     "browser_too_many_live": "Too many live views of the browser are open: close one first.",
     "browser_busy": "Too many browsers are open on this server: try again in a few minutes.",
     "browser_shutting_down": "The browser is shutting down on this server.",
+    "browser_account_closing": "This account is being deleted, so its browsers can't be started.",
     "provider_not_found": "Provider account not found.",
     "provider_name_invalid": "The name needs 1 to {max} characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit.",
     "provider_name_taken": "An account with this name already exists.",
@@ -1225,7 +1232,7 @@
     "app_field_locked": "{field} was captured and can’t be changed afterwards.",
     "app_signature_type": "A signature must be a PNG picture.",
     "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
-    "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
+    "session_account_changed": "This browser is now signed in as another account, in another tab, so nothing was done. Reload the page to go on.",
     "offline_unsupported": "This needs a connection. Offline, you can add records, change or delete downloaded ones, and look around the downloaded copy.",
     "notification_not_found": "That notification isn't available.",
     "notification_email_invalid": "The email choices aren't valid: a kind, a mode, an hour from 0 to 23 and a time zone such as Europe/Lisbon are expected.",

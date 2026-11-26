@@ -32,7 +32,7 @@ func (k *failingKB) RemoveSpace(sp access.Space) error {
 	return k.Knowledge.RemoveSpace(sp)
 }
 
-func (k *failingKB) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error) {
+func (k *failingKB) AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(int) error) (int, error) {
 	k.mu.Lock()
 	k.rewrote = append(k.rewrote, sp.ID)
 	fail := k.failIDs[sp.ID]
@@ -40,7 +40,7 @@ func (k *failingKB) AnonymizeAuthors(ctx context.Context, sp access.Space, email
 	if fail {
 		return 0, errors.New("cannot rewrite")
 	}
-	return k.Knowledge.AnonymizeAuthors(ctx, sp, emails)
+	return k.Knowledge.AnonymizeAuthorsNoting(ctx, sp, emails, planned)
 }
 
 // A private space whose directory can't be removed doesn't keep the leaver's other private spaces

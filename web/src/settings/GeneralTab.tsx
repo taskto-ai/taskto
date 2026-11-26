@@ -6,6 +6,8 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { api, type MailStatus, mailPath, type Workspace } from '../api'
 import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, t as translate, useT } from '../i18n'
 import { useLoad } from '../load'
+import { useMounted } from '../mounted'
+import { sameSession } from '../session'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
@@ -23,13 +25,17 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
   // The workspace's value from the server, when it comes again.
   useEffect(() => setLocale(workspace.locale || DEFAULT_LOCALE), [workspace.locale])
   const { busy, error, run } = useAction()
+  const mounted = useMounted()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     // English, the default, is stored as "": no default picked.
     const body = { locale: locale === DEFAULT_LOCALE ? '' : locale }
+    const session = sameSession()
     const ok = await run(() => api(`/api/workspaces/${workspace.id}`, { method: 'PATCH', body }))
     if (ok) {
       await setPreferences({ workspace: body.locale })
+      // The session may have ended, or the person left the tab, while the language's file loaded.
+      if (!session() || !mounted.current) return
       // In the language the page is in now, which the change may have made another.
       toast({ message: translate('settings.general.saved'), tone: 'success' })
     }
@@ -66,11 +72,13 @@ function MailPanel({ workspace, email }: { workspace: number; email: string }) {
   const t = useT()
   const status = useLoad(() => api<MailStatus>(mailPath(workspace)), [workspace])
   const { busy, error, run } = useAction()
-  const send = () =>
-    run(async () => {
-      const r = await api<{ sent_to: string }>(`${mailPath(workspace)}/test`, { method: 'POST', body: {} })
-      toast({ message: t('settings.general.mail.sent', { email: r.sent_to }), tone: 'success' })
+  const send = async () => {
+    let to = ''
+    const ok = await run(async () => {
+      to = (await api<{ sent_to: string }>(`${mailPath(workspace)}/test`, { method: 'POST', body: {} })).sent_to
     })
+    if (ok) toast({ message: t('settings.general.mail.sent', { email: to }), tone: 'success' })
+  }
   const m = status.data
   return (
     <Section

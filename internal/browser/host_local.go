@@ -115,3 +115,11 @@ func DialRetry(ctx context.Context, path string) (net.Conn, error) {
 
 // Clean implements Host.
 func (h *LocalHost) Clean(user int64) error { return Clean(h.Paths(user)) }
+
+// Purge implements Host.
+func (h *LocalHost) Purge(user int64) error {
+	if user <= 0 {
+		return errors.New("invalid user")
+	}
+	return Purge(h.Paths(user))
+}

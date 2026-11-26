@@ -5,6 +5,8 @@
 import { type ReactNode, type Ref, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { format, useT } from '../i18n'
+import { useMounted } from '../mounted'
+import { sameSession } from '../session'
 import { Button } from '../ui/Button'
 import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
@@ -16,6 +18,9 @@ import { VisuallyHidden } from '../ui/VisuallyHidden'
 import './Settings.css'
 
 // Runs one change at a time; a failure is kept, to show next to what failed.
+// It says the change was made only while the tab is still on the screen: one that ends after the
+// person left it, or after their session ended, shows nothing and writes nothing more (no toast,
+// no preference), as what it would say may be the next person's to see.
 // `labels` names a form's fields as the person sees them, for an error the server says of one
 // ("the api_key isn't valid" reads "the Secret key isn't valid").
 export function useAction(labels?: ReadonlyMap<string, string>) {
@@ -23,19 +28,24 @@ export function useAction(labels?: ReadonlyMap<string, string>) {
   const [error, setError] = useState<string | null>(null)
   const named = useRef(labels)
   named.current = labels
-  const run = useCallback(async (change: () => Promise<unknown>): Promise<boolean> => {
-    setBusy(true)
-    setError(null)
-    try {
-      await change()
-      return true
-    } catch (e) {
-      setError(errorText(e, named.current))
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }, [])
+  const mounted = useMounted()
+  const run = useCallback(
+    async (change: () => Promise<unknown>): Promise<boolean> => {
+      setBusy(true)
+      setError(null)
+      const same = sameSession()
+      try {
+        await change()
+        return mounted.current && same()
+      } catch (e) {
+        if (mounted.current && same()) setError(errorText(e, named.current))
+        return false
+      } finally {
+        if (mounted.current) setBusy(false)
+      }
+    },
+    [mounted],
+  )
   return { busy, error, run }
 }
 

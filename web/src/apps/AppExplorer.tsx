@@ -136,9 +136,11 @@ export function AppExplorer({
   // Leaving the page (another section, another workspace, the browser's Back) asks the same, while a
   // record holds unsaved changes. A move that keeps this explorer (another address of the same app)
   // would keep the drawer and its draft too: discarding closes the drawer first, so "discard" is true.
-  useBeforeLeave((go) =>
+  // Signing out (`whole`) only asks: the person may still cancel at the next question, and then the
+  // drawer must still hold what they typed; it goes with the app's pages once the sign-out is certain.
+  useBeforeLeave((go, whole) =>
     leaving(() => {
-      if (unsaved.current) setOpen(null)
+      if (unsaved.current && !whole) setOpen(null)
       go()
     }),
   )

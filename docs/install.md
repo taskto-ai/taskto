@@ -882,8 +882,11 @@ is a decision about the workspace's records, not an account's.
 - **Steps that wait for the agent runtime or the CLI workers.** Pi Durable, the runtime, has no way
   to delete a conversation, so the purge **retires** each one (its work stops and the runtime refuses
   it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`, with the
-  deleted content zeroed in the file. It also rewrites the runtime's providers file, and removes the
-  CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
+  deleted content zeroed in the file. It also rewrites the runtime's providers file, stops the
+  person's agent browsers (none starts meanwhile, and their live views close) and, once their
+  processes are gone, removes their profile, and then removes the CLI worker's directory of the
+  person (`<data>/cli/u<id>`, or the worker container's own copy), which is left alone while a
+  browser step is still recorded. Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
   need them stay recorded, and are done by the next start with them on and every ten minutes. The log
@@ -893,7 +896,7 @@ is a decision about the workspace's records, not an account's.
   answers `503` while another connection holds its database, so a purge isn't acknowledged until
   the write-ahead log, which can still hold the transcript, is empty. What failed is in `last_error`
   of `purge_cleanups`, as a fixed word (`sidecar_busy`, `sidecar_refused`, `sidecar_unreachable`,
-  `cli_worker_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
+  `cli_worker_failed`, `browser_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
   with an HTTP status when the runtime answered one, and never the text of the error, which can hold
   what a person wrote; the providers' step stays recorded while a removed account's key file is
   still on disk.
