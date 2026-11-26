@@ -325,7 +325,7 @@ test('Back stops before starting the app again when another person signed in mea
 })
 
 test('Back that started the app again just as another tab finished the sign-out lets go of what it took', async () => {
-  let report: () => void = () => {}
+  let report: (() => void) | undefined
   let holdReport = false
   const fresh = { ...me, user: { ...me.user, time_zone: '' } } as Me
   fakeFetch({
@@ -345,12 +345,12 @@ test('Back that started the app again just as another tab finished the sign-out 
   holdReport = true
   fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
   // The app has started again for the login (its offline data claimed); its time zone is on its way.
-  await waitFor(() => expect(report).not.toBe(undefined))
+  await waitFor(() => expect(report).toBeDefined())
   await new Promise((r) => setTimeout(r, 20))
   localStorage.removeItem(LAST)
   window.dispatchEvent(new StorageEvent('storage', { key: LAST, newValue: null }))
   await screen.findByRole('heading', { name: 'Log in' })
-  await act(async () => report())
+  await act(async () => report?.())
   await new Promise((r) => setTimeout(r, 50))
   expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
@@ -422,7 +422,7 @@ test('one the person chose to discard is not verified clear while it may still b
 })
 
 test('a start whose answer comes late never takes a newer login of the account back, nor settles its sign-out', async () => {
-  let answer: () => void = () => {}
+  let answer: (() => void) | undefined
   fakeFetch({
     ...signedIn,
     'GET /api/me': () =>
@@ -431,7 +431,7 @@ test('a start whose answer comes late never takes a newer login of the account b
       }),
   })
   render(<App />)
-  await waitFor(() => expect(answer).not.toBe(undefined))
+  await waitFor(() => expect(answer).toBeDefined())
   await new Promise((r) => setTimeout(r, 20))
   // Meanwhile the same person signs in again in another tab, with a newer login, downloads an app's
   // data there, and begins signing that login out.
@@ -439,7 +439,7 @@ test('a start whose answer comes late never takes a newer login of the account b
   await activate(7, 'Pat')
   recordSignOut(7, 's2', false, new Map())
   // This tab's start is answered only now, for the login the cookie held when it asked.
-  await act(async () => answer())
+  await act(async () => answer?.())
   await screen.findByRole('banner')
   expect(pendingSignOutOf(7)).toMatchObject({ session: 's2' })
   // The newer login's sign-out is finished: the device is cleared, not shielded by the older login.
@@ -449,7 +449,7 @@ test('a start whose answer comes late never takes a newer login of the account b
 })
 
 test('a start answered 401 leaves a sign-out another tab recorded after it asked to that tab', async () => {
-  let answer: () => void = () => {}
+  let answer: (() => void) | undefined
   fakeFetch({
     ...signedIn,
     'GET /api/me': () =>
@@ -460,12 +460,12 @@ test('a start answered 401 leaves a sign-out another tab recorded after it asked
   await activate(7, 'Pat')
   runtimeState().runtime?.engine.pause('manual')
   render(<App />)
-  await waitFor(() => expect(answer).not.toBe(undefined))
+  await waitFor(() => expect(answer).toBeDefined())
   await new Promise((r) => setTimeout(r, 20))
   // Another tab, signed in as Pat, begins signing out: its logout isn't answered yet.
   recordSignOut(7, 's2', false, new Map())
   // This tab's start is answered now: the login its cookie held when it asked is over.
-  await act(async () => answer())
+  await act(async () => answer?.())
   await screen.findByRole('heading', { name: 'Log in' })
   await new Promise((r) => setTimeout(r, 50))
   // That sign-out is the other tab's to finish (or the next start's): nothing of Pat's is touched.

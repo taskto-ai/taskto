@@ -127,15 +127,22 @@ function withPushLock<T>(work: () => Promise<T>): Promise<T> {
 const UNSUBSCRIBING = 'taskto.push-unsubscribing:'
 const UNSUBSCRIBE_UNRESOLVED_MS = 60_000
 
+// The turn-offs going on, in any tab: each one's own mark, the same way (a turn-off that fails puts
+// push back only when no other is still on its way).
+const TURNING_OFF_MARK = 'taskto.push-turning-off:'
+
 // Whether an unsubscribe of the browser's subscription isn't resolved yet, in this tab or another.
-// Marks that are over (a tab closed in the middle) or that hold no time are removed as they are found.
-function unsubscribeUnresolved(): boolean {
+const unsubscribeUnresolved = () => freshMarks(UNSUBSCRIBING)
+
+// Whether a mark under `prefix` is still fresh. Marks that are over (a tab closed in the middle) or
+// that hold no time are removed as they are found.
+function freshMarks(prefix: string): boolean {
   let unresolved = false
   try {
     const over: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
-      if (!key?.startsWith(UNSUBSCRIBING)) continue
+      if (!key?.startsWith(prefix)) continue
       const raw = localStorage.getItem(key)
       const at = raw === null || raw.trim() === '' ? Number.NaN : Number(raw)
       if (Number.isFinite(at) && Math.abs(Date.now() - at) < UNSUBSCRIBE_UNRESOLVED_MS) unresolved = true
@@ -322,27 +329,40 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   if (sub) {
     // Turning off from here on, for every tab and the next start, until it is done or given up.
     const turn = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-    const turningOff = `${TURNING_OFF}${who}:${turn}:${baseOf(before) ?? ''}`
-    write(turningOff)
+    const pending = `${TURNING_OFF_MARK}${turn}`
+    mark(pending, true)
+    write(`${TURNING_OFF}${who}:${turn}:${baseOf(before) ?? ''}`)
+    // This turn-off didn't happen: push is as it was before any turn-off began, unless another one is
+    // still on its way (it decides), or someone has the flag now (turned on, or off, since).
+    const giveUp = () => {
+      mark(pending, false)
+      const now = read()
+      if (now?.startsWith(TURNING_OFF) && ownerOf(now) === String(who) && !freshMarks(TURNING_OFF_MARK))
+        write(baseOf(before))
+    }
     try {
-      await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
-    } catch (e) {
-      // The server still knows the device: as it was, unless someone claimed the flag meanwhile.
-      if (read() === turningOff) write(baseOf(before))
-      throw e
+      try {
+        await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
+      } catch (e) {
+        // The server still knows the device.
+        giveUp()
+        throw e
+      }
+      s.check(undefined)
+      // Asked at the moment it would be ended: another account (another tab, where the order of
+      // changes isn't kept) may have claimed the browser's subscription while the server answered.
+      // It is theirs then, with their flag; this account's turning off is done with the server's answer.
+      const now = read()
+      if (now !== null && ownerOf(now) !== String(who) && now !== before) return
+      if (!(await unsubscribe(sub).catch(() => false))) {
+        // The browser kept it: shown as it was, for the person to try again.
+        giveUp()
+        throw new PushUnsubscribeFailed()
+      }
+      s.check(undefined)
+    } finally {
+      mark(pending, false)
     }
-    s.check(undefined)
-    // Asked at the moment it would be ended: another account (another tab, where the order of
-    // changes isn't kept) may have claimed the browser's subscription while the server answered.
-    // It is theirs then, with their flag; this account's turning off is done with the server's answer.
-    const now = read()
-    if (now !== null && ownerOf(now) !== String(who) && now !== before) return
-    if (!(await unsubscribe(sub).catch(() => false))) {
-      // The browser kept it: shown as it was, for the person to try again.
-      if (read() === turningOff) write(baseOf(before))
-      throw new PushUnsubscribeFailed()
-    }
-    s.check(undefined)
   }
   write(null)
 }
