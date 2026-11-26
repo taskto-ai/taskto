@@ -96,9 +96,12 @@ jobs:
           if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
             printf '%s\n\n' "$NOTES" >>"$RUNNER_TEMP/notes.md"
           fi
-          if [ "$MANUAL_UPGRADE" = true ]; then
-            gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
-          else
-            gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+          # An ordinary release lists its pull requests after the notes, grouped by their titles'
+          # prefixes (Features, Fixes, Other: .github/scripts/release-notes.sh); GitHub generates
+          # the list against the previous release.
+          if [ "$MANUAL_UPGRADE" != true ]; then
+            gh api --method POST "repos/$GH_REPO/releases/generate-notes" -f "tag_name=$VERSION" --jq .body >"$RUNNER_TEMP/generated.md"
+            bash .github/scripts/release-notes.sh <"$RUNNER_TEMP/generated.md" >>"$RUNNER_TEMP/notes.md"
           fi
+          gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           gh workflow run images.yml --ref "$VERSION"
