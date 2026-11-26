@@ -67,3 +67,20 @@ func TestLimiterUsed(t *testing.T) {
 		t.Fatalf("Used after Give = %d, want 2", n)
 	}
 }
+
+// A map held at the sweep size by keys that haven't expired is not scanned on every new key.
+func TestLimiterSweepCostIsBounded(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := New(1, time.Minute, func() time.Time { return now })
+	for i := range SweepAt + 1000 {
+		l.Take(fmt.Sprint(i))
+	}
+	if l.sweeps > 1 {
+		t.Fatalf("%d full scans for 1000 new keys over unexpired ones, want at most 1", l.sweeps)
+	}
+	now = now.Add(2 * time.Minute)
+	l.Take("later")
+	if n := l.Len(); n != 1 {
+		t.Fatalf("%d keys after the windows ended, want 1", n)
+	}
+}

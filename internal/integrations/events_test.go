@@ -376,3 +376,22 @@ func TestEventErrorsAreCodes(t *testing.T) {
 		t.Fatalf("Ignore = %v", err)
 	}
 }
+
+// An event keeps whether it is of live money from the route's write to the worker's claim.
+func TestAnEventKeepsItsMode(t *testing.T) {
+	r := newRig(t)
+	for i, live := range []bool{true, false} {
+		ev := Event{ID: fmt.Sprintf("evt_mode_%d", i), Kind: EventPaymentSucceeded, RefToken: token(), ObjectID: "cs_" + token(),
+			AmountMinor: 100, Currency: "EUR", OccurredAt: r.clock.Now(), Livemode: live}
+		if got, err := r.store.record(context.Background(), r.in.ID, ev, SourceWebhook, []byte(ev.ID)); err != nil || got != storedNew {
+			t.Fatalf("record: %v, %v", got, err)
+		}
+		r.clock.Advance(time.Millisecond)
+	}
+	a := &applier{}
+	r.svc.SetApplier(a)
+	r.svc.drainEvents(context.Background())
+	if a.count() != 2 || !a.seen[0].Livemode || a.seen[1].Livemode {
+		t.Fatalf("the worker got %+v, want a live event and then a test one", a.seen)
+	}
+}

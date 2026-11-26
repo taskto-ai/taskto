@@ -17,6 +17,10 @@ type Limiter struct {
 
 	mu   sync.Mutex
 	hits map[string]*window
+	// nextSweep is the earliest time Take may scan the whole map again, and sweeps counts the
+	// scans: a map full of unexpired keys is scanned once in a while, not on every new key.
+	nextSweep time.Time
+	sweeps    int
 }
 
 type window struct {
@@ -41,8 +45,9 @@ func (l *Limiter) Take(key string) (bool, time.Duration) {
 	now := l.now()
 	w := l.hits[key]
 	if w == nil || !now.Before(w.ends) {
-		if len(l.hits) >= SweepAt {
+		if len(l.hits) >= SweepAt && !now.Before(l.nextSweep) {
 			l.sweep(now)
+			l.nextSweep = now.Add(l.window / 4)
 		}
 		w = &window{ends: now.Add(l.window)}
 		l.hits[key] = w
@@ -82,6 +87,7 @@ func (l *Limiter) Used() int {
 }
 
 func (l *Limiter) sweep(now time.Time) {
+	l.sweeps++
 	for k, w := range l.hits {
 		if !now.Before(w.ends) {
 			delete(l.hits, k)

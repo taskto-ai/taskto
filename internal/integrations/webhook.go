@@ -34,6 +34,9 @@ const (
 	hookWindow     = time.Minute
 )
 
+// hookReadTimeout is how long a delivery's body may take to arrive; a variable for the tests.
+var hookReadTimeout = 30 * time.Second
+
 // publicIDRe is the shape of an integration's public id: 128 random bits in hex. An id of any
 // other shape can't exist and is answered like one that doesn't, without a lookup.
 var publicIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -97,6 +100,9 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeWebhookTooLarge, "the body is too large")
 		return
 	}
+	// A body that trickles in or never comes can't hold the connection: the read has a deadline of
+	// its own. A connection that can't take one (a test's recorder) is read without.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(hookReadTimeout))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBody))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -184,6 +190,10 @@ func (s *Service) hookSubject(ctx context.Context, publicID string) (hookSubject
 		return sub, nil
 	}
 	creds, revision, err := s.store.hookCredentials(ctx, target.workspace, target.id)
+	if errors.Is(err, errNotFound) {
+		// Removed between the two reads: it is an id with nothing behind it, like the first lookup's.
+		return sub, nil
+	}
 	if err != nil {
 		var unreadable unreadableError
 		if errors.As(err, &unreadable) {

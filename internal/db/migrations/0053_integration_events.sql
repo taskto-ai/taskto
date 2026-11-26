@@ -33,6 +33,8 @@ CREATE TABLE integration_events (
     amount_minor        INTEGER NOT NULL CHECK (amount_minor >= 0),
     -- ISO 4217, upper case.
     currency            TEXT NOT NULL CHECK (length(currency) = 3),
+    -- Whether the event is of live money (1) or of the provider's test mode (0).
+    livemode            INTEGER NOT NULL DEFAULT 0 CHECK (livemode IN (0, 1)),
     -- SHA-256 of the exact body, hex.
     body_sha256         TEXT NOT NULL CHECK (length(body_sha256) = 64),
     -- When the provider says the event happened, and when the server took it in.

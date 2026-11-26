@@ -1,9 +1,13 @@
 package integrations
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -297,4 +301,51 @@ func TestRefusalsDoTheSameWorkAndLeaveNoLog(t *testing.T) {
 	if got := r.logs.String()[before:]; got != "" {
 		t.Errorf("a refusal wrote to the log: %q", got)
 	}
+}
+
+// A body that never arrives can't hold the connection: the read has a deadline.
+func TestAStalledBodyIsCutOff(t *testing.T) {
+	old := hookReadTimeout
+	hookReadTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { hookReadTimeout = old })
+	r := newRig(t)
+	srv := httptest.NewServer(r.h)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST %s%s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{", HookPrefix, r.id)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer for a stalled body within the deadline: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a stalled body = %d, want 400", resp.StatusCode)
+	}
+	if r.total() != 0 {
+		t.Fatal("a stalled body stored an event")
+	}
+}
+
+// An integration removed after its id was found is an id with nothing behind it: the decoy, the
+// standard refusal, not a server error.
+func TestAnIntegrationRemovedDuringLookupGetsTheDecoy(t *testing.T) {
+	r := newRig(t)
+	target, err := r.store.byPublicID(context.Background(), r.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, r.owner.do(http.MethodDelete, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)), nil), http.StatusNoContent)
+	if _, _, err := r.store.hookCredentials(context.Background(), target.workspace, target.id); !errors.Is(err, errNotFound) {
+		t.Fatalf("credentials of a removed integration: %v, want errNotFound", err)
+	}
+	d, err := r.send.Send(context.Background(), testprovider.NewEvent("customer.created", map[string]any{"id": "cus_1", "object": "customer"}, r.clock.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	isNotFound(t, "a removed integration", d.Status, d.Response)
 }
