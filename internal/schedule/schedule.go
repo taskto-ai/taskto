@@ -77,7 +77,10 @@
 // (access.ErrDisabled) has not lost access for good: the job is held, not failed (below). No handler acts with the authority of whoever scheduled
 // it, or of the server. The one exception is a kind registered with RegisterServer: work the
 // server does about a person (the purge of an account that was deleted), whose jobs run with no
-// check of their owner, disabled or not, by a handler that acts for no one's access.
+// check of their owner, disabled or not, by a handler that acts for no one's access. Their jobs
+// are counted apart from the owner's own (MaxServerPerUser, not MaxPerUser), so a person with as
+// many jobs as they may have still gets the server's work about them, and that work takes none
+// of their room; the worker runs them in their turn, by due time, like any other.
 //
 // # A disabled owner's jobs wait
 //
@@ -170,6 +173,11 @@ const (
 	// MaxPerUser bounds one person's jobs that wait or run, counted at every change into one of
 	// those states (a new job, and a finished job scheduled again).
 	MaxPerUser = 1000
+	// MaxServerPerUser bounds the jobs of kinds registered with RegisterServer that wait or run
+	// about one person. They are counted apart from MaxPerUser: the server's work about a person (the
+	// purge of their deleted account) always has room, however many jobs of their own they have,
+	// and never takes room from those.
+	MaxServerPerUser = 16
 
 	defaultLease       = 2 * time.Minute
 	defaultTimeout     = time.Minute
@@ -458,8 +466,33 @@ func exists(ctx context.Context, q DBTX, j Job) (bool, error) {
 	return found, err
 }
 
-// activeCount is the number of jobs of one owner that wait or run: the ones the bound counts.
-const activeCount = `(SELECT count(*) FROM scheduled_jobs WHERE user_id = %s AND state IN ('pending', 'running'))`
+// activeCount is the number of jobs of one owner that wait or run, of the kinds in a pool (the
+// second %s, from pool): the ones the pool's bound counts.
+const activeCount = `(SELECT count(*) FROM scheduled_jobs WHERE user_id = %s AND state IN ('pending', 'running')%s)`
+
+// pool is how the bound of kind's jobs is counted: the server's kinds (RegisterServer) together,
+// up to MaxServerPerUser, and the others together, up to MaxPerUser. It returns the condition on
+// kind that activeCount adds, its arguments, and the bound.
+func (s *Service) pool(kind Kind) (cond string, args []any, bound int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	server := make([]string, 0, len(s.server))
+	for k := range s.server {
+		server = append(server, string(k))
+	}
+	slices.Sort(server)
+	if len(server) == 0 {
+		return "", nil, MaxPerUser
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?, ", len(server)), ", ")
+	for _, k := range server {
+		args = append(args, k)
+	}
+	if s.server[kind] {
+		return " AND kind IN (" + marks + ")", args, MaxServerPerUser
+	}
+	return " AND kind NOT IN (" + marks + ")", args, MaxPerUser
+}
 
 const insertColumns = `kind, user_id, workspace_id, space_id, dedupe_key, payload, run_at, every_seconds, created_at, updated_at`
 
@@ -477,15 +510,17 @@ func (s *Service) Schedule(ctx context.Context, q DBTX, j Job) (created bool, er
 		return false, err
 	}
 	at := stamp(s.clock())
+	cond, kinds, bound := s.pool(j.Kind)
+	args := []any{string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
+		j.UserID}
+	args = append(append(args, kinds...), bound)
 	var id int64
 	err = q.QueryRowContext(ctx, `
 		INSERT INTO scheduled_jobs (`+insertColumns+`)
 		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE `+fmt.Sprintf(activeCount, "?")+` < ?
+		WHERE `+fmt.Sprintf(activeCount, "?", cond)+` < ?
 		ON CONFLICT (user_id, kind, dedupe_key) DO NOTHING
-		RETURNING id`,
-		string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
-		j.UserID, MaxPerUser).Scan(&id)
+		RETURNING id`, args...).Scan(&id)
 	switch {
 	case err == nil:
 		return true, nil
@@ -522,21 +557,24 @@ func (s *Service) Reschedule(ctx context.Context, q DBTX, j Job) (created bool, 
 	// The insert is attempted when the owner has room or the job exists (a conflict then updates it);
 	// the update applies when the job is active already, or the owner has room for it to become so.
 	// Both are decided inside the one statement. A revision of 0 is a row that was just inserted.
+	cond, kinds, bound := s.pool(j.Kind)
+	args := []any{string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
+		j.UserID}
+	args = append(append(args, kinds...), bound, j.UserID, string(j.Kind), j.DedupeKey)
+	args = append(append(args, kinds...), bound)
 	var revision int64
 	err = q.QueryRowContext(ctx, `
 		INSERT INTO scheduled_jobs (`+insertColumns+`)
 		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE `+fmt.Sprintf(activeCount, "?")+` < ?
+		WHERE `+fmt.Sprintf(activeCount, "?", cond)+` < ?
 		   OR EXISTS (SELECT 1 FROM scheduled_jobs WHERE user_id = ? AND kind = ? AND dedupe_key = ?)
 		ON CONFLICT (user_id, kind, dedupe_key) DO UPDATE SET
 			workspace_id = excluded.workspace_id, space_id = excluded.space_id, payload = excluded.payload,
 			run_at = excluded.run_at, every_seconds = excluded.every_seconds,
 			state = 'pending', attempts = 0, failed_runs = 0, retry_at = NULL, lease = lease + 1, lease_until = NULL,
 			revision = revision + 1, last_error = NULL, done_at = NULL, updated_at = excluded.updated_at
-			WHERE scheduled_jobs.state IN ('pending', 'running') OR `+fmt.Sprintf(activeCount, "excluded.user_id")+` < ?
-		RETURNING revision`,
-		string(j.Kind), j.UserID, j.WorkspaceID, spaceArg(j.SpaceID), j.DedupeKey, payload, stamp(j.RunAt), everySeconds(j.Every), at, at,
-		j.UserID, MaxPerUser, j.UserID, string(j.Kind), j.DedupeKey, MaxPerUser).Scan(&revision)
+			WHERE scheduled_jobs.state IN ('pending', 'running') OR `+fmt.Sprintf(activeCount, "excluded.user_id", cond)+` < ?
+		RETURNING revision`, args...).Scan(&revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, ErrTooMany
