@@ -328,7 +328,7 @@ func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, 
 	if err := c.references(); err != nil {
 		return nil, nil, err
 	}
-	if err := c.iconLabels(byID); err != nil {
+	if err := c.iconLabels(byID); err != nil && !c.copied {
 		return nil, nil, err
 	}
 	return out, sortedKeys(c.used), nil
@@ -461,7 +461,7 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 		switch n := v.(type) {
 		case string:
 			if !slices.Contains(iconNames, n) {
-				return fmt.Errorf(`%q is not an icon's name: give the icon {"svgPath": "<path data>"} (icons.go)`, n)
+				return fmt.Errorf(`%q is not an icon's name: give the icon {"svgPath": "<path data>"}`, n)
 			}
 		case map[string]any:
 			if _, isPath := n["svgPath"]; isPath {

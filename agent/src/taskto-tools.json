@@ -1209,7 +1209,7 @@
               "items": {
                 "type": "object"
               },
-              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both. An Icon is drawn from one SVG path you write: {\"name\": {\"svgPath\": \"M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z\"}} on a 24 by 24 view box, filled; app_catalog's rule on icons says the rest"
+              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both. An Icon is drawn from one SVG path you write: {\"name\": {\"svgPath\": \"M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z\"}} on a 24 by 24 view box, filled; app_catalog's rule on icons says the rest"
             },
             "screens": {
               "type": "array",
@@ -1699,7 +1699,7 @@
               "items": {
                 "type": "object"
               },
-              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both. An Icon is drawn from one SVG path you write: {\"name\": {\"svgPath\": \"M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z\"}} on a 24 by 24 view box, filled; app_catalog's rule on icons says the rest"
+              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both. An Icon is drawn from one SVG path you write: {\"name\": {\"svgPath\": \"M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z\"}} on a 24 by 24 view box, filled; app_catalog's rule on icons says the rest"
             },
             "screens": {
               "type": "array",

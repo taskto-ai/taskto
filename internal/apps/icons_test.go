@@ -3,10 +3,10 @@ package apps
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 )
@@ -14,7 +14,7 @@ import (
 // A plus sign on the 24 by 24 view box, and a check mark.
 const (
 	plusPath  = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"
-	checkPath = "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"
+	checkPath = "M3 13l3-3 4 4 8-8 3 3-11 11z"
 )
 
 // iconScreen is a one-screen app around components, with an add action for its buttons.
@@ -94,16 +94,30 @@ func TestIconPathRefusesAnythingElse(t *testing.T) {
 			}
 		})
 	}
-	// Not a string, or with another key beside it.
+	// A svgPath that isn't text, or another key beside it: the same code, said as what it is.
+	for name, tc := range map[string]struct{ icon, says string }{
+		"a number":    {`{"id":"icon","component":"Icon","name":{"svgPath":5}}`, "must be text, not a number"},
+		"null":        {`{"id":"icon","component":"Icon","name":{"svgPath":null}}`, "must be text, not null"},
+		"a list":      {`{"id":"icon","component":"Icon","name":{"svgPath":["M0 0"]}}`, "must be text, not a list"},
+		"an object":   {`{"id":"icon","component":"Icon","name":{"svgPath":{"path":"/x"}}}`, "must be text, not an object"},
+		"another key": {`{"id":"icon","component":"Icon","name":{"svgPath":"M0 0","href":"http://elsewhere.example"}}`, "no other key"},
+	} {
+		_, err := iconScreen(tc.icon).Check()
+		if code, _ := codeOf(err); code != apierr.CodeAppIconPath || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: err = %v (code %q), want %s saying %q", name, err, code, apierr.CodeAppIconPath, tc.says)
+		}
+	}
+	// A character outside the grammar is named as a character, not a stray byte.
+	if _, err := iconScreen(pathIcon("M0 0 L1 1\u00a0")).Check(); err == nil || !strings.Contains(err.Error(), `'\u00a0'`) {
+		t.Errorf("non-ASCII: err = %v", err)
+	}
+	// Not an icon's prop, and not an icon's name: refused, and the message names no source file.
 	for name, icon := range map[string]string{
-		"a number":        `{"id":"icon","component":"Icon","name":{"svgPath":5}}`,
-		"an object":       `{"id":"icon","component":"Icon","name":{"svgPath":{"path":"/x"}}}`,
-		"another key":     `{"id":"icon","component":"Icon","name":{"svgPath":"M0 0","href":"http://elsewhere.example"}}`,
 		"a style beside":  `{"id":"icon","component":"Icon","name":{"svgPath":"M0 0"},"style":"color:red"}`,
 		"an unknown name": `{"id":"icon","component":"Icon","name":"receipt"}`,
 	} {
-		if _, err := iconScreen(icon).Check(); !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		if _, err := iconScreen(icon).Check(); !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), ".go") {
+			t.Errorf("%s: err = %v, want ErrInvalid naming no file", name, err)
 		}
 	}
 }
@@ -153,7 +167,13 @@ func TestIconAloneNeedsAName(t *testing.T) {
 		"a modal's trigger with no label":       {modal, unlabelled, body},
 		"a labelled button, an unlabelled icon": {labelledButton, unlabelled},
 		"icons only, through a row": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
-			`{"id":"row","component":"Row","children":["plus","named"]}`, unlabelled, `{"id":"named","component":"Icon","name":"star"}`},
+			`{"id":"row","component":"Row","children":["plus","bound"]}`, unlabelled, `{"id":"bound","component":"Icon","name":{"path":"/icon"}}`},
+		"beside a blank text": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
+			`{"id":"row","component":"Row","children":["plus","text"]}`, unlabelled, `{"id":"text","component":"Text","text":""}`},
+		"beside text of spaces": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
+			`{"id":"row","component":"Row","children":["plus","text"]}`, unlabelled, `{"id":"text","component":"Text","text":"   "}`},
+		"beside a divider": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
+			`{"id":"row","component":"Row","children":["plus","line"]}`, unlabelled, `{"id":"line","component":"Divider"}`},
 		"icons only, through a card and a column": {`{"id":"icon","component":"Modal","trigger":"card","content":"body"}`, body,
 			`{"id":"card","component":"Card","child":"col"}`, `{"id":"col","component":"Column","children":["plus"]}`, unlabelled},
 	} {
@@ -169,6 +189,10 @@ func TestIconAloneNeedsAName(t *testing.T) {
 		"a modal's labelled icon":  {modal, labelled, body},
 		"beside a label": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
 			`{"id":"row","component":"Row","children":["plus","text"]}`, unlabelled, `{"id":"text","component":"Text","text":"Add"}`},
+		"a name, all the button shows": {`{"id":"icon","component":"Button","child":"named","action":{"event":{"name":"add"}}}`,
+			`{"id":"named","component":"Icon","name":"delete"}`},
+		"a name beside an unlabelled path": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
+			`{"id":"row","component":"Row","children":["plus","named"]}`, unlabelled, `{"id":"named","component":"Icon","name":"add"}`},
 		"standing in a column": {`{"id":"icon","component":"Column","children":["plus"]}`, unlabelled},
 		"beside text, deeper in": {`{"id":"icon","component":"Button","child":"card","action":{"event":{"name":"add"}}}`,
 			`{"id":"card","component":"Card","child":"row"}`, `{"id":"row","component":"Row","children":["plus","col"]}`, unlabelled,
@@ -232,12 +256,82 @@ func TestIconLabelsDoNotMultiplyFanOut(t *testing.T) {
 		`{"id":"r3","component":"Row","children":` + fan("r4") + `}`,
 		`{"id":"r4","component":"Row","children":["plus"]}`,
 		`{"id":"plus","component":"Icon","name":{"svgPath":"` + plusPath + `"}}`}
-	start := time.Now()
 	_, err := iconScreen(comps...).Check()
 	if code, params := codeOf(err); code != apierr.CodeAppIconLabel || params["component"] != "plus" {
 		t.Fatalf("err = %v, want %s for plus", err, apierr.CodeAppIconLabel)
 	}
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("the check took %v", took)
+	// The walk itself, counted: each component once per depth, each of its children once from
+	// there. Without the memo it would be 200 to the fourth.
+	byID := map[string]map[string]any{}
+	for _, c := range comps {
+		obj, err := decodeObject(json.RawMessage(c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		byID[obj["id"].(string)] = obj
 	}
+	w := iconWalk{byID: byID, pathIcons: map[string]bool{"plus": true}, memo: map[contentAt]contentName{}}
+	if got := w.names("r1", 0); got.named || got.icon != "plus" {
+		t.Fatalf("names = %+v", got)
+	}
+	if limit := 4 * maxListLen; w.visits > limit {
+		t.Errorf("the walk took %d steps, want at most %d", w.visits, limit)
+	}
+}
+
+// A copy of someone's live release saved before the label rule is made as it is: the copier didn't
+// write it and can't change the source. The rule holds again when the copy is published.
+func TestACopyOfAnOldReleaseIsNotHeldToTheLabelRule(t *testing.T) {
+	w := newWorld(t)
+	s := w.crew()
+	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "expense-tracker", nil))
+	// As it could have been saved before: the "New expense" button shows only its plus icon.
+	var def map[string]any
+	var raw string
+	if err := w.e.db.QueryRow(`SELECT definition FROM app_releases WHERE app_id = ? AND number = 1`, a.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &def); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range def["screens"].([]any)[0].(map[string]any)["components"].([]any) {
+		if c := c.(map[string]any); c["id"] == "list-new" {
+			c["child"] = "list-new-icon"
+		}
+	}
+	old, _ := json.Marshal(def)
+	// Releases can't be changed: it goes in as the next one, made live.
+	if _, err := w.e.db.Exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
+		SELECT app_id, 2, ?, definition_version, requires FROM app_releases WHERE app_id = ? AND number = 1`, string(old), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.db.Exec(`UPDATE apps SET live_release = 2 WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := definitionOf(t, old).Check(); codeOfErr(err) != apierr.CodeAppIconLabel {
+		t.Fatalf("saved again, the release would be refused with %s: %v", apierr.CodeAppIconLabel, err)
+	}
+
+	rec := w.bob.do(http.MethodPost, appPath(s, a.ID, "/duplicate"), map[string]any{"space_id": w.bobPrivate.ID})
+	expect(t, rec, http.StatusCreated)
+	copyApp := w.view(w.bob, w.bobPrivate, decode[App](t, rec))
+	rec = w.bob.do(http.MethodPost, appPath(w.bobPrivate, copyApp.ID, "/publish"), map[string]any{"version": copyApp.Version, "acknowledge": []SchemaChange{}})
+	expect(t, rec, http.StatusBadRequest)
+	if !strings.Contains(rec.Body.String(), string(apierr.CodeAppIconLabel)) {
+		t.Fatalf("publishing the copy: %s", rec.Body)
+	}
+}
+
+func definitionOf(t *testing.T, raw []byte) Definition {
+	t.Helper()
+	var d Definition
+	if err := json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func codeOfErr(err error) apierr.Code {
+	code, _ := codeOf(err)
+	return code
 }

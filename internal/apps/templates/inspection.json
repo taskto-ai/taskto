@@ -13,11 +13,11 @@
         "components": [
           { "id": "list-root", "component": "Column", "children": ["list-head", "list-failures", "list-new", "list-items"] },
           { "id": "list-title", "component": "Text", "text": "Inspections", "variant": "h2" },
-          { "id": "list-icon", "component": "Icon", "name": { "svgPath": "M8 2h8v2h3v18H5V4h3zm2 2v1h4V4zm.6 12.2 6-6-1.4-1.4-4.6 4.6-1.8-1.8L7.4 13z" } },
+          { "id": "list-icon", "component": "Icon", "name": { "svgPath": "M8 2h8v2h3v18H5V4h3zm2 2v1h4V4zM10 17l8-8-1.5-1.5-6.5 6.5-2.5-2.5L6 13z" } },
           { "id": "list-head", "component": "Row", "align": "center", "children": ["list-icon", "list-title"] },
           { "id": "list-failures", "component": "Stat", "label": "Open failures", "value": { "path": "/open_failures" } },
           { "id": "list-new-label", "component": "Text", "text": "New inspection" },
-          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" } },
+          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z" } },
           { "id": "list-new-content", "component": "Row", "align": "center", "children": ["list-new-icon", "list-new-label"] },
           {
             "id": "list-new",
@@ -68,7 +68,7 @@
           { "id": "new-signed", "component": "SignatureInput", "field": "signed", "label": "Inspector's signature", "value": { "path": "/draft/signed" } },
           { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
           { "id": "new-back-label", "component": "Text", "text": "Back" },
-          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" } },
+          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
           { "id": "new-back-content", "component": "Row", "align": "center", "children": ["new-back-icon", "new-back-label"] },
           {
             "id": "new-back",
@@ -133,7 +133,7 @@
             "action": { "event": { "name": "close_inspection", "context": { "id": { "path": "/record/id" }, "status": "closed" } } }
           },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
-          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" } },
+          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
           { "id": "detail-back-content", "component": "Row", "align": "center", "children": ["detail-back-icon", "detail-back-label"] },
           {
             "id": "detail-back",

@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 //
 // An app's icons are SVG path data from its definition (internal/apps/icons.go). The renderer draws
-// a valid path in an <svg> it makes itself, and nothing for a name or for anything that isn't path
-// data, even when the definition reached it without the server's check.
+// a valid path in an <svg> it makes itself, and nothing for anything that isn't path data, even when
+// the definition reached it without the server's check. A name is shown as its word only where it is
+// all a control shows, as before icons were paths; elsewhere it draws nothing.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import { AppView } from './AppView'
 import { APPS_CATALOG_ID } from './catalog'
-import { iconPath, MAX_ICON_PATH } from './iconPath'
+import { iconPath, iconsShowingTheirName, MAX_ICON_PATH, type SurfaceComponent } from './iconPath'
 
 afterEach(cleanup)
 
-const PLUS = 'M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z'
-const BACK = 'M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z'
+const PLUS = 'M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z'
+const BACK = 'M3 12l8-8v5h10v6H11v5z'
 const BOUND = 'm0 0h24v24H0z'
 
 // What isn't path data, as the server refuses it; here it is drawn as nothing.
@@ -111,4 +112,119 @@ test('draws valid paths in its own svg and nothing for the rest', async () => {
   expect(container.querySelector('img, script, i.material-icons')).toBeNull()
   expect(container.innerHTML).not.toContain('alert(1)')
   expect(container.innerHTML).not.toContain('elsewhere.example')
+})
+
+// Which icons given by name show their word: the same walk as the server's label rule.
+test('a name shows its word only where nothing else names the control', () => {
+  const c = (component: string, props: Record<string, unknown> = {}): SurfaceComponent => ({ component, props })
+  const named = c('Icon', { name: 'delete' })
+  const path = c('Icon', { name: { svgPath: PLUS } })
+  const labelled = c('Icon', { name: { svgPath: PLUS }, accessibility: { label: 'Add' } })
+  const cases: [string, Record<string, SurfaceComponent>, string[]][] = [
+    ['alone in a button', { b: c('Button', { child: 'n' }), n: named }, ['n']],
+    [
+      'a modal trigger',
+      { m: c('Modal', { trigger: 'n', content: 't' }), n: named, t: c('Text', { text: 'Hi' }) },
+      ['n'],
+    ],
+    [
+      'through a card and a row, beside a path',
+      {
+        b: c('Button', { child: 'k' }),
+        k: c('Card', { child: 'r' }),
+        r: c('Row', { children: ['p', 'n'] }),
+        p: path,
+        n: named,
+      },
+      ['n'],
+    ],
+    [
+      'beside a blank text and a divider',
+      {
+        b: c('Button', { child: 'r' }),
+        r: c('Row', { children: ['n', 't', 'd'] }),
+        n: named,
+        t: c('Text', { text: ' ' }),
+        d: c('Divider'),
+      },
+      ['n'],
+    ],
+    [
+      'beside text',
+      {
+        b: c('Button', { child: 'r' }),
+        r: c('Row', { children: ['n', 't'] }),
+        n: named,
+        t: c('Text', { text: 'Delete' }),
+      },
+      [],
+    ],
+    [
+      'beside a labelled path',
+      { b: c('Button', { child: 'r' }), r: c('Row', { children: ['n', 'p'] }), n: named, p: labelled },
+      [],
+    ],
+    ['not in a control', { r: c('Row', { children: ['n'] }), n: named }, []],
+    [
+      'beside a bound text',
+      {
+        b: c('Button', { child: 'r' }),
+        r: c('Row', { children: ['n', 't'] }),
+        n: named,
+        t: c('Text', { text: { path: '/x' } }),
+      },
+      [],
+    ],
+  ]
+  for (const [name, components, want] of cases)
+    expect([...iconsShowingTheirName(new Map(Object.entries(components)))], name).toEqual(want)
+})
+
+// A fan-out of references to one child is looked at once per depth: this returns at once.
+test('the walk does not multiply references that fan out', () => {
+  const fan = (next: string) => ({ component: 'Row', props: { children: Array(200).fill(next) } })
+  const components = new Map<string, SurfaceComponent>([
+    ['b', { component: 'Button', props: { child: 'r1' } }],
+    ['r1', fan('r2')],
+    ['r2', fan('r3')],
+    ['r3', fan('r4')],
+    ['r4', { component: 'Row', props: { children: ['n'] } }],
+    ['n', { component: 'Icon', props: { name: 'delete' } }],
+  ])
+  expect([...iconsShowingTheirName(components)]).toEqual(['n'])
+})
+
+// Apps saved when names drew the word: a button and a modal's trigger that are only a name keep
+// their word, so they keep a name and something to press, and the modal still opens.
+test('a control that is only a name keeps its word, its name and its use', async () => {
+  const messages = [
+    { version: 'v0.9', createSurface: { surfaceId: 'named', catalogId: APPS_CATALOG_ID } },
+    {
+      version: 'v0.9',
+      updateComponents: {
+        surfaceId: 'named',
+        components: [
+          { id: 'root', component: 'Column', children: ['del', 'more', 'title-row'] },
+          { id: 'del', component: 'Button', child: 'del-icon', action: { event: { name: 'remove' } } },
+          { id: 'del-icon', component: 'Icon', name: 'delete' },
+          { id: 'more', component: 'Modal', trigger: 'more-icon', content: 'more-body' },
+          { id: 'more-icon', component: 'Icon', name: 'menu' },
+          { id: 'more-body', component: 'Text', text: 'More options' },
+          { id: 'title-row', component: 'Row', children: ['star', 'title'] },
+          { id: 'star', component: 'Icon', name: 'star' },
+          { id: 'title', component: 'Text', text: 'Favourites' },
+        ],
+      },
+    },
+  ]
+  const { container } = render(
+    <AppView surfaceId="named" label="Named" transport={{ load: async () => messages, act: async () => [] }} />,
+  )
+  await screen.findByText('Favourites')
+  expect(screen.getByRole('button', { name: 'delete' }).textContent).toContain('delete')
+  // Beside a label a name draws nothing.
+  expect(screen.queryByText('star')).toBeNull()
+  expect(container.querySelectorAll('.ui-app-icon-name')).toHaveLength(2)
+  fireEvent.click(screen.getByText('menu'))
+  await screen.findByText('More options')
 })

@@ -18,7 +18,7 @@
           { "id": "list-head", "component": "Row", "align": "center", "children": ["list-icon", "list-title"] },
           { "id": "list-out", "component": "Stat", "label": "Items checked out", "value": { "path": "/out" } },
           { "id": "list-new-label", "component": "Text", "text": "Check out an item" },
-          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" } },
+          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z" } },
           { "id": "list-new-content", "component": "Row", "align": "center", "children": ["list-new-icon", "list-new-label"] },
           {
             "id": "list-new",
@@ -73,7 +73,7 @@
           { "id": "new-notes", "component": "TextField", "label": "Notes", "variant": "longText", "value": { "path": "/draft/notes" } },
           { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
           { "id": "new-back-label", "component": "Text", "text": "Back" },
-          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" } },
+          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
           { "id": "new-back-content", "component": "Row", "align": "center", "children": ["new-back-icon", "new-back-label"] },
           {
             "id": "new-back",
@@ -141,7 +141,7 @@
           },
           { "id": "detail-actions", "component": "Row", "children": ["detail-back"] },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
-          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" } },
+          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
           { "id": "detail-back-content", "component": "Row", "align": "center", "children": ["detail-back-icon", "detail-back-label"] },
           {
             "id": "detail-back",

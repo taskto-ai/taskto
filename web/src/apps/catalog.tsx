@@ -11,7 +11,7 @@ import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
 import { BarcodeField } from './BarcodeInput'
 import { type CaptureInfo, isLocation } from './capture'
-import { iconPath } from './iconPath'
+import { iconPath, iconsShowingTheirName, type SurfaceComponent } from './iconPath'
 import { LocationField } from './LocationInput'
 import { PhotoField, PhotoStrip, useAppFiles } from './PhotoInput'
 import { type PhotoLimits, photoIds, signatureId } from './photos'
@@ -225,8 +225,24 @@ const LEFT_OUT = new Set(['Image', 'Video', 'AudioPlayer', 'openUrl', 'regex'])
 const basicIcon = basicCatalog.components.get('Icon')
 const IconApi = { name: 'Icon', schema: basicIcon?.schema ?? z.object({}).passthrough() }
 
-const Icon = createComponentImplementation(IconApi, ({ props }) => {
+// The surface's components as the definition gives them, for iconsShowingTheirName.
+function surfaceComponents(context: {
+  surfaceComponents: { getAll(): Map<string, { type: string; properties: Record<string, unknown> }> }
+}) {
+  const out = new Map<string, SurfaceComponent>()
+  for (const [id, model] of context.surfaceComponents.getAll())
+    out.set(id, { component: model.type, props: model.properties })
+  return out
+}
+
+const Icon = createComponentImplementation(IconApi, ({ props, context }) => {
   const { name, accessibility } = props as { name?: unknown; accessibility?: { label?: unknown } }
+  // A name is all a control shows: the name as text, as it was before icons were paths, so the
+  // control keeps its size and its name. React puts it in as text, never as markup.
+  if (typeof name === 'string') {
+    const shown = iconsShowingTheirName(surfaceComponents(context)).has(context.componentModel.id)
+    return shown ? <span className="ui-app-icon-name">{name}</span> : null
+  }
   const d = iconPath(name)
   if (!d) return null
   const label = typeof accessibility?.label === 'string' ? accessibility.label.trim() : ''

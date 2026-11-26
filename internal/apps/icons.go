@@ -17,8 +17,11 @@ import (
 // The web app checks the same grammar again before it draws one (web/src/apps/iconPath.ts),
 // creates the <svg> and <path> itself, and puts the string only in the path's d attribute.
 //
-// An icon given by a name, the A2UI basic catalog's other form, is still accepted, so apps
-// saved with one stay valid, but nothing is drawn for it: the web app loads no icon font.
+// An icon given by a name, the A2UI basic catalog's other form ("delete", "menu"), is still
+// accepted, so apps saved with one stay valid, but the web app has no drawing for it: no icon
+// font and no set of icons, by choice. Where a name is all a control (a Button, a Modal's trigger)
+// shows, the web app shows the name as text, as before, so the control keeps its size and its
+// name; beside other content it draws nothing. A path is the way to give an icon.
 
 // MaxIconPathLen is the longest path an icon may have, in characters. A detailed 24px glyph is
 // well under 1,500; the definition's own limit (MaxDefinitionSize) already caps a whole app at
@@ -43,56 +46,88 @@ func checkIconPath(s string) error {
 	case s[0] != 'M' && s[0] != 'm':
 		return fmt.Errorf("must start with a moveto, M or m")
 	}
-	for i := 0; i < len(s); i++ {
-		if !strings.ContainsRune(iconPathChars, rune(s[i])) {
-			return fmt.Errorf("has %q at %d: only path commands (%s), numbers, commas and spaces are allowed",
-				s[i], i, iconPathChars[:20])
+	for i, r := range s {
+		if !strings.ContainsRune(iconPathChars, r) {
+			return fmt.Errorf("has %q at byte %d: only path commands (%s), numbers, commas and spaces are allowed",
+				r, i, iconPathChars[:20])
 		}
 	}
 	return nil
 }
 
-// iconPath checks an Icon's {"svgPath": …} and notes that the screen needs the capability.
+// iconPath checks an Icon's {"svgPath": …} and notes that the screen needs the capability. Every
+// refusal has the code the web app translates.
 func (c *screenCheck) iconPath(id string, o map[string]any) error {
-	if len(o) != 1 {
-		return fmt.Errorf(`{"svgPath"} takes no other key`)
+	refuse := func(format string, args ...any) error {
+		return invalidAs(apierr.CodeAppIconPath, apierr.Params{"max": MaxIconPathLen}, "svgPath "+format, args...)
 	}
-	s, _ := o["svgPath"].(string)
+	if len(o) != 1 {
+		return refuse(`takes no other key beside it`)
+	}
+	s, isText := o["svgPath"].(string)
+	if !isText {
+		return refuse("must be text, not %s", jsonKind(o["svgPath"]))
+	}
 	if err := checkIconPath(s); err != nil {
-		return invalidAs(apierr.CodeAppIconPath, apierr.Params{"max": MaxIconPathLen}, "svgPath %v", err)
+		return refuse("%v", err)
 	}
 	c.used[IconPathCapability] = true
 	c.pathIcons[id] = true
 	return nil
 }
 
+// jsonKind names the kind of a decoded JSON value, for a message.
+func jsonKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "true or false"
+	case []any:
+		return "a list"
+	case map[string]any:
+		return "an object"
+	case string:
+		return "text"
+	}
+	return "a number"
+}
+
 // iconLabels checks that a control drawn only with path icons has a name. A Button's content,
 // or a Modal's trigger, followed through the containers that lay it out (Row, Column, Card), up to
-// maxIconContentDepth deep: if it holds path icons and nothing else that names it (a Text, or any
-// other component), one of its icons needs an accessibility label of its own, which the web app
-// gives the drawn icon and so the control (the renderer's Button puts its own label on an element
-// outside the <button>, which names nothing). Beside other content an icon is decoration, hidden
-// from assistive technology unless it has a label. Icons by name draw nothing, so they neither
-// name a control nor need a name.
+// maxIconContentDepth deep: if nothing in it names the control (contentNames) and it holds path
+// icons, one of them needs an accessibility label of its own, which the web app gives the drawn
+// icon and so the control (the renderer's Button puts its own label on an element outside the
+// <button>, which names nothing). Beside content that names the control, an icon is decoration,
+// hidden from assistive technology unless it has a label. The web app runs the same walk
+// (web/src/apps/iconPath.ts) to decide where an icon given by name shows its name.
 func (c *screenCheck) iconLabels(byID map[string]map[string]any) error {
-	memo := map[contentAt]contentName{}
+	w := iconWalk{byID: byID, pathIcons: c.pathIcons, memo: map[contentAt]contentName{}}
 	for _, id := range sortedKeys(byID) {
 		obj := byID[id]
-		var content string
-		switch obj["component"] {
-		case "Button":
-			content, _ = obj["child"].(string)
-		case "Modal":
-			content, _ = obj["trigger"].(string)
-		default:
+		content, isControl := controlContent(obj)
+		if !isControl {
 			continue
 		}
-		if got := namedBy(byID, c.pathIcons, memo, content, 0); !got.named && got.icon != "" {
+		if got := w.names(content, 0); !got.named && got.icon != "" {
 			return invalidAs(apierr.CodeAppIconLabel, apierr.Params{"component": got.icon},
 				"component %q: %s %q shows only icons, so one needs a name: give the icon accessibility.label", got.icon, obj["component"], id)
 		}
 	}
 	return nil
+}
+
+// controlContent is the id of what a control shows: a Button's child, a Modal's trigger.
+func controlContent(obj map[string]any) (string, bool) {
+	switch obj["component"] {
+	case "Button":
+		s, _ := obj["child"].(string)
+		return s, true
+	case "Modal":
+		s, _ := obj["trigger"].(string)
+		return s, true
+	}
+	return "", false
 }
 
 // maxIconContentDepth is how deep iconLabels follows containers inside a control. Deeper content
@@ -112,31 +147,53 @@ type (
 	}
 )
 
-// namedBy reports what the content under id says of the control it is in: named by a labelled
-// path icon, a Text or any other component that isn't a container, or a template of a list; and
-// the first unlabelled path icon it holds. Each component is looked at once per depth (memo), so a
+// iconWalk walks a control's content. Each component is looked at once per depth (memo), so a
 // component that many containers refer to costs no more than one: the work is bounded by the
-// depth, the components and their children, however the references fan out.
-func namedBy(byID map[string]map[string]any, pathIcons map[string]bool, memo map[contentAt]contentName, id string, depth int) contentName {
+// depth, the components and their children, however the references fan out. visits counts the
+// steps, for a test that holds it to that bound.
+type iconWalk struct {
+	byID      map[string]map[string]any
+	pathIcons map[string]bool
+	memo      map[contentAt]contentName
+	visits    int
+}
+
+// names reports what the content under id says of the control it is in, and the first unlabelled
+// path icon it holds. What names it: a labelled path icon; an icon given by name, whose name the
+// web app shows where nothing else names the control; a Text that isn't blank; any other component
+// that isn't a container or a Divider; a template of a list, a bound Text and content too deep to
+// follow (taken to name it). What doesn't: an unlabelled path icon, an icon bound to data, a blank
+// literal Text, a Divider.
+func (w *iconWalk) names(id string, depth int) contentName {
+	w.visits++
 	key := contentAt{id, depth}
-	if got, seen := memo[key]; seen {
+	if got, seen := w.memo[key]; seen {
 		return got
 	}
 	got := contentName{named: true}
-	obj, ok := byID[id]
-	switch {
+	obj, ok := w.byID[id]
+	switch kind, _ := obj["component"].(string); {
 	case !ok || depth > maxIconContentDepth:
-	case obj["component"] == "Icon":
+	case kind == "Icon":
+		_, byName := obj["name"].(string)
 		switch {
-		case !pathIcons[id]:
-			got.named = false // a name draws nothing
-		case !hasLabel(obj):
-			got = contentName{icon: id}
+		case w.pathIcons[id]:
+			if !hasLabel(obj) {
+				got = contentName{icon: id}
+			}
+		case !byName:
+			got.named = false // bound: drawn only if it holds a path, and then unnamed
 		}
-	case obj["component"] == "Card":
+	case kind == "Text":
+		if t, literal := obj["text"].(string); literal && strings.TrimSpace(t) == "" {
+			got.named = false
+		}
+	case kind == "Divider":
+		got.named = false
+	case kind == "Card":
 		child, _ := obj["child"].(string)
-		got = namedBy(byID, pathIcons, memo, child, depth+1)
-	case obj["component"] == "Row" || obj["component"] == "Column":
+		got = w.names(child, depth+1)
+	case kind == "Row" || kind == "Column":
 		children, isList := obj["children"].([]any)
 		if !isList {
 			break // a template draws rows of data
@@ -144,14 +201,14 @@ func namedBy(byID map[string]map[string]any, pathIcons map[string]bool, memo map
 		got.named = false
 		for _, ch := range children {
 			s, _ := ch.(string)
-			under := namedBy(byID, pathIcons, memo, s, depth+1)
+			under := w.names(s, depth+1)
 			got.named = got.named || under.named
 			if got.icon == "" {
 				got.icon = under.icon
 			}
 		}
 	}
-	memo[key] = got
+	w.memo[key] = got
 	return got
 }
 
