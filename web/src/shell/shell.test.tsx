@@ -1378,6 +1378,7 @@ for (const ending of ['logs out', 'loses the session', 'is replaced from another
     await firstPersonsToast()
     if (ending === 'logs out') {
       fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+      await screen.findByRole('heading', { name: 'Log in' })
     } else if (ending === 'loses the session') {
       people.signedOut()
       await act(() => api('/api/expired').catch(() => {}))
@@ -1396,7 +1397,7 @@ for (const ending of ['logs out', 'loses the session', 'is replaced from another
   })
 }
 
-test("a toast's button is gone the moment the person asks to log out, while signing out still waits", async () => {
+test("once signing out is certain the shell and the toast's button are gone, while signing out still waits", async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   let finish: (() => void) | null = null
   twoPeople({
@@ -1407,8 +1408,10 @@ test("a toast's button is gone the moment the person asks to log out, while sign
   })
   await firstPersonsToast()
   fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
-  // At once, before anything of signing out has waited: the first person's toast, and its button,
-  // are already gone.
+  // Certain (nothing to ask about), and the logout still on its way: nothing of the shell is drawn,
+  // so nothing of it (a Save in Settings, the toast's button) can be pressed meanwhile.
+  expect(await screen.findByText('Signing out…')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Open it' })).toBeNull()
   await waitFor(() => expect(finish).not.toBeNull())
   await act(async () => finish?.())
@@ -1555,4 +1558,89 @@ test('a menu drawn again with the account’s older value keeps the save the que
   await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }, { locale: 'en' }, { locale: '' }]))
   await act(async () => answers.shift()?.(true))
   await act(() => setPreferences({ user: null }))
+})
+
+// --- The tail of a sign-out ---------------------------------------------------------------------
+
+test('a 401 while the logout is on its way never opens the login screen before the sign-out is done', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let finish: (() => void) | null = null
+  twoPeople({
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        finish = () => done({ status: 204 })
+      }),
+    'GET /api/expired': { status: 401, body: { error: 'not logged in' } },
+  })
+  render(<App />)
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await waitFor(() => expect(finish).not.toBeNull())
+  // Something else answers 401 meanwhile (the window got the focus, a count was asked again).
+  await act(() => api('/api/expired').catch(() => {}))
+  await new Promise((r) => setTimeout(r, 20))
+  // Nobody can sign in under the sign-out still running: the login isn't shown yet.
+  expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+  expect(screen.getByText('Signing out…')).toBeTruthy()
+  await act(async () => finish?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+})
+
+for (const failure of ['no answer', 'a server error'] as const) {
+  test(`a logout that gets ${failure} leaves the person signed in, with Try again and Back`, async () => {
+    window.history.replaceState(null, '', '/w/1/conversations')
+    let fail = true
+    const people = twoPeople({
+      'POST /api/logout': () => {
+        if (!fail) return { status: 204 }
+        if (failure === 'no answer') throw new TypeError('Failed to fetch')
+        return { status: 500, body: { error: 'internal error', code: 'internal' } }
+      },
+    })
+    render(<App />)
+    fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+    expect(await screen.findByRole('heading', { name: "Couldn't sign out" })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+    // Back: the app, still signed in, and its requests name the account again.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the app' }))
+    await screen.findByRole('navigation', { name: 'Sections' })
+    // Log out again, and this time the server confirms it.
+    fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+    await screen.findByRole('heading', { name: "Couldn't sign out" })
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await screen.findByRole('heading', { name: 'Log in' })
+    expect(people.calls.filter((c) => c.path === '/api/logout')).toHaveLength(3)
+  })
+}
+
+test('a sign-out whose tail answers after a newer session began here touches nothing of it', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let finish: (() => void) | null = null
+  twoPeople({
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        finish = () => done({ status: 204 })
+      }),
+  })
+  render(<App />)
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await waitFor(() => expect(finish).not.toBeNull())
+  // However it came about, a newer session is this page's now, with a draft of its own.
+  act(() => beginSession(2))
+  localStorage.setItem('taskto:drafts-of', '2')
+  await act(async () => finish?.())
+  await new Promise((r) => setTimeout(r, 20))
+  // The tail stopped: no login screen over it, and its drafts are untouched.
+  expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('2')
+})
+
+test("a request of this account that the server refuses as another's ends the page's session", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  twoPeople({ 'POST /api/x': { status: 409, body: { error: 'another account', code: 'session_account_changed' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  await act(() => api('/api/x', { method: 'POST', body: {} }).catch(() => {}))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 })

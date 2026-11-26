@@ -325,7 +325,8 @@ export async function unsentOf(user: number): Promise<Unsent> {
 export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
   const runtime = state.runtime
-  const users = [...new Set([runtime?.user, user].filter((n): n is number => n !== undefined))]
+  // Only the account signing out (`user`), never another that is open here meanwhile.
+  const users = user !== undefined ? [user] : runtime ? [runtime.user] : []
   const left: UnsentRef[] = []
   for (const id of users) {
     let store = runtime?.user === id ? runtime.store : undefined
@@ -347,7 +348,9 @@ export async function settle(user: number | undefined, approved: Approval = new 
 }
 
 async function teardown(purge: boolean, user?: number): Promise<void> {
-  const runtime = state.runtime
+  // The runtime open here is let go only if it is the account signing out's: another's (signed in
+  // since) is left as it is.
+  const runtime = user === undefined || state.runtime?.user === user ? state.runtime : null
   if (runtime) {
     runtime.stop()
     if (purge) {
@@ -389,7 +392,7 @@ export async function deactivate({
   if (opening) await opening.catch(() => {})
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])
-    await teardown(false)
+    await teardown(false, user)
     forgetLast(user)
     return []
   }

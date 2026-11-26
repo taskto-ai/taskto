@@ -4,7 +4,11 @@
     "unreachableTitle": "Não foi possível falar com o servidor",
     "unreachableHelp": "Verifique a sua conexão, ou pergunte a quem cuida deste servidor se ele está no ar, e tente de novo.",
     "unreachableDetail": "O que deu errado: {error}",
-    "tryAgain": "Tentar de novo"
+    "tryAgain": "Tentar de novo",
+    "signingOut": "Saindo…",
+    "signOutFailedTitle": "Não foi possível sair",
+    "signOutFailedHelp": "O servidor não confirmou, então você continua conectado neste dispositivo. Verifique sua conexão e tente de novo.",
+    "backToApp": "Voltar ao app"
   },
   "apps": {
     "intro": "Apps pessoais são telas que o agente cria para você: peça uma em uma conversa, como “um controle de despesas no meu espaço privado”. Os apps de um espaço compartilhado são de todos os membros: mova um app para lá para compartilhá-lo.",
@@ -1105,7 +1109,7 @@
     "app_field_locked": "{field} foi capturado e não pode ser alterado depois.",
     "app_signature_type": "Uma assinatura deve ser uma imagem PNG.",
     "offline_downloads_disabled": "Um administrador desativou os downloads offline deste espaço.",
-    "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
+    "session_account_changed": "Este navegador agora está conectado com outra conta, em outra aba, então nada foi feito. Recarregue a página para continuar.",
     "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros, alterar ou excluir os baixados e navegar pela cópia baixada.",
     "notification_not_found": "Essa notificação não está disponível.",
     "notification_email_invalid": "As escolhas de e-mail não são válidas: espera-se um tipo, um modo, uma hora de 0 a 23 e um fuso horário como Europe/Lisbon.",

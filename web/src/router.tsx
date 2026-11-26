@@ -184,6 +184,15 @@ function watchHistory() {
   })
 }
 
+// Whether the person may leave every page there is (signing out leaves them all): the page that
+// asks (a draft not saved) is asked, as a move to another page asks it. True at once when no page
+// asks; never answered while the person keeps what they have (they stay where they are).
+export function mayLeave(): Promise<boolean> {
+  const ask = asker()
+  if (!ask) return Promise.resolve(true)
+  return new Promise((resolve) => ask(() => resolve(true)))
+}
+
 // While `ask` is given, moves to another page wait for it (see above). The latest page to ask is
 // the one asked; it is told what the page last committed, never a render React set aside.
 export function useBeforeLeave(ask: BeforeLeave | null) {

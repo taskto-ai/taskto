@@ -141,6 +141,13 @@
     margin-block: auto;
   }
 
+  /* Signing out: the spinner beside what is happening. */
+  .ui-auth-signing-out {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
   /* Before the app knows who is signed in: the logo and the shape of a form, still. */
   .ui-auth-skeleton {
     display: grid;
