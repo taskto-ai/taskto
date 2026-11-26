@@ -673,7 +673,20 @@ func TestPurgeConversationDoesNotStopTheSidecarWhileItWaits(t *testing.T) {
 	purged := make(chan error, 1)
 	started := time.Now()
 	go func() { purged <- s.client.PurgeConversation(ctx, doomed) }()
-	time.Sleep(50 * time.Millisecond) // the purge is under way, waiting for the reader
+	// Under way: the purge's deletion has committed (seen from another connection than the pinned
+	// one), so it is now waiting to checkpoint behind the reader.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		var left int
+		if err := reader.QueryRowContext(ctx, `SELECT count(*) FROM conversations WHERE id = ?`, doomed).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		if left == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the purge never deleted the conversation")
+		}
+	}
 
 	// The sidecar answers while the purge waits, promptly. (A purge on the main thread holds every
 	// request until its wait is over, which the test entry sets to 300 ms.)
