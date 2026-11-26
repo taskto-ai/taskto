@@ -387,6 +387,9 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   // The challenge of a login whose password was right and that now asks for a code.
   const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, failure, submit, edited } = useSubmit(async () => {
+    // Someone is signing in: the notice is not for them, and not for the form they come back to
+    // after a failure or from the code step, whenever the page is seen.
+    setDeleted(null)
     const reply = await api<Me | Challenged>('/api/login', {
       method: 'POST',
       body: { email, password },
@@ -394,8 +397,6 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     if (needsCode(reply)) {
       setPassword('')
       setChallenge(reply.challenge)
-      // Whoever this is, the notice is not for the form they come back to from the code step.
-      setDeleted(null)
       return null
     }
     return reply

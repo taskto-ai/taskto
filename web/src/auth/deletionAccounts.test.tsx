@@ -194,3 +194,32 @@ test('case 4: a notice that was shown is not shown again on the password form af
   await screen.findByLabelText('Password')
   expect(screen.queryByText(NOTICE)).toBeNull()
 })
+
+test('case 3: an older date the storage kept is not told once the newer one, which it could not keep, was shown', () => {
+  sessionStorage.setItem('taskto.accountDeleted', '2026-11-01T10:00:00.000Z')
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  rememberDeletion(PURGE)
+  ackDeletion(PURGE)
+  expect(peekDeletion()).toBeNull()
+})
+
+test('case 4: another account whose login fails is not shown a notice that was waiting for a page to be seen', async () => {
+  rememberDeletion(PURGE)
+  let state: DocumentVisibilityState = 'hidden'
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state)
+  fakeFetch({
+    'GET /api/login/methods': { body: methods },
+    'POST /api/login': { status: 401, body: { error: 'wrong', code: 'wrong_credentials' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  signInAs('next@example.com')
+  await screen.findByRole('alert')
+  state = 'visible'
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  expect(screen.queryByText(NOTICE)).toBeNull()
+})

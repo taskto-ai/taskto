@@ -20,7 +20,7 @@ export const DELETION_EVENT = 'taskto:account-deleted'
 // storage throws then neither loses the notice (a write that failed) nor tells it again (a removal
 // that failed), as long as the page stays. A reload can't do better than the storage does.
 let inMemory: string | null = null
-let shown: string | null = null
+const shown = new Set<string>()
 
 // How many sign-in submissions this page has seen.
 let submissions = 0
@@ -45,7 +45,7 @@ export function beginDeletion(): number {
 export function rememberDeletion(purgeAt: string, since: number = submissions): void {
   if (since !== submissions) return
   inMemory = purgeAt
-  shown = null
+  shown.delete(purgeAt)
   try {
     window.sessionStorage.setItem(KEY, purgeAt)
   } catch {
@@ -60,18 +60,22 @@ export function peekDeletion(): string | null {
   // date there to be told instead.
   if (inMemory !== null) return inMemory
   const kept = stored()
-  return kept !== null && kept !== shown ? kept : null
+  return kept !== null && !shown.has(kept) ? kept : null
 }
 
 // The notice has been shown: it is told no more. Given the date that was shown, a newer deletion
 // remembered meanwhile is kept; given none, whatever is kept is dropped.
 export function ackDeletion(shownDate?: string): void {
   if (shownDate !== undefined && inMemory !== null && inMemory !== shownDate) return
+  // What this page remembered came before what the storage kept, so a stored date is older than it
+  // (a write that failed left it there): shown along with it.
+  const superseded = inMemory !== null
   const gone = shownDate ?? peekDeletion()
   inMemory = null
-  if (gone !== null) shown = gone
+  if (gone !== null) shown.add(gone)
   const kept = stored()
-  if (shownDate !== undefined && kept !== null && kept !== shownDate) return
+  if (kept !== null && superseded) shown.add(kept)
+  if (shownDate !== undefined && !superseded && kept !== null && kept !== shownDate) return
   try {
     window.sessionStorage.removeItem(KEY)
   } catch {
