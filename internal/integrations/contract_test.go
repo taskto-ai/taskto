@@ -74,6 +74,10 @@ type paymentsFixture struct {
 	Tolerance time.Duration
 	// OtherSecret is a second webhook secret of the provider's format that isn't the integration's.
 	OtherSecret string
+	// PayerHosts are the provider's own hosts a payer's address may be on (not its API hosts).
+	PayerHosts []string
+	// RefusalWords are words the provider's fake says in its refusal of a key: none may be in an error.
+	RefusalWords []string
 	// PayerWords are what a payer typed at the provider and the provider sends in its events: none of it
 	// may come out of Normalize.
 	PayerWords []string
@@ -229,6 +233,9 @@ func contractCreateOnce(ctx context.Context, fx *paymentsFixture) error {
 		if err != nil || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
 			return failf("%s: the address %q isn't a plain https address", sh.Name, first.URL)
 		}
+		if !slices.Contains(fx.PayerHosts, u.Hostname()) {
+			return failf("%s: the address %q isn't on the provider's own hosts %v", sh.Name, first.URL, fx.PayerHosts)
+		}
 		// The same key and the same terms again (a retry after a lost answer) is the same link, not a second.
 		for range 2 {
 			again, err := fx.Provider.CreatePaymentLink(ctx, fx.Creds, fx.Client, nl)
@@ -308,6 +315,14 @@ func contractCreateCredentials(ctx context.Context, fx *paymentsFixture) error {
 		if strings.Contains(err.Error(), bad.APIKey.Reveal()) || strings.Contains(err.Error(), fx.Creds.APIKey.Reveal()) {
 			return failf("%s: the failure quotes a key: %v", sh.Name, err)
 		}
+		if len(fx.RefusalWords) == 0 {
+			return failf("the fixture names none of the words of the provider's refusal")
+		}
+		for _, w := range fx.RefusalWords {
+			if strings.Contains(err.Error(), w) {
+				return failf("%s: the failure quotes the provider's words %q: %v", sh.Name, w, err)
+			}
+		}
 		if fx.Objects() != before {
 			return failf("%s: a refused key made an object", sh.Name)
 		}
@@ -344,9 +359,9 @@ func contractFindByToken(ctx context.Context, fx *paymentsFixture) error {
 		if err != nil {
 			return err
 		}
-		got, found, _, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, nl, since)
-		if err != nil || !found || got.ObjectID != made.ObjectID || got.URL != made.URL {
-			return failf("%s: lookup of the token = %+v, %v, %v, want %+v", sh.Name, got, found, err, made)
+		got, found, expired, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, nl, since)
+		if err != nil || !found || expired || got.ObjectID != made.ObjectID || got.URL != made.URL {
+			return failf("%s: lookup of the token = %+v, %v, expired %v, %v, want %+v", sh.Name, got, found, expired, err, made)
 		}
 		// The lookup makes nothing.
 		before := fx.Objects()
@@ -358,7 +373,7 @@ func contractFindByToken(ctx context.Context, fx *paymentsFixture) error {
 		if other.Token, err = newToken(); err != nil {
 			return err
 		}
-		got, found, expired, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, other, since)
+		got, found, expired, err = fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, other, since)
 		if err != nil || found || expired || got != (Link{}) {
 			return failf("%s: lookup of another token = %+v, %v, %v, %v", sh.Name, got, found, expired, err)
 		}
@@ -369,7 +384,7 @@ func contractFindByToken(ctx context.Context, fx *paymentsFixture) error {
 func contractFindTerms(ctx context.Context, fx *paymentsFixture) error {
 	since := fx.Now().Add(-time.Hour)
 	for _, sh := range fx.Shapes {
-		_, nl, err := fx.made(ctx, sh)
+		made, nl, err := fx.made(ctx, sh)
 		if err != nil {
 			return err
 		}
@@ -379,9 +394,9 @@ func contractFindTerms(ctx context.Context, fx *paymentsFixture) error {
 		} {
 			l := nl
 			change(&l)
-			// A refusal may name the object it saw (unchecked, for the key to keep), never a link to give.
+			// A refusal names the object it saw (unchecked, for the key to keep), never a link to give.
 			got, found, _, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, l, since)
-			if !isCall(err, CallRefused) || found || got.URL != "" {
+			if !isCall(err, CallRefused) || found || got.URL != "" || got.ObjectID != made.ObjectID {
 				return failf("%s: a lookup of %s adopted %+v, %v, %v, want a refusal", sh.Name, what, got, found, err)
 			}
 		}

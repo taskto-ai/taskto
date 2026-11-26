@@ -53,8 +53,11 @@ func stripeFixture(t *testing.T) *paymentsFixture {
 		Now:         fake.Clock().Now,
 		Tolerance:   StripeTolerance,
 		OtherSecret: testprovider.OtherWebhookSecret,
-		PayerWords:  []string{payer.Email, payer.Name},
-		Objects:     func() int { return len(fake.Sessions()) + len(fake.Links()) },
+		PayerHosts:  []string{stripeCheckoutHost, stripeLinkHost},
+		// The fake answers a key it doesn't know as Stripe does.
+		RefusalWords: []string{"Invalid API Key"},
+		PayerWords:   []string{payer.Email, payer.Name},
+		Objects:      func() int { return len(fake.Sessions()) + len(fake.Links()) },
 		Pay: func(l Link, sh linkShape) ([]signedDelivery, error) {
 			var evs []testprovider.Event
 			var err error
