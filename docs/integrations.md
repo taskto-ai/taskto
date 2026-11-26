@@ -264,13 +264,17 @@ What a delivery goes through, in this order, each step cheaper than the next:
    those secrets when it starts, and a secret that **more than one integration holds is used for
    none of them**: deliveries signed with it are the plain `404` for each, nothing is stored,
    and each integration's [check](#checking-a-connection) says so (without naming the other
-   one) until one of them has another secret. (A rotation doesn't keep such a secret as the
-   previous one, so the integration that still holds it isn't kept from verifying for the
-   overlap.)
+   one) until **each** has a fresh secret from its provider. The server records the secret's
+   fingerprint as found shared (`integration_shared_secrets`, written at start and by every
+   change or removal that could take a copy away), so a secret that was ever shared is never
+   used again for any integration: when one holder rotates, or is removed, the other keeps
+   refusing, because the secret is known to the first's workspace, and no integration may be
+   given it again (`integration_webhook_secret_reused`). A rotation doesn't keep such a secret
+   as the previous one either.
 
    Every well-formed signature costs the same work: the body is MAC'd against exactly two keys,
    the current and the previous secret, and a slot with none holds a random key of the server's
-   own that nobody has. An id with no usable secret (unknown, disabled, shared or with none) is
+   own that nobody has, whose match is never counted even so. An id with no usable secret (unknown, disabled, shared or with none) is
    verified against a random secret the server made, so the work over the body is the same and
    the result is thrown away. A header that isn't well formed is refused before any MAC, for
    every id alike.

@@ -173,10 +173,12 @@ func (stripe) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, 
 		return errMalformedHeader
 	}
 	match := 0
-	for _, key := range keys {
+	for slot, key := range keys {
 		want := stripeMAC(key, stamp, body)
 		for _, got := range sigs {
-			if hmac.Equal(want, got) {
+			// Every slot is computed and compared, but only one that holds a configured secret may
+			// count: a signature made with the padding key authenticates nothing.
+			if hmac.Equal(want, got) && slot < real {
 				match = 1 // no early exit
 			}
 		}

@@ -78,3 +78,19 @@ CREATE INDEX integration_events_by_received ON integration_events (received_at);
 ALTER TABLE integration_secrets ADD COLUMN fingerprint BLOB CHECK (fingerprint IS NULL OR length(fingerprint) = 32);
 
 CREATE INDEX integration_secrets_by_fingerprint ON integration_secrets (fingerprint) WHERE fingerprint IS NOT NULL;
+
+-- The backfill that gives old secrets their fingerprint runs under the write lock on every create
+-- and rotation: this index holds only the webhook secrets still without one (none, once the server
+-- has started), so it finds nothing to do without reading the table.
+CREATE INDEX integration_secrets_unfingerprinted ON integration_secrets (integration_id)
+    WHERE fingerprint IS NULL AND name IN ('webhook_secret', 'webhook_secret_previous');
+
+-- Fingerprints of webhook secrets that were found held by more than one integration (an old
+-- install can have one). Such a secret is known to more than one workspace, so it is never used
+-- again for any integration, even once every other holder has rotated away from it: each
+-- integration that still has it refuses deliveries until its provider gives it a fresh secret. The
+-- row is the keyed fingerprint only, never the secret.
+CREATE TABLE integration_shared_secrets (
+    fingerprint BLOB PRIMARY KEY CHECK (length(fingerprint) = 32),
+    found_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+) STRICT, WITHOUT ROWID;

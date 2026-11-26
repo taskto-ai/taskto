@@ -47,7 +47,8 @@ func (r *rig) checkOf(id int64) CheckResult {
 
 // A webhook secret two integrations hold (an old install can have it) verifies a delivery for
 // neither, whichever workspace they are in: the delivery stores nothing and is the plain 404, the
-// check tells admins without saying whose it is, and once one of them rotates the other works.
+// check tells admins without saying whose it is, and once one of them rotates the other still refuses
+// (the secret is spent) until it has a fresh one too.
 func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
@@ -117,7 +118,8 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 		t.Fatalf("check of an integration with a secret of its own = %+v", got)
 	}
 
-	// One of them rotates: the other is the only holder again.
+	// One of them rotates. The secret was found shared, so it is spent for both: the other
+	// integration, which now is the only one that holds it, still refuses, and says so.
 	expect(t, r.owner.do(http.MethodPatch, wsPath(ws2, fmt.Sprintf("integrations/%d", second.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
 	var previous int
@@ -125,11 +127,16 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 		second.ID).Scan(&previous); err != nil || previous != 0 {
 		t.Fatalf("a shared secret was kept as the previous one (%d, %v)", previous, err)
 	}
-	if d, err := r.send.Send(ctx, ev); err != nil || d.Status != http.StatusOK {
-		t.Fatalf("the first integration after the other rotated = %v, %v", d.Status, err)
+	if d, err := r.send.Send(ctx, ev); err != nil {
+		t.Fatal(err)
+	} else {
+		isNotFound(t, "the first integration after the other rotated, still with the shared secret", d.Status, d.Response)
 	}
-	if n := len(r.rows(r.in.ID)); n != 1 {
-		t.Fatalf("%d events stored for the first integration, want 1", n)
+	if n := len(r.rows(r.in.ID)); n != 0 {
+		t.Fatalf("%d events stored with a secret that was shared", n)
+	}
+	if got := r.checkOf(r.in.ID); got.OK || got.Code != "integration_webhook_secret_shared" {
+		t.Fatalf("check of the first integration after the other rotated = %+v", got)
 	}
 	rotated := r.sender(secondID, stripeHookNew)
 	if d, err := rotated.Send(ctx, ev); err != nil || d.Status != http.StatusOK {
@@ -140,8 +147,109 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	} else {
 		isNotFound(t, "the rotated integration with its old secret", d.Status, d.Response)
 	}
+	// Nobody may be given the spent secret again, even the integration that still holds it.
+	expectCode(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
+		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusConflict, "integration_webhook_secret_reused")
+	expectCode(t, r.owner.do(http.MethodPatch, wsPath(ws2, fmt.Sprintf("integrations/%d", second.ID)),
+		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusConflict, "integration_webhook_secret_reused")
+	expectCode(t, r.owner.do(http.MethodPost, wsPath(r.ws, "integrations"), withHook(stripeBody("again"), stripeHook)),
+		http.StatusConflict, "integration_webhook_secret_reused")
+
+	// The first one gets a fresh secret from its provider too: now it works, with that one only.
+	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
+		map[string]any{"secrets": map[string]string{"webhook_secret": hookFor("fresh")}}), http.StatusOK)
+	if err := r.db.QueryRow(`SELECT count(*) FROM integration_secrets WHERE integration_id = ? AND name = 'webhook_secret_previous'`,
+		r.in.ID).Scan(&previous); err != nil || previous != 0 {
+		t.Fatalf("a spent secret was kept as the previous one (%d, %v)", previous, err)
+	}
+	if d, err := r.send.Send(ctx, ev); err != nil {
+		t.Fatal(err)
+	} else {
+		isNotFound(t, "the first integration with the spent secret after its rotation", d.Status, d.Response)
+	}
+	if d, err := r.sender(strings.TrimPrefix(*r.in.WebhookURL, hookOrigin+HookPrefix), hookFor("fresh")).Send(ctx, ev); err != nil || d.Status != http.StatusOK {
+		t.Fatalf("the first integration with its fresh secret = %v, %v", d.Status, err)
+	}
+	if n := len(r.rows(r.in.ID)); n != 1 {
+		t.Fatalf("%d events stored for the first integration, want 1", n)
+	}
 	if got := r.checkOf(r.in.ID); !got.OK {
-		t.Fatalf("check after the other rotated = %+v", got)
+		t.Fatalf("check after both rotated = %+v", got)
+	}
+}
+
+// Deleting one of two integrations that share a secret doesn't make the survivor the only holder:
+// it keeps refusing until it has a fresh secret.
+func TestASecretFoundSharedStaysSpentWhenAHolderIsRemoved(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	other, otherID, _ := r.integration(stripeBody("other"), hookFor("other"))
+	r.shareSecret(other, otherID, stripeHook)
+	s, _ := r.session(2500, "eur")
+	r.must(r.fake.Pay(s.ID))
+	ev := r.completed()
+	expect(t, r.owner.do(http.MethodDelete, wsPath(r.ws, fmt.Sprintf("integrations/%d", other.ID)), nil), http.StatusNoContent)
+	if d, err := r.send.Send(ctx, ev); err != nil {
+		t.Fatal(err)
+	} else {
+		isNotFound(t, "the survivor of a removed holder", d.Status, d.Response)
+	}
+	if got := r.checkOf(r.in.ID); got.OK || got.Code != "integration_webhook_secret_shared" {
+		t.Fatalf("check of the survivor = %+v", got)
+	}
+}
+
+// A database that isn't started again since it was found to hold a secret twice is still safe: the
+// first change to either integration records the secret before it takes a copy away.
+func TestARotationRecordsASharedSecretNotYetFound(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	other, otherID, _ := r.integration(stripeBody("other"), hookFor("other"))
+	r.shareSecret(other, otherID, stripeHook)
+	if _, err := r.db.Exec(`DELETE FROM integration_shared_secrets`); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", other.ID)),
+		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
+	s, _ := r.session(2500, "eur")
+	r.must(r.fake.Pay(s.ID))
+	if d, err := r.send.Send(ctx, r.completed()); err != nil {
+		t.Fatal(err)
+	} else {
+		isNotFound(t, "the integration still holding a secret found shared at the other's rotation", d.Status, d.Response)
+	}
+}
+
+// The backfill that every create and rotation runs reads only the rows that wait for a fingerprint,
+// through their partial index, and not the table.
+func TestTheBackfillUsesItsPartialIndex(t *testing.T) {
+	r := newRig(t)
+	rows, err := r.db.Query(`EXPLAIN QUERY PLAN ` + backfillQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	joined := strings.Join(plan, "\n")
+	if !strings.Contains(joined, "integration_secrets_unfingerprinted") || strings.Contains(joined, "SCAN s") && !strings.Contains(joined, "USING") {
+		t.Fatalf("the backfill's plan doesn't use its index:\n%s", joined)
+	}
+	// Nothing waits for a fingerprint, so it fills nothing in.
+	tx, err := r.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if n, err := r.store.backfillFingerprints(context.Background(), tx); err != nil || n != 0 {
+		t.Fatalf("backfill with nothing missing = %d, %v", n, err)
 	}
 }
 
@@ -281,4 +389,37 @@ func TestAnOldSecretWithoutAFingerprintIsStillRefused(t *testing.T) {
 	}
 	expectCode(t, r.owner.do(http.MethodPost, wsPath(r.ws, "integrations"), withHook(stripeBody("second"), stripeHook)),
 		http.StatusConflict, "integration_webhook_secret_reused")
+}
+
+// The padding key of an empty slot does the work of a key and authenticates nothing: a delivery
+// signed with it, were it known, is refused, with one secret configured or none, while the same
+// number of MACs are computed.
+func TestThePaddingKeyAuthenticatesNothing(t *testing.T) {
+	body := []byte(`{"id":"evt_1","object":"event"}`)
+	known := "padding-key-known-to-the-test"
+	old := verifyPad
+	verifyPad = []byte(known)
+	t.Cleanup(func() { verifyPad = old })
+	var count int
+	macHook = func() { count++ }
+	t.Cleanup(func() { macHook = nil })
+	forged := sig(known, hookNow, string(body))
+	for name, secrets := range map[string]WebhookSecrets{
+		"no secret":       {},
+		"one secret":      {Current: Secret(stripeHook)},
+		"only a previous": {Previous: Secret(stripeHook)},
+		"two secrets":     {Current: Secret(stripeHook), Previous: Secret(stripeHookNew)},
+	} {
+		count = 0
+		if err := (stripe{}).VerifyWebhook(forged, body, secrets, hookNow); err == nil {
+			t.Errorf("%s: a delivery signed with the padding key verified", name)
+		}
+		if count != verifyKeys {
+			t.Errorf("%s: %d MACs, want %d", name, count, verifyKeys)
+		}
+	}
+	// The configured secrets still verify.
+	if err := (stripe{}).VerifyWebhook(sig(stripeHook, hookNow, string(body)), body, WebhookSecrets{Current: Secret(stripeHook)}, hookNow); err != nil {
+		t.Errorf("a delivery signed with the configured secret = %v", err)
+	}
 }

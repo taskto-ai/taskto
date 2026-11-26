@@ -356,16 +356,25 @@ func (s *Store) fingerprintFor(name, value string) any {
 // BackfillFingerprints gives the webhook secrets saved before fingerprints existed theirs, which
 // the server does when it starts. A secret that doesn't open (the server key changed) stays
 // without one: it verifies nothing either.
+//
+// It also records every fingerprint found held by more than one integration (see
+// markSharedSecrets), which a start does whether or not anything was missing.
 func (s *Store) BackfillFingerprints(ctx context.Context) error {
-	return s.tx(ctx, func(tx *sql.Tx) error { return s.backfillFingerprints(ctx, tx) })
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := s.backfillFingerprints(ctx, tx); err != nil {
+			return err
+		}
+		return s.markSharedSecrets(ctx, tx)
+	})
 }
 
-func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, `SELECT i.id, i.workspace_id, i.public_id, s.name, s.sealed
-		FROM integration_secrets s JOIN integrations i ON i.id = s.integration_id
-		WHERE s.fingerprint IS NULL AND s.name IN (?, ?)`, SecretWebhookSecret, SecretWebhookSecretPrevious)
+// backfillFingerprints fills in the fingerprints that are missing, and says how many it did. The
+// query is bounded by the partial index on exactly those rows (migration 0053), so with nothing
+// missing, which is every create and rotation after the first start, it reads no row of the table.
+func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) (int, error) {
+	rows, err := tx.QueryContext(ctx, backfillQuery)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	type pending struct {
 		ref    sealRef
@@ -377,13 +386,14 @@ func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) error {
 		var p pending
 		if err := rows.Scan(&p.ref.id, &p.ref.workspace, &p.ref.publicID, &p.name, &p.sealed); err != nil {
 			_ = rows.Close()
-			return err
+			return 0, err
 		}
 		todo = append(todo, p)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
+		return 0, err
 	}
+	filled := 0
 	for _, p := range todo {
 		plain, err := s.key.Open(p.sealed, p.ref.ad(p.name))
 		if err != nil {
@@ -391,10 +401,50 @@ func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) error {
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE integration_secrets SET fingerprint = ? WHERE integration_id = ? AND name = ?`,
 			s.fingerprintFor(p.name, string(plain)), p.ref.id, p.name); err != nil {
-			return err
+			return 0, err
+		}
+		filled++
+	}
+	if filled > 0 {
+		// Secrets that were just given their fingerprint may be ones two integrations hold.
+		if err := s.markSharedSecrets(ctx, tx); err != nil {
+			return 0, err
 		}
 	}
-	return nil
+	return filled, nil
+}
+
+// backfillQuery finds the webhook secrets without a fingerprint. Its names are literals, the very
+// ones of the partial index integration_secrets_unfingerprinted, because SQLite only uses a
+// partial index for a query whose condition it can see implies the index's; a test checks the plan.
+const backfillQuery = `SELECT i.id, i.workspace_id, i.public_id, s.name, s.sealed
+	FROM integration_secrets s INDEXED BY integration_secrets_unfingerprinted
+	JOIN integrations i ON i.id = s.integration_id
+	WHERE s.fingerprint IS NULL AND s.name IN ('webhook_secret', 'webhook_secret_previous')`
+
+// markSharedSecrets records, as compromised, every webhook secret that more than one integration
+// holds now (an expired previous secret holds nothing): it is known to each of their workspaces.
+// Once recorded it
+// verifies for no integration, whoever rotates away from it first, and no integration may be given
+// it again; each that holds it refuses deliveries until its provider gives it a fresh secret.
+func (s *Store) markSharedSecrets(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO integration_shared_secrets (fingerprint, found_at)
+		SELECT fingerprint, ? FROM integration_secrets WHERE fingerprint IS NOT NULL AND (expires_at IS NULL OR expires_at > ?)
+		GROUP BY fingerprint HAVING count(DISTINCT integration_id) > 1`, s.stamp(s.now()), s.stamp(s.now()))
+	return err
+}
+
+// markSharedSecretsOf is markSharedSecrets for the secrets of one integration of the workspace,
+// run before a change or a removal takes a copy away, so the other holder is not left as the only
+// one. A write is the only place it can be recorded: a delivery or a check only reads.
+func (s *Store) markSharedSecretsOf(ctx context.Context, tx *sql.Tx, workspace, id int64) error {
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO integration_shared_secrets (fingerprint, found_at)
+		SELECT DISTINCT a.fingerprint, ? FROM integration_secrets a JOIN integrations i ON i.id = a.integration_id
+		WHERE a.integration_id = ? AND i.workspace_id = ? AND a.fingerprint IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > ?)
+			AND EXISTS (SELECT 1 FROM integration_secrets b WHERE b.fingerprint = a.fingerprint AND b.integration_id <> a.integration_id
+				AND (b.expires_at IS NULL OR b.expires_at > ?))`,
+		s.stamp(s.now()), id, workspace, s.stamp(s.now()), s.stamp(s.now()))
+	return err
 }
 
 func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (record, error) {
@@ -531,14 +581,22 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 
 		now := s.now()
 		ref := old.sealRef(workspace)
+		if webhook, ok := c.secrets[SecretWebhookSecret]; ok {
+			// Whatever copy of a shared secret this change takes away, the other holder must not be left
+			// as the only one: it is recorded first. Then the new secret must be one that was never
+			// shared, even if it is the one this integration has now.
+			if err := s.markSharedSecretsOf(ctx, tx, workspace, id); err != nil {
+				return err
+			}
+			if err := s.checkWebhookSecretFree(ctx, tx, id, webhook); err != nil {
+				return err
+			}
+		}
 		if webhook, ok := c.secrets[SecretWebhookSecret]; ok && !s.holds(ctx, tx, ref, SecretWebhookSecret, webhook) {
 			// The secret that is replaced keeps verifying for a day, so events the provider signed
 			// with it before the change took effect there aren't refused. Sending the secret that
 			// is already current (a retry whose answer was lost) leaves both slots as they are:
 			// copying it into the previous slot would drop the one it replaced.
-			if err := s.checkWebhookSecretFree(ctx, tx, id, webhook); err != nil {
-				return err
-			}
 			if err := s.keepPrevious(ctx, tx, ref, now); err != nil {
 				return err
 			}
@@ -604,10 +662,10 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 // giving any secret saved before fingerprints their own), and the answer names nothing of the
 // integration that holds it.
 func (s *Store) checkWebhookSecretFree(ctx context.Context, tx *sql.Tx, except int64, value string) error {
-	if err := s.backfillFingerprints(ctx, tx); err != nil {
+	if _, err := s.backfillFingerprints(ctx, tx); err != nil {
 		return err
 	}
-	taken, err := s.heldByAnother(ctx, tx, except, s.webhookFingerprint(value))
+	taken, err := s.unusable(ctx, tx, except, s.webhookFingerprint(value))
 	if err != nil {
 		return err
 	}
@@ -615,6 +673,18 @@ func (s *Store) checkWebhookSecretFree(ctx context.Context, tx *sql.Tx, except i
 		return errWebhookSecretReused
 	}
 	return nil
+}
+
+// unusable says whether a webhook secret with the fingerprint can verify no delivery for integration
+// except: one that was found held by more than one integration, ever (integration_shared_secrets),
+// or that another holds now.
+func (s *Store) unusable(ctx context.Context, q querier, except int64, fingerprint []byte) (bool, error) {
+	var found bool
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_shared_secrets WHERE fingerprint = ?)`,
+		fingerprint).Scan(&found); err != nil || found {
+		return found, err
+	}
+	return s.heldByAnother(ctx, q, except, fingerprint)
 }
 
 // heldByAnother says whether an integration other than except has a webhook secret, current or
@@ -635,7 +705,7 @@ func (s *Store) sharedWebhookSecrets(ctx context.Context, q querier, integration
 		if secret == "" {
 			return false, nil
 		}
-		return s.heldByAnother(ctx, q, integration, s.webhookFingerprint(secret.Reveal()))
+		return s.unusable(ctx, q, integration, s.webhookFingerprint(secret.Reveal()))
 	}
 	if current, err = check(creds.WebhookSecret); err != nil {
 		return false, false, err
@@ -680,7 +750,7 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 	}
 	// A secret another integration holds too (one an old install can have) verified nothing here, and
 	// kept as the previous one it would keep the other's from verifying for the overlap: it is let go.
-	held, err := s.heldByAnother(ctx, tx, ref.id, s.webhookFingerprint(string(plain)))
+	held, err := s.unusable(ctx, tx, ref.id, s.webhookFingerprint(string(plain)))
 	if err != nil {
 		return err
 	}
@@ -697,6 +767,10 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 // names it with an ON DELETE RESTRICT (an app's approval) makes the delete fail: errInUse.
 func (s *Store) remove(ctx context.Context, workspace, id int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		// Its secrets go with it: one another integration holds too is recorded as shared first.
+		if err := s.markSharedSecretsOf(ctx, tx, workspace, id); err != nil {
+			return err
+		}
 		var provider, created string
 		err := tx.QueryRowContext(ctx, `DELETE FROM integrations WHERE id = ? AND workspace_id = ? RETURNING provider, created_at`,
 			id, workspace).Scan(&provider, &created)
