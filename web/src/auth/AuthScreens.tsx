@@ -11,7 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
-import { ackDeletion, DELETION_EVENT, peekDeletion } from './deleted'
+import { ackDeletion, DELETION_EVENT, peekDeletion, signInSubmitted } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -99,6 +99,9 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     inFlight.current = true
     setBusy(true)
     setFailure(null)
+    // Someone is signing in here: a deletion notice still waiting is not for them, whoever they are,
+    // and a deletion answered from now on is not told to them either.
+    signInSubmitted()
     // The mark goes where `busy` goes, never earlier: after a success the screen is on its way out
     // (onDone may still be opening the account's offline data), and a submit meanwhile would make
     // a second session or be refused.
@@ -391,6 +394,8 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     if (needsCode(reply)) {
       setPassword('')
       setChallenge(reply.challenge)
+      // Whoever this is, the notice is not for the form they come back to from the code step.
+      setDeleted(null)
       return null
     }
     return reply
