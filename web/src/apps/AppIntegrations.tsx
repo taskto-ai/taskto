@@ -8,7 +8,7 @@
 // The slots themselves are the draft's: the agent writes them (a slot is JSON like any other part of
 // a definition), so changing one is asking the agent in the conversation.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   type App,
   type ApprovalStatus,
@@ -39,10 +39,25 @@ import './Integrations.css'
 // (nothing is asked of the server then).
 export function useSlots(base: string, app: App) {
   const declares = Object.keys(app.draft?.integrations ?? {}).length > 0
-  return useLoad(
+  const slots = useLoad(
     () => (declares ? api<IntegrationStatus>(`${base}/integrations`) : Promise.resolve(null)),
     [base, declares, app.version],
   )
+  // An admin decides a request in Settings, which neither the app nor its version shows: while a
+  // request waits, the statuses are read again when the person comes back to the page.
+  const { reload } = slots
+  const waiting = slots.data?.slots.some((s) => s.status === 'requested') ?? false
+  useEffect(() => {
+    if (!waiting) return
+    const again = () => document.visibilityState !== 'hidden' && reload()
+    window.addEventListener('focus', again)
+    document.addEventListener('visibilitychange', again)
+    return () => {
+      window.removeEventListener('focus', again)
+      document.removeEventListener('visibilitychange', again)
+    }
+  }, [waiting, reload])
+  return slots
 }
 
 // A slot may be used by a release made of the draft: its contract is approved, and the integration it

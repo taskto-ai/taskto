@@ -185,6 +185,7 @@ test('revoking asks first, and says what stops when the contract is the live one
       },
     },
     [`POST ${queue}/4/revoke`]: { body: approval({ status: 'revoked' }) },
+    'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
   })
   render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
   fireEvent.click(await screen.findByRole('radio', { name: 'Approved' }))
@@ -377,4 +378,25 @@ test('an error of an older page for a filter left behind is not shown over the c
   fail?.()
   await new Promise((r) => setTimeout(r, 20))
   expect(screen.queryByText(/Old page failed|went wrong/i)).toBeNull()
+})
+
+test('revoke waits for the integration lookup, and a failed lookup is said and keeps it off', async () => {
+  fakeFetch({
+    [`GET ${queue}?status=requested`]: { body: { approvals: [], next_cursor: null } },
+    [`GET ${queue}?status=approved`]: {
+      body: {
+        approvals: [
+          approval({ status: 'approved', integration: { id: 7, name: 'shop', display_name: 'Shop', usable: true } }),
+        ],
+        next_cursor: null,
+      },
+    },
+    'GET /api/workspaces/1/integrations': { status: 500, body: { error: 'Lookup failed', code: 'internal' } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  fireEvent.click(await screen.findByRole('radio', { name: 'Approved' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review the request of Invoices' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
+  expect(await within(dialog).findByRole('alert')).toBeTruthy()
+  expect((within(dialog).getByRole('button', { name: 'Revoke approval' }) as HTMLButtonElement).disabled).toBe(true)
 })

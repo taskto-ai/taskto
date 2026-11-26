@@ -396,3 +396,19 @@ test('publishing stays closed when the status of the outside services can’t be
   await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
   expect(screen.queryByRole('button', { name: /publish/i })).toBeNull()
 })
+
+test('a request that waits is read again when the person comes back, and not otherwise', async () => {
+  const calls = fakeFetch({ 'GET /api/x/integrations': status(slot({ status: 'requested', approval_id: 4 })) })
+  panel(appOf())
+  await screen.findByText(/Waiting for an admin/)
+  const reads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/x/integrations').length
+  expect(reads()).toBe(1)
+  window.dispatchEvent(new Event('focus'))
+  await waitFor(() => expect(reads()).toBe(2))
+  cleanup()
+  const other = fakeFetch({ 'GET /api/x/integrations': status(slot()) })
+  panel(appOf())
+  await screen.findByText('Not asked for yet')
+  window.dispatchEvent(new Event('focus'))
+  expect(other.filter((c) => c.path === '/api/x/integrations')).toHaveLength(1)
+})

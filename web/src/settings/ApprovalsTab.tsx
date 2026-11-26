@@ -302,7 +302,11 @@ function ReviewDialog({
               </Button>
             )}
             {a.status === 'approved' && (
-              <Button variant="danger" disabled={busy} onClick={revoke}>
+              <Button
+                variant="danger"
+                disabled={busy || integrations.loading || integrations.error !== null}
+                onClick={revoke}
+              >
                 {t('settings.approvals.revoke')}
               </Button>
             )}
@@ -315,6 +319,7 @@ function ReviewDialog({
             {a.live && <span className="approvals-note">{t('settings.approvals.isLive')}</span>}
           </div>
           <ContractSummary contract={a.contract} />
+          {approved && integrations.error && <Notice tone="danger">{integrations.error}</Notice>}
           {a.integration && a.status === 'approved' && (
             <p className="approvals-note">
               {t(a.integration.usable ? 'apps.integrations.connectedTo' : 'apps.integrations.connectedUnusable', {
