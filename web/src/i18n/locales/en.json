@@ -1681,7 +1681,17 @@
           "blocked": "Needs a person",
           "manualUpgrade": "Manual upgrade"
         },
-        "mismatchBadge": "Not the recorded version"
+        "mismatchBadge": "Not the recorded version",
+        "available": {
+          "line": "Update available: {version} (published {date})",
+          "lineUndated": "Update available: {version}",
+          "notes": "Release notes",
+          "compare": "What changed",
+          "needsPerson": "Needs a person",
+          "manual": "It needs steps by hand, so neither the nightly run nor Update now installs it: read its notes, do what they say on the host, then run {command} there.",
+          "upToDate": "Up to date: nothing newer on this channel.",
+          "looked": "Last looked for updates"
+        }
       }
     },
     "actions": {

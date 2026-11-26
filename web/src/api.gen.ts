@@ -791,10 +791,19 @@ export type UpdateReport = {
   stale?: boolean
   status: UpdatestatusStatus | null
   request: UpdatestatusRequestState
+  notes_url?: string
 }
 
 export type UpdateRequested = {
   requested_at: string
+}
+
+export type UpdatestatusAvailable = {
+  version: string
+  sha?: string
+  published?: string
+  manual_upgrade: boolean
+  repo?: string
 }
 
 export type UpdatestatusNeedsPerson = {
@@ -848,6 +857,8 @@ export type UpdatestatusStatus = {
   needs_person: UpdatestatusNeedsPerson | null
   running: UpdatestatusRunning | null
   requests: UpdatestatusRequests | null
+  looked?: string
+  available: UpdatestatusAvailable | null
 }
 
 export type Widget = {

@@ -126,6 +126,7 @@ const updates = (
     needs_person: null,
     running: null,
     requests: { supported: true, last: null },
+    available: null,
     ...status,
   },
   ...over,
@@ -440,4 +441,95 @@ test('a request the host never took says so after a while, instead of waiting fo
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect(await screen.findByText(/Update requested\. Waiting/)).toBeTruthy()
   expect(screen.queryByText(/The host hasn't started the update/)).toBeNull()
+})
+
+test('an update that waits shows its version, when it was published and its release notes, next to Update now', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates(
+        { notes_url: 'https://github.com/taskto-ai/taskto/releases/tag/v0.4.0' },
+        {
+          looked: ago(1),
+          available: {
+            version: 'v0.4.0',
+            sha: 'a'.repeat(40),
+            published: '2026-11-20T10:00:00Z',
+            manual_upgrade: false,
+          },
+        },
+      ),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  const line = await screen.findByText(/^Update available:/)
+  expect(line.textContent).toMatch(/Update available: v0\.4\.0 \(published .*2026/)
+  expect(screen.getByText('v0.4.0').tagName).toBe('CODE')
+  const notes = screen.getByRole('link', { name: 'Release notes' })
+  expect(notes.getAttribute('href')).toBe('https://github.com/taskto-ai/taskto/releases/tag/v0.4.0')
+  expect(notes.getAttribute('rel')).toContain('noopener')
+  expect(screen.queryByText('Needs a person')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Update now' })).toBeTruthy()
+  expect(screen.getByText('Last looked for updates')).toBeTruthy()
+  expect(screen.queryByText(/Up to date: nothing newer/)).toBeNull()
+})
+
+test('a release that needs a person is badged, with the command that installs it', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates(
+        { notes_url: 'https://github.com/taskto-ai/taskto/releases/tag/v0.4.0' },
+        {
+          looked: ago(1),
+          needs_person: { kind: 'manual-upgrade', code: 'manual-upgrade' },
+          available: { version: 'v0.4.0', published: '2026-11-20T10:00:00Z', manual_upgrade: true },
+        },
+      ),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  const badge = await screen.findByText('Needs a person')
+  expect(badge.closest('.ui-badge')).toBeTruthy()
+  expect(screen.getByText('taskto-update --to v0.4.0').tagName).toBe('CODE')
+  expect(screen.getByRole('link', { name: 'Release notes' })).toBeTruthy()
+})
+
+test('on the main channel a waiting commit is shown short, with what changed since the running one', async () => {
+  const sha = '0123456789abcdef0123456789abcdef01234567'
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates(
+        {
+          running_version: 'f'.repeat(40),
+          notes_url: `https://github.com/taskto-ai/taskto/compare/${'f'.repeat(40)}...${sha}`,
+        },
+        {
+          channel: 'main',
+          recorded_version: 'f'.repeat(40),
+          looked: ago(1),
+          available: { version: sha, sha, manual_upgrade: false },
+        },
+      ),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect((await screen.findByText(/^Update available:/)).textContent).toBe('Update available: 0123456789ab')
+  expect(screen.getByText('0123456789ab').getAttribute('title')).toBe(sha)
+  expect(screen.getByRole('link', { name: 'What changed' }).getAttribute('href')).toMatch(/\/compare\/f{40}\.\.\.0123/)
+})
+
+test('with nothing newer it says up to date, and an updater that never looked says nothing of it', async () => {
+  fakeFetch({ ...noBackups, 'GET /api/workspaces/1/updates': { body: updates({}, { looked: ago(1) }) } })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText('Up to date: nothing newer on this channel.')).toBeTruthy()
+  expect(screen.queryByText(/^Update available/)).toBeNull()
+  cleanup()
+
+  fakeFetch({ ...noBackups, 'GET /api/workspaces/1/updates': { body: updates() } })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  await screen.findByText('Updates are working.')
+  expect(screen.queryByText(/Up to date: nothing newer/)).toBeNull()
+  expect(screen.queryByText('Last looked for updates')).toBeNull()
 })

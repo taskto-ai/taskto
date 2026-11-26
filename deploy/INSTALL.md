@@ -1089,6 +1089,13 @@ About (for the server's operators) shows it.
 installs the request path unit and makes the request directory, and until it is run the button
 says the host can't take a request yet.
 
+It also installs **the check for a newer version**: `taskto-update-check.timer` runs
+`taskto-update --check` every six hours, which chooses the version a run would install (the same
+channel, the same rules, `manual-upgrade` included), pulls no image, changes nothing, and
+publishes what it found, so Settings → About says "Update available" with the release notes
+before the nightly run (or Update now) installs it. **This step is required again on a VM set up
+before the release that added it**: until then the page shows no available update.
+
 **Run**: every file is taken out of git and checked before anything is sent, so a version
 without the script never puts an empty file on the VM. Such a version is only for
 `TASKTO_UPDATE_CHANNEL=off`, and the step is then skipped.
@@ -1103,12 +1110,12 @@ else
   set -e
   d=$(mktemp -d)
   trap 'rm -rf "$d"' EXIT
-  for f in taskto-update.sh taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path; do
+  for f in taskto-update.sh taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path taskto-update-check.service taskto-update-check.timer; do
     git show "${TASKTO_VERSION}:deploy/$f" > "$d/$f"
     [ -s "$d/$f" ] || { echo "FAIL: deploy/$f of $TASKTO_VERSION is empty"; exit 1; }
   done
   ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /usr/local/sbin/taskto-update.new && chmod 755 /usr/local/sbin/taskto-update.new && mv /usr/local/sbin/taskto-update.new /usr/local/sbin/taskto-update'" < "$d/taskto-update.sh"
-  for u in taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path; do
+  for u in taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path taskto-update-check.service taskto-update-check.timer; do
     ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /etc/systemd/system/$u.new && chmod 644 /etc/systemd/system/$u.new && mv /etc/systemd/system/$u.new /etc/systemd/system/$u'" < "$d/$u"
   done
   )
@@ -1120,7 +1127,7 @@ install -d -m 755 /var/lib/taskto-update /var/lib/taskto-update/public
 req=${TASKTO_UPDATE_REQUEST:-/var/lib/taskto-update/request}
 install -d -m 755 -o 65532 -g 65532 "$req"
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
-  systemctl disable --now taskto-update.timer taskto-update-request.path >/dev/null 2>&1 || true
+  systemctl disable --now taskto-update.timer taskto-update-request.path taskto-update-check.timer >/dev/null 2>&1 || true
 else
   install -d -m 755 /etc/systemd/system/taskto-update.timer.d
   printf '[Timer]\nOnCalendar=\nOnCalendar=*-*-* %s:00 UTC\n' "${TASKTO_UPDATE_AT:-04:30}" > /etc/systemd/system/taskto-update.timer.d/at.conf
@@ -1130,9 +1137,12 @@ else
   printf '[Path]\nPathExists=\nPathExists=%s/update-now\n' "$req" > /etc/systemd/system/taskto-update-request.path.d/dir.conf
   systemctl daemon-reload
   systemctl enable --now taskto-update-request.path >/dev/null 2>&1
+  systemctl enable --now taskto-update-check.timer >/dev/null 2>&1
 fi
 # Last, so that it sees the path unit: the first status for Settings → About, which says whether this host can take a request.
 /usr/local/sbin/taskto-update --publish-status || echo "WARN: the first status for Settings → About wasn't written (the lines above say why)"
+# And what is available next, at once rather than at the check timer's next run (it pulls and changes nothing).
+[ "${TASKTO_UPDATE_CHANNEL:-release}" = off ] || /usr/local/sbin/taskto-update --check || echo "WARN: the first look for a newer version failed (the lines above say why); the timer tries again"
 EOF
 fi
 ```
@@ -1157,14 +1167,17 @@ fail() { echo "FAIL: $*"; exit 1; }
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
   systemctl is-enabled -q taskto-update.timer 2>/dev/null && fail "the timer is on, and updates are off"
   systemctl is-enabled -q taskto-update-request.path 2>/dev/null && fail "the request path unit is on, and updates are off"
+  systemctl is-enabled -q taskto-update-check.timer 2>/dev/null && fail "the check timer is on, and updates are off"
   echo OK; exit 0
 fi
 systemctl is-active -q taskto-update.timer && systemctl is-enabled -q taskto-update.timer || fail "the timer"
 systemctl is-active -q taskto-update-request.path && systemctl is-enabled -q taskto-update-request.path || fail "the request path unit (Update now)"
+systemctl is-active -q taskto-update-check.timer && systemctl is-enabled -q taskto-update-check.timer || fail "the check timer (Update available)"
+jq -e 'has("looked")' /var/lib/taskto-update/public/status.json >/dev/null || fail "the host's status doesn't say when the updater last looked for a newer version: run taskto-update --check and read what it says"
 req=${TASKTO_UPDATE_REQUEST:-/var/lib/taskto-update/request}
 [ "$(stat -c %u "$req")" = 65532 ] && [ ! -L "$req" ] || fail "$req isn't a directory of uid 65532 (the server's)"
 jq -e '.requests.supported == true' /var/lib/taskto-update/public/status.json >/dev/null || fail "the host's status says it can't take an update request: the request directory or the path unit isn't in place"
-systemctl list-timers taskto-update.timer --no-pager | sed -n 1,2p
+systemctl list-timers taskto-update.timer taskto-update-check.timer --no-pager | sed -n 1,3p
 /usr/local/sbin/taskto-update --dry-run || fail "the dry run: the lines above say why"
 echo OK
 EOF

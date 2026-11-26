@@ -1690,7 +1690,17 @@
           "blocked": "Precisa de uma pessoa",
           "manualUpgrade": "Atualização manual"
         },
-        "mismatchBadge": "Não é a versão registrada"
+        "mismatchBadge": "Não é a versão registrada",
+        "available": {
+          "line": "Atualização disponível: {version} (publicada em {date})",
+          "lineUndated": "Atualização disponível: {version}",
+          "notes": "Notas da versão",
+          "compare": "O que mudou",
+          "needsPerson": "Precisa de uma pessoa",
+          "manual": "Ela precisa de passos manuais, então nem a execução noturna nem Atualizar agora a instalam: leia as notas, faça o que elas dizem no host e depois execute {command} lá.",
+          "upToDate": "Atualizado: nada mais novo neste canal.",
+          "looked": "Última busca por atualizações"
+        }
       }
     },
     "actions": {
