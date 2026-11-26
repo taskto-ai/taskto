@@ -25,11 +25,14 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/ratelimit"
 )
 
 // Options configure the Service.
@@ -40,6 +43,9 @@ type Options struct {
 	// Egress is where calls to providers may go (-integration-egress). Nil is "public": every
 	// connection's address is checked, so a call never reaches a private or loopback address.
 	Egress *egress.Policy
+	// Now is the clock of the webhook route's signature tolerance, the limits and the event
+	// worker; nil is the real one. It is for tests, which move time without sleeping.
+	Now func() time.Time
 }
 
 // Service serves the integrations API (docs/api.md#integrations).
@@ -48,6 +54,18 @@ type Service struct {
 	spaces    *access.Checker
 	publicURL string
 	egress    egress.Policy
+
+	now func() time.Time
+	// hookIP and hookID limit the webhook route (webhook.go); applier applies stored events and
+	// wake tells the worker (events.go).
+	hookIP, hookID *ratelimit.Limiter
+	// decoy is the secret a delivery with no usable one is verified against (webhook.go).
+	decoy WebhookSecrets
+	// afterLookup, set by a test, runs between the route's two reads of an integration: finding
+	// it by its public id, and opening its credentials.
+	afterLookup func()
+	applier     atomic.Pointer[Applier]
+	wake        chan struct{}
 }
 
 // New returns the API over store.
@@ -56,7 +74,15 @@ func New(store *Store, opts Options) *Service {
 	if opts.Egress != nil {
 		policy = *opts.Egress
 	}
-	return &Service{store: store, publicURL: opts.PublicURL, egress: policy}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	} else {
+		store.now = now
+	}
+	s := &Service{store: store, publicURL: opts.PublicURL, egress: policy, now: now, wake: make(chan struct{}, 1), decoy: newDecoy()}
+	s.hookIP, s.hookID = newHookLimits(now)
+	return s
 }
 
 // Client returns the client for calls to provider p of an integration with these settings, under
@@ -411,12 +437,26 @@ func (s *Service) check(ctx context.Context, tx *sql.Tx, workspace int64, rec re
 			return CheckResult{Code: apierr.CodeIntegrationSecretRequired, Params: apierr.Params{"secret": spec.Name}}, nil
 		}
 	}
-	if _, err := s.store.openCredentials(ctx, tx, workspace, rec.ID); err != nil {
+	creds, err := s.store.openCredentials(ctx, tx, workspace, rec.ID)
+	if err != nil {
 		var bad unreadableError
 		if errors.As(err, &bad) {
 			return CheckResult{Code: apierr.CodeIntegrationSecretUnreadable, Params: apierr.Params{"secret": bad.secret}}, nil
 		}
 		return CheckResult{}, err
+	}
+	// A webhook secret another integration holds too (an old install can have one) verifies no
+	// delivery: it is said without saying whose it is.
+	current, previous, err := s.store.sharedWebhookSecrets(ctx, tx, rec.ID, creds)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	if current || previous {
+		name := SecretWebhookSecret
+		if !current {
+			name = SecretWebhookSecretPrevious
+		}
+		return CheckResult{Code: apierr.CodeIntegrationWebhookSecretShared, Params: apierr.Params{"secret": name}}, nil
 	}
 	return CheckResult{OK: true}, nil
 }

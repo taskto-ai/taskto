@@ -1035,6 +1035,28 @@
     }
   },
   {
+    "name": "list_integrations",
+    "description": "List the outside services (integrations) an app in a space may use: each one's name, display_name, kind (payments) and status (active, or disabled while an admin has switched it off). With app_id (a space's app you may design or publish) it also lists the slots that app's DRAFT declares, with the status of the approval of each slot's contract (none, requested, approved, rejected, revoked) and, for the live release, live_status and live_usable. An app declares a slot of a kind, never an integration: an admin chooses the integration when approving, and only a person asks for, or gives, that approval. It never shows an account, a key, a limit or another space.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "an app of the space, from list_apps: also list its declared slots"
+        }
+      },
+      "required": ["space_id"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "show_app",
     "description": "Show an app: its DRAFT definition (screen, collection, actions and summaries: what you edit), its version, and which release is live (number, definition_version and what it requires, not its definition) with unpublished_changes, whether the draft differs from it. People use the live release, not the draft.",
     "read_only": true,

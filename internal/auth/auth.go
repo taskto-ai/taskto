@@ -28,6 +28,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/mail"
+	"taskto.ai/taskto/internal/ratelimit"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -112,20 +113,20 @@ type Service struct {
 	setupHash []byte
 	setupDone atomic.Bool
 
-	perIP        *limiter
-	perAccountIP *limiter
-	perAccount   *limiter
+	perIP        *ratelimit.Limiter
+	perAccountIP *ratelimit.Limiter
+	perAccount   *ratelimit.Limiter
 
 	// The second step's limits (twofactor.go), apart from the login's: a wrong code is not a
 	// wrong password.
-	codePerIP        *limiter
-	codePerAccountIP *limiter
-	codePerAccount   *limiter
+	codePerIP        *ratelimit.Limiter
+	codePerAccountIP *ratelimit.Limiter
+	codePerAccount   *ratelimit.Limiter
 
 	key *serverkey.Key
 	// The limits of the emailed reset link (mailer.go).
-	resetPerIP    *limiter
-	resetPerEmail *limiter
+	resetPerIP    *ratelimit.Limiter
+	resetPerEmail *ratelimit.Limiter
 	// resetStarts is the server's own limit on reset emails: how many it starts, never how many
 	// are running, so a refusal can't depend on how long the mail server takes for the accounts
 	// that exist.
@@ -138,8 +139,8 @@ type Service struct {
 	stopWork  context.CancelFunc
 
 	// The limits of invitations sent by email (mailer.go): per admin, and per invited address.
-	invitePerAdmin     *limiter
-	invitePerRecipient *limiter
+	invitePerAdmin     *ratelimit.Limiter
+	invitePerRecipient *ratelimit.Limiter
 
 	sso *sso
 
@@ -194,20 +195,20 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 		s.setupHash = sum[:]
 	}
 	now := func() time.Time { return s.now() }
-	s.perIP = newLimiter(ipAttempts, attemptWindow, now)
-	s.perAccountIP = newLimiter(accountAndIPAttempts, attemptWindow, now)
-	s.perAccount = newLimiter(accountAttempts, attemptWindow, now)
-	s.codePerIP = newLimiter(codeIPAttempts, attemptWindow, now)
-	s.codePerAccountIP = newLimiter(codeAccountAndIPAttempts, attemptWindow, now)
-	s.codePerAccount = newLimiter(codeAccountAttempts, attemptWindow, now)
+	s.perIP = ratelimit.New(ipAttempts, attemptWindow, now)
+	s.perAccountIP = ratelimit.New(accountAndIPAttempts, attemptWindow, now)
+	s.perAccount = ratelimit.New(accountAttempts, attemptWindow, now)
+	s.codePerIP = ratelimit.New(codeIPAttempts, attemptWindow, now)
+	s.codePerAccountIP = ratelimit.New(codeAccountAndIPAttempts, attemptWindow, now)
+	s.codePerAccount = ratelimit.New(codeAccountAttempts, attemptWindow, now)
 	s.key = opts.Key
-	s.resetPerIP = newLimiter(resetIPAttempts, resetWindow, now)
-	s.resetPerEmail = newLimiter(resetEmailAttempts, resetWindow, now)
+	s.resetPerIP = ratelimit.New(resetIPAttempts, resetWindow, now)
+	s.resetPerEmail = ratelimit.New(resetEmailAttempts, resetWindow, now)
 	s.resetStarts = newBucket(resetStartBurst, resetStartEvery, now)
 	s.mailSlots = make(chan struct{}, mailConcurrency)
 	s.workCtx, s.stopWork = context.WithCancel(context.Background())
-	s.invitePerAdmin = newLimiter(inviteAdminAttempts, inviteWindow, now)
-	s.invitePerRecipient = newLimiter(inviteRecipientAttempts, inviteWindow, now)
+	s.invitePerAdmin = ratelimit.New(inviteAdminAttempts, inviteWindow, now)
+	s.invitePerRecipient = ratelimit.New(inviteRecipientAttempts, inviteWindow, now)
 	s.sso = newSSO(opts.SSO, now)
 	return s
 }

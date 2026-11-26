@@ -92,6 +92,10 @@ func ActorFrom(ctx context.Context) int64 {
 	return id
 }
 
+// ClientFrom returns the address WithClient put on ctx, or "". It is the client as the login
+// limits find it: the direct peer, or behind a trusted proxy the address that proxy forwarded.
+func ClientFrom(ctx context.Context) string { return clientFrom(ctx) }
+
 func clientFrom(ctx context.Context) string {
 	addr, _ := ctx.Value(clientKey).(string)
 	return addr

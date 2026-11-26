@@ -63,6 +63,11 @@ export type Contract = [
   Is<Check<Gen.IntegrationRegistry, Api.IntegrationRegistry>>,
   Is<Check<Gen.IntegrationCheck, Api.IntegrationCheck>>,
   Is<Check<Gen.SpaceIntegration, Api.SpaceIntegration>>,
+  Is<Check<Gen.AppsContract, Api.IntegrationContract>>,
+  Is<Check<Gen.AppsSlotStatus, Api.SlotStatus>>,
+  Is<Check<Gen.AppIntegrationStatus, Api.IntegrationStatus>>,
+  Is<Check<Gen.AppIntegrationApproval, Api.IntegrationApproval>>,
+  Is<Check<Gen.AppIntegrationApprovalList, Api.IntegrationApprovalList>>,
   // The host's updates, for the server's operators.
   Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
   Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,

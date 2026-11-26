@@ -77,6 +77,7 @@ export type AppIntegrationApproval = {
   status: string
   live: boolean
   integration: AppsBoundIntegration | null
+  space_grant: string
   requested_by: AppsAuthor | null
   requested_at: string
   decided_by: AppsAuthor | null
@@ -274,6 +275,8 @@ export type AppsEffectDetail = {
   column?: string
   path?: string
   route?: string
+  amount?: number
+  currency?: string
 }
 
 export type AppsEffectError = {

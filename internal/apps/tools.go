@@ -52,6 +52,16 @@ func (s *Service) ShowApp(ctx context.Context, a Actor, spaceID, appID int64) (A
 	return forAgent(ap), err
 }
 
+// AppIntegrations is the integrations the app's draft declares and where the approval of each
+// stands, for someone who may design or publish it (forbidden otherwise).
+func (s *Service) AppIntegrations(ctx context.Context, a Actor, spaceID, appID int64) (IntegrationStatus, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return IntegrationStatus{}, err
+	}
+	return s.integrationStatus(ctx, sp, a, appID)
+}
+
 // forAgent leaves out the live release's definition: the agent works on the draft, and a reply
 // holds one definition (MaxDefinitionSize), not two.
 func forAgent(ap App) App {

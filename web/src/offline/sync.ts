@@ -45,6 +45,7 @@ import {
   type OfflineStore,
   type OutboxItem,
   type Problem,
+  type SeenAs,
 } from './store'
 
 export const MAX_ATTEMPTS = 8
@@ -223,6 +224,18 @@ export type SyncDeps = {
   heartbeat?: (fn: () => void, ms: number) => () => void
 }
 
+// An item put back in the queue for another try, at once.
+const retried = (i: OutboxItem): OutboxItem => ({
+  ...i,
+  state: 'queued',
+  attempts: 0,
+  nextAttemptAt: undefined,
+  attention: undefined,
+  error: undefined,
+  // A photo that was refused is uploaded again from the start.
+  attachments: i.attachments.map((a) => (a.state === 'uploaded' && !a.serverId ? { ...a, state: 'pending' } : a)),
+})
+
 const realHeartbeat = (fn: () => void, ms: number) => {
   const handle = setInterval(fn, ms)
   return () => clearInterval(handle)
@@ -392,7 +405,24 @@ export class SyncEngine {
   }
 
   // "Try again now": an item that waits for its next attempt, or needs attention, is sent at once.
-  async retry(id?: string): Promise<void> {
+  //
+  // A person's press on one item carries the item as it was shown (`seen`): in the transaction that
+  // changes it, one that moved on meanwhile (another tab claimed it, sent it, edited it) is refused
+  // (`ItemChanged`) and nothing is applied or sent.
+  async retry(id?: string, seen?: SeenAs): Promise<void> {
+    if (id !== undefined && seen) {
+      await this.store.updateItem(
+        id,
+        (i) => (i.state === 'queued' || i.state === 'attention' ? retried(i) : undefined),
+        {
+          guarded: true,
+          seen,
+        },
+      )
+      if (this.paused === 'manual') this.paused = null
+      await this.run()
+      return
+    }
     for (const item of await this.store.listItems()) {
       if (id !== undefined && item.id !== id) continue
       // "Sync now" for the whole queue leaves alone what only the person can settle: sending it
@@ -402,22 +432,10 @@ export class SyncEngine {
         // Decided on the item as it is stored: one a tab just synced is never put back.
         await this.store.updateItem(
           item.id,
-          (i) =>
-            i.state !== 'queued' && i.state !== 'attention'
-              ? undefined
-              : {
-                  ...i,
-                  state: 'queued',
-                  attempts: 0,
-                  nextAttemptAt: undefined,
-                  attention: undefined,
-                  error: undefined,
-                  // A photo that was refused is uploaded again from the start.
-                  attachments: i.attachments.map((a) =>
-                    a.state === 'uploaded' && !a.serverId ? { ...a, state: 'pending' } : a,
-                  ),
-                },
-          { guarded: true },
+          (i) => (i.state !== 'queued' && i.state !== 'attention' ? undefined : retried(i)),
+          {
+            guarded: true,
+          },
         )
       }
     }
@@ -426,20 +444,20 @@ export class SyncEngine {
   }
 
   // Holds an item as a local draft: it stays on this device and isn't sent until it is sent on purpose.
-  async hold(id: string): Promise<void> {
+  async hold(id: string, seen?: SeenAs): Promise<void> {
     await this.store.updateItem(
       id,
       (i) => (i.state === 'synced' || i.state === 'syncing' ? undefined : { ...i, state: 'draft' }),
-      { guarded: true },
+      { guarded: true, seen },
     )
     this.emit()
   }
 
-  async release(id: string): Promise<void> {
+  async release(id: string, seen?: SeenAs): Promise<void> {
     await this.store.updateItem(
       id,
       (i) => (i.state === 'draft' ? { ...i, state: 'queued', attempts: 0, nextAttemptAt: undefined } : undefined),
-      { guarded: true },
+      { guarded: true, seen },
     )
     await this.run()
   }

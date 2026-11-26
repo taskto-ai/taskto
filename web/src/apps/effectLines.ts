@@ -53,7 +53,7 @@ export function ruleText(rule: Rule, f: Pick<Format, 'list' | 'number'>, nested 
 }
 
 // A literal as people read it: text quoted, a number in the locale's format, a boolean in words.
-function valueText(value: unknown, f: Pick<Format, 'number'>): string {
+export function valueText(value: unknown, f: Pick<Format, 'number'>): string {
   if (typeof value === 'string') return t('apps.builder.rule.text', { value })
   if (typeof value === 'number') return f.number(value)
   if (typeof value === 'boolean') return t(value ? 'apps.builder.rule.yes' : 'apps.builder.rule.no')
@@ -93,6 +93,12 @@ export function effectLines(
         break
       case 'create_document':
         line = t('apps.builder.can.effect.createDocument', { path: e.path ?? '', space: spaceOf(e, targets) })
+        break
+      case 'create_payment_link':
+        line = t('apps.builder.can.effect.createPaymentLink', {
+          slot: e.integration ?? '',
+          amount: e.amount_field ?? '',
+        })
         break
       default:
         if (e.route === 'board') line = t('apps.builder.can.effect.openBoard', { board: boardOf(e, targets) })

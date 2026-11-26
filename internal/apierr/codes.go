@@ -425,19 +425,24 @@ const (
 
 	// Integrations: a workspace's connections to outside providers (internal/integrations).
 
-	CodeIntegrationNotFound         Code = "integration_not_found"
-	CodeIntegrationNameInvalid      Code = "integration_name_invalid"         // params: max
-	CodeIntegrationNameTaken        Code = "integration_name_taken"           // 409
-	CodeIntegrationDisplayNameBad   Code = "integration_display_name_invalid" // params: max
-	CodeIntegrationProviderUnknown  Code = "integration_provider_unknown"
-	CodeIntegrationSecretRequired   Code = "integration_secret_required"   // params: secret
-	CodeIntegrationSecretInvalid    Code = "integration_secret_invalid"    // params: secret
-	CodeIntegrationSecretUnreadable Code = "integration_secret_unreadable" // in a check's answer: params: secret
-	CodeIntegrationSettingInvalid   Code = "integration_setting_invalid"   // params: setting
-	CodeIntegrationLimitInvalid     Code = "integration_limit_invalid"     // params: max
-	CodeIntegrationCurrencyInvalid  Code = "integration_currency_invalid"  // params: max
-	CodeTooManyIntegrations         Code = "too_many_integrations"         // params: max
-	CodeIntegrationInUse            Code = "integration_in_use"
+	CodeIntegrationNotFound            Code = "integration_not_found"
+	CodeIntegrationNameInvalid         Code = "integration_name_invalid"         // params: max
+	CodeIntegrationNameTaken           Code = "integration_name_taken"           // 409
+	CodeIntegrationDisplayNameBad      Code = "integration_display_name_invalid" // params: max
+	CodeIntegrationProviderUnknown     Code = "integration_provider_unknown"
+	CodeIntegrationSecretRequired      Code = "integration_secret_required"       // params: secret
+	CodeIntegrationSecretInvalid       Code = "integration_secret_invalid"        // params: secret
+	CodeIntegrationSecretUnreadable    Code = "integration_secret_unreadable"     // in a check's answer: params: secret
+	CodeIntegrationWebhookSecretReused Code = "integration_webhook_secret_reused" // 409: another integration verifies deliveries with this webhook secret
+	CodeIntegrationWebhookSecretShared Code = "integration_webhook_secret_shared" // in a check's answer: params: secret; another integration has this webhook secret too, so it verifies nothing
+	CodeIntegrationSettingInvalid      Code = "integration_setting_invalid"       // params: setting
+	CodeIntegrationLimitInvalid        Code = "integration_limit_invalid"         // params: max
+	CodeIntegrationCurrencyInvalid     Code = "integration_currency_invalid"      // params: max
+	CodeTooManyIntegrations            Code = "too_many_integrations"             // params: max
+	CodeIntegrationInUse               Code = "integration_in_use"
+	CodeIntegrationEventGaveUp         Code = "integration_event_gave_up" // an event's last stored reason when its tries ran out
+	CodeWebhookRateLimited             Code = "webhook_rate_limited"      // 429, with Retry-After: the webhook route's limits (POST /hooks/{id})
+	CodeWebhookTooLarge                Code = "webhook_too_large"         // 413: a delivery's body is over the route's cap
 
 	// The operator's "Update now" (internal/server/updates.go, docs/api.md#update-now).
 

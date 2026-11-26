@@ -359,6 +359,8 @@ function formats(locale: string) {
   const lists = {
     conjunction: new Intl.ListFormat(locale),
     disjunction: new Intl.ListFormat(locale, { type: 'disjunction' }),
+    // Short phrases that go together without "and": "text, required, up to 80 characters".
+    unit: new Intl.ListFormat(locale, { type: 'unit', style: 'short' }),
   }
   const toDate = (d: Date | string | number) => (d instanceof Date ? d : new Date(d))
   return {
@@ -401,7 +403,8 @@ function formats(locale: string) {
       // and MB: the symbol, in the locale's own number and spacing.
       return parts.map((p) => (unit === 'byte' && p.type === 'unit' ? 'B' : p.value)).join('')
     },
-    list: (items: readonly string[], type: 'conjunction' | 'disjunction' = 'conjunction') => lists[type].format(items),
+    list: (items: readonly string[], type: 'conjunction' | 'disjunction' | 'unit' = 'conjunction') =>
+      lists[type].format(items),
   }
 }
 
