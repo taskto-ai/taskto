@@ -280,7 +280,12 @@ write.
   keeps idempotency keys for at least 24 hours, so a crash and then a wait of more than a day with
   no object noted is the one case that can leave two payable links for one reference. A failure that
   Stripe keeps under a key (a `5xx`) would be answered to the same key for ever, so the next try has
-  a key of its own.
+  a key of its own; but Stripe documents a `5xx` as an indeterminate result, the object may have been
+  made, so before that call the integration lists what the account made (the open Checkout Sessions
+  created since the reference, matched on `client_reference_id`, or the active Payment Links, newest
+  first, matched on `metadata[taskto_ref]`; neither has a filter for them and the search API doesn't
+  cover them) and adopts an object of the token as if a call had answered it. When the listing can't
+  be read in full, nothing is made: the entry waits and tries again.
 - **The server's own pages, or none.** With `-public-url` the payer comes back to
   `<public URL>/payment/done` or `/payment/cancelled`, web app pages that show a short message and
   call nothing; without it the payer stays on Stripe's confirmation page and no URL of ours is sent.
@@ -306,7 +311,8 @@ against, so none of them needs a network:
 
 - **A fake Stripe**, an in-process HTTP server for the endpoints the integration uses: Checkout
   Sessions (create, retrieve, list, expire), Payment Links, the events list and a harmless
-  balance call. It answers with the shapes of Stripe's API at the version the adapter pins
+  balance call. Its lists work as Stripe's do (newest first, with `limit` and the cursors, and `created`
+  and `status` on sessions, `active` on links). It answers with the shapes of Stripe's API at the version the adapter pins
   (`integrations.StripeAPIVersion`; a test checks that the two agree), refuses unknown
   parameters, wrong keys, other versions and bodies that aren't form-encoded, and keeps
   idempotency keys as Stripe documents for API v1: the same key and parameters get the saved

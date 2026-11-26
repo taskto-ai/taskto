@@ -3567,7 +3567,10 @@ entry's number) with a random 128-bit token, the provider's idempotency key and 
 provider echoes back with the payment, and it keeps the provider's answer. An entry done again after
 a crash finds its reference: with the provider's object noted, the provider is not asked again; with
 none, it is asked again under the same key, which the provider answers with the object it already
-made. A failure the provider keeps under a key gets a key of its own on the next try. The link and its
+made. A failure the provider keeps under a key gets a key of its own on the next try, after the provider
+is asked for an object of the reference's token that the failed call may have made (a `5xx` is an
+indeterminate result): one found is adopted as the call's answer, and while the provider can't say,
+nothing is made and the entry is tried again. The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
 again changes nothing. A Checkout Session expires by itself within the provider's default of 24

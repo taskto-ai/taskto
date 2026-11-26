@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -687,6 +688,80 @@ func TestListingSessions(t *testing.T) {
 	}
 	if ans := a.get("/v1/checkout/sessions", url.Values{"colour": {"red"}}); ans.status != 400 {
 		t.Errorf("an unknown filter: %d", ans.status)
+	}
+}
+
+func TestListingPaymentLinksAndSessionsByCreation(t *testing.T) {
+	_, clock, a := newFake(t)
+	type linkList struct {
+		Object  string
+		URL     string
+		HasMore bool `json:"has_more"`
+		Data    []testprovider.PaymentLink
+	}
+	var ids []string
+	for i := range 4 {
+		form := oneLineLink(1000+i, "eur")
+		form.Set("metadata[taskto_ref]", "tok"+strconv.Itoa(i))
+		ids = append(ids, a.newLink(form).ID)
+	}
+	a.post("/v1/payment_links/"+ids[2], url.Values{"active": {"false"}}, "")
+	var l linkList
+	a.get("/v1/payment_links", url.Values{"limit": {"2"}}).into(t, &l)
+	if l.Object != "list" || l.URL != "/v1/payment_links" || !l.HasMore || len(l.Data) != 2 || l.Data[0].ID != ids[3] || l.Data[0].Metadata["taskto_ref"] != "tok3" {
+		t.Errorf("first page, newest first: %+v", l)
+	}
+	a.get("/v1/payment_links", url.Values{"limit": {"2"}, "starting_after": {l.Data[1].ID}}).into(t, &l)
+	if l.HasMore || len(l.Data) != 2 || l.Data[1].ID != ids[0] {
+		t.Errorf("second page: %+v", l)
+	}
+	a.get("/v1/payment_links", url.Values{"active": {"true"}}).into(t, &l)
+	if len(l.Data) != 3 {
+		t.Errorf("active links: %+v", l)
+	}
+	a.get("/v1/payment_links", url.Values{"active": {"false"}}).into(t, &l)
+	if len(l.Data) != 1 || l.Data[0].ID != ids[2] {
+		t.Errorf("inactive links: %+v", l)
+	}
+	for name, q := range map[string]url.Values{"a metadata filter": {"metadata[taskto_ref]": {"tok1"}}, "a bad boolean": {"active": {"maybe"}}, "a bad cursor": {"starting_after": {"plink_nope"}}} {
+		if ans := a.get("/v1/payment_links", q); ans.status != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, ans.status)
+		}
+	}
+
+	// Sessions are listed by the time they were created.
+	var sessions []string
+	var times []int64
+	for i := range 3 {
+		clock.Advance(time.Hour)
+		s := a.newSession(500, "eur", "r"+strconv.Itoa(i))
+		sessions, times = append(sessions, s.ID), append(times, s.Created)
+	}
+	type sessionList struct{ Data []testprovider.Session }
+	var sl sessionList
+	list := func(q url.Values) []string {
+		a.get("/v1/checkout/sessions", q).into(t, &sl)
+		var out []string
+		for _, s := range sl.Data {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	ts := func(n int64) string { return strconv.FormatInt(n, 10) }
+	if got := list(url.Values{"created[gte]": {ts(times[1])}}); !slices.Equal(got, []string{sessions[2], sessions[1]}) {
+		t.Errorf("created[gte]: %v", got)
+	}
+	if got := list(url.Values{"created[gt]": {ts(times[1])}}); !slices.Equal(got, []string{sessions[2]}) {
+		t.Errorf("created[gt]: %v", got)
+	}
+	if got := list(url.Values{"created[lt]": {ts(times[1])}, "created[gte]": {ts(times[0])}}); !slices.Equal(got, []string{sessions[0]}) {
+		t.Errorf("a range: %v", got)
+	}
+	if got := list(url.Values{"created": {ts(times[2])}}); !slices.Equal(got, []string{sessions[2]}) {
+		t.Errorf("created: %v", got)
+	}
+	if ans := a.get("/v1/checkout/sessions", url.Values{"created[gte]": {"soon"}}); ans.status != http.StatusBadRequest {
+		t.Errorf("a created that isn't a number: %d", ans.status)
 	}
 }
 

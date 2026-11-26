@@ -83,6 +83,7 @@ type Stripe struct {
 	sessions     map[string]*session
 	sessionOrder []string
 	links        map[string]*paymentLink
+	linkOrder    []string
 	events       []*Event
 	idem         map[string]*idemEntry
 	faults       []*Fault
@@ -398,7 +399,7 @@ func route(r *http.Request) (handlerFn, string, bool) {
 		fn, ok := both((*Stripe).listSessions, (*Stripe).createSession)
 		return fn, "", ok
 	case "/v1/payment_links":
-		fn, ok := both(nil, (*Stripe).createLink)
+		fn, ok := both((*Stripe).listLinks, (*Stripe).createLink)
 		return fn, "", ok
 	case "/v1/events":
 		fn, ok := both((*Stripe).listEvents, nil)

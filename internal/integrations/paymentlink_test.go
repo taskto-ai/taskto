@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -412,24 +413,206 @@ func TestAnEntryDoneAgainAfterTheLinkWasNotedDoesNotCallStripe(t *testing.T) {
 	}
 }
 
+// What a payment link is made as, by the address the server has: a Checkout Session when it has a
+// public URL, a Payment Link when it hasn't.
+var linkShapes = map[string]struct {
+	public string
+	path   string
+}{
+	"a checkout session": {publicURL, "/v1/checkout/sessions"},
+	"a payment link":     {"", "/v1/payment_links"},
+}
+
+// mustPost makes an object at Stripe directly, the way another system of the account would.
+func (p *pay) mustPost(path string, form url.Values) {
+	p.t.Helper()
+	req, err := http.NewRequest(http.MethodPost, p.fake.URL()+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.fake.APIKey())
+	req.Header.Set("Stripe-Version", p.fake.APIVersion())
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		p.t.Fatalf("POST %s: %d", path, resp.StatusCode)
+	}
+}
+
+// objects is how many objects of the shape Stripe holds.
+func (p *pay) objects(path string) int {
+	if path == "/v1/payment_links" {
+		return len(p.fake.Links())
+	}
+	return len(p.fake.Sessions())
+}
+
+// objectID is the id of the only object of the shape.
+func (p *pay) objectID(path string) string {
+	p.t.Helper()
+	if path == "/v1/payment_links" {
+		return p.fake.Links()[0].ID
+	}
+	return p.fake.Sessions()[0].ID
+}
+
 // Stripe keeps a failure it answered under the key, and would answer it again to the same key for
-// a day: the next try has a key of its own.
-func TestAFailureStripeKeepsIsNotAskedAgainUnderItsKey(t *testing.T) {
+// a day: the next try has a key of its own. But a 5xx is an indeterminate result: Stripe made the
+// object, and the failure is all the server was told. Another under the new key would be a second
+// payable link for one invoice, so the object is looked for and adopted.
+func TestAFailureStripeKeepsIsNotAskedAgainUnderItsKeyAndItsObjectIsAdopted(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			p.fake.Fail(testprovider.ServerError().AfterExecuting().On(http.MethodPost, shape.path))
+			p.startWorker()
+			p.send(record, "op-send-0004")
+			p.waitFor("the first call", func() bool { return len(p.fake.RequestsTo(http.MethodPost, shape.path)) == 1 })
+			p.waitFor("the entry waits", func() bool { es := p.entries(); return len(es) == 1 && es[0].state == "pending" })
+			if r := p.refs(); len(r) != 1 || r[0].keySeq != 1 || r[0].object != "" {
+				t.Fatalf("refs after the 5xx = %+v", r)
+			}
+			p.later(time.Minute)
+			e := p.settled(apps.StateDone)
+
+			// No second call that makes anything: the retry only read what Stripe holds.
+			if reqs := p.fake.RequestsTo(http.MethodPost, shape.path); len(reqs) != 1 {
+				t.Fatalf("%d calls that make an object: %+v", len(reqs), reqs)
+			}
+			if reads := p.fake.RequestsTo(http.MethodGet, shape.path); len(reads) != 1 || reads[0].IdempotencyKey != "" {
+				t.Fatalf("reads = %+v", reads)
+			}
+			if n := p.objects(shape.path); n != 1 {
+				t.Fatalf("%d objects at Stripe, want 1", n)
+			}
+			refs := p.refs()
+			if len(refs) != 1 || refs[0].keySeq != 1 || refs[0].state != "open" || refs[0].effect.Int64 != e.id || refs[0].object != p.objectID(shape.path) {
+				t.Fatalf("refs = %+v", refs)
+			}
+			// The adopted object is written back exactly as one a call answered: its address and id.
+			data, _ := p.record(record)
+			if !strings.Contains(data, `"payment_id":"`+refs[0].object+`"`) || !strings.Contains(data, refs[0].url) || refs[0].url == "" {
+				t.Fatalf("record = %s, ref = %+v", data, refs[0])
+			}
+			var system string
+			if err := p.db.QueryRow(`SELECT updated_system FROM app_rows WHERE id = ?`, record).Scan(&system); err != nil || system != fmt.Sprintf("integration:%d", p.in.ID) {
+				t.Fatalf("updated_system = %q, %v", system, err)
+			}
+		})
+	}
+}
+
+// A 5xx that made nothing: the retry looks, finds nothing, and makes exactly one object, under a
+// key of its own.
+func TestAFailureThatMadeNothingIsMadeOnceUnderANewKey(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			p.fake.Fail(testprovider.ServerError().On(http.MethodPost, shape.path))
+			p.startWorker()
+			p.send(record, "op-send-0005")
+			p.waitFor("the first call", func() bool { return len(p.fake.RequestsTo(http.MethodPost, shape.path)) == 1 })
+			p.waitFor("the entry waits", func() bool { es := p.entries(); return len(es) == 1 && es[0].state == "pending" })
+			if n := p.objects(shape.path); n != 0 {
+				t.Fatalf("%d objects after a failure that made none", n)
+			}
+			p.later(time.Minute)
+			e := p.settled(apps.StateDone)
+
+			reqs := p.fake.RequestsTo(http.MethodPost, shape.path)
+			if len(reqs) != 2 || reqs[0].IdempotencyKey == reqs[1].IdempotencyKey || !strings.HasPrefix(reqs[1].IdempotencyKey, reqs[0].IdempotencyKey+"-") {
+				t.Fatalf("keys: %+v", reqs)
+			}
+			if n := p.objects(shape.path); n != 1 {
+				t.Fatalf("%d objects at Stripe, want 1", n)
+			}
+			if refs := p.refs(); len(refs) != 1 || refs[0].keySeq != 1 || refs[0].state != "open" || refs[0].effect.Int64 != e.id || refs[0].object != p.objectID(shape.path) {
+				t.Fatalf("refs = %+v", refs)
+			}
+		})
+	}
+}
+
+// While Stripe can't say whether an earlier call made the object, no call is made: the entry waits
+// and, once the lookup works, adopts it.
+func TestWhileTheLookupFailsNothingIsMade(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			p.fake.Fail(testprovider.ServerError().AfterExecuting().On(http.MethodPost, shape.path))
+			p.fake.Fail(testprovider.Unavailable().Times(2).On(http.MethodGet, shape.path))
+			p.startWorker()
+			p.send(record, "op-send-0006")
+			p.waitFor("the entry waits after the first call", func() bool {
+				es := p.entries()
+				return len(es) == 1 && es[0].state == "pending" && es[0].attempts == 1
+			})
+			for attempt := 2; attempt <= 3; attempt++ {
+				p.later(time.Hour)
+				p.waitFor("the lookup fails", func() bool {
+					es := p.entries()
+					return len(es) == 1 && es[0].state == "pending" && es[0].attempts == attempt
+				})
+				// The failed lookup made no call, and didn't spend the key: the object may be there.
+				if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+					t.Fatalf("attempt %d: %d calls that make an object", attempt, n)
+				}
+				if r := p.refs(); len(r) != 1 || r[0].keySeq != 1 || r[0].object != "" || r[0].state != "creating" {
+					t.Fatalf("attempt %d: refs = %+v", attempt, r)
+				}
+				if es := p.entries(); es[0].code != string(apierr.CodeIntegrationProviderUnreachable) {
+					t.Fatalf("attempt %d: code = %q", attempt, es[0].code)
+				}
+			}
+			p.later(time.Hour)
+			p.settled(apps.StateDone)
+			if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+				t.Fatalf("%d calls that make an object", n)
+			}
+			if n := p.objects(shape.path); n != 1 {
+				t.Fatalf("%d objects at Stripe, want 1", n)
+			}
+			if refs := p.refs(); len(refs) != 1 || refs[0].state != "open" || refs[0].object != p.objectID(shape.path) {
+				t.Fatalf("refs = %+v", refs)
+			}
+		})
+	}
+}
+
+// An object Stripe lists that is another reference's is never adopted, and one that is no longer
+// open or active is not what the payer was given.
+func TestOnlyAnOpenObjectOfTheRefsTokenIsAdopted(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
-	p.fake.Fail(testprovider.ServerError().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	// Another reference's session, made earlier at the same account, with the same amount.
+	other := url.Values{}
+	other.Set("mode", "payment")
+	other.Set("success_url", publicURL+PaymentDonePath)
+	other.Set("client_reference_id", "someone-elses-reference")
+	other.Set("line_items[0][quantity]", "1")
+	other.Set("line_items[0][price_data][currency]", "eur")
+	other.Set("line_items[0][price_data][unit_amount]", "1000")
+	other.Set("line_items[0][price_data][product_data][name]", "Invoice A-1 for Acme")
+	p.mustPost("/v1/checkout/sessions", other)
+	p.fake.Fail(testprovider.ServerError().On(http.MethodPost, "/v1/checkout/sessions"))
 	p.startWorker()
-	p.send(record, "op-send-0004")
-	p.waitFor("the first call", func() bool { return len(p.posts()) == 1 })
+	p.send(record, "op-send-0007")
 	p.waitFor("the entry waits", func() bool { es := p.entries(); return len(es) == 1 && es[0].state == "pending" })
 	p.later(time.Minute)
-	e := p.settled(apps.StateDone)
-	reqs := p.posts()
-	if len(reqs) != 2 || reqs[0].IdempotencyKey == reqs[1].IdempotencyKey || !strings.HasPrefix(reqs[1].IdempotencyKey, reqs[0].IdempotencyKey+"-") {
-		t.Fatalf("keys: %+v", reqs)
+	p.settled(apps.StateDone)
+	if n := len(p.fake.Sessions()); n != 2 {
+		t.Fatalf("%d sessions, want the other's and one new", n)
 	}
-	if refs := p.refs(); len(refs) != 1 || refs[0].keySeq != 1 || refs[0].state != "open" || refs[0].effect.Int64 != e.id {
-		t.Fatalf("refs = %+v", refs)
+	refs := p.refs()
+	if len(refs) != 1 || refs[0].object == p.fake.Sessions()[0].ID {
+		t.Fatalf("the ref adopted another reference's session: %+v", refs)
 	}
 }
 

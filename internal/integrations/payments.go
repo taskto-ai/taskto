@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -22,6 +23,14 @@ type PaymentProvider interface {
 	// Its failures are *CallError, which never holds the provider's words: they could name a
 	// customer, and what the provider says is not for a person or a record to read.
 	CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error)
+	// FindPaymentLink looks for the object an earlier call for the same reference may have made
+	// without its answer being noted: a call that failed with an indeterminate result (a 5xx, a
+	// timeout, a dropped connection) may have been executed, and the next call has a key of its
+	// own, which would make a second object. since is when the reference was first made; nothing
+	// of it was created before. found is false only when the provider was read in full and has
+	// no such object: a read that couldn't be finished is an error, never "not found". Its
+	// failures are *CallError that are never KeyKept.
+	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found bool, err error)
 }
 
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
@@ -200,12 +209,9 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 	if err != nil {
 		return Link{}, &CallError{Kind: CallRefused}
 	}
-	req.Header.Set("Authorization", "Bearer "+creds.APIKey.Reveal())
-	req.Header.Set("Stripe-Version", StripeAPIVersion)
+	stripeHeaders(req, creds)
 	req.Header.Set("Idempotency-Key", l.IdempotencyKey())
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", stripeUserAgent)
 
 	resp, err := c.Do(req)
 	if err != nil {
@@ -226,31 +232,161 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 		URL    string `json:"url"`
 		Object string `json:"object"`
 	}
-	object, idPattern, host := "checkout.session", stripeSessionID, stripeCheckoutHost
-	if hosted {
-		object, idPattern, host = "payment_link", stripeLinkID, stripeLinkHost
-	}
-	if err := json.Unmarshal(body, &out); err != nil || out.Object != object || !idPattern.MatchString(out.ID) || len(out.ID) > maxLinkID {
+	if err := json.Unmarshal(body, &out); err != nil {
 		// An answer that isn't the object asked for: the call was made, and nothing says what became
 		// of it, so it is not tried again as if it had not been.
 		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
 	}
-	u, err := url.Parse(out.URL)
-	if err != nil || u.Scheme != "https" || u.Hostname() != host || u.User != nil || len(out.URL) > maxLinkURL {
+	link, ok := stripeLinkOf(hosted, l.Token, out.Object, out.ID, out.URL)
+	if !ok {
 		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
 	}
+	return link, nil
+}
+
+func stripeHeaders(req *http.Request, creds Credentials) {
+	req.Header.Set("Authorization", "Bearer "+creds.APIKey.Reveal())
+	req.Header.Set("Stripe-Version", StripeAPIVersion)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", stripeUserAgent)
+}
+
+// stripeLinkOf checks what Stripe says of an object it made (or of one a list shows) and returns
+// the link: the object must be the kind asked for, with an id and an address of the shapes and
+// the domain Stripe uses for it. A hosted Payment Link's address gets the ref's token as
+// ?client_reference_id=, the documented way its payments carry one.
+func stripeLinkOf(hosted bool, token, object, id, rawURL string) (Link, bool) {
+	want, idPattern, host := "checkout.session", stripeSessionID, stripeCheckoutHost
 	if hosted {
-		// The reference the payment of the link echoes back, as Stripe documents it: in the address.
+		want, idPattern, host = "payment_link", stripeLinkID, stripeLinkHost
+	}
+	if object != want || !idPattern.MatchString(id) || len(id) > maxLinkID {
+		return Link{}, false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() != host || u.User != nil || len(rawURL) > maxLinkURL {
+		return Link{}, false
+	}
+	if hosted {
 		if u.RawQuery != "" || u.Fragment != "" {
-			return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+			return Link{}, false
 		}
-		u.RawQuery = "client_reference_id=" + l.Token
-		out.URL = u.String()
-		if len(out.URL) > maxLinkURL {
-			return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+		u.RawQuery = "client_reference_id=" + token
+		rawURL = u.String()
+		if len(rawURL) > maxLinkURL {
+			return Link{}, false
 		}
 	}
-	return Link{URL: out.URL, ObjectID: out.ID}, nil
+	return Link{URL: rawURL, ObjectID: id}, true
+}
+
+const (
+	// findPageSize is the most Stripe lists in a page, and findMaxPages how many pages a lookup
+	// reads, newest first: the object looked for is among the newest, since its call was one of
+	// the last the integration's account saw (a Checkout Session is also bounded by its creation
+	// time). A lookup that reaches the last page with more behind it finds nothing out, so it
+	// fails and the entry is tried again.
+	findPageSize = 100
+	findMaxPages = 20
+	// findSkew is how far before the ref's creation a session may have been created by the
+	// provider's clock.
+	findSkew = 10 * time.Minute
+)
+
+// FindPaymentLink lists what the account made and picks the object that has the ref's token. Stripe
+// documents the outcome of a request answered with a 5xx as indeterminate, "the operation might
+// have produced side effects even though you received an error", and says not to "retry with a
+// new idempotency key until you've resolved the original outcome", by retrieving the object and
+// matching it on a local identifier kept in its metadata
+// (https://docs.stripe.com/error-low-level#server-errors). A 500 is saved under the idempotency
+// key and answered again to that key (https://docs.stripe.com/api/idempotent_requests), which is
+// why the next call has a key of its own. So before it, the object a lost call made is looked
+// for, at the pinned API version (StripeAPIVersion):
+//   - List Checkout Sessions, https://docs.stripe.com/api/checkout/sessions/list: filters by
+//     created, status, payment_intent and payment_link, and none by client_reference_id or
+//     metadata, so the open sessions created since the ref was made are read and matched on
+//     client_reference_id, the token (the object has it, https://docs.stripe.com/api/checkout/sessions/object);
+//   - List all payment links, https://docs.stripe.com/api/payment-link/list: only active and the
+//     cursors, so the active links are read newest first and matched on metadata[taskto_ref];
+//   - the Search API (https://docs.stripe.com/search) doesn't list Checkout Sessions or Payment
+//     Links, and its data can take a minute to be searchable ("don't use search for
+//     read-after-write flows", which this is), so it isn't used.
+//
+// The list APIs read what was written. A session that is no longer open (paid or expired) or a
+// link that is no longer active is not adopted: the payer was never given its address.
+func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, error) {
+	hosted := l.SuccessURL == ""
+	path := "/v1/checkout/sessions"
+	q := url.Values{"limit": {strconv.Itoa(findPageSize)}}
+	if hosted {
+		path = "/v1/payment_links"
+		q.Set("active", "true")
+	} else {
+		q.Set("status", "open")
+		q.Set("created[gte]", strconv.FormatInt(since.Add(-findSkew).Unix(), 10))
+	}
+	for range findMaxPages {
+		req, err := c.NewRequest(ctx, http.MethodGet, c.BaseURL(stripeHost)+path+"?"+q.Encode(), nil)
+		if err != nil {
+			return Link{}, false, &CallError{Kind: CallUnreachable}
+		}
+		stripeHeaders(req, creds)
+		resp, err := c.Do(req)
+		if err != nil {
+			return Link{}, false, &CallError{Kind: CallUnreachable}
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
+		_ = resp.Body.Close()
+		if err != nil {
+			return Link{}, false, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return Link{}, false, stripeLookupFailure(resp.StatusCode)
+		}
+		var page struct {
+			HasMore bool `json:"has_more"`
+			Data    []struct {
+				ID                string            `json:"id"`
+				Object            string            `json:"object"`
+				URL               string            `json:"url"`
+				ClientReferenceID *string           `json:"client_reference_id"`
+				Metadata          map[string]string `json:"metadata"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return Link{}, false, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
+		}
+		for _, o := range page.Data {
+			var ours bool
+			if hosted {
+				ours = o.Metadata[stripeRefMetadata] == l.Token
+			} else {
+				ours = o.ClientReferenceID != nil && *o.ClientReferenceID == l.Token
+			}
+			if !ours {
+				continue
+			}
+			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
+			if !ok {
+				// Ours, and not a link the payer could be given: nothing says what it is.
+				return Link{}, false, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+			}
+			return link, true, nil
+		}
+		if !page.HasMore || len(page.Data) == 0 {
+			return Link{}, false, nil
+		}
+		q.Set("starting_after", page.Data[len(page.Data)-1].ID)
+	}
+	return Link{}, false, &CallError{Kind: CallUnreachable} // not read in full
+}
+
+// stripeLookupFailure classifies an answer to a read: never KeyKept, since a read has no key.
+func stripeLookupFailure(status int) error {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return &CallError{Kind: CallCredentials, Status: status}
+	}
+	return &CallError{Kind: CallUnreachable, Status: status}
 }
 
 // stripeFailure classifies an answer that isn't a success, from its status and the kind of error

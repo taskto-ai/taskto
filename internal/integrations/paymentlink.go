@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"modernc.org/sqlite"
 
@@ -30,7 +31,10 @@ import (
 //     that can make a second payable link, and its payment is recorded as a duplicate).
 //
 // A provider that answered an error it keeps under the key is asked again under a key of its own
-// (NewLink.KeySeq), as the kept failure would be answered again for ever.
+// (NewLink.KeySeq), as the kept failure would be answered again for ever. Such an error (a 5xx) is
+// an indeterminate result, though: the call may have made the object. So before a call under a new
+// key, the provider is asked for an object of the ref's token, which is adopted as if the call had
+// answered it; and if it can't be asked, nothing is made and the entry waits (FindPaymentLink).
 //
 // The ref is made before the call and the money is checked before the ref, so a refused amount
 // leaves nothing behind. The key of the integration is opened here, for the call, and goes nowhere
@@ -107,10 +111,33 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return ref.link(), nil
 	}
 
-	link, err := provider.CreatePaymentLink(ctx, creds, s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...), NewLink{
+	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
+	nl := NewLink{
 		Token: ref.token, KeySeq: ref.keySeq, AmountMinor: minor, Currency: cur, Description: req.Description,
 		SuccessURL: success, CancelURL: cancel,
-	})
+	}
+	// A key of its own means an earlier call answered an error the provider kept, which it also
+	// gives for a call it executed: the object may exist. Another under the new key could make a
+	// second payable link for the same payment, so the first is looked for and adopted; and while
+	// the provider can't say, no call is made.
+	if ref.keySeq > 0 {
+		since, err := time.Parse(timeFormat, ref.createdAt)
+		if err != nil {
+			return paylink.Link{}, err
+		}
+		found, ok, err := provider.FindPaymentLink(ctx, creds, client, nl, since)
+		if err != nil {
+			return paylink.Link{}, s.callFailed(ctx, ref, rec, err)
+		}
+		if ok {
+			if err := s.noteLink(ctx, ref, found); err != nil {
+				return paylink.Link{}, err
+			}
+			slog.Info("integrations: a payment link made by an earlier call was adopted", "integration", ref.integrationID, "provider", rec.Provider)
+			return paylink.Link{URL: found.URL, ObjectID: found.ObjectID, AmountMinor: minor, Currency: cur}, nil
+		}
+	}
+	link, err := provider.CreatePaymentLink(ctx, creds, client, nl)
 	if err != nil {
 		return paylink.Link{}, s.callFailed(ctx, ref, rec, err)
 	}
@@ -202,6 +229,7 @@ type ref struct {
 	currency                           string
 	keySeq                             int
 	state                              string
+	createdAt                          string
 }
 
 func (r ref) link() paylink.Link {
@@ -209,12 +237,12 @@ func (r ref) link() paylink.Link {
 }
 
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
-	amount_minor, currency, key_seq, state`
+	amount_minor, currency, key_seq, state, created_at`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
-		&r.amountMinor, &r.currency, &r.keySeq, &r.state)
+		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt)
 	return r, err
 }
 
