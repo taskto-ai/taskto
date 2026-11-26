@@ -6,7 +6,7 @@
 // Looking at the page asks the server nothing: what deleting takes is read when you press the button.
 
 import { type FormEvent, useState } from 'react'
-import { api, type DeletionReply, type DeletionStatus, exportPath, SESSION_LOST } from '../api'
+import { api, type DeletionReply, type DeletionStatus, exportPath, forAccount, SESSION_LOST } from '../api'
 import { rememberDeletion } from '../auth/deleted'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -17,7 +17,7 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Alert, FormActions, Loading, Section, useAction } from './parts'
 
-export function DeleteAccount({ workspace }: { workspace: number }) {
+export function DeleteAccount({ workspace, user }: { workspace: number; user: number }) {
   const t = useT()
   const f = useFormat()
   const [asking, setAsking] = useState(false)
@@ -39,6 +39,9 @@ export function DeleteAccount({ workspace }: { workspace: number }) {
     const ok = await deleting.run(async () => {
       reply = await api<DeletionReply>('/api/me/deletion', {
         method: 'POST',
+        // The account whose form this is: a tab left open while another account signed in here
+        // is refused (session_account_changed), never deleting the other one.
+        headers: forAccount(user),
         body: s?.method === 'password' ? { password, ...(s.two_factor ? { code } : {}) } : {},
       })
     })

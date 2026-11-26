@@ -66,6 +66,8 @@ test('deleting your account offers the export first, asks for the password, and 
 
   await waitFor(() => expect(sent(calls, 'POST', '/api/me/deletion')).toHaveLength(1))
   expect(sent(calls, 'POST', '/api/me/deletion')[0].body).toEqual({ password: 'fake-test-password' })
+  // Bound to the account whose form it is (the owner, 1), so a stale tab can't delete another's.
+  expect(Object.values(sent(calls, 'POST', '/api/me/deletion')[0].headers)).toContain('1')
   await waitFor(() => expect(lost).toHaveBeenCalled())
   // The sign-in screen is told when the account is erased, once.
   expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')

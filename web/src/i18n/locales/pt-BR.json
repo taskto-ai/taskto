@@ -1260,12 +1260,12 @@
       "noEmail": "Este servidor não envia convites por e-mail; um convite é um link que você copia e envia.",
       "deletionPending": "Exclusão em {date}",
       "deletions": "Contas aguardando exclusão",
-      "deletionsHelp": "Como operador deste servidor, você vê todas as contas que aguardam o fim do prazo de carência. Cancelar uma exclusão reativa a conta; depois que a limpeza começa, não dá mais para cancelar.",
+      "deletionsHelp": "Como operador deste servidor, você vê todas as contas que aguardam o fim do prazo de carência. Cancelar uma exclusão reativa a conta, a menos que um administrador a tenha desativado antes, o que permanece; depois que a limpeza começa, não dá mais para cancelar.",
       "noDeletions": "Nenhuma conta aguarda exclusão.",
       "deletionDetails": "Será apagada em {date}",
       "deletionPurging": "Sendo apagada agora",
       "cancelDeletion": "Cancelar exclusão",
-      "cancelDeletionQuestion": "Cancelar a exclusão da conta de {name}? Ela é reativada e a pessoa entra como antes.",
+      "cancelDeletionQuestion": "Cancelar a exclusão da conta de {name}? Ela é reativada (a menos que um administrador a tenha desativado antes, o que permanece) e a pessoa entra como antes.",
       "cancelDeletionConfirm": "Sim, cancelar"
     },
     "password": {

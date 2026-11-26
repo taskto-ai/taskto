@@ -1254,12 +1254,12 @@
       "noEmail": "This server doesn't email invites, so an invite is a link you copy and send yourself.",
       "deletionPending": "Deleting on {date}",
       "deletions": "Accounts waiting to be deleted",
-      "deletionsHelp": "As an operator of this server you see every account that is waiting out its grace period. Cancelling a deletion switches the account back on; once the purge has begun it can’t be cancelled.",
+      "deletionsHelp": "As an operator of this server you see every account that is waiting out its grace period. Cancelling a deletion switches the account back on, unless an admin had disabled it before, which stays; once the purge has begun it can’t be cancelled.",
       "noDeletions": "No accounts are waiting to be deleted.",
       "deletionDetails": "Purged on {date}",
       "deletionPurging": "Being purged now",
       "cancelDeletion": "Cancel deletion",
-      "cancelDeletionQuestion": "Cancel the deletion of {name}’s account? It is switched on again, and they sign in as before.",
+      "cancelDeletionQuestion": "Cancel the deletion of {name}’s account? It is switched on again (unless an admin had disabled it before, which stays), and they sign in as before.",
       "cancelDeletionConfirm": "Yes, cancel it"
     },
     "password": {

@@ -13,7 +13,7 @@ import { Panel } from '../ui/Panel'
 import { DeleteAccount } from './DeleteAccount'
 import { Alert, FormActions, Section, SettingsTab, useAction } from './parts'
 
-export function DataTab({ workspace, admin = false }: { workspace: number; admin?: boolean }) {
+export function DataTab({ workspace, user, admin = false }: { workspace: number; user: number; admin?: boolean }) {
   const t = useT()
   const action = useAction()
   const wsAction = useAction()
@@ -44,7 +44,7 @@ export function DataTab({ workspace, admin = false }: { workspace: number; admin
           <p className="settings-muted">{t('settings.data.limit')}</p>
         </Panel>
       </Section>
-      <DeleteAccount workspace={workspace} />
+      <DeleteAccount workspace={workspace} user={user} />
       {admin && (
         <Section title={t('settings.data.workspace.title')} help={t('settings.data.workspace.intro')}>
           <Panel padded className="settings-panel-body">
