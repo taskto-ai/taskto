@@ -2936,6 +2936,7 @@
       "notesPlaceholder": "Write a note",
       "locked": "Workspace ID",
       "lockedValue": "ws-1042",
+      "lockedError": "This ID is used by another workspace.",
       "overdue": "Overdue only",
       "all": "Select all",
       "archived": "Show archived",

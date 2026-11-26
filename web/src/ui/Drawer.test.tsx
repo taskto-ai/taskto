@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { useState } from 'react'
+import { Suspense, startTransition, use, useState } from 'react'
 import { afterEach, describe, expect, test } from 'vitest'
 import { Dialog } from './Dialog'
 import { Drawer } from './Drawer'
@@ -139,4 +139,40 @@ test("a screen's own class goes on the drawer, beside its own", () => {
   )
   const drawer = screen.getByRole('region', { name: 'A card' })
   expect(drawer.className).toBe('ui-drawer ui-test-drawer')
+})
+
+// A board whose next card takes a while to load: the drawer shows the first card until it has.
+const never = new Promise<never>(() => {})
+function Waits(): null {
+  use(never)
+  return null
+}
+function Cards({ closed }: { closed: string[] }) {
+  const [card, setCard] = useState('Write the launch post')
+  return (
+    <>
+      <button type="button" onClick={() => startTransition(() => setCard('Plan the release'))}>
+        Next card
+      </button>
+      <Drawer open onClose={() => closed.push(card)} title={card}>
+        {card === 'Plan the release' && <Waits />}
+      </Drawer>
+    </>
+  )
+}
+
+describe('Drawer, between renders', () => {
+  test('Escape calls the onClose of the drawer on screen, not of a render that never committed', () => {
+    const closed: string[] = []
+    render(
+      <Suspense fallback={null}>
+        <Cards closed={closed} />
+      </Suspense>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Next card' }))
+    // The next card is still loading: the drawer on screen is the first one's.
+    expect(screen.getByRole('region', { name: 'Write the launch post' })).toBeTruthy()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(closed).toEqual(['Write the launch post'])
+  })
 })

@@ -876,16 +876,72 @@ export const EVERYWHERE = new Map([
   ],
 ])
 
+// A nested rule's selectors as the ones they stand for, one for each way of choosing a parent for
+// each `&`: `&` is the parent (`.tt-card { &:hover }` is `.tt-card:hover`), and a selector without
+// `&`, or one that starts with a combinator, has the parent in front (`.tt-card { h2 }` is
+// `.tt-card h2`, `.tt-card { + .x + & }` is `.tt-card + .x + .tt-card`). Each `&` is the whole
+// parent list, so `.a, .b { & + & }` is four selectors. At the start of a compound, `&` is the
+// parent's text, which ends in the compound the rest is added to; after the start of one it is
+// `:is(parent)` (`.tt-page&` is not `.tt-pagebody`). Only a bare `&` is the nesting selector: one
+// in a string (`a[href*="&"]`) or escaped (`\\&`) is a character.
+export function nestedSelectors(parents, child) {
+  // The child as text between its `&`s, and for each `&` whether it follows a compound's start.
+  const texts = ['']
+  const glued = []
+  for (let i = 0; i < child.length; i++) {
+    const c = child[i]
+    if (c === '\\') {
+      texts[texts.length - 1] += child.slice(i, i + 2)
+      i++
+    } else if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < child.length && child[j] !== c) j += child[j] === '\\' ? 2 : 1
+      texts[texts.length - 1] += child.slice(i, j + 1)
+      i = j
+    } else if (c === '&') {
+      glued.push(/[^\s>+~(]$/.test(texts.at(-1)))
+      texts.push('')
+    } else texts[texts.length - 1] += c
+  }
+  if (glued.length === 0 || /^\s*[>+~]/.test(child)) {
+    texts.unshift('')
+    texts[1] = ` ${texts[1].trimStart()}`
+    glued.unshift(false)
+  }
+  let out = [texts[0]]
+  glued.forEach((isGlued, k) => {
+    out = out.flatMap((sofar) => parents.map((p) => sofar + (isGlued ? `:is(${p})` : p) + texts[k + 1]))
+  })
+  return out
+}
+
+export function nestedSelector(parent, child) {
+  return nestedSelectors([parent], child)[0]
+}
+
+// The style rule a nested block is in, through the conditional rules between them (`input {
+// @media (…) { … } }` styles `input`): none for a block at the top or only in at-rules.
+function enclosingRule(blocks) {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i].kind === 'rule') return blocks[i]
+    if (blocks[i].kind === 'keyframes') return null
+  }
+  return null
+}
+
 // Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
 // whose `from` and `to` are not elements), each with its line and the properties its block sets.
+// A nested rule is recorded as the selectors it stands for (nestedSelectors), and the declarations
+// in a conditional rule nested in a style rule are that style rule's.
 export function allRules(css) {
   const out = []
-  const blocks = [] // for each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  // For each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  const blocks = []
   let prelude = ''
   let preludeLine = 1
   let line = 1
   const declare = (text) => {
-    const top = blocks.at(-1)
+    const top = blocks.at(-1)?.kind === 'at' ? enclosingRule(blocks) : blocks.at(-1)
     if (top?.kind !== 'rule') return
     const colon = text.indexOf(':')
     if (colon < 0) return
@@ -915,10 +971,13 @@ export function allRules(css) {
       else {
         const rules = []
         if (!blocks.some((b) => b.kind === 'keyframes')) {
-          for (const selector of splitSelectors(text)) {
-            const r = { selector, line: preludeLine, properties: [] }
-            rules.push(r)
-            out.push(r)
+          const parents = enclosingRule(blocks)?.rules.map((r) => r.selector)
+          for (const own of splitSelectors(text)) {
+            for (const selector of parents ? nestedSelectors(parents, own) : [own]) {
+              const r = { selector, line: preludeLine, properties: [] }
+              rules.push(r)
+              out.push(r)
+            }
           }
         }
         blocks.push({ kind: 'rule', rules })

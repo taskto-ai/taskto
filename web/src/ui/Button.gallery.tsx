@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useT } from '../i18n'
 import { Button, ButtonLink } from './Button'
 import { Specimen } from './GalleryParts'
@@ -10,6 +11,8 @@ export const title = 'Button'
 
 export default function ButtonGallery() {
   const t = useT()
+  // The segmented controls in the rows can be turned, as a person would.
+  const [view, setView] = useState<'list' | 'board'>('list')
   return (
     <>
       <Specimen caption={t('gallery.state.regular')}>
@@ -72,8 +75,8 @@ export default function ButtonGallery() {
         </Select>
         <SegmentedControl
           label={t('gallery.sample.view')}
-          value="list"
-          onChange={() => {}}
+          value={view}
+          onChange={setView}
           options={[
             { value: 'list', label: t('gallery.sample.list') },
             { value: 'board', label: t('gallery.sample.board') },
@@ -96,8 +99,8 @@ export default function ButtonGallery() {
         <SegmentedControl
           size="sm"
           label={t('gallery.sample.view')}
-          value="list"
-          onChange={() => {}}
+          value={view}
+          onChange={setView}
           options={[
             { value: 'list', label: t('gallery.sample.list') },
             { value: 'board', label: t('gallery.sample.board') },

@@ -2960,6 +2960,7 @@
       "notesPlaceholder": "Escreva uma nota",
       "locked": "ID do espaço de trabalho",
       "lockedValue": "ws-1042",
+      "lockedError": "Este ID já é usado por outro espaço de trabalho.",
       "overdue": "Só atrasados",
       "all": "Selecionar tudo",
       "archived": "Mostrar arquivados",
