@@ -490,6 +490,7 @@ export function PublishPanel({
             setApproving(null)
             setRefocus((n) => n + 1)
           }}
+          onFailed={slots.reload}
           onApproved={async () => {
             slots.reload()
             await run(approving, [])

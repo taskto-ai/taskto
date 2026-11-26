@@ -6,7 +6,15 @@
 // same way. The server checks the role on every route; this only asks.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, errorText, type Integration, type IntegrationApproval, type IntegrationApprovalList, ws } from '../api'
+import {
+  ApiError,
+  api,
+  errorText,
+  type Integration,
+  type IntegrationApproval,
+  type IntegrationApprovalList,
+  ws,
+} from '../api'
 import { ApprovalBadge } from '../apps/AppIntegrations'
 import { ContractSummary } from '../apps/ContractSummary'
 import { type Key, useFormat, useT } from '../i18n'
@@ -27,6 +35,9 @@ import './Approvals.css'
 type Filter = 'requested' | 'approved' | 'rejected' | 'revoked'
 const FILTERS: Filter[] = ['requested', 'approved', 'rejected', 'revoked']
 
+// What a decision on a request that was already decided says: the row on screen is out of date.
+const STALE = ['app_integration_not_pending', 'app_integration_not_approved']
+
 type Page = { items: IntegrationApproval[]; next: string | null }
 
 export function ApprovalsTab({ workspace }: { workspace: number }) {
@@ -38,6 +49,8 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
   const [more, setMore] = useState(false)
   const [reviewing, setReviewing] = useState<IntegrationApproval | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // A decision that came too late (someone else decided the request first): said above the list.
+  const [problem, setProblem] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   // The newest request for a list is the one that is shown: a slow answer for a filter left behind
   // is dropped.
@@ -71,7 +84,16 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
 
   const decided = (message: string) => {
     setReviewing(null)
+    setProblem(null)
     setNotice(message)
+    setNonce((n) => n + 1)
+  }
+  // The request was decided meanwhile: the dialog closes and the list is read again, so what stays is
+  // what the server holds now, never the row that was open.
+  const stale = (message: string) => {
+    setReviewing(null)
+    setNotice(null)
+    setProblem(message)
     setNonce((n) => n + 1)
   }
 
@@ -86,11 +108,13 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
         value={filter}
         onChange={(v) => {
           setNotice(null)
+          setProblem(null)
           setFilter(v)
         }}
         options={FILTERS.map((v) => ({ value: v, label: t(`settings.approvals.filters.${v}` as Key) }))}
       />
       {notice && <Notice tone="success">{notice}</Notice>}
+      {problem && <Notice tone="danger">{problem}</Notice>}
       {error && <Notice tone="danger">{error}</Notice>}
       {!page && !error && <p className="approvals-note">{t('app.loading')}</p>}
       {page && page.items.length === 0 && <EmptyState title={t(`settings.approvals.empty.${filter}` as Key)} />}
@@ -134,6 +158,7 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
           approval={reviewing}
           onClose={() => setReviewing(null)}
           onDecided={decided}
+          onStale={stale}
         />
       )}
     </div>
@@ -146,19 +171,26 @@ function ReviewDialog({
   approval: a,
   onClose,
   onDecided,
+  onStale,
 }: {
   workspace: number
   approval: IntegrationApproval
   onClose: () => void
   onDecided: (message: string) => void
+  onStale: (message: string) => void
 }) {
   const t = useT()
   const f = useFormat()
   const waiting = a.status === 'requested'
-  // Only a request that waits is decided with an integration, and only then are they asked for.
+  const approved = a.status === 'approved'
+  // A request that waits is decided with an integration, and an approval that is revoked may have
+  // made the space's grant: only those two read the integrations.
   const integrations = useLoad(
-    () => (waiting ? api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`) : Promise.resolve(null)),
-    [workspace, waiting],
+    () =>
+      waiting || approved
+        ? api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`)
+        : Promise.resolve(null),
+    [workspace, waiting, approved],
   )
   const [chosen, setChosen] = useState('')
   const [busy, setBusy] = useState(false)
@@ -172,6 +204,11 @@ function ReviewDialog({
   const allowing = picked !== undefined && !picked.spaces.includes(a.space_id)
   const space = a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name
 
+  // The grant of the space the approval made: it ends with the last approval that needs it, unless
+  // an admin keeps it in the integration's spaces (Settings, Integrations).
+  const bound = integrations.data?.integrations.find((i) => i.id === a.integration?.id)
+  const madeGrant = a.status === 'approved' && bound !== undefined && bound.approval_spaces.includes(a.space_id)
+
   const decide = async (verb: 'approve' | 'reject' | 'revoke', message: string) => {
     setBusy(true)
     setError(null)
@@ -182,15 +219,23 @@ function ReviewDialog({
       })
       onDecided(message)
     } catch (e) {
-      setError(errorText(e))
-      setBusy(false)
+      if (e instanceof ApiError && STALE.includes(e.code ?? '')) onStale(errorText(e))
+      else {
+        setError(errorText(e))
+        setBusy(false)
+      }
     }
   }
 
   const revoke = async () => {
     const yes = await confirm({
       title: t('settings.approvals.revokeQuestion', { app: a.app_name }),
-      body: t(a.live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
+      body: [
+        t(a.live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
+        madeGrant ? t('settings.approvals.revokeSpace', { space }) : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
       confirmLabel: t('settings.approvals.revoke'),
       tone: 'danger',
     })
@@ -293,7 +338,14 @@ function ReviewDialog({
                   {t('apps.integrations.approve.none', { kind: t(`settings.integrations.kind.${a.kind}` as Key) })}
                 </Notice>
               )}
-              {allowing && <p className="approvals-note">{t('settings.approvals.allowSpace', { space })}</p>}
+              {allowing && (
+                <p className="approvals-note">
+                  {t('settings.approvals.allowSpace', { space })}{' '}
+                  <Link href={routePath({ workspace, section: 'settings', item: 'integrations' })}>
+                    {t('settings.approvals.keepLink')}
+                  </Link>
+                </p>
+              )}
             </>
           )}
           {error && <Notice tone="danger">{error}</Notice>}

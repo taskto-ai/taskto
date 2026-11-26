@@ -170,6 +170,7 @@ export function ApproveAndPublishDialog({
   slots,
   onClose,
   onApproved,
+  onFailed,
 }: {
   workspace: number
   base: string
@@ -179,6 +180,10 @@ export function ApproveAndPublishDialog({
   onClose: () => void
   // Every approval is made: publish. Resolves when that is over.
   onApproved: () => Promise<void>
+  // A step was refused (a request someone decided meanwhile, an integration switched off since): the
+  // slots are read again, so a retry starts from what the server holds and never repeats a slot
+  // that was approved before the refusal.
+  onFailed: () => void
 }) {
   const t = useT()
   const list = useLoad(() => api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`), [workspace])
@@ -223,6 +228,7 @@ export function ApproveAndPublishDialog({
       await onApproved()
     } catch (e) {
       setError(errorText(e))
+      onFailed()
     } finally {
       setBusy(false)
     }

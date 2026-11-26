@@ -688,8 +688,12 @@ export type IntegrationCheck = { ok: boolean; remote: boolean; code?: string; pa
 // admin approves its hash (docs/api.md, "Integrations of an app").
 export type ContractLink = {
   action: string
+  // What the action does (insert, update, delete): it decides who may trigger the request.
+  action_kind: string
   amount_field: string
   describes: string[]
+  // Whether the description names the record's id, which sends the id out as text too.
+  describes_id: boolean
   currency?: string
   currency_field?: string
   currency_options?: string[]
@@ -701,6 +705,24 @@ export type ContractSet = { field: string; value?: unknown; from?: string }
 export type ContractHandler = { event: string; sets: ContractSet[] }
 export type ContractRule = { event: string; rule: Rule }
 export type ContractWrite = { field: string; values: unknown[]; from: string[] }
+// What one field the integration reads, writes or is gated by may hold (a requirement that reads
+// another field reaches the fields it names, and the other way round). No wording: no labels.
+export type ContractField = {
+  name: string
+  type: string
+  required?: boolean
+  required_when?: Rule
+  max_length?: number
+  min?: number
+  max?: number
+  options?: string[]
+  // The kind of code a barcode field reads.
+  format?: string
+  // Whether a stored location or signature may be replaced later.
+  editable?: boolean
+  max_files?: number
+  max_bytes?: number
+}
 export type IntegrationContract = {
   version: number
   kind: string
@@ -712,6 +734,7 @@ export type IntegrationContract = {
   only_if: ContractRule[]
   links: ContractLink[]
   handlers: ContractHandler[]
+  fields: ContractField[]
 }
 
 // How an approval of a contract stands: asked for, decided, or not asked for yet.

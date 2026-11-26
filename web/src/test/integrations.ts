@@ -4,7 +4,7 @@
 import type { Integration, IntegrationApproval, IntegrationContract, SlotStatus } from '../api'
 
 export const contract: IntegrationContract = {
-  version: 2,
+  version: 5,
   kind: 'payments',
   operations: ['create_payment_link'],
   sends: ['customer', 'number', 'total'],
@@ -18,8 +18,10 @@ export const contract: IntegrationContract = {
   links: [
     {
       action: 'send',
+      action_kind: 'update',
       amount_field: 'total',
       describes: ['customer', 'number'],
+      describes_id: true,
       currency: 'EUR',
       url_field: 'pay_url',
       id_field: 'payment_id',
@@ -34,6 +36,22 @@ export const contract: IntegrationContract = {
         { field: 'status', value: 'paid' },
       ],
     },
+  ],
+  fields: [
+    { name: 'customer', type: 'string', required: true, max_length: 80 },
+    { name: 'number', type: 'string', required: true, max_length: 20 },
+    { name: 'paid_at', type: 'date' },
+    { name: 'pay_url', type: 'string', max_length: 2048 },
+    { name: 'payment_id', type: 'string', max_length: 255 },
+    {
+      name: 'receipt',
+      type: 'attachment',
+      required_when: { field: 'status', op: 'eq', value: 'paid' },
+      max_files: 2,
+      max_bytes: 5000000,
+    },
+    { name: 'status', type: 'choice', required: true, options: ['draft', 'paid', 'sent'] },
+    { name: 'total', type: 'number', required: true, min: 1, max: 100000 },
   ],
 }
 
@@ -85,6 +103,7 @@ export const shop: Integration = {
   disabled: false,
   disabled_at: null,
   spaces: [12],
+  approval_spaces: [],
   other_spaces: 0,
   created_at: '2026-11-24T10:00:00.000Z',
   updated_at: '2026-11-24T10:00:00.000Z',

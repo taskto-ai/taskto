@@ -617,7 +617,7 @@
         "option": "{name} ({mode})",
         "none": "No integration for {kind} is connected and switched on yet.",
         "openSettings": "Open the integrations",
-        "allowSpace": "This also allows the integration in {space}.",
+        "allowSpace": "This also allows the integration in {space}, for as long as an approval needs it. An admin keeps it longer in the integration’s spaces, in Settings.",
         "consent": "By continuing you approve exactly what is listed above, for this app, and publish it.",
         "confirm": "Approve and publish"
       },
@@ -627,7 +627,14 @@
           "payments": "payment"
         },
         "sends": "Sends to the {service} service the values of {fields}.",
-        "link": "When the action {action} runs, it asks for a payment link for the amount in {amount}, in {currency}, and writes the link to {url} and its number to {id}.",
+        "link": "When the action {action} ({kind}) runs, it asks for a payment link for the amount in {amount}, in {currency}, and writes the link to {url} and its number to {id}.",
+        "actionKind": {
+          "insert": "it adds a record",
+          "update": "it changes a record",
+          "delete": "it deletes a record"
+        },
+        "describes": "The description it sends names {what}.",
+        "recordNumber": "the record’s number",
         "linkWhen": "{link} Only when {rule}.",
         "linkCurrencyField": "the currency in {field} ({options})",
         "handlersIntro": "When the service reports something about a payment, it may write to the record:",
@@ -650,6 +657,23 @@
           "currency": "the currency it was paid in",
           "receipt_url": "the address of the receipt",
           "payment_id": "the payment’s number at the service"
+        },
+        "fieldsIntro": "What each of these fields may hold. Raising a limit, adding an option or dropping a requirement needs a new approval:",
+        "fieldLine": "{field}: {rules}.",
+        "constraint": {
+          "required": "required",
+          "requiredWhen": "required when {rule}",
+          "optional": "may be left empty",
+          "maxLength_one": "up to {count} character",
+          "maxLength_other": "up to {count} characters",
+          "min": "at least {value}",
+          "max": "at most {value}",
+          "options": "one of {options}",
+          "format": "reads {format} codes",
+          "editable": "can be replaced once stored",
+          "maxFiles_one": "up to {count} file",
+          "maxFiles_other": "up to {count} files",
+          "maxBytes": "each up to {size}"
         },
         "limits": "Nothing else: no other field, no web address, no key. An admin connects the account and sets its limits."
       }
@@ -2187,10 +2211,12 @@
       "revoked": "Revoked the approval of {app}.",
       "isLive": "This is what the live release asks.",
       "decidedBy": "Decided by {who}, {when}.",
-      "allowSpace": "The integration isn’t allowed in {space} yet. Approving also allows it there.",
+      "allowSpace": "The integration isn’t allowed in {space} yet. Approving also allows it there, for as long as an approval needs it.",
+      "keepLink": "To keep it allowed afterwards, tick “Keep … after the approval ends” in the integration’s spaces.",
       "revokeQuestion": "Revoke the approval of {app}?",
       "revokeBody": "The app stops using the integration at once. It can’t be published, or rolled back to, with this contract until it is approved again.",
-      "revokeLive": "This is what the live release asks. It stops using the integration at once, though it stays online, and it can’t be published or rolled back to until it is approved again."
+      "revokeLive": "This is what the live release asks. It stops using the integration at once, though it stays online, and it can’t be published or rolled back to until it is approved again.",
+      "revokeSpace": "If no other approval needs it, {space} also stops being allowed for the integration, unless it is kept in the integration’s spaces."
     }
   },
   "pwa": {

@@ -72,7 +72,12 @@ test('the contract is said in plain words before anyone decides', async () => {
   const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
   const text = dialog.textContent ?? ''
   expect(text).toContain('Sends to the payment service the values of “customer”, “number”, and “total”.')
-  expect(text).toContain('When the action “send” runs, it asks for a payment link for the amount in “total”, in EUR')
+  expect(text).toContain(
+    'When the action “send” (it changes a record) runs, it asks for a payment link for the amount in “total”, in EUR',
+  )
+  expect(text).toContain('The description it sends names “customer”, “number”, and the record’s number.')
+  expect(text).toContain('What each of these fields may hold.')
+  expect(text).toContain('“total”: number, required, at least 1, at most 100,000.')
   expect(text).toContain('and writes the link to “pay_url” and its number to “payment_id”')
   expect(text).toContain('When a payment succeeds, only if status is “sent”:')
   expect(text).toContain('sets “paid_at” to the time the payment happened')
@@ -102,6 +107,13 @@ test('approving names the integration, and its space is allowed with it when it 
   ])
   await waitFor(() => expect(approve.disabled).toBe(false))
   expect(within(dialog).getByText(/Approving also allows it there/)).toBeTruthy()
+  // What keeps it allowed afterwards is the integration's own spaces, in the Integrations tab: pointed
+  // to, not made again here.
+  expect(
+    within(dialog)
+      .getByRole('link', { name: /Keep … after the approval ends/ })
+      .getAttribute('href'),
+  ).toContain('integrations')
   fireEvent.click(approve)
   await waitFor(() => expect(sent(calls, 'POST', `${queue}/4/approve`)).toHaveLength(1))
   expect(sent(calls, 'POST', `${queue}/4/approve`)[0]).toEqual({ integration_id: 7, allow_space: true })
@@ -210,8 +222,8 @@ test('an older page is read with the cursor the server gave', async () => {
   expect(calls.filter((c) => c.path.includes('cursor'))).toHaveLength(1)
 })
 
-test('a refusal is said in words, and a decision that failed keeps the dialog open', async () => {
-  fakeFetch({
+test('a decision on a request someone decided first closes the dialog, says so and reads the list again', async () => {
+  const calls = fakeFetch({
     ...waiting(approval()),
     'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
     [`POST ${queue}/4/approve`]: {
@@ -225,8 +237,89 @@ test('a refusal is said in words, and a decision that failed keeps the dialog op
   const approve = within(dialog).getByRole('button', { name: 'Approve' }) as HTMLButtonElement
   await waitFor(() => expect(approve.disabled).toBe(false))
   fireEvent.click(approve)
-  expect(await within(dialog).findByText('This request was already decided.')).toBeTruthy()
+  expect(await screen.findByText('This request was already decided.')).toBeTruthy()
+  expect(screen.queryByRole('dialog', { name: 'Request of Invoices' })).toBeNull()
+  await waitFor(() =>
+    expect(calls.filter((c) => c.method === 'GET' && c.path === `${queue}?status=requested`)).toHaveLength(2),
+  )
+})
+
+test('a refusal that leaves the request as it was is said in the dialog, which stays open', async () => {
+  fakeFetch({
+    ...waiting(approval()),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
+    [`POST ${queue}/4/approve`]: {
+      status: 409,
+      body: { error: 'x', code: 'app_integration_disabled' },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Review the request of Invoices' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
+  const approve = within(dialog).getByRole('button', { name: 'Approve' }) as HTMLButtonElement
+  await waitFor(() => expect(approve.disabled).toBe(false))
+  fireEvent.click(approve)
+  expect(await within(dialog).findByText('This integration is switched off.')).toBeTruthy()
   expect(screen.getByRole('dialog', { name: 'Request of Invoices' })).toBeTruthy()
+})
+
+// The approved list, with one approval of the shop in the shared space, and what the integrations say.
+function approved(integration: typeof shop) {
+  return {
+    [`GET ${queue}?status=requested`]: { body: { approvals: [], next_cursor: null } },
+    [`GET ${queue}?status=approved`]: {
+      body: {
+        approvals: [
+          approval({
+            status: 'approved',
+            integration: { id: 7, name: 'shop', display_name: 'Shop', usable: true },
+            decided_by: { id: 1, name: 'Owner', agent: false },
+            decided_at: '2026-11-24T11:00:00.000Z',
+          }),
+        ],
+        next_cursor: null,
+      },
+    },
+    'GET /api/workspaces/1/integrations': { body: { integrations: [integration] } },
+  }
+}
+
+async function askToRevoke() {
+  fireEvent.click(await screen.findByRole('radio', { name: 'Approved' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review the request of Invoices' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke approval' }))
+  return screen.findByRole('alertdialog', { name: 'Revoke the approval of Invoices?' })
+}
+
+test('revoking an approval that allowed the space says the space goes with it, unless it is kept', async () => {
+  fakeFetch(approved({ ...shop, spaces: [12], approval_spaces: [12] }))
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  const sure = await askToRevoke()
+  expect(within(sure).getByText(/Shop floor also stops being allowed for the integration/)).toBeTruthy()
+})
+
+test('revoking an approval whose space an admin allowed says nothing about the space', async () => {
+  fakeFetch(approved({ ...shop, spaces: [12], approval_spaces: [] }))
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  const sure = await askToRevoke()
+  expect(within(sure).getByText(/It can’t be published, or rolled back to/)).toBeTruthy()
+  expect(within(sure).queryByText(/stops being allowed/)).toBeNull()
+})
+
+test('a revoke of an approval that is no longer one is said above the list, which is read again', async () => {
+  const calls = fakeFetch({
+    ...approved({ ...shop, approval_spaces: [] }),
+    [`POST ${queue}/4/revoke`]: { status: 409, body: { error: 'x', code: 'app_integration_not_approved' } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  const sure = await askToRevoke()
+  fireEvent.click(within(sure).getByRole('button', { name: 'Revoke approval' }))
+  expect(await screen.findByText('Only an approval can be revoked.')).toBeTruthy()
+  expect(screen.queryByRole('dialog', { name: 'Request of Invoices' })).toBeNull()
+  await waitFor(() =>
+    expect(calls.filter((c) => c.method === 'GET' && c.path === `${queue}?status=approved`)).toHaveLength(2),
+  )
 })
 
 test('another filter asks for that status, and a failed list says why', async () => {

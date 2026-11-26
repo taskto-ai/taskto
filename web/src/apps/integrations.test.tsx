@@ -96,6 +96,16 @@ test('the panel says what the app asks of an outside service in words, and where
   expect(within(section).getByText('Not asked for yet')).toBeTruthy()
   expect(section.textContent).toContain('it asks for a payment link for the amount in “total”, in EUR')
   expect(section.textContent).toContain('sets “status” to “paid”')
+  // What the contract binds besides the amount: who may trigger the action, the text it sends, and
+  // what each field involved may hold. An admin approves all of it, so all of it is said.
+  expect(section.textContent).toContain('When the action “send” (it changes a record) runs')
+  expect(section.textContent).toContain('The description it sends names “customer”, “number”, and the record’s number.')
+  expect(section.textContent).toContain('“total”: number, required, at least 1, at most 100,000.')
+  expect(section.textContent).toContain('“status”: choice, required, one of “draft”, “paid”, and “sent”.')
+  expect(section.textContent).toContain('“pay_url”: text, may be left empty, up to 2,048 characters.')
+  expect(section.textContent).toContain(
+    '“receipt”: photos, required when status is “paid”, up to 2 files, each up to 5 MB.',
+  )
   // The effect is told with the others, and nothing says the app can reach nothing else.
   expect(screen.getByText('Asks the “payments” outside service for a link to pay the amount in “total”.')).toBeTruthy()
   expect(screen.queryByText(/It can’t reach anything else/)).toBeNull()
@@ -279,7 +289,7 @@ test('a request that already waits is approved as it is, and an integration not 
   const dialog = await screen.findByRole('dialog', { name: 'Approve and publish' })
   const confirm = within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement
   await waitFor(() => expect(confirm.disabled).toBe(false))
-  expect(within(dialog).getByText('This also allows the integration in Private.')).toBeTruthy()
+  expect(within(dialog).getByText(/This also allows the integration in Private/)).toBeTruthy()
   fireEvent.click(confirm)
   await waitFor(() => expect(sent(calls, 'POST', '/api/x/publish')).toHaveLength(1))
   // No second request, and the approval is of the one that waited.
@@ -321,6 +331,28 @@ test('a refused approval stops the publish and is said in the dialog', async () 
   fireEvent.click(confirm)
   expect(await within(dialog).findByText('This integration is switched off.')).toBeTruthy()
   expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
+  // The slots are read again, so a retry starts from what the server holds now.
+  await waitFor(() => expect(calls.filter((c) => c.path === '/api/x/integrations')).toHaveLength(2))
+})
+
+test('a request asked for again is a new one: the admin approves its id, never the old one’s', async () => {
+  const calls = fakeFetch({
+    'GET /api/x/integrations': status(slot({ status: 'revoked', approval_id: 4 })),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 11 } },
+    'POST /api/workspaces/1/integration-approvals/11/approve': { body: { id: 11 } },
+    'POST /api/x/publish': { body: { id: 9, live: { number: 1 } } },
+  })
+  panel(appOf(), mine, true)
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve and publish…' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Approve and publish' })
+  const confirm = within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement
+  await waitFor(() => expect(confirm.disabled).toBe(false))
+  fireEvent.click(confirm)
+  await waitFor(() => expect(sent(calls, 'POST', '/api/x/publish')).toHaveLength(1))
+  expect(sent(calls, 'POST', '/api/x/integrations/payments/request')).toHaveLength(1)
+  expect(adminCalls(calls).filter((c) => c.path.endsWith('/4/approve'))).toEqual([])
+  expect(sent(calls, 'POST', '/api/workspaces/1/integration-approvals/11/approve')).toHaveLength(1)
 })
 
 test('an admin who may not publish the app is offered no approve and publish', async () => {

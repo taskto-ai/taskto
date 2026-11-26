@@ -622,7 +622,7 @@
         "option": "{name} ({mode})",
         "none": "Ainda não há integração de {kind} conectada e ligada.",
         "openSettings": "Abrir as integrações",
-        "allowSpace": "Isto também permite a integração em {space}.",
+        "allowSpace": "Isso também permite a integração em {space}, enquanto alguma aprovação precisar dela. Um administrador a mantém por mais tempo nos espaços da integração, em Configurações.",
         "consent": "Ao continuar, você aprova exatamente o que está listado acima, para este app, e o publica.",
         "confirm": "Aprovar e publicar"
       },
@@ -632,7 +632,14 @@
           "payments": "pagamento"
         },
         "sends": "Envia ao serviço de {service} os valores de {fields}.",
-        "link": "Quando a ação {action} roda, ela pede um link de pagamento para o valor em {amount}, em {currency}, e grava o link em {url} e o número dele em {id}.",
+        "link": "Quando a ação {action} ({kind}) roda, ela pede um link de pagamento para o valor em {amount}, em {currency}, e grava o link em {url} e o número dele em {id}.",
+        "actionKind": {
+          "insert": "ela adiciona um registro",
+          "update": "ela altera um registro",
+          "delete": "ela exclui um registro"
+        },
+        "describes": "A descrição que ela envia cita {what}.",
+        "recordNumber": "o número do registro",
         "linkWhen": "{link} Só quando {rule}.",
         "linkCurrencyField": "a moeda em {field} ({options})",
         "handlersIntro": "Quando o serviço informa algo sobre um pagamento, ele pode gravar no registro:",
@@ -655,6 +662,25 @@
           "currency": "a moeda em que foi pago",
           "receipt_url": "o endereço do recibo",
           "payment_id": "o número do pagamento no serviço"
+        },
+        "fieldsIntro": "O que cada um destes campos pode conter. Aumentar um limite, incluir uma opção ou retirar uma exigência pede uma nova aprovação:",
+        "fieldLine": "{field}: {rules}.",
+        "constraint": {
+          "required": "obrigatório",
+          "requiredWhen": "obrigatório quando {rule}",
+          "optional": "pode ficar vazio",
+          "maxLength_one": "até {count} caractere",
+          "maxLength_many": "até {count} caracteres",
+          "maxLength_other": "até {count} caracteres",
+          "min": "no mínimo {value}",
+          "max": "no máximo {value}",
+          "options": "um entre {options}",
+          "format": "lê códigos {format}",
+          "editable": "pode ser substituído depois de gravado",
+          "maxFiles_one": "até {count} arquivo",
+          "maxFiles_many": "até {count} arquivos",
+          "maxFiles_other": "até {count} arquivos",
+          "maxBytes": "cada um com até {size}"
         },
         "limits": "Nada além disso: nenhum outro campo, nenhum endereço da web, nenhuma chave. Um administrador conecta a conta e define os limites dela."
       }
@@ -2202,10 +2228,12 @@
       "revoked": "A aprovação de {app} foi revogada.",
       "isLive": "É o que a versão publicada pede.",
       "decidedBy": "Decidido por {who}, {when}.",
-      "allowSpace": "A integração ainda não é permitida em {space}. Aprovar também a permite lá.",
+      "allowSpace": "A integração ainda não é permitida em {space}. Aprovar também a permite ali, enquanto alguma aprovação precisar dela.",
+      "keepLink": "Para mantê-la permitida depois, marque “Manter … depois que a aprovação terminar” nos espaços da integração.",
       "revokeQuestion": "Revogar a aprovação de {app}?",
       "revokeBody": "O app deixa de usar a integração na hora. Ele não pode ser publicado, nem revertido para uma versão com este contrato, até ser aprovado de novo.",
-      "revokeLive": "É o que a versão publicada pede. Ela deixa de usar a integração na hora, embora continue no ar, e não pode ser publicada nem restaurada até ser aprovada de novo."
+      "revokeLive": "É o que a versão publicada pede. Ela deixa de usar a integração na hora, embora continue no ar, e não pode ser publicada nem restaurada até ser aprovada de novo.",
+      "revokeSpace": "Se nenhuma outra aprovação precisar dele, {space} também deixa de ser permitido para a integração, a menos que seja mantido nos espaços da integração."
     }
   },
   "pwa": {
