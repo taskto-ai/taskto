@@ -375,10 +375,7 @@ func TestLoginAndLogout(t *testing.T) {
 
 	current := c.cookie
 	expect(t, c.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
-	if c.cookie != nil {
-		t.Fatal("logout didn't clear the cookie")
-	}
-	// The revoked session doesn't work even if the browser kept the cookie.
+	// The revoked session doesn't work, though the browser keeps the cookie (logout never expires it).
 	revoked := &client{e: e, ip: c.ip, cookie: current}
 	expect(t, revoked.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 
@@ -404,9 +401,6 @@ func TestSessionsAreStoredHashedAndExpire(t *testing.T) {
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	e.advance(time.Minute)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	if owner.cookie != nil {
-		t.Fatal("an expired session's cookie wasn't cleared")
-	}
 
 	// The next login drops the user's expired sessions.
 	c := e.client()
@@ -873,4 +867,44 @@ func TestCSRFRawBodyRoutes(t *testing.T) {
 			t.Errorf("%s %s (%s): status %d, want %d", tt.method, tt.target, tt.site, rec.Code, tt.status)
 		}
 	}
+}
+
+// A browser's tabs share its session cookie. One tab's logout (or any request of a session that has
+// ended) may be answered after another tab signed in as someone else and the cookie became theirs:
+// that answer must not expire the cookie, which would sign the newer login out.
+func TestAnOlderSessionsAnswerNeverExpiresANewerLoginsCookie(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	older := owner.cookie
+
+	// What the older session's requests answer: its logout, and a request after it ended.
+	sessionCookies := func(rec *httptest.ResponseRecorder) []*http.Cookie {
+		var out []*http.Cookie
+		for _, ck := range rec.Result().Cookies() {
+			if strings.Contains(ck.Name, "taskto_session") {
+				out = append(out, ck)
+			}
+		}
+		return out
+	}
+	stale := &client{e: e, ip: owner.ip, cookie: older}
+	rec := stale.do(http.MethodPost, "/api/logout", nil)
+	expect(t, rec, http.StatusNoContent)
+	if got := sessionCookies(rec); len(got) != 0 {
+		t.Fatalf("logout answered with session cookies %+v: it would expire a newer login's", got)
+	}
+	stale = &client{e: e, ip: owner.ip, cookie: older}
+	rec = stale.do(http.MethodGet, "/api/me", nil)
+	expect(t, rec, http.StatusUnauthorized)
+	if got := sessionCookies(rec); len(got) != 0 {
+		t.Fatalf("a request of an ended session answered with session cookies %+v", got)
+	}
+
+	// Meanwhile the browser signed in again: the newer cookie still works, and the older session
+	// stays revoked.
+	newer := e.client()
+	newer.ip = owner.ip
+	expect(t, newer.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
+	expect(t, newer.do(http.MethodGet, "/api/me", nil), http.StatusOK)
+	expect(t, (&client{e: e, ip: owner.ip, cookie: older}).do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 }

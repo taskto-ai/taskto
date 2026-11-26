@@ -65,7 +65,6 @@ func (s *Service) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	err := s.revokeSession(r.Context(), u.ID, id, s.sessionToken(r))
 	switch {
 	case errors.Is(err, errSessionGone):
-		s.clearSessionCookie(w)
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return
 	case errors.Is(err, errNotFound):
@@ -87,7 +86,6 @@ func (s *Service) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Reque
 	n, err := s.revokeOtherSessions(r.Context(), u.ID, s.sessionToken(r))
 	switch {
 	case errors.Is(err, errSessionGone):
-		s.clearSessionCookie(w)
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return
 	case err != nil:

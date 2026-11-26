@@ -647,7 +647,11 @@ cookie:
 
 ### `POST /api/logout`
 
-Revokes the session and clears the cookie. `204`, also without a session.
+Revokes the session the request carries. `204`, also without a session. It never expires the
+browser's session cookie: by the time the answer arrives, another tab may have signed in and
+replaced it, and an expiring cookie can't be limited to the session it was for. The revoked token
+is refused like any unknown one (`401`, which doesn't touch the cookie either), and the next login
+replaces it.
 
 ### `GET /api/me`
 

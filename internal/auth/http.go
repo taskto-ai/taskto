@@ -351,6 +351,12 @@ func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
 	audit.Log(r.Context(), s.db, e)
 }
 
+// Logging out revokes the session the request carries, and that is all: the answer never
+// expires the browser's session cookie. The cookie is the browser's, shared by its tabs, and by the
+// time an answer arrives another tab may have signed in and replaced it; an expiring Set-Cookie
+// can't say "only if it is still this session", so it would sign that newer login out. The revoked
+// token left in the cookie is refused like any unknown one, and the next login replaces it. (The
+// single sign-on cookie follows the same rule.)
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := s.sessionToken(r); token != "" {
 		if err := s.endSession(r.Context(), token); err != nil {
@@ -358,7 +364,6 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
