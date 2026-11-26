@@ -156,8 +156,12 @@ export function signOutToResume(me: Me): PendingSignOut | undefined {
 // The login found is remembered first, for a cleanup of an older one that is still on its way.
 // `asked`: when the server was asked who is signed in (a start's answer may come late): a sign-out
 // recorded after that is a newer login's, never one this start's login replaced.
-export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()): Promise<void> {
-  if (me) rememberLogin(me.user.id, me.session, asked)
+// Resolves false when `me` is no longer the browser's login: something newer was learned before
+// this answer came (another account or login signed in, or this login ended), or after the waits
+// here. Then nothing was done, and the caller claims nothing for it.
+export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()): Promise<boolean> {
+  const remembered = me ? rememberLogin(me.user.id, me.session, asked) : 'ok'
+  if (remembered === 'stale') return false
   for (const listed of pendingSignOuts()) {
     // Read again: an earlier cleanup waited, and another tab may have settled or replaced it since.
     const p = pendingSignOuts().find((r) => r.user === listed.user && r.session === listed.session)
@@ -172,6 +176,10 @@ export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()
     if ((p.at ?? 0) > asked) continue
     await cleanUpAfterSignOut(p.user, p.session, decisionOf(p))
   }
+  // Asked again after those waits: another tab may have signed someone in, or this login out, since.
+  if (!me || remembered === 'unkept' || !me.session) return true
+  const now = browserLogin()
+  return now?.user === me.user.id && now.session === me.session
 }
 
 export const decisionOf = (p: PendingSignOut): Decision => ({

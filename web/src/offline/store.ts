@@ -999,8 +999,19 @@ function probe(name: string): Promise<boolean | undefined> {
   })
 }
 
-// How long the account's lock is waited for, and held at most (milliseconds; tests shorten them).
-export const lockTimes = { wait: 10_000, hold: 10_000 }
+// How long the account's lock is waited for, and held at most (milliseconds), and the clocks that
+// say so: a signal that aborts the wait, and a timer that ends the hold. Tests replace the clocks
+// with ones they trigger themselves.
+export const lockTimes = {
+  wait: 10_000,
+  hold: 10_000,
+  waitOver: (ms: number): AbortSignal | undefined =>
+    typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined,
+  holdOver: (ms: number, over: () => void): (() => void) => {
+    const timer = setTimeout(over, ms)
+    return () => clearTimeout(timer)
+  },
+}
 
 // One at a time per account, across the browser's tabs: opening its database, and a sign-out's
 // deletion of it. Where the browser has no Web Locks, the deletion still removes only a retired
@@ -1015,7 +1026,7 @@ function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
   if (!locks?.request) return work()
   let granted = false
-  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(lockTimes.wait) : undefined
+  const signal = lockTimes.waitOver(lockTimes.wait)
   const held = () => {
     granted = true
     return withinTime(work(), lockTimes.hold)
@@ -1028,14 +1039,14 @@ function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
 
 function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new StorageUnavailable('the offline database took too long')), ms)
+    const cancel = lockTimes.holdOver(ms, () => reject(new StorageUnavailable('the offline database took too long')))
     work.then(
       (v) => {
-        clearTimeout(timer)
+        cancel()
         resolve(v)
       },
       (e) => {
-        clearTimeout(timer)
+        cancel()
         reject(e)
       },
     )

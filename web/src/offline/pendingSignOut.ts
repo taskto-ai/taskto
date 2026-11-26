@@ -92,12 +92,15 @@ export function recordSignOut(
   approved: Approval,
   discardUnreadable = false,
 ): void {
-  // A logout of this same login that got no answer before may still reach the server: that stays
-  // known, whatever becomes of this one.
-  const before = read().find((p) => p.user === user)
-  const unanswered = !!before?.unanswered && session !== '' && before.session === session
+  // One record per login, never per account: a stale tab signing out an older login of the account
+  // never takes away the decision of a newer one (recorded in another tab, perhaps gone back from and
+  // still waiting on a logout that got no answer). A logout of this same login that got no answer
+  // before may still reach the server: that stays known, whatever becomes of this one.
+  const same = (p: PendingSignOut) => p.user === user && p.session === session
+  const before = read().find(same)
+  const unanswered = !!before?.unanswered && session !== ''
   write([
-    ...read().filter((p) => p.user !== user),
+    ...read().filter((p) => !same(p)),
     {
       user,
       session,
@@ -154,48 +157,68 @@ export function signOutPending(user: number): boolean {
   return read().some((p) => p.user === user && p.phase !== 'backed')
 }
 
-// The login this browser started with last (a sign-in, or a start that found one), shared by its
-// tabs: a sign-out of an older login of the same account, confirmed late, leaves what is on the
-// device to it (signOut.ts). With when the server was asked about it (`at`, this browser's clock): a
-// start answered late never puts an older login of the account back over one learned since.
+// What this browser last learned of who is signed in on it, shared by its tabs (one cookie for the
+// browser): a login (a sign-in, or a start that found one), or that one ended (`session` ''), with
+// when it was learned (`at`, this browser's clock: when the server was asked, or the login seen
+// over). A sign-out of an older login of the same account, confirmed late, leaves what is on the
+// device to the newer one (signOut.ts). An answer that is older than what is known (a start answered
+// late, for this account or another, or for a login that has ended since) is no news: it is not
+// remembered, and its caller claims nothing for it.
 const LOGIN = 'taskto:login'
 
 export type BrowserLogin = { user: number; session: string; at: number }
 
-export function rememberLogin(user: number, session: string | undefined, asked = Date.now()): void {
-  const now = browserLogin()
-  if (now && now.user === user && now.at > asked) return
-  try {
-    if (session) window.localStorage.setItem(LOGIN, JSON.stringify({ user, session, at: asked }))
-    else window.localStorage.removeItem(LOGIN)
-  } catch {
-    // Not kept: a late sign-out of an older login clears the device as it would have.
-  }
-}
-
-// The login `session` of `user` is over: it is no longer the browser's, if it was. Compared before it
-// is removed, so a newer login remembered meanwhile stays.
-export function forgetLogin(user: number, session: string | undefined): void {
-  const now = browserLogin()
-  if (!now || now.user !== user || !session || now.session !== session) return
-  try {
-    window.localStorage.removeItem(LOGIN)
-  } catch {
-    // Not removed: a later cleanup of an older login is shielded by it, and leaves the device.
-  }
-}
-
-export function browserLogin(): BrowserLogin | null {
+function readLogin(): BrowserLogin | null {
   try {
     const v = JSON.parse(window.localStorage.getItem(LOGIN) ?? 'null') as {
       user?: unknown
       session?: unknown
       at?: unknown
     } | null
-    return v && Number.isInteger(v.user) && typeof v.session === 'string' && v.session !== ''
+    return v && Number.isInteger(v.user) && typeof v.session === 'string'
       ? { user: v.user as number, session: v.session, at: Number.isFinite(v.at) ? (v.at as number) : 0 }
       : null
   } catch {
     return null
   }
+}
+
+// 'stale': something newer is known (the answer is not to be acted on); 'unkept': the browser didn't
+// keep it (storage refused), which is no reason to stop.
+export function rememberLogin(
+  user: number,
+  session: string | undefined,
+  asked = Date.now(),
+): 'ok' | 'stale' | 'unkept' {
+  const known = readLogin()
+  if (known && known.at > asked) return 'stale'
+  try {
+    window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: session ?? '', at: asked }))
+    return 'ok'
+  } catch {
+    // Not kept: a late sign-out of an older login clears the device as it would have.
+    return 'unkept'
+  }
+}
+
+// The login `session` of `user` is over: it is no longer the browser's, if it was, and an answer
+// about it asked before now is stale. Compared first, so a newer login remembered meanwhile stays.
+export function forgetLogin(user: number, session: string | undefined): void {
+  const now = browserLogin()
+  if (!now || now.user !== user || !session || now.session !== session) return
+  try {
+    window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: '', at: Date.now() }))
+  } catch {
+    try {
+      window.localStorage.removeItem(LOGIN)
+    } catch {
+      // Not removed: a later cleanup of an older login is shielded by it, and leaves the device.
+    }
+  }
+}
+
+// The login the browser holds now, as far as it knows; null when none (or it ended).
+export function browserLogin(): BrowserLogin | null {
+  const v = readLogin()
+  return v && v.session !== '' ? v : null
 }

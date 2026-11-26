@@ -11,9 +11,17 @@ import { fakeFetch } from './test/fakes'
 
 // The sign-out waits a short time here, and the device's cleanup can be made to fail.
 const fail = vi.hoisted(() => ({ cleanup: false, activate: false }))
+// How long a logout is waited for: long by default, so a logout a test holds is never cut short by
+// a loaded machine; a test that wants it to time out says so (`deadline.logout = 0`).
+const deadline = vi.hoisted(() => ({ logout: 60_000 }))
 vi.mock('./signOut', async (original) => {
   const real = await original<typeof import('./signOut')>()
-  return { ...real, SIGN_OUT_WAIT_MS: 100 }
+  return {
+    ...real,
+    get SIGN_OUT_WAIT_MS() {
+      return deadline.logout
+    },
+  }
 })
 vi.mock('./offline/runtime', async (original) => {
   const real = await original<typeof import('./offline/runtime')>()
@@ -40,6 +48,7 @@ const pages = {
 }
 
 beforeEach(() => {
+  deadline.logout = 60_000
   window.history.replaceState(null, '', '/w/1/conversations')
   fail.cleanup = false
   fail.activate = false
@@ -78,6 +87,8 @@ test("an older tab's logout confirmed after another tab signed someone else in l
 })
 
 test('a logout the server never answers ends at "Couldn\'t sign out", not on the spinner', async () => {
+  // No answer in time.
+  deadline.logout = 0
   fakeFetch({ ...pages, 'GET /api/me': { body: first }, 'POST /api/logout': () => new Promise(() => {}) })
   render(<App />)
   await logOut()

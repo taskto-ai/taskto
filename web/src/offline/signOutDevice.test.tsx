@@ -15,9 +15,17 @@ import { fakeFetch } from '../test/fakes'
 import { activate, deactivate, lastUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
 
+// How long a logout is waited for: long by default, so a logout a test holds is never cut short by
+// a loaded machine; a test that wants it to time out says so (`deadline.logout = 0`).
+const deadline = vi.hoisted(() => ({ logout: 60_000 }))
 vi.mock('../signOut', async (original) => {
   const real = await original<typeof import('../signOut')>()
-  return { ...real, SIGN_OUT_WAIT_MS: 100 }
+  return {
+    ...real,
+    get SIGN_OUT_WAIT_MS() {
+      return deadline.logout
+    },
+  }
 })
 
 const me = {
@@ -68,6 +76,7 @@ const pending = () =>
 const databases = async () => (await indexedDB.databases()).map((d) => d.name)
 
 beforeEach(() => {
+  deadline.logout = 60_000
   globalThis.indexedDB = new IDBFactory()
   window.history.replaceState(null, '', '/')
   window.localStorage.clear()
@@ -106,6 +115,8 @@ async function signOutDiscarding() {
 }
 
 test('a logout that got no answer and reaches the server after Back finishes the sign-out the person chose', async () => {
+  // The logout's answer doesn't come in time.
+  deadline.logout = 0
   let session: 'on' | 'over' = 'on'
   fakeFetch({
     ...signedIn,

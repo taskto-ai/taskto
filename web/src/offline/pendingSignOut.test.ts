@@ -97,9 +97,10 @@ test('a sign-out of the same login again keeps that an earlier logout of it got 
   backFromSignOut(1, 's1')
   // The first logout may still reach the server: the sign-out is kept, as gone back from.
   expect(pendingSignOutOf(1)).toMatchObject({ session: 's1', phase: 'backed', unanswered: true })
-  // Not for another login of the account.
+  // Not for another login of the account, whose record is its own (the first one's stays).
   recordSignOut(1, 's2', false, new Map())
-  expect(pendingSignOutOf(1)?.unanswered).toBeUndefined()
+  expect(pendingSignOuts().find((p) => p.session === 's2')?.unanswered).toBeUndefined()
+  expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'backed', unanswered: true })
 })
 
 test('the browser keeps the login it learned last of an account, whatever order the answers come in', () => {

@@ -13,17 +13,45 @@ import { App } from '../App'
 import { api, type Me } from '../api'
 import { cleanUpAfterSignOut, finishUnfinishedSignOuts } from '../signOut'
 import { fakeFetch } from '../test/fakes'
-import { pendingSignOutOf, recordSignOut, signOutPending } from './pendingSignOut'
+import {
+  backFromSignOut,
+  browserLogin,
+  pendingSignOutOf,
+  pendingSignOuts,
+  recordSignOut,
+  rememberLogin,
+  signOutPending,
+  unansweredSignOut,
+} from './pendingSignOut'
 import { activate, deactivate, lastUser, runtimeState } from './runtime'
 import { databaseExists, lockTimes, OfflineStore, type OutboxItem } from './store'
 
 // Something can be made to happen as a start (or Back) takes the account up, before it is claimed.
-const during = vi.hoisted(() => ({ claim: null as (() => void) | null }))
+const during = vi.hoisted(() => ({ claim: null as (() => void) | null, activate: null as (() => void) | null }))
+vi.mock('./runtime', async (original) => {
+  const real = await original<typeof import('./runtime')>()
+  return {
+    ...real,
+    // Something can be made to happen just as an account's offline data is taken up (after the
+    // claim's own checks, before the account is made the browser's).
+    activate: async (...args: Parameters<typeof real.activate>) => {
+      const hook = during.activate
+      during.activate = null
+      hook?.()
+      return real.activate(...args)
+    },
+  }
+})
+// How long a logout is waited for: long by default, so a logout a test holds is never cut short by
+// a loaded machine; a test that wants it to time out says so (`deadline.logout = 0`).
+const deadline = vi.hoisted(() => ({ logout: 60_000 }))
 vi.mock('../signOut', async (original) => {
   const real = await original<typeof import('../signOut')>()
   return {
     ...real,
-    SIGN_OUT_WAIT_MS: 100,
+    get SIGN_OUT_WAIT_MS() {
+      return deadline.logout
+    },
     finishUnfinishedSignOuts: async (...args: Parameters<typeof real.finishUnfinishedSignOuts>) => {
       const hook = during.claim
       during.claim = null
@@ -128,12 +156,14 @@ function fakeLocks() {
 }
 
 beforeEach(() => {
+  deadline.logout = 60_000
   globalThis.indexedDB = new IDBFactory()
   window.history.replaceState(null, '', '/')
   window.localStorage.clear()
   window.sessionStorage.clear()
   hold.preferences = null
   during.claim = null
+  during.activate = null
 })
 
 const times = { ...lockTimes }
@@ -399,7 +429,7 @@ test('Back in the tab that signed out sends the queue again only once the sign-o
   expect(pendingAtResume).not.toContain(true)
 })
 
-test('Back whose claim comes just after another tab finished the sign-out takes the marker back away', async () => {
+test('Back whose claim of the account comes just after another tab finished the sign-out takes the marker back away', async () => {
   fakeFetch({
     ...signedIn,
     'GET /api/me': { body: me },
@@ -408,8 +438,8 @@ test('Back whose claim comes just after another tab finished the sign-out takes 
   await signedInAs()
   logOut()
   await screen.findByRole('heading', { name: "Couldn't sign out" })
-  // The other tab's cleanup forgets the account as Back takes it up again.
-  during.claim = () => {
+  // The other tab's cleanup forgets the account just as Back takes its offline data up again.
+  during.activate = () => {
     localStorage.removeItem(LAST)
     window.dispatchEvent(new StorageEvent('storage', { key: LAST, newValue: null }))
   }
@@ -456,9 +486,10 @@ test('a start whose answer comes late never takes a newer login of the account b
   await finishUnfinishedSignOuts({ ...me, session: 's2' })
   await activate(7, 'Pat')
   recordSignOut(7, 's2', false, new Map())
-  // This tab's start is answered only now, for the login the cookie held when it asked.
+  // This tab's start is answered only now, for the login the cookie held when it asked: older than
+  // what the browser knows, so it opens nothing, and the page is to be reloaded.
   await act(async () => answer?.())
-  await screen.findByRole('banner')
+  expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(pendingSignOutOf(7)).toMatchObject({ session: 's2' })
   // The newer login's sign-out is finished: the device is cleared, not shielded by the older login.
   await deactivate({ purge: false })
@@ -492,20 +523,14 @@ test('a start answered 401 leaves a sign-out another tab recorded after it asked
   expect(await databases()).toContain('taskto-offline-7')
 })
 
-// A promise's outcome, or 'hung' when it hasn't settled within `ms`.
-const within = <T,>(p: Promise<T>, ms: number) =>
-  Promise.race([
-    p.then(
-      () => 'settled' as const,
-      () => 'settled' as const,
-    ),
-    new Promise<'hung'>((r) => setTimeout(() => r('hung'), ms)),
-  ])
-
 test("a sign-out's deletion the browser keeps blocked gives the account's lock up: the next sign-in opens the database", async () => {
   fakeLocks()
-  lockTimes.hold = 50
-  lockTimes.wait = 50
+  // The holder's time is up when the test says so.
+  const overs: (() => void)[] = []
+  lockTimes.holdOver = (_ms, over) => {
+    overs.push(over)
+    return () => {}
+  }
   await activate(7, 'Pat')
   runtimeState().runtime?.engine.pause('manual')
   // Another connection to the database that never closes when asked (a frozen tab): the deletion
@@ -526,35 +551,35 @@ test("a sign-out's deletion the browser keeps blocked gives the account's lock u
   })
   void cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map() })
   await waitFor(() => expect(blockedSeen).toBe(true))
-  // Past the holder's time, the account's lock is given back while the deletion is still blocked.
-  await new Promise((r) => setTimeout(r, 100))
-  expect(
-    await within(
-      navigator.locks.request('taskto-offline-db:7', async () => {}),
-      1000,
-    ),
-  ).toBe('settled')
+  // The holder's time is up: the account's lock is given back while the deletion is still blocked
+  // (the request is granted; were it not, the test would not end).
+  for (const over of overs.splice(0)) over()
+  await navigator.locks.request('taskto-offline-db:7', async () => {})
   // The other connection closes: the deletion finishes, and the next sign-in on this browser, the
   // same person's or someone else's, goes on.
   deletions.mockRestore()
   blocker.close()
-  const opened = await Promise.race([
-    OfflineStore.open(7),
-    new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000)),
-  ])
-  expect(opened).toBeInstanceOf(OfflineStore)
-  if (opened instanceof OfflineStore) opened.close()
-  expect(await within(activate(8, 'Sam'), 1000)).toBe('settled')
+  const opened = await OfflineStore.open(7)
+  opened.close()
+  await activate(8, 'Sam')
+  expect(runtimeState().runtime?.user).toBe(8)
 })
 
 test("waiting for an account's lock is bounded: the database is said to be unavailable, never waited for for good", async () => {
   fakeLocks()
-  lockTimes.wait = 50
-  lockTimes.hold = 60_000
+  // The wait is over when the test says so.
+  const waits: AbortController[] = []
+  lockTimes.waitOver = () => {
+    const wait = new AbortController()
+    waits.push(wait)
+    return wait.signal
+  }
   let release: () => void = () => {}
   // Something holds the account's lock (a deletion the browser is slow with).
   void navigator.locks.request('taskto-offline-db:7', () => new Promise<void>((done) => (release = done)))
-  await expect(OfflineStore.open(7)).rejects.toThrow()
+  const opening = OfflineStore.open(7)
+  for (const wait of waits) wait.abort()
+  await expect(opening).rejects.toThrow()
   release()
 })
 
@@ -670,4 +695,121 @@ test('a newer login that starts just as the cleanup begins its transaction keeps
   expect((await after.listItems()).map((i) => i.id)).toEqual(['item-1'])
   await after.enqueue(queued('newer'), [])
   after.close()
+})
+
+test("a stale tab's sign-out never takes away a newer login's decision", async () => {
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': { body: me },
+    // The browser's login is the newer one: the stale tab's logout is refused.
+    'POST /api/logout': { status: 409, body: { error: 'not this login', code: 'session_account_changed' } },
+  })
+  await signedInAs()
+  // Another tab signed the same person in again, chose to discard a record when signing that newer
+  // login out, got no answer, and went back.
+  await finishUnfinishedSignOuts({ ...me, session: 's2' })
+  recordSignOut(7, 's2', false, new Map([['item-1', { version: 1, operation: 'op-race-item-1' }]]))
+  unansweredSignOut(7, 's2')
+  backFromSignOut(7, 's2')
+  // This stale tab, still on the older login, signs out.
+  logOut()
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await new Promise((r) => setTimeout(r, 20))
+  // The newer login's decision is still there, for its late logout to finish.
+  expect(pendingSignOuts().find((p) => p.session === 's2')).toMatchObject({
+    phase: 'backed',
+    approved: [['item-1', { version: 1, operation: 'op-race-item-1' }]],
+  })
+})
+
+test("a start answered late for an account that isn't the browser's any more claims nothing of the one that is", async () => {
+  let answer: (() => void) | undefined
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': () =>
+      new Promise((done) => {
+        answer = () => done({ body: me })
+      }),
+  })
+  render(<App />)
+  await waitFor(() => expect(answer).toBeDefined())
+  // Meanwhile another person signs in in another tab, and begins a draft there.
+  const sam = { ...me, user: { id: 8, email: 'sam@example.com', name: 'Sam' }, session: 't1' } as Me
+  await finishUnfinishedSignOuts(sam)
+  localStorage.setItem('taskto:drafts-of', '8')
+  localStorage.setItem('taskto:builder-start:8:1', 'a draft of the second person')
+  localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Sam' }))
+  // This tab's start is answered only now, for the account the cookie held when it asked.
+  await act(async () => answer?.())
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('8')
+  expect(localStorage.getItem('taskto:builder-start:8:1')).toBe('a draft of the second person')
+  expect(browserLogin()).toMatchObject({ user: 8, session: 't1' })
+  expect(lastUser()).toEqual({ id: 8, name: 'Sam' })
+})
+
+test('a start answered late for a login that has signed out since opens nothing of it', async () => {
+  // Another tab has this login.
+  rememberLogin(7, 's1', Date.now() - 1000)
+  let answer: (() => void) | undefined
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': () =>
+      new Promise((done) => {
+        answer = () => done({ body: me })
+      }),
+  })
+  render(<App />)
+  await waitFor(() => expect(answer).toBeDefined())
+  // That tab signs out, and its logout is confirmed: the login is over.
+  recordSignOut(7, 's1', false, new Map())
+  expect(await cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map() })).toBe(true)
+  // This tab's start is answered only now, for the login its cookie held when it asked.
+  await act(async () => answer?.())
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(lastUser()).toBeNull()
+  expect(localStorage.getItem('taskto:drafts-of')).toBeNull()
+})
+
+test('a start whose earlier sign-outs take a while claims nothing when another person signed in meanwhile', async () => {
+  // A sign-out of someone else's left unfinished on this browser: the start finishes it first.
+  recordSignOut(9, 'u1', false, new Map())
+  const real = OfflineStore.open.bind(OfflineStore)
+  vi.spyOn(OfflineStore, 'open').mockImplementationOnce(async (user: number) => {
+    // While that cleanup waits on the database, the second person signs in in another tab.
+    rememberLogin(8, 't1', Date.now() + 1)
+    localStorage.setItem('taskto:drafts-of', '8')
+    localStorage.setItem('taskto:builder-start:8:1', 'a draft of the second person')
+    return real(user)
+  })
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  render(<App />)
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('8')
+  expect(localStorage.getItem('taskto:builder-start:8:1')).toBe('a draft of the second person')
+  expect(browserLogin()).toMatchObject({ user: 8, session: 't1' })
+})
+
+test("a start that isn't stale still leaves a sign-out another login recorded after it asked", async () => {
+  let answer: (() => void) | undefined
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': () =>
+      new Promise((done) => {
+        answer = () => done({ body: me })
+      }),
+  })
+  // Another tab asked who is signed in before this one did, and learned of a newer login.
+  rememberLogin(7, 's2', Date.now() - 1000)
+  render(<App />)
+  await waitFor(() => expect(answer).toBeDefined())
+  // That tab begins signing that login out while this start waits for its answer.
+  recordSignOut(7, 's2', false, new Map())
+  await act(async () => answer?.())
+  await screen.findByRole('banner')
+  // Recorded after this start asked: that login's to finish, not this start's to drop.
+  expect(pendingSignOuts().find((p) => p.session === 's2')).toBeTruthy()
 })

@@ -577,9 +577,13 @@ signing in is dealt with when it signs in:
   the request was sent) touches nothing on the device: the drafts, the database and the push
   subscription are that login's. The browser remembers the login it started with last, and forgets it
   as soon as that login is known to be over (a `401`, a lost session, its own sign-out), so a login
-  that has ended shields nothing. It keeps the one it learned of last, by when the server was asked
-  (a start answered late never puts an older login back), and only a login learned after a sign-out
-  was recorded counts as newer than it. Every step of the cleanup asks again, after each wait, whether a
+  that has ended shields nothing. It keeps what it learned of last, by when the server was asked or
+  the login was seen to end: a start answered late, for this account or another, or for a login that
+  has signed out since, is older than that, so it claims nothing (no drafts, no offline data, no
+  marker) and the page says *The account changed*. Only a login learned after a sign-out was
+  recorded counts as newer than it. A sign-out's record and decision are kept **per login**: a stale
+  tab signing out an older login never replaces or removes a newer login's (one gone back from and
+  still waiting on a logout that got no answer keeps the person's decision for when it ends). Every step of the cleanup asks again, after each wait, whether a
   newer login started, also inside the transaction that empties the database before it changes
   anything, and settles only its own login's record. A cleanup that found the database unreadable keeps
   the sign-out recorded and says so, whatever a later read says. Its deletion of the database is

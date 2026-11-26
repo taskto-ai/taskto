@@ -119,11 +119,13 @@ export function App() {
   // `asked`: when the server was asked who `me` is (a start, Back); a sign-in's answer is the newest.
   // `still`: whether the claim is still wanted after its first wait (Back: no other tab finished the
   // sign-out or signed someone in since); when it isn't, nothing is claimed, and it answers false.
+  // An answer older than what the browser knows by now (another account or login signed in since, or
+  // this one ended) claims nothing either: it answers false.
   const claim = useCallback(async (me: Me, asked = Date.now(), still: () => boolean = () => true) => {
     // A sign-out on this device that didn't finish (its tab closed, its cleanup failed) is finished
     // first, with its person's decision, before any account's offline data opens here; one of this
     // account's under a newer login is not to be, since the person signed in again (signOut.ts).
-    await finishUnfinishedSignOuts(me, asked)
+    if (!(await finishUnfinishedSignOuts(me, asked))) return false
     if (!still()) return false
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
@@ -140,10 +142,13 @@ export function App() {
   // Another tab finished this page's own sign-out (see below): the offline runtime heard it as an
   // account change, which it is not for this page. Until someone signs in here again.
   const [finishedElsewhere, setFinishedElsewhere] = useState(false)
+  // A start whose answer turned out stale: the page goes on as whoever is signed in, after a reload
+  // (`accountChanged`, set once it is made, below).
+  const staleStart = useRef<() => void>(() => {})
   const signIn = useCallback(
     async (me: Me, asked?: number) => {
       const now = await enter(me, asked)
-      if (!now) return
+      if (!now) return staleStart.current()
       // The session begins before the shell is drawn, so what the shell starts is in it.
       beginSession(now.user.id)
       setFinishedElsewhere(false)
@@ -208,6 +213,7 @@ export function App() {
     endSession()
     setChanged(true)
   }, [])
+  staleStart.current = accountChanged
   // Where a sign-out this page is finishing leads, read when a signal comes.
   const leavingTo = useRef<Session | null>(null)
   leavingTo.current = session.state === 'leaving' ? session.tail.next : null
@@ -477,8 +483,6 @@ export function App() {
         // nothing of the account is claimed once another tab finished the sign-out or someone else
         // signed in, and what was claimed is let go if that came while it was.
         await setPreferences({ user: me.user.locale ?? null })
-        if (!mine()) return
-        if (heard !== undefined) return accountChanged()
         const invite = tail.next.state === 'invite'
         // Asked again once earlier sign-outs are finished, before anything of the account is claimed.
         const wanted = () => mine() && heard === undefined
@@ -534,7 +538,10 @@ export function App() {
     async (me: Me, next: Session, asked?: number) => {
       const pending = signOutToResume(me)
       if (!pending) return false
-      await finishUnfinishedSignOuts(me, asked)
+      if (!(await finishUnfinishedSignOuts(me, asked))) {
+        staleStart.current()
+        return true
+      }
       const tail: Tail = { user: pending.user, session: pending.session, next, ...decisionOf(pending) }
       setSession({ state: 'leaving', tail })
       void finish(tail)
@@ -576,7 +583,7 @@ export function App() {
         // theirs from here, and is what signing out from the page takes away.
         if (me && (await resumed(me, { state: 'invite', me: null }, asked))) return
         if (me) {
-          await claim(me, asked)
+          if (!(await claim(me, asked))) return staleStart.current()
           beginSession(me.user.id)
         }
         return setSession({ state: 'invite', me })
