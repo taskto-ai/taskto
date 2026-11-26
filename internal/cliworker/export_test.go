@@ -1,5 +1,7 @@
 package cliworker
 
+import "context"
+
 // SignInURLForTest exposes signInURL to the package's external tests.
 var SignInURLForTest = signInURL
 
@@ -18,4 +20,10 @@ var ApprovalSocketForTest = approvalSocket
 // ToolsReadOnlyForTest exposes the read-only policy for taskto's tools.
 func ToolsReadOnlyForTest(t *Tools, cli CLI, tool string, input []byte) bool {
 	return t.readOnly(cli, tool, input)
+}
+
+// BeginRemovalForTest starts a removal of user's files (every account, or cli's account in
+// slot) as Forget and Logout do, and returns the function that ends it.
+func (w *Worker) BeginRemovalForTest(ctx context.Context, user int64, all bool, cli CLI, slot Slot) (func(), error) {
+	return w.beginRemoval(ctx, &removal{user: user, all: all, cli: cli, slot: slot})
 }

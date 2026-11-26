@@ -1109,6 +1109,7 @@
     "cli_workers_no_boundary": "CLI workers run in local mode on this server, with no boundary between users, so they work only while the server has a single user. An operator can run the CLI worker container instead.",
     "cli_not_installed": "{cli} isn't installed on this server.",
     "cli_worker_closing": "The CLI worker is shutting down: try again in a moment.",
+    "cli_account_removing": "This account is being disconnected: try again in a moment.",
     "cli_no_login": "No sign-in is in progress.",
     "cli_login_code_invalid": "The code needs 1 to {max} printable characters.",
     "cli_login_no_code": "This sign-in doesn't take a code.",

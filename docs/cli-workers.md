@@ -391,6 +391,13 @@ The UI shows what the command prints.
   (below) and never the token.
 - **Logout** runs `claude auth logout`, `codex logout` or `grok logout`, then deletes the
   account's sessions. Their files go with the config directory when the user disconnects.
+- **Removing files under a running CLI** never happens. Disconnecting an account, and
+  forgetting a deleted user (everything the worker keeps for them), first refuse new turns and
+  sign-ins on what goes (`ErrRemoving`, `cli_account_removing` for a sign-in), then stop the
+  turns running on it (SIGTERM, the grace time, SIGKILL) and wait for their process groups to
+  end, and only then remove the files. A CLI that doesn't end in time, or a caller that gives
+  up, leaves the files where they are with an error, and the removal can be run again. Another
+  account's turns, and other users', are not stopped.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

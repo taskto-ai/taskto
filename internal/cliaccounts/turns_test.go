@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -567,4 +569,94 @@ func TestTurnAsksTheOwner(t *testing.T) {
 			t.Errorf("allow_all asked: %+v", ev)
 		}
 	}
+}
+
+// longTurn starts a slow Codex turn of c's conversation, and returns where its events end up.
+func (e *turnEnv) longTurn(c *client, name string) (conversation int64, result chan []cliworker.Event) {
+	e.t.Helper()
+	c.connect(cliworker.Codex)
+	clitest.WriteScenario(e.t, e.layout.User(c.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 60_000})
+	conversation = e.conversation(c)
+	result = make(chan []cliworker.Event, 1)
+	go func() {
+		_, events, _ := e.post(conversation, "/cli/turn", turnBody{Turn: name, CLI: "codex", Model: "default", Prompt: "slow"})
+		result <- events
+	}()
+	eventually(e.t, "the turn didn't start", func() bool {
+		t, ok := e.worker.Turn(fmt.Sprintf("c%d-%s", conversation, name))
+		return ok && len(clitest.Calls(e.t, e.layout.User(c.id).Config(cliworker.Codex))) > 0 && !t.Over()
+	})
+	return conversation, result
+}
+
+// Forgetting a deleted user ends their running turn, and its tokens for taskto's tools with it,
+// before their login's files go; another user's running turn is not touched.
+func TestForgetEndsTheUsersRunningTurns(t *testing.T) {
+	e := newTurnEnv(t)
+	conv, mine := e.longTurn(e.owner, "mine")
+	otherConv, theirs := e.longTurn(e.other, "theirs")
+	home := e.layout.User(e.owner.id).Root
+
+	if err := e.svc.Forget(context.Background(), e.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case events := <-mine:
+		if d := done(events); d.Status != cliworker.StatusStopped {
+			t.Errorf("done = %+v, want the turn stopped", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the forgotten user's turn kept running")
+	}
+	turn, _ := e.worker.Turn(fmt.Sprintf("c%d-mine", conv))
+	if !turn.Over() {
+		t.Error("the forgotten user's turn is still running in the worker")
+	}
+	if _, err := os.Stat(home); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the user's directory remains: %v", err)
+	}
+	// The other user's turn runs on.
+	other, _ := e.worker.Turn(fmt.Sprintf("c%d-theirs", otherConv))
+	if other.Over() {
+		t.Fatal("forgetting one user stopped another's turn")
+	}
+	if code, _, _ := e.post(otherConv, "/cli/stop", map[string]string{"turn": "theirs"}); code != http.StatusNoContent {
+		t.Fatalf("stop = %d", code)
+	}
+	select {
+	case events := <-theirs:
+		if d := done(events); d.Status != cliworker.StatusStopped {
+			t.Errorf("done = %+v", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the other user's turn didn't end")
+	}
+}
+
+// Disconnecting an account ends the turns running on its login first; the same user's other
+// CLI and another user's turns go on.
+func TestDisconnectEndsTheTurnsOnTheAccount(t *testing.T) {
+	e := newTurnEnv(t)
+	conv, mine := e.longTurn(e.owner, "mine")
+	otherConv, theirs := e.longTurn(e.other, "theirs")
+
+	expect(t, e.owner.do(http.MethodDelete, base+"/codex", nil), http.StatusNoContent)
+	turn, _ := e.worker.Turn(fmt.Sprintf("c%d-mine", conv))
+	if !turn.Over() {
+		t.Error("the account was disconnected while a turn still ran on it")
+	}
+	select {
+	case events := <-mine:
+		if d := done(events); d.Status != cliworker.StatusStopped {
+			t.Errorf("done = %+v", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the turn didn't end")
+	}
+	other, _ := e.worker.Turn(fmt.Sprintf("c%d-theirs", otherConv))
+	if other.Over() {
+		t.Fatal("disconnecting one user's account stopped another's turn")
+	}
+	e.worker.Stop(fmt.Sprintf("c%d-theirs", otherConv))
+	<-theirs
 }

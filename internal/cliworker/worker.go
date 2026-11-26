@@ -66,6 +66,9 @@ type Worker struct {
 	named   chan struct{} // closed and replaced when a CLI names its session (waitTurnForHook)
 	closed  bool
 	wg      sync.WaitGroup
+	// removals are the accounts whose files are being removed (Forget, Logout): no turn or
+	// login starts on them meanwhile (removal).
+	removals []*removal
 
 	// The approval socket (approve.go): its listener, its path and, when it had to go
 	// elsewhere than the layout's root, the directory made for it.
@@ -79,6 +82,9 @@ var (
 	ErrUnavailable = errors.New("this CLI is not installed on the worker")
 	ErrTurnClash   = errors.New("a different turn has this ID")
 	ErrClosed      = errors.New("the worker is shutting down")
+	// ErrRemoving is Start's and StartLogin's answer while the files of the account they would
+	// use are being removed (a deleted user's, or a disconnected account's).
+	ErrRemoving = errors.New("this account's CLI files are being removed")
 )
 
 // New returns a Worker. It first stops every CLI process group a previous worker on the same
@@ -232,6 +238,9 @@ func (w *Worker) Start(spec TurnSpec) (t *Turn, attached bool, err error) {
 			return nil, false, ErrTurnClash
 		}
 		return old, true, nil
+	}
+	if w.removing(spec.User, spec.CLI, spec.Slot) {
+		return nil, false, ErrRemoving
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t = &Turn{spec: spec, cancel: cancel, changed: make(chan struct{}), ended: make(chan struct{})}

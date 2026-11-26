@@ -365,6 +365,7 @@ const (
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
 	CodeCLINotInstalled        Code = "cli_not_installed" // params: cli
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
+	CodeCLIAccountRemoving     Code = "cli_account_removing" // 409: the account's CLI files are being removed (disconnected, or its user deleted)
 	CodeCLINoLogin             Code = "cli_no_login"
 	CodeCLILoginCodeInvalid    Code = "cli_login_code_invalid" // params: max
 	CodeCLILoginNoCode         Code = "cli_login_no_code"

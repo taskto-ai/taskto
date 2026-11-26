@@ -310,6 +310,8 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, err.Error(), apierr.Params{"cli": a.cli.Name()})
 	case errors.Is(err, cliworker.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerClosing, err.Error())
+	case errors.Is(err, cliworker.ErrRemoving):
+		writeError(w, http.StatusConflict, apierr.CodeCLIAccountRemoving, err.Error())
 	default:
 		serverError(w, r, err)
 	}

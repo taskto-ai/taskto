@@ -144,6 +144,10 @@ func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
 		w.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if w.removing(user, cli, slot) {
+		w.mu.Unlock()
+		return nil, ErrRemoving
+	}
 	key := loginKey{user, cli, slot}
 	if old := w.logins[key]; old != nil && !old.Info().State.Final() {
 		w.mu.Unlock()
@@ -485,7 +489,15 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 	if !slot.Valid() {
 		return errors.New("invalid account")
 	}
-	// A login in progress is stopped first, and waited for: one that ends while the files go
+	// The turns running on the account are stopped first, and none starts while the files go:
+	// one that kept running would hold the login it was started with, and write its session
+	// back into the directory.
+	end, err := w.beginRemoval(ctx, &removal{user: user, cli: cli, slot: slot})
+	if err != nil {
+		return err
+	}
+	defer end()
+	// A login in progress is stopped, and waited for: one that ends while the files go
 	// could write its credentials back.
 	w.CancelLogin(user, cli, slot)
 	if l, ok := w.Login(user, cli, slot); ok {
@@ -506,24 +518,48 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 			}
 		}
 	}
-	_, _, err := w.runQuick(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
+	_, _, err = w.runQuick(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
 	return err
 }
 
 // Forget removes everything the worker keeps for user, for an account that is deleted: it stops
-// the logins in progress, signs the CLIs out (best effort: a login that can't be signed out is
+// the user's running turns and waits for them (an error, with the files kept, when one doesn't
+// end), refuses new ones, stops the logins in progress, signs the CLIs out (best effort: a login that can't be signed out is
 // still deleted with the directory) and removes the user's directory, with their logins,
 // sessions, working directories and browser profile. Idempotent.
 func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return errors.New("invalid user")
 	}
+	// Every turn of the user is stopped and waited for first, and none starts while their files
+	// go: a CLI still running would keep their login, and write into the directory again.
+	// Another user's turns are not covered.
+	end, err := w.beginRemoval(ctx, &removal{user: user, all: true})
+	if err != nil {
+		return err
+	}
+	defer end()
+	var logins []*Login
 	for _, cli := range []CLI{Claude, Codex, Grok} {
 		for _, slot := range allSlots {
 			w.CancelLogin(user, cli, slot)
+			if l, ok := w.Login(user, cli, slot); ok {
+				logins = append(logins, l)
+			}
 		}
 	}
-	_, _, err := w.runQuick(ctx, user, helperRequest{Op: "forget"})
+	// A login that ends while the files go could write its credentials back.
+	grace := time.After(w.cfg.StopGrace + 5*time.Second)
+	for _, l := range logins {
+		select {
+		case <-l.Done():
+		case <-grace:
+			return errors.New("a sign-in in progress didn't stop")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	_, _, err = w.runQuick(ctx, user, helperRequest{Op: "forget"})
 	return err
 }
 
