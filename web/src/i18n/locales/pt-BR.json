@@ -558,6 +558,10 @@
         "inspection": {
           "name": "Inspeção",
           "description": "Percorra um local, registre aprovado ou reprovado com o lugar e uma assinatura, e transforme cada reprovação em um cartão em um quadro que você escolher."
+        },
+        "invoicing": {
+          "name": "Faturamento",
+          "description": "Guarde suas faturas, envie uma com um link de pagamento e veja-a marcada como paga (ou reembolsada) quando o pagamento chegar. Um administrador precisa conectar uma conta de pagamentos e aprovar o app."
         }
       }
     },

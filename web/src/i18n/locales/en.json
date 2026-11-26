@@ -554,6 +554,10 @@
         "inspection": {
           "name": "Inspection",
           "description": "Walk a site, record pass or fail with the place and a signature, and have every failure become a card on a board you choose."
+        },
+        "invoicing": {
+          "name": "Invoicing",
+          "description": "Keep your invoices, send one with a payment link, and see it marked paid (or refunded) when the payment arrives. It needs an admin to connect a payments account and approve the app."
         }
       }
     },

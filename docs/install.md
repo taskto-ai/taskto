@@ -999,6 +999,14 @@ The archive holds password hashes, sessions, and `server.key` next to the provid
 encrypts, so whoever has the archive can read those keys: keep it as private as the server,
 and encrypt it before it leaves the machine.
 
+That includes the keys of [payment integrations](integrations.md#secrets): a payment provider's
+secret key and webhook signing secret are sealed with `server.key`, and the archive holds both.
+After restoring a backup **on another machine**, treat those keys as exposed to whoever handled the
+archive: create new ones at the provider, enter them in Settings → Integrations, and delete the old
+ones. (Restoring on the same machine, from your own backup, is not a reason to rotate.) A restore
+with a `server.key` other than the one that sealed them leaves the keys unreadable: **Check** says
+so, and you enter them again.
+
 A backup is a copy of one moment, and later changes don't reach it. When a file's old
 versions are [taken out of a space's history](api.md#taking-a-files-old-versions-out-of-history),
 the archives and restic snapshots taken before still hold them, until they expire

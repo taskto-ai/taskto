@@ -1,6 +1,6 @@
 # App templates
 
-Three starter apps come with the server. A template is only a **definition** (the same JSON as
+Four starter apps come with the server. A template is only a **definition** (the same JSON as
 any app's, checked by the same catalog): installing one makes a new app of your own in the space
 you choose, as a draft, with no records, photos or history, and nobody's roles but the ones the
 template names for you. Nothing is live until you try the draft and publish it, the ordinary way.
@@ -25,7 +25,7 @@ definition on a 24 by 24 view box ([docs/api.md](api.md#the-definition), Icons),
 decoration beside a label, so they need no name of their own. Version 2 of each template added
 them; an app installed from version 1 has none, and keeps working as it was.
 
-## The three templates
+## The four templates
 
 ### Expense tracker (for your private space)
 
@@ -67,6 +67,38 @@ other, and checks again when the card is made (the effect runs as the person who
 only if they may write the board then). The roles are the space's own: everyone who may write it
 reads and adds inspections.
 
+### Invoicing (for your private space, with a payments account)
+
+Invoices with a number, a customer, an amount, a currency (EUR, USD, GBP or BRL) and a status:
+*Draft*, *Sent*, *Paid* or *Refunded*. Screens: the list with the count waiting for payment, a form,
+and an invoice's detail. **Send invoice** makes a payment page at the payment provider and puts its
+address on the invoice; when the customer pays, the invoice becomes *Paid* with the date, and when
+the payment is refunded in full, *Refunded*. An invoice whose page expired offers **Make a new
+payment link**. A **Home widget** counts the invoices waiting for payment and the paid ones.
+
+It is the one template that reaches outside TaskTo.AI, and it does so without naming anything: its
+definition declares a **slot** called `payments` of the kind `payments` ([integrations.md](integrations.md#apps-and-approval)),
+an action with a `create_payment_link` effect on that slot, and what a payment may write (the status
+and the date, only when the invoice is *Sent*; *Refunded*, only when it is *Paid*). It holds no
+provider, no address, no account, no key and no limit, which are the admin's. So:
+
+- **Installing it binds nothing.** The draft opens with the slot unapproved. Until a workspace admin
+  has connected a payments account, allowed the space and approved the app's contract, the app
+  can't be published; the builder's preview works at once, on sample data, and never calls the
+  provider.
+- **A copy is the same.** Installing it twice, or duplicating an installed one, gives apps with no
+  approval, no records, no payment links and no secrets, each asking for its own approval.
+- The roles are the space's own: the template gives nobody an app role, so in a shared space it is
+  a good fit for a team that is fine with everyone who can write the space seeing every invoice, and
+  otherwise one to install in a private space.
+- The currencies it offers must also be on the admin's list for the account: an invoice in another
+  currency is refused when it is sent, with a message that names the currency.
+
+The whole setup, from the provider's keys to the first paid invoice, is in
+[integrations.md](integrations.md#taking-payments-a-guide). The template's contract hash is pinned in
+`internal/apps/templates_invoicing_test.go`: a change to what it sends or writes makes every
+installed copy ask for a new approval, so it is changed on purpose.
+
 ## Duplicate as template
 
 On the Apps page, **Duplicate as template** copies an app's **definition** into a new app of a
@@ -78,7 +110,9 @@ definition and nothing else:
 - no roles from the source (the copy is unrestricted, so the space's own rules decide, and its
   creator has the roles the creator of any new app has), no Home placements or defaults, no
   releases;
-- no effect's queued or finished work.
+- no effect's queued or finished work;
+- no approval of an outside service, payment link or payment event: an app that asks for a
+  [payments account](integrations.md#apps-and-approval) asks an admin again.
 
 An effect aimed at a board you can't write, or in another workspace, is **cleared**: the effect stays, and the copy can't be
 published until you choose a board (the same picker as for the inspection template). Boards you
@@ -100,6 +134,9 @@ shared space). A new user can do all of this with no setup beyond an account:
    *Open failures* go up. Submit one that passes: no card, the count doesn't move. Mark the failure
    as fixed: the count goes down.
 4. **Duplicate as template** on any of them, into your private space, and check the copy is empty.
+5. **Invoicing** needs a payments account, so it is tried by hand with the provider's test mode, as
+   [integrations.md](integrations.md#trying-an-integration-by-hand) says; without one you can install
+   it, try the preview and see that publishing asks for an admin's approval.
 
 What needs a **real device**: the camera (receipt photos, and scanning the equipment tag), the
 position and the signature pad's touch drawing. In a desktop browser the photo comes from a file,

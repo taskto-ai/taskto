@@ -1,0 +1,268 @@
+{
+  "template_version": 1,
+  "id": "invoicing",
+  "version": 1,
+  "name": "Invoicing",
+  "description": "Keep your invoices, send one with a payment link, and see it marked paid (or refunded) when the payment arrives. It needs an admin to connect a payments account and approve the app.",
+  "recommended_space": "private",
+  "definition": {
+    "screens": [
+      {
+        "name": "list",
+        "root": "list-root",
+        "components": [
+          { "id": "list-root", "component": "Column", "children": ["list-head", "list-unpaid", "list-new", "list-items"] },
+          { "id": "list-title", "component": "Text", "text": "Invoices", "variant": "h2" },
+          { "id": "list-icon", "component": "Icon", "name": { "svgPath": "M6 2h12v20l-3-2-3 2-3-2-3 2zm3 5v2h6V7zm0 4v2h6v-2zm0 4v2h4v-2z" } },
+          { "id": "list-head", "component": "Row", "align": "center", "children": ["list-icon", "list-title"] },
+          { "id": "list-unpaid", "component": "Stat", "label": "Waiting for payment", "value": { "path": "/unpaid" } },
+          { "id": "list-new-label", "component": "Text", "text": "New invoice" },
+          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z" } },
+          { "id": "list-new-content", "component": "Row", "align": "center", "children": ["list-new-icon", "list-new-label"] },
+          {
+            "id": "list-new",
+            "component": "Button",
+            "variant": "primary",
+            "child": "list-new-content",
+            "action": { "event": { "name": "new_invoice" } }
+          },
+          { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
+          { "id": "row", "component": "Column", "children": ["row-head", "row-foot"] },
+          { "id": "row-head", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-number", "row-status"] },
+          { "id": "row-number", "component": "Text", "text": { "path": "number" } },
+          { "id": "row-status", "component": "Text", "text": { "path": "_labels/status" }, "variant": "caption" },
+          { "id": "row-foot", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-customer", "row-open"] },
+          { "id": "row-customer", "component": "Text", "text": { "path": "customer" }, "variant": "caption" },
+          { "id": "row-open-label", "component": "Text", "text": "Open" },
+          {
+            "id": "row-open",
+            "component": "Button",
+            "variant": "borderless",
+            "child": "row-open-label",
+            "action": { "event": { "name": "open_invoice", "context": { "id": { "path": "id" } } } }
+          }
+        ]
+      },
+      {
+        "name": "new",
+        "root": "new-root",
+        "components": [
+          {
+            "id": "new-root",
+            "component": "Column",
+            "children": ["new-title", "new-number", "new-customer", "new-total", "new-currency", "new-actions"]
+          },
+          { "id": "new-title", "component": "Text", "text": "New invoice", "variant": "h2" },
+          { "id": "new-number", "component": "TextField", "label": "Invoice number", "value": { "path": "/draft/number" } },
+          { "id": "new-customer", "component": "TextField", "label": "Customer", "value": { "path": "/draft/customer" } },
+          { "id": "new-total", "component": "TextField", "label": "Amount", "variant": "number", "value": { "path": "/draft/total" } },
+          {
+            "id": "new-currency",
+            "component": "ChoicePicker",
+            "label": "Currency",
+            "variant": "mutuallyExclusive",
+            "displayStyle": "chips",
+            "options": [
+              { "label": "EUR", "value": "EUR" },
+              { "label": "USD", "value": "USD" },
+              { "label": "GBP", "value": "GBP" },
+              { "label": "BRL", "value": "BRL" }
+            ],
+            "value": { "path": "/draft/currency" }
+          },
+          { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
+          { "id": "new-back-label", "component": "Text", "text": "Back" },
+          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
+          { "id": "new-back-content", "component": "Row", "align": "center", "children": ["new-back-icon", "new-back-label"] },
+          {
+            "id": "new-back",
+            "component": "Button",
+            "child": "new-back-content",
+            "action": { "event": { "name": "back_to_list" } }
+          },
+          { "id": "new-save-label", "component": "Text", "text": "Save invoice" },
+          {
+            "id": "new-save",
+            "component": "Button",
+            "variant": "primary",
+            "child": "new-save-label",
+            "action": {
+              "event": {
+                "name": "add_invoice",
+                "context": {
+                  "number": { "path": "/draft/number" },
+                  "customer": { "path": "/draft/customer" },
+                  "total": { "path": "/draft/total" },
+                  "currency": { "path": "/draft/currency" },
+                  "status": "draft"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "detail",
+        "root": "detail-root",
+        "record": true,
+        "components": [
+          {
+            "id": "detail-root",
+            "component": "Column",
+            "children": [
+              "detail-title",
+              "detail-customer",
+              "detail-total",
+              "detail-currency",
+              "detail-status",
+              "detail-paid-when",
+              "detail-link-when",
+              "detail-send-when",
+              "detail-resend-when",
+              "detail-actions"
+            ]
+          },
+          { "id": "detail-title", "component": "Text", "text": { "path": "/record/number" }, "variant": "h2" },
+          { "id": "detail-customer", "component": "Stat", "label": "Customer", "value": { "path": "/record/customer" } },
+          { "id": "detail-total", "component": "Stat", "label": "Amount", "value": { "path": "/record/total" } },
+          { "id": "detail-currency", "component": "Stat", "label": "Currency", "value": { "path": "/record/_labels/currency" } },
+          { "id": "detail-status", "component": "Stat", "label": "Status", "value": { "path": "/record/_labels/status" } },
+          {
+            "id": "detail-paid-when",
+            "component": "Show",
+            "source": "record",
+            "when": { "field": "status", "op": "eq", "value": "paid" },
+            "child": "detail-paid"
+          },
+          { "id": "detail-paid", "component": "Stat", "label": "Paid on", "value": { "path": "/record/paid_at" } },
+          {
+            "id": "detail-link-when",
+            "component": "Show",
+            "source": "record",
+            "when": { "field": "status", "op": "eq", "value": "sent" },
+            "child": "detail-link"
+          },
+          { "id": "detail-link", "component": "Stat", "label": "Payment link", "value": { "path": "/record/pay_url" } },
+          {
+            "id": "detail-send-when",
+            "component": "Show",
+            "source": "record",
+            "when": { "field": "status", "op": "eq", "value": "draft" },
+            "child": "detail-send"
+          },
+          { "id": "detail-send-label", "component": "Text", "text": "Send invoice" },
+          {
+            "id": "detail-send",
+            "component": "Button",
+            "variant": "primary",
+            "child": "detail-send-label",
+            "action": { "event": { "name": "send_invoice", "context": { "id": { "path": "/record/id" }, "status": "sent" } } }
+          },
+          {
+            "id": "detail-resend-when",
+            "component": "Show",
+            "source": "record",
+            "when": { "field": "status", "op": "eq", "value": "sent" },
+            "child": "detail-resend"
+          },
+          { "id": "detail-resend-label", "component": "Text", "text": "Make a new payment link" },
+          {
+            "id": "detail-resend",
+            "component": "Button",
+            "child": "detail-resend-label",
+            "action": { "event": { "name": "send_invoice", "context": { "id": { "path": "/record/id" }, "status": "sent" } } }
+          },
+          { "id": "detail-actions", "component": "Row", "children": ["detail-back"] },
+          { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
+          { "id": "detail-back-content", "component": "Row", "align": "center", "children": ["detail-back-icon", "detail-back-label"] },
+          {
+            "id": "detail-back",
+            "component": "Button",
+            "child": "detail-back-content",
+            "action": { "event": { "name": "back_to_list" } }
+          }
+        ]
+      }
+    ],
+    "entry": "list",
+    "collection": {
+      "fields": [
+        { "name": "number", "type": "string", "required": true, "max_length": 50 },
+        { "name": "customer", "type": "string", "required": true, "max_length": 100 },
+        { "name": "total", "type": "number", "required": true, "min": 0 },
+        {
+          "name": "currency",
+          "type": "choice",
+          "required": true,
+          "options": ["EUR", "USD", "GBP", "BRL"],
+          "option_labels": { "EUR": "EUR", "USD": "USD", "GBP": "GBP", "BRL": "BRL" }
+        },
+        {
+          "name": "status",
+          "type": "choice",
+          "required": true,
+          "options": ["draft", "sent", "paid", "refunded"],
+          "option_labels": { "draft": "Draft", "sent": "Sent", "paid": "Paid", "refunded": "Refunded" }
+        },
+        { "name": "paid_at", "type": "date" },
+        { "name": "pay_url", "type": "string", "max_length": 2048 },
+        { "name": "payment_id", "type": "string", "max_length": 255 }
+      ]
+    },
+    "actions": {
+      "new_invoice": { "kind": "navigate", "screen": "new" },
+      "open_invoice": { "kind": "navigate", "screen": "detail" },
+      "back_to_list": { "kind": "navigate", "screen": "list" },
+      "add_invoice": { "kind": "insert", "then": "list" },
+      "send_invoice": {
+        "kind": "update",
+        "effects": [
+          {
+            "kind": "create_payment_link",
+            "integration": "payments",
+            "amount_field": "total",
+            "currency_field": "currency",
+            "description": "Invoice {{number}} for {{customer}}",
+            "url_field": "pay_url",
+            "id_field": "payment_id"
+          }
+        ]
+      }
+    },
+    "integrations": {
+      "payments": {
+        "kind": "payments",
+        "on": {
+          "payment.succeeded": {
+            "only_if": { "field": "status", "op": "eq", "value": "sent" },
+            "set": { "status": { "value": "paid" }, "paid_at": { "from": "occurred_at" } }
+          },
+          "payment.refunded": {
+            "only_if": { "field": "status", "op": "eq", "value": "paid" },
+            "set": { "status": { "value": "refunded" } }
+          }
+        }
+      }
+    },
+    "summaries": {
+      "unpaid": { "kind": "count", "where": { "field": "status", "op": "eq", "value": "sent" } },
+      "paid": { "kind": "count", "where": { "field": "status", "op": "eq", "value": "paid" } }
+    },
+    "contributions": {
+      "widgets": [
+        {
+          "id": "invoices",
+          "title": "Invoices",
+          "kind": "summaries",
+          "size": "small",
+          "summaries": [
+            { "summary": "unpaid", "label": "Waiting for payment" },
+            { "summary": "paid", "label": "Paid" }
+          ]
+        }
+      ],
+      "pin": { "label": "Invoices" }
+    }
+  }
+}

@@ -1,13 +1,227 @@
 # Integrations
 
-Design note: let a workspace connect an account at an outside service, so a personal app can
-one day ask for a payment link and be told the payment happened. An **integration** is the
-admin's connection to one provider account: its credentials, its limits and the spaces that
-may use it. The first kind of integration is **payments**; Stripe and Square are the first
-providers.
+A workspace can connect an account at an outside service, so a personal app can ask for a
+payment link and be told the payment happened. An **integration** is the admin's connection to
+one provider account: its credentials, its limits and the spaces that may use it. The first kind
+of integration is **payments**.
 
-This page describes what the server does today, the rules every later part keeps, and, marked
-as such, what is still to come. The routes are in [api.md](api.md#integrations).
+The page has two parts. [Taking payments: a guide](#taking-payments-a-guide) is for the admin who
+connects the account and the person who builds or uses the app, in plain words and in the order you
+do things. Everything after it is the reference: what the server does and the rules it keeps, for
+whoever changes the code or needs to know exactly. The routes are in [api.md](api.md#integrations).
+
+## Taking payments: a guide
+
+By the end of this guide an invoice in your own app has a **Send invoice** button. Pressing it makes
+a payment page at Stripe and puts its address on the invoice; the customer pays there, with a card
+number that only Stripe ever sees; and the invoice then shows **Paid**, with the date, by itself.
+
+Who does what:
+
+- **An admin** of the workspace connects the Stripe account, sets its limits, says which spaces may
+  use it and approves each app that wants to.
+- **Whoever builds the app** (you, or the agent for you) starts from the **Invoicing** template or
+  describes a payments app, tries it and asks for the approval.
+- **Everyone with access to the app** just uses it.
+
+On a one-person install you are all three, and the steps below are short.
+
+**What works today.** Payments work with **Stripe**. Square can be connected and its settings
+checked, but it can't make payment links or send TaskTo events yet, so don't connect it to take
+payments. Refunds are made in Stripe, not in TaskTo (see [Refunds](#refunds)). Two things need the
+server to have a public address: customers coming back to a page of yours (optional), and the
+invoice marking itself paid (see [step 2](#2-tell-stripe-where-to-send-events)).
+
+### 1. Connect your Stripe account
+
+Do this first in Stripe's **test mode** ([step 3](#3-test-mode-and-live-mode) says why).
+
+1. In Stripe's dashboard (its menus move now and then, and its own documentation is the reference
+   for where things are), create a **secret key** (a restricted key works too, if it may create and
+   read Checkout Sessions and Payment Links and read the account). It starts with `sk_test_` or
+   `rk_test_`. A key that starts with `pk_` is a *publishable* key, which can't do this: TaskTo
+   refuses it.
+2. In TaskTo, **Settings → Integrations → Connect an account**. Choose Stripe, give the account a
+   name, and paste the key. The server seals it with its own key the moment it arrives. From then on
+   nobody can see it again, not you, not another admin, not an app, not the agent: the screen only
+   says the key is **set**. To change it you enter a new one.
+3. Set the **limits**: the largest amount one payment may ask for (in the currency's smallest unit:
+   cents for euros) and the currencies it may ask in. An app can't raise them; a payment above the
+   limit, or in another currency, is refused before Stripe is asked. Allow every currency your
+   invoices use (the template offers EUR, USD, GBP and BRL).
+4. Press **Check**. It tells you that the saved credentials open and the settings are right. It does
+   **not** call Stripe, so it can't tell you the key is valid at Stripe: the first payment link does.
+5. In **Spaces**, tick the spaces whose apps may use the account. A new account has none, so no app
+   can use it yet. (Approving an app, in [step 4](#4-install-the-invoicing-app-and-approve-it), can
+   also allow that app's space.)
+
+### 2. Tell Stripe where to send events
+
+Stripe tells TaskTo about a payment by calling an address of this integration's own. You set that up
+once per integration, in Stripe.
+
+1. The server needs a **public address** (`-public-url`) and its reverse proxy has to forward
+   `POST /hooks/*` ([the install guide](install.md#webhooks-from-payment-providers) has the
+   details, including a tunnel for a server at home). Once it is set, the integration's card in
+   TaskTo shows **Register this address at the provider**, followed by an address ending in a long
+   random id.
+2. In Stripe, **Developers → Webhooks → Add endpoint**. Paste the address. Choose **these** events,
+   which are all TaskTo reads, and the **snapshot** payload style:
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`.
+   Others are harmless: TaskTo answers them and drops them.
+3. Stripe shows the endpoint's **signing secret**, which starts with `whsec_`. Paste it into the
+   integration's **Webhook signing secret** in TaskTo. Without it every delivery is refused: that is
+   how TaskTo knows a message really came from Stripe and wasn't made up by someone who found the
+   address.
+
+Each integration has its own address and so its own signing secret, and no two integrations may use
+the same one (TaskTo refuses it). When you roll the secret at Stripe, enter the new one here: the old
+one keeps working for a day, so deliveries Stripe signed before the change aren't lost.
+
+**Without a public address** the payment links are still made: the customer pays, and stays on a
+confirmation page Stripe hosts. But Stripe can't reach your server, so the invoice **doesn't mark
+itself paid** yet. Asking Stripe about open payments from the server's side is a later change and
+isn't built. Until then you see the payment in Stripe and change the invoice yourself, or you use a
+tunnel that forwards `POST /hooks/*` to the server and give `-public-url` its address.
+
+### 3. Test mode and live mode
+
+A Stripe key is for **test mode** (fake money, Stripe's test cards) or **live mode** (real money),
+and TaskTo reads which from the key. The integration's card says **Test mode** or **Live mode: real
+money**.
+
+- **Try everything in test mode first**, end to end, with the invoicing app: a test key, a test
+  webhook endpoint and Stripe's test cards. Test and live are separate worlds at Stripe, each with
+  its own endpoints and signing secrets: register the address in each one you use.
+- **Make live a second integration**, with its own live key and its own endpoint. To move an app
+  from one to the other, revoke its approval, ask again and approve it with the live integration.
+  Don't swap a test key for a live one in the same integration: an invoice whose link was still
+  being made stops with an error, because the link can't be followed into the other mode, and a
+  payment event of the other mode is ignored on purpose (money of one mode never marks a record of
+  the other).
+- Never paste a live key anywhere but here, and never use one to try the software out.
+
+### 4. Install the invoicing app and approve it
+
+1. **Apps → Start from a template → Invoicing.** Choose a space (your private one, unless the
+   invoices are a team's). It installs as a **draft**: no records, no roles and no account. It is
+   a template, so it is only a definition, and it works with whichever payments account the admin
+   connects.
+2. The draft has the screens of an invoice: a number, a customer, an amount, a currency and a
+   status (*Draft*, *Sent*, *Paid*, *Refunded*), the paid date and the address of the payment page.
+   **Send invoice** makes the payment link. When the customer pays, the status becomes *Paid* and
+   the date is filled in; when the payment is refunded in full, it becomes *Refunded*. The
+   builder's preview shows what a link would ask ("Create a payment link of 120.00 EUR") and never
+   calls Stripe or needs an account.
+3. An app that asks for a payment link can't be published until an admin approves **exactly what it
+   asks for**. In the publish panel, under **Outside services**, you read it in plain words (the
+   fields it sends to Stripe, which of its records a payment may change and how, the currencies it
+   asks in) and press the button to ask for approval.
+4. The admin opens **Settings → Integration approvals**. The request shows the app's and the space's
+   names, who asked and what it asks, and nothing of the app's records: that is why an app in
+   somebody's private space can be approved at all. The admin **approves** it by choosing the
+   integration (and, if the space isn't allowed yet, allowing it there) or **turns it down**.
+5. Publish. If you are the admin, **Approve and publish** does the three steps in one with the same
+   words on screen.
+
+What an approval is, and isn't:
+
+- It is for a version of what the app asks, identified by a hash of it. Reworded text doesn't need a
+  new one; sending another field, writing another field or value, asking in another currency or
+  from another action does. The live version stays approved while the next draft waits.
+- **A copy has none.** Installing the template again, or duplicating an app, gives an app that asks
+  again. So the template can't send anyone's money anywhere by being copied.
+- An admin can **revoke** an approval, switch the integration off or take a space away, and the app
+  stops making links and receiving payments at once. It stays online.
+
+### 5. Send an invoice
+
+1. Open an invoice and press **Send invoice**. The invoice becomes *Sent* and, a moment later, the
+   payment page's address appears on it. You send that address to your customer yourself, however
+   you like: TaskTo doesn't email it.
+2. The customer pays on Stripe's page. TaskTo never sees the card.
+3. Stripe tells the server. TaskTo checks the signature, checks the amount and the currency are
+   exactly what the link asked, and then marks the invoice **Paid** with the date. The record's
+   history shows who did it: the integration, not a person.
+
+If a link isn't made, the person who pressed the button sees why, in words ("The amount is above the
+…", "The payment provider didn't accept this integration's key"), and retries it from the app's
+**Effects** panel once it is fixed. Amounts are exact: more decimals than the currency has, zero, or negative amounts are refused,
+and never rounded.
+
+**An expired link.** With a public address the payment page is a Stripe Checkout Session, which
+Stripe closes after 24 hours. A customer who comes later finds a closed page, and the invoice stays
+*Sent*. The invoice then offers **Make a new payment link**: that makes a fresh page and replaces the
+address on the invoice. Use it once the old page has expired; a page that hasn't expired can still
+be paid. Without a public address the link is a Stripe Payment Link, which takes one payment and
+doesn't expire by itself.
+
+**A declined card** is not a failure: the customer can try another card on the same page.
+
+### Refunds
+
+TaskTo doesn't refund. You refund in Stripe's dashboard, and Stripe tells TaskTo. A refund of the
+**whole** payment marks the invoice *Refunded*. A **partial** refund changes nothing in TaskTo,
+because the invoice isn't refunded yet; the refund that completes it does. (The status is the only
+thing TaskTo changes; the money moves in Stripe.)
+
+### When a payment's outcome is unknown
+
+Sometimes TaskTo asks Stripe for a payment link and doesn't learn whether Stripe made one: the
+connection dropped, or Stripe answered with an error after starting the work. Making another link
+could leave **two payable links for one invoice**, so TaskTo never does that by guessing. In order:
+
+1. **It looks for the link by itself**, for up to six hours: it asks Stripe whether a link carrying
+   its reference exists, and if one does and can still be paid, uses it. Nobody needs to do anything.
+   The person who pressed the button sees that the server is still looking.
+2. **If six hours pass without an answer**, the action fails with a message that says the outcome is
+   unknown, and the admins have a decision to make.
+3. **The admin checks Stripe**. In Stripe's dashboard, look in **Payment Links** (or in **Checkout
+   Sessions** if the server has a public address) for one made around the time of the invoice, for
+   its amount, with the invoice's text as its product name ("Invoice INV-7 for Acme").
+   - **One is there.** Tell the person who pressed the button to retry that payment (it is listed,
+     failed, in the app's **Effects** panel): the server finds the link, adopts it, and writes its
+     address on the invoice.
+   - **None is there.** The admin confirms that no link exists, and a new one is made, **once**. If
+     that attempt's outcome is unknown too, the admin decides again.
+4. **If the customer paid anyway** while it was undecided, the payment is real money and is applied
+   as usual: the invoice becomes *Paid*, and the stuck action ends without making a link.
+
+The list of payments waiting for an admin's decision, and the confirmation, are routes of the API for
+now, with no screen: [the list](api.md#get-apiworkspacesworkspaceintegrationsintegrationpayment-linksunresolved) and
+[the confirmation](api.md#confirm-that-no-payment-link-exists). Only an admin can use them, only for
+spaces the admin manages (somebody's private space is theirs), and the confirmation is written to the
+audit log. The agent has no tool for either.
+
+### When an event can't be applied
+
+Money that arrives is never dropped quietly. An event that can't be applied (the app is offline, its
+approval was revoked, the record was deleted, the amount isn't what the link asked) is kept with a
+reason, every admin of the workspace gets a notification that says an integration's payment needs an
+admin, and nothing is changed in the app. After fixing the cause, an admin retries the event through
+[the API](api.md#post-apiworkspacesworkspaceintegrationsintegrationeventseventretry). A second payment of
+an invoice that is already paid is never applied: it is recorded and shown to the admin, who refunds
+it at Stripe.
+
+### What TaskTo never does with your keys
+
+- It never shows a key again, to anyone, after you enter it: not in the screen, the API, a log or an
+  error message.
+- It never gives a key to an app, a record, a template, the agent, a tool, an MCP client or an agent's
+  environment. A person's own agent can read nothing about an account.
+- It never lets an app or a model choose where a call goes. Providers are a fixed list in the server,
+  each with fixed addresses, and a definition has no place for an address, a header or a key: an app
+  only says *what it wants* (a link for this amount) and the server asks the account an admin chose.
+- It never stores a card number, a customer's email or the body of Stripe's messages. It keeps a link,
+  the provider's id and the amount it asked for.
+- It never calls Stripe from a test or from CI: tests run against a fake. You are the one who tries
+  it for real, in test mode ([trying it by hand](#trying-an-integration-by-hand)).
+- **Backups.** A backup holds the server's key (`server.key`) next to the sealed keys, so a backup
+  is as sensitive as the keys themselves: keep it private and encrypted
+  ([install.md](install.md#backups)). **After restoring a backup on another machine, rotate your
+  keys:** create new ones at Stripe, enter them here, and delete the old. If the server's key isn't
+  the one that sealed a key, **Check** says so and you enter it again.
 
 ## What exists today
 
@@ -743,11 +957,41 @@ against, so none of them needs a network:
 
 CI never calls a real provider: tests run against the fake. **Check** only looks at what the
 server holds (the secrets are set and open, the settings are valid) and says nothing about
-whether the provider accepts the credentials. To try a payment link against the real Stripe, by
-hand and never in CI, use its **test mode** with test keys of your own that you create at Stripe:
-connect them in Settings → Integrations, set a public URL, allow a space, approve an invoicing app
-and send an invoice; the link opens a hosted page that takes Stripe's test cards. Never use live
-keys to try the software, and never paste a key into an issue, a chat or a commit.
+whether the provider accepts the credentials. The fake can't know if Stripe changed, so before a
+release that touches the adapter, and whenever the pinned API version is raised, somebody tries it
+against the real Stripe, **by hand and never in CI** (as `make dictation-e2e` is never in CI), in
+its **test mode**, with test keys of their own created at Stripe. Never use live keys to try the
+software, and never paste a key into an issue, a chat, a log or a commit.
+
+The smoke test, on a server with a public address that forwards `POST /hooks/*` (or a tunnel to it),
+and takes about twenty minutes:
+
+1. **Connect.** Settings → Integrations → Connect an account: Stripe, a test secret key, a ceiling
+   and the currency you will use, and your own private space allowed. **Check** says the credentials
+   open (and, in the API, that `remote` is `false`: Stripe wasn't asked).
+2. **Webhook.** In Stripe's test mode add an endpoint at the address the card shows, with the five
+   events of [step 2](#2-tell-stripe-where-to-send-events), and paste its `whsec_` signing secret.
+3. **Install and approve.** Install the Invoicing template in your private space, request the
+   approval, approve it with the integration and publish (or **Approve and publish**).
+4. **Pay.** Add an invoice of a small amount in an allowed currency, press **Send invoice**, and see
+   the address appear. Open it and pay with Stripe's test card `4242 4242 4242 4242`: the invoice
+   becomes *Paid* with today's date, and its history says the integration did it. In Stripe, the
+   webhook endpoint shows the deliveries answered `200`.
+5. **Replay.** Resend the same event from Stripe's dashboard: nothing changes.
+6. **Refund.** Refund the whole payment in Stripe: the invoice becomes *Refunded*. Try a partial
+   refund on another invoice: it stays *Paid*.
+7. **Expiry.** Make a payment page and expire it (Stripe's API has an "expire a Checkout Session"
+   call, or wait a day): the invoice stays
+   *Sent*; **Make a new payment link** gives a new address that can be paid.
+8. **Without the public address.** Stop forwarding `/hooks/*` and clear `-public-url`, restart, send
+   an invoice: a link is made on a confirmation page Stripe hosts, the payment is taken, and the
+   invoice stays *Sent* (polling isn't built yet).
+9. **Revoke.** Revoke the approval: **Send invoice** now fails with a message that says an admin
+   must approve it, and a payment made afterwards waits as a failed event for an admin.
+10. **Clean up.** Switch the integration off or delete it, and delete the test keys and endpoint at
+    Stripe.
+
+Record what you saw and any Stripe screen or event that differed from this page.
 
 ## Not here, on purpose
 
