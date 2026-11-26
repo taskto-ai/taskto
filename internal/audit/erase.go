@@ -13,7 +13,8 @@ import (
 // about the account (target_type "user", with the account's creation time, since an id is given
 // again) are marked too. The invitations to the account's address, which carry the address in their
 // details (an invitation is about a person who had no account yet), lose it: an address is the one
-// thing about a person that a detail may hold. It returns how many events it changed.
+// thing about a person that a detail may hold. The address each of their own events was made from
+// (client_addr) is cleared. It returns how many events it changed.
 //
 // Nothing else in an event is about a person: details are typed (schema.go), and name no one but by
 // the id of an account or a space.
@@ -23,6 +24,8 @@ func Erase(ctx context.Context, tx *sql.Tx, userID int64, createdAt, email strin
 		stmt string
 		args []any
 	}{
+		// The address of the request an event was made from is about the person too.
+		{`UPDATE audit_events SET client_addr = NULL WHERE actor_id = ? AND client_addr IS NOT NULL`, []any{userID}},
 		{`UPDATE audit_events SET actor_deleted = 1 WHERE actor_id = ?`, []any{userID}},
 		{`UPDATE audit_events SET target_deleted = 1
 			WHERE target_type = ? AND target_id = ? AND target_created_at IS ?`, []any{TargetUser, userID, createdAt}},

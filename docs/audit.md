@@ -165,6 +165,7 @@ the person, in the same transaction that deletes the account:
   read like an anonymous attempt; they are marked `actor_deleted`, and the log shows "Deleted user";
 - the events about the account (`target_type` `user`, matched by its id *and* its creation time,
   since an id is never given again, the creation time makes it certain) are marked `target_deleted`;
+- the network address each of their events was made from (`client_addr`) is cleared;
 - the invitations to the account's address, which hold the address in their details, lose it
   (`invite_created`, `invite_revoked`);
 - nothing else in an event is about a person: details are typed and name no one but by the number

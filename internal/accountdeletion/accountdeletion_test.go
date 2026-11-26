@@ -204,6 +204,7 @@ func newWorld(t *testing.T) *world {
 		TargetType: audit.TargetUser, Target: w.carol, Details: audit.Details{"from": "member", "to": "admin"}}); err != nil {
 		t.Fatal(err)
 	}
+	exec(t, sqlDB, `UPDATE audit_events SET client_addr = '203.0.113.9'`) // as events made over HTTP carry
 
 	w.sched = schedule.New(sqlDB, access.New(sqlDB, nil), schedule.Options{Poll: 10 * time.Millisecond})
 	w.apps = apps.New(sqlDB, access.New(sqlDB, nil)).WithFiles(dir)
@@ -395,6 +396,9 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 	}
 	if actorDeleted < 1 || actorDeleted != actorNull {
 		t.Errorf("events of a deleted actor: %d, with no actor: %d", actorDeleted, actorNull)
+	}
+	if n := w.count(`SELECT count(*) FROM audit_events WHERE actor_deleted = 1 AND client_addr IS NOT NULL`); n != 0 {
+		t.Errorf("%d events of the deleted account still hold the address they were made from", n)
 	}
 	var details string
 	var targetDeleted bool
