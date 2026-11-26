@@ -973,6 +973,12 @@ type SpaceIntegration struct {
 	Status string `json:"status"`
 }
 
+// ForSpace lists the integrations allowed in the workspace's space, as someone who works there
+// sees them. The caller has checked that they may read the space.
+func (s *Store) ForSpace(ctx context.Context, workspace, space int64) ([]SpaceIntegration, error) {
+	return s.forSpace(ctx, workspace, space)
+}
+
 // forSpace lists the integrations allowed in the workspace's space.
 func (s *Store) forSpace(ctx context.Context, workspace, space int64) ([]SpaceIntegration, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.name, i.display_name, i.provider, i.disabled_at IS NOT NULL

@@ -7,6 +7,7 @@
 
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import type { Me, Workspace } from '../api'
+import { WorkspaceAdmin } from '../apps/admin'
 import { BoardsPage } from '../boards/BoardsPage'
 import { ConversationsPage } from '../conversations/ConversationsPage'
 import { setPreferences, useT } from '../i18n'
@@ -287,9 +288,13 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
       return <BoardsPage key={route.item ?? ''} workspace={route.workspace} open={route.item} />
     case 'apps':
       return (
-        <Suspense fallback={<Loading />}>
-          <AppsPage workspace={route.workspace} open={route.item} />
-        </Suspense>
+        // Whether the person is an admin decides which step of publishing is offered (approve and
+        // publish); the server checks the role on every route all the same.
+        <WorkspaceAdmin value={workspace.role === 'admin'}>
+          <Suspense fallback={<Loading />}>
+            <AppsPage workspace={route.workspace} open={route.item} />
+          </Suspense>
+        </WorkspaceAdmin>
       )
     case 'settings':
       return <SettingsPage me={me} workspace={workspace} tab={route.item} />

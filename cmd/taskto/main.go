@@ -306,6 +306,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	tools := agenttools.New(agenttools.Options{
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
+		Integrations: integrations.NewStore(sqlDB, key),
 	})
 	// The same tools for the CLIs of conversations' turns, on the per-turn proxy's listener.
 	enableCLITools(cfg, cliAccounts, tools)

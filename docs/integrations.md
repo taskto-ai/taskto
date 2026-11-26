@@ -190,8 +190,50 @@ SHA-256 is the contract's **hash**.
 
 An approval is for the next draft as much as the live release: the live release's stays approved
 while the draft's is decided. In a one-person install the publisher is the admin: requesting,
-approving and publishing are the same person's three calls, which the web app will offer as one
+approving and publishing are the same person's three calls, which the web app offers as one
 "approve and publish" step.
+
+**In the web app.**
+
+- **The app builder's publish panel** has an "Outside services" part when the draft declares a slot:
+  each slot with what the app asks of it in plain words (the contract: the fields it sends out, the
+  payment links it asks for, what action triggers each and when, the text they send out, what each
+  event the service reports may write to a record, and what each field involved may hold: its type,
+  whether it may be left empty, its limits and options, never the app's own wording), where its
+  approval stands (not asked for yet, waiting for an admin, approved,
+  turned down, revoked, or approved but not usable now because the integration was switched off or the
+  space taken away) and, for someone who may publish the app, a button to ask for the approval. The
+  slots are the draft's, which the agent writes: to change what an app asks, ask the agent in the
+  conversation. Publishing is not offered while a slot has no usable approval; the server refuses it
+  all the same (`app_integration_unapproved`).
+- **An admin who may publish the app** has no separate request: the panel offers "Approve and publish",
+  a dialog with the same words, a choice of the workspace's integrations of the kind that are switched
+  on, a line that says that continuing approves exactly what is listed and publishes it (and, when the
+  integration isn't allowed in the space yet, that approving allows it there while an approval needs
+  it), and then the request, the approval and the publish as three calls in that order. A request that
+  already waits is approved as it is, never asked for twice; a contract that was turned down or revoked
+  is asked for anew, and it is the new request's id that is approved. A step the server refuses (a
+  request decided meanwhile) reads the slots again, so a retry starts from what the server holds.
+- **Settings → Integration approvals** (admins only: the tab isn't listed for anyone else, and the server
+  refuses its routes) is the queue: Waiting, Approved, Turned down and Revoked, each request with the
+  app's and its space's names (a private space is only called private), who asked and when, and, in
+  a dialog, the contract in the same words. A waiting request is approved with an integration or turned
+  down; an approval is revoked after a confirmation that says whether it is the live release's, which
+  stops using the integration at once, and whether the space's grant it made goes with it. A decision on
+  a request someone decided first closes the dialog, says so and reads the list again. Keeping an
+  allowed space after its approval ends is the integration's own spaces dialog (Settings →
+  Integrations, "Keep … after the approval ends"), which the queue points to and doesn't repeat. The
+  admin reads no app and no record: the screen has only what the requester submitted.
+- **The builder's preview** says what a payment link would ask for from the sample record ("Create a
+  payment link", simulated, the sum in the currency) and calls no service, opens no secret and needs
+  no approval.
+
+**What the agent can do.** The read-only tool `list_integrations`
+([agent-tools.md](agent-tools.md#the-tools)) lists the integrations allowed in a space (name, kind and
+status: never an id, a provider, a key, a limit or another space) and, for an app the user may design or
+publish, the slots its draft declares with the status of their approval. The agent writes the
+declaration into a draft like any other JSON; it can't request, approve, bind or read anything about an
+account.
 
 **Copies carry nothing.** Approvals belong to an app, not to a definition. A duplicate and an
 installed template have the slots and no approval, and can't be published until their own contract

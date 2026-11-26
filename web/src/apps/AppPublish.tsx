@@ -28,6 +28,8 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { ApproveAndPublishDialog, SlotsSection, undecided, usable, useSlots } from './AppIntegrations'
+import { useIsAdmin } from './admin'
 import { effectLines } from './effectLines'
 
 // What went wrong with a change to an app, for people. A role that doesn't allow it names what is
@@ -260,8 +262,21 @@ export function PublishPanel({
   headingLevel?: 2 | 3
 }) {
   const t = useT()
+  const f = useFormat()
+  const admin = useIsAdmin()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The outside services the draft asks for: a release can't be made of it until each is approved.
+  const slots = useSlots(base, app)
+  const declares = Object.keys(app.draft?.integrations ?? {}).length > 0
+  const blocked = (slots.data?.slots ?? []).filter((s) => !usable(s))
+  const toApprove = blocked.filter(undecided)
+  // Approved, but the integration was switched off or taken out of the space since: an approval can't
+  // mend that, an admin does in Settings.
+  const broken = blocked.filter((s) => !undecided(s))
+  const gated = declares && (blocked.length > 0 || slots.data === undefined)
+  // The draft's version an admin is approving and publishing at once, as `reviewed` is for a review.
+  const [approving, setApproving] = useState<number | null>(null)
   // The draft's version the person is confirming, which a publish names: the draft they were
   // shown, never a newer one that arrived while the confirmation was open.
   const [reviewed, setReviewed] = useState<number | null>(null)
@@ -270,7 +285,19 @@ export function PublishPanel({
   const [published, setPublished] = useState<number | null>(null)
   // The draft changed under a confirmation: it was closed, and the person confirms again.
   const [moved, setMoved] = useState(false)
+  // The slots an admin approved in "approve and publish" that stand although the step did not end in a
+  // publish (a later slot or the publish was refused, or the draft changed): said, so they are not a
+  // surprise later.
+  const [granted, setGranted] = useState<string[]>([])
+  // The approvals an earlier step made that are still approvals: one an admin has revoked since is not
+  // said to stand.
+  const standing = granted.filter((name) =>
+    (slots.data?.slots ?? []).some((s) => s.slot === name && s.status === 'approved'),
+  )
   const seen = useRef(app.version)
+  // The draft's version now, for a step that was started on an older one.
+  const current = useRef(app.version)
+  current.current = app.version
   // The step's main button, and the inline confirmation's: focus goes there when what it was on
   // goes away (a cancelled schema dialog, a review that became its confirmation).
   const actionButton = useRef<HTMLButtonElement>(null)
@@ -283,9 +310,10 @@ export function PublishPanel({
   useEffect(() => {
     if (seen.current === app.version) return
     seen.current = app.version
-    if (reviewed !== null || migration !== null) {
+    if (reviewed !== null || migration !== null || approving !== null) {
       setReviewed(null)
       setMigration(null)
+      setApproving(null)
       setMoved(true)
     }
   }, [app.version])
@@ -294,7 +322,9 @@ export function PublishPanel({
   const nothing = app.live !== null && !app.unpublished_changes
 
   // version is the draft the person reviewed (a personal app has no review: the one on screen).
-  const run = async (version: number, acknowledge: SchemaChange[]) => {
+  // Resolves with what the publish was refused with, or null when it went through (or waits for the
+  // schema changes to be acknowledged).
+  const run = async (version: number, acknowledge: SchemaChange[]): Promise<string | null> => {
     setBusy(true)
     setError(null)
     setMoved(false)
@@ -305,11 +335,14 @@ export function PublishPanel({
       } else {
         setMigration(null)
         setReviewed(null)
+        setGranted([])
         setPublished(result.published.live?.number ?? null)
         onChanged()
       }
+      return null
     } catch (e) {
-      setError(appError(e, app.name))
+      const message = appError(e, app.name)
+      setError(message)
       // A refusal after the acknowledgement keeps the schema dialog open, with the error in it, for
       // another try; any other closes the step.
       if (acknowledge.length === 0) {
@@ -317,6 +350,7 @@ export function PublishPanel({
         setMigration(null)
       }
       onChanged()
+      return message
     } finally {
       setBusy(false)
     }
@@ -348,6 +382,23 @@ export function PublishPanel({
     )
   else if (migration) action = null
   else if (nothing) action = published === null && <p className="apps-note">{t('apps.builder.publish.nothing')}</p>
+  else if (gated)
+    // What is asked of an outside service has no approval yet: publishing is refused until it has.
+    // An admin approves and publishes in one step; anyone else waits for one (the section above asks).
+    action =
+      blocked.length === 0 ? null : admin && broken.length === 0 ? (
+        <div className="apps-actions">
+          <Button ref={actionButton} variant="primary" onClick={() => setApproving(app.version)}>
+            {t('apps.integrations.approveAndPublish')}
+          </Button>
+        </div>
+      ) : (
+        <p className="apps-note">
+          {t(broken.length > 0 ? 'apps.integrations.publishBroken' : 'apps.integrations.publishWaits', {
+            slots: f.list(blocked.map((s) => s.slot)),
+          })}
+        </p>
+      )
   else if (personal)
     action = (
       <div className="apps-actions">
@@ -405,6 +456,22 @@ export function PublishPanel({
         <dd>
           <Capabilities app={app} />
         </dd>
+        {declares && (
+          <>
+            <dt>{t('apps.integrations.title')}</dt>
+            <dd>
+              <SlotsSection
+                workspace={space.workspace_id}
+                base={base}
+                slots={slots.data}
+                error={slots.error}
+                mayRequest={mayPublish && !admin}
+                admin={admin}
+                reload={slots.reload}
+              />
+            </dd>
+          </>
+        )}
       </dl>
       {published !== null && (
         <Notice tone="success">
@@ -416,6 +483,9 @@ export function PublishPanel({
       )}
       {error && !migration && <Notice tone="danger">{error}</Notice>}
       {moved && <Notice tone="danger">{t('apps.builder.publish.moved')}</Notice>}
+      {standing.length > 0 && (
+        <Notice tone="warning">{t('apps.integrations.approve.kept', { slots: f.list(standing) })}</Notice>
+      )}
       {action}
       {migration && mayPublish && (
         <MigrationDialog
@@ -427,6 +497,57 @@ export function PublishPanel({
             setMigration(null)
             setError(null)
             setRefocus((n) => n + 1)
+          }}
+        />
+      )}
+      {approving !== null && admin && mayPublish && !migration && (
+        <ApproveAndPublishDialog
+          workspace={space.workspace_id}
+          base={base}
+          space={space}
+          slots={toApprove}
+          onClose={() => {
+            if (busy) return
+            setApproving(null)
+            setRefocus((n) => n + 1)
+          }}
+          onApproval={(slot) => {
+            // Kept here, not in the dialog: an approval made by a dialog that was closed meanwhile (the
+            // draft changed under it) still stands, and the notice must say so.
+            setGranted((g) => (g.includes(slot) ? g : [...g, slot]))
+            slots.reload()
+          }}
+          onFailed={(done) => {
+            slots.reload()
+            setGranted(done)
+          }}
+          onContractChanged={(done) => {
+            // What the admin approved is not what the draft asks now: nothing is published, the app and
+            // its slots are read again, and the person reviews it anew.
+            setApproving(null)
+            setMoved(true)
+            setGranted(done)
+            onChanged()
+            slots.reload()
+            setRefocus((n) => n + 1)
+          }}
+          onApproved={async (done) => {
+            const version = approving
+            slots.reload()
+            // The draft changed while the approvals were made: the step was closed and said so, and the
+            // version it started on is not published.
+            if (current.current !== version) {
+              setGranted(done)
+              return null
+            }
+            // Said from here on, whatever the publish does: refused, waiting for the schema changes to be
+            // acknowledged or done (which clears it).
+            setGranted(done)
+            const refused = await run(version, [])
+            slots.reload()
+            if (refused !== null) return refused
+            setApproving(null)
+            return null
           }}
         />
       )}

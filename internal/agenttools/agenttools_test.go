@@ -17,6 +17,7 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/providers"
 	"taskto.ai/taskto/internal/search"
@@ -65,7 +66,7 @@ func newWorld(t *testing.T) *world {
 	appSvc := apps.New(sqlDB, checker)
 	w := &world{t: t, db: sqlDB, kb: kb, apps: appSvc, tools: New(Options{
 		DB: sqlDB, Key: key, Access: checker, Boards: boards.New(sqlDB, checker), Apps: appSvc,
-		Knowledge: kb, Search: index,
+		Knowledge: kb, Search: index, Integrations: integrations.NewStore(sqlDB, key),
 	})}
 	w.alice = w.insert(`INSERT INTO users (email, name, password_hash) VALUES ('alice@example.com', 'Alice', 'x') RETURNING id`)
 	w.bob = w.insert(`INSERT INTO users (email, name, password_hash) VALUES ('bob@example.com', 'Bob', 'x') RETURNING id`)
