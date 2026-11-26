@@ -367,7 +367,8 @@ func (w *Worker) birthMark(user int64) string {
 }
 
 // born is when the worker first acted for user, if it recorded that. A record whose time can't be
-// read (a crash as it was written) is dated by the file's own time.
+// read (a crash as it was written) is dated by the file's own time, with the file system clock's
+// slack (fsClockSlack).
 func (w *Worker) born(user int64) (time.Time, bool) {
 	b, err := os.ReadFile(w.birthMark(user))
 	if err != nil {
@@ -380,7 +381,7 @@ func (w *Worker) born(user int64) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
-	return info.ModTime(), true
+	return info.ModTime().Add(fsClockSlack), true
 }
 
 // noteBirth records, before the worker first acts for user, that it does now. It is the worker's

@@ -328,12 +328,21 @@ func TestReconcileKeepsADirectoryMadeJustAfterItsAccount(t *testing.T) {
 	// 2's directory is from before the worker kept records, its time as far behind.
 	file2 := mine(t, h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true))
 	setTime(t, h.layout.User(2).Root, lag)
+	// 3's record lost its time (a crash as it was written), and the file's is as far behind.
+	file3 := mine(t, h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true))
+	if _, err := h.w.Status(ctx, 3, cliworker.Claude, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.w.BirthMarkForTest(3), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setTime(t, h.w.BirthMarkForTest(3), lag)
 
-	census := cliworker.Census{Live: []int64{1, 2}, Created: map[int64]time.Time{1: created, 2: created}, Next: 3, Before: time.Now()}
+	census := cliworker.Census{Live: []int64{1, 2, 3}, Created: map[int64]time.Time{1: created, 2: created, 3: created}, Next: 4, Before: time.Now()}
 	if err := h.w.Reconcile(ctx, census); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{file, file2} {
+	for _, f := range []string{file, file2, file3} {
 		if _, err := os.Stat(f); err != nil {
 			t.Errorf("a live person's file went: %v", err)
 		}
