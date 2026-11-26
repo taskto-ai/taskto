@@ -686,6 +686,15 @@ func TestPurgeConversationDoesNotStopTheSidecarWhileItWaits(t *testing.T) {
 	if took := time.Since(probed); took > 120*time.Millisecond {
 		t.Errorf("the sidecar took %v to answer while a purge waited: the purge holds the thread that serves it", took)
 	}
+	// A write of the harness's own (a new conversation) goes through while the purge waits: the
+	// checkpoint holds the database's write lock only for short attempts, not for the whole wait.
+	wrote := time.Now()
+	if _, err := s.client.CreateConversation(ctx); err != nil {
+		t.Fatalf("a write while the purge waited: %v", err)
+	}
+	if took := time.Since(wrote); took > 200*time.Millisecond {
+		t.Errorf("a write took %v while a purge waited on a reader: the purge holds the write lock", took)
+	}
 	select {
 	case err := <-purged:
 		t.Fatalf("fixture: the purge ended after %v, with %v, before the sidecar was probed", time.Since(started), err)

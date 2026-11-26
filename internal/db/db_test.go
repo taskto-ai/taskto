@@ -975,23 +975,31 @@ func TestAppAttachmentsKeepTheirAppFieldAndUploader(t *testing.T) {
 }
 
 // The record of CLI workers marks a database that had users before it as 'unknown' (a container
-// worker may have run), and one with none as clean: the purge of a deleted account closes its CLI
-// step only for the second.
+// worker may have run), also when the last account was purged since, and one that never had any as
+// clean: the purge of a deleted account closes its CLI step only for the second.
 func TestCLIWorkerHistoryMigrationMarksOlderDatabasesUnknown(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name  string
-		users bool
+		setup []string
 		want  []string
-	}{{"a database with users", true, []string{"unknown"}}, {"a new database", false, nil}} {
+	}{
+		{"a database with users", []string{`INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')`}, []string{"unknown"}},
+		{"a database whose last account was purged", []string{
+			`INSERT INTO users (id, email, name, password_hash) VALUES (7, 'a@example.com', 'A', 'x')`,
+			`DELETE FROM users WHERE id = 7`}, []string{"unknown"}},
+		{"a database with a purge step still recorded", []string{
+			`INSERT INTO purge_cleanups (user_id, kind, target) VALUES (9, 'cli_home', '9')`}, []string{"unknown"}},
+		{"a new database", nil, nil},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
 			if _, err := migrate(ctx, sqlDB, migrationsBefore(t, "_cli_worker_history.sql")); err != nil {
 				t.Fatal(err)
 			}
-			if tc.users {
-				if _, err := sqlDB.ExecContext(ctx, `INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')`); err != nil {
-					t.Fatal(err)
+			for _, q := range tc.setup {
+				if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+					t.Fatalf("%s: %v", q, err)
 				}
 			}
 			if _, err := Migrate(ctx, sqlDB); err != nil {

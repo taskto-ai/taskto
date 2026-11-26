@@ -14,4 +14,9 @@ CREATE TABLE cli_worker_history (
     first_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ) STRICT;
 
-INSERT INTO cli_worker_history (worker) SELECT 'unknown' WHERE EXISTS (SELECT 1 FROM users);
+-- 'Had users' is any trace of one: an account (user_ids keeps the highest id ever given, so it shows
+-- an account that was purged too) or a purge step still recorded for one.
+INSERT INTO cli_worker_history (worker)
+    SELECT 'unknown' WHERE EXISTS (SELECT 1 FROM users)
+        OR coalesce((SELECT high FROM user_ids WHERE id = 1), 0) > 0
+        OR EXISTS (SELECT 1 FROM purge_cleanups);

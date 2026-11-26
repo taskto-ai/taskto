@@ -7,7 +7,7 @@
 
 import { DatabaseSync } from 'node:sqlite'
 import { Worker } from 'node:worker_threads'
-import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
+import { truncateWalAt, truncateWalWithin, WalBusyError } from './wal.js'
 
 // Deletes a conversation's records, and those of the conversations its tasks started, from the
 // database: its entries (what was said), tasks, submissions and documents with their revisions.
@@ -66,7 +66,7 @@ export function purgeRecords(dbPath: string, root: number, walBusyMs: number): v
     }
     // What was deleted is still in the log until it is truncated, and a reader (the harness's, or a
     // watch) can hold it up: then the purge isn't done, and the server asks again.
-    truncateWal(db)
+    truncateWalWithin(db, walBusyMs)
   } finally {
     db.close()
   }
