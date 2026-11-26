@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const isolationSupported = true
@@ -25,8 +28,6 @@ type isolationState struct {
 }
 
 // uid is user's uid.
-func (iso *Isolation) uid(user int64) int { return iso.UIDBase + int(user) } //nolint:gosec // callers check maxIsolatedUser
-
 // asUser makes cmd run as user's own Unix user, creating it first. Without isolation it
 // does nothing.
 func (w *Worker) asUser(cmd *exec.Cmd, user int64) error {
@@ -34,27 +35,27 @@ func (w *Worker) asUser(cmd *exec.Cmd, user int64) error {
 	if iso == nil {
 		return nil
 	}
-	if user <= 0 || user >= maxIsolatedUser {
-		return fmt.Errorf("user %d can't have a Unix user", user)
-	}
-	if err := w.ensureUser(user); err != nil {
+	uid, err := iso.uidOf(user)
+	if err != nil {
 		return err
 	}
-	id := uint32(iso.uid(user)) //nolint:gosec // bounded by maxIsolatedUser
+	if err := w.ensureUser(user, uid); err != nil {
+		return err
+	}
+	id := uint32(uid) //nolint:gosec // below maxUID: uidOf, and New's check of UIDBase
 	cmd.SysProcAttr.Credential = &syscall.Credential{Uid: id, Gid: id, Groups: []uint32{}}
 	return nil
 }
 
 // ensureUser adds user's Unix user and group if they aren't there, and creates their
 // directory, owned by them. It refuses a directory that is a symlink or someone else's.
-func (w *Worker) ensureUser(user int64) error {
+func (w *Worker) ensureUser(user int64, uid int) error {
 	iso := w.cfg.Isolation
 	iso.state.mu.Lock()
 	defer iso.state.mu.Unlock()
 	if iso.state.known[user] {
 		return nil
 	}
-	uid := iso.uid(user)
 	dirs := w.cfg.Layout.User(user)
 	name := "tt" + strconv.FormatInt(user, 10)
 	if err := addLine(iso.UserFile, name, uid, fmt.Sprintf("%s:x:%d:%d:TaskTo user %d:%s:/bin/sh", name, uid, uid, user, dirs.Home)); err != nil {
@@ -101,23 +102,28 @@ func (w *Worker) dropUnixUser(user int64) {
 	delete(iso.state.known, user)
 }
 
+// procRoot is where the processes are listed (a test's own, in tests).
+var procRoot = "/proc"
+
 // killUID kills every process of uid and waits until none is left (a zombie, killed and waiting to
-// be reaped, holds nothing and doesn't count), for at most wait (3 s if it isn't positive): a
-// process a CLI detached into a group or session of its own is one of them. ErrBusy if one is still
-// there after it.
+// be reaped, holds nothing and doesn't count), for at most wait: a process a CLI detached into a
+// group or session of its own is one of them. ErrBusy if one is still there after it. Only a full
+// look at the processes says none is left: one that can't be made, or a process whose state can't
+// be read, is an error.
 func killUID(uid int, wait time.Duration) error {
-	if wait <= 0 {
-		wait = 3 * time.Second
-	}
 	deadline := time.Now().Add(wait)
 	for {
-		left := 0
-		for _, pid := range uidProcesses(uid) {
-			left++
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		pids, err := uidProcesses(uid)
+		if err != nil {
+			return err
 		}
-		if left == 0 {
+		if len(pids) == 0 {
 			return nil
+		}
+		for _, pid := range pids {
+			if err := killIfUID(pid, uid); err != nil {
+				return err
+			}
 		}
 		if time.Now().After(deadline) {
 			return ErrBusy
@@ -126,37 +132,96 @@ func killUID(uid int, wait time.Duration) error {
 	}
 }
 
-// uidProcesses lists the processes whose real uid is uid, apart from zombies.
-func uidProcesses(uid int) []int {
-	entries, err := os.ReadDir("/proc")
+// uidProcesses lists the processes whose real uid is uid, apart from zombies, PID 1 and the worker.
+func uidProcesses(uid int) ([]int, error) {
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("listing the processes: %w", err)
 	}
+	self := os.Getpid()
 	var out []int
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid <= 1 {
+		if err != nil || pid <= 1 || pid == self {
 			continue
 		}
-		b, err := os.ReadFile("/proc/" + e.Name() + "/status") //nolint:gosec // G304: a /proc path
+		owner, zombie, err := procStatus(pid)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			continue // it ended
+		}
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("reading process %d: %w", pid, err)
 		}
-		zombie, mine := false, false
-		for _, line := range strings.Split(string(b), "\n") {
-			if rest, ok := strings.CutPrefix(line, "State:"); ok {
-				zombie = strings.HasPrefix(strings.TrimSpace(rest), "Z")
-			}
-			if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
-				fields := strings.Fields(rest)
-				mine = len(fields) > 0 && fields[0] == strconv.Itoa(uid)
-			}
-		}
-		if mine && !zombie {
+		if owner == uid && !zombie {
 			out = append(out, pid)
 		}
 	}
-	return out
+	return out, nil
+}
+
+// procStatus is pid's real uid and whether it is a zombie.
+func procStatus(pid int) (uid int, zombie bool, err error) {
+	b, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"))
+	if err != nil {
+		return 0, false, err
+	}
+	uid = -1
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "State:"); ok {
+			zombie = strings.HasPrefix(strings.TrimSpace(rest), "Z")
+		}
+		if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				if uid, err = strconv.Atoi(fields[0]); err != nil {
+					return 0, false, fmt.Errorf("a status with no uid: %w", err)
+				}
+			}
+		}
+	}
+	if uid < 0 {
+		return 0, false, errors.New("a status with no uid")
+	}
+	return uid, zombie, nil
+}
+
+// killIfUID kills pid only while it is a process of uid. It takes a pidfd, a reference to the
+// process that a pid given again can't take over, reads the uid, and checks through the reference
+// that the process still runs (a pid isn't given again while its process runs, so what was read is
+// that process's) before it signals it through the reference. On a kernel without pidfds (before
+// 5.3) the pid is signalled after its uid is read again.
+func killIfUID(pid, uid int) error {
+	fd, err := unix.PidfdOpen(pid, 0)
+	switch {
+	case errors.Is(err, unix.ESRCH):
+		return nil
+	case errors.Is(err, unix.ENOSYS):
+		if owner, zombie, err := procStatus(pid); err == nil && owner == uid && !zombie {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("opening process %d: %w", pid, err)
+	}
+	defer unix.Close(fd)
+	owner, zombie, err := procStatus(pid)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading process %d: %w", pid, err)
+	}
+	if err := unix.PidfdSendSignal(fd, 0, nil, 0); errors.Is(err, unix.ESRCH) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("checking process %d: %w", pid, err)
+	}
+	if owner != uid || zombie {
+		return nil
+	}
+	if err := unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+		return fmt.Errorf("killing process %d: %w", pid, err)
+	}
+	return nil
 }
 
 // addLine appends line to the account file path unless the entry is there: one with name and

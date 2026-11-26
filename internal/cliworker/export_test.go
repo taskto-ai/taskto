@@ -73,3 +73,19 @@ func (w *Worker) GroupsForTest() int {
 	defer w.mu.Unlock()
 	return len(w.groups)
 }
+
+// MaxUIDForTest is the uid every user's uid stays below.
+const MaxUIDForTest = maxUID
+
+// SetDialHookForTest has f run in a live view's dial between its admission and its helper.
+func (w *Worker) SetDialHookForTest(f func()) { w.dialHookForTest = f }
+
+// HelpersBuiltForTest is how many helpers passed every check to be built.
+func (w *Worker) HelpersBuiltForTest() int64 { return w.helpersBuilt.Load() }
+
+// GatedForTest reports whether a removal of all of user's accounts has closed their gate.
+func (w *Worker) GatedForTest(user int64) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.gated(user, "", "")
+}

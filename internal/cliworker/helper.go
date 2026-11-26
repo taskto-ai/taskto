@@ -245,7 +245,15 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 	// introduced, so whose directory has no owner recorded (owner.go). The browser's removal is a
 	// purge's step, which may come after the user was forgotten; it checks the owner itself, under
 	// the user's gate (browserHost.PurgeOwned).
+	// And none while their whole directory is being removed: a removal's own steps make no helper,
+	// apart from the browser's removal, which runs under the gate it holds (browserHost.Hold).
 	if req.Op != "browser-purge" {
+		w.mu.Lock()
+		removing := w.gated(user, "", "")
+		w.mu.Unlock()
+		if removing {
+			return nil, nil, ErrRemoving
+		}
 		if w.isForgotten(user) {
 			return nil, nil, ErrForgotten
 		}
@@ -253,6 +261,7 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 			return nil, nil, ErrUnknownOwner
 		}
 	}
+	w.helpersBuilt.Add(1)
 	req.LayoutRoot, req.User = w.cfg.Layout.Root, user
 	if req.Path == "" {
 		req.Path = w.cfg.Path

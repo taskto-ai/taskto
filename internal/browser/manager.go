@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // Host starts a browser's processes for a user: as the server's own OS user (LocalHost), or
@@ -52,13 +54,20 @@ type Config struct {
 	Allow func(user int64) error
 }
 
-// OwnedHost is a Host that knows who owns a user's directory (the CLI worker's): Forget then
-// removes the profile only while the directory's owner is still the one it began with, since a
-// restore may give the number to someone else meanwhile.
+// OwnedHost is a Host that knows who owns a user's directory (the CLI worker's). Forget then does
+// everything under Hold: nothing of the number changes owner meanwhile, and nothing is done once
+// the directory is another account's (ErrNotTheOwner), since a restore may give the number to
+// someone else.
 type OwnedHost interface {
+	// Owner is the identity recorded as the owner of user's directory, "" for none.
 	Owner(user int64) (string, error)
-	PurgeOwned(user int64, owner string) error
+	// Hold keeps user's directory from changing owner until release is called, and is
+	// ErrNotTheOwner when it is recorded as another account's than owner.
+	Hold(ctx context.Context, user int64, owner string) (release func(), err error)
 }
+
+// ErrNotTheOwner is Hold's answer when the user's directory is another account's.
+var ErrNotTheOwner = errors.New("the user's directory belongs to another account")
 
 // allowed asks Config.Allow about user.
 func (m *Manager) allowed(user int64) error {
@@ -238,14 +247,26 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return badf("invalid user")
 	}
-	// Who owns the directory as the purge begins: the profile removed is that owner's only.
-	owned, isOwned := m.cfg.Host.(OwnedHost)
-	var owner string
-	if isOwned {
-		var err error
-		if owner, err = owned.Owner(user); err != nil {
-			return fmt.Errorf("reading who owns the browser files: %w", err)
+	// With a host that knows owners, all of it under Hold, for the account the call is meant for
+	// (internal/cliowner), or else the one that owns the directory now.
+	if owned, ok := m.cfg.Host.(OwnedHost); ok {
+		want, named := cliowner.From(ctx)
+		if !named {
+			var err error
+			if want, err = owned.Owner(user); err != nil {
+				return fmt.Errorf("reading who owns the browser files: %w", err)
+			}
 		}
+		release, err := owned.Hold(ctx, user, want)
+		if errors.Is(err, ErrNotTheOwner) {
+			return nil // nothing of that account's is left under the number
+		}
+		if err != nil {
+			return err
+		}
+		defer release()
+	} else if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := m.stopAll(ctx, user, true); err != nil {
 		return err
@@ -253,11 +274,7 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 	if m.cfg.Host == nil {
 		return nil
 	}
-	purge := func() error { return m.cfg.Host.Purge(user) }
-	if isOwned {
-		purge = func() error { return owned.PurgeOwned(user, owner) }
-	}
-	if err := purge(); err != nil {
+	if err := m.cfg.Host.Purge(user); err != nil {
 		return fmt.Errorf("removing the browser files: %w", err)
 	}
 	return nil

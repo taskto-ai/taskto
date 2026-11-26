@@ -49,15 +49,19 @@ func (l localWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	return t, attached, nil
 }
 
-func (l localWorker) FindTurn(id string) (Turn, bool) {
+func (l localWorker) FindTurn(user int64, id string) (Turn, bool) {
 	t, ok := l.Turn(id)
-	if !ok {
+	if !ok || t.Spec().User != user {
 		return nil, false
 	}
 	return t, true
 }
 
-func (l localWorker) StopTurn(id string) { l.Stop(id) }
+func (l localWorker) StopTurn(user int64, id string) {
+	if t, ok := l.Turn(id); ok && t.Spec().User == user {
+		l.Stop(id)
+	}
+}
 
 // Authorizer says whom a request on the tools socket is for (agenttools.Service.Authorize).
 type Authorizer func(*http.Request) (conversations.Principal, error)
@@ -79,7 +83,11 @@ func (s *Service) authorized(authorize Authorizer, h principalHandler) http.Hand
 		var refusal *agenttools.Refusal
 		switch {
 		case errors.As(err, &refusal):
-			writeError(w, refusal.Status, refusalCode(refusal.Status), refusal.Message)
+			code := refusal.Code
+			if code == "" {
+				code = refusalCode(refusal.Status)
+			}
+			writeError(w, refusal.Status, code, refusal.Message)
 			return
 		case err != nil:
 			serverError(w, r, err)
@@ -158,7 +166,10 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		serverError(w, r, err)
 		return
 	}
-	if !s.worker.Available(req.CLI) {
+	if ok, err := s.cliAvailable(req.CLI); err != nil {
+		workerError(w, r, ref{cli: req.CLI}, err) // the stream hasn't started
+		return
+	} else if !ok {
 		fail(cliworker.StatusFailed, req.CLI.Name()+" is not installed on this server")
 		return
 	}
@@ -166,7 +177,7 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 
 	// A turn the worker still has is read from its start, with the turns it switched to: the
 	// CLIs run once.
-	if t, ok := s.worker.FindTurn(id); ok {
+	if t, ok := s.worker.FindTurn(p.User, id); ok {
 		// The ID names the conversation; its spec must be this conversation's owner's too,
 		// as for a stop (a conversation's owner never changes, but the check is cheap).
 		if sp := t.Spec(); sp.User != p.User || sp.Conversation != p.Conversation || sp.CLI != req.CLI {
@@ -219,6 +230,10 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 			"check before you repeat anything. Continue the task:\n\n"
 	}
 	t, err := s.start(r.Context(), p, req, id, c, note)
+	if err != nil && !out.started && (errors.Is(err, cliworker.ErrUnreachable) || errors.Is(err, ErrNotReady)) {
+		workerError(w, r, ref{cli: req.CLI}, err) // an outage keeps its code while nothing was streamed
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "cli turn: the worker refused it", "conversation", p.Conversation, "cli", c.cli(), "err", err)
 		fail(cliworker.StatusFailed, "the CLI worker refused the turn: "+err.Error())
@@ -363,7 +378,7 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 			return // the client left: the rest is recorded in the background
 		}
 		nextID := chainID(id, n+1)
-		next, found := s.worker.FindTurn(nextID)
+		next, found := s.worker.FindTurn(p.User, nextID)
 		notice := s.switchNotice(nextID)
 		if !found && n < maxSwitches {
 			next, notice = s.switchAfter(ctx, out, p, req, t, res, id, nextID, tried)
@@ -518,7 +533,7 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 	}
 	if s.isStopped(id) {
 		// The user stopped the turn while this one started: it stops too, and the chain ends.
-		s.worker.StopTurn(nextID)
+		s.worker.StopTurn(p.User, nextID)
 	}
 	notice := fmt.Sprintf("%s %s: continuing on %s", from, why, next.title())
 	s.mu.Lock()
@@ -733,12 +748,12 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request, p conversat
 	// Every place in the chain is looked at: an earlier turn may be gone from the worker
 	// while a later one runs.
 	for n := 0; n <= maxSwitches; n++ {
-		t, ok := s.worker.FindTurn(chainID(id, n))
+		t, ok := s.worker.FindTurn(p.User, chainID(id, n))
 		if !ok {
 			continue
 		}
 		if t.Spec().User == p.User && t.Spec().Conversation == p.Conversation {
-			s.worker.StopTurn(chainID(id, n))
+			s.worker.StopTurn(p.User, chainID(id, n))
 			slog.InfoContext(r.Context(), "cli turn stopped", "conversation", p.Conversation, "turn", chainID(id, n))
 		}
 	}

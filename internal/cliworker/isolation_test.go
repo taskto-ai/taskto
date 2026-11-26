@@ -308,7 +308,7 @@ func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 // process from it up.
 func TestIsolationRefusesALowUIDBase(t *testing.T) {
 	h := newIsolated(t)
-	for _, base := range []int{-1, 1, 1000, 65534} {
+	for _, base := range []int{-1, 1, 1000, 65534, cliworker.MaxUIDForTest - (1 << 30)} {
 		cfg := h.cfg
 		cfg.Isolation = &cliworker.Isolation{UIDBase: base, UserFile: h.cfg.Isolation.UserFile, Group: h.cfg.Isolation.Group}
 		if _, err := cliworker.New(cfg); err == nil || !strings.Contains(err.Error(), "first uid") {

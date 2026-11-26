@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // Browsers is the users' browsers as the server uses them: a Manager in this process (local
@@ -120,7 +122,14 @@ func NewHandler(m *Manager) http.Handler {
 		}
 	}))
 	mux.HandleFunc("POST /browser/users/{user}/forget", user(func(w http.ResponseWriter, r *http.Request, id int64) {
-		if err := m.Forget(r.Context(), id); err != nil {
+		var req struct {
+			// Identity is the account the call is meant for (internal/cliowner), if known.
+			Identity string `json:"identity,omitempty"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := m.Forget(cliowner.With(r.Context(), req.Identity), id); err != nil {
 			refuse(w, err)
 			return
 		}
@@ -277,7 +286,7 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("the CLI worker is unreachable: %w", err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
@@ -351,9 +360,17 @@ func (c *Remote) Stop(ctx context.Context, user int64, kind Kind) error {
 	return c.do(ctx, http.MethodPost, userPath(user, "/stop"), map[string]Kind{"browser": kind}, nil)
 }
 
+// ErrUnreachable is a Remote's answer when the CLI worker, where the browsers run, can't be
+// reached.
+var ErrUnreachable = errors.New("the CLI worker is unreachable")
+
 // Forget implements Browsers.
 func (c *Remote) Forget(ctx context.Context, user int64) error {
-	return c.do(ctx, http.MethodPost, userPath(user, "/forget"), struct{}{}, nil)
+	body := map[string]string{}
+	if id, ok := cliowner.From(ctx); ok {
+		body["identity"] = id
+	}
+	return c.do(ctx, http.MethodPost, userPath(user, "/forget"), body, nil)
 }
 
 // Do implements Browsers.
@@ -369,7 +386,7 @@ func (c *Remote) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser, 
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.socket)
 	if err != nil {
-		return nil, fmt.Errorf("the CLI worker is unreachable: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://cli-worker"+userPath(user, "/live"), nil)
 	if err != nil {

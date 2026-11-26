@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/browser"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -133,11 +134,12 @@ func TestReconcileKeepsADirectoryOnlyForItsOwner(t *testing.T) {
 	}
 
 	c := census(5, map[int64]string{2: strings.Repeat("e", 32)}, 1, 2, 4)
+	c.AdoptUnowned = true // local mode
 	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 
-	// 1: the live account's own. 4: from before owners, adopted (no restore). 5: from next up,
+	// 1: the live account's own. 4: from before owners, adopted (local mode). 5: from next up,
 	// introduced by this server since it read its database.
 	kept, removed := []int64{1, 4, 5}, []int64{2, 3, 6, 7}
 	for _, user := range kept {
@@ -202,16 +204,17 @@ func TestReconcileKeepsADirectoryOnlyForItsOwner(t *testing.T) {
 	}
 }
 
-// After a restore, a directory from before owners were recorded can't be told from another
-// history's: it is removed, never handed to the live account of its number, which starts afresh.
-// Without a restore it is that account's, and adopted.
-func TestReconcileNeverHandsOverADirectoryWithNoOwnerAfterARestore(t *testing.T) {
-	for _, restored := range []bool{true, false} {
+// A directory from before owners were recorded can't be told from another history's where the
+// worker's directories aren't in the server's backups (container mode): it is removed, never handed
+// to the live account of its number, which starts afresh. Where they are (local mode), it is that
+// account's, and adopted.
+func TestReconcileAdoptsADirectoryWithNoOwnerOnlyWhenTold(t *testing.T) {
+	for _, adopt := range []bool{false, true} {
 		h := newHarness(t, nil)
 		ctx := context.Background()
 		file := legacy(t, h, 1)
 		c := census(2, nil, 1)
-		c.Restored = restored
+		c.AdoptUnowned = adopt
 		if err := h.w.Reconcile(ctx, c); err != nil {
 			t.Fatal(err)
 		}
@@ -223,11 +226,11 @@ func TestReconcileNeverHandsOverADirectoryWithNoOwnerAfterARestore(t *testing.T)
 			t.Fatal(err)
 		}
 		_, ferr := os.Stat(file)
-		if restored && (st.LoggedIn || !errors.Is(ferr, fs.ErrNotExist)) {
-			t.Errorf("after a restore the live account was given a directory with no owner: signed in %v, file %v", st.LoggedIn, ferr)
+		if !adopt && (st.LoggedIn || !errors.Is(ferr, fs.ErrNotExist)) {
+			t.Errorf("the live account was given a directory with no owner: signed in %v, file %v", st.LoggedIn, ferr)
 		}
-		if !restored && (!st.LoggedIn || ferr != nil) {
-			t.Errorf("with no restore the live account lost its own directory: signed in %v, file %v", st.LoggedIn, ferr)
+		if adopt && (!st.LoggedIn || ferr != nil) {
+			t.Errorf("told to adopt, the live account lost its own directory: signed in %v, file %v", st.LoggedIn, ferr)
 		}
 	}
 }
@@ -429,23 +432,21 @@ func TestRemoteReconcileTakesALargeCensus(t *testing.T) {
 	}
 }
 
-// A deleted account's browser purge that began before a restore gave its number to someone else
-// never reaches the new account's files: it runs under the number's gate, and only while the
-// directory's owner is the one it began with. With the directory already gone, it is done.
-func TestABrowserPurgeNeverReachesTheNumbersNextOwner(t *testing.T) {
+// A deleted account's purge that comes late, after a restore gave the number to another account,
+// reaches nothing of that account: neither its files, its CLIs nor its browsers, which aren't
+// refused. The purge names the account it is for (cliowner), and the worker checks it under the
+// number's gate. A purge for the account that owns the number still removes its files, and nothing
+// is done or marked for a caller that has given up.
+func TestALatePurgeNeverReachesTheNumbersNextOwner(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
-	host := h.w.BrowserHost(nil)
-	owned, ok := host.(browser.OwnedHost)
-	if !ok {
-		t.Fatal("the worker's browser host doesn't check owners")
-	}
+	m := browser.NewManager(browser.Config{Host: h.w.BrowserHost(nil), Allow: h.w.BrowserAllowed})
+	t.Cleanup(m.Close)
+	h.w.SetBrowsers(m)
 	h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true)
-	began, err := owned.Owner(3) // the purge of the deleted account begins
-	if err != nil || began != cliworker.IdentityForTest(3) {
-		t.Fatalf("owner = %q %v", began, err)
-	}
-	// Meanwhile a restore gave 3 to another account, which made a browser profile.
+	deleted := cliworker.IdentityForTest(3)
+
+	// A restore gave 3 to another account, which signed in and made a browser profile.
 	next := strings.Repeat("a", 32)
 	if err := h.w.Reconcile(ctx, census(4, map[int64]string{3: next}, 3)); err != nil {
 		t.Fatal(err)
@@ -453,6 +454,11 @@ func TestABrowserPurgeNeverReachesTheNumbersNextOwner(t *testing.T) {
 	if err := h.w.Introduce(ctx, 3, next, cliworker.TestBoot); err != nil {
 		t.Fatal(err)
 	}
+	dirs, err := h.layout.Ensure(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
 	profile := filepath.Join(h.layout.BrowserPaths(3).Root, "personal", "Cookies")
 	if err := os.MkdirAll(filepath.Dir(profile), 0o700); err != nil {
 		t.Fatal(err)
@@ -460,24 +466,48 @@ func TestABrowserPurgeNeverReachesTheNumbersNextOwner(t *testing.T) {
 	if err := os.WriteFile(profile, []byte("the new account's"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := owned.PurgeOwned(3, began); err != nil {
+
+	// The deleted account's purge comes now: its browser step, then its CLI step.
+	late := cliowner.With(ctx, deleted)
+	if err := m.Forget(late, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Forget(late, 3); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(profile); err != nil {
-		t.Errorf("the old account's purge removed the new account's profile: %v", err)
+		t.Errorf("the late purge removed the new account's profile: %v", err)
 	}
-	// The new account's own purge removes it.
-	if err := owned.PurgeOwned(3, next); err != nil {
+	if st, err := h.w.Status(ctx, 3, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Errorf("the new account after the late purge: %+v %v", st, err)
+	}
+	if _, err := m.Do(ctx, 3, browser.Action{Op: browser.OpTabs, Browser: browser.Personal}); err != nil {
+		t.Errorf("the new account's browser is refused after the late purge: %v", err)
+	}
+
+	// A caller that has given up does nothing, and marks nothing.
+	cancelled, cancel := context.WithCancel(cliowner.With(ctx, next))
+	cancel()
+	if err := h.w.Forget(cancelled, 3); err == nil {
+		t.Error("a cancelled Forget reported done")
+	}
+	if err := m.Forget(cancelled, 3); err == nil {
+		t.Error("a cancelled browser purge reported done")
+	}
+	if _, err := h.w.Status(ctx, 3, cliworker.Claude, ""); err != nil {
+		t.Errorf("a cancelled Forget marked the account: %v", err)
+	}
+	if _, err := m.Do(ctx, 3, browser.Action{Op: browser.OpTabs, Browser: browser.Personal}); err != nil {
+		t.Errorf("a cancelled browser purge refused the account: %v", err)
+	}
+
+	// The account's own purge removes its files.
+	if err := m.Forget(cliowner.With(ctx, next), 3); err != nil {
 		t.Fatal(err)
 	}
 	gone(t, h.layout.BrowserPaths(3).Root)
-
-	// A number whose directory went is done, and nothing is made again.
-	if err := h.w.Forget(ctx, 3); err != nil {
+	if err := h.w.Forget(cliowner.With(ctx, next), 3); err != nil {
 		t.Fatal(err)
-	}
-	if err := owned.PurgeOwned(3, next); err != nil {
-		t.Errorf("the purge's browser step after the directory went: %v", err)
 	}
 	gone(t, h.layout.User(3).Root)
 }
@@ -500,4 +530,34 @@ func TestAnEndedTurnsGroupIsNotListed(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// A live view's dial that is on its way when a removal of the user's directory begins starts no
+// helper: it is registered from its first step, so the removal cancels it and waits for it before
+// the files go, and no helper is made while the removal runs.
+func TestALiveViewDialDuringARemovalStartsNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.user(t, 4, cliworker.Claude, clitest.Scenario{}, true)
+	host := h.w.BrowserHost(nil)
+	removed := make(chan error, 1)
+	var built int64
+	h.w.SetDialHookForTest(func() {
+		built = h.w.HelpersBuiltForTest()
+		// A restore gave 4 to another account, introduced now: its old directory goes.
+		go func() { removed <- h.w.Introduce(ctx, 4, strings.Repeat("f", 32), cliworker.TestBoot) }()
+		for !h.w.GatedForTest(4) {
+			time.Sleep(time.Millisecond)
+		}
+	})
+	if _, err := host.DialVNC(ctx, 4); err == nil {
+		t.Fatal("a live view opened during the removal")
+	}
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	if n := h.w.HelpersBuiltForTest() - built; n != 0 {
+		t.Errorf("%d helpers were made for the dial during the removal", n)
+	}
+	gone(t, filepath.Join(h.layout.User(4).Root, "work"))
 }

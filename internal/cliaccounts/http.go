@@ -57,7 +57,10 @@ func (s *Service) withAccount(h accountHandler) http.HandlerFunc {
 			workerError(w, r, a, err)
 			return
 		}
-		if !s.worker.Available(a.cli) {
+		if ok, err := s.cliAvailable(a.cli); err != nil {
+			workerError(w, r, a, err)
+			return
+		} else if !ok {
 			writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, a.cli.Name()+" is not installed on this server",
 				apierr.Params{"cli": a.cli.Name()})
 			return
@@ -319,7 +322,7 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, err.Error(), apierr.Params{"cli": a.cli.Name()})
 	case errors.Is(err, cliworker.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerClosing, err.Error())
-	case errors.Is(err, ErrNotReady), errors.Is(err, cliworker.ErrUnknownOwner):
+	case errors.Is(err, ErrNotReady), errors.Is(err, cliworker.ErrUnknownOwner), errors.Is(err, cliworker.ErrUnreachable):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, ErrNotReady.Error())
 	case errors.Is(err, cliworker.ErrForgotten):
 		writeError(w, http.StatusGone, apierr.CodeCLIAccountForgotten, err.Error())

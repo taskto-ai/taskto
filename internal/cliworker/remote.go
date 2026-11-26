@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // In container mode the worker is its own process (`taskto cli-worker`, as root, in a
@@ -150,6 +152,8 @@ func (w *Worker) Handler() http.Handler {
 	mux.HandleFunc("POST /forget", func(rw http.ResponseWriter, r *http.Request) {
 		var req struct {
 			User int64 `json:"user"`
+			// Identity is the account the call is meant for (internal/cliowner), if known.
+			Identity string `json:"identity,omitempty"`
 		}
 		if !decodeBody(rw, r, &req) {
 			return
@@ -158,7 +162,7 @@ func (w *Worker) Handler() http.Handler {
 			refuse(rw, badRequest{errors.New("invalid user")})
 			return
 		}
-		if err := w.Forget(r.Context(), req.User); err != nil {
+		if err := w.Forget(cliowner.With(r.Context(), req.Identity), req.User); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -208,7 +212,7 @@ func (w *Worker) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /turns/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		t, ok := w.Turn(r.PathValue("id"))
-		if !ok {
+		if !ok || !turnOf(t, r) {
 			http.Error(rw, `{"error":"unknown turn"}`, http.StatusNotFound)
 			return
 		}
@@ -245,7 +249,9 @@ func (w *Worker) Handler() http.Handler {
 		reply(rw, map[string]any{"events": events, "done": done})
 	})
 	mux.HandleFunc("POST /turns/{id}/stop", func(rw http.ResponseWriter, r *http.Request) {
-		w.Stop(r.PathValue("id"))
+		if t, ok := w.Turn(r.PathValue("id")); ok && turnOf(t, r) {
+			w.Stop(r.PathValue("id"))
+		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /permissions", func(rw http.ResponseWriter, r *http.Request) {
@@ -373,7 +379,7 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("the CLI worker is unreachable: %w", err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
@@ -405,14 +411,26 @@ func quick() (context.Context, context.CancelFunc) {
 
 // Available reports whether cli is installed on the worker; false if it doesn't answer.
 func (c *Remote) Available(cli CLI) bool {
+	ok, err := c.Availability(cli)
+	if err != nil {
+		slog.Warn("cli worker: unreachable", "err", err)
+	}
+	return ok
+}
+
+// ErrUnreachable is a Remote's answer when the worker can't be reached.
+var ErrUnreachable = errors.New("the CLI worker is unreachable")
+
+// Availability reports whether cli can run on the worker, and ErrUnreachable when the worker
+// can't be asked: an outage is not a CLI that isn't installed.
+func (c *Remote) Availability(cli CLI) (bool, error) {
 	ctx, cancel := quick()
 	defer cancel()
 	var out map[CLI]bool
 	if err := c.do(ctx, http.MethodGet, "/available", nil, &out); err != nil {
-		slog.Warn("cli worker: unreachable", "err", err)
-		return false
+		return false, err
 	}
-	return out[cli]
+	return out[cli], nil
 }
 
 // StartLogin starts user's login for cli's account in slot, or returns the one in progress.
@@ -473,8 +491,13 @@ func (c *Remote) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 }
 
 // Forget removes everything the worker keeps for user, for an account that is deleted.
+// The account it is meant for goes with it when ctx carries it (internal/cliowner).
 func (c *Remote) Forget(ctx context.Context, user int64) error {
-	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
+	body := map[string]any{"user": user}
+	if id, ok := cliowner.From(ctx); ok {
+		body["identity"] = id
+	}
+	return c.do(ctx, http.MethodPost, "/forget", body, nil)
 }
 
 // Introduce tells the worker that user is the account with identity, for the server started as
@@ -503,6 +526,13 @@ func (c *Remote) StartTurn(spec TurnSpec) (*RemoteTurn, bool, error) {
 	return &RemoteTurn{c: c, spec: spec}, out.Attached, nil
 }
 
+// turnOf reports whether turn t is the user the request names (?user=): a turn of another user's
+// is none.
+func turnOf(t *Turn, r *http.Request) bool {
+	user, err := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
+	return err == nil && user > 0 && t.Spec().User == user
+}
+
 // turnInfo is a turn as GET /turns/{id} shows it: its spec, without its tokens, and whether it
 // has ended.
 type turnInfo struct {
@@ -511,21 +541,21 @@ type turnInfo struct {
 }
 
 // FindTurn returns the worker's turn with id, running or finished recently.
-func (c *Remote) FindTurn(id string) (*RemoteTurn, bool) {
+func (c *Remote) FindTurn(user int64, id string) (*RemoteTurn, bool) {
 	ctx, cancel := quick()
 	defer cancel()
 	var info turnInfo
-	if err := c.do(ctx, http.MethodGet, "/turns/"+url.PathEscape(id), nil, &info); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/turns/"+url.PathEscape(id)+"?user="+strconv.FormatInt(user, 10), nil, &info); err != nil {
 		return nil, false
 	}
 	return &RemoteTurn{c: c, spec: info.TurnSpec, over: info.Over}, true
 }
 
-// StopTurn stops the worker's turn id.
-func (c *Remote) StopTurn(id string) {
+// StopTurn stops user's turn id on the worker.
+func (c *Remote) StopTurn(user int64, id string) {
 	ctx, cancel := quick()
 	defer cancel()
-	if err := c.do(ctx, http.MethodPost, "/turns/"+url.PathEscape(id)+"/stop", nil, nil); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/turns/"+url.PathEscape(id)+"/stop?user="+strconv.FormatInt(user, 10), nil, nil); err != nil {
 		slog.Warn("cli worker: stopping a turn", "err", err)
 	}
 }

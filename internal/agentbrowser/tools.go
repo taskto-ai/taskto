@@ -13,6 +13,7 @@ import (
 	"taskto.ai/taskto/internal/agenttools"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/browser"
+	"taskto.ai/taskto/internal/cliaccounts"
 )
 
 // The browser tools (internal/agenttools/tools.json), for the conversation's owner. Every
@@ -107,12 +108,12 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 		return nil, refuse(http.StatusNotFound, "unknown tool")
 	}
 	if err := s.Usable(ctx, user); err != nil {
-		status := http.StatusConflict
 		var e *apierr.Error
 		if errors.As(err, &e) {
-			status = e.Status // the CLI worker isn't ready yet: 503, try again
+			// The CLI worker isn't ready yet: 503 with its code, and the caller tries again.
+			return nil, &agenttools.Refusal{Status: e.Status, Message: e.Msg, Code: e.Code}
 		}
-		return nil, refuse(status, "%s", err.Error())
+		return nil, refuse(http.StatusConflict, "%s", err.Error())
 	}
 	a, err := decodeArgs(name, raw)
 	if err != nil {
@@ -178,6 +179,8 @@ func toolError(ctx context.Context, name string, err error) error {
 		return refuse(http.StatusConflict, "%s", err.Error())
 	case errors.Is(err, browser.ErrUnavailable), errors.Is(err, browser.ErrBusy), errors.Is(err, browser.ErrClosed), errors.Is(err, browser.ErrNotRunning), errors.Is(err, browser.ErrAccountClosing):
 		return refuse(http.StatusServiceUnavailable, "%s", err.Error())
+	case errors.Is(err, browser.ErrUnreachable):
+		return &agenttools.Refusal{Status: http.StatusServiceUnavailable, Message: cliaccounts.ErrNotReady.Error(), Code: apierr.CodeCLIWorkerNotReady}
 	case ctx.Err() != nil:
 		return ctx.Err()
 	}

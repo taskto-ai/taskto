@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,8 +79,9 @@ type Worker interface {
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
-	FindTurn(id string) (Turn, bool)
-	StopTurn(id string)
+	// FindTurn returns user's turn id, and StopTurn stops it: a turn of another user's is none.
+	FindTurn(user int64, id string) (Turn, bool)
+	StopTurn(user int64, id string)
 
 	// Permissions lists the permission questions waiting in user's conversation, and Answer
 	// answers one (cliworker.ErrNoPermission if it isn't waiting there).
@@ -160,8 +160,8 @@ func (r remoteWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	return t, attached, nil
 }
 
-func (r remoteWorker) FindTurn(id string) (Turn, bool) {
-	t, ok := r.Remote.FindTurn(id)
+func (r remoteWorker) FindTurn(user int64, id string) (Turn, bool) {
+	t, ok := r.Remote.FindTurn(user, id)
 	if !ok {
 		return nil, false
 	}
@@ -185,8 +185,6 @@ type Service struct {
 	// the users it has introduced to the worker since it started (under mu).
 	boot       string
 	introduced map[int64]bool
-	// restoreMark is the file a restore of the data directory leaves (backup.RestoredMark), or "".
-	restoreMark string
 
 	// watching holds the logins a goroutine is following to their end, and started when each
 	// account's last login started: an account that isn't connected yet is listed while its
@@ -375,15 +373,12 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot}
-	// A restore since the worker was last told: its directories with no owner recorded may be
-	// another history's. Only in container mode: in local mode they are in the data directory,
-	// and the backup brought back the ones that go with its database.
-	if s.restoreMark != "" && s.mode == Container {
-		if _, err := os.Stat(s.restoreMark); err == nil {
-			census.Restored = true
-		}
-	}
+	// A directory with no owner recorded (from before the worker recorded owners) is adopted for
+	// the live account of its number only in local mode, where the directories are in the data
+	// directory and a backup brings back the ones that go with its database. The container
+	// worker's volume isn't in any backup, and nothing tells a restore an older version made
+	// apart from an upgrade: there it goes, and its person signs in to their CLIs again.
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot, AdoptUnowned: s.mode != Container}
 	// One transaction: the users and the next number describe the same state, or a person added
 	// in between would be neither live nor below the next number.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -427,19 +422,8 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 		s.mu.Unlock()
 		s.reconciled.Store(true)
 	}
-	if err == nil && census.Restored {
-		// Told, with everything done: no directory without an owner is left.
-		if rerr := os.Remove(s.restoreMark); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			return rerr
-		}
-	}
 	return err
 }
-
-// SetRestoreMark names the file a restore of the data directory leaves (backup.RestoredMark):
-// while it is there, the census says the data was restored, and it goes once the worker has been
-// told everything.
-func (s *Service) SetRestoreMark(path string) { s.restoreMark = path }
 
 // reconcileTimeout bounds one attempt at telling the worker: it may stop what still runs for a
 // number it removes the directory of, and waits for that.

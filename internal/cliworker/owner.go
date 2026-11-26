@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // Who a user's directory belongs to. A user number names an account only within one history of
@@ -137,6 +139,21 @@ func (w *Worker) Introduce(ctx context.Context, user int64, identity, boot strin
 		}
 	}
 	return w.setOwner(user, ownerRecord{identity: identity, boot: boot})
+}
+
+// ownedBy reports whether user's directory may be removed for the account ctx names (cliowner):
+// yes when ctx names none, or the directory has no owner recorded, or it is that account's. The
+// caller holds the user's gate.
+func (w *Worker) ownedBy(ctx context.Context, user int64) (bool, error) {
+	want, ok := cliowner.From(ctx)
+	if !ok {
+		return true, nil
+	}
+	rec, has, err := w.owner(user)
+	if err != nil {
+		return false, err
+	}
+	return !has || rec.identity == want, nil
 }
 
 func (w *Worker) hasDir(user int64) bool {

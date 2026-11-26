@@ -697,9 +697,9 @@ docker compose --profile cli up -d --build
   sessions with the conversation so far. After a restore of the server's data, the server tells
   the worker at its start which accounts exist, by an identity each account keeps for good, and the
   worker removes every directory that isn't a live account's own, so a new person given a number
-  again never gets someone else's logins ([cli-workers.md](cli-workers.md)). `taskto restore`
-  leaves `cli-worker-restored` in the data directory for this: the directories from before the
-  worker recorded owners are then removed, not handed over, and their people sign in again.
+  again never gets someone else's logins ([cli-workers.md](cli-workers.md)). The directories the
+  worker made before it recorded identities are removed, not handed over: after upgrading to the
+  version that introduced them, each person signs in to their CLIs once more.
 - The worker needs the internet to reach Anthropic, OpenAI and xAI. The server's egress
   policies don't apply to it. It reaches the internet and nothing else: it is alone on a
   network of its own (`worker`, the bridge `taskto-worker`), so the other services don't
@@ -1258,12 +1258,10 @@ them again).
 
 **The CLI worker's directories are brought in line at the next start.** The `cli-homes` volume
 isn't in the backup, so it may hold the CLI logins, files and browser profiles of people who had
-user numbers after the backup, which the restored server gives again. `taskto restore` leaves
-`cli-worker-restored` in the data directory. At its next start the server tells the worker which
-accounts exist, and the worker keeps only the directories of the live accounts whose identity it
-recorded. Everything else is removed before anyone is given the number, and so are the directories
-the worker made before it recorded identities: those people sign in to their CLIs again. Once
-that is done the server removes the file ([cli-workers.md](cli-workers.md)).
+user numbers after the backup, which the restored server gives again. At its next start the server
+tells the worker which accounts exist, and the worker keeps only the directories of the live
+accounts whose identity it recorded. Everything else is removed before anyone is given the number
+([cli-workers.md](cli-workers.md)).
 
 From an archive file:
 
@@ -1381,6 +1379,12 @@ So an upgrade can't be undone in place; the way back is the backup taken before 
 installed with [deploy/INSTALL.md](../deploy/INSTALL.md) upgrades itself every night
 ([Automatic updates](#automatic-updates)); when an upgrade fails after the new server has
 started, it stops and tells you, and the way back is the by-hand one that follows.
+
+**CLI sign-ins after the upgrade that records owners.** From the version in which the CLI worker
+records which account each user directory belongs to, a container worker no longer hands over a
+directory it made before: nothing can tell an upgrade from a restore made by an older version. So
+after that upgrade each person signs in to their CLIs once more (Settings → CLI accounts); their
+conversations go on, with new CLI sessions. In local mode the directories are kept.
 
 **Upgrade**, say from v0.1.0 to v0.2.0:
 

@@ -176,6 +176,10 @@ func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) (ended fun
 // again. A caller that must refuse a forgotten user asks isForgotten after it.
 func (w *Worker) beginGate(ctx context.Context, sc scope) (end func(), err error) {
 	for {
+		// A caller that has given up closes nothing.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		w.mu.Lock()
 		var other *gate
 		for _, o := range w.gates {

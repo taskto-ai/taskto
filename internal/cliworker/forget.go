@@ -95,6 +95,10 @@ func (w *Worker) markForgotten(user int64) error {
 // directory any more, and only then the directory, with their logins, sessions, working
 // directories and browser profile. Idempotent: a call that failed halfway (ErrBusy, say) is made
 // again, and the mark stays.
+//
+// When ctx carries the account the call is meant for (internal/cliowner, a purge's), nothing is
+// done once the number's directory is recorded as another account's: a restore gave the number to
+// someone since, and the deleted account's files went with that account's introduction.
 func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return errors.New("invalid user")
@@ -106,6 +110,13 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 		return err
 	}
 	defer end()
+	// Under the gate, so no introduction comes in between: the check holds for what follows.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if mine, err := w.ownedBy(ctx, user); err != nil || !mine {
+		return err
+	}
 	if err := w.markForgotten(user); err != nil {
 		return fmt.Errorf("recording that the user was forgotten: %w", err)
 	}
@@ -128,9 +139,11 @@ type Census struct {
 	// Boot is the server's own: a random value it takes when it starts, and introduces users
 	// with (Introduce).
 	Boot string `json:"boot"`
-	// Restored says the server's data was restored since the worker was last told who exists:
-	// a directory with no owner recorded may be another history's.
-	Restored bool `json:"restored"`
+	// AdoptUnowned says a directory with no owner recorded (from before the worker recorded
+	// owners) is the live account's of its number: in local mode, where the directories are in the
+	// server's data directory and its backups. Otherwise such a directory may be another history's
+	// (a restore, by any version, gives numbers again), and goes.
+	AdoptUnowned bool `json:"adopt_unowned"`
 	// Before is when the server read its database, for the forgotten marks: a mark made after it
 	// is a purge the census can't know of.
 	Before time.Time `json:"before"`
@@ -155,7 +168,8 @@ func (c Census) check() error {
 //
 //   - its recorded owner is the live account of its number, by identity; or
 //   - it has no owner recorded (from before the worker recorded owners), its number is live, and
-//     no restore happened since (Census.Restored): it is adopted for that account; or
+//     the census says such a directory is its account's (Census.AdoptUnowned, local mode): it is
+//     adopted for that account; or
 //   - its number is next or above and this server introduced its owner after it read its database
 //     (the record's boot is the census's): a person added since.
 //
@@ -253,7 +267,7 @@ func (w *Worker) keeps(user int64, c Census, live bool) (bool, error) {
 		return rec.identity == c.Owners[user], nil
 	case ok:
 		return user >= c.Next && rec.boot == c.Boot, nil
-	case live && !c.Restored && w.hasDir(user):
+	case live && c.AdoptUnowned && w.hasDir(user):
 		return true, w.setOwner(user, ownerRecord{identity: c.Owners[user], boot: c.Boot})
 	}
 	return false, nil

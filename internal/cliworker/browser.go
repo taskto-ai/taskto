@@ -116,10 +116,30 @@ func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 
 // DialVNC starts the helper as the user to connect to their VNC socket, and returns its
 // stdin and stdout as the stream. The helper says "ok" once it is connected.
+//
+// The connection is a helper request of the user's from its first step to its close (admit): a
+// removal of their directory that begins meanwhile cancels it, and waits until it has ended, so
+// no helper of the dial's starts, or still runs, once their files go.
 func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	if err := h.w.browserGate(user); err != nil {
+	held, release, err := h.w.admit(context.Background(), user, "", "")
+	if err != nil {
 		return nil, err
 	}
+	if hook := h.w.dialHookForTest; hook != nil {
+		hook()
+	}
+	c, err := h.dialVNC(ctx, held, user)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	c.release = release
+	// A removal's cancel closes the connection, which ends the request.
+	c.stopWatch = context.AfterFunc(held, func() { _ = c.Close() })
+	return c, nil
+}
+
+func (h *browserHost) dialVNC(ctx, held context.Context, user int64) (*helperConn, error) {
 	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser-vnc"})
 	if err != nil {
 		return nil, err
@@ -137,6 +157,12 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 	cmd.Stdout = childOut
 	stderr := &tailBuffer{max: 2 << 10}
 	cmd.Stderr = stderr
+	// Nothing starts for a request a removal has cancelled.
+	if err := held.Err(); err != nil {
+		childOut.Close()
+		stdout.Close()
+		return nil, ErrRemoving
+	}
 	err = cmd.Start()
 	childOut.Close()
 	if err != nil {
@@ -169,6 +195,10 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 			}
 			return nil, err
 		}
+	case <-held.Done():
+		// A removal of the user's directory began: the dial ends now.
+		c.Close()
+		return nil, ErrRemoving
 	case <-ctx.Done():
 		// The helper may have answered just as ctx ended: its answer wins.
 		select {
@@ -192,6 +222,10 @@ type helperConn struct {
 	out  *os.File
 	r    *bufio.Reader
 	once sync.Once
+	// release ends the helper request the connection is (DialVNC), and stopWatch its watch for a
+	// removal's cancel; both are nil before the connection is handed out.
+	release   func()
+	stopWatch func() bool
 }
 
 func (c *helperConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
@@ -204,6 +238,12 @@ func (c *helperConn) Close() error {
 		_ = c.cmd.Wait()
 		// A read still waiting ends now, with an error: the stream is over either way.
 		_ = c.out.Close()
+		if c.stopWatch != nil {
+			c.stopWatch()
+		}
+		if c.release != nil {
+			c.release()
+		}
 	})
 	return nil
 }
@@ -212,11 +252,14 @@ func (h *browserHost) Clean(user int64) error {
 	return h.quickOp(user, "browser-clean", "removing the testing profile")
 }
 
-// Purge removes the user's whole browser directory, as the user, for a deleted account, whoever
-// owns the directory now. The Manager uses PurgeOwned.
+// Purge removes the user's whole browser directory, as the user, for a deleted account. The
+// Manager calls it under Hold. With the user's directory gone (Forget, Reconcile), the browser's
+// went with it, and nothing is made again.
 func (h *browserHost) Purge(user int64) error {
-	owner, _ := h.Owner(user)
-	return h.PurgeOwned(user, owner)
+	if !h.w.hasDir(user) {
+		return nil
+	}
+	return h.quickOp(user, "browser-purge", "removing the browser's files")
 }
 
 // Owner is the identity recorded as the owner of user's directory, "" for none (owner.go).
@@ -225,24 +268,29 @@ func (h *browserHost) Owner(user int64) (string, error) {
 	return rec.identity, err
 }
 
-// PurgeOwned removes user's browser directory, as the user, for a deleted account whose directory
-// owner was owner when its purge began. It runs under the user's gate, so not beside a removal or an
-// introduction of the number, and only while the directory is still that owner's: a restore may
-// have given the number to someone else meanwhile, whose files are not the purge's. With the
-// user's directory gone (Forget, Reconcile), the browser's went with it, and nothing is made again.
-func (h *browserHost) PurgeOwned(user int64, owner string) error {
-	end, err := h.w.beginGate(context.Background(), scope{user: user, all: true})
+// Hold closes the user's gate for a deleted account's browser purge, whose account was owner, and
+// returns the function that opens it again: no removal or introduction of the number runs
+// meanwhile. It is browser.ErrNotTheOwner when the directory is recorded as another account's: a
+// restore gave the number to someone since, whose browsers and files are not the purge's.
+func (h *browserHost) Hold(ctx context.Context, user int64, owner string) (func(), error) {
+	end, err := h.w.beginGate(ctx, scope{user: user, all: true})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer end()
-	if !h.w.hasDir(user) {
-		return nil
+	if err := ctx.Err(); err != nil {
+		end()
+		return nil, err
 	}
-	if now, err := h.Owner(user); err != nil || now != owner {
-		return err
+	now, err := h.Owner(user)
+	if err != nil {
+		end()
+		return nil, err
 	}
-	return h.quickOp(user, "browser-purge", "removing the browser's files")
+	if now != "" && now != owner {
+		end()
+		return nil, browser.ErrNotTheOwner
+	}
+	return end, nil
 }
 
 // quickOp runs one of the helper's short browser ops as the user, stopping it after 30 s.

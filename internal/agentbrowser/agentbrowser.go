@@ -132,7 +132,7 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		serverError(w, r, err)
+		browserError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -329,6 +329,8 @@ func browserError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserShuttingDown, err.Error())
 	case errors.Is(err, browser.ErrAccountClosing):
 		writeError(w, http.StatusConflict, apierr.CodeBrowserAccountClosing, err.Error())
+	case errors.Is(err, browser.ErrUnreachable):
+		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())
 	default:
 		serverError(w, r, err)
 	}

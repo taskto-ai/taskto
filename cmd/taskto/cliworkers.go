@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/agenttools"
-	"taskto.ai/taskto/internal/backup"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
@@ -57,7 +56,6 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 			return nil, nil, err
 		}
 		// The worker keeps its own record of the users it forgot, apart from the backup.
-		svc.SetRestoreMark(filepath.Join(cfg.DataDir, backup.RestoredMark))
 		svc.StartReconcile()
 		return svc, func() error {
 			err := stopProxy()
@@ -105,7 +103,6 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 		worker.Close()
 		return nil, nil, err
 	}
-	svc.SetRestoreMark(filepath.Join(cfg.DataDir, backup.RestoredMark))
 	svc.StartReconcile()
 	return svc, func() error {
 		err := stopProxy()

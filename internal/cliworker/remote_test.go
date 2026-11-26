@@ -108,11 +108,15 @@ func TestRemoteWorker(t *testing.T) {
 	if _, attached, err := r.StartTurn(s); err != nil || !attached {
 		t.Fatalf("re-attach = %v %v", attached, err)
 	}
-	if found, ok := r.FindTurn("remote"); !ok || found.Spec().User != 1 {
+	if found, ok := r.FindTurn(1, "remote"); !ok || found.Spec().User != 1 {
 		t.Fatal("find")
 	}
-	if _, ok := r.FindTurn("nope"); ok {
+	if _, ok := r.FindTurn(1, "nope"); ok {
 		t.Fatal("found a turn that doesn't exist")
+	}
+	// Another user can't find it, nor stop it, knowing its ID: the worker checks whose it is.
+	if _, ok := r.FindTurn(2, "remote"); ok {
+		t.Fatal("another user found the turn")
 	}
 	other := s
 	other.User = 2
@@ -134,7 +138,12 @@ func TestRemoteWorker(t *testing.T) {
 	if _, _, err := long.Wait(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	r.StopTurn("long")
+	r.StopTurn(2, "long") // another user's stop reaches nothing
+	time.Sleep(100 * time.Millisecond)
+	if found, ok := r.FindTurn(1, "long"); !ok || found.Over() {
+		t.Fatal("another user's stop stopped the turn")
+	}
+	r.StopTurn(1, "long")
 	events = nil
 	for done := false; !done; {
 		got, d, err := long.Wait(ctx, len(events))

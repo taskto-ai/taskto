@@ -76,9 +76,13 @@ type Worker struct {
 	groups    map[int]groupRec
 	groupWait time.Duration
 	groupSeq  uint64
-	// helperLaunches counts the helpers built to run, for tests.
+	// helperLaunches counts the helpers built to run, for tests, and helpersBuilt the ones that
+	// passed every check.
 	helperLaunches atomic.Int64
-	loginRuns      map[*Login]struct{}
+	helpersBuilt   atomic.Int64
+	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
+	dialHookForTest func()
+	loginRuns       map[*Login]struct{}
 	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
 	marks sync.Mutex
 	// browsers is the agent browsers that run in this worker (SetBrowsers), or nil.
@@ -162,6 +166,10 @@ func New(cfg Config) (*Worker, error) {
 		// process from it up, so it must never reach anything but the CLI users.
 		if iso.UIDBase < minUIDBase {
 			return nil, fmt.Errorf("cliworker: the first uid must be %d or more", minUIDBase)
+		}
+		// Checked once, here: every user's uid (uidOf) is then a valid one below the 32-bit nobody.
+		if int64(iso.UIDBase)+maxIsolatedUser >= maxUID {
+			return nil, fmt.Errorf("cliworker: the first uid must be below %d", maxUID-maxIsolatedUser)
 		}
 		if iso.UserFile == "" {
 			iso.UserFile = "/etc/passwd"

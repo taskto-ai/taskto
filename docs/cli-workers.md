@@ -433,6 +433,20 @@ The UI shows what the command prints.
 
   If something doesn't end in time, nothing is removed (`ErrBusy`), and the removal can be tried
   again. A process a CLI detached is not tracked in local mode, which has no Unix user per person.
+
+  The processes of a Unix user are ended through a pidfd: the uid is read while the reference is
+  held, and the signal goes through it, so a pid given again to another process is never
+  signalled. Only a full look at the processes counts as "none left": one that can't be made, or a
+  process whose state can't be read, fails the removal. The uid range is checked once, when the
+  worker starts, and starting and ending a user's processes use the same number-to-uid rule.
+
+  While the removal's gate is closed, no helper is made for the user, and a live view's connection
+  is a request of the user's from its first step to its close: a removal cancels it and waits for
+  it, like a status check. A deleted account's purge names the account its steps are for (its
+  identity, kept with the steps when the purge began, `purge_cleanups.cli_identity`), and the
+  worker's `Forget` and the agent browsers' refusal, stop and profile removal act only under the
+  number's gate, and only while the directory isn't recorded as another account's. A caller that
+  has given up does nothing, and marks nothing.
 - **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account. It
   first records the user as forgotten in the worker's own state directory
   (`.worker/forgotten-u<user>`, so it outlives a worker's restart). That refuses every turn,
@@ -455,11 +469,10 @@ The UI shows what the command prints.
     of its number, by identity; or, for a number from the next up, when this server introduced
     its owner after it read its database (the record's boot is the census's). A directory with no
     owner recorded, from before the worker recorded owners, is adopted for the live account of its
-    number only when no restore happened since. `taskto restore` leaves `cli-worker-restored` in
-    the data directory, and the server removes it once the worker has been told everything. In
-    container mode that mark means such a directory is removed, never handed over: its person
-    signs in again. In local mode the directories are in the data directory, so the backup brought
-    back the ones that go with its database;
+    number only in local mode, where the directories are in the data directory and a backup brings
+    back the ones that go with its database. In container mode nothing can tell an upgrade from a
+    restore made by any version, so such a directory is removed, never handed over: after the
+    upgrade that introduced owners, each person signs in to their CLIs once more;
   - removes everything else as above. A number below the next that isn't live is an account gone
     for good: it is forgotten as `Forget` does, and stays refused;
   - removes the marks of the live users and of the numbers from the next up, apart from a mark made
@@ -476,11 +489,12 @@ The UI shows what the command prints.
   Until the worker has been told, since this server started, and the user has been introduced, the
   server asks nothing of it for them. Every user-scoped call waits for it, and the first such
   request tells the worker if the start couldn't. Calls that can't wait (reading a sign-in's
-  progress, cancelling it, finding a turn by its ID) answer as if there were nothing. One attempt
+  progress, cancelling it, finding a turn by its ID) answer as if there were nothing, and a turn is
+  looked up and stopped for its user only: the worker's API answers none of another user's. One attempt
   at telling the worker runs at a time, and a request waiting for it gives up with its own context.
-  While the worker can't be reached, the API answers `cli_worker_not_ready` (`503`) first, before
-  it says whether a CLI is installed and before a turn's stream starts. The agent browser's routes
-  give the same answer.
+  While the worker can't be reached, at a start or later, the API answers `cli_worker_not_ready`
+  (`503`) first, before it says whether a CLI is installed and before a turn's stream starts. The
+  agent browser's routes and the agent's browser tools give the same answer, with its code.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

@@ -289,7 +289,7 @@ func TestRemoteHidesTheToolsToken(t *testing.T) {
 	if _, _, err := r.StartTurn(s); err != nil {
 		t.Fatal(err)
 	}
-	found, ok := r.FindTurn(s.ID)
+	found, ok := r.FindTurn(s.User, s.ID)
 	if !ok {
 		t.Fatal("turn not found")
 	}

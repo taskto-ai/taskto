@@ -30,7 +30,11 @@ type Isolation struct {
 // maxIsolatedUser bounds user IDs so uids stay below the 32-bit nobody range.
 const maxIsolatedUser = 1 << 30
 
-// uidOf is user's Unix user: UIDBase plus their number, for a number that can have one.
+// maxUID is the 32-bit nobody's uid: every user's uid is below it (New checks UIDBase).
+const maxUID = 1<<32 - 2
+
+// uidOf is user's Unix user: UIDBase plus their number, for a number that can have one. Starting
+// a user's processes and ending them both use it.
 func (i *Isolation) uidOf(user int64) (int, error) {
 	if user <= 0 || user >= maxIsolatedUser {
 		return 0, fmt.Errorf("user %d can't have a Unix user", user)

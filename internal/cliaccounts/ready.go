@@ -224,13 +224,20 @@ func (r readyWorker) StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, 
 	return t, attached, err
 }
 
-// FindTurn names no user: until the worker has been told who exists, there is none. Its callers
-// check the turn's user, who is ready by then.
-func (r readyWorker) FindTurn(id string) (Turn, bool) {
-	if !r.s.reconciled.Load() {
+// FindTurn is user's turn id: none until the worker was told who exists and who user is (a turn
+// the worker kept from before may be the number's old owner's), and none of another user's.
+func (r readyWorker) FindTurn(user int64, id string) (Turn, bool) {
+	if !r.s.isIntroduced(user) {
 		return nil, false
 	}
-	return r.Worker.FindTurn(id)
+	return r.Worker.FindTurn(user, id)
+}
+
+// StopTurn stops user's turn id, once user is introduced.
+func (r readyWorker) StopTurn(user int64, id string) {
+	if r.s.isIntroduced(user) {
+		r.Worker.StopTurn(user, id)
+	}
 }
 
 func (r readyWorker) Permissions(ctx context.Context, user, conversation int64) (out []cliworker.PermissionRequest, err error) {
@@ -244,4 +251,23 @@ func (r readyWorker) Permissions(ctx context.Context, user, conversation int64) 
 
 func (r readyWorker) Answer(ctx context.Context, user, conversation int64, id string, allow bool) error {
 	return r.call(ctx, user, func() error { return r.Worker.Answer(ctx, user, conversation, id, allow) })
+}
+
+// availability is the worker's own answer to whether cli can run, with cliworker.ErrUnreachable
+// when it can't be asked (Remote.Availability); a worker in this process always answers.
+type availability interface {
+	Availability(cli cliworker.CLI) (bool, error)
+}
+
+// cliAvailable reports whether cli can run on the worker, and an error when the worker can't be
+// asked: an outage is the worker not being ready, not a CLI that isn't installed.
+func (s *Service) cliAvailable(cli cliworker.CLI) (bool, error) {
+	w := s.worker
+	if r, ok := w.(readyWorker); ok {
+		w = r.Worker
+	}
+	if a, ok := w.(availability); ok {
+		return a.Availability(cli)
+	}
+	return s.worker.Available(cli), nil
 }

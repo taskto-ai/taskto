@@ -38,6 +38,17 @@ type fakeBrowsers struct {
 		a    browser.Action
 	}
 	lives []int64
+	// down makes every call fail as when the CLI worker can't be reached.
+	down bool
+}
+
+func (f *fakeBrowsers) unreachable() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down {
+		return fmt.Errorf("%w: dial unix: connect: no such file", browser.ErrUnreachable)
+	}
+	return nil
 }
 
 func newFake() *fakeBrowsers { return &fakeBrowsers{running: map[int64]map[browser.Kind]bool{}} }
@@ -47,6 +58,9 @@ func (f *fakeBrowsers) Availability(context.Context) map[browser.Kind]bool {
 }
 
 func (f *fakeBrowsers) Status(_ context.Context, user int64) (map[browser.Kind]browser.State, error) {
+	if err := f.unreachable(); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := map[browser.Kind]browser.State{}
@@ -70,6 +84,9 @@ func (f *fakeBrowsers) set(user int64, kind browser.Kind, on bool) {
 }
 
 func (f *fakeBrowsers) Start(_ context.Context, user int64, kind browser.Kind) error {
+	if err := f.unreachable(); err != nil {
+		return err
+	}
 	f.set(user, kind, true)
 	return nil
 }
@@ -80,6 +97,9 @@ func (f *fakeBrowsers) Stop(_ context.Context, user int64, kind browser.Kind) er
 }
 
 func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (browser.Result, error) {
+	if err := f.unreachable(); err != nil {
+		return browser.Result{}, err
+	}
 	f.mu.Lock()
 	f.actions = append(f.actions, struct {
 		user int64
@@ -727,5 +747,36 @@ func TestNotReadyKeepsItsCode(t *testing.T) {
 	}
 	if len(e.b.actions) != 0 || len(e.b.running) != 0 {
 		t.Fatal("the browser was reached")
+	}
+}
+
+// A CLI worker that can't be reached once the browser was usable is the not-ready answer, with
+// its code, on the routes and to the agent's tools: not a server error, and not a code-less 503.
+func TestAnUnreachableWorkerIsNotReady(t *testing.T) {
+	f := newFake()
+	e := newEnv(t, f, nil)
+	owner, _ := e.setup()
+	f.down = true
+	for _, r := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, base, nil},
+		{http.MethodPost, base + "/start", map[string]string{}},
+	} {
+		rec := owner.do(r.method, r.path, r.body)
+		if rec.Code != http.StatusServiceUnavailable || decode[map[string]any](t, rec)["code"] != string(apierr.CodeCLIWorkerNotReady) {
+			t.Errorf("%s %s = %d %s, want 503 %s", r.method, r.path, rec.Code, rec.Body.String(), apierr.CodeCLIWorkerNotReady)
+		}
+	}
+	_, err := New(f, nil).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`))
+	var refused *agenttools.Refusal
+	if !errors.As(err, &refused) || refused.Status != http.StatusServiceUnavailable || refused.Code != apierr.CodeCLIWorkerNotReady {
+		t.Errorf("a tool with the worker unreachable: %#v", err)
+	}
+	if _, err := New(e.b, func(context.Context, int64) error {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, "not ready")
+	}).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !errors.As(err, &refused) || refused.Code != apierr.CodeCLIWorkerNotReady {
+		t.Errorf("a tool before the worker is ready keeps no code: %#v", err)
 	}
 }

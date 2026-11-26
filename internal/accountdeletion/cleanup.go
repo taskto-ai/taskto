@@ -17,6 +17,7 @@ import (
 
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -114,10 +115,13 @@ func (s *Service) SetProviders(sync func(ctx context.Context) error) {
 // later purge's accounts were deleted, and a shared one would be that later purge's only retry.
 func providersTarget(userID int64) string { return "feed:" + strconv.FormatInt(userID, 10) }
 
-// record notes a step to do for userID, within q. Noting it again changes nothing.
+// record notes a step to do for userID, within q. Noting it again changes nothing. A step on the
+// CLI worker's files (the browsers', the CLI home) keeps the account's identity: the worker removes
+// only what is still that account's (internal/cliowner).
 func (s *Service) record(ctx context.Context, q execer, userID int64, kind, target string) error {
-	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (kind, target) DO NOTHING`, userID, kind, target, s.o.Clock().UTC().Format("2006-01-02T15:04:05.000Z"))
+	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at, cli_identity)
+		VALUES (?, ?, ?, ?, CASE WHEN ? IN ('browser', 'cli_home') THEN (SELECT cli_identity FROM users WHERE id = ?) END)
+		ON CONFLICT (kind, target) DO NOTHING`, userID, kind, target, s.o.Clock().UTC().Format("2006-01-02T15:04:05.000Z"), kind, userID)
 	return err
 }
 
@@ -129,13 +133,16 @@ type cleanup struct {
 	id           int64
 	user         int64
 	kind, target string
+	// identity is the account's, for a step on the CLI worker's files ("" for one recorded before
+	// identities were kept).
+	identity string
 }
 
 // pending lists the recorded steps, of userID's purge, or of every account's if userID is 0. The
 // browsers' steps come first: the CLI home, which holds their directory, is removed after them even
 // when it was recorded before them.
 func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) {
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target FROM purge_cleanups
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target, coalesce(cli_identity, '') FROM purge_cleanups
 		WHERE ? = 0 OR user_id = ? ORDER BY kind <> ?, id`, userID, userID, cleanBrowser)
 	if err != nil {
 		return nil, err
@@ -144,7 +151,7 @@ func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) 
 	var out []cleanup
 	for rows.Next() {
 		var c cleanup
-		if err := rows.Scan(&c.id, &c.user, &c.kind, &c.target); err != nil {
+		if err := rows.Scan(&c.id, &c.user, &c.kind, &c.target, &c.identity); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -242,7 +249,7 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if err != nil || user <= 0 {
 			return failed(failBadTarget, nil)
 		}
-		return s.forgetBrowser(ctx, user)
+		return s.forgetBrowser(cliowner.With(ctx, c.identity), user)
 	case cleanCLIHome:
 		kind, id, _ := strings.Cut(c.target, ":")
 		user, err := strconv.ParseInt(id, 10, 64)
@@ -253,7 +260,7 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		// period) and waits for the requests in flight; a cut call is made again.
 		cctx, cancel := context.WithTimeout(ctx, cliForgetTimeout)
 		defer cancel()
-		return s.forgetCLI(cctx, kind, user)
+		return s.forgetCLI(cliowner.With(cctx, c.identity), kind, user)
 	case cleanProviders:
 		return s.syncProviders(ctx)
 	}

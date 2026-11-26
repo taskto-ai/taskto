@@ -23,3 +23,11 @@ WHEN OLD.cli_identity IS NOT NULL AND NEW.cli_identity IS NOT OLD.cli_identity
 BEGIN
     SELECT RAISE(ABORT, 'an account''s CLI identity never changes');
 END;
+
+-- A deleted account's purge removes its CLI and browser files in steps that may run after the
+-- account is gone: each such step keeps the account's identity, and the worker removes only what is
+-- still that account's.
+ALTER TABLE purge_cleanups ADD COLUMN cli_identity TEXT;
+
+UPDATE purge_cleanups SET cli_identity = (SELECT cli_identity FROM users WHERE users.id = purge_cleanups.user_id)
+WHERE kind IN ('browser', 'cli_home');
