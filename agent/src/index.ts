@@ -59,7 +59,7 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
-import { HARNESS_DB_OPTIONS, LIFECYCLE_KIND, runPurge, startCheckpointer, WalBusyError } from './purge.js'
+import { HARNESS_DB_OPTIONS, LIFECYCLE_KIND, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
@@ -364,6 +364,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'POST' && action === 'submit') {
       const body = await readJson(req)
       if (typeof body.content !== 'string') throw new HttpError(400, 'content must be a string')
+      const content = body.content
       const whenBusy = body.whenBusy
       if (whenBusy !== undefined && whenBusy !== 'steer' && whenBusy !== 'followUp' && whenBusy !== 'reject') {
         throw new HttpError(400, 'whenBusy must be steer, followUp or reject')
@@ -379,29 +380,30 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
-      if (capability !== undefined || language !== undefined) {
-        // Before the input, so the run it starts has them. Rewritten only when they changed.
-        await conv.commit(async (tx) => {
-          if (capability !== undefined) {
-            const access = await tx.doc(ToolAccess, conv.id)
-            if (access.capability !== capability) access.capability = capability
-          }
-          if (language !== undefined) {
-            const lang = await tx.doc(Language, conv.id)
-            if (lang.tag !== language) lang.tag = language
-          }
-        }, context)
-      }
-      const submission = await conv.submit(
-        {
+      // One commit: the conversation is checked again as retired in it, so input that passed the
+      // look above while a retire committed is refused, not admitted after the retire's abort.
+      // Commits run one after another, so the retire's (which marks it) is wholly before or after.
+      // The settings are written in the same commit as the input, so the run it starts has them;
+      // rewritten only when they changed.
+      let submissionId: SubmissionId | undefined
+      await conv.commit(async (tx) => {
+        if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        submissionId = await conv.submit(tx, {
           type: 'input',
-          content: body.content,
+          content,
           ...(whenBusy ? { whenBusy } : {}),
           ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
-        },
-        context,
-      )
-      return send(res, 202, { submissionId: submission.id })
+        })
+        if (capability !== undefined) {
+          const access = await tx.doc(ToolAccess, conv.id)
+          if (access.capability !== capability) access.capability = capability
+        }
+        if (language !== undefined) {
+          const lang = await tx.doc(Language, conv.id)
+          if (lang.tag !== language) lang.tag = language
+        }
+      }, context)
+      return send(res, 202, { submissionId })
     }
     if (req.method === 'POST' && action === 'retire') {
       const found = await conversation(id)
@@ -427,13 +429,15 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         // Idle, as retiring left it: background work included, so nothing writes into what the purge
         // removes (a retire before this version stopped only the rest).
         await found.abort(context, { background: true })
-        // On a worker thread (purge.ts): its waits for the database never stall other turns.
-        await runPurge({ path: dbPath as string, root: num, timeoutMs: walBusyMs })
+        // On a worker thread (purge.ts), one purge at a time: its waits for the database never stall
+        // other turns, and the server's next try of a purge still running waits for it rather than
+        // starting another beside it.
+        await purgeOnce({ path: dbPath as string, root: num, timeoutMs: walBusyMs })
         console.error(`conversation ${num} purged`)
       } else {
         // Gone already, perhaps by an earlier purge that deleted the rows and couldn't truncate the
         // log: what was said can still be in it, so done means the log is empty too.
-        await runPurge({ path: dbPath as string, timeoutMs: walBusyMs })
+        await purgeOnce({ path: dbPath as string, timeoutMs: walBusyMs })
       }
       res.writeHead(204).end()
       return

@@ -2,11 +2,15 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { Worker } from 'node:worker_threads'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  framesLeft,
   HARNESS_DB_OPTIONS,
   LIFECYCLE_KIND,
+  purgeOnce,
   purgeRecords,
+  purgeWorkersStarted,
   runPurge,
   startCheckpointer,
   truncateWalWithin,
@@ -102,6 +106,14 @@ describe('runPurge', () => {
   }
   const marksLeft = (writer: DatabaseSync) =>
     (writer.prepare('SELECT count(*) AS n FROM taskto_purge_marks WHERE root = 1 AND id <> 1').get() as { n: number }).n
+
+  // Folds a large setup into the database and has the disk write it out (fullfsync, for macOS), so
+  // what a test measures is the purge, not the system writing back what the setup just made.
+  const settle = (writer: DatabaseSync) => {
+    writer.exec('PRAGMA fullfsync = ON')
+    writer.exec('PRAGMA checkpoint_fullfsync = ON')
+    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  }
 
   // A connection set up as Chord sets up the harness's with the sidecar's options.
   const harnessLike = (db: DatabaseSync) => {
@@ -244,7 +256,7 @@ describe('runPurge', () => {
       record.run(id)
     }
     writer.exec('COMMIT')
-    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    settle(writer)
     try {
       const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 5000 }))
       expect(probe.error).toBeUndefined()
@@ -294,11 +306,15 @@ describe('runPurge', () => {
         { id: 3 },
       ])
       expect(writer.prepare('SELECT id FROM tasks').all()).toEqual([{ id: 20 }])
-      expect(writer.prepare(`SELECT id FROM documents WHERE kind = '${LIFECYCLE_KIND}' ORDER BY id`).all()).toEqual([
-        { id: 43 },
-        { id: 44 },
-      ])
-      expect(left('SELECT count(*) AS n FROM document_revisions WHERE document_id IN (43, 44)')).toBe(2)
+      // The root is still retired (its lifecycle document goes last), and what is left of the tree
+      // is reachable from it or marked.
+      expect(
+        writer.prepare(`SELECT id FROM documents WHERE kind = '${LIFECYCLE_KIND}' AND owner_id = 1`).all(),
+      ).toEqual([{ id: 43 }])
+      expect(left('SELECT count(*) AS n FROM document_revisions WHERE document_id = 43')).toBe(1)
+      expect(
+        left("SELECT count(*) AS n FROM taskto_purge_marks WHERE root = 1 AND kind = 'conversation' AND id = 3"),
+      ).toBe(1)
 
       await runPurge({ path, root: 1, timeoutMs: 5000 })
       expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
@@ -408,7 +424,7 @@ describe('runPurge', () => {
       record.run(id)
     }
     writer.exec('COMMIT')
-    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    settle(writer)
     try {
       const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000 }))
       expect(probe.error).toBeUndefined()
@@ -448,13 +464,14 @@ describe('runPurge', () => {
           },
         }),
       ).toThrow(stop)
-      // Partway through the tree: some tasks are gone, and every one left is marked, so the next
-      // purge finds it even where what led to it from the root has gone.
+      // Partway through the tree: some tasks are gone, and every one left is marked or its
+      // conversation is still there, so the next purge finds it from the marks.
       expect(tasksLeft()).toBeGreaterThan(0)
       expect(
         writer
           .prepare(`SELECT count(*) AS n FROM tasks t WHERE NOT EXISTS
-            (SELECT 1 FROM taskto_purge_marks m WHERE m.root = 1 AND m.kind = 'task' AND m.id = t.id)`)
+            (SELECT 1 FROM taskto_purge_marks m WHERE m.root = 1 AND m.kind = 'task' AND m.id = t.id)
+            AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = t.conversation_id)`)
           .get(),
       ).toEqual({ n: 0 })
       await runPurge({ path, root: 1, timeoutMs: 5000 })
@@ -701,6 +718,151 @@ describe('runPurge', () => {
       }
     }, 60_000)
   }
+
+  // SQLite answers a checkpoint that another connection's checkpoint keeps out with busy = 1 and
+  // log -1, not an error; only busy = 0 with log -1 means the database isn't in WAL mode.
+  it('reads a busy checkpoint as not drained', () => {
+    expect(framesLeft({ busy: 1, log: -1, checkpointed: -1 })).toBe(Number.POSITIVE_INFINITY)
+    expect(framesLeft({ busy: 0, log: -1, checkpointed: -1 })).toBe(0)
+    expect(framesLeft({ busy: 0, log: 10, checkpointed: 4 })).toBe(6)
+    expect(framesLeft({ busy: 1, log: 10, checkpointed: 4 })).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  // Another thread's checkpoint (the checkpointer's, or another purge's) is copying a large log when
+  // the purge looks: that round learned nothing, and the TRUNCATE waits for a round whose own
+  // passive checkpoint found the log drained.
+  it('does not truncate while another checkpoint is copying the log', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    writer.exec('BEGIN')
+    for (let i = 0; i < 300_000; i++) more.run('q'.repeat(400))
+    writer.exec('COMMIT')
+    const flag = new Int32Array(new SharedArrayBuffer(4))
+    const other = new Worker(
+      `const { DatabaseSync } = require('node:sqlite')
+       const { workerData } = require('node:worker_threads')
+       const db = new DatabaseSync(workerData.path, { timeout: 0 })
+       Atomics.store(workerData.flag, 0, 1)
+       Atomics.notify(workerData.flag, 0)
+       db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get()
+       db.close()`,
+      { eval: true, workerData: { path, flag } },
+    )
+    const ended = new Promise((resolve) => other.once('exit', resolve))
+    Atomics.wait(flag, 0, 0, 5000)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5) // it is copying now
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    const rounds: number[] = []
+    const truncated: number[] = []
+    try {
+      truncateWalWithin(db, 20_000, { round: (b) => rounds.push(b), truncating: () => truncated.push(pending()) })
+      expect(rounds[0]).toBe(Number.POSITIVE_INFINITY)
+      for (const p of truncated) expect(p).toBeLessThanOrEqual(64)
+      expect(log()).toBe('')
+    } finally {
+      await ended
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  }, 60_000)
+
+  // A very large account (150,000 tasks): each of the purge's transactions does a bounded amount of
+  // work (the marks are read from their index, the tree is marked a batch at a time, never by one
+  // list of every id), the harness's writes wait a fixed short time at most, and a purge that
+  // stopped carries on from its marks without going over the whole tree again.
+  it('keeps every transaction short on a very large account, and carries on after a stop', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const task = writer.prepare("INSERT INTO tasks (id, conversation_id, record) VALUES (?, 1, '{}')")
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    writer.exec('BEGIN')
+    for (let id = 1_000_000; id < 1_150_000; id++) {
+      task.run(id)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    settle(writer)
+    const stop = new Error('stopped')
+    const slices: number[] = []
+    let started = performance.now()
+    let firstSlice = Number.POSITIVE_INFINITY
+    let count = 0
+    try {
+      expect(() =>
+        purgeRecords(path, 1, 10_000, {
+          slice: (ms) => slices.push(ms),
+          afterSlice: () => {
+            if (++count === 20) throw stop
+          },
+        }),
+      ).toThrow(stop)
+      // The retry: its first transaction comes at once, not after a look at the whole tree.
+      started = performance.now()
+      purgeRecords(path, 1, 10_000, {
+        slice: (ms) => slices.push(ms),
+        afterSlice: () => {
+          if (firstSlice === Number.POSITIVE_INFINITY) firstSlice = performance.now() - started
+        },
+      })
+      const took = performance.now() - started
+      expect(firstSlice).toBeLessThan(200)
+      expect(Math.max(...slices)).toBeLessThan(100)
+      expect(took).toBeLessThan(20_000)
+      expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
+      expect(writer.prepare('SELECT count(*) AS n FROM taskto_purge_marks').get()).toEqual({ n: 0 })
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 120_000)
+
+  // The same on its thread, with the harness's writes beside it: a fixed bound on the longest stall.
+  it('leaves the write lock to other writes on a very large account', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const task = writer.prepare("INSERT INTO tasks (id, conversation_id, record) VALUES (?, 1, '{}')")
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    writer.exec('BEGIN')
+    for (let id = 1_000_000; id < 1_150_000; id++) {
+      task.run(id)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    settle(writer)
+    try {
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000 }))
+      expect(probe.error).toBeUndefined()
+      expect(probe.longest).toBeLessThan(250)
+      expect(probe.gap).toBeLessThan(250)
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 120_000)
+
+  // The server asks again for a purge whose call it gave up on (its time limit), and the first
+  // purge's worker goes on: the second request waits for it and has its outcome, and starts no worker
+  // of its own, so two purges never take turns on the write lock.
+  it('runs one purge for a root at a time, however often it is asked', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const before = purgeWorkersStarted()
+    try {
+      const first = purgeOnce({ path, root: 1, timeoutMs: 5000 })
+      const second = purgeOnce({ path, root: 1, timeoutMs: 5000 })
+      await Promise.all([first, second])
+      expect(purgeWorkersStarted() - before).toBe(1)
+      expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
+      // Once it has ended, a new request is a new purge.
+      await purgeOnce({ path, timeoutMs: 5000 })
+      expect(purgeWorkersStarted() - before).toBe(2)
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  })
 
   it('rejects with the failure of a purge that is not about the log', async () => {
     await expect(runPurge({ path: join(dir, 'missing', 'agent.db'), root: 1, timeoutMs: 100 })).rejects.toThrow()
