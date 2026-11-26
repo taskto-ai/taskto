@@ -111,10 +111,12 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, e
 		case errors.Is(rerr, errWaiting):
 			waiting++
 		default:
-			errs = append(errs, fmt.Errorf("%s %s of account %d: %w", c.kind, c.target, c.user, rerr))
-			// Only the cause is kept, never what a step handled.
+			// The cause is kept with the step (last_error), where the operator reads it, and is not in
+			// the error returned, which the server's log prints: it can name paths and files the step
+			// handled. The error says which step failed.
 			_, _ = s.o.DB.ExecContext(ctx, `UPDATE purge_cleanups SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
 				rerr.Error(), c.id)
+			errs = append(errs, fmt.Errorf("step %d (%s) of account %d failed; its cause is in last_error of purge_cleanups", c.id, c.kind, c.user))
 		}
 	}
 	return waiting, errors.Join(errs...)

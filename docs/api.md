@@ -1153,6 +1153,13 @@ the CLI workers to be on stays recorded after the account is gone and is done wh
 event says how many are waiting (`cleanups_pending`), and the server doesn't log the purge as complete
 until none is.
 
+A purge job is only a reminder to look: what decides when an account is purged is the request in
+force, read when the purge starts, and a job that runs before that request's deadline (left over from
+a request that was cancelled and made again) is moved to the deadline and deletes nothing. Each
+purge records its own rewriting of the providers file, so one purge's finishing it never clears
+another's; the event's `cleanups_pending` counts it, since it is done after the account is gone. The
+cause of a step that failed is kept with the step (`last_error` of `purge_cleanups`), not in the log.
+
 ## Invites
 
 An invite is for one email address, with a role. It works once and expires after 7 days.

@@ -842,8 +842,11 @@ is a decision about the workspace's records, not an account's.
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
   need them stay recorded, and are done by the next start with them on and every ten minutes. The log
   says "purged an account, with steps still to do" while any is left, and the audit event's
-  `cleanups_pending` says how many. If the runtime is on and fails, the purge fails and is tried
-  again.
+  `cleanups_pending` says how many (the providers file's rewriting, which is done after the account
+  is gone, is one). If the runtime is on and fails, the purge fails and is tried again; the runtime
+  answers `503` while another connection holds its database, so a purge isn't acknowledged until
+  the write-ahead log, which can still hold the transcript, is empty. The cause of a failed step is
+  in `last_error` of `purge_cleanups`, not in the log.
 - **Model providers and CLI vendors.** What a conversation sent to a provider is theirs to delete.
 - **SQLite and the filesystem.** Deleted rows are overwritten as the database is reused, and
   deleted files are only unlinked; use disk encryption if remnants matter to you.

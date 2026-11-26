@@ -5,6 +5,7 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'rea
 import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { BrandLogo } from '../BrandLogo'
 import { t, useFormat, useT } from '../i18n'
+import { Notice } from '../ui/Notice'
 import { takeDeletion } from './deleted'
 
 // The product's name, the same in every language.
@@ -295,11 +296,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   }
   return (
     <AuthFrame title={t('auth.login.title')}>
-      {deleted && (
-        <p className="tt-notice" role="status">
-          {t('auth.accountDeleted', { date: f.date(deleted) })}
-        </p>
-      )}
+      {deleted && <Notice tone="info">{t('auth.accountDeleted', { date: f.date(deleted) })}</Notice>}
       {ssoError && (
         <p role="alert" className="tt-error">
           {ssoError}

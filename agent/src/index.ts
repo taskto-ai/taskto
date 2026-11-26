@@ -62,8 +62,8 @@ import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
-import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
 import { SpikeTools } from './tools.js'
+import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
 
 // Everything this process logs passes redact(), so an API key never reaches its output.
 for (const level of ['error', 'warn', 'log', 'info', 'debug'] as const) {
@@ -545,13 +545,17 @@ const server = createServer((req, res) => {
   route(req, res).catch((error: unknown) => {
     // A purge that couldn't empty the log is not an error of the sidecar's: it isn't done yet.
     const status = error instanceof HttpError ? error.status : error instanceof WalBusyError ? 503 : 500
-    if (status === 500) console.error(error)
+    // What went wrong goes to the sidecar's own log; the answer says what a caller may act on: a
+    // refusal of ours, or that the purge isn't done, and for anything else only that it failed.
+    if (status === 500 || status === 503) console.error(error)
     const reason = error instanceof HttpError ? error.reason : undefined
-    if (!res.headersSent)
-      send(res, status, {
-        error: error instanceof Error ? error.message : String(error),
-        ...(reason ? { reason } : {}),
-      })
+    const message =
+      error instanceof HttpError
+        ? error.message
+        : error instanceof WalBusyError
+          ? 'the purge is not done: a reader holds the database'
+          : 'internal error'
+    if (!res.headersSent) send(res, status, { error: message, ...(reason ? { reason } : {}) })
     else res.end()
   })
 })
