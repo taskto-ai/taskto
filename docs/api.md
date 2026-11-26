@@ -344,6 +344,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
 | `cli_worker_closing` | 503 | The CLI worker is shutting down. |
+| `cli_account_removing` | 409 | The account's CLI files are being removed (it is being disconnected): a sign-in or a check can't start on it meanwhile. |
+| `cli_account_busy` | 409 | A process of the account's CLI is still running after it was stopped: nothing was removed, try again. |
+| `cli_account_forgotten` | 410 | The CLI worker removed this account's files (a purge) and refuses it; after a restore of the server's data it says so until the server has told the worker who is here again, a moment after it starts. |
 | `cli_no_login` | 404 | No sign-in is in progress for this account. |
 | `cli_login_code_invalid` | 400 | A sign-in's code must be 1 to `max` printable characters. |
 | `cli_login_no_code` | 409 | This sign-in doesn't take a code. |

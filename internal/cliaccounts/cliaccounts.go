@@ -69,6 +69,9 @@ type Worker interface {
 	// Forget removes everything the worker keeps for a deleted user: logins, sessions, working
 	// directories and the browser's profile.
 	Forget(ctx context.Context, user int64) error
+	// Reconcile tells the worker which users exist, which number the next user gets and when
+	// that was read, so that it takes back the forgotten marks a restore made wrong.
+	Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
@@ -329,6 +332,96 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 		}
 	}
 	return nil
+}
+
+// ReconcileForgotten tells the worker which users the database has and which number the next
+// one gets, so that it takes back the marks of users it forgot (Forget) that a restore of the
+// database made wrong: the person whose account was purged may be back in it, and the numbers
+// after the backup are given again. The worker's own directory, in container mode, isn't part of
+// the backup, so it can't know; the database can. Call it at every start (StartReconcile). An
+// account whose purge has begun is not live here: its mark stays until the purge deletes it.
+func (s *Service) ReconcileForgotten(ctx context.Context) error {
+	if s.worker == nil {
+		return nil
+	}
+	before := time.Now()
+	// One transaction: the users and the next number describe the same state, or a person added
+	// in between would be neither live nor below the next number.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a read: nothing to keep
+	// Not the accounts whose purge has begun: it forgets the CLI files before it deletes the
+	// account, and one that stopped between the two is made again from its start, which forgets
+	// them again; until the account is gone its mark must stay.
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users
+		WHERE id NOT IN (SELECT user_id FROM account_deletions WHERE purge_started_at IS NOT NULL)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var live []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		live = append(live, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	// What auth's insertUser gives the next user: above every number there has been.
+	var next int64
+	if err := tx.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&next); err != nil {
+		return err
+	}
+	_ = tx.Rollback() // the worker is called without the read open
+	return s.worker.Reconcile(ctx, live, next, before)
+}
+
+// StartReconcile does ReconcileForgotten now and, if the worker can't be reached yet (in
+// container mode it starts beside the server), again in the background until it has.
+func (s *Service) StartReconcile() {
+	if s.worker == nil {
+		return
+	}
+	try := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return s.ReconcileForgotten(ctx)
+	}
+	err := try()
+	if err == nil {
+		return
+	}
+	slog.Warn("cliaccounts: telling the CLI worker which users exist failed; trying again", "err", err)
+	s.mu.Lock()
+	select {
+	case <-s.closing:
+		s.mu.Unlock()
+		return
+	default:
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		delay := time.Second
+		for {
+			select {
+			case <-s.closing:
+				return
+			case <-time.After(delay):
+			}
+			if err := try(); err == nil {
+				return
+			}
+			delay = min(delay*2, 30*time.Second)
+		}
+	}()
 }
 
 // Close stops following logins.

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -66,6 +67,20 @@ type Worker struct {
 	named   chan struct{} // closed and replaced when a CLI names its session (waitTurnForHook)
 	closed  bool
 	wg      sync.WaitGroup
+	// What a removal covers and waits for (removal.go): the accounts being disconnected, the
+	// helper requests running, the process groups started for accounts, and every sign-in's
+	// execution from its start until it returns, apart from logins (a new sign-in replaces a
+	// cancelled one there while the old one's CLI may still run).
+	gates     []*gate
+	helpers   map[*helperRun]struct{}
+	groups    map[int]groupRec
+	groupWait time.Duration
+	groupSeq  uint64
+	// helperLaunches counts the helpers built to run, for tests.
+	helperLaunches atomic.Int64
+	loginRuns      map[*Login]struct{}
+	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
+	marks sync.Mutex
 
 	// The approval socket (approve.go): its listener, its path and, when it had to go
 	// elsewhere than the layout's root, the directory made for it.
@@ -79,6 +94,8 @@ var (
 	ErrUnavailable = errors.New("this CLI is not installed on the worker")
 	ErrTurnClash   = errors.New("a different turn has this ID")
 	ErrClosed      = errors.New("the worker is shutting down")
+	// ErrForgotten: the user was forgotten (Forget, for a deleted account): nothing starts for them.
+	ErrForgotten = errors.New("this user's CLI files were removed with their account")
 )
 
 // New returns a Worker. It first stops every CLI process group a previous worker on the same
@@ -158,7 +175,7 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
-	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{})}
+	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return nil, err
 	}
@@ -226,6 +243,14 @@ func (w *Worker) Start(spec TurnSpec) (t *Turn, attached bool, err error) {
 	defer w.mu.Unlock()
 	if w.closed {
 		return nil, false, ErrClosed
+	}
+	// Checked under the lock Forget takes after marking the user: a turn is either refused here
+	// or among the ones Forget stops and waits for.
+	if w.isForgotten(spec.User) {
+		return nil, false, ErrForgotten
+	}
+	if w.gated(spec.User, spec.CLI, spec.Slot) {
+		return nil, false, ErrRemoving
 	}
 	if old, ok := w.turns[spec.ID]; ok {
 		if old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {
@@ -385,6 +410,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return failed("%v", err)
 	}
 	pgid := cmd.Process.Pid
+	w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)
 	record := filepath.Join(w.stateDir(), spec.ID+".pid")
 	if start, err := startTime(pgid); err == nil {
 		if err := os.WriteFile(record, []byte(strconv.Itoa(pgid)+" "+start+"\n"), 0o600); err != nil {

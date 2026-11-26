@@ -28,6 +28,7 @@ import (
 //	GET    /status/{user}/{cli}?slot=               → AuthStatus
 //	POST   /logout           {user, cli, slot?}     → 204
 //	POST   /forget           {user}                 → 204 (everything kept for a deleted account)
+//	POST   /reconcile        {live, next, before}   → 204 (takes back the marks of users a restore made wrong)
 //
 // slot is the account's (Slot); empty or left out, the first.
 //	POST   /turns            TurnSpec        → {"attached": bool}
@@ -47,6 +48,9 @@ var remoteErrors = map[string]error{
 	"bad_code":       ErrBadCode,
 	"no_code_needed": ErrNoCodeNeeded,
 	"no_permission":  ErrNoPermission,
+	"forgotten":      ErrForgotten,
+	"removing":       ErrRemoving,
+	"busy":           ErrBusy,
 }
 
 // remoteWait bounds how long an events request waits for a new event.
@@ -153,6 +157,25 @@ func (w *Worker) Handler() http.Handler {
 			return
 		}
 		if err := w.Forget(r.Context(), req.User); err != nil {
+			refuse(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Live   []int64   `json:"live"`
+			Next   int64     `json:"next"`
+			Before time.Time `json:"before"`
+		}
+		if !decodeBody(rw, r, &req) {
+			return
+		}
+		if req.Next <= 0 || req.Before.IsZero() {
+			refuse(rw, badRequest{errors.New("invalid reconcile")})
+			return
+		}
+		if err := w.Reconcile(r.Context(), req.Live, req.Next, req.Before); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -265,7 +288,9 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusServiceUnavailable
 			case errors.Is(sentinel, ErrNoLogin), errors.Is(sentinel, ErrNoPermission):
 				status = http.StatusNotFound
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded):
+			case errors.Is(sentinel, ErrForgotten):
+				status = http.StatusGone
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy):
 				status = http.StatusConflict
 			}
 		}
@@ -429,6 +454,12 @@ func (c *Remote) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 // Forget removes everything the worker keeps for user, for an account that is deleted.
 func (c *Remote) Forget(ctx context.Context, user int64) error {
 	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
+}
+
+// Reconcile tells the worker which users exist and which number comes next, so that it takes
+// back the forgotten marks a restore of the server's data made wrong (Worker.Reconcile).
+func (c *Remote) Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error {
+	return c.do(ctx, http.MethodPost, "/reconcile", map[string]any{"live": live, "next": next, "before": before}, nil)
 }
 
 // StartTurn starts spec's turn on the worker, or attaches to the one with its ID.

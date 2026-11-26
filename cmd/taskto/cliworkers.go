@@ -55,6 +55,8 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 			svc.Close()
 			return nil, nil, err
 		}
+		// The worker keeps its own record of the users it forgot, apart from the backup.
+		svc.StartReconcile()
 		return svc, func() error {
 			err := stopProxy()
 			svc.Close()
@@ -101,6 +103,7 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 		worker.Close()
 		return nil, nil, err
 	}
+	svc.StartReconcile()
 	return svc, func() error {
 		err := stopProxy()
 		svc.Close()
