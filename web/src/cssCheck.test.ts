@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -91,24 +91,6 @@ test("the app's own stylesheet and components pass", () => {
   const r = spawnSync(process.execPath, [script], { encoding: 'utf8', cwd: web })
   expect(r.stderr).toBe('')
   expect(r.status).toBe(0)
-})
-
-test('the search result snippet and the settings code sample have a class each', () => {
-  const search = readFileSync(join(web, 'src/search/search.legacy.css'), 'utf8')
-  const rules = [...search.matchAll(/(^|\n)\.tt-snippet \{([^}]*)\}/g)]
-  // A search snippet is running text: a grid would make each highlighted word a row of its own.
-  expect(rules).toHaveLength(1)
-  expect(rules[0][2]).not.toMatch(/display:\s*grid/)
-  const settings = readFileSync(join(web, 'src/settings/settings.legacy.css'), 'utf8')
-  expect(settings).toMatch(/\n\.tt-setup-snippet \{[^}]*display:\s*grid/)
-})
-
-test('the settings code sample keeps the colour and the wrapping the shared snippet class once gave it', () => {
-  const css = readFileSync(join(web, 'src/settings/settings.legacy.css'), 'utf8')
-  const rule = css.match(/(^|\n)\.tt-setup-snippet \{([^}]*)\}/)?.[2] ?? ''
-  // The headings and commands there were muted and wrapped anywhere, before the class was renamed.
-  expect(rule).toMatch(/color:\s*var\(--tt-muted\)/)
-  expect(rule).toMatch(/overflow-wrap:\s*anywhere/)
 })
 
 test('a class a lookup table holds counts as used; an attribute selector is not a rule for a class', () => {
@@ -453,12 +435,12 @@ describe('how the app loads its stylesheets', () => {
     expect(stray.err).toContain('src/search/extra.css: nothing loads it')
 
     const dropped = app({
-      'styles.css': OLD_STYLESHEETS.filter((f) => f !== 'search/search.legacy.css')
+      'styles.css': OLD_STYLESHEETS.filter((f) => f !== 'markdown.legacy.css')
         .map((f) => `@import "./${f}";`)
         .join('\n'),
     })
     expect(dropped.code).toBe(1)
-    expect(dropped.err).toContain('src/search/search.legacy.css: nothing loads it')
+    expect(dropped.err).toContain('src/markdown.legacy.css: nothing loads it')
     expect(dropped.err).toContain('src/styles.css: lists ')
 
     const gone = app({ 'pwa/pwa.legacy.css': null })
@@ -551,7 +533,7 @@ describe('how the app loads its stylesheets', () => {
   })
 
   test("an old screen's file declares no layer, nested in @media either", () => {
-    const file = 'apps/apps.legacy.css'
+    const file = 'markdown.legacy.css'
     const r = app({ [file]: '@layer screens {\n  .tt-app { color: inherit; }\n}\n' })
     expect(r.code).toBe(1)
     expect(r.err).toContain(`src/${file}:1: declares \`@layer screens\``)

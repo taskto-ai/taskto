@@ -24,3 +24,6 @@ export function topLevel(
   | { kind: 'import'; url: string; rest: string; line: number }
   | { kind: 'block' | 'statement'; prelude: string; line: number }
 )[]
+export const BUILT_FROM_PIECES: ReadonlyMap<string, string>
+export function unusedClassErrors(web: string, built?: ReadonlyMap<string, string>): string[]
+export function unusedAliasErrors(web: string): string[]

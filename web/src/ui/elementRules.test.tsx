@@ -16,6 +16,7 @@ import {
   allRules,
   compounds,
   EVERYWHERE,
+  OLD_STYLESHEETS,
   oldStylesheets,
   optsOut,
   reachesAnywhere,
@@ -174,10 +175,7 @@ function drawEverything() {
 }
 
 test("it reads the old stylesheets themselves: the base and every screen's file", () => {
-  expect(sheets.map((s) => s.file)).toEqual(
-    expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.legacy.css']),
-  )
-  expect(sheets.length).toBeGreaterThan(10)
+  expect(sheets.map((s) => s.file)).toEqual(OLD_STYLESHEETS.map((f) => `src/${f}`))
 })
 
 test('every element a component draws has a ui- class', () => {

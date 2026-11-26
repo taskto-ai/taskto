@@ -7,19 +7,14 @@
     --tt-canvas: var(--color-bg);
     --tt-stone: var(--color-bg-sunken);
     --tt-surface: var(--color-surface);
-    --tt-user: var(--color-surface-own);
-    --tt-qr-ground: var(--color-paper);
     --tt-hover: var(--color-hover);
-    --tt-selected: var(--color-selected);
     --tt-scrim: var(--color-scrim);
 
     --tt-fg: var(--color-text);
-    --tt-fg-soft: var(--color-text-soft);
     --tt-muted: var(--color-text-muted);
 
     --tt-line: var(--color-border);
     --tt-line-strong: var(--color-border-strong);
-    --tt-rule: var(--color-rule);
 
     --tt-accent: var(--color-accent);
     --tt-accent-hover: var(--color-accent-hover);
@@ -28,17 +23,9 @@
     --tt-accent-soft: var(--color-accent-soft);
     --tt-focus: var(--color-focus);
     --tt-link: var(--color-link);
-    --tt-node: var(--color-node);
-    --tt-node-edge: var(--color-node-edge);
     --tt-logo-dot: var(--color-logo);
 
-    /* The top bar is the page's ground; it goes when the shell is the sidebar. */
-    --tt-bar: var(--color-bg);
-    --tt-on-bar: var(--color-text);
-    --tt-on-bar-muted: var(--color-text-muted);
-
     --tt-danger: var(--color-danger);
-    --tt-on-danger: var(--color-on-danger);
     --tt-success: var(--color-success);
     --tt-warning: var(--color-warning);
 
@@ -50,10 +37,8 @@
     --tt-display: var(--font-display);
     --tt-mono: var(--font-mono);
     --tt-touch: var(--control-touch);
-    --tt-sidebar-w: var(--width-sidebar);
-    /* Not on a scale: today's one radius and the top bar's height, as they were. */
+    /* Not on a scale: the old stylesheet's one radius, as it was. */
     --tt-radius: 8px;
-    --tt-topbar-h: 52px;
     /* The sizes and spaces base.css had, none of them on a scale: as they were. */
     --tt-text-body: 15px;
     --tt-text-h1: 1.15rem;

@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { afterEach, describe, expect, test } from 'vitest'
-import { oldStylesheets } from '../../scripts/css-check.mjs'
+import { OLD_STYLESHEETS, oldStylesheets } from '../../scripts/css-check.mjs'
 import { Button } from './Button'
 import { Checkbox } from './Checkbox'
 import { rules } from './cssValues'
@@ -62,10 +62,7 @@ const galleries = import.meta.glob<{ default: ComponentType; title: string }>('.
 
 describe('the old stylesheet and the controls', () => {
   test("it reads the old stylesheets themselves: the base and every screen's file", () => {
-    expect(sheets.map((s) => s.file)).toEqual(
-      expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.legacy.css']),
-    )
-    expect(sheets.length).toBeGreaterThan(10)
+    expect(sheets.map((s) => s.file)).toEqual(OLD_STYLESHEETS.map((f) => `src/${f}`))
   })
 
   test('it has element rules, and they still reach the screens’ own elements', () => {
