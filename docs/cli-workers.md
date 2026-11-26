@@ -431,9 +431,11 @@ The UI shows what the command prints.
     up, unless the worker made the directory after the server read its database (a person added
     since); and a live number whose directory the worker made before the account was made. The
     worker records when it first acts for each user, in its own state directory
-    (`.worker/born-u<user>`, written before anything of the user's is made and never by the user);
-    a directory from before it recorded that is judged by the directory's own time, which is never
-    before it was made. Nothing of a live user is removed otherwise;
+    (`.worker/born-u<user>`, with the time in it, written before anything of the user's is made and
+    never by the user; not the file's own time, which a file system may take from a clock a few
+    milliseconds behind); a directory from before it recorded that is judged by the directory's own
+    time, which is never before it was made, and counts as older than an account only by more than
+    a second. Nothing of a live user is removed otherwise;
   - removes the marks of the live users and of the numbers from the next up, apart from a mark made
     after the server read its database (a purge running now), and takes back the agent browsers'
     own refusals the same way. The marks of accounts that are gone for good stay, and so do those

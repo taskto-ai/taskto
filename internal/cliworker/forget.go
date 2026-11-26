@@ -318,8 +318,14 @@ func (w *Worker) stale(user int64, stale func(born time.Time, recorded bool) boo
 	if err != nil {
 		return false, err
 	}
-	return stale(info.ModTime(), false), nil
+	// The file system's clock may be a little behind the one accounts are dated by: a directory
+	// counts as older than a time only by more than that.
+	return stale(info.ModTime().Add(fsClockSlack), false), nil
 }
+
+// fsClockSlack is more than a file's time can be behind the clock that dates accounts and the
+// census (file systems that take it from a coarse clock lag by a few milliseconds).
+const fsClockSlack = time.Second
 
 // usersWithFiles lists the users the worker keeps a directory of, or a record of when it made
 // one, in order.
@@ -353,13 +359,23 @@ func (w *Worker) usersWithFiles() ([]int64, error) {
 }
 
 // birthMark is the file in the worker's own directory that records when the worker first acted for
-// user (its time): before that, nothing of theirs was made here.
+// user, in its contents: before that, nothing of theirs was made here. Not the file's own time,
+// which some file systems take from a clock a few milliseconds behind: a user's first use right
+// after their account was made would look older than the account.
 func (w *Worker) birthMark(user int64) string {
 	return filepath.Join(w.stateDir(), "born-u"+strconv.FormatInt(user, 10))
 }
 
-// born is when the worker first acted for user, if it recorded that.
+// born is when the worker first acted for user, if it recorded that. A record whose time can't be
+// read (a crash as it was written) is dated by the file's own time.
 func (w *Worker) born(user int64) (time.Time, bool) {
+	b, err := os.ReadFile(w.birthMark(user))
+	if err != nil {
+		return time.Time{}, false
+	}
+	if at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(b))); err == nil {
+		return at, true
+	}
 	info, err := os.Lstat(w.birthMark(user))
 	if err != nil {
 		return time.Time{}, false
@@ -385,6 +401,10 @@ func (w *Worker) noteBirth(user int64) error {
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(time.Now().UTC().Format(time.RFC3339Nano) + "\n"); err != nil {
+		_ = f.Close()
 		return err
 	}
 	// On disk before the directory it dates: Reconcile takes a directory without one for older.

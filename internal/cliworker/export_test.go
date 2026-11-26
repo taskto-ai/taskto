@@ -1,6 +1,9 @@
 package cliworker
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
 // SignInURLForTest exposes signInURL to the package's external tests.
 var SignInURLForTest = signInURL
@@ -55,13 +58,14 @@ func (w *Worker) GroupSeqForTest(pgid int) uint64 {
 // waits for otherwise (a turn's end, a sign-in's) is not answered by the groups' wait.
 func (w *Worker) SetGroupWaitForTest(d time.Duration) { w.groupWait = d }
 
-// NoteBirthForTest records that the worker acts for user now, as its first helper does, and
-// returns the record's path, whose time is when.
-func (w *Worker) NoteBirthForTest(user int64) string {
+// SetBirthForTest records that the worker first acted for user at at.
+func (w *Worker) SetBirthForTest(user int64, at time.Time) {
 	if err := w.noteBirth(user); err != nil {
 		panic(err)
 	}
-	return w.birthMark(user)
+	if err := os.WriteFile(w.birthMark(user), []byte(at.UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
+		panic(err)
+	}
 }
 
 // GroupsForTest is how many process groups the worker lists.
@@ -70,3 +74,6 @@ func (w *Worker) GroupsForTest() int {
 	defer w.mu.Unlock()
 	return len(w.groups)
 }
+
+// BirthMarkForTest is the path of the record of when the worker first acted for user.
+func (w *Worker) BirthMarkForTest(user int64) string { return w.birthMark(user) }

@@ -88,7 +88,7 @@ func TestReconcileRemovesTheDirectoriesThatAreNoLiveUsersOwn(t *testing.T) {
 		4: twoHoursAgo,          // live, with no time of the account sent: not checked
 		6: now.Add(time.Minute), // a number from next up, made after the census: a person added since
 	} {
-		setTime(t, h.w.NoteBirthForTest(user), at)
+		h.w.SetBirthForTest(user, at)
 	}
 	// 5 had the number in a lost history, and a turn of theirs is still running.
 	turn, _, err := h.w.Start(spec("lost", 5, cliworker.Claude, "work"))
@@ -96,7 +96,7 @@ func TestReconcileRemovesTheDirectoriesThatAreNoLiveUsersOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitEvent(t, turn, cliworker.EventTool, "")
-	setTime(t, h.w.NoteBirthForTest(5), hourAgo)
+	h.w.SetBirthForTest(5, hourAgo)
 	// 8 and 9 are live, their directories from before the worker recorded when it made them: 8's is
 	// older than the account, 9's isn't.
 	setTime(t, h.layout.User(8).Root, twoHoursAgo)
@@ -242,7 +242,7 @@ func TestRemoteReconcile(t *testing.T) {
 	r := serve(t, h)
 	ctx := context.Background()
 	file := mine(t, h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true))
-	setTime(t, h.w.NoteBirthForTest(2), time.Now().Add(-2*time.Hour))
+	h.w.SetBirthForTest(2, time.Now().Add(-2*time.Hour))
 	census := cliworker.Census{Live: []int64{2}, Created: map[int64]time.Time{2: time.Now().Add(-time.Hour)}, Next: 3, Before: time.Now()}
 	if err := r.Reconcile(ctx, census); err != nil {
 		t.Fatal(err)
@@ -308,4 +308,34 @@ func TestABrowserPurgeAfterReconcileIsDone(t *testing.T) {
 		t.Errorf("the purge's browser step for a forgotten user: %v", err)
 	}
 	gone(t, h.layout.BrowserPaths(3).Root)
+}
+
+// A person who uses the CLIs a moment after their account was made keeps their directory, though
+// the file system dates files by a clock a few milliseconds behind the one that dated the account
+// (Linux's coarse clock): the worker dates its record by its contents, and a directory from before
+// it kept records only by more than that.
+func TestReconcileKeepsADirectoryMadeJustAfterItsAccount(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	created := time.Now()
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	file := mine(t, dirs)
+	if _, err := h.w.Status(ctx, 1, cliworker.Claude, ""); err != nil { // the worker's first act for them
+		t.Fatal(err)
+	}
+	lag := created.Add(-5 * time.Millisecond)
+	setTime(t, h.w.BirthMarkForTest(1), lag)
+	// 2's directory is from before the worker kept records, its time as far behind.
+	file2 := mine(t, h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true))
+	setTime(t, h.layout.User(2).Root, lag)
+
+	census := cliworker.Census{Live: []int64{1, 2}, Created: map[int64]time.Time{1: created, 2: created}, Next: 3, Before: time.Now()}
+	if err := h.w.Reconcile(ctx, census); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{file, file2} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("a live person's file went: %v", err)
+		}
+	}
 }
