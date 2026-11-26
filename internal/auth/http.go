@@ -419,7 +419,9 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 				serverError(w, r, err)
 				return
 			}
-			if current != body.Session {
+			// A login that is over already (revoked, expired) has nothing left to end: 204, as without
+			// a session.
+			if current != "" && current != body.Session {
 				writeError(w, http.StatusConflict, apierr.CodeAccountChanged, "this browser's login is not the one this sign-out was for")
 				return
 			}

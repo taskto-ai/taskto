@@ -676,10 +676,12 @@ An optional body names the login the sign-out is for, as `GET /api/me` names it:
 {"session": "c1d2e3"}
 ```
 
-The session is then revoked only if it is the one the request carries. Otherwise nothing is revoked
-and the answer is `409 session_account_changed`: a sign-out tried again after its first answer was
+The session is then revoked only if it is the one the request carries. If the request carries
+another login that is still going on, nothing is revoked and the answer is
+`409 session_account_changed`: a sign-out tried again after its first answer was
 lost, from a page whose browser has signed in again since (the same account in another tab), never
-ends that newer login. The web app always names it.
+ends that newer login. A request whose login is over already (revoked, expired) has nothing to end,
+and is answered `204` whatever it names. The web app always names it.
 
 ### `GET /api/me`
 

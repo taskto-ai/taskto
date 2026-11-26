@@ -232,3 +232,114 @@ test('Back to the same account but another login (made meanwhile) does not reope
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 })
+
+// "Back to the app" and "Try again" are never both in flight: while either waits, the other does
+// nothing. So the end is one of two, whichever answers first: signed in with nothing cleared, or
+// signed out with the device cleared; never signed out on the server with the device's data left.
+test('Back in flight: Try again does nothing, and Back for the same login signs in with nothing cleared', async () => {
+  let me: { body: Me } | Promise<{ body: Me }> = { body: { ...first, session: 's1' } }
+  let logouts = 0
+  fakeFetch({
+    ...pages,
+    'GET /api/me': () => me,
+    'POST /api/logout': () => {
+      logouts++
+      return logouts === 1 ? { status: 503, body: { error: 'unavailable', code: 'internal' } } : { status: 204 }
+    },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  let answer: (() => void) | null = null
+  me = new Promise((done) => {
+    answer = () => done({ body: { ...first, session: 's1' } })
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  await waitFor(() => expect(answer).not.toBeNull())
+  // It says it is working, and Try again can't be pressed.
+  const retry = screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement
+  expect(retry.disabled).toBe(true)
+  expect(screen.getByRole('button', { name: /Back to the app/ }).getAttribute('aria-busy')).toBe('true')
+  fireEvent.click(retry)
+  await act(async () => answer?.())
+  await screen.findByRole('navigation', { name: 'Sections' })
+  expect(logouts).toBe(1)
+  expect(pendingOf()).toEqual([])
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('1')
+})
+
+test('Try again in flight: Back does nothing, and the confirmed logout clears the device', async () => {
+  let logouts = 0
+  let confirm: (() => void) | null = null
+  const calls = fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first, session: 's1' } },
+    'POST /api/logout': () => {
+      logouts++
+      if (logouts === 1) return { status: 503, body: { error: 'unavailable', code: 'internal' } }
+      return new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      })
+    },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  const back = screen.getByRole('button', { name: /Back to the app/ })
+  const asked = calls.filter((c) => c.path === '/api/me').length
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(confirm).not.toBeNull())
+  // Back, pressed while the logout is in flight: nothing is asked, nothing settled.
+  fireEvent.click(back)
+  expect(calls.filter((c) => c.path === '/api/me')).toHaveLength(asked)
+  expect(pendingOf()).toEqual(['1:s1'])
+  await act(async () => confirm?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+  expect(localStorage.getItem('taskto:drafts-of')).toBeNull()
+  expect(calls.filter((c) => c.path === '/api/me')).toHaveLength(asked)
+})
+
+test('Back in a tab that took the sign-out up starts the app as a fresh start does', async () => {
+  localStorage.setItem(
+    'taskto:sign-out-pending',
+    JSON.stringify([{ user: 1, session: 's1', phase: 'requested', keep: false, approved: [] }]),
+  )
+  const fresh = { ...first, session: 's1', user: { ...first.user, time_zone: '' } } as Me
+  const calls = fakeFetch({
+    ...pages,
+    'GET /api/me': { body: fresh },
+    'PATCH /api/me': { body: { ...fresh, user: { ...fresh.user, time_zone: 'UTC' } } },
+    'POST /api/logout': { status: 500, body: { error: 'internal error', code: 'internal' } },
+  })
+  render(<App />)
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  expect(localStorage.getItem('taskto:drafts-of')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  await screen.findByRole('navigation', { name: 'Sections' })
+  // The account's drafts are claimed, and its time zone reported, as at any start.
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('1')
+  expect(calls.some((c) => c.method === 'PATCH' && c.path === '/api/me')).toBe(true)
+})
+
+test('another tab finishing the same sign-out takes this one to the login, not to "The account changed"', async () => {
+  let confirm: (() => void) | null = null
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first, session: 's1' } },
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      }),
+  })
+  render(<App />)
+  await logOut()
+  await waitFor(() => expect(confirm).not.toBeNull())
+  // The other tab's cleanup forgets the account: nobody is signed in on this browser now.
+  localStorage.removeItem('taskto:offline-last')
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  expect(screen.queryByText('The account changed')).toBeNull()
+  await act(async () => confirm?.())
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+})

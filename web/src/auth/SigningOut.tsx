@@ -12,11 +12,14 @@ import { AuthLayout } from './AuthLayout'
 
 export function SigningOut({
   failed,
+  busy = false,
   onRetry,
   onBack,
 }: {
   // What went wrong, when the server didn't confirm the sign-out.
   failed?: string
+  // Back is asking who is signed in: it says so, and neither button can be pressed meanwhile.
+  busy?: boolean
   onRetry: () => void
   onBack: () => void
 }) {
@@ -40,10 +43,12 @@ export function SigningOut({
           title={t('app.signOutFailedTitle')}
           actions={
             <>
-              <Button variant="primary" onClick={onRetry}>
+              <Button variant="primary" onClick={onRetry} disabled={busy}>
                 {t('app.tryAgain')}
               </Button>
-              <Button onClick={onBack}>{t('app.backToApp')}</Button>
+              <Button onClick={onBack} loading={busy}>
+                {t('app.backToApp')}
+              </Button>
             </>
           }
         >

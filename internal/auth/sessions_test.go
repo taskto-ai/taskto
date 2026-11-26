@@ -674,4 +674,7 @@ func TestLogoutRevokesOnlyTheLoginItNames(t *testing.T) {
 	// Naming the login it carries, it signs out.
 	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": newer}), http.StatusNoContent)
 	expect(t, first.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
+	// Asked again once that login is over (its first answer was lost): nothing to end, 204.
+	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": newer}), http.StatusNoContent)
+	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": original}), http.StatusNoContent)
 }
