@@ -1177,6 +1177,17 @@ server first: restore takes the data directory's lock, so it refuses a directory
 runs on, and a server started on the directory before the restore is done is refused. A
 restore that fails removes what it wrote, so the directory is empty for the next try.
 
+**Everyone signs in again after a restore.** A server ends a login by deleting its row, so a
+backup made before that still holds it, and a restore could bring back a session that was signed
+out, revoked by a password change, or a browser's that kept its cookie. So `taskto restore` empties
+the restored database's browser sessions (and the push subscriptions bound to them), access tokens,
+password reset links and half-done two-factor logins before any server starts on it. People sign
+in again, and make new access tokens for their agents and scripts; an admin makes new reset links.
+What a restore leaves is the account's state as of the backup, which holds no revocation: pending
+invitations (they expire, and accepting one needs the address's own account), and the password
+and two-factor codes, which are as the backup had them (a person who changed them since changes
+them again).
+
 From an archive file:
 
 `docker compose down` stops the backup schedule too when its profile is in `.env`'s
