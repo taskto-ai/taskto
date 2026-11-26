@@ -89,9 +89,9 @@ func TestEditingASentInvoiceMakesNoProviderCall(t *testing.T) {
 		t.Fatalf("the send: %d calls, pay_url %v", len(p.posts()), url)
 	}
 
-	// The record editor's action (the template's update without effects): the customer and the amount
-	// change, and nothing is queued or asked of Stripe.
-	p.act("op-inv-edit-01", "edit_invoice", map[string]any{"id": record, "customer": "Acme Ltd", "total": 130})
+	// The record editor's action (the template's update without effects): the customer and the number
+	// change, and nothing is queued or asked of Stripe. (The amount can't, while the link may be paid.)
+	p.act("op-inv-edit-01", "edit_invoice", map[string]any{"id": record, "customer": "Acme Ltd", "number": "INV-1b"})
 	time.Sleep(200 * time.Millisecond)
 	if es := p.entries(); len(es) != 1 {
 		t.Fatalf("an edit queued %d entries", len(es)-1)
@@ -151,6 +151,9 @@ func TestSendingAnInvoiceTwiceMakesOneLink(t *testing.T) {
 }
 
 // The record's open link asks other money than a new entry: nothing is made, and the entry says so.
+// The record's money can't change while its link may be paid, so the send is refused first; and an
+// entry that asks other money all the same (the record changed by a path that doesn't go through an
+// action) still makes no second link.
 func TestAnOpenLinkForAnotherAmountIsNeverJoinedByASecond(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -158,7 +161,13 @@ func TestAnOpenLinkForAnotherAmountIsNeverJoinedByASecond(t *testing.T) {
 	p.send(record, "op-amount-0001")
 	p.allEnded(1)
 	first := p.field(record, "pay_url")
-	p.act("op-amount-0002", "send", map[string]any{"id": record, "status": "sent", "total": 12})
+	expectCode(t, p.actRec("op-amount-0002", "send", map[string]any{"id": record, "status": "sent", "total": 12}),
+		http.StatusUnprocessableEntity, string(apierr.CodeAppPaymentLinkOpen))
+	if es := p.entries(); len(es) != 1 || p.field(record, "total") != float64(10) {
+		t.Fatalf("a refused send: %d entries, total %v", len(es), p.field(record, "total"))
+	}
+	p.exec(`UPDATE app_rows SET data = json_set(data, '$.total', 12) WHERE id = ?`, record)
+	p.act("op-amount-0003", "send", map[string]any{"id": record, "status": "sent", "customer": "Other"})
 	es := p.allEnded(2)
 	if es[1].state != apps.StateFailed || es[1].code != string(apierr.CodeIntegrationLinkStillOpen) {
 		t.Fatalf("the second entry: %+v", es[1])

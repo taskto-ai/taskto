@@ -174,6 +174,14 @@ still being made, or its outcome is unknown, the same link is used again and not
 (a link for another amount fails with a message instead, until the old one expires). Only a link
 that Stripe says has expired, or one that was paid, lets a new one be made.
 
+**The amount stays while the link may be paid.** While an invoice's link is open, still being made or
+its outcome is unknown, its amount and its currency can't change, from the invoice's screen, the
+records explorer, the agent or any other action: the customer would pay the old amount for an invoice
+that says another. Everything else on the invoice can change. Once Stripe says the link expired (it
+tells TaskTo, which needs the public address), change the amount and use **Replace an expired link**:
+the new link asks the new amount. A send that failed before it made anything, and is retried after
+the amount changed, makes nothing for the old amount: send the invoice again.
+
 **An expired link.** With a public address the payment page is a Stripe Checkout Session, which
 Stripe closes after 24 hours. A customer who comes later finds a closed page, and the invoice stays
 *Sent*. The invoice offers **Replace an expired link**: it clears the address on the invoice and asks
@@ -608,21 +616,40 @@ write.
     new reference is made. **Settled** (complete, or an inactive Payment Link), a new one is made only
     if the reference knows it was paid; otherwise `integration_link_already_paid`, for a person. A read
     that fails makes nothing (the entry's failure, tried again). A reference made under another
-    integration, account or mode can't be read with the key now: unless it is paid, refunded or
-    expired, the entry fails with `integration_changed` or `integration_account_changed`.
+    integration, account or mode can't be read with the key now: unless it expired, or was paid (or
+    refunded) on that very link, the entry fails with `integration_changed` or
+    `integration_account_changed` for an admin. A reference paid on another key's object (one an admin
+    confirmed away, paid after all) still has its own link on record, which may be open, so it counts
+    as neither; under the same integration such a link, read open, stops the entry with
+    `integration_link_already_paid`. A link given again takes the slot of the entry that gives it (the
+    live release's, bound to the same integration), so its payment is written even when the slot was
+    renamed since the link was made.
   - *It is still being made, or its outcome is unknown*: the new entry **takes it** (the reference's
     `effect_id` becomes the new entry's) and goes on resolving it as its own, under every rule below:
     it waits on the reconciliation, adopts what the earlier call made, or fails with
     `integration_outcome_unknown` for an admin, whose confirmation then names the new entry. A reference
     under which no call ever ran (every call refused before it ran, or none sent) holds nothing at
     Stripe: it is removed, in the transaction that makes the new one, which also stops a call another
-    try was about to write ahead under it (the write-ahead needs the reference). A reference held by an
-    entry newer than the one asking is left to it: the older entry waits and is then superseded.
+    try was about to write ahead under it (the write-ahead needs the reference). A reference whose
+    every key is confirmed to have left nothing payable (its object seen expired, or an admin's
+    confirmation that it made none), though the try that learned it stopped before it moved on, holds
+    nothing either: it is retired (marked expired, its keys kept) and a new reference is made for the
+    money the entry asks now; a retired reference takes no key again, from its own entry or a try still
+    running. A reference held by an entry newer than the one asking is left to it: the older entry waits
+    and is then superseded. A reference taken over moves to the slot of the entry that takes it.
   - *It was paid before it learned its link*: a new reference is made.
 
   The read at Stripe happens before the transaction (which holds the write lock from its start), and
   the transaction reads the record's newest reference again: if it isn't the one checked, the entry
   reads it again. So two entries of one record never both make a link.
+- **The money stays while a link may be paid.** A change of a record's amount or currency (the fields
+  an app's `create_payment_link` effects read) is refused with `422 app_payment_link_open`, in the
+  change's own transaction, while an entry of the effect waits to run or a reference of the record may
+  still be paid: one with a link that isn't known expired and wasn't paid on that very link, or one with
+  none yet that has a key whose outcome is unknown or that made something. So a link is never paid at
+  an amount the record no longer says, and the payment is always written to a record that asks it. An
+  entry retried after the money changed (it failed before it made anything) fails with
+  `integration_amount_changed` and makes nothing.
 - **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
   unique by the outbox entry and keeps the provider's answer. It has **keys**
   (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of

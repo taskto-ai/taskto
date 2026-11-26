@@ -7,6 +7,7 @@ package paylink
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -18,6 +19,17 @@ type Opener interface {
 	// OpenPaymentLink returns the link to pay what the request asks, making it at the provider only
 	// if the request's entry has not made one already. Its failures are *Error.
 	OpenPaymentLink(ctx context.Context, req Request) (Link, error)
+	// MayBePaid says whether a payment link of the app's record may still take a payment, or may still
+	// come to exist, as far as the server knows: one that is open, still being made or whose outcome
+	// is unknown, read through q (the transaction that changes the record, under its write lock). Only
+	// a link confirmed expired, or paid on that very link, is no longer one. While a link may be paid,
+	// the record's money (the amount and currency it asks) can't change.
+	MayBePaid(ctx context.Context, q Querier, appID, recordID int64) (bool, error)
+}
+
+// Querier is what MayBePaid reads with: a transaction or the database.
+type Querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // Request is a payment link as the integration is asked for it. The integration of the

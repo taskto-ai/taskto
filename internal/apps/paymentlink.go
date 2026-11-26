@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 
@@ -119,6 +120,12 @@ func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, sp
 		return asks(l) && (l.When == nil || ap.liveDef.Collection.holds(*l.When, data))
 	}) {
 		return paymentGrant{}, refuse(apierr.CodeIntegrationConditionChanged)
+	}
+	// The money the entry asks is the record's still. It can't change while an entry waits to run
+	// (paymentMoneyLocked), but one that failed and is retried after the record's amount or currency
+	// changed would ask for a link at the old money, which the invoice no longer says.
+	if amount, code := p.moneyEffect().moneyOf(ap.liveDef.Collection, data); amount != p.Amount || code != p.Currency {
+		return paymentGrant{}, refuse(apierr.CodeIntegrationAmountChanged)
 	}
 	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
 }
@@ -298,6 +305,66 @@ func notePaymentLinkEntry(ctx context.Context, tx *sql.Tx, appID, recordID, effe
 			WHERE excluded.effect_id > app_payment_link_latest.effect_id`, appID, recordID, field, effectID); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// moneyEffect is the effect as far as its money goes: where the entry's amount and currency were read.
+func (p payload) moneyEffect() Effect {
+	e := Effect{Kind: EffectCreatePaymentLink, AmountField: p.AmountField, CurrencyField: p.CurrencyField}
+	if p.CurrencyField == "" {
+		e.Currency = p.Currency
+	}
+	return e
+}
+
+// paymentMoneyLocked refuses a change of the record's money (the amount or the currency a payment
+// link effect of the app reads) while a payment link of the record may still be paid: an entry that
+// waits to run asks the money it was queued with, and a link that is open, still being made or whose
+// outcome is unknown asks the money it was made for. A payer would pay the old amount for an invoice
+// that says another, and the payment would settle it. Once the link is confirmed expired (or paid on
+// that very link), the money may change, and the next link asks the new one. Asked of the update's
+// own transaction, under the write lock, so no entry or link begins between the check and the change.
+func paymentMoneyLocked(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID, recordID int64, def Definition, before, after map[string]any) error {
+	changed := ""
+	for _, name := range slices.Sorted(maps.Keys(def.Actions)) {
+		for _, e := range def.Actions[name].Effects {
+			if e.Kind != EffectCreatePaymentLink {
+				continue
+			}
+			wasAmount, wasCode := e.moneyOf(def.Collection, before)
+			nowAmount, nowCode := e.moneyOf(def.Collection, after)
+			switch {
+			case wasAmount != nowAmount:
+				changed = e.AmountField
+			case wasCode != nowCode:
+				changed = e.CurrencyField
+			}
+			if changed != "" {
+				break
+			}
+		}
+		if changed != "" {
+			break
+		}
+	}
+	if changed == "" {
+		return nil
+	}
+	var locked bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM app_effects
+		WHERE app_id = ? AND record_id = ? AND kind = ? AND state IN ('pending', 'running'))`, appID, recordID, EffectCreatePaymentLink).Scan(&locked); err != nil {
+		return err
+	}
+	if !locked && payments != nil {
+		var err error
+		if locked, err = payments.MayBePaid(ctx, tx, appID, recordID); err != nil {
+			return err
+		}
+	}
+	if locked {
+		return invalidAs(apierr.CodeAppPaymentLinkOpen, apierr.Params{"field": changed},
+			"%s can't change while the record's payment link may still be paid: change it once the link has expired", changed)
 	}
 	return nil
 }

@@ -130,6 +130,12 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if found && (ref.objectID != "" || paidWithoutLink(ref)) {
 		return s.savedLink(ctx, rec, provider, ref, req)
 	}
+	if found && ref.state == "expired" {
+		// Retired with no link: every key of it was confirmed to have left nothing a payer can use, and a
+		// newer entry of the record made the record's link in its place (takeEarlier). Nothing more is
+		// made for it.
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+	}
 	if found && ref.integrationID != req.IntegrationID {
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged} // before anything is asked of anyone
 	}
@@ -910,7 +916,8 @@ func (s *Service) writeAhead(ctx context.Context, r ref, a attempt) (bool, error
 	res, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET sends = sends + 1,
 			first_sent_at = coalesce(first_sent_at, ?), unknown_since = coalesce(unknown_since, ?)
 		WHERE ref_id = ? AND seq = ? AND outcome IS NULL
-			AND EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL)`,
+			AND EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
+				AND state IN ('creating', 'failed'))`,
 		at, at, a.refID, a.seq, r.id, a.seq)
 	if err != nil {
 		return false, err
@@ -962,10 +969,12 @@ func (s *Service) markAttempt(ctx context.Context, a attempt, outcome string) er
 // payer can use: none has an unknown outcome or an object that was made or settled, and none was
 // abandoned with an object on record (an admin's "none exists" that something seen contradicts). An
 // object a lookup saw and couldn't check is on record as any other is: the key holding it has no
-// outcome while it stands (or settled), so it blocks the move, until the object itself is seen expired. A ref refused is read back still on key a.
+// outcome while it stands (or settled), so it blocks the move, until the object itself is seen expired.
+// And only for a ref that can still note a link (creating, or failed): one a newer entry retired
+// (takeEarlier) takes no key again. A ref refused is read back still on key a.
 func (s *Service) nextAttempt(ctx context.Context, r ref, a attempt) (ref, error) {
 	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1
-		WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
+		WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed')
 			AND EXISTS (SELECT 1 FROM integration_ref_attempts WHERE ref_id = ? AND seq = ? AND outcome IN ('expired', 'abandoned'))
 			AND NOT EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = ?
 				AND (o.outcome IS NULL OR o.outcome NOT IN ('expired', 'abandoned') OR (o.outcome = 'abandoned' AND o.object_id IS NOT NULL)))`,
@@ -1070,7 +1079,11 @@ func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, cre
 	if err != nil || !ok || prior.objectID == "" {
 		return paylink.Link{}, false, 0, err
 	}
-	finished := prior.state == "paid" || prior.state == "refunded" || prior.state == "expired"
+	// Finished: nothing of its link can be paid. It expired, or it was paid on that very link. A ref
+	// paid on another key's object (one an admin confirmed away, which was paid after all) still has its
+	// own link on record, which may be open: it can't be read under another integration or account, so
+	// the entry stops with the code that says which, for an admin.
+	finished := prior.state == "expired" || ((prior.state == "paid" || prior.state == "refunded") && prior.paidObjectID == prior.objectID)
 	switch {
 	case prior.integrationID != req.IntegrationID:
 		if finished {
@@ -1089,8 +1102,18 @@ func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, cre
 	}
 	switch state {
 	case LinkOpen:
+		if prior.state == "paid" || prior.state == "refunded" {
+			// Paid on another key's object, and its own link still takes payment: a person reconciles it.
+			return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+		}
 		if prior.amountMinor != minor || prior.currency != cur {
 			return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
+		}
+		// Given again by an entry of the live release: its payment is written through the slot that
+		// release declares, which is bound to the same integration (checked above). A slot renamed since
+		// the ref was made would no longer find the app's rules for the payment.
+		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET slot = ? WHERE id = ? AND slot != ?`, req.Slot, prior.id, req.Slot); err != nil {
+			return paylink.Link{}, false, 0, err
 		}
 		slog.Info("integrations: a record's payment link that may still be paid is given again", "integration", prior.integrationID, "ref", prior.id)
 		return prior.link(), true, 0, nil
@@ -1145,11 +1168,49 @@ func (s *Service) takeEarlier(ctx context.Context, tx *sql.Tx, req paylink.Reque
 		}
 		return ref{}, false, nil
 	}
-	// Still being made, or its outcome unknown: the entry takes it and resolves it as its own.
-	if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET effect_id = ? WHERE id = ?`, req.EffectID, prior.id); err != nil {
+	var live bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = ? AND NOT `+deadKey+`)`,
+		prior.id).Scan(&live); err != nil {
+		return ref{}, false, err
+	}
+	if !live {
+		// Every call under it ran, and each key is confirmed to have left nothing a payer can use (its
+		// object seen expired, or an admin's confirmation that it made none), though the try that learned
+		// it stopped before it moved on. It holds nothing, and asks the money it was made for: a new ref
+		// is made for what the entry asks now. The ref stays, with its keys, retired (expired): its own
+		// entry, or a try of it still running, takes no key for it again (nextAttempt, writeAhead).
+		if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET state = 'expired', settled_at = coalesce(settled_at, ?)
+			WHERE id = ? AND state IN ('creating', 'failed')`, s.store.stamp(s.store.now()), prior.id); err != nil {
+			return ref{}, false, err
+		}
+		return ref{}, false, nil
+	}
+	// Still being made, or its outcome unknown: the entry takes it and resolves it as its own, under the
+	// slot the entry's release declares (beginRef refuses it if that slot is bound to another integration).
+	if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET effect_id = ?, slot = ? WHERE id = ?`, req.EffectID, req.Slot, prior.id); err != nil {
 		return ref{}, false, err
 	}
 	slog.Info("integrations: a record's payment link still being made is taken by its newer entry", "integration", prior.integrationID, "ref", prior.id)
 	out, err := scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE id = ?`, prior.id))
 	return out, err == nil, err
+}
+
+// deadKey holds of a key (integration_ref_attempts o) that can leave nothing a payer can use: its object
+// was seen expired, an admin confirmed it made none (and nothing seen contradicts it), or no call under
+// it ever ran. Every term is true or false, never NULL (a key with no outcome yet has outcome NULL), so
+// NOT deadKey holds of every other key.
+const deadKey = `(coalesce(o.outcome, '') = 'expired' OR (coalesce(o.outcome, '') = 'abandoned' AND o.object_id IS NULL)
+	OR (o.outcome IS NULL AND o.sends = o.clean_sends AND o.object_id IS NULL))`
+
+// MayBePaid says whether a ref of the app's record may still take a payment, or still come to have a
+// link (paylink.Opener): one with a link that isn't confirmed expired and wasn't paid on that very
+// link, or one with none yet that has a key that isn't dead (being made, or its outcome unknown).
+func (s *Service) MayBePaid(ctx context.Context, q paylink.Querier, appID, recordID int64) (bool, error) {
+	var yes bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_refs r WHERE r.app_id = ? AND r.record_id = ? AND (
+		CASE WHEN r.provider_object_id IS NOT NULL
+			THEN r.state != 'expired' AND NOT (r.state IN ('paid', 'refunded') AND r.paid_object_id = r.provider_object_id)
+			ELSE EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = r.id AND NOT `+deadKey+`)
+		END))`, appID, recordID).Scan(&yes)
+	return yes, err
 }

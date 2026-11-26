@@ -76,7 +76,9 @@ address on the invoice; when the customer pays, the invoice becomes *Paid* with 
 the payment is refunded in full, *Refunded*. A sent invoice offers **Replace an expired link**, which
 makes a new page only once the old one has expired at the provider (until then it puts the same
 address back). Editing an invoice in the records view never asks for a link: the template has an edit
-action without effects, which the records view uses. A **Home widget** counts the invoices waiting
+action without effects, which the records view uses. While an invoice's link may still be paid (or
+is still being made), its amount and currency can't be changed by any edit; once the link has expired,
+they can, and **Replace an expired link** then asks the new amount. A **Home widget** counts the invoices waiting
 for payment and the paid ones.
 
 It is the one template that reaches outside TaskTo.AI, and it does so without naming anything: its
