@@ -187,6 +187,10 @@ function Frame({
   // An open drawer takes focus, Escape closes it and gives focus back to its button.
   useEffect(() => {
     if (!drawer) return
+    // Opened again: a page focus still waiting from a link whose move was refused (a draft kept) is
+    // forgotten, so closing it now (Escape gives the menu button the focus) isn't undone.
+    focusPage.current = false
+    followedFrom.current = null
     ;(
       sidebar.current?.querySelector<HTMLElement>('[aria-current="page"]') ??
       sidebar.current?.querySelector<HTMLElement>('a')

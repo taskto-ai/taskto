@@ -410,6 +410,31 @@ test('a page that asks before it is left is asked when another workspace is pick
   await screen.findByRole('button', { name: 'Workspace: Team' })
 })
 
+test('a drawer link whose move is refused (a draft kept) doesn’t take the focus from a later Escape', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  // A page with a draft that the person keeps: the move never goes on.
+  const ask = vi.fn<BeforeLeave>(() => {})
+  render(
+    <>
+      <Shell me={me as unknown as Me} onLogout={() => {}} />
+      <Draft ask={ask} />
+    </>,
+  )
+  const menuButton = await screen.findByRole('button', { name: 'Open the menu' })
+  fireEvent.click(menuButton)
+  fireEvent.click(
+    screen.getByRole('navigation', { name: 'Sections' }).querySelector('a[href="/w/1/boards"]') as Element,
+  )
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  // The menu opened again and closed with Escape: the focus is on the menu button, and stays there.
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  await act(async () => {})
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open the menu' }))
+})
+
 test('the workspace switcher works by keyboard and gives the focus back', async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
