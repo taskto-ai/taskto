@@ -398,7 +398,10 @@ The UI shows what the command prints.
   process groups they started. Only this account: the user's other accounts, their other CLIs and
   other users go on, and nothing is marked, so the account works again once it is over. If
   something is still running after the wait, nothing is removed (`ErrBusy`, `409`,
-  `cli_account_busy`) and the disconnect can be tried again.
+  `cli_account_busy`) and the disconnect can be tried again. Removals that cover an account in
+  common run one after the other (a disconnect, a second one, a `Forget` of the user): the helper
+  requests of one, the sign-out and the removal of the files, never overlap another's. A caller
+  that has already given up (its context ended) starts none.
 - **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account: it
   removes the user's whole directory. It first records the user as forgotten in the worker's own
   state directory (`.worker/forgotten-u<user>`, so it outlives a worker's restart), which refuses

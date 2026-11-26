@@ -515,6 +515,10 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 		return err
 	}
 	defer end()
+	// A user forgotten while this waited for the gate (a Forget has the gate, and ends first).
+	if w.isForgotten(user) {
+		return ErrForgotten
+	}
 	if err := w.quiesce(ctx, sc); err != nil {
 		return err
 	}

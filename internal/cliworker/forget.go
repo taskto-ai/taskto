@@ -90,13 +90,21 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return errors.New("invalid user")
 	}
+	// The gate first: a disconnect or another Forget of the user's that is running ends before this
+	// begins, and none begins meanwhile, so their helper requests never overlap the removal.
+	sc := scope{user: user, all: true}
+	end, err := w.beginGate(ctx, sc)
+	if err != nil {
+		return err
+	}
+	defer end()
 	if err := w.markForgotten(user); err != nil {
 		return fmt.Errorf("recording that the user was forgotten: %w", err)
 	}
-	if err := w.quiesce(ctx, scope{user: user, all: true}); err != nil {
+	if err := w.quiesce(ctx, sc); err != nil {
 		return err
 	}
-	_, _, err := w.runHelper(ctx, user, helperRequest{Op: "forget"})
+	_, _, err = w.runHelper(ctx, user, helperRequest{Op: "forget"})
 	return err
 }
 

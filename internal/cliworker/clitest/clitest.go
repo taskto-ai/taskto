@@ -56,6 +56,10 @@ type Scenario struct {
 	// directory, wait that long, and then write status.finished there (making the directory if it
 	// is gone), before it answers.
 	StatusSleepMS int `json:"status_sleep_ms,omitempty"`
+	// LogoutSleepMS makes `claude auth logout` write logout.started into its config directory,
+	// wait that long, and then write logout.finished there (making the directory if it is gone),
+	// as a sign-out that is slow and ends by writing to the account's directory.
+	LogoutSleepMS int `json:"logout_sleep_ms,omitempty"`
 	// Background starts a process that outlives the CLI, in its process group.
 	Background bool `json:"background,omitempty"`
 	// HoldStdout makes the background process keep the CLI's stdout open.
@@ -345,6 +349,8 @@ const (
 	LateWrite      = "late-write"
 	StatusStarted  = "status.started"
 	StatusFinished = "status.finished"
+	LogoutStarted  = "logout.started"
+	LogoutFinished = "logout.finished"
 )
 
 func (f *fake) answer(prompt, session string) string {
@@ -763,6 +769,12 @@ func (f *fake) claudeAuth(cmd string) int {
 		}
 		return 0
 	case "logout":
+		if f.scenario.LogoutSleepMS > 0 {
+			_ = os.WriteFile(filepath.Join(f.config, LogoutStarted), nil, 0o600)
+			time.Sleep(time.Duration(f.scenario.LogoutSleepMS) * time.Millisecond)
+			_ = os.MkdirAll(f.config, 0o700)
+			_ = os.WriteFile(filepath.Join(f.config, LogoutFinished), nil, 0o600)
+		}
 		_ = os.Remove(creds)
 		fmt.Println("Successfully logged out from your Anthropic account.")
 		return 0

@@ -211,3 +211,103 @@ func TestLogoutsOfOneAccountDoNotOverlap(t *testing.T) {
 		}
 	}
 }
+
+// A deleted account's removal and a disconnect of one of its accounts run one after the other:
+// the disconnect's sign-out is a helper request that ends by writing into the account's directory,
+// and must not do it after the directory went.
+func TestForgetWaitsForADisconnectInProgress(t *testing.T) {
+	h := newHarness(t, nil)
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{LogoutSleepMS: 1500}, true)
+	loggedOut := make(chan error, 1)
+	go func() { loggedOut <- h.w.Logout(context.Background(), 1, cliworker.Claude, "") }()
+	eventually(t, "the sign-out didn't start", func() bool {
+		_, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), clitest.LogoutStarted))
+		return err == nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-loggedOut:
+		if err != nil {
+			t.Errorf("the disconnect: %v", err)
+		}
+	default:
+		t.Fatal("Forget returned while a disconnect of the user's account was still running")
+	}
+	gone(t, dirs.Root)
+}
+
+// A sign-in that was cancelled and replaced is still a process: disconnecting the account waits for
+// it too, however quickly the sign-in was started again.
+func TestLogoutWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
+	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
+	old, err := h.w.StartLogin(1, cliworker.Claude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.w.CancelLogin(1, cliworker.Claude, "")
+	// The replacement stops at once; only the cancelled one takes its time.
+	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{})
+	replacement, err := h.w.StartLogin(1, cliworker.Claude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement == old {
+		t.Fatal("fixture: the cancelled sign-in was reused")
+	}
+	select {
+	case <-old.Done():
+		t.Fatal("fixture: the cancelled sign-in had ended already")
+	default:
+	}
+	if err := h.w.Logout(context.Background(), 1, cliworker.Claude, ""); err != nil {
+		t.Fatal(err)
+	}
+	for name, l := range map[string]*cliworker.Login{"the cancelled one": old, "its replacement": replacement} {
+		select {
+		case <-l.Done():
+		default:
+			t.Errorf("Logout returned while %s was still running", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), clitest.LateWrite)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the cancelled sign-in saved its file after the account's files were removed: %v", err)
+	}
+}
+
+// A removal whose caller has already given up starts nothing destructive: the files stay, and
+// the removal can be made again.
+func TestAnAlreadyCancelledRemovalRemovesNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	creds := filepath.Join(dirs.Config(cliworker.Claude), ".credentials.json")
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	launched := h.w.HelperLaunchesForTest()
+
+	if err := h.w.Logout(cancelled, 1, cliworker.Claude, ""); err == nil {
+		t.Error("a disconnect for a caller that had given up went through")
+	}
+	if _, err := os.Stat(creds); err != nil {
+		t.Errorf("the login's files went for a caller that had given up: %v", err)
+	}
+	if err := h.w.Forget(cancelled, 1); err == nil {
+		t.Error("a removal for a caller that had given up went through")
+	}
+	if _, err := os.Stat(creds); err != nil {
+		t.Errorf("the user's files went for a caller that had given up: %v", err)
+	}
+	if n := h.w.HelperLaunchesForTest(); n != launched {
+		t.Errorf("%d helpers were started for callers that had given up", n-launched)
+	}
+	// Made again by a caller that waits, it finishes.
+	if err := h.w.Forget(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, dirs.Root)
+}

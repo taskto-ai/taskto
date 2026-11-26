@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,7 +75,9 @@ type Worker struct {
 	helpers   map[*helperRun]struct{}
 	groups    map[int]groupRec
 	groupWait time.Duration
-	loginRuns map[*Login]struct{}
+	// helperLaunches counts the helpers built to run, for tests.
+	helperLaunches atomic.Int64
+	loginRuns      map[*Login]struct{}
 	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
 	marks sync.Mutex
 

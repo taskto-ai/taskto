@@ -136,15 +136,14 @@ func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) {
 	}
 }
 
-// beginGate closes the account of sc (one account) to new turns, sign-ins and helper requests,
-// once a removal of an account in common has ended, and returns the function that opens it again.
+// beginGate closes what sc covers (one account, or all of a user's) to new turns, sign-ins and
+// helper requests, once a removal of an account in common has ended, and returns the function that
+// opens it again. Removals of one account run one after the other: the helper requests of one (a
+// sign-out, the removal of the files) must not overlap another's, which would make the directory
+// again. A caller that must refuse a forgotten user asks isForgotten after it.
 func (w *Worker) beginGate(ctx context.Context, sc scope) (end func(), err error) {
 	for {
 		w.mu.Lock()
-		if w.isForgotten(sc.user) {
-			w.mu.Unlock()
-			return nil, ErrForgotten
-		}
 		var other *gate
 		for _, o := range w.gates {
 			if sc.overlaps(o.scope) {

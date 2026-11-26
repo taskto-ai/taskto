@@ -22,6 +22,9 @@ func ToolsReadOnlyForTest(t *Tools, cli CLI, tool string, input []byte) bool {
 	return t.readOnly(cli, tool, input)
 }
 
+// HelperLaunchesForTest is how many helpers the worker has been asked to start.
+func (w *Worker) HelperLaunchesForTest() int64 { return w.helperLaunches.Load() }
+
 // TrackGroupForTest lists process group pgid as one the worker started for the account of
 // user's cli in slot.
 func (w *Worker) TrackGroupForTest(pgid int, user int64, cli CLI, slot Slot) {
