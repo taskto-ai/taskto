@@ -858,3 +858,78 @@ test('another section or workspace (the switcher, the router) asks first over a 
   // Asked once, not again by the router after the page said go.
   expect(asked()).toBeNull()
 })
+
+// jsdom moves through the history in a task of its own, then fires popstate; an undone move then
+// fires its own.
+async function back() {
+  await act(async () => {
+    const done = new Promise((r) => window.addEventListener('popstate', () => setTimeout(r, 0), { once: true }))
+    window.history.back()
+    await done
+  })
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+}
+
+test('keeping a draft over another section stays: the address, the draft and the history as they were', async () => {
+  kb()
+  window.history.replaceState(null, '', '/w/1/knowledge')
+  render(<KnowledgePage workspace={1} />)
+  const doc = await open()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(doc).getByLabelText('Text'), { target: { value: 'Mine.' } })
+  const from = window.location.pathname
+  const length = window.history.length
+  act(() => navigate('/w/2/boards'))
+  fireEvent.click(within(doc).getByRole('button', { name: 'Keep editing' }))
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+  expect(asked()).toBeNull()
+  expect(window.location.pathname).toBe(from)
+  expect(window.history.length).toBe(length)
+  expect((within(doc).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Mine.')
+})
+
+test('Back over a draft asks: keeping undoes it, discarding goes back', async () => {
+  kb()
+  act(() => navigate('/w/1/home'))
+  act(() => navigate('/w/1/knowledge'))
+  render(<KnowledgePage workspace={1} />)
+  const doc = await open()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(doc).getByLabelText('Text'), { target: { value: 'Mine.' } })
+  const from = window.location.pathname
+  await back()
+  expect(asked()).toBeTruthy()
+  fireEvent.click(within(doc).getByRole('button', { name: 'Keep editing' }))
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+  expect(window.location.pathname).toBe(from)
+  expect((within(doc).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Mine.')
+  await back()
+  fireEvent.click(within(doc).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(window.location.pathname).not.toBe(from))
+})
+
+test('a discard leaves the draft the editor’s until it is gone: the move it lets go is not asked again, a later one is', () => {
+  const h = renderHook(() => useGuard())
+  const call = (f: (g: Guard) => void) => act(() => f(h.result.current))
+  call((g) => g.report('a', true, false))
+  // The move the person agreed to raises the same question on its way (a link asks the router,
+  // which asks the page): it goes, unasked.
+  const inner = vi.fn()
+  call((g) => g.ask(() => h.result.current.ask(inner)))
+  expect(h.result.current.asking).toBe('leave')
+  call((g) => g.discard())
+  expect(inner).toHaveBeenCalledOnce()
+  // The editor is still there (nothing closed it): its draft is still guarded.
+  const unload = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(unload)
+  expect(unload.defaultPrevented).toBe(true)
+  const later = vi.fn()
+  call((g) => g.ask(later))
+  expect(later).not.toHaveBeenCalled()
+  expect(h.result.current.asking).toBe('leave')
+  // Gone: nothing is left to ask about.
+  call((g) => g.dispose('a'))
+  const after = vi.fn()
+  call((g) => g.ask(after))
+  expect(after).toHaveBeenCalledOnce()
+})

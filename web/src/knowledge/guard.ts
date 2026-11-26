@@ -59,6 +59,9 @@ export function useGuard(): Guard {
   const open = useRef<Wait | null>(null)
   open.current = pending
   const queued = useRef<Wait | null>(null)
+  // While what the person chose to discard goes on: a question it raises on its way (a link's
+  // navigate asks the router, which asks this page) is the same one, already answered.
+  const through = useRef(false)
 
   const goOn = useCallback(() => {
     const waiting = queued.current
@@ -66,7 +69,8 @@ export function useGuard(): Guard {
     waiting?.go()
   }, [])
   const ask = useCallback((go: () => void, why: Why = 'leave') => {
-    if (state.current.saving) queued.current = { go, why }
+    if (through.current) go()
+    else if (state.current.saving) queued.current = { go, why }
     else if (state.current.dirty) setPending({ go, why })
     else go()
   }, [])
@@ -111,12 +115,16 @@ export function useGuard(): Guard {
   const forget = useCallback(() => {
     queued.current = null
   }, [])
+  // The draft stays the editor's until it is gone (dispose): a move that kept the editor would keep
+  // the guard, the link guard and the browser's question on.
   const discard = useCallback(() => {
     setPending(null)
-    // Discarded: nothing is left to lose, so the move that goes on now (the router asks the page
-    // before it leaves, useBeforeLeave) isn't asked about again.
-    state.current = { dirty: false, saving: false }
-    pending?.go()
+    through.current = true
+    try {
+      pending?.go()
+    } finally {
+      through.current = false
+    }
   }, [pending])
 
   // The page closing or reloading, and a link of the app that would leave this page: both

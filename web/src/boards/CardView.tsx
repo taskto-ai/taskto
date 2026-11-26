@@ -92,10 +92,22 @@ export function CardView({
     if (await mayLeave()) onClose()
   }
   // Leaving the page (another section, another workspace, the browser's Back) asks the same, while
-  // a description or a comment is being written.
+  // a description or a comment is being written. With nothing unsaved the answer is at once, so the
+  // router lets a Back go as one move (an answer later undoes it and does it again).
   useBeforeLeave((go) => {
+    if (!drafts.any()) return go()
     void mayLeave().then((ok) => ok && go())
   })
+  // Closing the tab or reloading it over a draft: the browser's own question.
+  useEffect(() => {
+    const unload = (e: BeforeUnloadEvent) => {
+      if (!drafts.any()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', unload)
+    return () => window.removeEventListener('beforeunload', unload)
+  }, [drafts])
 
   return (
     <DraftsContext.Provider value={drafts}>

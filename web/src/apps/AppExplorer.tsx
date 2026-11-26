@@ -123,19 +123,25 @@ export function AppExplorer({
       tone: 'danger',
     })
   // Does `go` at once when nothing is unsaved (as before: the list asks the server straight away),
-  // and only after the person chose to discard when something is.
+  // and only after the person chose to discard when something is. Every `go` given here closes the
+  // drawer or puts another record in it, so what was typed goes with it; the flag is cleared by the
+  // drawer itself when it really goes (RecordDetail says so as it unmounts), never ahead of that.
   const leaving = (go: () => void) => {
     if (!unsaved.current) return go()
     void askToLeave().then((discard) => {
-      if (!discard) return
-      unsaved.current = false
-      go()
+      if (discard) go()
     })
   }
   if (leaveRef) leaveRef.current = leaving
   // Leaving the page (another section, another workspace, the browser's Back) asks the same, while a
-  // record holds unsaved changes.
-  useBeforeLeave(leaving)
+  // record holds unsaved changes. A move that keeps this explorer (another address of the same app)
+  // would keep the drawer and its draft too: discarding closes the drawer first, so "discard" is true.
+  useBeforeLeave((go) =>
+    leaving(() => {
+      if (unsaved.current) setOpen(null)
+      go()
+    }),
+  )
   // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
   // says what the list holds now: the row it came from is gone.
   const count = useRef<HTMLParagraphElement>(null)
@@ -154,7 +160,6 @@ export function AppExplorer({
       // another record opened before the answer came) closes nothing: what is open, and what was
       // typed in it, stay.
       if (from !== openingNow.current) return
-      unsaved.current = false
       setOpen(null)
       setTimeout(() => count.current?.focus(), 0)
       return

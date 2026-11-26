@@ -854,3 +854,84 @@ test('another section (the switcher, the router) asks first over a record not sa
   fireEvent.click(within(ask).getByRole('button', { name: 'Discard my changes' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/settings'))
 })
+
+// jsdom moves through the history in a task of its own, then fires popstate; an undone move then
+// fires its own.
+async function back() {
+  await act(async () => {
+    const done = new Promise((r) => window.addEventListener('popstate', () => setTimeout(r, 0), { once: true }))
+    window.history.back()
+    await done
+  })
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+}
+
+test('a move to another address of the same app: keeping stays with the draft; discarding closes the drawer and goes', async () => {
+  window.history.replaceState(null, '', '/w/1/apps/1-1-new')
+  await editing()
+  const length = window.history.length
+  // Kept: the address, the draft and the history as they were.
+  act(() => navigate('/w/1/apps/1-1'))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(window.location.pathname).toBe('/w/1/apps/1-1-new')
+  expect(window.history.length).toBe(length)
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+  // Discarded: true to its word, the drawer and the draft go (the explorer stays: the same app).
+  act(() => navigate('/w/1/apps/1-1'))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/1-1'))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+  // With nothing left the guard asks nothing; a record edited again is guarded again.
+  act(() => navigate('/w/1/apps/1-1-new'))
+  expect(window.location.pathname).toBe('/w/1/apps/1-1-new')
+  fireEvent.click(screen.getByRole('button', { name: 'Open record 4' }))
+  fireEvent.change(await waitFor(() => field('description')), { target: { value: 'Again' } })
+  fireEvent.click(within(drawer()).getByRole('button', { name: 'Close' }))
+  expect(await leaving()).toBeTruthy()
+})
+
+test('Back to another address of the same app asks: keeping undoes it, discarding closes the drawer and goes back', async () => {
+  // Both entries the app's own (an entry from before it started can't be undone).
+  act(() => navigate('/w/1/apps/1-1'))
+  act(() => navigate('/w/1/apps/1-1-new'))
+  await editing()
+  const length = window.history.length
+  await back()
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(window.location.pathname).toBe('/w/1/apps/1-1-new')
+  expect(window.history.length).toBe(length)
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+  await back()
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/1-1'))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+})
+
+test('a field typed and put back by hand is not a change: nothing is asked', async () => {
+  const { description } = await editing()
+  fireEvent.change(description, { target: { value: 'Lunch' } })
+  const unload = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(unload)
+  expect(unload.defaultPrevented).toBe(false)
+  const from = window.location.pathname
+  act(() => navigate(`${from}/x`))
+  expect(window.location.pathname).toBe(`${from}/x`)
+  fireEvent.click(within(drawer()).getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+})
+
+test('closing or reloading the tab over a record not saved gets the browser’s question, until the drawer goes', async () => {
+  await editing()
+  const before = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(before)
+  expect(before.defaultPrevented).toBe(true)
+  fireEvent.click(within(drawer()).getByRole('button', { name: 'Close' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+  const after = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(after)
+  expect(after.defaultPrevented).toBe(false)
+})
