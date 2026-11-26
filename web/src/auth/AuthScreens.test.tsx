@@ -7,12 +7,12 @@ import { setPreferences } from '../i18n'
 import { NoWorkspace } from '../shell/NoWorkspace'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
-import { clearDeletion, peekDeletion, rememberDeletion } from './deleted'
+import { deletionShown, noteSignIn, peekDeletion, rememberDeletion, resetDeletion, startDeletion } from './deleted'
 import { ServerUnreachable } from './ServerUnreachable'
 
 afterEach(async () => {
   cleanup()
-  clearDeletion()
+  resetDeletion()
   vi.unstubAllGlobals()
   window.history.replaceState(null, '', '/')
   await setPreferences({ user: null })
@@ -459,7 +459,7 @@ test('forgotten password: too many requests is said in words', async () => {
 
 test('after an account is deleted the login says when it is erased, once', async () => {
   sessionStorage.clear()
-  rememberDeletion('2026-12-08T10:00:00.000Z')
+  rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z')
   fakeFetch({ 'GET /api/login/methods': { body: both } })
   const first = render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
@@ -477,36 +477,147 @@ test('a sign-in screen already up when the deletion is answered still says when 
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
   // A 401 had mounted it; now the deletion succeeds.
-  act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
+  act(() => rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z'))
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
 })
 
-test('the deletion notice is told even when the browser’s storage refuses, and goes once cleared', () => {
+const DATE = '2026-12-08T10:00:00.000Z'
+const SHOWN = /Your account was deleted\. It is switched off now/
+
+// One storage operation refuses at a time; the others work.
+function refuse(op: 'setItem' | 'getItem' | 'removeItem') {
+  return vi.spyOn(Storage.prototype, op).mockImplementation(() => {
+    throw new Error('no storage')
+  })
+}
+
+test('a refused setItem still tells the notice to this tab’s sign-in screens, also one built after another went', async () => {
   sessionStorage.clear()
-  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-    throw new Error('no storage')
-  })
-  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-    throw new Error('no storage')
-  })
-  const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
-    throw new Error('no storage')
-  })
-  rememberDeletion('2026-12-08T10:00:00.000Z')
-  expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
-  clearDeletion()
+  const set = refuse('setItem')
+  rememberDeletion(startDeletion(1), DATE)
+  expect(peekDeletion()).toBe(DATE)
+  // The methods never answer: the first screen is a loading one, and is gone.
+  vi.stubGlobal('fetch', () => new Promise(() => {}))
+  render(<LoginScreen onDone={() => {}} />).unmount()
+  vi.unstubAllGlobals()
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const second = render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(SHOWN)
+  second.unmount()
+  // ...and once shown, not again.
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(SHOWN)).toBeNull()
+  set.mockRestore()
+})
+
+test('a refused getItem does not stop the notice, nor bring it back after it was shown', async () => {
+  sessionStorage.clear()
+  rememberDeletion(startDeletion(1), DATE)
+  const get = refuse('getItem')
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const first = render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(SHOWN)
+  first.unmount()
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(SHOWN)).toBeNull()
+  get.mockRestore()
+})
+
+test('a refused removeItem does not replay the notice once it was shown', async () => {
+  sessionStorage.clear()
+  rememberDeletion(startDeletion(1), DATE)
+  const remove = refuse('removeItem')
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const first = render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(SHOWN)
+  first.unmount()
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(SHOWN)).toBeNull()
+  remove.mockRestore()
+})
+
+test('with setItem refused once the notice is stored, the removal that follows cannot replay it either', async () => {
+  sessionStorage.clear()
+  rememberDeletion(startDeletion(1), DATE)
+  const set = refuse('setItem')
+  const remove = refuse('removeItem')
+  deletionShown()
   expect(peekDeletion()).toBeNull()
   set.mockRestore()
-  get.mockRestore()
   remove.mockRestore()
+})
+
+test('the shown notice is overwritten in storage, not only removed', () => {
+  sessionStorage.clear()
+  rememberDeletion(startDeletion(1), DATE)
+  deletionShown()
+  expect(peekDeletion()).toBeNull()
+  // A page that lost its memory (a reload) reads the marker, and tells nothing.
+  expect(JSON.parse(sessionStorage.getItem('taskto.accountDeleted') ?? 'null')).toMatchObject({ user: 1, shown: true })
+})
+
+// An account (1) asks for its deletion and is signed out; another (2) signs in before the answer.
+test('a deletion answered after another account signed in is not kept, so that account’s sign-in screen never tells it', async () => {
+  sessionStorage.clear()
+  noteSignIn(1)
+  const request = startDeletion(1)
+  // 1's session ended; 2 signs in (App notes every sign-in)...
+  noteSignIn(2)
+  // ...and 1's answer arrives late.
+  rememberDeletion(request, DATE)
+  expect(peekDeletion()).toBeNull()
+  expect(sessionStorage.getItem('taskto.accountDeleted')).toBeNull()
+  // 2's session ends later: the sign-in screen is the plain one.
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(SHOWN)).toBeNull()
+})
+
+test('a deletion answered while another account is on the code step is kept out of its way and not told to anyone after it', async () => {
+  sessionStorage.clear()
+  noteSignIn(1)
+  const request = startDeletion(1)
+  const done = vi.fn((me: { user: { id: number } }) => noteSignIn(me.user.id))
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { two_factor_required: true, challenge: 'fake-challenge', expires_at: 'x' } },
+    'POST /api/login/two-factor': { body: { ...owner, user: { ...owner.user, id: 2 } } },
+  })
+  render(<LoginScreen onDone={done} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  await screen.findByRole('heading', { name: 'Two-factor login' })
+  // 1's answer arrives now: nothing is told on the code step.
+  act(() => rememberDeletion(request, DATE))
+  expect(screen.queryByText(SHOWN)).toBeNull()
+  expect(peekDeletion()).toBe(DATE)
+  fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await vi.waitFor(() => expect(done).toHaveBeenCalled())
+  // 2 has signed in: the notice is dropped (the browser has moved on from 1), never shown to 2 or the next.
+  expect(peekDeletion()).toBeNull()
+})
+
+test('a notice waiting when another account signs in is dropped, and storage keeps no replayable copy', () => {
+  sessionStorage.clear()
+  noteSignIn(1)
+  rememberDeletion(startDeletion(1), DATE)
+  // Somebody (account 2) signs in: whatever waits is dropped.
+  noteSignIn(2)
+  expect(peekDeletion()).toBeNull()
+  expect(JSON.parse(sessionStorage.getItem('taskto.accountDeleted') ?? 'null')).toMatchObject({ shown: true })
 })
 
 // A sign-in screen that goes before it draws the notice (its methods still loading, a reload, an
 // error that is retried through a new screen) has not told the person anything.
 test('a sign-in screen that goes before drawing the deletion notice leaves it for the next one', async () => {
   sessionStorage.clear()
-  clearDeletion()
-  rememberDeletion('2026-12-08T10:00:00.000Z')
+  resetDeletion()
+  rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z')
   // The methods never answer: the first screen is a loading one, and is gone.
   vi.stubGlobal('fetch', () => new Promise(() => {}))
   const first = render(<LoginScreen onDone={() => {}} />)
@@ -520,10 +631,10 @@ test('a sign-in screen that goes before drawing the deletion notice leaves it fo
 
 test('a deletion answered while the sign-in screen is still loading is told by the next screen if this one goes', async () => {
   sessionStorage.clear()
-  clearDeletion()
+  resetDeletion()
   vi.stubGlobal('fetch', () => new Promise(() => {}))
   const first = render(<LoginScreen onDone={() => {}} />)
-  act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
+  act(() => rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z'))
   first.unmount()
   vi.unstubAllGlobals()
   fakeFetch({ 'GET /api/login/methods': { body: both } })
@@ -533,8 +644,8 @@ test('a deletion answered while the sign-in screen is still loading is told by t
 
 test('the deletion notice survives React’s double render and effects, and is told once', async () => {
   sessionStorage.clear()
-  clearDeletion()
-  rememberDeletion('2026-12-08T10:00:00.000Z')
+  resetDeletion()
+  rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z')
   fakeFetch({ 'GET /api/login/methods': { body: both } })
   const first = render(
     <StrictMode>
@@ -554,8 +665,8 @@ test('the deletion notice survives React’s double render and effects, and is t
 
 test('the deletion notice is not used up by a step that does not show it', async () => {
   sessionStorage.clear()
-  clearDeletion()
-  rememberDeletion('2026-12-08T10:00:00.000Z')
+  resetDeletion()
+  rememberDeletion(startDeletion(1), '2026-12-08T10:00:00.000Z')
   fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [], reset_by_email: true } } })
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/Your account was deleted\./)

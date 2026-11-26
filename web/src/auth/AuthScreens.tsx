@@ -11,7 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
-import { clearDeletion, DELETION_EVENT, peekDeletion } from './deleted'
+import { DELETION_EVENT, deletionShown, peekDeletion } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -410,7 +410,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   // not on the forgotten-password step. Once it is, it has been told, and a reload shows the plain form.
   const drawn = loaded.state.kind === 'ready' && !challenge && !forgetting
   useEffect(() => {
-    if (deleted && drawn) clearDeletion()
+    if (deleted && drawn) deletionShown()
   }, [deleted, drawn])
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />

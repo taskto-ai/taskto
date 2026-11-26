@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { type DeletionStatus, type Me, type Member, type PendingDeletion, SESSION_LOST, type Workspace } from '../api'
-import { clearDeletion, peekDeletion } from '../auth/deleted'
+import { peekDeletion, resetDeletion } from '../auth/deleted'
 import { type Call, fakeFetch } from '../test/fakes'
 import { answer } from '../test/ui'
 import { claimDrafts, readState, writeState } from '../uiState'
@@ -34,7 +34,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   sessionStorage.clear()
-  clearDeletion() // a date a test left in memory
+  resetDeletion() // a date a test left in memory
 })
 afterEach(() => {
   cleanup()

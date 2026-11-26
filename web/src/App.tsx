@@ -7,7 +7,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, concernsAccount, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen, StartingScreen } from './auth/AuthScreens'
-import { clearDeletion } from './auth/deleted'
+import { noteSignIn } from './auth/deleted'
 import { ServerUnreachable } from './auth/ServerUnreachable'
 import { setPreferences } from './i18n'
 import { leavePush } from './notifications/push'
@@ -53,9 +53,11 @@ export function App() {
   // person first, `foreign`). Sending what the account queued starts (or goes on, after the
   // session ended and this person signed in again).
   const claim = useCallback(async (me: Me) => {
-    // Somebody is signed in here: the notice of a deleted account that no sign-in screen drew is
-    // not for them, nor for whoever signs in on this tab after them.
-    clearDeletion()
+    // Somebody has signed in here: a deleted account's notice that no sign-in screen drew is dropped,
+    // not told to them nor to whoever signs in after them, and a deletion answered from now on for
+    // another account is not kept. If the notice was waiting (this person was on the code step when
+    // it came), it is lost to the deleted account's person: the sign-in shows the browser has moved on.
+    noteSignIn(me.user.id)
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
   }, [])

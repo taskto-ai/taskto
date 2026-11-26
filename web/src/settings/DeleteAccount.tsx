@@ -7,7 +7,7 @@
 
 import { type FormEvent, useState } from 'react'
 import { api, type DeletionReply, type DeletionStatus, exportPath, forAccount, sessionLostFor } from '../api'
-import { rememberDeletion } from '../auth/deleted'
+import { rememberDeletion, startDeletion } from '../auth/deleted'
 import { forgetAccount } from '../auth/forgetAccount'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -37,6 +37,9 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     let reply: DeletionReply | undefined
+    // Who asks, and which sign-ins this page has seen: the answer is kept only if no other account
+    // signs in meanwhile.
+    const request = startDeletion(user)
     const ok = await deleting.run(async () => {
       reply = await api<DeletionReply>('/api/me/deletion', {
         method: 'POST',
@@ -52,7 +55,7 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
       // read again, and is gone now, from this answer and for the account whose form this is: a
       // request refused a moment earlier may have taken the app to the sign-in screen already, which
       // is no longer listening for the session to end.
-      rememberDeletion(reply.purge_at)
+      rememberDeletion(request, reply.purge_at)
       await forgetAccount(user)
       // On to the sign-in screen, which says when the account is purged: told for this account,
       // so a window another account signed in to meanwhile stays as it is.
