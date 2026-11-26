@@ -217,7 +217,8 @@ func (w *Worker) Reconcile(_ context.Context, live []int64, next int64, before t
 func (w *Worker) removeOldMark(e fs.DirEntry, before time.Time) error {
 	w.marks.Lock()
 	defer w.marks.Unlock()
-	info, err := e.Info()
+	// Read now, under the lock: a directory entry's own Info may be from before the mark was made again.
+	info, err := os.Lstat(filepath.Join(w.stateDir(), e.Name()))
 	if err != nil || !info.ModTime().Before(before) {
 		return nil //nolint:nilerr // a mark that is gone or newer is left as it is
 	}

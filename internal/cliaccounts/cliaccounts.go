@@ -309,7 +309,8 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 // one gets, so that it takes back the marks of users it forgot (Forget) that a restore of the
 // database made wrong: the person whose account was purged may be back in it, and the numbers
 // after the backup are given again. The worker's own directory, in container mode, isn't part of
-// the backup, so it can't know; the database can. Call it at every start (StartReconcile).
+// the backup, so it can't know; the database can. Call it at every start (StartReconcile). An
+// account whose purge has begun is not live here: its mark stays until the purge deletes it.
 func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	if s.worker == nil {
 		return nil
@@ -322,7 +323,11 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // a read: nothing to keep
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM users`)
+	// Not the accounts whose purge has begun: it forgets the CLI files before it deletes the
+	// account, and one that stopped between the two is made again from its start, which forgets
+	// them again; until the account is gone its mark must stay.
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users
+		WHERE id NOT IN (SELECT user_id FROM account_deletions WHERE purge_started_at IS NOT NULL)`)
 	if err != nil {
 		return err
 	}

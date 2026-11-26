@@ -409,7 +409,8 @@ The UI shows what the command prints.
   numbers are live and which one comes next (`Service.StartReconcile`, retried in the background
   while the worker isn't reachable yet), and the worker removes the marks of the live ones and of
   the next and later ones, apart from a mark made after the server read its database (a purge
-  running now). The marks of accounts that are gone for good stay. Until it has been told, a
+  running now). The marks of accounts that are gone for good stay, and so do those of accounts
+  whose purge has begun (it forgets the worker's files before it deletes the account). Until it has been told, a
   restored person may be refused with `cli_account_forgotten`.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,

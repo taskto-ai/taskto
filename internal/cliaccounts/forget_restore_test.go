@@ -215,3 +215,33 @@ func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 		t.Errorf("answer = %d %q, want 410 %q", rec.Code, body.Code, apierr.CodeCLIAccountForgotten)
 	}
 }
+
+// An account whose purge began keeps its mark across a start of the server, until the purge has
+// deleted it: the purge forgets the worker's files before it deletes the account, and one that
+// failed in between is made again from its start. A person whose deletion is only requested is
+// not forgotten yet, and nothing marks them.
+func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
+	e := newEnv(t, Container, nil)
+	ctx := context.Background()
+	begun := newUser(t, e.db, "begun@example.com")
+	other := newUser(t, e.db, "other@example.com")
+	for _, user := range []int64{begun, other} {
+		if err := e.svc.Forget(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.db.Exec(`INSERT INTO account_deletions (user_id, requested_at, purge_at, purge_started_at) VALUES (?, 'x', 'x', 'x')`, begun); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond) // the marks are older than the read
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.worker.StartLogin(begun, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Errorf("the account whose purge began was let back: %v", err)
+	}
+	if _, err := e.worker.StartLogin(other, cliworker.Claude, ""); err != nil {
+		t.Errorf("an account that is live and not being purged is refused: %v", err)
+	}
+	e.worker.CancelLogin(other, cliworker.Claude, "")
+}
