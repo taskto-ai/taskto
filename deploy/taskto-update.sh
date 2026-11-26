@@ -614,7 +614,9 @@ notify() {
 # didn't answer, a hold, a failure before it looked) leaves what was found before, which holds only
 # while the install is on the version it was found from (write_public).
 update_available() {
-	case $reason in *"can't tell whether"*) return 0 ;; esac
+	# Not knowing what is newer (GitHub couldn't compare, or the install isn't on a version) isn't
+	# finding that nothing is.
+	case $reason in *"can't tell whether"* | *"neither a release nor a commit"*) return 0 ;; esac
 	case $result:$(reason_code "$result" "$reason") in
 	updated:*)
 		# The install is on what this run chose, the newest there is.

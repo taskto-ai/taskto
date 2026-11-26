@@ -231,3 +231,35 @@ func TestUpdateCheckUnits(t *testing.T) {
 		}
 	}
 }
+
+// An install that isn't on a version (a build of no release or commit) can't be told what is
+// newer: that is not "nothing newer", so the check records no look.
+func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "", false, false)
+	e.setVersion("dev")
+	if code, out := e.run("--check"); code != 0 || !strings.Contains(out, "neither a release nor a commit") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if e.exists("state/available.json") {
+		t.Error("the check recorded a look it couldn't make")
+	}
+	if s := e.public(); !s.Looked.IsZero() || s.Available != nil {
+		t.Fatalf("status = %+v", s)
+	}
+}
+
+// Step 16 copies the check's units only when the version has them, and stops before the VM's
+// part when a copy fails.
+func TestRunbookCheckUnitsAreOptionalAndACopyFailureStops(t *testing.T) {
+	runbook := readRepoFile(t, "deploy/INSTALL.md")
+	for _, want := range []string{
+		`taskto-update-check.*) git cat-file -e "${TASKTO_VERSION}:deploy/$f"`,
+		"  ) && vm <<'EOF'",
+		"[ ! -e /etc/systemd/system/taskto-update-check.timer ] || systemctl enable --now taskto-update-check.timer",
+	} {
+		if !strings.Contains(runbook, want) {
+			t.Errorf("deploy/INSTALL.md doesn't have %q", want)
+		}
+	}
+}
