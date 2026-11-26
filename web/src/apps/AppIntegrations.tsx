@@ -186,6 +186,7 @@ export function ApproveAndPublishDialog({
   space,
   slots,
   onClose,
+  onApproval,
   onApproved,
   onFailed,
   onContractChanged,
@@ -196,6 +197,9 @@ export function ApproveAndPublishDialog({
   // The slots whose approval is still to be asked for or decided, and what the publish needs of the rest.
   slots: SlotStatus[]
   onClose: () => void
+  // One slot's approval went through. Called even after this dialog was closed (a draft that changed
+  // under it), so the caller keeps the record of what was approved outside the dialog's lifetime.
+  onApproval: (slot: string) => void
   // Every approval is made (`done` names them): publish. Resolves with what the publish was refused
   // with, or null when it went through.
   onApproved: (done: string[]) => Promise<string | null>
@@ -203,8 +207,8 @@ export function ApproveAndPublishDialog({
   // slots are read again, so a retry starts from what the server holds and never repeats a slot
   // that was approved before the refusal. `done` are the ones approved before it.
   onFailed: (done: string[]) => void
-  // The draft's contract changed while the admin read it: what they approved is not what the app asks
-  // now, so the caller closes this and reads the app again.
+  // The draft's contract changed while the admin read it, or it no longer declares a slot: what they
+  // approved is not what the app asks now, so the caller closes this and reads the app again.
   onContractChanged: (done: string[]) => void
 }) {
   const t = useT()
@@ -261,13 +265,21 @@ export function ApproveAndPublishDialog({
           body: { integration_id: integration.id, allow_space: !integration.spaces.includes(space.id) },
         })
         approved.push(s.slot)
+        // Told at once and whether or not this dialog is still on screen: an approval is made on the
+        // server, and the page must say it stands even when what follows is discarded.
+        onApproval(s.slot)
         setDone([...approved])
       }
       const refused = await onApproved(approved)
       if (refused !== null) setError(refused)
     } catch (e) {
       if (!alive.current) return
-      if (e instanceof ApiError && e.code === 'app_integration_contract_changed') {
+      // A slot the draft no longer declares is the same news as a contract that changed: the draft moved
+      // under the admin, and what they read is not what it asks now.
+      if (
+        e instanceof ApiError &&
+        (e.code === 'app_integration_contract_changed' || e.code === 'app_integration_slot_unknown')
+      ) {
         onContractChanged(approved)
         return
       }

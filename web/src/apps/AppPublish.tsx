@@ -511,6 +511,12 @@ export function PublishPanel({
             setApproving(null)
             setRefocus((n) => n + 1)
           }}
+          onApproval={(slot) => {
+            // Kept here, not in the dialog: an approval made by a dialog that was closed meanwhile (the
+            // draft changed under it) still stands, and the notice must say so.
+            setGranted((g) => (g.includes(slot) ? g : [...g, slot]))
+            slots.reload()
+          }}
           onFailed={(done) => {
             slots.reload()
             setGranted(done)

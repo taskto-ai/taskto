@@ -416,6 +416,38 @@ test('the revoke warning says what the server holds now, not what the list said 
   expect(within(sure).getByText(/though it stays online/)).toBeTruthy()
 })
 
+// The list says one grant when the dialog opens and the server another when the revoke is asked for:
+// another session kept the space's grant (or the approval made it) in between.
+async function revokeWithGrantNow(before: 'approval' | 'settings', now: 'approval' | 'settings') {
+  const row = (grant: 'approval' | 'settings') =>
+    approval({
+      status: 'approved',
+      space_grant: grant,
+      integration: { id: 7, name: 'shop', display_name: 'Shop', usable: true },
+    })
+  let reads = 0
+  fakeFetch({
+    [`GET ${queue}?status=requested`]: { body: { approvals: [], next_cursor: null } },
+    [`GET ${queue}?status=approved`]: () => {
+      reads++
+      return { body: { approvals: [row(reads === 1 ? before : now)], next_cursor: null } }
+    },
+    ...spaceList(12),
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  return askToRevoke()
+}
+
+test('the revoke warning about the space’s grant is the one the server holds now: kept since the list was read', async () => {
+  const sure = await revokeWithGrantNow('approval', 'settings')
+  expect(within(sure).queryByText(/stops being allowed/)).toBeNull()
+})
+
+test('the revoke warning about the space’s grant is the one the server holds now: made by the approval since', async () => {
+  const sure = await revokeWithGrantNow('settings', 'approval')
+  expect(within(sure).getByText(/Shop floor also stops being allowed for the integration/)).toBeTruthy()
+})
+
 test('an error of an older page for a filter left behind is not shown over the current queue', async () => {
   let fail: (() => void) | undefined
   fakeFetch({

@@ -526,6 +526,68 @@ test('a refusal that arrives after the dialog was closed does not close the one 
   expect(screen.getByRole('dialog', { name: 'Approve and publish' })).toBeTruthy()
 })
 
+test('an approval made by an attempt the draft superseded is still said to stay active, whatever came after it', async () => {
+  let firstDone = false
+  let release: (() => void) | undefined
+  fakeFetch({
+    'GET /api/x/integrations': () =>
+      status(firstDone ? slot({ status: 'approved', integration: approvedShop }) : slot(), billing()),
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': { body: { id: 4 } },
+    'POST /api/workspaces/1/integration-approvals/4/approve': () =>
+      new Promise((resolve) => {
+        release = () => {
+          firstDone = true
+          resolve({ body: { id: 4 } })
+        }
+      }),
+    'POST /api/x/integrations/billing/request': {
+      status: 409,
+      body: { error: 'x', code: 'app_integration_contract_changed' },
+    },
+  })
+  const element = (app: App) => (
+    <WorkspaceAdmin value={true}>
+      <PublishPanel base="/api/x" spaceBase="/api/y" app={app} space={team} onChanged={() => {}} />
+    </WorkspaceAdmin>
+  )
+  const view = render(element(appOf()))
+  const { confirm } = await openApproveAndPublish()
+  fireEvent.click(confirm)
+  await waitFor(() => expect(release).toBeDefined())
+  // The draft changes while the first approval is in flight: the dialog closes and says so.
+  view.rerender(element(appOf({ version: 3 })))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
+  expect(screen.queryByText(/These approvals went through/)).toBeNull()
+  // The approval goes through after that, and the second request is refused: the admin is still told.
+  release?.()
+  expect(await screen.findByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
+})
+
+test('a slot the draft no longer declares closes the dialog, reads the app and the slots again and says the draft changed', async () => {
+  let reads = 0
+  const calls = fakeFetch({
+    'GET /api/x/integrations': () => {
+      reads++
+      return status(slot())
+    },
+    'GET /api/workspaces/1/integrations': { body: { integrations: [{ ...shop, spaces: [3] }] } },
+    'POST /api/x/integrations/payments/request': {
+      status: 404,
+      body: { error: 'x', code: 'app_integration_slot_unknown', params: { slot: 'payments' } },
+    },
+  })
+  const changed = panel(appOf(), team, true)
+  const { confirm } = await openApproveAndPublish()
+  const before = reads
+  fireEvent.click(confirm)
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
+  expect(changed).toHaveBeenCalled()
+  await waitFor(() => expect(reads).toBeGreaterThan(before))
+  expect(screen.getByText(/The draft changed while you were reviewing it/)).toBeTruthy()
+  expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
+})
+
 test('approvals made before a publish that waits for the schema changes are said when it is cancelled', async () => {
   let approved = false
   fakeFetch({

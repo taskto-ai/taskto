@@ -221,8 +221,10 @@ function ReviewDialog({
 
   // The grant of the space the approval made: it ends with the last approval that needs it, unless
   // an admin keeps it in the integration's spaces. The queue says it of this approval's own space, so
-  // it is known for a space the admin can't list too.
-  const madeGrant = a.status === 'approved' && a.space_grant === 'approval'
+  // it is known for a space the admin can't list too. Read again before a revoke is confirmed
+  // (`revoke`), since another session may have kept the grant since the list was read.
+  const madeGrantOf = (row: Pick<IntegrationApproval, 'status' | 'space_grant'>) =>
+    row.status === 'approved' && row.space_grant === 'approval'
 
   const decide = async (verb: 'approve' | 'reject' | 'revoke', message: string) => {
     setBusy(true)
@@ -242,26 +244,26 @@ function ReviewDialog({
     }
   }
 
-  // Whether the approval's contract is the live release's now, as the server holds it, not as the
-  // list said when it was read: the warning the admin confirms must describe what the revoke does.
-  const liveNow = async (): Promise<boolean> => {
+  // The approval as the server holds it now, not as the list said when it was read: the warning the
+  // admin confirms must describe what the revoke does, so both what it is live as and the grant it made.
+  const refreshed = async (): Promise<IntegrationApproval> => {
     let cursor: string | null = null
     do {
       const r: IntegrationApprovalList = await api(
         `${ws(workspace)}/integration-approvals?status=approved${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
       )
       const found = r.approvals.find((x) => x.id === a.id)
-      if (found) return found.live
+      if (found) return found
       cursor = r.next_cursor
     } while (cursor)
-    return a.live
+    return a
   }
 
   const revoke = async () => {
-    let live = a.live
+    let row: IntegrationApproval = a
     setBusy(true)
     try {
-      live = await liveNow()
+      row = await refreshed()
     } catch {
       // The list's word stands; the server decides the revoke either way.
     } finally {
@@ -270,8 +272,8 @@ function ReviewDialog({
     const yes = await confirm({
       title: t('settings.approvals.revokeQuestion', { app: a.app_name }),
       body: [
-        t(live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
-        madeGrant
+        t(row.live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
+        madeGrantOf(row)
           ? t(keepable === false ? 'settings.approvals.revokeSpaceTemporary' : 'settings.approvals.revokeSpace', {
               space,
             })
