@@ -7,7 +7,8 @@
 // is asked again, with the session the browser holds then, before any is accepted.
 
 import { useEffect, useRef, useState } from 'react'
-import { type AppTransport, AppView } from '../apps/AppView'
+import { AppView } from '../apps/AppView'
+import type { AppTransport } from '../apps/transport'
 import { useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'

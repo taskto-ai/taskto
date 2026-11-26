@@ -1,7 +1,9 @@
 {
   "app": {
     "loading": "Loading…",
-    "unreachable": "Can't reach the server: {error}",
+    "unreachableTitle": "Can't reach the server",
+    "unreachableHelp": "Check your connection, or ask whoever runs this server whether it is up, then try again.",
+    "unreachableDetail": "What went wrong: {error}",
     "tryAgain": "Try again"
   },
   "apps": {
@@ -580,7 +582,8 @@
     "takeOfflineConfirm": {
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
-    }
+    },
+    "rendererFailed": "This screen couldn't be loaded: its code didn't arrive. Check your connection, then try again."
   },
   "auth": {
     "methods": {
@@ -597,7 +600,6 @@
       "intro": "Your password was right. Enter the code from your authenticator app to finish logging in.",
       "introReset": "Your new password is set. Enter the code from your authenticator app to finish logging in.",
       "code": "Code from your app, or a recovery code",
-      "busy": "Checking…",
       "submit": "Log in",
       "back": "Back to the password",
       "toLogin": "Go to the login",
@@ -607,7 +609,6 @@
     "login": {
       "forgot": "Forgot your password? Ask a workspace admin for a reset link.",
       "title": "Log in",
-      "busy": "Logging in…",
       "submit": "Log in",
       "forgotByEmail": "Forgot your password?"
     },
@@ -615,7 +616,6 @@
       "title": "Reset your password",
       "intro": "Enter your account's email address. If an account has it, we'll email a link to choose a new password.",
       "submit": "Email me a link",
-      "busy": "Sending…",
       "sentTitle": "Check your email",
       "sent": "If an account has {email}, a link to choose a new password is on its way.",
       "sentHelp": "The link works once and expires. If nothing arrives in a few minutes, look in the spam folder, or ask a workspace admin for a reset link.",
@@ -630,27 +630,29 @@
       "hint": "At least 12 characters.",
       "again": "New password again",
       "mismatch": "The passwords don't match.",
-      "setting": "Setting…",
       "submit": "Set the password"
     },
     "email": "Email",
     "password": "Password",
     "yourName": "Your name",
     "passwordHint": "At least {min} characters.",
+    "show": "Show",
+    "hide": "Hide",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
     "setup": {
       "title": "Set up this server",
-      "intro": "Create the owner's account. The setup token is in the server's log, on the line with <code>setup_token=</code>, printed while no account exists. It changes at every start.",
+      "lede": "Create the owner's account and the first workspace.",
       "token": "Setup token",
+      "tokenHint": "It's in the server's log, on the line with <code>setup_token=</code>, printed while no account exists. It changes at every start.",
       "workspaceName": "Workspace name",
       "defaultWorkspace": "Home",
-      "busy": "Setting up…",
       "submit": "Create the owner"
     },
     "invite": {
       "title": "Join a workspace",
       "incomplete": "This invite link is incomplete: open the whole link you were sent.",
       "loggedInAs": "You're logged in as {email}. The invite works for the address it was sent to.",
-      "joining": "Joining…",
       "join": "Join the workspace",
       "logOut": "Log out, to use another account",
       "ssoIntro": "You were invited. Sign in with your provider, using the address the invite was sent to.",
@@ -658,7 +660,6 @@
       "loginIntro": "Log in to the account of the address the invite was sent to.",
       "loginSubmit": "Log in and join",
       "newIntro": "You were invited. Create your account: your email is the address the invite was sent to.",
-      "creating": "Creating…",
       "create": "Create the account"
     }
   },
@@ -1079,6 +1080,8 @@
     "integration_changed": "This payment link was made under another payments integration than the one this app uses now. An admin needs to check whether that link was paid, and make it unable to take payment if not, before the action is run again.",
     "integration_lookup_incomplete": "The payment provider’s account holds too many payment links for the server to check whether an earlier try already made this one, so none was made. An admin needs to look in that account for a link of this payment and settle it (paid: nothing is recreated; unpaid: make it unable to take payment) before the action is run again.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
+    "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
+    "app_icon_label": "The icon “{component}” is in a button or a trigger that shows only icons, so it needs a name: give it an accessibility label.",
     "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",
     "app_release_not_found": "That release of the app doesn’t exist.",
     "app_release_outdated": "This screen is from an older release of the app (release {release}; the live one is {live}). Reload the app to continue.",
@@ -1856,6 +1859,8 @@
       "hostedNote": "Speech goes to this endpoint only when the engine above is the hosted API; setting a key doesn't switch to it. The glossary never does: it is applied on this server.",
       "removeKey": "Remove the API key",
       "onBadge": "On",
+      "notReadyBadge": "Not ready yet",
+      "unavailableBadge": "Not available on this server",
       "offBadge": "Off"
     },
     "search": {
@@ -2142,6 +2147,7 @@
     },
     "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
     "logOut": "Log out",
+    "phoneBar": "App bar",
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
     "workspace": "Workspace",
@@ -2305,8 +2311,8 @@
       "label": "Search the knowledge base",
       "placeholder": "Search…",
       "where": "Where to search",
-      "inSpace": "In {space}",
-      "everywhere": "In all spaces",
+      "inSpace": "Search in {space}",
+      "everywhere": "Search in all spaces",
       "submit": "Search"
     },
     "results": {
@@ -2363,7 +2369,8 @@
     "showArchivedTitle": "Show archived conversations",
     "new": "New",
     "nothingArchived": "Nothing archived.",
-    "none": "No conversations yet. Start one with New.",
+    "none": "No conversations yet.",
+    "noneHelp": "Start one with New, or ask the agent to build an app.",
     "pick": "Pick a conversation, or start a new one.",
     "untitled": "Conversation of {date}",
     "conversation": "Conversation",
@@ -2743,7 +2750,6 @@
       "body_one": "{count} record on this device hasn’t reached the server. Signing out now would lose it unless you sync or discard it.",
       "body_other": "{count} records on this device haven’t reached the server. Signing out now would lose them unless you sync or discard them.",
       "sync": "Sync now",
-      "syncing": "Syncing…",
       "discard": "Discard and sign out",
       "cancel": "Cancel",
       "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
@@ -2898,6 +2904,7 @@
       "title": "Confirm your email address",
       "working": "Confirming your address…",
       "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
+      "nothing": "There is nothing to confirm here: this page was opened without the email's link. Your notification settings say which address notifications go to, and whether it is confirmed.",
       "settings": "Open notification settings",
       "failed": "Your address couldn't be confirmed: the server didn't answer. Check your connection, then open the link in the email again."
     },

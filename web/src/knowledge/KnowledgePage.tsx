@@ -12,7 +12,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ws } from '../api'
 import { useT } from '../i18n'
-import { parseDocumentItem } from '../router'
+import { parseDocumentItem, useBeforeLeave } from '../router'
 import { SearchBox, type SearchQuery, SearchResults } from '../search/Search'
 import { spaceLabel, useSpaces } from '../spaces'
 import { Button } from '../ui/Button'
@@ -72,6 +72,9 @@ export function KnowledgePage({
   // doesn't: its results come in front of the document, which keeps its draft behind them.
   const guard = useGuard()
   const { ask } = guard
+  // Leaving the page (another section, another workspace, the browser's Back) asks the same, while
+  // a draft would be lost.
+  useBeforeLeave(ask)
   // What is shown now: a delete or a restore that finishes after the person went to another
   // space or document is not theirs to show there.
   const now = useLatest({ base, path: open?.path })

@@ -103,7 +103,9 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   catalog, a data collection with a schema, and actions served by Go (add, change or
   delete a row; a delete is recoverable, and each row keeps a revision and its history, so a stale edit is refused instead of overwriting a newer one). No generated code runs. `internal/apps` checks every saved screen
   strictly against the catalog, and every row against the schema; the browser's renderer
-  checks again. An app lives in a space, so its access and its rows' are the space's, and
+  checks again. An icon is SVG path data the agent writes, accepted only as path commands and
+  numbers and drawn by the web app into an `<svg>` it makes itself, never as markup or an
+  address ([api.md](api.md#the-definition)). An app lives in a space, so its access and its rows' are the space's, and
   sharing an app is moving it to a shared space. Inside that boundary, app roles (builder,
   publisher, user, data manager, reader, resolved by `access.Checker`) only narrow what the
   space allows: a user can submit records without being able to redesign the app, and

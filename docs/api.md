@@ -176,6 +176,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_preview_too_large` | 413 | A preview's request, with all its sample rows, is over `max_mib` MiB. |
 | `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
 | `app_definition_version` | 400 | The definition's `definition_version` is `version`, which this server doesn't read (it reads up to `supported`). |
+| `app_icon_path` | 400 | The icon `component`'s `svgPath` isn't SVG path data: it must start with `M` or `m` and hold only path commands, numbers, signs, decimal points, exponents, commas and spaces, at most `max` characters ([The definition](#the-definition), Icons). |
+| `app_icon_label` | 400 | The icon `component` is in a `Button` or a `Modal`'s trigger that shows only icons, none with an `accessibility.label` ([The definition](#the-definition), Icons). |
 | `app_not_published` | 409 | The app has no release yet: it is a draft, so it can't be launched or have its actions run. |
 | `app_release_not_found` | 404 | The app has no such release. |
 | `app_release_outdated` | 409 | An action from release `release` that the live release `live` can't take; reload the app. |
@@ -2859,6 +2861,44 @@ saying what is wrong) unless:
   component may contain itself, and every button's event must be one of the app's
   actions. The web app's renderer runs with A2UI's strict validation too, against the
   same catalog.
+- **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
+  the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
+  filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app
+  and drawn in other people's browsers, so only path data is accepted: it starts with `M` or `m`,
+  then holds only the commands `MmLlHhVvCcSsQqTtAaZz`, digits, `+`, `-`, `.`, `e`, `E`, commas
+  and spaces, and is 1–2000 characters (a detailed glyph is well under 1,500; the 48 KiB limit on
+  the whole definition is what caps how many an app holds). Anything else (a quote, a bracket,
+  markup, a URL, a newline, another letter, an empty path, a `svgPath` that isn't text, another key
+  beside it) is refused with `app_icon_path`. The web app makes the `<svg>` and `<path>` itself
+  and puts the string only in the path's `d` attribute, after checking the same grammar again; it
+  never makes markup, a URL, a style or a class from it.
+
+  A `Button`, or a `Modal`'s trigger, is a **control**; its content is followed through the
+  `Row`, `Column` and `Card` that lay it out, up to 4 deep. Content **names** the control when it
+  holds a `Text` that isn't blank, a path icon with an `accessibility.label`, an icon given by
+  name (below), any other component except a `Divider`, a list template, a bound `Text`, or
+  anything deeper than 4. A control whose content names nothing and holds path icons is refused
+  with `app_icon_label`: give one of its icons an `accessibility.label`, which the web app gives
+  the drawn icon and so the control. Beside content that names the control, an icon is
+  decoration, hidden from assistive technology unless it has a label.
+
+  An icon given by **name** (`"add"`, `"delete"`, …, A2UI's names) is still accepted, so apps
+  saved with one stay valid, but the web app has no drawing for it: no icon font and no icon set.
+  Where nothing else names a control, a name in it shows as text, the word, as it always has, so
+  the control keeps its size and its name; anywhere else a name draws nothing. A data binding is
+  accepted too, and draws only when it holds `{"svgPath"}` with valid path data. A definition
+  with a path icon, or an icon bound to data, requires the capability `icon.svg_path`, so a client
+  whose renderer doesn't check paths says it must be updated instead of drawing one.
+
+  **What saved before is refused now.** Two kinds of definition that were accepted before icons
+  were checked are refused when they are saved again (`PATCH …/apps/{app}`, `update_app`) or published:
+  one with a `svgPath` that isn't path data (`app_icon_path`), and one with a control that shows
+  only unlabelled path icons (`app_icon_label`). Their live releases keep working as they are (the
+  first draws no icon there). A copy (`POST …/apps/{app}/duplicate`) isn't held to the label rule,
+  since the copier didn't write it and may not be able to change the source: the copy is made, and
+  the rule holds again when someone who edits the copy saves or publishes it. A copy of a
+  definition with a `svgPath` that isn't path data is refused (`app_icon_path`), so nothing
+  unchecked is stored again; only someone who edits the source can fix it.
 - **collection.fields**, at most 50: `name` (a lowercase letter, then up to 39 lowercase
   letters, digits or `_`; not `id`, `items` or `draft`), `type` (`string`, `number`,
   `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, `choice`, `attachment`: a

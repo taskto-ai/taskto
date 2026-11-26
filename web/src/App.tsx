@@ -6,8 +6,16 @@
 
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
-import { InviteScreen, LoginScreen, PaymentReturnScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
-import { setPreferences, useT } from './i18n'
+import {
+  InviteScreen,
+  LoginScreen,
+  PaymentReturnScreen,
+  ResetPasswordScreen,
+  SetupScreen,
+  StartingScreen,
+} from './auth/AuthScreens'
+import { ServerUnreachable } from './auth/ServerUnreachable'
+import { setPreferences } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
 import { AccountChanged } from './offline/AccountChanged'
@@ -16,7 +24,7 @@ import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
-import { navigate } from './router'
+import { beforeLeaving, navigate } from './router'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -51,7 +59,6 @@ type Leaving = { user: number; next: Session }
 type Asked = Leaving & Unsent
 
 export function App() {
-  const t = useT()
   const [session, setSession] = useState<Session>({ state: 'loading' })
   const { runtime, foreign, problem } = useRuntime()
   // Unsent drafts kept in this browser belong to whoever is signed in: they are claimed before
@@ -231,7 +238,7 @@ export function App() {
 
   switch (session.state) {
     case 'loading':
-      return <p className="tt-center tt-muted">{t('app.loading')}</p>
+      return <StartingScreen />
     case 'setup':
       return <SetupScreen onDone={logIn} />
     case 'login':
@@ -256,19 +263,10 @@ export function App() {
     case 'reset':
       return <ResetPasswordScreen token={window.location.hash.slice(1)} onDone={resetDone} />
     case 'error':
-      return (
-        <div className="tt-center">
-          <p role="alert" className="tt-error">
-            {t('app.unreachable', { error: session.error })}
-          </p>
-          <button type="button" className="tt-button" onClick={load}>
-            {t('app.tryAgain')}
-          </button>
-        </div>
-      )
+      return <ServerUnreachable error={session.error} onRetry={load} />
     case 'offline':
       return (
-        <Suspense fallback={<p className="tt-center tt-muted">{t('app.loading')}</p>}>
+        <Suspense fallback={<StartingScreen />}>
           <OfflineShell user={session.name} onReconnect={load} />
         </Suspense>
       )
@@ -279,7 +277,11 @@ export function App() {
         <>
           <Shell
             me={me}
-            onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
+            // A draft open on the page (a document, a card, a record) is asked about first, then the
+            // records this device hasn't sent (LogoutGuard): the draft is what the person sees and
+            // was just working on, and keeping it ends there, with nothing else asked; the device's
+            // question only comes once they mean to go. Each is asked once.
+            onLogout={() => beforeLeaving(() => void logOut({ user: me.user.id, next: { state: 'login' } }))}
             onMe={(next) =>
               // Only the account still signed in: an answer that comes after logout must not bring the shell back.
               setSession((s) => (s.state === 'in' && s.me.user.id === next.user.id ? { state: 'in', me: next } : s))

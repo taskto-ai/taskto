@@ -5,10 +5,8 @@
 @layer tokens {
   :root {
     --tt-canvas: var(--color-bg);
-    --tt-stone: var(--color-bg-sunken);
     --tt-surface: var(--color-surface);
     --tt-hover: var(--color-hover);
-    --tt-scrim: var(--color-scrim);
 
     --tt-fg: var(--color-text);
     --tt-muted: var(--color-text-muted);
@@ -17,19 +15,11 @@
     --tt-line-strong: var(--color-border-strong);
 
     --tt-accent: var(--color-accent);
-    --tt-accent-hover: var(--color-accent-hover);
     --tt-on-accent: var(--color-on-accent);
-    --tt-accent-edge: var(--color-accent-edge);
     --tt-accent-soft: var(--color-accent-soft);
     --tt-focus: var(--color-focus);
     --tt-link: var(--color-link);
     --tt-logo-dot: var(--color-logo);
-
-    --tt-danger: var(--color-danger);
-
-    --tt-shadow-lift: var(--shadow-lift);
-    --tt-shadow-lift-hover: var(--shadow-lift-hover);
-    --tt-shadow-pop: var(--shadow-pop);
 
     --tt-font: var(--font-sans);
     --tt-display: var(--font-display);
@@ -43,9 +33,7 @@
     --tt-text-h2: 1rem;
     --tt-text-h3: 0.95rem;
     --tt-text-code: 0.9em;
-    --tt-text-small: 0.85rem;
     --tt-field-padding: 0.45rem 0.6rem;
-    --tt-error-margin: 0.25rem 0;
     /* Not a step of the type scale: under 16px, iOS zooms in on a field that takes the focus. */
     --tt-text-no-zoom: 16px;
 

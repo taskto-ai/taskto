@@ -14,9 +14,10 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { ApiError } from '../api'
 import { fakeFetch } from '../test/fakes'
-import { type ActionPayload, AppView, httpTransport } from './AppView'
+import { AppView } from './AppView'
 import { appsCatalog, catalogCapabilities, DEFINITION_VERSION } from './catalog'
 import { forgetOperations } from './operations'
+import { type ActionPayload, httpTransport } from './transport'
 
 afterEach(() => {
   cleanup()

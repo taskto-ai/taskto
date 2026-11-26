@@ -1,0 +1,172 @@
+@layer screens {
+  /* The page: the brand's ground, the card centred on it. Clear of an installed app's status and
+     home bars, and of the notch on its sides. It scrolls on its own: with the on-screen keyboard up
+     (html[data-keyboard], ui/base.css) the page is only the part above it and the body doesn't
+     scroll, so a form taller than that is scrolled here. */
+  .ui-auth {
+    block-size: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    padding-block: max(var(--space-6), env(safe-area-inset-top)) max(var(--space-6), env(safe-area-inset-bottom));
+    /* env()'s insets are the screen's left and right whatever the language's direction (a notch
+       in landscape), so these are physical. */
+    padding-left: max(var(--space-4), env(safe-area-inset-left));
+    padding-right: max(var(--space-4), env(safe-area-inset-right));
+    background: var(--color-bg);
+    color: var(--color-text);
+    font: var(--type-ui);
+  }
+
+  /* Centred by its margins, not by the container's alignment: a card taller than the page then
+     starts at the top and scrolls, where centring would cut its top off. */
+  .ui-auth-card {
+    flex: none;
+    margin: auto;
+    inline-size: min(100%, calc(var(--width-reading) / 2 + 2 * var(--space-8)));
+    display: grid;
+    gap: var(--space-6);
+    padding: var(--space-8);
+    background: var(--color-surface);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+  }
+
+  /* The brand speaks a little louder here than in the app: the logo at a confident size. */
+  .ui-auth-brand {
+    display: flex;
+    color: var(--color-text);
+  }
+
+  .ui-auth-head {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-auth-help {
+    color: var(--color-text-soft);
+  }
+
+  .ui-auth-help p {
+    margin: 0;
+  }
+
+  .ui-auth-help p:not(:first-child) {
+    margin-block-start: var(--space-2);
+  }
+
+  .ui-auth-help code,
+  .ui-auth-mono {
+    font: var(--type-code);
+    padding-inline: var(--space-1);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-sunken);
+    color: var(--color-text);
+  }
+
+  .ui-auth-form,
+  .ui-auth-stack {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  /* The one primary button of the screen, the width of the form. */
+  .ui-auth-form > .ui-button-primary,
+  .ui-auth-stack > .ui-button {
+    inline-size: 100%;
+  }
+
+  /* The form's error, focused after a failed submit so the person lands on it; it is no control,
+     so it shows no ring: the danger notice is what marks it. */
+  .ui-auth-error {
+    display: grid;
+    outline: none;
+  }
+
+  .ui-auth-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: 0;
+    color: var(--color-text-muted);
+    font: var(--type-small);
+  }
+
+  .ui-auth-divider::before,
+  .ui-auth-divider::after {
+    content: "";
+    flex: 1;
+    border-block-start: var(--line-thin) solid var(--color-border);
+  }
+
+  .ui-auth-note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font: var(--type-small);
+  }
+
+  /* The other paths, quieter than the form: under it, centred. */
+  .ui-auth-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2) var(--space-4);
+    padding-block-start: var(--space-4);
+    border-block-start: var(--line-thin) solid var(--color-border);
+    color: var(--color-text-muted);
+    font: var(--type-small);
+    text-align: center;
+  }
+
+  .ui-auth-links p {
+    margin: 0;
+  }
+
+  /* The password and its Show button, inside the field's edge. */
+  .ui-auth-password {
+    position: relative;
+    display: grid;
+  }
+
+  .ui-auth-password > .ui-textbox {
+    padding-inline-end: calc(var(--space-16) + var(--space-4));
+  }
+
+  .ui-auth-password > .ui-button {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: var(--space-1);
+    margin-block: auto;
+  }
+
+  /* On a touch screen a button is the touch target's height, and so is the field: the Show button
+     keeps the whole 44px to tap, while what it draws (its hover fill and its focus ring) keeps a
+     space's clearance inside the field's edges, not over them. */
+  @media (pointer: coarse) {
+    .ui-auth-password > .ui-button {
+      padding-block: var(--space-1);
+      background-clip: content-box;
+    }
+
+    .ui-auth-password > .ui-button:focus-visible {
+      outline-offset: calc(var(--space-1) * -1);
+    }
+  }
+
+  /* Before the app knows who is signed in: the logo and the shape of a form, still. */
+  .ui-auth-skeleton {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  @media (max-width: 30rem) {
+    .ui-auth-card {
+      margin-block: 0 auto;
+      padding: var(--space-6) var(--space-5);
+      gap: var(--space-5);
+      box-shadow: none;
+    }
+  }
+}

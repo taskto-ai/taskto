@@ -41,3 +41,26 @@ scenario(
   },
   { viewport: { width: 820, height: 1100 } },
 )
+
+scenario(
+  'on a phone, a link in the menu takes the keyboard to the new page; Settings says its name above the tab',
+  async (s) => {
+    const { page } = s
+    await setUp(s)
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/w/1/home')
+    await page.getByRole('heading', { level: 1 }).first().waitFor()
+    for (const name of ['Boards', 'Settings']) {
+      await page.getByRole('button', { name: 'Open the menu' }).click()
+      await page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name, exact: true }).click()
+      await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN', null, { timeout: 5_000 })
+    }
+    // Settings on a phone: its title is the tab's, and "Settings" is the line above it.
+    const main = page.getByRole('main')
+    assert.equal(await main.locator('.settings-path').isVisible(), true)
+    assert.equal((await main.locator('.settings-path').textContent()).trim(), 'Settings')
+    // Wide, the side list's title says it, and the line is not drawn.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    assert.equal(await main.locator('.settings-path').isVisible(), false)
+  },
+)

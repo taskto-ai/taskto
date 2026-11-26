@@ -47,6 +47,7 @@ type screenScope struct {
 	actions    map[string]Action
 	collection Collection
 	screens    map[string]Screen
+	copied     bool // a copy of another app: the icon label rule is not applied (icons.go)
 }
 
 func (d Definition) hasScreens() bool { return len(d.Screens) > 0 }
