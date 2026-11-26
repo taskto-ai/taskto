@@ -86,12 +86,25 @@ export function RecordDetail({
   const editable = canChange && !deleted && !!updateAction && !record?.deleted_at
   const title = t('apps.records.record', { id: String(id) })
 
-  // What isn't saved: a changed field, or a conflict on screen (both versions are the person's to
-  // choose from). Said to the explorer, which asks before anything closes the drawer then.
-  const unsaved = Object.keys(edits).length > 0 || conflict !== null
+  // What isn't saved: a field that differs from the record's value (one typed and put back by hand
+  // is saved as it is), or a conflict on screen (both versions are the person's to choose from).
+  // Said to the explorer, which asks before anything closes the drawer then; and to the browser,
+  // which asks before the tab closes or reloads. The drawer going says nothing is left.
+  const saved = conflict?.data ?? record?.data
+  const unsaved = conflict !== null || Object.entries(edits).some(([name, value]) => value !== toText(saved?.[name]))
   const tell = useRef(onUnsaved)
   tell.current = onUnsaved
   useEffect(() => tell.current?.(unsaved), [unsaved])
+  useEffect(() => () => tell.current?.(false), [])
+  useEffect(() => {
+    if (!unsaved) return
+    const unload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', unload)
+    return () => window.removeEventListener('beforeunload', unload)
+  }, [unsaved])
 
   if (!record) {
     return (

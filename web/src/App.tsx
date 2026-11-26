@@ -17,7 +17,7 @@ import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
-import { navigate } from './router'
+import { beforeLeaving, navigate } from './router'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -257,7 +257,11 @@ export function App() {
         <>
           <Shell
             me={me}
-            onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
+            // A draft open on the page (a document, a card, a record) is asked about first, then the
+            // records this device hasn't sent (LogoutGuard): the draft is what the person sees and
+            // was just working on, and keeping it ends there, with nothing else asked; the device's
+            // question only comes once they mean to go. Each is asked once.
+            onLogout={() => beforeLeaving(() => void logOut({ user: me.user.id, next: { state: 'login' } }))}
             onMe={(next) =>
               // Only the account still signed in: an answer that comes after logout must not bring the shell back.
               setSession((s) => (s.state === 'in' && s.me.user.id === next.user.id ? { state: 'in', me: next } : s))
