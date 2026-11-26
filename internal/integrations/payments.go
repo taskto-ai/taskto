@@ -86,6 +86,12 @@ type ObservedPayment struct {
 	// Currency is the code, upper case.
 	Currency string
 	Livemode bool
+	// PaidAt is when the payment was made, as the provider says, read in the same request as the
+	// payment: the time a webhook's event of the payment would carry, so that a payment made just
+	// before midnight and found by a poll just after it is dated the day it was made. An adapter whose
+	// provider says when gives it (the contract suite requires it); the zero time means the provider
+	// says nothing, and only then is the payment dated by the time the poll found it.
+	PaidAt time.Time
 }
 
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
@@ -670,18 +676,63 @@ func stripeLookupFailure(status int, h http.Header) error {
 }
 
 // polledSession holds the fields of a Checkout Session that a poll reads. Nothing a payer typed (name,
-// email, address) is decoded.
+// email, address) is decoded, of the session or of the charge expanded into it.
 type polledSession struct {
-	ID            string  `json:"id"`
-	Object        string  `json:"object"`
-	Mode          string  `json:"mode"`
-	Status        string  `json:"status"`
-	PaymentStatus string  `json:"payment_status"`
-	PaymentIntent *string `json:"payment_intent"`
-	PaymentLink   *string `json:"payment_link"`
-	AmountTotal   int64   `json:"amount_total"`
-	Currency      string  `json:"currency"`
-	Livemode      bool    `json:"livemode"`
+	ID            string        `json:"id"`
+	Object        string        `json:"object"`
+	Mode          string        `json:"mode"`
+	Status        string        `json:"status"`
+	PaymentStatus string        `json:"payment_status"`
+	PaymentIntent *polledIntent `json:"payment_intent"`
+	PaymentLink   *string       `json:"payment_link"`
+	AmountTotal   int64         `json:"amount_total"`
+	Currency      string        `json:"currency"`
+	Livemode      bool          `json:"livemode"`
+}
+
+// stripePollExpand asks for the session's PaymentIntent and its latest Charge as objects in the same
+// answer (https://docs.stripe.com/expand), for the time of the payment: a Checkout Session and a
+// PaymentIntent say when they were created, not when they were paid, and the Charge's "created" is
+// when the payer's payment was made (for a card, the moment it succeeded). The webhook's
+// checkout.session.completed is sent at that moment too. For a list the paths are under "data.".
+const stripePollExpand = "payment_intent.latest_charge"
+
+// polledIntent is a session's payment_intent: its id, or with the expansion the object, of which the
+// id and the latest charge's time are read.
+type polledIntent struct {
+	ID            string
+	ChargeCreated int64
+}
+
+func (pi *polledIntent) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		return json.Unmarshal(b, &pi.ID)
+	}
+	var o struct {
+		ID           string          `json:"id"`
+		Object       string          `json:"object"`
+		LatestCharge json.RawMessage `json:"latest_charge"`
+	}
+	if err := json.Unmarshal(b, &o); err != nil {
+		return err
+	}
+	if o.Object != "payment_intent" {
+		return errors.New("integrations: payment_intent isn't a PaymentIntent")
+	}
+	pi.ID = o.ID
+	if len(o.LatestCharge) > 0 && o.LatestCharge[0] == '{' {
+		var ch struct {
+			Object  string `json:"object"`
+			Created int64  `json:"created"`
+		}
+		if err := json.Unmarshal(o.LatestCharge, &ch); err != nil {
+			return err
+		}
+		if ch.Object == "charge" {
+			pi.ChargeCreated = ch.Created
+		}
+	}
+	return nil
 }
 
 // payment is what the session says of a payment made on it, or false if it isn't a paid session of
@@ -694,10 +745,13 @@ func (o polledSession) payment() (ObservedPayment, bool) {
 	}
 	p := ObservedPayment{ObjectID: o.ID, AmountMinor: o.AmountTotal, Currency: strings.ToUpper(o.Currency), Livemode: o.Livemode}
 	if o.PaymentIntent != nil {
-		if !stripeIntentIDRe.MatchString(*o.PaymentIntent) {
+		if !stripeIntentIDRe.MatchString(o.PaymentIntent.ID) {
 			return ObservedPayment{}, false
 		}
-		p.PaymentID = *o.PaymentIntent
+		p.PaymentID = o.PaymentIntent.ID
+		if o.PaymentIntent.ChargeCreated > 0 {
+			p.PaidAt = time.Unix(o.PaymentIntent.ChargeCreated, 0).UTC()
+		}
 	}
 	return p, true
 }
@@ -710,6 +764,10 @@ func (o polledSession) payment() (ObservedPayment, bool) {
 //   - a Payment Link, by List Checkout Sessions with the payment_link filter and status "complete"
 //     (https://docs.stripe.com/api/checkout/sessions/list): each paid session is a payment. A link
 //     itself has no payment status, and one that was deactivated says nothing of whether it was paid.
+//
+// Both ask for the session's intent and its latest charge in the same answer (stripePollExpand), for
+// the time of each payment. An expiry has no such time: expires_at is when the session was due to
+// expire, and one the server expired early keeps it, so an expired session is dated by the read.
 func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error) {
 	if hosted {
 		return stripeReadLinkPayments(ctx, creds, c, objectID)
@@ -717,7 +775,8 @@ func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hos
 	if !stripeSessionID.MatchString(objectID) {
 		return Observed{}, &CallError{Kind: CallRefused}
 	}
-	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions/"+objectID)
+	q := url.Values{"expand[]": {stripePollExpand}}
+	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions/"+objectID+"?"+q.Encode())
 	if err != nil {
 		return Observed{}, err
 	}
@@ -747,7 +806,8 @@ func stripeReadLinkPayments(ctx context.Context, creds Credentials, c *Client, l
 	if !stripeLinkID.MatchString(linkID) {
 		return Observed{}, &CallError{Kind: CallRefused}
 	}
-	q := url.Values{"payment_link": {linkID}, "status": {"complete"}, "limit": {strconv.Itoa(findPageSize)}}
+	q := url.Values{"payment_link": {linkID}, "status": {"complete"}, "limit": {strconv.Itoa(findPageSize)},
+		"expand[]": {"data." + stripePollExpand}}
 	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions?"+q.Encode())
 	if err != nil {
 		return Observed{}, err

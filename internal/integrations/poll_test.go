@@ -165,6 +165,55 @@ func TestPollingMarksAnInvoicePaidWithoutAnyWebhook(t *testing.T) {
 	}
 }
 
+// A polled payment is dated when it was paid, as its webhook event is, and not when the poll found it:
+// a payment made at 23:59:30 and found at 00:00:10 is paid on the day it was made. Both shapes are read
+// with the provider's time of the payment in the same request.
+func TestAPolledPaymentIsDatedWhenItWasPaidNotWhenItWasFound(t *testing.T) {
+	for _, public := range []string{publicURL, ""} {
+		name := map[string]string{publicURL: "a checkout session", "": "a payment link"}[public]
+		t.Run(name, func(t *testing.T) {
+			p := newPayOnOneClock(t, public)
+			// The invoice is sent at 23:50:00 UTC of a day to come.
+			now := p.svc.now().UTC()
+			midnight := now.Truncate(24 * time.Hour).Add(24 * time.Hour)
+			if midnight.Sub(now) < 15*time.Minute {
+				midnight = midnight.Add(24 * time.Hour)
+			}
+			p.later(midnight.Add(-10 * time.Minute).Sub(now))
+			record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
+
+			p.later(midnight.Add(-30 * time.Second).Sub(p.svc.now())) // 23:59:30
+			paidAt := p.svc.now().UTC().Truncate(time.Second)
+			var err error
+			if public != "" {
+				_, err = p.fake.Pay(ref.object)
+			} else {
+				_, err = p.fake.PayLink(ref.object)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.later(40 * time.Second) // 00:00:10, the next day
+			mark := p.mark()
+			p.pollNow()
+			if n := len(p.readsSince(mark)); n != 1 {
+				t.Fatalf("%d reads", n)
+			}
+			got := p.fields(record)
+			if got["status"] != "paid" || got["paid_at"] != paidAt.Format(time.DateOnly) {
+				t.Fatalf("the invoice paid at %v and found at %v is %v", paidAt, p.svc.now().UTC(), got)
+			}
+			var occurred string
+			if err := p.db.QueryRow(`SELECT occurred_at FROM integration_events WHERE source = ?`, SourcePoll).Scan(&occurred); err != nil {
+				t.Fatal(err)
+			}
+			if at, err := time.Parse(timeFormat, occurred); err != nil || !at.Equal(paidAt) {
+				t.Fatalf("the polled event occurred at %q, the payment was made at %v (%v)", occurred, paidAt, err)
+			}
+		})
+	}
+}
+
 // Without a public address the server's links are Payment Links, whose payments are sessions of the link:
 // this is the case polling is for, since no webhook can reach the server.
 func TestPollingFindsAPaymentThroughAPaymentLinkWithNoPublicURL(t *testing.T) {

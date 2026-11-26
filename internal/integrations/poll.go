@@ -278,7 +278,7 @@ func (s *Service) pollRef(ctx context.Context, rec record, creds Credentials, cl
 		// A paid object is told even when it ended another way too: money is never dropped.
 		for _, p := range obs.Payments {
 			s.pollTell(ctx, rec, r, Event{ID: "poll:" + p.ObjectID + ":paid", Kind: EventPaymentSucceeded, ObjectID: p.ObjectID,
-				PaymentID: p.PaymentID, AmountMinor: p.AmountMinor, Currency: p.Currency, Livemode: p.Livemode})
+				PaymentID: p.PaymentID, AmountMinor: p.AmountMinor, Currency: p.Currency, Livemode: p.Livemode, OccurredAt: p.PaidAt})
 		}
 	case obs.Expired:
 		s.pollTell(ctx, rec, r, Event{ID: "poll:" + r.objectID + ":expired", Kind: EventPaymentExpired, ObjectID: r.objectID,
@@ -290,9 +290,16 @@ func (s *Service) pollRef(ctx context.Context, rec record, creds Credentials, cl
 // pollTell stores what a read found as an event of the integration, with the ref's token for the key
 // whose object was read, and wakes the event worker. A second poll of the same state, or the webhook's
 // event for it, is another row or the same one: the apply step is the one that makes it once.
+//
+// A payment is dated as a webhook's event of it is, by the provider's own time of the payment
+// (ObservedPayment.PaidAt, in ev.OccurredAt): one made at 23:59:30 and found at 00:00:10 is dated
+// 23:59:30, the day it was made. Only an event the provider says no time of (an expiry, or a payment
+// of a provider that says none) is dated by when the poll found it.
 func (s *Service) pollTell(ctx context.Context, rec record, r ref, ev Event) {
 	ev.RefToken = s.pollToken(ctx, r)
-	ev.OccurredAt = s.now()
+	if ev.OccurredAt.IsZero() {
+		ev.OccurredAt = s.now()
+	}
 	got, err := s.store.recordGuarded(ctx, rec.ID, &hookGuard{mode: rec.Mode}, ev, SourcePoll, []byte(ev.ID))
 	switch {
 	case errors.Is(err, errHookRefused):

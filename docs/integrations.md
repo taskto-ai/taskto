@@ -707,9 +707,21 @@ webhook's event takes. It never reads an event feed: it retrieves the objects th
 - **What it reads.** For a Checkout Session, its status and payment status (`complete` and `paid`:
   paid; `expired`: the link ended; a delayed payment that hasn't settled: nothing yet). For a Payment
   Link, the link's completed sessions (`payment_link` filter), each paid one a payment. The answer is
-  checked against Stripe's shapes as a webhook's is, and holds nothing a payer typed. A refund of a paid
+  checked against Stripe's shapes as a webhook's is, and nothing a payer typed is decoded or kept. A refund of a paid
   ref is not polled: a ref that is paid, expired, failed or refunded is no longer open, and the
   webhook tells a refund.
+- **Dated when it happened.** A polled payment is dated by the provider's own time of the payment,
+  read in the same request, as its webhook event is: a payment made at 23:59:30 and found at 00:00:10
+  is `occurred_at` 23:59:30, and an invoice's `paid_at` is the day it was paid. For Stripe the read
+  asks for the session's PaymentIntent and its latest Charge as objects (`expand[]` of
+  `payment_intent.latest_charge`, `data.payment_intent.latest_charge` for a link's list), and the
+  time is the Charge's `created`, when the payer's payment was made (for a card, when it succeeded;
+  for a delayed method such as a bank debit, when the debit was started, which can be days before
+  the webhook's `checkout.session.async_payment_succeeded`). Only when the provider gives no time (a
+  session with no charge, or an adapter whose provider says none) is a payment dated by when the poll
+  found it, and so is an expiry: Stripe gives no time of an expiry the server asked for early (a
+  session's `expires_at` stays the time it was due to expire). The [contract
+  suite](#the-end-to-end-isolation-and-contract-suites) requires the payment's time of every adapter that polls.
 - **Read-only.** A poll never makes, changes or deletes anything at the provider.
 - **Its own key, its own mode.** A ref is read with its own integration's key only, in that
   integration's workspace, and only while the key is of the mode the ref was made in (a test ref is
@@ -824,8 +836,10 @@ Three groups of tests run in CI's Go job, with no real network:
   written once in terms of the adapter interfaces and the normalized shapes: a link made once for a
   token and refused for the same token with other terms, found by its token, its state read live,
   a webhook's signature, time tolerance and rotation, and a payment, expiry and refund each read as one
-  event with the ref's token and the exact amount, nothing a payer typed in it. An adapter runs it by
-  giving a `paymentsFixture` (its adapter, a client for its fake, the fake's payer, expiry and refund);
+  event with the ref's token and the exact amount, nothing a payer typed in it; and of an adapter that
+  polls (`PaymentPoller`), a payment read back dated by the provider's time of it, the time its webhook
+  event carries, not the time of the read. An adapter runs it by giving a `paymentsFixture` (its
+  adapter, a client for its fake, the fake's payer, expiry and refund, and a clock it can move);
   `contract_stripe_test.go` is Stripe's, and `TestTheContractSuiteNoticesABrokenAdapter` runs the cases
   against adapters broken on purpose, to show they fail.
 
