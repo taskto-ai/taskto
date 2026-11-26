@@ -861,6 +861,46 @@ export type IntegrationApproval = {
 export type SpaceGrant = 'none' | 'approval' | 'settings'
 export type IntegrationApprovalList = { approvals: IntegrationApproval[]; next_cursor: string | null }
 
+// A provider event the server stored for an integration, as an admin sees it: its kind, amount and
+// state, and the code that says why it wasn't applied. It holds no record, app, space or body.
+export type IntegrationEventState = 'pending' | 'running' | 'applied' | 'ignored' | 'failed'
+export type IntegrationEvent = {
+  id: number
+  kind: string
+  source: string
+  state: IntegrationEventState
+  // Why an ignored or failed event wasn't applied (an errors.<code> text); absent for the others.
+  code?: string
+  // In the currency's smallest unit.
+  amount_minor: number
+  currency: string
+  livemode: boolean
+  attempts: number
+  occurred_at: string
+  received_at: string
+  processed_at: string | null
+  retriable: boolean
+}
+// A page, newest first; `next_before` is the id to continue after, 0 on the last page.
+export type IntegrationEventList = { events: IntegrationEvent[]; next_before: number }
+
+// A payment link whose outcome at the provider is unknown, in a space the admin manages.
+export type PaymentLinkOutcome = {
+  effect_id: number
+  app_id: number
+  space_id: number
+  record_id: number
+  // Decimal text with the currency's decimals.
+  amount: string
+  currency: string
+  since: string
+  // The server is still looking for the link: nothing is asked of the admin yet.
+  waiting: boolean
+  // The wait ended and the entry stopped: the admin may confirm that no link exists.
+  can_confirm: boolean
+}
+export type PaymentLinkOutcomes = { payment_links: PaymentLinkOutcome[] }
+
 // What a space's readers see of an integration allowed there.
 export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }
 

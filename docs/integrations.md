@@ -228,6 +228,19 @@ approving and publishing are the same person's three calls, which the web app of
   allowed space after its approval ends is the integration's own spaces dialog (Settings →
   Integrations, "Keep … after the approval ends"), which the queue points to and doesn't repeat. The
   admin reads no app and no record: the screen has only what the requester submitted.
+- **Settings → Integration events** (admins only, like the queue) is what became of an integration's
+  provider events ([applying events](#applying-events)): for the integration chosen, its events newest
+  first, filtered by state (failed, ignored, applied, waiting), each with its kind, amount, time, mode
+  and state, and the reason an ignored or failed one wasn't applied, in the words of its code; a second
+  payment and an amount that doesn't match are named so. A failed event has a Retry button, which calls
+  the retry route and shows the server's refusal under the event (an event that is no longer failed
+  reads the list again). An event holds no record, app or space, so none is shown. Above them, **Payment
+  links to check** lists the unresolved payment links of the spaces the admin manages
+  (`payment-links/unresolved`): each with its amount, record, app, space and the time its outcome became
+  unknown, what to look for in the Stripe account, and, once the wait ended, a "Confirm no link exists"
+  button behind a confirmation that says plainly that if a link does exist the payer ends up with two
+  and could pay twice. Cancelling sends nothing. The screen asks only for the one integration's events
+  and links, the workspace's spaces' names and the provider registry.
 - **The builder's preview** says what a payment link would ask for from the sample record ("Create a
   payment link", simulated, the sum in the currency) and calls no service, opens no secret and needs
   no approval.

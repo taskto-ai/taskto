@@ -1319,7 +1319,8 @@
       "tokens": "Access tokens",
       "about": "About",
       "notifications": "Notifications",
-      "integrationApprovals": "Integration approvals"
+      "integrationApprovals": "Integration approvals",
+      "integrationEvents": "Integration events"
     },
     "general": {
       "language": "Default language",
@@ -2309,6 +2310,78 @@
       "integrations": "Accounts at payment providers that apps may use."
     },
     "actionsColumn": "Actions",
+    "events": {
+      "title": "Integration events",
+      "intro": "What happened to the payments and other events an integration’s provider sent: what was applied to an app’s records, what was left alone and why, and what needs you. You see each event’s kind, amount and state, never the app or the record it was for.",
+      "integration": "Integration",
+      "noIntegrations": "There is no integration to show events for.",
+      "openIntegrations": "Open integrations",
+      "filter": "Show events that are",
+      "filters": {
+        "all": "All",
+        "failed": "Failed",
+        "ignored": "Ignored",
+        "applied": "Applied",
+        "pending": "Waiting"
+      },
+      "empty": {
+        "all": "No events have arrived yet.",
+        "failed": "No event has failed.",
+        "ignored": "No event was ignored.",
+        "applied": "No event has been applied.",
+        "pending": "No event is waiting."
+      },
+      "state": {
+        "pending": "Waiting",
+        "running": "Being applied",
+        "applied": "Applied",
+        "ignored": "Ignored",
+        "failed": "Failed",
+        "duplicate": "Duplicate payment",
+        "mismatch": "Amount mismatch"
+      },
+      "kind": {
+        "payment_succeeded": "Payment received",
+        "payment_expired": "Payment link expired",
+        "payment_failed": "Payment failed",
+        "payment_refunded": "Payment refunded"
+      },
+      "live": "Live money",
+      "test": "Test mode",
+      "attempts_one": "Tried {count} time.",
+      "attempts_other": "Tried {count} times.",
+      "retry": "Retry",
+      "retryNamed": "Retry the event “{kind}” of {when}",
+      "retried": "“{kind}” will be applied again in a moment.",
+      "older": "Show older events",
+      "list": {
+        "title": "Events",
+        "intro": "Newest first. A failed event waits until you fix what is wrong, then retry it.",
+        "label": "Events"
+      },
+      "links": {
+        "title": "Payment links to check",
+        "intro": "A payment link whose creation the payment provider never confirmed isn’t made again by itself, so the payer is never sent two links.",
+        "none": "No payment link is waiting for a decision.",
+        "list": "Payment links to check",
+        "row": "Payment link for {amount}",
+        "detail": "Record {record} of app {app} · {space}",
+        "since": "Outcome unknown since {when}.",
+        "looking": "Still looking",
+        "needsYou": "Needs you",
+        "checkTitle": "What to check at Stripe",
+        "checkLook": "In the Stripe account of this integration, look for a payment link or a checkout session of the amount and time shown, whose metadata holds a “taskto_ref”.",
+        "checkFound": "If you find one, leave it. Ask the person who made the payment to retry it: the link is found and used.",
+        "checkNone": "If there is none, including an inactive or expired one, confirm below that none exists.",
+        "confirmAction": "Confirm no link exists",
+        "confirmNamed": "Confirm that no payment link of {amount} exists",
+        "confirmQuestion": "Confirm that Stripe has no payment link for {amount}?",
+        "confirmBody": "You are saying that you checked the Stripe account and found no payment link or checkout session for the {amount} of record {record}, outcome unknown since {since}. One new payment link will be made, once.",
+        "confirmWarning": "If one does exist and you missed it, the payer ends up with two links and could pay twice. Check Stripe before you confirm.",
+        "confirmed": "A new payment link for {amount} will be made, once.",
+        "space": "Space {id}"
+      }
+    },
     "approvals": {
       "title": "Integration approvals",
       "intro": "Apps ask here to use an outside service, such as taking payments. You see what an app asks in plain words, who asked and where, and never the app or its records. Approving connects the app to one of the workspace’s integrations.",
