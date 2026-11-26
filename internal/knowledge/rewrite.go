@@ -1039,8 +1039,8 @@ func (s *Store) RemoveSpace(sp access.Space) error {
 	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
 	if sp.Generation != 0 {
-		if last := st.lastGen.Load(); last != 0 && last != sp.Generation {
-			return nil // the files at the path are another space's
+		if st.lastGen.Load() > sp.Generation {
+			return nil // a space made later has the ID: the files at the path are its
 		}
 		if s.spaceExists != nil {
 			ok, err := s.spaceExists(sp)

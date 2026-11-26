@@ -534,3 +534,28 @@ func TestARemovalForASpaceWhoseRowIsGoneLeavesTheDirectoryAlone(t *testing.T) {
 	}
 	must[Result](t)(s.Put(ctx, current, "b.md", []byte("y"), "", alice, ""))
 }
+
+// A space made with a removed space's ID, before the removal is forgotten, is removed like any
+// other when its turn comes: what the state remembers of the earlier space doesn't make its
+// removal a no-op, which would leave its files and its mark unset.
+func TestARemovalOfALaterSpaceWithTheSameIDIsNotSkipped(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	old := writable(1)
+	old.Generation = 1
+	must[Result](t)(s.Put(ctx, old, "a.md", []byte("x"), "", alice, ""))
+	if err := s.RemoveSpace(old); err != nil { // not forgotten yet
+		t.Fatal(err)
+	}
+
+	// The later space has files, made through another Store (this one has not served it): its
+	// removal is the first thing this Store does for it.
+	later := writable(1)
+	later.Generation = 2
+	must[Result](t)(New(dataDir, Options{}).Put(ctx, later, "b.md", []byte("y"), "", alice, ""))
+	if err := s.RemoveSpace(later); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, dataDir, later)
+	_, err := s.Put(ctx, later, "c.md", []byte("z"), "", alice, "")
+	wantErr(t, err, ErrSpaceRemoved)
+}

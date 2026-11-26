@@ -251,10 +251,10 @@ type spaceState struct {
 	// the caller didn't have it). A space made later with the same ID has another, so the mark
 	// never refuses it, whether or not ForgetSpace has run.
 	removedGen int64
-	// lastGen is the generation of the space whose files this state has been used for (0 until a
-	// call that knows its space's generation has been let in): RemoveSpace leaves the directory
-	// alone when it is called for another space that once had the ID, since the files there are
-	// not that one's. Atomic, since holders and readers set it under the shared lock.
+	// lastGen is the largest generation of the spaces this state has served (0 until a call that
+	// knows its space's generation has been let in; generations only grow): RemoveSpace leaves the
+	// directory alone when it is called for an older space that once had the ID, since the files
+	// there are a later one's. Atomic, since holders and readers set it under the shared lock.
 	lastGen atomic.Int64
 
 	// cache is the usage the last write published, under cacheMu, which no one holds for
@@ -309,8 +309,10 @@ func (s *Store) admit(st *spaceState, sp access.Space) error {
 			return ErrSpaceRemoved
 		}
 	}
-	if sp.Generation != 0 {
-		st.lastGen.Store(sp.Generation)
+	for last := st.lastGen.Load(); sp.Generation > last; last = st.lastGen.Load() {
+		if st.lastGen.CompareAndSwap(last, sp.Generation) {
+			break
+		}
 	}
 	return nil
 }
