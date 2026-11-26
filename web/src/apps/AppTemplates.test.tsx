@@ -215,7 +215,10 @@ test('once published, the install page shows the live app and no longer offers t
   expect(screen.getByText(/Nothing is unpublished: the draft is the live release/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Preview the draft' })).toBeNull()
   expect(within(panel).queryByRole('button', { name: /ublish/ })).toBeNull()
-  expect(calls.some((c) => c.path === '/api/workspaces/1/spaces/2/apps/9/surface?release=1')).toBe(true)
+  // The live screen's renderer is loaded when it is drawn (LazyAppView): its request comes a moment later.
+  await waitFor(() =>
+    expect(calls.some((c) => c.path === '/api/workspaces/1/spaces/2/apps/9/surface?release=1')).toBe(true),
+  )
   // And the way to the app where people use it.
   expect(screen.getByRole('link', { name: 'Open Expense tracker in Apps' }).getAttribute('href')).toBe('/w/1/apps/2-9')
 })
