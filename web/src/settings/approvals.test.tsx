@@ -516,3 +516,20 @@ test('the filter keeps to the start of the page and scrolls inside itself rather
     /@media \(max-width: 40rem\)\s*\{[^@]*\.approvals-filters \.ui-segmented\s*\{[^}]*flex-wrap:\s*wrap/,
   )
 })
+
+test('a failed lookup of the spaces is said, and neither promises nor denies a way to keep the grant', async () => {
+  fakeFetch({
+    ...waiting(approval({ space_id: 99 })),
+    'GET /api/workspaces/1/spaces?all=true': { status: 500, body: { error: 'Spaces failed', code: 'internal' } },
+    'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
+    [`POST ${queue}/4/approve`]: { body: approval({ status: 'approved' }) },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Review the request of Invoices' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
+  const approve = within(dialog).getByRole('button', { name: 'Approve' }) as HTMLButtonElement
+  await waitFor(() => expect(approve.disabled).toBe(false))
+  expect(await within(dialog).findByRole('alert')).toBeTruthy()
+  expect(within(dialog).queryByText(/for as long as this approval lasts/)).toBeNull()
+  expect(within(dialog).queryByRole('link', { name: /Keep … after the approval ends/ })).toBeNull()
+})

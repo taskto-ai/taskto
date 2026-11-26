@@ -8,7 +8,7 @@
 // The slots themselves are the draft's: the agent writes them (a slot is JSON like any other part of
 // a definition), so changing one is asking the agent in the conversation.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   type App,
@@ -215,6 +215,15 @@ export function ApproveAndPublishDialog({
   const [error, setError] = useState<string | null>(null)
   // The slots approved by this dialog so far, across tries: their approvals stay when a later step fails.
   const [done, setDone] = useState<string[]>([])
+  // Whether this dialog is still the one on screen: a refusal that arrives after it was closed (the draft
+  // changed under it, and the admin may have opened another) is no news to the page.
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
 
   const candidates = (s: SlotStatus) => (list.data?.integrations ?? []).filter((i) => i.kind === s.kind && !i.disabled)
   // The one choice there is, taken as the answer until the person picks another.
@@ -257,6 +266,7 @@ export function ApproveAndPublishDialog({
       const refused = await onApproved(approved)
       if (refused !== null) setError(refused)
     } catch (e) {
+      if (!alive.current) return
       if (e instanceof ApiError && e.code === 'app_integration_contract_changed') {
         onContractChanged(approved)
         return

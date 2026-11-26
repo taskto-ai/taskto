@@ -289,6 +289,11 @@ export function PublishPanel({
   // publish (a later slot or the publish was refused, or the draft changed): said, so they are not a
   // surprise later.
   const [granted, setGranted] = useState<string[]>([])
+  // The approvals an earlier step made that are still approvals: one an admin has revoked since is not
+  // said to stand.
+  const standing = granted.filter((name) =>
+    (slots.data?.slots ?? []).some((s) => s.slot === name && s.status === 'approved'),
+  )
   const seen = useRef(app.version)
   // The draft's version now, for a step that was started on an older one.
   const current = useRef(app.version)
@@ -383,14 +388,7 @@ export function PublishPanel({
     action =
       blocked.length === 0 ? null : admin && broken.length === 0 ? (
         <div className="apps-actions">
-          <Button
-            ref={actionButton}
-            variant="primary"
-            onClick={() => {
-              setGranted([])
-              setApproving(app.version)
-            }}
-          >
+          <Button ref={actionButton} variant="primary" onClick={() => setApproving(app.version)}>
             {t('apps.integrations.approveAndPublish')}
           </Button>
         </div>
@@ -485,8 +483,8 @@ export function PublishPanel({
       )}
       {error && !migration && <Notice tone="danger">{error}</Notice>}
       {moved && <Notice tone="danger">{t('apps.builder.publish.moved')}</Notice>}
-      {granted.length > 0 && (
-        <Notice tone="warning">{t('apps.integrations.approve.kept', { slots: f.list(granted) })}</Notice>
+      {standing.length > 0 && (
+        <Notice tone="warning">{t('apps.integrations.approve.kept', { slots: f.list(standing) })}</Notice>
       )}
       {action}
       {migration && mayPublish && (
@@ -536,12 +534,12 @@ export function PublishPanel({
               setGranted(done)
               return null
             }
+            // Said from here on, whatever the publish does: refused, waiting for the schema changes to be
+            // acknowledged or done (which clears it).
+            setGranted(done)
             const refused = await run(version, [])
             slots.reload()
-            if (refused !== null) {
-              setGranted(done)
-              return refused
-            }
+            if (refused !== null) return refused
             setApproving(null)
             return null
           }}

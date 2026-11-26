@@ -216,7 +216,8 @@ function ReviewDialog({
   const allowing = picked !== undefined && !picked.spaces.includes(a.space_id)
   const space = a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name
   // Whether the admin can keep the space's grant, in Settings, Integrations: only a space they manage.
-  const keepable = spaces.data?.some((s) => s.id === a.space_id) ?? false
+  // Known only once the lookup has succeeded: a failed one is said, and guides neither way.
+  const keepable = spaces.data == null ? undefined : spaces.data.some((s) => s.id === a.space_id)
 
   // The grant of the space the approval made: it ends with the last approval that needs it, unless
   // an admin keeps it in the integration's spaces. The queue says it of this approval's own space, so
@@ -271,7 +272,9 @@ function ReviewDialog({
       body: [
         t(live ? 'settings.approvals.revokeLive' : 'settings.approvals.revokeBody'),
         madeGrant
-          ? t(keepable ? 'settings.approvals.revokeSpace' : 'settings.approvals.revokeSpaceTemporary', { space })
+          ? t(keepable === false ? 'settings.approvals.revokeSpaceTemporary' : 'settings.approvals.revokeSpace', {
+              space,
+            })
           : '',
       ]
         .filter(Boolean)
@@ -378,7 +381,7 @@ function ReviewDialog({
                   {t('apps.integrations.approve.none', { kind: t(`settings.integrations.kind.${a.kind}` as Key) })}
                 </Notice>
               )}
-              {picked && !spaces.loading && keepable && allowing && (
+              {picked && keepable === true && allowing && (
                 <p className="approvals-note">
                   {t('settings.approvals.allowSpace', { space })}{' '}
                   <Link href={routePath({ workspace, section: 'settings', item: 'integrations' })}>
@@ -389,11 +392,12 @@ function ReviewDialog({
               {/* A space the admin doesn't manage (another member's private space) has no setting to keep
                   its grant in, and the integrations' list doesn't say whether it has one: the grant lasts as
                   long as the approval, whatever it was before. */}
-              {picked && !spaces.loading && !keepable && (
+              {picked && keepable === false && (
                 <p className="approvals-note">{t('settings.approvals.allowSpaceTemporary')}</p>
               )}
             </>
           )}
+          {spaces.error && <Notice tone="danger">{spaces.error}</Notice>}
           {error && <Notice tone="danger">{error}</Notice>}
         </div>
       </Dialog>

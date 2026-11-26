@@ -3249,7 +3249,10 @@ release approved again, so that the app can roll back to it, the publisher reads
 current draft, replaces the draft (`PATCH` with `definition`) with that release's definition from
 `GET …/apps/{app}/releases/{release}`, asks for the approval and has an admin approve it, rolls back
 to the release, and writes the kept draft back with `PATCH`. A rollback leaves the draft as it
-is, so without the first step the draft is lost.
+is, so without the first step the draft is lost. Every `PATCH` names the `version` the last reply
+gave, so the write-back names the one the replacement's reply gave: if it is refused with `409
+app_changed`, another builder saved an edit to the draft meanwhile, and the publisher reads the draft
+again and merges that edit into the kept one before writing it back, never over it.
 
 **The gate.** Publishing and rolling back are refused (`409 app_integration_unapproved`, `slot`) unless
 every slot of the release that would become live has an approval of its contract's hash whose
