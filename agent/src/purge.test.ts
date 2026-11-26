@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { purgeRecords, runPurge, WalBusyError } from './purge.js'
+import { LIFECYCLE_KIND, purgeRecords, runPurge, WalBusyError } from './purge.js'
 
 const WORD = 'doomed-marmalade-7731'
 
@@ -56,7 +56,7 @@ describe('runPurge', () => {
       CREATE TABLE tasks (id INTEGER PRIMARY KEY, conversation_id INTEGER);
       CREATE TABLE entries (id INTEGER PRIMARY KEY, conversation_id INTEGER, text TEXT);
       CREATE TABLE submissions (id INTEGER PRIMARY KEY, conversation_id INTEGER);
-      CREATE TABLE documents (id INTEGER PRIMARY KEY, scope_kind TEXT, owner_id INTEGER);
+      CREATE TABLE documents (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'notes', scope_kind TEXT, owner_id INTEGER);
       CREATE TABLE document_revisions (document_id INTEGER NOT NULL, seq INTEGER NOT NULL, content TEXT,
         PRIMARY KEY (document_id, seq));
       CREATE TABLE record_ids (id INTEGER PRIMARY KEY);
@@ -71,7 +71,11 @@ describe('runPurge', () => {
       INSERT INTO submissions (id, conversation_id) VALUES (30, 3);
       INSERT INTO documents (id, scope_kind, owner_id) VALUES (40, 'conversation', 1), (41, 'task', 20), (42, 'conversation', 2);
       INSERT INTO document_revisions (document_id, seq, content) VALUES (40, 1, 'a'), (40, 2, 'b'), (41, 1, 'c'), (42, 1, 'kept');
-      INSERT INTO record_ids (id) VALUES (1), (2), (3), (10), (11), (20), (30), (40), (41), (42);
+      -- Conversations 1 and 3 are retired, as the sidecar records it.
+      INSERT INTO documents (id, kind, scope_kind, owner_id) VALUES (43, '${LIFECYCLE_KIND}', 'conversation', 1),
+        (44, '${LIFECYCLE_KIND}', 'conversation', 3);
+      INSERT INTO document_revisions (document_id, seq, content) VALUES (43, 1, 'retired'), (44, 1, 'retired');
+      INSERT INTO record_ids (id) VALUES (1), (2), (3), (10), (11), (20), (30), (40), (41), (42), (43), (44);
     `)
     writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (10, 1, ?), (11, 2, ?)').run(WORD, 'kept')
     const reader = new DatabaseSync(path, { timeout: 100 })
@@ -197,6 +201,55 @@ describe('runPurge', () => {
       expect(probe.writes).toBeGreaterThan(3)
       expect(writer.prepare('SELECT count(*) AS n FROM entries WHERE conversation_id = 1').get()).toEqual({ n: 0 })
       expect(writer.prepare('SELECT count(*) AS n FROM record_ids').get()).toEqual({ n: 3 }) // 2, 11 and 42
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  }, 30_000)
+
+  // A purge that stops after some of its short transactions leaves what the next needs: the
+  // conversations stay retired (their lifecycle documents are there), and the task that owns
+  // conversation 3 still leads to it, so the retry removes conversation 3's records too.
+  it('stops halfway and is finished by the next, which still finds every conversation', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    // Conversation 3, which a task of conversation 1 started, has more than one transaction's worth.
+    writer.exec('BEGIN')
+    const insert = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 3, ?)')
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    for (let id = 1000; id < 200_000; id++) {
+      insert.run(id, WORD)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    const stop = new Error('stopped')
+    try {
+      expect(() =>
+        purgeRecords(path, 1, 1000, () => {
+          throw stop
+        }),
+      ).toThrow(stop)
+      const left = (q: string) => (writer.prepare(q).get() as { n: number }).n
+      expect(left('SELECT count(*) AS n FROM entries WHERE conversation_id = 3')).toBeGreaterThan(0)
+      expect(writer.prepare('SELECT id FROM conversations ORDER BY id').all()).toEqual([
+        { id: 1 },
+        { id: 2 },
+        { id: 3 },
+      ])
+      expect(writer.prepare('SELECT id FROM tasks').all()).toEqual([{ id: 20 }])
+      expect(writer.prepare(`SELECT id FROM documents WHERE kind = '${LIFECYCLE_KIND}' ORDER BY id`).all()).toEqual([
+        { id: 43 },
+        { id: 44 },
+      ])
+      expect(left('SELECT count(*) AS n FROM document_revisions WHERE document_id IN (43, 44)')).toBe(2)
+
+      await runPurge({ path, root: 1, timeoutMs: 5000 })
+      expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
+      expect(left('SELECT count(*) AS n FROM entries WHERE conversation_id <> 2')).toBe(0)
+      expect(writer.prepare('SELECT id FROM tasks').all()).toEqual([])
+      expect(writer.prepare('SELECT id FROM documents').all()).toEqual([{ id: 42 }])
+      expect(writer.prepare('SELECT id FROM record_ids ORDER BY id').all()).toEqual([{ id: 2 }, { id: 11 }, { id: 42 }])
+      expect(log()).not.toContain(WORD)
     } finally {
       reader.close()
       writer.close()

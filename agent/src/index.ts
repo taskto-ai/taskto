@@ -59,7 +59,7 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
-import { runPurge, WalBusyError } from './purge.js'
+import { LIFECYCLE_KIND, runPurge, WalBusyError } from './purge.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
@@ -148,7 +148,7 @@ void harness.closed.then((end) => {
 // so a sweep for orphans leaves alone one the server is still recording (0 for one created before
 // this document existed), and when it was retired.
 const Lifecycle = defineDoc<{ createdAt: number; retiredAt: number | null }>({
-  kind: 'taskto.lifecycle',
+  kind: LIFECYCLE_KIND, // the purge removes it last (purge.ts)
   version: 1,
   scope: 'conversation',
   history: 'latest',
