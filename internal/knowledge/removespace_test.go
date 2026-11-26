@@ -447,3 +447,28 @@ func blockedIn(a, b string) bool {
 	}
 	return false
 }
+
+// Forgetting a removed space drops the mark of that space only: when a later space with the same
+// ID was removed before the earlier one's purge got to forget it, the mark is the later one's, and
+// the earlier purge's forgetting must not lift it.
+func TestForgetSpaceLeavesTheMarkOfALaterSpaceWithTheSameID(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	earlier := writable(1)
+	earlier.CreatedAt = "2026-01-01T00:00:00.000Z"
+	later := writable(1)
+	later.CreatedAt = "2026-02-01T00:00:00.000Z"
+	must[Result](t)(s.Put(ctx, later, "a.md", []byte("x"), "", alice, ""))
+	if err := s.RemoveSpace(later); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ForgetSpace(earlier)
+
+	_, err := s.Put(ctx, later, "b.md", []byte("y"), "", alice, "")
+	wantErr(t, err, ErrSpaceRemoved)
+	gone(t, dataDir, later)
+
+	// Its own mark is forgotten.
+	s.ForgetSpace(later)
+	must[Result](t)(s.Put(ctx, later, "c.md", []byte("z"), "", alice, ""))
+}

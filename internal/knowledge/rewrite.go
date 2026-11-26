@@ -1068,11 +1068,12 @@ func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
 
 // ForgetSpace drops what the Store keeps of a space removed by RemoveSpace, once its rows are
 // deleted: nothing can reach the space then, and a space made later may be given its ID. A space
-// that isn't marked removed is left alone.
+// that isn't marked removed is left alone, and so is one whose mark is of another space that had
+// the ID (a later one's removal, told by its creation time as admit tells it).
 func (s *Store) ForgetSpace(sp access.Space) {
 	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
-	if !st.removed {
+	if !st.removed || (st.removedCreated != "" && sp.CreatedAt != "" && sp.CreatedAt != st.removedCreated) {
 		return
 	}
 	s.mu.Lock()
