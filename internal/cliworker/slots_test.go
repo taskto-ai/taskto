@@ -21,6 +21,7 @@ import (
 // turns and sign-out never touch the first's.
 func TestAccountSlots(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	dirs, err := h.layout.Ensure(1)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +115,7 @@ func TestAccountSlots(t *testing.T) {
 // stay. Doing it again is no error.
 func TestForgetRemovesEverythingKeptForAUser(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	ctx := context.Background()
 	mine, err := h.layout.EnsureSlot(1, cliworker.Claude, "2")
 	if err != nil {

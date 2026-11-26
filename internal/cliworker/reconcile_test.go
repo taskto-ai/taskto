@@ -10,11 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -64,54 +66,80 @@ func setTime(t *testing.T, path string, at time.Time) {
 	}
 }
 
+// legacy makes user's directory as a worker from before owners were recorded made it: with no
+// owner, signed in, and a file of theirs.
+func legacy(t *testing.T, h *harness, user int64) string {
+	t.Helper()
+	dirs, err := h.layout.Ensure(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
+	return mine(t, dirs)
+}
+
+// otherBoot is the boot of another server than the one the census comes from.
+const otherBoot = "0000000000000000000000000000ab00"
+
+// census is what the tests' server says: live users with the identities they were introduced
+// with, unless given.
+func census(next int64, owners map[int64]string, live ...int64) cliworker.Census {
+	c := cliworker.Census{Live: live, Owners: map[int64]string{}, Next: next, Boot: cliworker.TestBoot, Before: time.Now()}
+	for _, user := range live {
+		c.Owners[user] = cliworker.IdentityForTest(user)
+	}
+	for user, id := range owners {
+		c.Owners[user] = id
+	}
+	return c
+}
+
 // After a restore of the server's data, the worker may hold directories of a history the restore
-// went back from: the server's census at its start says which numbers are live users and which
-// come next, and Reconcile removes every directory that isn't a live user's own, so no one given a
-// number again gets another person's logins and files, while nothing of a live user is removed.
-func TestReconcileRemovesTheDirectoriesThatAreNoLiveUsersOwn(t *testing.T) {
+// went back from. Reconcile keeps a directory only for the account that owns it, by its identity,
+// whatever any clock or file time says: a number given to another account, a number from next up
+// that this server didn't introduce, and an account gone for good all lose theirs, with their
+// browsers and running turns stopped first; the live accounts' own stay.
+func TestReconcileKeepsADirectoryOnlyForItsOwner(t *testing.T) {
 	h := newHarness(t, nil)
 	browsers := &fakeBrowsers{layout: h.layout, stopped: map[int64]bool{}}
 	h.w.SetBrowsers(browsers)
 	ctx := context.Background()
-	now := time.Now()
-	hourAgo, twoHoursAgo := now.Add(-time.Hour), now.Add(-2*time.Hour)
 
 	files := map[int64]string{}
-	for user := int64(1); user <= 9; user++ {
+	for _, user := range []int64{1, 2, 3, 5} {
 		files[user] = mine(t, h.user(t, user, cliworker.Claude, clitest.Scenario{SleepMS: 60_000}, true))
 	}
-	// When the worker first acted for each, where it recorded it; the others' directories are from
-	// before it recorded that.
-	for user, at := range map[int64]time.Time{
-		1: hourAgo,              // live, made after the account: theirs
-		2: twoHoursAgo,          // live, but made before the account: someone else's, of a lost history
-		4: twoHoursAgo,          // live, with no time of the account sent: not checked
-		6: now.Add(time.Minute), // a number from next up, made after the census: a person added since
-	} {
-		h.w.SetBirthForTest(user, at)
+	// 6 was introduced by another server (the one before the restore), 4 and 7 by a worker from
+	// before owners were recorded.
+	if err := h.w.Introduce(ctx, 6, cliworker.IdentityForTest(6), otherBoot); err != nil {
+		t.Fatal(err)
 	}
-	// 5 had the number in a lost history, and a turn of theirs is still running.
-	turn, _, err := h.w.Start(spec("lost", 5, cliworker.Claude, "work"))
+	files[6] = mine(t, h.layout.User(6))
+	files[4], files[7] = legacy(t, h, 4), legacy(t, h, 7)
+	// 2's number was given to someone else since; a turn of the old owner's still runs.
+	turn, _, err := h.w.Start(spec("lost", 2, cliworker.Claude, "work"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitEvent(t, turn, cliworker.EventTool, "")
-	h.w.SetBirthForTest(5, hourAgo)
-	// 8 and 9 are live, their directories from before the worker recorded when it made them: 8's is
-	// older than the account, 9's isn't.
-	setTime(t, h.layout.User(8).Root, twoHoursAgo)
-
-	census := cliworker.Census{
-		Live:    []int64{1, 2, 4, 8, 9},
-		Created: map[int64]time.Time{1: twoHoursAgo, 2: hourAgo, 8: hourAgo, 9: hourAgo},
-		Next:    5,
-		Before:  now,
+	// No clock decides: the times say the opposite of who owns what.
+	for user, f := range files {
+		at := time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC)
+		if user == 2 || user == 6 || user == 7 {
+			at = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+		}
+		setTime(t, f, at)
+		setTime(t, h.layout.User(user).Root, at)
 	}
-	if err := h.w.Reconcile(ctx, census); err != nil {
+
+	c := census(5, map[int64]string{2: strings.Repeat("e", 32)}, 1, 2, 4)
+	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 
-	kept, removed := []int64{1, 4, 6, 9}, []int64{2, 3, 5, 7, 8}
+	// 1: the live account's own. 4: from before owners, adopted (no restore). 5: from next up,
+	// introduced by this server since it read its database.
+	kept, removed := []int64{1, 4, 5}, []int64{2, 3, 6, 7}
 	for _, user := range kept {
 		if _, err := os.Stat(files[user]); err != nil {
 			t.Errorf("user %d's own file was removed: %v", user, err)
@@ -119,11 +147,14 @@ func TestReconcileRemovesTheDirectoriesThatAreNoLiveUsersOwn(t *testing.T) {
 	}
 	for _, user := range removed {
 		gone(t, h.layout.User(user).Root)
+		gone(t, h.w.OwnerFileForTest(user))
+	}
+	if b, err := os.ReadFile(h.w.OwnerFileForTest(4)); err != nil || !strings.HasPrefix(string(b), cliworker.IdentityForTest(4)) {
+		t.Errorf("the adopted directory's owner = %q %v", b, err)
 	}
 	if !turn.Over() {
-		t.Error("the lost history's turn still runs in the directory that went")
+		t.Error("the old owner's turn still runs")
 	}
-	// Their browsers were stopped before the directory went, and nobody else's.
 	var stopped []int64
 	for user, there := range browsers.stopped {
 		stopped = append(stopped, user)
@@ -135,38 +166,34 @@ func TestReconcileRemovesTheDirectoriesThatAreNoLiveUsersOwn(t *testing.T) {
 	if !slices.Equal(stopped, removed) {
 		t.Errorf("browsers stopped for %v, want %v", stopped, removed)
 	}
-	// The browsers' refusals go as the marks do: for live users and numbers from next up.
-	if browsers.again == nil || !browsers.before.Equal(now) {
+	if browsers.again == nil {
 		t.Fatal("the browsers' refusals weren't reconciled")
 	}
-	for user, want := range map[int64]bool{1: true, 2: true, 3: false, 4: true, 5: true, 9: true, 100: true} {
+	for user, want := range map[int64]bool{1: true, 2: true, 3: false, 5: true, 100: true} {
 		if got := browsers.again(user); got != want {
 			t.Errorf("browser refusal of %d taken back = %v, want %v", user, got, want)
 		}
 	}
 
-	// The account that is gone for good stays refused; a live user whose directory went, and a
-	// number to be given again, start afresh, with nothing of anyone's.
+	// The account gone for good stays refused. The account given number 2 is unknown until the
+	// server introduces it, and then starts with nothing of anyone's.
 	if _, err := h.w.Status(ctx, 3, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("an account gone for good: %v", err)
 	}
-	for _, user := range []int64{2, 5} {
-		st, err := h.w.Status(ctx, user, cliworker.Claude, "")
-		if err != nil || st.LoggedIn {
-			t.Errorf("user %d after the directory went: %+v %v, want not signed in", user, st, err)
-		}
-		if _, err := os.Stat(files[user]); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("user %d finds the old file: %v", user, err)
-		}
+	if _, err := h.w.Status(ctx, 2, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrUnknownOwner) {
+		t.Errorf("the number's new account before it was introduced: %v", err)
 	}
-
-	// Told again (the next start), nothing more goes: 2 has a directory of their own now.
-	census.Before = time.Now()
-	if err := h.w.Reconcile(ctx, census); err != nil {
+	if err := h.w.Introduce(ctx, 2, strings.Repeat("e", 32), cliworker.TestBoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(h.layout.User(2).Root); err != nil {
-		t.Errorf("the live user's new directory went: %v", err)
+	if st, err := h.w.Status(ctx, 2, cliworker.Claude, ""); err != nil || st.LoggedIn {
+		t.Errorf("the number's new account: %+v %v, want not signed in", st, err)
+	}
+
+	// Told again (the next start), nothing more goes.
+	c.Before = time.Now()
+	if err := h.w.Reconcile(ctx, c); err != nil {
+		t.Fatal(err)
 	}
 	for _, user := range kept {
 		if _, err := os.Stat(files[user]); err != nil {
@@ -175,14 +202,145 @@ func TestReconcileRemovesTheDirectoriesThatAreNoLiveUsersOwn(t *testing.T) {
 	}
 }
 
+// After a restore, a directory from before owners were recorded can't be told from another
+// history's: it is removed, never handed to the live account of its number, which starts afresh.
+// Without a restore it is that account's, and adopted.
+func TestReconcileNeverHandsOverADirectoryWithNoOwnerAfterARestore(t *testing.T) {
+	for _, restored := range []bool{true, false} {
+		h := newHarness(t, nil)
+		ctx := context.Background()
+		file := legacy(t, h, 1)
+		c := census(2, nil, 1)
+		c.Restored = restored
+		if err := h.w.Reconcile(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.w.Introduce(ctx, 1, cliworker.IdentityForTest(1), cliworker.TestBoot); err != nil {
+			t.Fatal(err)
+		}
+		st, err := h.w.Status(ctx, 1, cliworker.Claude, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ferr := os.Stat(file)
+		if restored && (st.LoggedIn || !errors.Is(ferr, fs.ErrNotExist)) {
+			t.Errorf("after a restore the live account was given a directory with no owner: signed in %v, file %v", st.LoggedIn, ferr)
+		}
+		if !restored && (!st.LoggedIn || ferr != nil) {
+			t.Errorf("with no restore the live account lost its own directory: signed in %v, file %v", st.LoggedIn, ferr)
+		}
+	}
+}
+
+// Introducing an account whose number's directory is someone else's removes that one first, with
+// the sign-ins, turns and permission questions the worker held for it; introducing the owner again
+// changes nothing; nothing starts for an account the server hasn't introduced.
+func TestIntroduceRemovesADirectoryThatIsNotTheAccounts(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if _, err := h.w.Status(ctx, 9, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrUnknownOwner) {
+		t.Errorf("a status check before the account was introduced: %v", err)
+	}
+	if _, _, err := h.w.Start(spec("unknown", 9, cliworker.Claude, "hi")); !errors.Is(err, cliworker.ErrUnknownOwner) {
+		t.Errorf("a turn before the account was introduced: %v", err)
+	}
+	if _, err := h.w.StartLogin(9, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrUnknownOwner) {
+		t.Errorf("a sign-in before the account was introduced: %v", err)
+	}
+
+	old := mine(t, h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true))
+	if done := last(run(t, h.w, spec("old-turn", 1, cliworker.Claude, "hi"))); done.Status != cliworker.StatusOK {
+		t.Fatalf("the old owner's turn: %+v", done)
+	}
+	h.user(t, 1, cliworker.Codex, clitest.Scenario{}, false)
+	if _, err := h.w.StartLogin(1, cliworker.Codex, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Again by the same account: nothing changes.
+	if err := h.w.Introduce(ctx, 1, cliworker.IdentityForTest(1), cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatalf("introducing the owner again removed their file: %v", err)
+	}
+
+	next := strings.Repeat("d", 32)
+	if err := h.w.Introduce(ctx, 1, next, cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, old)
+	if st, err := h.w.Status(ctx, 1, cliworker.Claude, ""); err != nil || st.LoggedIn {
+		t.Errorf("the new account: %+v %v, want not signed in", st, err)
+	}
+	if _, ok := h.w.Login(1, cliworker.Codex, ""); ok {
+		t.Error("the old owner's sign-in is still there for the new account")
+	}
+	if _, ok := h.w.Turn("old-turn"); ok {
+		t.Error("the old owner's turn is still there for the new account")
+	}
+	if qs := h.w.Permissions(1, 7); len(qs) != 0 {
+		t.Errorf("the old owner's questions: %+v", qs)
+	}
+
+	// A forgotten account is refused.
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Introduce(ctx, 1, next, cliworker.TestBoot); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Errorf("introducing a forgotten account: %v", err)
+	}
+}
+
+// A directory with read-only parts (an archive's, a tool's) is removed all the same: the worker
+// takes it away from its path first, then deletes it as itself, and a link in it is removed, not
+// followed.
+func TestReconcileRemovesAReadOnlyDirectory(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	dirs := h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true)
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("not the user's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ro := filepath.Join(dirs.Work, "archive", "inner")
+	if err := os.MkdirAll(ro, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ro, "file"), []byte("x"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ro, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{ro, filepath.Dir(ro)} {
+		if err := os.Chmod(d, 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.w.Reconcile(ctx, census(4, nil, 1)); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, dirs.Root)
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("a file a link pointed to went: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(h.layout.Root, ".worker", "trash"))
+	if len(entries) != 0 {
+		t.Errorf("left in the trash: %v", entries)
+	}
+}
+
 // A directory that can't be removed yet (a process of it doesn't end in time) is kept, and its
-// user refused until a later Reconcile removes it: the answer is ErrIncomplete, so the server goes
-// on and tries again.
+// user refused, the agent browser too, until a later Reconcile removes it: the answer is
+// ErrIncomplete, so the server goes on and tries again.
 func TestReconcileRefusesWhatItCouldNotRemoveYet(t *testing.T) {
 	h := newHarness(t, nil)
 	h.w.SetGroupWaitForTest(300 * time.Millisecond)
 	ctx := context.Background()
 	file := mine(t, h.user(t, 7, cliworker.Claude, clitest.Scenario{}, true))
+	if err := h.w.BrowserAllowed(7); err != nil {
+		t.Fatalf("fixture: the browser of an introduced account: %v", err)
+	}
 	leftover := exec.Command("sleep", "60")
 	leftover.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := leftover.Start(); err != nil {
@@ -191,8 +349,9 @@ func TestReconcileRefusesWhatItCouldNotRemoveYet(t *testing.T) {
 	t.Cleanup(func() { _ = leftover.Process.Kill(); _ = leftover.Wait() })
 	h.w.TrackGroupForTest(leftover.Process.Pid, 7, cliworker.Claude, "")
 
-	census := cliworker.Census{Live: []int64{1}, Next: 2, Before: time.Now()}
-	err := h.w.Reconcile(ctx, census)
+	c := census(2, nil, 1)
+	c.Boot = otherBoot // the next server's: 7 is of another history
+	err := h.w.Reconcile(ctx, c)
 	if !errors.Is(err, cliworker.ErrIncomplete) {
 		t.Fatalf("Reconcile = %v, want ErrIncomplete", err)
 	}
@@ -202,17 +361,125 @@ func TestReconcileRefusesWhatItCouldNotRemoveYet(t *testing.T) {
 	if _, err := h.w.StartLogin(7, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the number whose directory is left is served: %v", err)
 	}
+	if err := h.w.BrowserAllowed(7); !errors.Is(err, browser.ErrAccountClosing) {
+		t.Errorf("the browser of the number whose directory is left: %v", err)
+	}
 
 	_ = leftover.Process.Kill()
 	_ = leftover.Wait()
-	census.Before = time.Now().Add(time.Second) // the next attempt reads its database after the mark
-	if err := h.w.Reconcile(ctx, census); err != nil {
+	c.Before = time.Now().Add(time.Second) // the next attempt reads its database after the mark
+	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	gone(t, h.layout.User(7).Root)
-	if _, err := h.w.Status(ctx, 7, cliworker.Claude, ""); err != nil {
+	if err := h.w.Introduce(ctx, 7, strings.Repeat("c", 32), cliworker.TestBoot); err != nil {
 		t.Errorf("the number, now clear, is still refused: %v", err)
 	}
+}
+
+// Over the worker's API the census and an introduction arrive whole, and a Reconcile that couldn't
+// remove everything yet answers ErrIncomplete, not the error of one of its users.
+func TestRemoteReconcile(t *testing.T) {
+	h := newHarness(t, nil)
+	r := serve(t, h)
+	ctx := context.Background()
+	file := mine(t, h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true))
+	if err := r.Reconcile(ctx, census(3, map[int64]string{2: strings.Repeat("e", 32)}, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the account's identity didn't arrive: the old owner's directory is still there (%v)", err)
+	}
+	if err := r.Introduce(ctx, 2, strings.Repeat("e", 32), cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Status(ctx, 2, cliworker.Claude, ""); err != nil {
+		t.Errorf("after the introduction over the API: %v", err)
+	}
+	if _, err := r.Status(ctx, 4, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrUnknownOwner) {
+		t.Errorf("an account not introduced, over the API: %v", err)
+	}
+
+	h.w.SetGroupWaitForTest(300 * time.Millisecond)
+	h.user(t, 5, cliworker.Claude, clitest.Scenario{}, true)
+	leftover := exec.Command("sleep", "60")
+	leftover.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := leftover.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = leftover.Process.Kill(); _ = leftover.Wait() })
+	h.w.TrackGroupForTest(leftover.Process.Pid, 5, cliworker.Claude, "")
+	c := census(3, map[int64]string{2: strings.Repeat("e", 32)}, 2)
+	c.Boot = otherBoot // 5 isn't this server's
+	if err := r.Reconcile(ctx, c); !errors.Is(err, cliworker.ErrIncomplete) || errors.Is(err, cliworker.ErrBusy) {
+		t.Errorf("Reconcile over the API = %v, want ErrIncomplete alone", err)
+	}
+}
+
+// The census of a server with many users fits in the worker's API.
+func TestRemoteReconcileTakesALargeCensus(t *testing.T) {
+	h := newHarness(t, nil)
+	r := serve(t, h)
+	live := make([]int64, 0, 50_000)
+	for user := int64(1); user <= 50_000; user++ {
+		live = append(live, user)
+	}
+	if err := r.Reconcile(context.Background(), census(50_001, nil, live...)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A deleted account's browser purge that began before a restore gave its number to someone else
+// never reaches the new account's files: it runs under the number's gate, and only while the
+// directory's owner is the one it began with. With the directory already gone, it is done.
+func TestABrowserPurgeNeverReachesTheNumbersNextOwner(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	host := h.w.BrowserHost(nil)
+	owned, ok := host.(browser.OwnedHost)
+	if !ok {
+		t.Fatal("the worker's browser host doesn't check owners")
+	}
+	h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true)
+	began, err := owned.Owner(3) // the purge of the deleted account begins
+	if err != nil || began != cliworker.IdentityForTest(3) {
+		t.Fatalf("owner = %q %v", began, err)
+	}
+	// Meanwhile a restore gave 3 to another account, which made a browser profile.
+	next := strings.Repeat("a", 32)
+	if err := h.w.Reconcile(ctx, census(4, map[int64]string{3: next}, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Introduce(ctx, 3, next, cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(h.layout.BrowserPaths(3).Root, "personal", "Cookies")
+	if err := os.MkdirAll(filepath.Dir(profile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profile, []byte("the new account's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := owned.PurgeOwned(3, began); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(profile); err != nil {
+		t.Errorf("the old account's purge removed the new account's profile: %v", err)
+	}
+	// The new account's own purge removes it.
+	if err := owned.PurgeOwned(3, next); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, h.layout.BrowserPaths(3).Root)
+
+	// A number whose directory went is done, and nothing is made again.
+	if err := h.w.Forget(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := owned.PurgeOwned(3, next); err != nil {
+		t.Errorf("the purge's browser step after the directory went: %v", err)
+	}
+	gone(t, h.layout.User(3).Root)
 }
 
 // A turn's process group, once the turn is over and the group holds no live process, is no
@@ -232,119 +499,5 @@ func TestAnEndedTurnsGroupIsNotListed(t *testing.T) {
 			t.Fatalf("%d process groups are still listed after their turn and helper ended", h.w.GroupsForTest())
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// Over the worker's API the census arrives whole, the account times too, and a Reconcile that
-// couldn't remove everything yet answers ErrIncomplete, not the error of one of its users.
-func TestRemoteReconcile(t *testing.T) {
-	h := newHarness(t, nil)
-	r := serve(t, h)
-	ctx := context.Background()
-	file := mine(t, h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true))
-	h.w.SetBirthForTest(2, time.Now().Add(-2*time.Hour))
-	census := cliworker.Census{Live: []int64{2}, Created: map[int64]time.Time{2: time.Now().Add(-time.Hour)}, Next: 3, Before: time.Now()}
-	if err := r.Reconcile(ctx, census); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the account's time didn't arrive: the directory made before it is still there (%v)", err)
-	}
-
-	h.w.SetGroupWaitForTest(300 * time.Millisecond)
-	h.user(t, 5, cliworker.Claude, clitest.Scenario{}, true)
-	leftover := exec.Command("sleep", "60")
-	leftover.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := leftover.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = leftover.Process.Kill(); _ = leftover.Wait() })
-	h.w.TrackGroupForTest(leftover.Process.Pid, 5, cliworker.Claude, "")
-	census.Before = time.Now()
-	if err := r.Reconcile(ctx, census); !errors.Is(err, cliworker.ErrIncomplete) || errors.Is(err, cliworker.ErrBusy) {
-		t.Errorf("Reconcile over the API = %v, want ErrIncomplete alone", err)
-	}
-}
-
-// The census of a server with many users fits in the worker's API.
-func TestRemoteReconcileTakesALargeCensus(t *testing.T) {
-	h := newHarness(t, nil)
-	r := serve(t, h)
-	census := cliworker.Census{Created: map[int64]time.Time{}, Next: 50_001, Before: time.Now()}
-	at := time.Now().Add(-time.Hour)
-	for user := int64(1); user <= 50_000; user++ {
-		census.Live = append(census.Live, user)
-		census.Created[user] = at
-	}
-	if err := r.Reconcile(context.Background(), census); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A purge that had begun when the server stopped finishes after a start whose Reconcile removed
-// the account's directory: its browser step, which comes before the worker's, isn't refused.
-func TestABrowserPurgeAfterReconcileIsDone(t *testing.T) {
-	h := newHarness(t, nil)
-	ctx := context.Background()
-	h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true)
-	if err := os.MkdirAll(h.layout.BrowserPaths(3).Root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// 3's purge has begun: not live, below the next number.
-	if err := h.w.Reconcile(ctx, cliworker.Census{Live: []int64{1}, Next: 4, Before: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	gone(t, h.layout.User(3).Root)
-	host := h.w.BrowserHost(nil)
-	if err := host.Purge(3); err != nil {
-		t.Errorf("the purge's browser step after the directory went: %v", err)
-	}
-	gone(t, h.layout.User(3).Root)
-	// And with the directory still there (a removal that ended busy), it runs, as the user.
-	if err := os.MkdirAll(h.layout.BrowserPaths(3).Root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := host.Purge(3); err != nil {
-		t.Errorf("the purge's browser step for a forgotten user: %v", err)
-	}
-	gone(t, h.layout.BrowserPaths(3).Root)
-}
-
-// A person who uses the CLIs a moment after their account was made keeps their directory, though
-// the file system dates files by a clock a few milliseconds behind the one that dated the account
-// (Linux's coarse clock): the worker dates its record by its contents, and a directory from before
-// it kept records only by more than that.
-func TestReconcileKeepsADirectoryMadeJustAfterItsAccount(t *testing.T) {
-	h := newHarness(t, nil)
-	ctx := context.Background()
-	created := time.Now()
-	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
-	file := mine(t, dirs)
-	if _, err := h.w.Status(ctx, 1, cliworker.Claude, ""); err != nil { // the worker's first act for them
-		t.Fatal(err)
-	}
-	lag := created.Add(-5 * time.Millisecond)
-	setTime(t, h.w.BirthMarkForTest(1), lag)
-	// 2's directory is from before the worker kept records, its time as far behind.
-	file2 := mine(t, h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true))
-	setTime(t, h.layout.User(2).Root, lag)
-	// 3's record lost its time (a crash as it was written), and the file's is as far behind.
-	file3 := mine(t, h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true))
-	if _, err := h.w.Status(ctx, 3, cliworker.Claude, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(h.w.BirthMarkForTest(3), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	setTime(t, h.w.BirthMarkForTest(3), lag)
-
-	census := cliworker.Census{Live: []int64{1, 2, 3}, Created: map[int64]time.Time{1: created, 2: created, 3: created}, Next: 4, Before: time.Now()}
-	if err := h.w.Reconcile(ctx, census); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{file, file2, file3} {
-		if _, err := os.Stat(f); err != nil {
-			t.Errorf("a live person's file went: %v", err)
-		}
 	}
 }

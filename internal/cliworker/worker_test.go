@@ -61,6 +61,10 @@ func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 // user prepares user's directories with cli signed in and the scenario s.
 func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Scenario, signedIn bool) cliworker.Dirs {
 	t.Helper()
+	// The server introduces a user before anything is made for them.
+	if err := h.w.Introduce(context.Background(), user, cliworker.IdentityForTest(user), cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
 	dirs, err := h.layout.Ensure(user)
 	if err != nil {
 		t.Fatal(err)
@@ -70,6 +74,16 @@ func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Sc
 	}
 	clitest.WriteScenario(t, dirs.Config(cli), s)
 	return dirs
+}
+
+// introduce introduces users to the worker, as the server does before it asks anything for them.
+func (h *harness) introduce(t *testing.T, users ...int64) {
+	t.Helper()
+	for _, user := range users {
+		if err := h.w.Introduce(context.Background(), user, cliworker.IdentityForTest(user), cliworker.TestBoot); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func spec(id string, user int64, cli cliworker.CLI, prompt string) cliworker.TurnSpec {
@@ -369,6 +383,7 @@ func TestReattach(t *testing.T) {
 // One user can never attach to another's turn, even knowing its ID.
 func TestTurnIDOfAnotherUser(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 300}, true)
 	if _, _, err := h.w.Start(spec("mine", 1, cliworker.Claude, "hi")); err != nil {
 		t.Fatal(err)

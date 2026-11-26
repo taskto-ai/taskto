@@ -51,6 +51,12 @@ func (s *Service) withAccount(h accountHandler) http.HandlerFunc {
 		if !s.usable(w, r) {
 			return
 		}
+		// Before anything else of the worker's, its availability too: while it can't be reached,
+		// the answer is that it isn't ready, not that the CLI isn't installed.
+		if err := s.ReadyUser(r.Context(), caller(r)); err != nil {
+			workerError(w, r, a, err)
+			return
+		}
 		if !s.worker.Available(a.cli) {
 			writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, a.cli.Name()+" is not installed on this server",
 				apierr.Params{"cli": a.cli.Name()})
@@ -93,6 +99,9 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 	switch err := s.Usable(r.Context()); {
 	case err == nil:
 		out.Enabled = true
+		// The accounts' sign-ins and checks are read from the worker once it knows the caller; until
+		// then they show as not signed in.
+		_ = s.ReadyUser(r.Context(), caller(r))
 	case errors.Is(err, ErrOff), errors.Is(err, ErrNoBoundary):
 		out.Reason, out.ReasonCode = err.Error(), unusableCode(err)
 	default:
@@ -310,7 +319,7 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, err.Error(), apierr.Params{"cli": a.cli.Name()})
 	case errors.Is(err, cliworker.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerClosing, err.Error())
-	case errors.Is(err, ErrNotReady):
+	case errors.Is(err, ErrNotReady), errors.Is(err, cliworker.ErrUnknownOwner):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, ErrNotReady.Error())
 	case errors.Is(err, cliworker.ErrForgotten):
 		writeError(w, http.StatusGone, apierr.CodeCLIAccountForgotten, err.Error())

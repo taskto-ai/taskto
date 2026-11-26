@@ -282,6 +282,7 @@ func TestTaskToToolsChecked(t *testing.T) {
 // The worker's API never hands a turn's tools token back.
 func TestRemoteHidesTheToolsToken(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	r := serve(t, h)
 	s := spec("remote-tools", 1, cliworker.Grok, "hello")
 	s.Tools = &cliworker.Tools{URL: "http://127.0.0.1:8081/cli-mcp", Token: tokenA, ReadOnly: []string{"list_spaces"}}

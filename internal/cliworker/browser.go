@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -82,6 +81,20 @@ func (w *Worker) browserGate(user int64) error {
 	defer w.mu.Unlock()
 	if w.gated(user, "", "") {
 		return ErrRemoving
+	}
+	return nil
+}
+
+// BrowserAllowed is the agent browsers' per-user rule in the worker (browser.Config.Allow): every
+// operation on user's browsers, reading an open one's state and tabs too, is refused while they
+// are forgotten (a deleted account, or one whose old directory couldn't be removed yet), while
+// their whole directory is being removed, and until the server has introduced their account
+// (owner.go). The refusal is browser.ErrAccountClosing, which the server's API knows.
+func (w *Worker) BrowserAllowed(user int64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.isForgotten(user) || w.gated(user, "", "") || !w.owned(user) {
+		return browser.ErrAccountClosing
 	}
 	return nil
 }
@@ -199,11 +212,35 @@ func (h *browserHost) Clean(user int64) error {
 	return h.quickOp(user, "browser-clean", "removing the testing profile")
 }
 
-// Purge removes the user's whole browser directory, as the user, for a deleted account. With the
-// user's directory gone (Forget, Reconcile), the browser's went with it: nothing is made again.
+// Purge removes the user's whole browser directory, as the user, for a deleted account, whoever
+// owns the directory now. The Manager uses PurgeOwned.
 func (h *browserHost) Purge(user int64) error {
-	if _, err := os.Lstat(h.w.cfg.Layout.User(user).Root); errors.Is(err, fs.ErrNotExist) {
+	owner, _ := h.Owner(user)
+	return h.PurgeOwned(user, owner)
+}
+
+// Owner is the identity recorded as the owner of user's directory, "" for none (owner.go).
+func (h *browserHost) Owner(user int64) (string, error) {
+	rec, _, err := h.w.owner(user)
+	return rec.identity, err
+}
+
+// PurgeOwned removes user's browser directory, as the user, for a deleted account whose directory
+// owner was owner when its purge began. It runs under the user's gate, so not beside a removal or an
+// introduction of the number, and only while the directory is still that owner's: a restore may
+// have given the number to someone else meanwhile, whose files are not the purge's. With the
+// user's directory gone (Forget, Reconcile), the browser's went with it, and nothing is made again.
+func (h *browserHost) PurgeOwned(user int64, owner string) error {
+	end, err := h.w.beginGate(context.Background(), scope{user: user, all: true})
+	if err != nil {
+		return err
+	}
+	defer end()
+	if !h.w.hasDir(user) {
 		return nil
+	}
+	if now, err := h.Owner(user); err != nil || now != owner {
+		return err
 	}
 	return h.quickOp(user, "browser-purge", "removing the browser's files")
 }

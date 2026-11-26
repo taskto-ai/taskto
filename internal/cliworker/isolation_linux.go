@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const isolationSupported = true
@@ -24,7 +25,7 @@ type isolationState struct {
 }
 
 // uid is user's uid.
-func (iso *Isolation) uid(user int64) int { return iso.UIDBase + int(user) }
+func (iso *Isolation) uid(user int64) int { return iso.uidOf(user) }
 
 // maxIsolatedUser bounds user IDs so uids stay below the 32-bit nobody range.
 const maxIsolatedUser = 1 << 30
@@ -101,6 +102,64 @@ func (w *Worker) dropUnixUser(user int64) {
 	iso.state.mu.Lock()
 	defer iso.state.mu.Unlock()
 	delete(iso.state.known, user)
+}
+
+// killUID kills every process of uid and waits until none is left (a zombie, killed and waiting to
+// be reaped, holds nothing and doesn't count), for at most wait (3 s if it isn't positive): a
+// process a CLI detached into a group or session of its own is one of them. ErrBusy if one is still
+// there after it.
+func killUID(uid int, wait time.Duration) error {
+	if wait <= 0 {
+		wait = 3 * time.Second
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		left := 0
+		for _, pid := range uidProcesses(uid) {
+			left++
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		if left == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return ErrBusy
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// uidProcesses lists the processes whose real uid is uid, apart from zombies.
+func uidProcesses(uid int) []int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/status") //nolint:gosec // G304: a /proc path
+		if err != nil {
+			continue
+		}
+		zombie, mine := false, false
+		for _, line := range strings.Split(string(b), "\n") {
+			if rest, ok := strings.CutPrefix(line, "State:"); ok {
+				zombie = strings.HasPrefix(strings.TrimSpace(rest), "Z")
+			}
+			if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
+				fields := strings.Fields(rest)
+				mine = len(fields) > 0 && fields[0] == strconv.Itoa(uid)
+			}
+		}
+		if mine && !zombie {
+			out = append(out, pid)
+		}
+	}
+	return out
 }
 
 // addLine appends line to the account file path unless the entry is there: one with name and

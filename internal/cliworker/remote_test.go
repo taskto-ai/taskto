@@ -39,6 +39,7 @@ func serve(t *testing.T, h *harness) *cliworker.Remote {
 // The server's client of a worker in its own process does what the worker does in-process.
 func TestRemoteWorker(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { delete(c.Bins, cliworker.Grok) })
+	h.introduce(t, 1, 2)
 	r := serve(t, h)
 	ctx := context.Background()
 

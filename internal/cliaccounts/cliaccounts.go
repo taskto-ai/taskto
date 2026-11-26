@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,10 +70,13 @@ type Worker interface {
 	// Forget removes everything the worker keeps for a deleted user: logins, sessions, working
 	// directories and the browser's profile.
 	Forget(ctx context.Context, user int64) error
-	// Reconcile tells the worker which users exist, when each was made, which number the next
-	// user gets and when that was read, so that it removes the directories and takes back the
-	// forgotten marks a restore made wrong (cliworker.Worker.Reconcile).
+	// Reconcile tells the worker which users exist, who each is, which number the next user gets
+	// and when that was read, so that it removes the directories and takes back the forgotten
+	// marks a restore made wrong (cliworker.Worker.Reconcile).
 	Reconcile(ctx context.Context, census cliworker.Census) error
+	// Introduce tells the worker who user is (their identity), before anything is asked of it for
+	// them (cliworker.Worker.Introduce).
+	Introduce(ctx context.Context, user int64, identity, boot string) error
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
@@ -171,9 +175,18 @@ type Service struct {
 	worker Worker // nil when Off; what acts for a user waits for ready (ready.go)
 
 	// reconcileMu serializes telling the worker who exists (ReconcileForgotten); reconciled is
-	// set once it has been told since this server started.
+	// set once it has been told since this server started; attempt is the attempt that Ready and
+	// StartReconcile wait for, while one runs (ready.go).
 	reconcileMu sync.Mutex
 	reconciled  atomic.Bool
+	attemptMu   sync.Mutex
+	attempt     *reconcileAttempt
+	// boot is this server's own random value, which it introduces users with; introduced holds
+	// the users it has introduced to the worker since it started (under mu).
+	boot       string
+	introduced map[int64]bool
+	// restoreMark is the file a restore of the data directory leaves (backup.RestoredMark), or "".
+	restoreMark string
 
 	// watching holds the logins a goroutine is following to their end, and started when each
 	// account's last login started: an account that isn't connected yet is listed while its
@@ -274,7 +287,7 @@ func New(sqlDB *sql.DB, mode Mode, worker Worker) *Service {
 	if mode == Off {
 		worker = nil
 	}
-	s := &Service{db: sqlDB, mode: mode, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	s := &Service{db: sqlDB, mode: mode, boot: newBoot(), introduced: map[int64]bool{}, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
 	if worker != nil {
 		s.worker = readyWorker{Worker: worker, s: s}
 	}
@@ -344,15 +357,15 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	return nil
 }
 
-// ReconcileForgotten tells the worker which users the database has, when each was made and which
-// number the next one gets, so that it removes what a restore of the database left wrong there:
-// the directories of numbers that aren't live users' (the person who had the number in the
-// history the restore went back from left their logins in it, and the number is given again), and
-// the marks of users it forgot (Forget) that are live again or whose numbers are given again. The
-// worker's own directory, in container mode, isn't part of the backup, so it can't know; the
-// database can. Call it at every start (StartReconcile); nothing is asked of the worker for a user
-// before it has been told (ready). An account whose purge has begun is not live here: its mark
-// stays until the purge deletes it.
+// ReconcileForgotten tells the worker which users the database has, who each is (their identity,
+// users.cli_identity) and which number the next one gets, so that it removes what a restore of
+// the database left wrong there: every directory whose recorded owner isn't the live account of
+// its number (the person who had the number in the history the restore went back from left their
+// logins in it, and the number is given again), and the marks of users it forgot (Forget) that
+// are live again or whose numbers are given again. The worker's own directory, in container mode,
+// isn't part of the backup, so it can't know; the database can. Call it at every start
+// (StartReconcile); nothing is asked of the worker for a user before it has been told (Ready). An
+// account whose purge has begun is not live here: its mark stays until the purge deletes it.
 //
 // It returns cliworker.ErrIncomplete when the worker was told but couldn't remove everything yet:
 // it refuses those users meanwhile, and the call is made again.
@@ -362,11 +375,15 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	return s.reconcileLocked(ctx)
-}
-
-func (s *Service) reconcileLocked(ctx context.Context) error {
-	census := cliworker.Census{Before: time.Now(), Created: map[int64]time.Time{}}
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot}
+	// A restore since the worker was last told: its directories with no owner recorded may be
+	// another history's. Only in container mode: in local mode they are in the data directory,
+	// and the backup brought back the ones that go with its database.
+	if s.restoreMark != "" && s.mode == Container {
+		if _, err := os.Stat(s.restoreMark); err == nil {
+			census.Restored = true
+		}
+	}
 	// One transaction: the users and the next number describe the same state, or a person added
 	// in between would be neither live nor below the next number.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -377,7 +394,7 @@ func (s *Service) reconcileLocked(ctx context.Context) error {
 	// Not the accounts whose purge has begun: it forgets the CLI files before it deletes the
 	// account, and one that stopped between the two is made again from its start, which forgets
 	// them again; until the account is gone its mark must stay.
-	rows, err := tx.QueryContext(ctx, `SELECT id, created_at FROM users
+	rows, err := tx.QueryContext(ctx, `SELECT id, cli_identity FROM users
 		WHERE id NOT IN (SELECT user_id FROM account_deletions WHERE purge_started_at IS NOT NULL)`)
 	if err != nil {
 		return err
@@ -385,15 +402,12 @@ func (s *Service) reconcileLocked(ctx context.Context) error {
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var created string
-		if err := rows.Scan(&id, &created); err != nil {
+		var identity string
+		if err := rows.Scan(&id, &identity); err != nil {
 			return err
 		}
 		census.Live = append(census.Live, id)
-		// A time that can't be read isn't sent: the worker then keeps the user's directory.
-		if at, err := time.Parse(time.RFC3339Nano, created); err == nil {
-			census.Created[id] = at
-		}
+		census.Owners[id] = identity
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -406,10 +420,26 @@ func (s *Service) reconcileLocked(ctx context.Context) error {
 	_ = tx.Rollback() // the worker is called without the read open
 	err = s.worker.Reconcile(ctx, census)
 	if err == nil || errors.Is(err, cliworker.ErrIncomplete) {
+		// The worker may have removed the directory, and owner record, of a user introduced
+		// before: they are introduced again.
+		s.mu.Lock()
+		clear(s.introduced)
+		s.mu.Unlock()
 		s.reconciled.Store(true)
+	}
+	if err == nil && census.Restored {
+		// Told, with everything done: no directory without an owner is left.
+		if rerr := os.Remove(s.restoreMark); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			return rerr
+		}
 	}
 	return err
 }
+
+// SetRestoreMark names the file a restore of the data directory leaves (backup.RestoredMark):
+// while it is there, the census says the data was restored, and it goes once the worker has been
+// told everything.
+func (s *Service) SetRestoreMark(path string) { s.restoreMark = path }
 
 // reconcileTimeout bounds one attempt at telling the worker: it may stop what still runs for a
 // number it removes the directory of, and waits for that.
@@ -427,9 +457,9 @@ func (s *Service) StartReconcile() {
 		return
 	}
 	try := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout)
-		defer cancel()
-		return s.ReconcileForgotten(ctx)
+		a := s.startAttempt()
+		<-a.done
+		return a.err
 	}
 	err := try()
 	if err == nil {

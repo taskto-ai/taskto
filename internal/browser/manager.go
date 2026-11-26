@@ -46,6 +46,26 @@ type Config struct {
 	StartTimeout, StopGrace time.Duration
 	// Tick is how often idle browsers are looked for (default 15 s).
 	Tick time.Duration
+	// Allow, when set, is asked before every operation on a user's browsers, the reading of a
+	// running one's state and tabs too, apart from stopping them: an error refuses it (the CLI
+	// worker's rule, cliworker.Worker.BrowserAllowed).
+	Allow func(user int64) error
+}
+
+// OwnedHost is a Host that knows who owns a user's directory (the CLI worker's): Forget then
+// removes the profile only while the directory's owner is still the one it began with, since a
+// restore may give the number to someone else meanwhile.
+type OwnedHost interface {
+	Owner(user int64) (string, error)
+	PurgeOwned(user int64, owner string) error
+}
+
+// allowed asks Config.Allow about user.
+func (m *Manager) allowed(user int64) error {
+	if m.cfg.Allow == nil {
+		return nil
+	}
+	return m.cfg.Allow(user)
 }
 
 // Manager runs the users' browsers. Its methods are safe for concurrent use.
@@ -140,6 +160,9 @@ func (m *Manager) Availability(context.Context) map[Kind]bool {
 // Status is user's two browsers. The tabs are listed for a running browser that answers in a
 // few seconds.
 func (m *Manager) Status(ctx context.Context, user int64) (map[Kind]State, error) {
+	if err := m.allowed(user); err != nil {
+		return nil, err
+	}
 	out := map[Kind]State{}
 	for _, kind := range []Kind{Personal, Testing} {
 		st := State{Available: m.Available(kind)}
@@ -215,13 +238,26 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return badf("invalid user")
 	}
+	// Who owns the directory as the purge begins: the profile removed is that owner's only.
+	owned, isOwned := m.cfg.Host.(OwnedHost)
+	var owner string
+	if isOwned {
+		var err error
+		if owner, err = owned.Owner(user); err != nil {
+			return fmt.Errorf("reading who owns the browser files: %w", err)
+		}
+	}
 	if err := m.stopAll(ctx, user, true); err != nil {
 		return err
 	}
 	if m.cfg.Host == nil {
 		return nil
 	}
-	if err := m.cfg.Host.Purge(user); err != nil {
+	purge := func() error { return m.cfg.Host.Purge(user) }
+	if isOwned {
+		purge = func() error { return owned.PurgeOwned(user, owner) }
+	}
+	if err := purge(); err != nil {
 		return fmt.Errorf("removing the browser files: %w", err)
 	}
 	return nil
@@ -408,6 +444,10 @@ func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool
 	if _, gone := m.forgotten[user]; gone {
 		m.mu.Unlock()
 		return nil, ErrAccountClosing
+	}
+	if err := m.allowed(user); err != nil {
+		m.mu.Unlock()
+		return nil, err
 	}
 	s := m.sessions[k]
 	if s == nil {

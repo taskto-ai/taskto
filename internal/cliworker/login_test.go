@@ -38,6 +38,7 @@ func status(t *testing.T, w *cliworker.Worker, user int64, cli cliworker.CLI) cl
 // Claude Code: the URL it prints is shown, and the code the sign-in page gives is pasted back.
 func TestClaudeCodeLogin(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	dirs, _ := h.layout.Ensure(1)
 	if st := status(t, h.w, 1, cliworker.Claude); st.LoggedIn {
 		t.Fatal("signed in before the login")
@@ -75,6 +76,7 @@ func TestClaudeCodeLogin(t *testing.T) {
 
 func TestClaudeCodeLoginWrongCode(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	l, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +97,7 @@ func TestClaudeCodeLoginWrongCode(t *testing.T) {
 // confirms on the provider's page.
 func TestDeviceCodeLogins(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	for cli, want := range map[cliworker.CLI][2]string{
 		cliworker.Codex: {"https://auth.openai.com/codex/device", "FAKE-C0DE1"},
 		cliworker.Grok:  {"https://accounts.x.ai/oauth2/device?user_code=GR0K-FAKE", "GR0K-FAKE"},
@@ -125,6 +128,7 @@ func TestDeviceCodeLogins(t *testing.T) {
 
 func TestDeviceCodeDeclined(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	dirs, _ := h.layout.Ensure(1)
 	l, err := h.w.StartLogin(1, cliworker.Codex, "")
 	if err != nil {
@@ -138,6 +142,7 @@ func TestDeviceCodeDeclined(t *testing.T) {
 
 func TestCancelLogin(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	l, err := h.w.StartLogin(1, cliworker.Grok, "")
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +162,7 @@ func TestCancelLogin(t *testing.T) {
 // One user's login is theirs: another user never sees it, can't answer it and can't cancel it.
 func TestLoginsAreTheUsers(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	l, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)

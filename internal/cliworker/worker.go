@@ -275,6 +275,9 @@ func (w *Worker) Start(spec TurnSpec) (t *Turn, attached bool, err error) {
 	if w.gated(spec.User, spec.CLI, spec.Slot) {
 		return nil, false, ErrRemoving
 	}
+	if !w.owned(spec.User) {
+		return nil, false, ErrUnknownOwner
+	}
 	if old, ok := w.turns[spec.ID]; ok {
 		if old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {
 			return nil, false, ErrTurnClash

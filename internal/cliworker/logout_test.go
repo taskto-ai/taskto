@@ -44,6 +44,7 @@ func (h *harness) runningTurn(t *testing.T, id string, user int64, cli cliworker
 // accounts, and other users, are not touched.
 func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	// The CLI takes a moment to stop and saves a file as it goes, as a real one saves its session.
 	mine := h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 300})
@@ -78,6 +79,7 @@ func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 // other accounts go on. Nothing marks the user: once it is over the account works again.
 func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	h.introduce(t, 1, 2)
 	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	mine := h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 1500})
 	h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
@@ -201,6 +203,7 @@ func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 // them.
 func TestLogoutsOfOneAccountDoNotOverlap(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	h.introduce(t, 1, 2)
 	h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 800})
 	ctx := context.Background()
 	results := make(chan error, 2)

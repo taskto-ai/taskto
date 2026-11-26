@@ -695,9 +695,11 @@ docker compose --profile cli up -d --build
 - Each user's CLI logins and sessions are on the `cli-homes` volume, which `taskto backup`
   doesn't cover. If it is lost, users sign in again, and their conversations start new CLI
   sessions with the conversation so far. After a restore of the server's data, the server tells
-  the worker at its start which users exist, and the worker removes the directories of the people
-  the restored database doesn't have (and of user numbers it will give again), so a new person
-  never gets someone else's logins ([cli-workers.md](cli-workers.md)).
+  the worker at its start which accounts exist, by an identity each account keeps for good, and the
+  worker removes every directory that isn't a live account's own, so a new person given a number
+  again never gets someone else's logins ([cli-workers.md](cli-workers.md)). `taskto restore`
+  leaves `cli-worker-restored` in the data directory for this: the directories from before the
+  worker recorded owners are then removed, not handed over, and their people sign in again.
 - The worker needs the internet to reach Anthropic, OpenAI and xAI. The server's egress
   policies don't apply to it. It reaches the internet and nothing else: it is alone on a
   network of its own (`worker`, the bridge `taskto-worker`), so the other services don't
@@ -1253,6 +1255,15 @@ What a restore leaves is the account's state as of the backup, which holds no re
 invitations (they expire, and accepting one needs the address's own account), and the password
 and two-factor codes, which are as the backup had them (a person who changed them since changes
 them again).
+
+**The CLI worker's directories are brought in line at the next start.** The `cli-homes` volume
+isn't in the backup, so it may hold the CLI logins, files and browser profiles of people who had
+user numbers after the backup, which the restored server gives again. `taskto restore` leaves
+`cli-worker-restored` in the data directory. At its next start the server tells the worker which
+accounts exist, and the worker keeps only the directories of the live accounts whose identity it
+recorded. Everything else is removed before anyone is given the number, and so are the directories
+the worker made before it recorded identities: those people sign in to their CLIs again. Once
+that is done the server removes the file ([cli-workers.md](cli-workers.md)).
 
 From an archive file:
 

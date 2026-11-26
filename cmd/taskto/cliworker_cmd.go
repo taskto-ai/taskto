@@ -96,6 +96,9 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		Idle:      *browserIdle,
 		Max:       *browserMax,
 		NoSandbox: true,
+		// Every operation on a user's browsers follows the worker's rule for the user: none while
+		// they are refused, being removed, or not yet introduced by the server.
+		Allow: w.BrowserAllowed,
 	})
 	defer browsers.Close()
 	// Removing a user's whole directory (Forget, Reconcile) stops their browsers first.

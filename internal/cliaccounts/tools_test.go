@@ -174,6 +174,9 @@ func TestToolsTokenRefusals(t *testing.T) {
 	conv := e.conversation(e.owner)
 	ctx := t.Context()
 	// A turn the worker is running: the fake works for a while.
+	if err := e.svc.ReadyUser(ctx, e.owner.id); err != nil {
+		t.Fatal(err)
+	}
 	dirs, err := e.layout.Ensure(e.owner.id)
 	if err != nil {
 		t.Fatal(err)

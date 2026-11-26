@@ -52,6 +52,7 @@ var remoteErrors = map[string]error{
 	"removing":       ErrRemoving,
 	"busy":           ErrBusy,
 	"incomplete":     ErrIncomplete,
+	"unknown_owner":  ErrUnknownOwner,
 }
 
 // remoteWait bounds how long an events request waits for a new event.
@@ -163,13 +164,24 @@ func (w *Worker) Handler() http.Handler {
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("POST /introduce", func(rw http.ResponseWriter, r *http.Request) {
+		var req struct {
+			User     int64  `json:"user"`
+			Identity string `json:"identity"`
+			Boot     string `json:"boot"`
+		}
+		if !decodeBody(rw, r, &req) {
+			return
+		}
+		if err := w.Introduce(r.Context(), req.User, req.Identity, req.Boot); err != nil {
+			refuse(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
 		var req Census
 		if !decodeBodyLimit(rw, r, &req, maxCensus) {
-			return
-		}
-		if req.Next <= 0 || req.Before.IsZero() {
-			refuse(rw, badRequest{errors.New("invalid reconcile")})
 			return
 		}
 		if err := w.Reconcile(r.Context(), req); err != nil {
@@ -291,7 +303,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownOwner):
 				status = http.StatusConflict
 			}
 		}
@@ -465,9 +477,15 @@ func (c *Remote) Forget(ctx context.Context, user int64) error {
 	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
 }
 
-// Reconcile tells the worker which users exist, when each was made and which number comes next,
-// so that it removes the directories and takes back the forgotten marks a restore of the server's
-// data made wrong (Worker.Reconcile).
+// Introduce tells the worker that user is the account with identity, for the server started as
+// boot, before anything is asked of it for them (Worker.Introduce).
+func (c *Remote) Introduce(ctx context.Context, user int64, identity, boot string) error {
+	return c.do(ctx, http.MethodPost, "/introduce", map[string]any{"user": user, "identity": identity, "boot": boot}, nil)
+}
+
+// Reconcile tells the worker which users exist, who each is and which number comes next, so that
+// it removes the directories and takes back the forgotten marks a restore of the server's data
+// made wrong (Worker.Reconcile).
 func (c *Remote) Reconcile(ctx context.Context, census Census) error {
 	return c.do(ctx, http.MethodPost, "/reconcile", census, nil)
 }

@@ -1,7 +1,7 @@
 package cliworker
 
 import (
-	"os"
+	"fmt"
 	"time"
 )
 
@@ -58,15 +58,14 @@ func (w *Worker) GroupSeqForTest(pgid int) uint64 {
 // waits for otherwise (a turn's end, a sign-in's) is not answered by the groups' wait.
 func (w *Worker) SetGroupWaitForTest(d time.Duration) { w.groupWait = d }
 
-// SetBirthForTest records that the worker first acted for user at at.
-func (w *Worker) SetBirthForTest(user int64, at time.Time) {
-	if err := w.noteBirth(user); err != nil {
-		panic(err)
-	}
-	if err := os.WriteFile(w.birthMark(user), []byte(at.UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
-		panic(err)
-	}
-}
+// TestBoot is the server boot the tests introduce users with.
+const TestBoot = "00000000000000000000000000000b00"
+
+// IdentityForTest is the identity the tests give user's account.
+func IdentityForTest(user int64) string { return fmt.Sprintf("%032x", user) }
+
+// OwnerFileForTest is the path of user's owner record.
+func (w *Worker) OwnerFileForTest(user int64) string { return w.ownerFile(user) }
 
 // GroupsForTest is how many process groups the worker lists.
 func (w *Worker) GroupsForTest() int {
@@ -74,6 +73,3 @@ func (w *Worker) GroupsForTest() int {
 	defer w.mu.Unlock()
 	return len(w.groups)
 }
-
-// BirthMarkForTest is the path of the record of when the worker first acted for user.
-func (w *Worker) BirthMarkForTest(user int64) string { return w.birthMark(user) }

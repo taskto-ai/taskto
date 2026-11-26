@@ -385,6 +385,7 @@ func TestApprovalSocketFallback(t *testing.T) {
 // config directory, where the CLI reads it.
 func TestPermissionOnAnotherAccountSlot(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	for _, cli := range cliworker.CLIs {
 		t.Run(string(cli), func(t *testing.T) {
 			dirs, err := h.layout.EnsureSlot(1, cli, "2")

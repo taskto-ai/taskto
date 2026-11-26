@@ -23,7 +23,7 @@ func (unreachableWorker) Reconcile(context.Context, cliworker.Census) error {
 func TestBrowserWaitsForTheWorkerToBeTold(t *testing.T) {
 	cli := cliaccounts.New(cliWorkersDB(t), cliaccounts.Container, unreachableWorker{})
 	t.Cleanup(cli.Close)
-	err := browserUsable(cli)(context.Background())
+	err := browserUsable(cli)(context.Background(), 1)
 	var e *apierr.Error
 	if !errors.As(err, &e) || e.Code != apierr.CodeCLIWorkerNotReady {
 		t.Errorf("browser usable = %v, want %s", err, apierr.CodeCLIWorkerNotReady)

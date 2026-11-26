@@ -31,9 +31,8 @@ import (
 // For the same reason a directory can outlive the history it belongs to: the person who had a
 // number after the backup may have left their directory here (an account never purged, or one
 // whose removal ended busy), and a new person given that number must not get it, with another
-// person's logins in it. So Reconcile also removes every directory that isn't a live user's, and
-// a live user's that the worker made before their account existed: the worker records when it
-// first acts for each user (birthMark), before anything makes their directory.
+// person's logins in it. So Reconcile also removes every directory whose recorded owner isn't the
+// live account of its number (owner.go).
 
 // forgottenMark is the file in the worker's own directory that records user as forgotten.
 func (w *Worker) forgottenMark(user int64) string {
@@ -90,20 +89,19 @@ func (w *Worker) markForgotten(user int64) error {
 }
 
 // Forget removes everything the worker keeps for user, for an account that is deleted. It
-// refuses everything that would start for them from now on (ErrForgotten), stops what runs for
-// them (their turns, the ones waiting for a place too, their sign-ins, the helper requests in
-// flight and their agent browsers) and waits for it, so nothing writes into their directory any
-// more (removal.go), and only then removes it, with their logins, sessions, working directories
-// and browser profile. Idempotent: a call that failed halfway (ErrBusy, say) is made again, and
-// the mark stays.
+// refuses everything that would start for them from now on (ErrForgotten), then removes all of it
+// the way removeUser does: their agent browsers, turns (the ones waiting for a place too),
+// sign-ins, helper requests and processes stopped and waited for, so nothing writes into their
+// directory any more, and only then the directory, with their logins, sessions, working
+// directories and browser profile. Idempotent: a call that failed halfway (ErrBusy, say) is made
+// again, and the mark stays.
 func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return errors.New("invalid user")
 	}
-	// The gate first: a disconnect or another Forget of the user's that is running ends before this
-	// begins, and none begins meanwhile, so their helper requests never overlap the removal.
-	sc := scope{user: user, all: true}
-	end, err := w.beginGate(ctx, sc)
+	// The gate first: a disconnect, an introduction or another removal of the user's that is
+	// running ends before this begins, and none begins meanwhile.
+	end, err := w.beginGate(ctx, scope{user: user, all: true})
 	if err != nil {
 		return err
 	}
@@ -111,41 +109,7 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if err := w.markForgotten(user); err != nil {
 		return fmt.Errorf("recording that the user was forgotten: %w", err)
 	}
-	if err := w.quiesce(ctx, sc); err != nil {
-		return err
-	}
 	return w.removeUser(ctx, user)
-}
-
-// removeUser removes user's whole directory, once the caller has made sure nothing new starts for
-// them (a mark, or a gate that covers all their accounts) and stopped what ran (quiesce). Their
-// agent browsers are stopped first, and waited for: the profile is in the directory, and a
-// browser's processes aren't the turns' and helpers' that quiesce stops. Then the helper removes
-// what is inside, as the user, and the worker the directory itself, which is its in the layout's
-// root, so the next person given the number gets a new one; and the record of when it was made.
-func (w *Worker) removeUser(ctx context.Context, user int64) error {
-	if b := w.browserStopper(); b != nil {
-		if err := b.StopAll(ctx, user); err != nil {
-			return fmt.Errorf("stopping the user's browsers: %w", err)
-		}
-	}
-	root := w.cfg.Layout.User(user).Root
-	if _, err := os.Lstat(root); err == nil {
-		if _, _, err := w.runHelper(ctx, user, helperRequest{Op: "forget"}); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if err := os.Remove(root); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("removing the user's directory: %w", err)
-	}
-	// With isolation, the next helper for the number makes the directory again (ensureUser).
-	w.dropUnixUser(user)
-	if err := os.Remove(w.birthMark(user)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 // ErrIncomplete is Reconcile's answer when it could not remove every directory it should have
@@ -153,36 +117,53 @@ func (w *Worker) removeUser(ctx context.Context, user int64) error {
 // later Reconcile removes them, so the server can go on, and tries again.
 var ErrIncomplete = errors.New("some users' directories could not be removed yet; they are refused until they are")
 
-// Census is what the server's database says when the server starts, for Reconcile.
+// Census is what the server's database says when it reads it, for Reconcile.
 type Census struct {
 	// Live is the numbers of the users that exist (an account whose purge has begun is not one).
 	Live []int64 `json:"live"`
-	// Created is when each live user's account was made. A user it doesn't name isn't checked
-	// against it.
-	Created map[int64]time.Time `json:"created,omitempty"`
+	// Owners is each live user's identity (users.cli_identity).
+	Owners map[int64]string `json:"owners"`
 	// Next is the number the next user gets: no number from it up has a user yet.
 	Next int64 `json:"next"`
-	// Before is when the server read its database: what happened after it, the census can't know.
+	// Boot is the server's own: a random value it takes when it starts, and introduces users
+	// with (Introduce).
+	Boot string `json:"boot"`
+	// Restored says the server's data was restored since the worker was last told who exists:
+	// a directory with no owner recorded may be another history's.
+	Restored bool `json:"restored"`
+	// Before is when the server read its database, for the forgotten marks: a mark made after it
+	// is a purge the census can't know of.
 	Before time.Time `json:"before"`
 }
 
-// Reconcile brings the worker in line with the server's database, which a restore of the
-// server's data may have taken back in time (the server calls it at every start). First the
-// directories: a user's whole directory is removed, the way Forget removes it (what runs for them
-// stopped and waited for first, their browsers too), when
+func (c Census) check() error {
+	if c.Next <= 0 || c.Before.IsZero() || !identityPattern.MatchString(c.Boot) {
+		return errors.New("invalid census")
+	}
+	for _, user := range c.Live {
+		if user <= 0 || user >= c.Next || !identityPattern.MatchString(c.Owners[user]) {
+			return errors.New("invalid census")
+		}
+	}
+	return nil
+}
+
+// Reconcile brings the worker in line with the server's database, which a restore of the server's
+// data may have taken back in its history (the server calls it at every start, before it asks
+// anything else for a user). First the directories detached earlier that couldn't be deleted then
+// (owner.go) are deleted. Then each user's directory and owner record is kept only when
 //
-//   - the number is below next and not live: an account that is gone for good (also one whose
-//     removal ended busy). It is forgotten as Forget does, and stays refused;
-//   - the number is next or above: whoever had it is in a history the restore went back from, and
-//     the number will be given again. Not a directory the worker made after the census was read:
-//     that is a person added since;
-//   - the number is live, but the worker made the directory before the account was made: it is
-//     the directory of someone who had the number in a lost history. A directory from before the
-//     worker recorded when it made them is judged by its own time, which only ever comes later.
+//   - its recorded owner is the live account of its number, by identity; or
+//   - it has no owner recorded (from before the worker recorded owners), its number is live, and
+//     no restore happened since (Census.Restored): it is adopted for that account; or
+//   - its number is next or above and this server introduced its owner after it read its database
+//     (the record's boot is the census's): a person added since.
 //
-// Nothing of a live user is removed otherwise. A directory that can't be removed yet (something of
-// it didn't stop in time) has its user refused (ErrForgotten) until a later Reconcile removes it,
-// and the answer is ErrIncomplete.
+// Anything else is removed the way removeUser removes it: a number below next that isn't live is
+// an account gone for good, forgotten as Forget does, and stays refused; any other is someone of
+// another history, and the number is given to its account afresh. No clock is asked. A directory
+// that can't be removed yet has its user refused (ErrForgotten) until a later Reconcile removes
+// it, and the answer is ErrIncomplete.
 //
 // Then the marks: a mark is removed when its user is live (their account is back) or its number is
 // next or above (it will be given again), unless the mark was made after the census was read: that
@@ -190,45 +171,16 @@ type Census struct {
 // aren't live stay: those accounts are gone for good. The agent browsers' own refusals go the same
 // way.
 func (w *Worker) Reconcile(ctx context.Context, c Census) error {
-	if c.Next <= 0 || c.Before.IsZero() {
-		return errors.New("invalid census")
+	if err := c.check(); err != nil {
+		return badRequest{err}
 	}
 	isLive := make(map[int64]bool, len(c.Live))
 	for _, id := range c.Live {
 		isLive[id] = true
 	}
-	users, err := w.usersWithFiles()
-	if err != nil {
-		return err
-	}
 	var errs []error
 	incomplete := map[int64]bool{}
-	for _, user := range users {
-		var err error
-		removed := false
-		why := ""
-		switch created, checked := c.Created[user]; {
-		case !isLive[user] && user < c.Next:
-			why, err = "an account that is gone", w.Forget(ctx, user)
-			removed = err == nil
-		case !isLive[user]:
-			why = "a number the server gives again"
-			removed, err = w.clearStale(ctx, user, func(born time.Time, recorded bool) bool {
-				return !recorded || born.Before(c.Before)
-			})
-		case checked:
-			why = "made before the account"
-			removed, err = w.clearStale(ctx, user, func(born time.Time, _ bool) bool { return born.Before(created) })
-		}
-		if err == nil {
-			if removed {
-				slog.Info("cliworker: removed a user's directory the server's database has no owner of", "user", user, "why", why)
-			}
-			continue
-		}
-		if ctx.Err() != nil {
-			return errors.Join(append(errs, err)...)
-		}
+	refuse := func(user int64, err error) error {
 		// Refused until a later Reconcile removes it. A mark that can't be made fails the whole
 		// call, and the server doesn't go on.
 		if merr := w.markForgotten(user); merr != nil {
@@ -236,6 +188,45 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 		}
 		incomplete[user] = true
 		errs = append(errs, fmt.Errorf("user %d: %w", user, err))
+		return nil
+	}
+	left, err := w.sweepTrash()
+	if err != nil {
+		return err
+	}
+	for user, err := range left {
+		if ferr := refuse(user, err); ferr != nil {
+			return ferr
+		}
+	}
+	users, err := w.usersWithFiles()
+	if err != nil {
+		return err
+	}
+	for _, user := range users {
+		if incomplete[user] {
+			continue
+		}
+		keep := func() (bool, error) { return w.keeps(user, c, isLive[user]) }
+		var err error
+		removed := false
+		if !isLive[user] && user < c.Next {
+			removed, err = true, w.Forget(ctx, user)
+		} else {
+			removed, err = w.clearUnless(ctx, user, keep)
+		}
+		if err == nil {
+			if removed {
+				slog.Info("cliworker: removed a user's directory that isn't a live account's", "user", user)
+			}
+			continue
+		}
+		if ctx.Err() != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		if ferr := refuse(user, err); ferr != nil {
+			return ferr
+		}
 	}
 
 	if err := w.takeBackMarks(c, isLive, incomplete); err != nil {
@@ -248,6 +239,41 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 		return fmt.Errorf("%w: %w", ErrIncomplete, errors.Join(errs...))
 	}
 	return nil
+}
+
+// keeps says whether user's directory and owner record stay (see Reconcile), adopting a directory
+// with no owner recorded for the live account when that is allowed.
+func (w *Worker) keeps(user int64, c Census, live bool) (bool, error) {
+	rec, ok, err := w.owner(user)
+	if err != nil {
+		return false, nil //nolint:nilerr // a damaged record is no owner: the directory goes
+	}
+	switch {
+	case ok && live:
+		return rec.identity == c.Owners[user], nil
+	case ok:
+		return user >= c.Next && rec.boot == c.Boot, nil
+	case live && !c.Restored && w.hasDir(user):
+		return true, w.setOwner(user, ownerRecord{identity: c.Owners[user], boot: c.Boot})
+	}
+	return false, nil
+}
+
+// clearUnless removes user's whole directory (removeUser) unless keep says it stays, asked again
+// under the gate: an introduction may have come in between. It reports whether it removed it.
+func (w *Worker) clearUnless(ctx context.Context, user int64, keep func() (bool, error)) (bool, error) {
+	if yes, err := keep(); yes || err != nil {
+		return false, err
+	}
+	end, err := w.beginGate(ctx, scope{user: user, all: true})
+	if err != nil {
+		return false, err
+	}
+	defer end()
+	if yes, err := keep(); yes || err != nil {
+		return false, err
+	}
+	return true, w.removeUser(ctx, user)
 }
 
 // takeBackMarks removes the marks Reconcile takes back (see there), apart from those of the users
@@ -277,61 +303,10 @@ func (w *Worker) takeBackMarks(c Census, isLive, keep map[int64]bool) error {
 	return errors.Join(errs...)
 }
 
-// clearStale removes user's whole directory if stale says it isn't theirs, given when the worker
-// first acted for them (born, when recorded). It is asked again once nothing can start for the
-// user and what ran was stopped: a person added after the census may have been given the number
-// meanwhile, and their directory is theirs.
-func (w *Worker) clearStale(ctx context.Context, user int64, stale func(born time.Time, recorded bool) bool) (removed bool, err error) {
-	if yes, err := w.stale(user, stale); !yes || err != nil {
-		return false, err
-	}
-	sc := scope{user: user, all: true}
-	end, err := w.beginGate(ctx, sc)
-	if err != nil {
-		return false, err
-	}
-	defer end()
-	if yes, err := w.stale(user, stale); !yes || err != nil {
-		return false, err
-	}
-	if err := w.quiesce(ctx, sc); err != nil {
-		return false, err
-	}
-	if yes, err := w.stale(user, stale); !yes || err != nil {
-		return false, err
-	}
-	return true, w.removeUser(ctx, user)
-}
-
-// stale asks stale about user's directory: when the worker recorded first acting for them, or,
-// for a directory from before it recorded that, the directory's own time (when it was made or
-// last changed, so never before it was made). A user with neither has nothing to remove. A
-// directory that can't be looked at is an error: nothing is removed, and the user is refused.
-func (w *Worker) stale(user int64, stale func(born time.Time, recorded bool) bool) (bool, error) {
-	if born, ok := w.born(user); ok {
-		return stale(born, true), nil
-	}
-	info, err := os.Lstat(w.cfg.Layout.User(user).Root)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	// The file system's clock may be a little behind the one accounts are dated by: a directory
-	// counts as older than a time only by more than that.
-	return stale(info.ModTime().Add(fsClockSlack), false), nil
-}
-
-// fsClockSlack is more than a file's time can be behind the clock that dates accounts and the
-// census (file systems that take it from a coarse clock lag by a few milliseconds).
-const fsClockSlack = time.Second
-
-// usersWithFiles lists the users the worker keeps a directory of, or a record of when it made
-// one, in order.
+// usersWithFiles lists the users the worker keeps a directory or an owner record of, in order.
 func (w *Worker) usersWithFiles() ([]int64, error) {
 	seen := map[int64]bool{}
-	for dir, prefix := range map[string]string{w.cfg.Layout.Root: "u", w.stateDir(): "born-u"} {
+	for dir, prefix := range map[string]string{w.cfg.Layout.Root: "u", w.stateDir(): "owner-u"} {
 		entries, err := os.ReadDir(dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -356,72 +331,6 @@ func (w *Worker) usersWithFiles() ([]int64, error) {
 	}
 	slices.Sort(users)
 	return users, nil
-}
-
-// birthMark is the file in the worker's own directory that records when the worker first acted for
-// user, in its contents: before that, nothing of theirs was made here. Not the file's own time,
-// which some file systems take from a clock a few milliseconds behind: a user's first use right
-// after their account was made would look older than the account.
-func (w *Worker) birthMark(user int64) string {
-	return filepath.Join(w.stateDir(), "born-u"+strconv.FormatInt(user, 10))
-}
-
-// born is when the worker first acted for user, if it recorded that. A record whose time can't be
-// read (a crash as it was written) is dated by the file's own time, with the file system clock's
-// slack (fsClockSlack).
-func (w *Worker) born(user int64) (time.Time, bool) {
-	b, err := os.ReadFile(w.birthMark(user))
-	if err != nil {
-		return time.Time{}, false
-	}
-	if at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(b))); err == nil {
-		return at, true
-	}
-	info, err := os.Lstat(w.birthMark(user))
-	if err != nil {
-		return time.Time{}, false
-	}
-	return info.ModTime().Add(fsClockSlack), true
-}
-
-// noteBirth records, before the worker first acts for user, that it does now. It is the worker's
-// own file: nothing of a user's can change it. A directory made before the worker recorded this
-// gets the time of its first use since, which is after its account was made.
-func (w *Worker) noteBirth(user int64) error {
-	path := w.birthMark(user)
-	if _, err := os.Lstat(path); err == nil {
-		return nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // G304: the worker's own state directory
-	if errors.Is(err, fs.ErrExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(time.Now().UTC().Format(time.RFC3339Nano) + "\n"); err != nil {
-		_ = f.Close()
-		return err
-	}
-	// On disk before the directory it dates: Reconcile takes a directory without one for older.
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	d, err := os.Open(w.stateDir())
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
 }
 
 // removeOldMark removes mark e unless it was made after before. The time is read and the mark

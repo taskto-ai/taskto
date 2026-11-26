@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,25 +101,6 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 		return errors.New("invalid request")
 	}
 	layout := Layout{Root: req.LayoutRoot}
-	if req.Op == "forget" {
-		// A deleted account: the user's whole directory goes, logins, sessions, working
-		// directories and the browser's profile with it. It is not made again.
-		// The user's Unix user (container mode) owns what is inside the directory, not the
-		// directory's place in the layout: its contents go first, then the directory if it can.
-		root := layout.User(req.User).Root
-		entries, err := os.ReadDir(root)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		for _, e := range entries {
-			if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
-				return err
-			}
-		}
-		_ = os.Remove(root)
-		_, err = io.WriteString(stdout, "{}\n")
-		return err
-	}
 	if strings.HasPrefix(req.Op, "browser") {
 		return runBrowserOp(req, layout, stdout)
 	}
@@ -260,19 +240,17 @@ func credentials(cli CLI) string {
 // header() first).
 func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
 	w.helperLaunches.Add(1)
-	// Every op but the ones that only remove (the user's directory, or their browser's) makes the
-	// directory (and a login's files in it): none runs for a forgotten user (forget.go). A purge's
-	// browser step may come after the user was forgotten: a Reconcile at the server's start removes
-	// the directory of an account whose purge has begun.
-	removal := req.Op == "forget" || req.Op == "browser-purge"
-	if !removal && w.isForgotten(user) {
-		return nil, nil, ErrForgotten
-	}
-	// Recorded before anything of the user's is made (asUser makes their directory): Reconcile
-	// tells a directory of someone who had the number before by it (forget.go).
-	if !removal {
-		if err := w.noteBirth(user); err != nil {
-			return nil, nil, fmt.Errorf("recording the user's first use: %w", err)
+	// Every op but the browser's removal makes the directory (and a login's files in it): none
+	// runs for a forgotten user (forget.go), nor for one whose account the server hasn't
+	// introduced, so whose directory has no owner recorded (owner.go). The browser's removal is a
+	// purge's step, which may come after the user was forgotten; it checks the owner itself, under
+	// the user's gate (browserHost.PurgeOwned).
+	if req.Op != "browser-purge" {
+		if w.isForgotten(user) {
+			return nil, nil, ErrForgotten
+		}
+		if !w.owned(user) {
+			return nil, nil, ErrUnknownOwner
 		}
 	}
 	req.LayoutRoot, req.User = w.cfg.Layout.Root, user

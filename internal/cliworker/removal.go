@@ -113,6 +113,9 @@ func (w *Worker) admit(ctx context.Context, user int64, cli CLI, slot Slot) (con
 	if w.gated(user, cli, slot) {
 		return nil, nil, ErrRemoving
 	}
+	if !w.owned(user) {
+		return nil, nil, ErrUnknownOwner
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	h := &helperRun{scope: scope{user: user, cli: cli, slot: slot}, cancel: cancel, done: make(chan struct{})}
 	w.helpers[h] = struct{}{}

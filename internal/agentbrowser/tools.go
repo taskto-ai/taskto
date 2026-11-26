@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/browser"
 )
 
@@ -105,8 +106,13 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 	if !known {
 		return nil, refuse(http.StatusNotFound, "unknown tool")
 	}
-	if err := s.Usable(ctx); err != nil {
-		return nil, refuse(http.StatusConflict, "%s", err.Error())
+	if err := s.Usable(ctx, user); err != nil {
+		status := http.StatusConflict
+		var e *apierr.Error
+		if errors.As(err, &e) {
+			status = e.Status // the CLI worker isn't ready yet: 503, try again
+		}
+		return nil, refuse(status, "%s", err.Error())
 	}
 	a, err := decodeArgs(name, raw)
 	if err != nil {

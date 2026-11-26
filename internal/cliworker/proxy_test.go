@@ -19,6 +19,7 @@ import (
 // for a gateway.
 func TestTurnThroughTheProxy(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	dirs, err := h.layout.Ensure(1)
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +97,7 @@ func TestTurnThroughTheProxy(t *testing.T) {
 // The worker's API never hands a turn's proxy token back.
 func TestRemoteHidesTheProxyToken(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	r := serve(t, h)
 	s := spec("remote-proxy", 1, cliworker.Grok, "hello")
 	s.Slot, s.Proxy = "s2", &cliworker.Proxy{URL: "http://taskto:8081", Token: "tt1.payload-for-the-test.signature"} //nolint:gosec // G101: made up for the test

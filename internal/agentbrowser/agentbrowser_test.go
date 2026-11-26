@@ -139,7 +139,7 @@ type env struct {
 	h   http.Handler
 }
 
-func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context) error) *env {
+func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context, int64) error) *env {
 	t.Helper()
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
@@ -258,7 +258,7 @@ func TestOff(t *testing.T) {
 
 // The CLI workers' rule (local mode with a second user) holds for the browser too.
 func TestUnusable(t *testing.T) {
-	e := newEnv(t, newFake(), func(context.Context) error { return errors.New("no OS boundary between users") })
+	e := newEnv(t, newFake(), func(context.Context, int64) error { return errors.New("no OS boundary between users") })
 	owner, _ := e.setup()
 	st := decode[Status](t, owner.do(http.MethodGet, base, nil))
 	if st.Enabled || st.Reason != "no OS boundary between users" || st.ReasonCode != apierr.CodeBrowserUnusable {
@@ -274,7 +274,7 @@ func TestUnusable(t *testing.T) {
 		cliaccounts.ErrOff:        apierr.CodeBrowserCLIWorkersOff,
 		cliaccounts.ErrNoBoundary: apierr.CodeBrowserSingleUser,
 	} {
-		other := newEnv(t, newFake(), func(context.Context) error { return why })
+		other := newEnv(t, newFake(), func(context.Context, int64) error { return why })
 		owner, _ := other.setup()
 		if st := decode[Status](t, owner.do(http.MethodGet, base, nil)); st.ReasonCode != code {
 			t.Errorf("%v: reason_code = %q, want %q", why, st.ReasonCode, code)
@@ -690,5 +690,42 @@ func TestLiveViewEndsWithTheShutdown(t *testing.T) {
 	}
 	if !liveEnds(ws) {
 		t.Fatal("the live view outlived the shutdown")
+	}
+}
+
+// While the CLI worker isn't ready (it hasn't been told who exists, or who the caller is), every
+// route answers with that reason's own status and code, the status too, and nothing reaches the
+// browser: the web app says to try again in a moment.
+func TestNotReadyKeepsItsCode(t *testing.T) {
+	notReady := apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, "the CLI worker isn't ready yet: try again in a moment")
+	var asked []int64
+	e := newEnv(t, newFake(), func(_ context.Context, user int64) error {
+		asked = append(asked, user)
+		return notReady
+	})
+	owner, _ := e.setup()
+	for _, r := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, base, nil},
+		{http.MethodPost, base + "/start", map[string]string{}},
+		{http.MethodPost, base + "/stop", map[string]string{}},
+	} {
+		rec := owner.do(r.method, r.path, r.body)
+		if rec.Code != http.StatusServiceUnavailable || decode[map[string]any](t, rec)["code"] != string(apierr.CodeCLIWorkerNotReady) {
+			t.Errorf("%s %s = %d %s, want 503 %s", r.method, r.path, rec.Code, rec.Body.String(), apierr.CodeCLIWorkerNotReady)
+		}
+	}
+	for _, user := range asked {
+		if user != owner.id {
+			t.Errorf("readiness was asked for user %d, not the caller %d", user, owner.id)
+		}
+	}
+	if _, err := New(e.b, func(context.Context, int64) error { return notReady }).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !refusedWith(err, http.StatusServiceUnavailable, "isn't ready") {
+		t.Errorf("a tool while the worker isn't ready: %v", err)
+	}
+	if len(e.b.actions) != 0 || len(e.b.running) != 0 {
+		t.Fatal("the browser was reached")
 	}
 }

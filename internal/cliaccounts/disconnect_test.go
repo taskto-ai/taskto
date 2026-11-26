@@ -25,6 +25,9 @@ func TestDisconnectStopsTheTurnUsingTheLogin(t *testing.T) {
 	conv := e.conversation(e.owner)
 	start := func(id string, user int64, slot cliworker.Slot, s clitest.Scenario) *cliworker.Turn {
 		t.Helper()
+		if err := e.svc.ReadyUser(t.Context(), user); err != nil {
+			t.Fatal(err)
+		}
 		dirs, err := e.layout.EnsureSlot(user, cliworker.Claude, slot)
 		if err != nil {
 			t.Fatal(err)

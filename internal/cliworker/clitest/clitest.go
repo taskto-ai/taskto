@@ -62,6 +62,9 @@ type Scenario struct {
 	LogoutSleepMS int `json:"logout_sleep_ms,omitempty"`
 	// Background starts a process that outlives the CLI, in its process group.
 	Background bool `json:"background,omitempty"`
+	// Detached, with Background, starts the process in a session of its own: it leaves the CLI's
+	// process group, as a daemon a tool started does, and a kill of the group doesn't reach it.
+	Detached bool `json:"detached,omitempty"`
 	// HoldStdout makes the background process keep the CLI's stdout open.
 	HoldStdout bool `json:"hold_stdout,omitempty"`
 	// Expired makes the login fail the way each CLI reports it.
@@ -299,6 +302,9 @@ func (f *fake) garbage() {
 func (f *fake) work() error {
 	if f.scenario.Background {
 		bg := exec.Command("sleep", "300")
+		if f.scenario.Detached {
+			bg.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		}
 		if f.scenario.HoldStdout {
 			bg.Stdout = os.Stdout
 		}

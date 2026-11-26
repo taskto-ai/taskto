@@ -555,7 +555,39 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 			return m, fmt.Errorf("mark the CLI workers' history unknown: %w", err)
 		}
 	}
+	// The container CLI worker's directories aren't in the backup: until the server has told it who
+	// exists, a directory from before it recorded owners can't be given to anyone.
+	if err := writeMark(filepath.Join(dataDir, RestoredMark)); err != nil {
+		return m, fmt.Errorf("mark the data directory restored: %w", err)
+	}
 	return m, nil
+}
+
+// RestoredMark is the file a restore leaves in the data directory, for the server: the CLI
+// worker's directories (in container mode a volume of their own, which no backup covers) may be
+// from another history than the restored database's. The server removes it once it has told the
+// worker who exists (docs/cli-workers.md).
+const RestoredMark = "cli-worker-restored"
+
+// writeMark makes the file at path, durably.
+func writeMark(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: a fixed name in the restored data directory
+	if err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // forgetWorkerHistory marks the CLI workers' history of the restored server database at p as

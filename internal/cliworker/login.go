@@ -152,6 +152,10 @@ func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
 		w.mu.Unlock()
 		return nil, ErrRemoving
 	}
+	if !w.owned(user) {
+		w.mu.Unlock()
+		return nil, ErrUnknownOwner
+	}
 	key := loginKey{user, cli, slot}
 	if old := w.logins[key]; old != nil && !old.Info().State.Final() {
 		w.mu.Unlock()

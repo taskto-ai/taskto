@@ -122,17 +122,25 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 	if err := svcB.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// From now on as the server asks: it introduces each account first.
+	started = func(user int64) error {
+		_, err := svcB.worker.StartLogin(user, cliworker.Claude, "")
+		return err
+	}
 	for name, user := range map[string]int64{"the person given a number again": fresh, "the person whose purge the restore undid": back, "a person never forgotten": one} {
 		if err := started(user); err != nil {
 			t.Errorf("%s (user %d) is refused after the restore: %v", name, user, err)
 		}
-		e.worker.CancelLogin(user, cliworker.Claude, "")
+		svcB.worker.CancelLogin(user, cliworker.Claude, "")
 	}
 	// The account that was gone before the backup is still gone.
 	if err := started(gone); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("an account that is gone for good was let back: %v", err)
 	}
 	// And a turn runs on the restored person's own login, as it did.
+	if err := svcB.ReadyUser(ctx, back); err != nil {
+		t.Fatal(err)
+	}
 	dirs, err := e.layout.Ensure(back)
 	if err != nil {
 		t.Fatal(err)
@@ -240,8 +248,8 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	if _, err := e.worker.StartLogin(begun, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the account whose purge began was let back: %v", err)
 	}
-	if _, err := e.worker.StartLogin(other, cliworker.Claude, ""); err != nil {
+	if _, err := e.svc.worker.StartLogin(other, cliworker.Claude, ""); err != nil {
 		t.Errorf("an account that is live and not being purged is refused: %v", err)
 	}
-	e.worker.CancelLogin(other, cliworker.Claude, "")
+	e.svc.worker.CancelLogin(other, cliworker.Claude, "")
 }

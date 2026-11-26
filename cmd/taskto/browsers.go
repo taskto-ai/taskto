@@ -12,6 +12,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
 )
 
@@ -52,21 +53,24 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 	return agentbrowser.New(m, browserUsable(cli)), m, m.Close
 }
 
-// browserUsable is the CLI workers' rule for the agent browser, and, since its profile is in the
-// user's CLI directory, that the worker has been told who exists since this server started: a
-// directory a restore left there may be someone else's until it has (cliaccounts.Service.Ready).
-func browserUsable(cli *cliaccounts.Service) func(context.Context) error {
-	return func(ctx context.Context) error {
+// browserUsable is the CLI workers' rule for the agent browser, and, since a user's profile is in
+// their CLI directory, that the worker has been told who exists since this server started and who
+// the user is (cliaccounts.Service.ReadyUser): until then a directory a restore left there may be
+// someone else's. Its refusals carry their own status and code, for the web app.
+func browserUsable(cli *cliaccounts.Service) func(context.Context, int64) error {
+	return func(ctx context.Context, user int64) error {
 		if err := cli.Usable(ctx); err != nil {
 			return err
 		}
-		if err := cli.Ready(ctx); err != nil {
-			if errors.Is(err, cliaccounts.ErrNotReady) {
-				// The browser's status and refusals carry the reason's own code, for the web app.
-				return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())
-			}
-			return err
+		switch err := cli.ReadyUser(ctx, user); {
+		case err == nil:
+			return nil
+		case errors.Is(err, cliworker.ErrForgotten):
+			return apierr.New(http.StatusGone, apierr.CodeCLIAccountForgotten, cliworker.ErrForgotten.Error())
+		case errors.Is(err, cliworker.ErrBusy):
+			return apierr.New(http.StatusConflict, apierr.CodeCLIAccountBusy, cliworker.ErrBusy.Error())
+		default:
+			return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())
 		}
-		return nil
 	}
 }

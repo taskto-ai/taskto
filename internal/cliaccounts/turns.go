@@ -140,6 +140,12 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "turn, cli, model and prompt are required, and the model must be one the CLI offers")
 		return
 	}
+	// Before the stream starts and before anything else of the worker's: while the worker can't be
+	// told who exists, or who the conversation's owner is, the answer is that it isn't ready.
+	if err := s.ReadyUser(r.Context(), p.User); err != nil {
+		workerError(w, r, ref{cli: req.CLI}, err)
+		return
+	}
 	out := newEventWriter(w)
 	fail := func(status cliworker.Status, msg string) {
 		out.write(cliworker.Event{Type: cliworker.EventDone, Status: status, Text: msg})

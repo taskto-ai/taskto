@@ -293,7 +293,9 @@ func TestReconcileTakesBackOnlyTheMarksARestoreMadeWrong(t *testing.T) {
 	if err := h.w.Forget(ctx, 5); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.w.Reconcile(ctx, cliworker.Census{Live: []int64{1, 2}, Next: 4, Before: snapshot}); err != nil {
+	c := census(4, nil, 1, 2)
+	c.Before = snapshot
+	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	refused := func(user int64) bool {

@@ -5,6 +5,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -74,5 +75,47 @@ func TestUnforgetTakesBackOnlyOlderRefusals(t *testing.T) {
 		if err := m.Start(ctx, user, Testing); !errors.Is(err, ErrAccountClosing) {
 			t.Errorf("user %d: %v, want ErrAccountClosing", user, err)
 		}
+	}
+}
+
+// The worker's per-user rule (Config.Allow) holds for every operation on a user's browsers, the
+// reading of one already running and its tabs too: a user whose old directory couldn't be removed
+// yet reaches nothing of its browser. Stopping it is still allowed, and others go on.
+func TestAllowHoldsForARunningBrowser(t *testing.T) {
+	h := newProfileHost(t)
+	h.vnc = echoView
+	var refused atomic.Bool
+	m := NewManager(Config{Host: h, Max: 8, Allow: func(user int64) error {
+		if user == 1 && refused.Load() {
+			return ErrAccountClosing
+		}
+		return nil
+	}})
+	t.Cleanup(m.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	startAll(t, m, 1)
+	startAll(t, m, 2)
+
+	refused.Store(true)
+	if _, err := m.Status(ctx, 1); !errors.Is(err, ErrAccountClosing) {
+		t.Errorf("status: %v", err)
+	}
+	for _, a := range []Action{{Op: OpTabs, Browser: Personal}, {Op: OpSnapshot, Browser: Personal, Tab: "T1"}} {
+		if _, err := m.Do(ctx, 1, a); !errors.Is(err, ErrAccountClosing) {
+			t.Errorf("%s: %v", a.Op, err)
+		}
+	}
+	if _, err := m.OpenLive(ctx, 1); !errors.Is(err, ErrAccountClosing) {
+		t.Errorf("live view: %v", err)
+	}
+	if err := m.Start(ctx, 1, Testing); !errors.Is(err, ErrAccountClosing) {
+		t.Errorf("start: %v", err)
+	}
+	if err := m.Stop(ctx, 1, Personal); err != nil {
+		t.Errorf("stop: %v", err)
+	}
+	if st, err := m.Status(ctx, 2); err != nil || !st[Personal].Running {
+		t.Errorf("another user's browser: %+v %v", st, err)
 	}
 }

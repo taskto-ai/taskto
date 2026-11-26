@@ -3,9 +3,11 @@
 package cliworker_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -104,9 +106,20 @@ func copyFile(t *testing.T, to string) {
 	}
 }
 
+// introduce introduces users to the worker, as the server does before it asks anything for them.
+func (h *isoHarness) introduce(t *testing.T, users ...int64) {
+	t.Helper()
+	for _, user := range users {
+		if err := h.w.Introduce(context.Background(), user, cliworker.IdentityForTest(user), cliworker.TestBoot); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // signIn connects user's fake cli the way its login would: as the user, through the helper.
 func (h *isoHarness) signIn(t *testing.T, user int64, cli cliworker.CLI) {
 	t.Helper()
+	h.introduce(t, user)
 	l, err := h.w.StartLogin(user, cli, "")
 	if err != nil {
 		t.Fatal(err)
@@ -274,6 +287,7 @@ func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 // another user's) is refused, not followed.
 func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	h := newIsolated(t)
+	h.introduce(t, 3, 4)
 	if err := os.Symlink("/etc", h.layout.User(3).Root); err != nil {
 		t.Fatal(err)
 	}
@@ -313,6 +327,7 @@ func TestIsolationRefusesAConflictingAccount(t *testing.T) {
 	}
 	_, _ = fmt.Fprintf(f, "tt5:x:4242:4242::/root:/bin/sh\nintruder:x:%d:%d::/:/bin/sh\n", isoBase+6, isoBase+6)
 	_ = f.Close()
+	h.introduce(t, 5, 6)
 	for _, user := range []int64{5, 6} {
 		done := last(run(t, h.w, spec(fmt.Sprintf("conflict-%d", user), user, cliworker.Claude, "hi")))
 		if done.Status != cliworker.StatusFailed || !strings.Contains(done.Text, "for someone else") {
@@ -372,5 +387,137 @@ func TestIsolationRefusesRootInLocalMode(t *testing.T) {
 		case allow && (done.Status != cliworker.StatusOK || probeResult(done.Text, "uid") != "ok 0 0"):
 			t.Errorf("as root with the override: %+v", done)
 		}
+	}
+}
+
+// Before a number's directory goes, and so before the number can be given to someone else, every
+// process of its Unix user ends: one a CLI detached into a session of its own too, which no turn
+// or process group of the worker's lists, and which would otherwise reach the next account's
+// directory under the same uid.
+func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
+	h := newIsolated(t)
+	h.signIn(t, 5, cliworker.Claude)
+	detached := exec.Command("sleep", "60")
+	detached.Dir = "/"
+	detached.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: isoBase + 5, Gid: isoBase + 5}}
+	if err := detached.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan struct{})
+	go func() { _ = detached.Wait(); close(ended) }()
+	t.Cleanup(func() { _ = detached.Process.Kill(); <-ended })
+
+	// A restore gave 5 to another account.
+	next := strings.Repeat("b", 32)
+	if err := h.w.Reconcile(context.Background(), census(6, map[int64]string{5: next}, 5)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a process of the old owner's uid outlived the removal of their directory")
+	}
+	if _, err := os.Stat(h.layout.User(5).Root); !os.IsNotExist(err) {
+		t.Errorf("the old directory: %v", err)
+	}
+	// The new account gets a directory of its own, as the same uid.
+	if err := h.w.Introduce(context.Background(), 5, next, cliworker.TestBoot); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := h.w.Status(context.Background(), 5, cliworker.Claude, ""); err != nil || st.LoggedIn {
+		t.Errorf("the new account: %+v %v", st, err)
+	}
+}
+
+// The worker removes a user's directory as itself, root with only CAP_CHOWN of the file powers
+// in the container (CI runs this with those capabilities alone too): a read-only part the user
+// made, and a link to a file of root's, don't stop it, and the link isn't followed.
+func TestIsolationRemovesAReadOnlyDirectoryOfTheUser(t *testing.T) {
+	h := newIsolated(t)
+	h.signIn(t, 6, cliworker.Claude)
+	outside := filepath.Join(filepath.Dir(h.layout.Root), "outside.txt")
+	if err := os.WriteFile(outside, []byte("root's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Made by the user, as a tool of theirs would.
+	work := h.layout.User(6).Work
+	mk := exec.Command("sh", "-c", `set -e; mkdir -p "$1/ro/inner"; echo x > "$1/ro/inner/file"; ln -s "$2" "$1/ro/inner/link"; chmod 400 "$1/ro/inner/file"; chmod 500 "$1/ro/inner" "$1/ro"`, "sh", work, outside)
+	mk.Dir = "/"
+	mk.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: isoBase + 6, Gid: isoBase + 6}}
+	if out, err := mk.CombinedOutput(); err != nil {
+		t.Fatalf("making the read-only directory as the user: %v %s", err, out)
+	}
+	if err := h.w.Forget(context.Background(), 6); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(h.layout.User(6).Root); !os.IsNotExist(err) {
+		t.Errorf("the directory: %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("a file a link pointed to went: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(h.layout.Root, ".worker", "trash")); len(entries) != 0 {
+		t.Errorf("left in the trash: %v", entries)
+	}
+}
+
+// (From the pull request that first ended a user's detached processes.) Forgetting a user ends
+// every process of their Unix user before their directory goes: also one
+// a tool of the CLI detached from the process group (a daemon, a browser's leftover), which the
+// stops of the turns and groups don't reach, and which would go on running as the user, writing
+// into the directory, or into a new person's that is given the number. Another user's processes,
+// turn and directory are not touched: a uid is one user's alone.
+func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
+	h := newIsolated(t)
+	for _, user := range []int64{1, 2} {
+		h.signIn(t, user, cliworker.Grok)
+	}
+	// User 1's tool detaches a process from the turn's group; user 2's stays in its own.
+	h.scenario(t, 1, cliworker.Grok, clitest.Scenario{SleepMS: 60_000, Background: true, Detached: true})
+	h.scenario(t, 2, cliworker.Grok, clitest.Scenario{SleepMS: 60_000, Background: true})
+	var turns [3]*cliworker.Turn
+	var bg [3]int
+	for _, user := range []int64{1, 2} {
+		turn, _, err := h.w.Start(spec(fmt.Sprintf("turn-%d", user), user, cliworker.Grok, "slow"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := h.layout.User(user).Config(cliworker.Grok)
+		eventually(t, "the CLI didn't start its tool", func() bool {
+			_, err := os.Stat(filepath.Join(cfg, "background.pid"))
+			return err == nil
+		})
+		turns[user], bg[user] = turn, backgroundPID(t, cfg)
+	}
+	// The detached process is in a session of its own: not in the turn's group.
+	if pgid, err := syscall.Getpgid(bg[1]); err != nil || pgid != bg[1] {
+		t.Fatalf("the detached process's group = %d, %v: want a group of its own (%d)", pgid, err, bg[1])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if alive(bg[1]) {
+		t.Error("the user's detached process still runs after Forget")
+	}
+	if !turns[1].Over() {
+		t.Error("the user's turn still runs after Forget")
+	}
+	gone(t, h.layout.User(1).Root)
+
+	// The other user: process, turn and files.
+	if !alive(bg[2]) {
+		t.Error("another user's process was ended")
+	}
+	if turns[2].Over() {
+		t.Errorf("another user's turn ended: %+v", last(waitDone(t, turns[2], time.Second)))
+	}
+	if _, err := os.Stat(h.layout.User(2).Config(cliworker.Grok)); err != nil {
+		t.Errorf("another user's directory: %v", err)
+	}
+	if err := h.w.Forget(ctx, 1); err != nil {
+		t.Errorf("forgetting again: %v", err)
 	}
 }

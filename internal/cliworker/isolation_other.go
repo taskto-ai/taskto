@@ -5,6 +5,7 @@ package cliworker
 import (
 	"errors"
 	"os/exec"
+	"time"
 )
 
 const isolationSupported = false
@@ -21,3 +22,5 @@ func (w *Worker) asUser(_ *exec.Cmd, _ int64) error {
 func killUIDs(int) int { return 0 }
 
 func (w *Worker) dropUnixUser(int64) {}
+
+func killUID(int, time.Duration) error { return nil }

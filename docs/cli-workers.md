@@ -402,57 +402,85 @@ The UI shows what the command prints.
   common run one after the other (a disconnect, a second one, a `Forget` of the user): the helper
   requests of one, the sign-out and the removal of the files, never overlap another's. A caller
   that has already given up (its context ended) starts none.
-- **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account: it
-  removes the user's whole directory. It first records the user as forgotten in the worker's own
-  state directory (`.worker/forgotten-u<user>`, so it outlives a worker's restart), which refuses
-  every turn, sign-in, status check and helper request for them (`ErrForgotten`, `410 Gone` with
-  the code `forgotten` over the worker's API, `cli_account_forgotten` in the server's). It then
-  stops what runs for the user and waits for it, the same way a disconnect does for one account
-  (their turns, the ones waiting for a place too, their sign-ins, their helper requests and the
-  process groups they started), so a CLI that was using the login has ended before its files go and
-  nothing writes into them or makes them again. The agent browsers that run in the worker are
-  stopped too, and waited for, before the directory goes: the profile is in it. If something
-  doesn't end in time it fails (`ErrBusy`) and the purge tries again (the purge gives each attempt
-  two minutes); the mark stays. A process a CLI detached into a group of its own is not tracked.
+- **Who owns a directory.** A user number names an account only within one history of the
+  server's database: a restore of the server's data goes back in it and gives the numbers after
+  the backup again, while the worker's directory (the `cli-homes` volume in container mode) is not
+  part of the backup. So the worker never decides by number alone, nor by any clock. Each account
+  has an identity that never changes and is never given to another (`users.cli_identity`, random,
+  set when the account is made). Before the server asks anything of the worker for a user in its
+  life (a sign-in, a status check, a sign-out, a turn, permission questions, the agent browser), it
+  **introduces** them (`POST /introduce` on the worker's API, `Worker.Introduce`): the worker
+  records the identity as the owner of the number's directory (`.worker/owner-u<user>`, the
+  worker's own file, written before anything of the user's is made). If the directory belongs to
+  someone else (another identity, or none recorded), it is removed first. Nothing starts for a
+  user without an owner record (`ErrUnknownOwner`, `unknown_owner` over the worker's API). The
+  server introduces each user again after each start; introducing the owner again changes nothing.
+- **Removing a user's directory** (`Forget`, an introduction of someone else, `Reconcile`) closes
+  everything of the user's to new starts, then, in order:
+  - stops their agent browsers and waits for them (the profile is in the directory);
+  - stops what runs for them and waits for it: their turns (the ones waiting for a place too),
+    their sign-ins, their helper requests and the process groups those started. In container mode
+    it then kills every process of their Unix user and waits until none is left: one a CLI
+    detached into a group or session of its own too, which would otherwise reach the next
+    account's directory under the same uid. The browser processes are included;
+  - takes the directory away from its path at once, into the worker's own `.worker/trash/`, where
+    no user can reach it. In container mode it first makes the directory the worker's
+    (`CAP_CHOWN`), since moving a directory writes its `..`;
+  - deletes it there as the worker: each directory is taken over before it is read, so a
+    read-only part is no obstacle, and a link is removed, never followed;
+  - drops what the worker remembers of the user: their owner record, their sign-ins, and their
+    finished turns with the permission questions those held.
+
+  If something doesn't end in time, nothing is removed (`ErrBusy`), and the removal can be tried
+  again. A process a CLI detached is not tracked in local mode, which has no Unix user per person.
+- **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account. It
+  first records the user as forgotten in the worker's own state directory
+  (`.worker/forgotten-u<user>`, so it outlives a worker's restart). That refuses every turn,
+  sign-in, status check, helper request, introduction and agent-browser operation for them
+  (`ErrForgotten`, `410 Gone` with the code `forgotten` over the worker's API,
+  `cli_account_forgotten` in the server's). It then removes their directory as above. If that
+  fails, the purge tries again (the purge gives each attempt two minutes), and the mark stays. A
+  purge's own browser step (`browser-purge`) runs under the user's gate, and only while the
+  directory's owner is the one recorded when the purge began, so it never reaches the files of an
+  account a restore gave the number to meanwhile. It is done when the directory is already gone.
 - **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) brings the worker in
-  line with the server's database after a restore of the server's data. User numbers are never
-  reused within one database's history, but a restore goes back in it: a person whose account was
-  purged since the backup is back, and the numbers after it are given again, while the worker's
-  directory (the `cli-homes` volume in container mode) is not part of the backup. It still holds
-  the marks of that history, and the directories of the people who had those numbers in it (an
-  account never purged, or one whose removal ended busy): their logins, working files and browser
-  profiles, which a new person given the number must never get. So at every start the server
-  tells the worker which numbers are live, when each live account was made and which number comes
-  next, read in one transaction (`Service.StartReconcile`, retried in the background until it
-  succeeds, with a warning at the first failure and every tenth). The worker then:
-  - removes, the way `Forget` does (what runs for the user stopped and waited for first, their
-    agent browsers too), every user's directory that isn't a live user's own: a number below the
-    next that isn't live (an account gone for good, which stays refused); a number from the next
-    up, unless the worker made the directory after the server read its database (a person added
-    since); and a live number whose directory the worker made before the account was made. The
-    worker records when it first acts for each user, in its own state directory
-    (`.worker/born-u<user>`, with the time in it, written before anything of the user's is made and
-    never by the user; not the file's own time, which a file system may take from a clock a few
-    milliseconds behind); a directory from before it recorded that is judged by the directory's own
-    time, which is never before it was made, and counts as older than an account only by more than
-    a second. Nothing of a live user is removed otherwise;
+  line with the server's database after a restore of the server's data. At every start, before it
+  asks anything else for a user, the server tells the worker which numbers are live, each live
+  account's identity, which number comes next, its own boot (a random value taken at each start,
+  which it introduces users with) and whether the data was restored since the worker was last
+  told. These are read in one transaction (`Service.StartReconcile`, retried in the background
+  until it succeeds, with a warning at the first failure and every tenth). The worker then:
+  - deletes what an earlier removal left in its trash;
+  - keeps a user's directory and owner record only when the recorded owner is the live account
+    of its number, by identity; or, for a number from the next up, when this server introduced
+    its owner after it read its database (the record's boot is the census's). A directory with no
+    owner recorded, from before the worker recorded owners, is adopted for the live account of its
+    number only when no restore happened since. `taskto restore` leaves `cli-worker-restored` in
+    the data directory, and the server removes it once the worker has been told everything. In
+    container mode that mark means such a directory is removed, never handed over: its person
+    signs in again. In local mode the directories are in the data directory, so the backup brought
+    back the ones that go with its database;
+  - removes everything else as above. A number below the next that isn't live is an account gone
+    for good: it is forgotten as `Forget` does, and stays refused;
   - removes the marks of the live users and of the numbers from the next up, apart from a mark made
     after the server read its database (a purge running now), and takes back the agent browsers'
     own refusals the same way. The marks of accounts that are gone for good stay, and so do those
     of accounts whose purge has begun (it forgets the worker's files before it deletes the
     account).
 
-  A purge that had begun before the start still finishes: its browser step, the helper's removal of
-  the browser's directory, is let through for a forgotten user, and is done when the directory is
-  already gone. A directory that can't be removed yet (a process of it doesn't end in time) is kept and its user
-  refused (`ErrForgotten`) until a later attempt removes it; the answer is `ErrIncomplete` (`409`,
-  `incomplete`), and the server goes on and tries again. Until the worker has been told, since this
-  server started, the server asks nothing of it for a user: a sign-in, a status check, a sign-out,
-  a turn or the agent browser waits for it, and the first such request tells it if the start
-  couldn't; while the worker can't be reached they are refused with `cli_worker_not_ready`
-  (`503`). In local mode the directories are under `<data>/cli/`, which the backup covers, so a
-  restore brings back the directories that go with its database and there is nothing to remove;
-  the same code runs.
+  A directory that can't be removed yet (a process of it doesn't end in time) is kept and its user
+  refused, the agent browser included, even an open one's state and tabs, until a later attempt
+  removes it. The answer is then `ErrIncomplete` (`409`, `incomplete`), and the server goes on and
+  tries again.
+
+  Until the worker has been told, since this server started, and the user has been introduced, the
+  server asks nothing of it for them. Every user-scoped call waits for it, and the first such
+  request tells the worker if the start couldn't. Calls that can't wait (reading a sign-in's
+  progress, cancelling it, finding a turn by its ID) answer as if there were nothing. One attempt
+  at telling the worker runs at a time, and a request waiting for it gives up with its own context.
+  While the worker can't be reached, the API answers `cli_worker_not_ready` (`503`) first, before
+  it says whether a CLI is installed and before a turn's stream starts. The agent browser's routes
+  give the same answer.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

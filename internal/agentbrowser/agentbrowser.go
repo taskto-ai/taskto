@@ -30,22 +30,24 @@ var ErrOff = errors.New("the agent browser is off on this server (-browser)")
 // Service serves the agent browser to users and to the agent.
 type Service struct {
 	b      browser.Browsers
-	usable func(context.Context) error
+	usable func(ctx context.Context, user int64) error
 }
 
-// New returns the service over b, usable when usable says so (the CLI workers' rule: the
-// browser runs in their worker, under the same OS boundary). A nil b means the browser is off.
-func New(b browser.Browsers, usable func(context.Context) error) *Service {
+// New returns the service over b, usable for a user when usable says so (the CLI workers' rule:
+// the browser runs in their worker, under the same OS boundary, and the user's profile is in
+// their CLI directory). A nil b means the browser is off.
+func New(b browser.Browsers, usable func(ctx context.Context, user int64) error) *Service {
 	return &Service{b: b, usable: usable}
 }
 
-// Usable reports whether the browser can be used now: nil, ErrOff, or the CLI workers' reason.
-func (s *Service) Usable(ctx context.Context) error {
+// Usable reports whether user's browser can be used now: nil, ErrOff, or the CLI workers'
+// reason. An *apierr.Error reason carries its own status and code.
+func (s *Service) Usable(ctx context.Context, user int64) error {
 	if s == nil || s.b == nil {
 		return ErrOff
 	}
 	if s.usable != nil {
-		return s.usable(ctx)
+		return s.usable(ctx, user)
 	}
 	return nil
 }
@@ -100,8 +102,14 @@ func unusable(err error) apierr.Code {
 
 func (s *Service) status(ctx context.Context, user int64) (Status, error) {
 	out := Status{Browsers: map[browser.Kind]browser.State{}}
+	why := s.Usable(ctx, user)
+	// A passing state (the CLI worker isn't ready yet) is the request's answer, with its code.
+	var e *apierr.Error
+	if errors.As(why, &e) && e.Status >= http.StatusInternalServerError {
+		return out, why
+	}
 	// Not usable is an answer, not a failure: the status says why.
-	if why := s.Usable(ctx); why != nil {
+	if why != nil {
 		out.Reason, out.ReasonCode = why.Error(), unusable(why)
 		return out, nil //nolint:nilerr // the reason is in the answer
 	}
@@ -118,6 +126,11 @@ func (s *Service) status(ctx context.Context, user int64) (Status, error) {
 
 func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := s.status(r.Context(), caller(r))
+	var e *apierr.Error
+	if errors.As(err, &e) {
+		apierr.WriteError(w, e)
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -125,13 +138,20 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// usableOr409 answers 409 with the reason when the browser can't be used now.
+// usableOr409 answers with the reason when the caller's browser can't be used now: 409, or the
+// reason's own status and code when it carries them (the CLI worker isn't ready yet: 503).
 func (s *Service) usableOr409(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.Usable(r.Context()); err != nil {
-		writeError(w, http.StatusConflict, unusable(err), err.Error())
+	err := s.Usable(r.Context(), caller(r))
+	if err == nil {
+		return true
+	}
+	var e *apierr.Error
+	if errors.As(err, &e) {
+		apierr.WriteError(w, e)
 		return false
 	}
-	return true
+	writeError(w, http.StatusConflict, unusable(err), err.Error())
+	return false
 }
 
 func readKind(w http.ResponseWriter, r *http.Request) (browser.Kind, bool) {

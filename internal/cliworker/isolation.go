@@ -24,3 +24,6 @@ type Isolation struct {
 
 	state isolationState //nolint:unused // the users made so far: Linux only (isolation_linux.go)
 }
+
+// uidOf is user's Unix user: UIDBase plus their number.
+func (i *Isolation) uidOf(user int64) int { return i.UIDBase + int(user) }
