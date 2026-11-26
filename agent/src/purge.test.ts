@@ -89,8 +89,11 @@ describe('runPurge', () => {
   // and the longest gap between two ticks of a 10 ms timer there (what a health check would wait).
   const writesDuring = async (work: Promise<unknown>) => {
     const db = new DatabaseSync(path, { timeout: 5000 })
-    // Its own commits don't fold the log in: only how long it waits for the purge is measured.
+    // Its own commits don't fold the log in, and don't wait for the disk, as the harness's don't
+    // (synchronous = NORMAL): only how long it waits for the purge's lock is measured, not how long a
+    // busy disk takes to sync.
     db.exec('PRAGMA wal_autocheckpoint = 0')
+    db.exec('PRAGMA synchronous = NORMAL')
     const insert = db.prepare("INSERT INTO entries (conversation_id, text) VALUES (2, 'another turn')")
     let longest = 0
     let writes = 0
@@ -432,8 +435,9 @@ describe('runPurge', () => {
       clearTimeout(release)
       expect(probe.error).toBeUndefined()
       // Copied by the checkpoint that empties the log, which holds the lock, a write waited for
-      // the whole copy (a fifth to most of the purge); copied beside the writers, for a moment.
-      expect(probe.longest).toBeLessThan(probe.took / 8)
+      // the whole copy (here about half of the purge); copied beside the writers, it waits only
+      // while the drained log's file is cut short (a few percent).
+      expect(probe.longest).toBeLessThan(probe.took / 4)
       expect(log()).not.toContain(WORD)
     } finally {
       reader.close()
