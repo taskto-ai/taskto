@@ -54,7 +54,8 @@ type Config struct {
 	// (docs/sso.md); empty means password logins only.
 	SSOProviders string
 	// PublicURL is the server's external origin, https://taskto.example.com: the base of the
-	// providers' redirect URIs. Required with SSOProviders (see ValidatePublicURL).
+	// providers' redirect URIs and of integrations' webhook addresses (the reverse proxy must
+	// forward POST /hooks/*). Required with SSOProviders (see ValidatePublicURL).
 	PublicURL string
 	// DisablePasswordLogin turns passwords off, for instances where everyone signs in with a
 	// provider. Needs SSOProviders.
@@ -267,7 +268,7 @@ var settings = []setting{
 	},
 	{
 		flag: "public-url", env: "TASKTO_PUBLIC_URL", key: "public_url",
-		usage: "the server's external https origin, such as https://taskto.example.com, for single sign-on's redirect URIs",
+		usage: "the server's external https origin, such as https://taskto.example.com, for single sign-on's redirect URIs and integrations' webhook addresses (the proxy must forward POST /hooks/*)",
 		get:   func(c Config) string { return c.PublicURL },
 		set:   func(c *Config, v string) error { c.PublicURL = v; return nil },
 	},

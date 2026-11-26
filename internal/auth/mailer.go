@@ -13,6 +13,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/mail"
+	"taskto.ai/taskto/internal/ratelimit"
 )
 
 // What accounts email (docs/api.md#email-links): a reset link a person asks for from the login
@@ -143,7 +144,7 @@ func (s *Service) handleRequestReset(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := s.clientIP(r)
 	limits := []struct {
-		l   *limiter
+		l   *ratelimit.Limiter
 		key string
 	}{
 		{s.resetPerIP, ip},
@@ -151,11 +152,11 @@ func (s *Service) handleRequestReset(w http.ResponseWriter, r *http.Request) {
 	}
 	refund := func(n int) {
 		for _, lim := range limits[:n] {
-			lim.l.give(lim.key)
+			lim.l.Give(lim.key)
 		}
 	}
 	for i, lim := range limits {
-		if ok, wait := lim.l.take(lim.key); !ok {
+		if ok, wait := lim.l.Take(lim.key); !ok {
 			refund(i)
 			limited(w, wait, apierr.CodeTooManyResets, "too many reset requests: try again later")
 			return
@@ -289,16 +290,16 @@ func (s *Service) recipientLocale(ctx context.Context, userID int64) (string, er
 // how long to wait.
 func (s *Service) takeInviteMail(admin int64, email string) (release func(), wait time.Duration) {
 	adminKey := strconv.FormatInt(admin, 10)
-	if ok, wait := s.invitePerAdmin.take(adminKey); !ok {
+	if ok, wait := s.invitePerAdmin.Take(adminKey); !ok {
 		return nil, wait
 	}
-	if ok, wait := s.invitePerRecipient.take(email); !ok {
-		s.invitePerAdmin.give(adminKey)
+	if ok, wait := s.invitePerRecipient.Take(email); !ok {
+		s.invitePerAdmin.Give(adminKey)
 		return nil, wait
 	}
 	return func() {
-		s.invitePerAdmin.give(adminKey)
-		s.invitePerRecipient.give(email)
+		s.invitePerAdmin.Give(adminKey)
+		s.invitePerRecipient.Give(email)
 	}, 0
 }
 

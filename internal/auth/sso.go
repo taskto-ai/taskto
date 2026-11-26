@@ -25,6 +25,7 @@ import (
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/ratelimit"
 )
 
 // Single sign-on through OpenID Connect (docs/sso.md).
@@ -58,7 +59,7 @@ type sso struct {
 	providers  []*ssoClient
 	byID       map[string]*ssoClient
 	timeout    time.Duration
-	startLimit *limiter
+	startLimit *ratelimit.Limiter
 
 	mu      sync.Mutex
 	pending map[string]ssoPending
@@ -107,7 +108,7 @@ func newSSO(providers []SSOProvider, now func() time.Time) *sso {
 	x := &sso{
 		byID:       map[string]*ssoClient{},
 		timeout:    ssoTimeout,
-		startLimit: newLimiter(ipAttempts, attemptWindow, now),
+		startLimit: ratelimit.New(ipAttempts, attemptWindow, now),
 		pending:    map[string]ssoPending{},
 	}
 	for _, p := range providers {
@@ -453,7 +454,7 @@ func (s *Service) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !readJSON(w, r, &req) {
 		return
 	}
-	if ok, wait := s.sso.startLimit.take(s.clientIP(r)); !ok {
+	if ok, wait := s.sso.startLimit.Take(s.clientIP(r)); !ok {
 		tooMany(w, wait)
 		return
 	}

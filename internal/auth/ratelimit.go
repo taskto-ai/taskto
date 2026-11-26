@@ -11,67 +11,6 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// limiter counts attempts per key in fixed windows, in memory. A restart forgets the
-// counts, which is fine for slowing down password guessing.
-type limiter struct {
-	max    int
-	window time.Duration
-	now    func() time.Time
-
-	mu   sync.Mutex
-	hits map[string]*window
-}
-
-type window struct {
-	count int
-	ends  time.Time
-}
-
-// sweepAt is the number of keys above which take drops the expired windows.
-const sweepAt = 10_000
-
-func newLimiter(maxAttempts int, per time.Duration, now func() time.Time) *limiter {
-	return &limiter{max: maxAttempts, window: per, now: now, hits: map[string]*window{}}
-}
-
-// take counts an attempt for key. It reports false, and how long until the window ends,
-// if key has used up its attempts; that attempt isn't counted.
-func (l *limiter) take(key string) (bool, time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	w := l.hits[key]
-	if w == nil || !now.Before(w.ends) {
-		if len(l.hits) >= sweepAt {
-			l.sweep(now)
-		}
-		w = &window{ends: now.Add(l.window)}
-		l.hits[key] = w
-	}
-	if w.count >= l.max {
-		return false, w.ends.Sub(now)
-	}
-	w.count++
-	return true, 0
-}
-
-// give hands back an attempt taken for key, for one that turned out not to count.
-func (l *limiter) give(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if w := l.hits[key]; w != nil && w.count > 0 {
-		w.count--
-	}
-}
-
-func (l *limiter) sweep(now time.Time) {
-	for k, w := range l.hits {
-		if !now.Before(w.ends) {
-			delete(l.hits, k)
-		}
-	}
-}
-
 // bucket is a token bucket: burst starts at once, then one more every `every`, in memory. What it
 // counts is requests taken in, never work still running, so whether it refuses depends only on
 // the requests that came before and the clock.
