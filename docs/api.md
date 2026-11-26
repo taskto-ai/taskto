@@ -670,6 +670,17 @@ replaced it, and an expiring cookie can't be limited to the session it was for. 
 is refused like any unknown one (`401`, which doesn't touch the cookie either), and the next login
 replaces it.
 
+An optional body names the login the sign-out is for, as `GET /api/me` names it:
+
+```json
+{"session": "c1d2e3"}
+```
+
+The session is then revoked only if it is the one the request carries. Otherwise nothing is revoked
+and the answer is `409 session_account_changed`: a sign-out tried again after its first answer was
+lost, from a page whose browser has signed in again since (the same account in another tab), never
+ends that newer login. The web app always names it.
+
 ### `GET /api/me`
 
 ```json

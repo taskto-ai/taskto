@@ -109,7 +109,7 @@ test('a cleanup that fails after the server confirmed still reaches the login, s
   await logOut()
   await screen.findByRole('heading', { name: 'Log in' })
   // Said once, in one toast.
-  const said = screen.getAllByText(/couldn't be fully cleared/).filter((el) => el.closest('.ui-toast'))
+  const said = (await screen.findAllByText(/couldn't be fully cleared/)).filter((el) => el.closest('.ui-toast'))
   expect(said).toHaveLength(1)
   expect(
     JSON.parse(localStorage.getItem('taskto:sign-out-pending') ?? '[]').map((p: { user: number }) => p.user),
@@ -125,21 +125,95 @@ test('a cleanup that fails after the server confirmed still reaches the login, s
   await waitFor(() => expect(localStorage.getItem('taskto:sign-out-pending')).toBeNull())
 })
 
-test('Back after a refused logout finds the page as the person left it, with what they hadn’t saved', async () => {
-  window.history.replaceState(null, '', '/w/1/settings/general')
+const pendingOf = () =>
+  (JSON.parse(localStorage.getItem('taskto:sign-out-pending') ?? '[]') as { user: number; session: string }[]).map(
+    (p) => `${p.user}:${p.session}`,
+  )
+
+test('Back after a refused logout, the browser still on the same login, starts the app afresh and drops the sign-out', async () => {
   fakeFetch({
     ...pages,
     'GET /api/me': { body: { ...first, session: 's1' } },
     'POST /api/logout': { status: 500, body: { error: 'internal error', code: 'internal' } },
   })
   render(<App />)
-  // A change not saved yet.
-  fireEvent.change(await screen.findByRole('combobox', { name: 'Default language' }), { target: { value: 'pt-BR' } })
   await logOut()
   await screen.findByRole('heading', { name: "Couldn't sign out" })
+  expect(pendingOf()).toEqual(['1:s1'])
   fireEvent.click(screen.getByRole('button', { name: 'Back to the app' }))
-  const language = (await screen.findByRole('combobox', { name: 'Default language' })) as HTMLSelectElement
-  expect(language.value).toBe('pt-BR')
+  await screen.findByRole('navigation', { name: 'Sections' })
+  expect(pendingOf()).toEqual([])
+})
+
+test('another tab starting with the login that is signing out takes the sign-out up: it is not cleared, and goes on', async () => {
+  // A sign-out certain in a tab that closed (or still finishing in another one): this login's.
+  localStorage.setItem(
+    'taskto:sign-out-pending',
+    JSON.stringify([{ user: 1, session: 's1', phase: 'requested', keep: false, approved: [] }]),
+  )
+  let answer: (() => void) | null = null
+  const calls = fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first, session: 's1' } },
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 204 })
+      }),
+  })
+  render(<App />)
+  expect(await screen.findByText('Signing out…')).toBeTruthy()
+  await waitFor(() => expect(answer).not.toBeNull())
+  // Not signed in again, and the sign-out is still recorded while the server is asked.
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+  expect(pendingOf()).toEqual(['1:s1'])
+  // For that login only.
+  expect(calls.find((c) => c.path === '/api/logout')?.body).toEqual({ session: 's1' })
+  await act(async () => answer?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+})
+
+test('Try again after the first answer was lost, the browser on a newer login by now, revokes nothing and says the account changed', async () => {
+  let logout: { status: number; body: unknown } = { status: 500, body: { error: 'internal error', code: 'internal' } }
+  const calls = fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first, session: 's1' } },
+    'POST /api/logout': () => logout,
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // Another tab signed the same person in again: the server's login is a newer one, which this
+  // sign-out must not end. The server refuses it.
+  logout = { status: 409, body: { error: 'not this login', code: 'session_account_changed' } }
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  const sent = calls.filter((c) => c.path === '/api/logout').map((c) => c.body)
+  expect(sent).toEqual([{ session: 's1' }, { session: 's1' }])
+})
+
+test("Back's answer is not taken when another tab signed in while it was asked, even as the same account", async () => {
+  let me: Promise<{ body: Me }> | { body: Me } = { body: { ...first, session: 's1' } }
+  fakeFetch({
+    ...pages,
+    'GET /api/me': () => me,
+    'POST /api/logout': { status: 500, body: { error: 'internal error', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  let answer: (() => void) | null = null
+  me = new Promise((done) => {
+    answer = () => done({ body: { ...first, session: 's1' } })
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Back to the app' }))
+  await waitFor(() => expect(answer).not.toBeNull())
+  // Meanwhile another tab signs the same account in (its marker is written again).
+  localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 1, name: 'First' }))
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  await act(async () => answer?.())
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 })
 
 test('Back to the same account but another login (made meanwhile) does not reopen the shell', async () => {

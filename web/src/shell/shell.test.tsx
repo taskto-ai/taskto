@@ -1359,7 +1359,7 @@ const second = { ...me, user: { id: 2, email: 'second@example.com', name: 'Secon
 // The browser as two people share it: the first signed in; signing in again (from the login
 // screen) makes the second the browser's. `extra` holds a route open, or answers one otherwise.
 function twoPeople(extra: Record<string, Parameters<typeof fakeFetch>[0][string]> = {}) {
-  let who: unknown = { ...me, can_create_workspace: true }
+  let who: unknown = { ...me, can_create_workspace: true, session: 'login-1' }
   const calls = fakeFetch({
     'GET /api/setup': { body: { needed: false } },
     'GET /api/me': () => (who ? { body: who } : { status: 401, body: { error: 'not logged in' } }),

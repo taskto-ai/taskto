@@ -399,8 +399,31 @@ func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
 // can't say "only if it is still this session", so it would sign that newer login out. The revoked
 // token left in the cookie is refused like any unknown one, and the next login replaces it. (The
 // single sign-on cookie follows the same rule.)
+//
+// A body may name the login the sign-out is for (`{"session": "<public id>"}`, as /api/me names it):
+// it is then revoked only if it is the login the request carries. A sign-out tried again after its
+// first answer was lost, from a tab whose browser has signed in again since (the same account in
+// another tab), must never revoke that newer login: it is refused (409 session_account_changed),
+// nothing is revoked, and the page says the account changed.
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Session string `json:"session"`
+	}
+	if r.ContentLength != 0 && !readJSON(w, r, &body) {
+		return
+	}
 	if token := s.sessionToken(r); token != "" {
+		if body.Session != "" {
+			current, err := s.sessionPublicID(r.Context(), token)
+			if err != nil {
+				serverError(w, r, err)
+				return
+			}
+			if current != body.Session {
+				writeError(w, http.StatusConflict, apierr.CodeAccountChanged, "this browser's login is not the one this sign-out was for")
+				return
+			}
+		}
 		if err := s.endSession(r.Context(), token); err != nil {
 			serverError(w, r, err)
 			return

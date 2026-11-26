@@ -35,6 +35,7 @@
 
 import { ApiError, api, concernsAccount, forAccount, SESSION_LOST } from '../api'
 import { storageFull, UploadCancelled, uploadPhoto } from '../apps/photos'
+import { signOutPending } from './pendingSignOut'
 import {
   type Attachment,
   type AttentionReason,
@@ -240,6 +241,15 @@ const retried = (i: OutboxItem): OutboxItem => ({
 const realHeartbeat = (fn: () => void, ms: number) => {
   const handle = setInterval(fn, ms)
   return () => clearInterval(handle)
+}
+
+// The queue's owner is signing out (in this tab or another, offline/pendingSignOut.ts): nothing more
+// is sent for them, and the claim is let go, until the sign-out is resolved one way or the other.
+class Departing extends Error {
+  constructor() {
+    super('the account is signing out')
+    this.name = 'Departing'
+  }
 }
 
 // An item's claim is no longer ours: another tab has it, so nothing of this send is written.
@@ -564,6 +574,9 @@ export class SyncEngine {
         this.pause('account')
         return wake
       }
+      // Its owner is signing out, here or in another tab: nothing is claimed. Looked at again soon,
+      // since a sign-out the server didn't confirm may be taken back.
+      if (this.departing()) return Math.min(wake ?? Number.POSITIVE_INFINITY, this.now() + LOCK_RETRY_MS)
       const queue = await this.store.listItems()
       const next = queue.find((i) => !done.has(i.id) && this.due(i) && !waitsForEarlier(i, queue))
       if (!next) return wake
@@ -674,6 +687,15 @@ export class SyncEngine {
     )
   }
 
+  // Whether the queue's owner has a sign-out not resolved on this browser (any tab's).
+  private departing(): boolean {
+    return signOutPending(this.store.user)
+  }
+
+  private notDeparting() {
+    if (this.departing()) throw new Departing()
+  }
+
   private async send(start: OutboxItem, exclusive: boolean): Promise<Outcome> {
     const id = start.id
     // The token of this send: what it writes is written only while the item's claim carries it.
@@ -710,6 +732,7 @@ export class SyncEngine {
       for (const a of claimed.attachments) {
         const current = (await this.store.getItem(id))?.attachments.find((x) => x.localId === a.localId)
         if (!current || (current.state === 'uploaded' && current.serverId)) continue
+        this.notDeparting()
         await this.uploadOne(claimed, current, abort.signal, attempt)
       }
       let fresh = await this.store.getItem(id)
@@ -721,12 +744,15 @@ export class SyncEngine {
       await this.renew(id, attempt, true)
       // A change the person chose to apply to a record deleted on the server: the record is
       // restored first, explicitly, and the change is sent on top of the restored revision.
+      // Asked again right before anything is sent: a sign-out may have begun during the uploads.
+      this.notDeparting()
       if (fresh.restore) {
         restoring = true
         fresh = await this.restoreFirst(fresh, abort.signal, attempt)
         restoring = false
       }
       const kind = kindOf(fresh)
+      this.notDeparting()
       const answer = await this.request<unknown>(`${fresh.base}/actions`, {
         method: 'POST',
         // The photos are the ones persisted on the item: a retry sends the same request. A change
@@ -797,6 +823,10 @@ export class SyncEngine {
       // writes nothing either: another tab has it.
       if (this.stopped && abort.signal.aborted) return await this.letGo(id, attempt)
       if (lost || e instanceof LeaseLost) return { kind: 'skipped' }
+      if (e instanceof Departing) {
+        await this.letGo(id, attempt)
+        return { kind: 'skipped', until: this.now() + LOCK_RETRY_MS }
+      }
       if (e instanceof UploadCancelled) return { kind: 'transient', error: describe(e) }
       // Awaited here, inside the try: the request is in flight (and abortable) until it is over.
       return await this.failed(id, attempt, e, abort.signal, () => lost, kindOf(claimed), restoring)

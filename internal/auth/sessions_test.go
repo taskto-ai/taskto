@@ -646,3 +646,32 @@ func TestMeNamesItsSession(t *testing.T) {
 		t.Fatalf("login reply session = %q; the one before was %q, the current one is %q", got, before, current(first))
 	}
 }
+
+// A sign-out names the login it is for; tried again after a newer login replaced it in this
+// browser, it revokes nothing.
+func TestLogoutRevokesOnlyTheLoginItNames(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.setup()
+	first := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
+	meOf := func(c *client) Me {
+		rec := c.do(http.MethodGet, "/api/me", nil)
+		expect(t, rec, http.StatusOK)
+		return decode[Me](t, rec)
+	}
+	original := meOf(first).Session
+	// The browser signs in again (another tab): its cookie is the newer login's now.
+	expect(t, first.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
+	newer := meOf(first).Session
+	if newer == original {
+		t.Fatal("signing in again kept the same session")
+	}
+	// The older tab tries its sign-out again, for the original login: refused, nothing revoked.
+	rec := first.do(http.MethodPost, "/api/logout", map[string]string{"session": original})
+	expect(t, rec, http.StatusConflict)
+	if got := meOf(first).Session; got != newer {
+		t.Fatalf("the newer login is %q after a refused sign-out, want %q", got, newer)
+	}
+	// Naming the login it carries, it signs out.
+	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": newer}), http.StatusNoContent)
+	expect(t, first.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
+}
