@@ -349,7 +349,7 @@ const root = document.getElementById('root') as HTMLElement
 root.style.height = '100dvh'
 createRoot(root).render(
   <StrictMode>
-    <main className="tt-page" style={{ height: '100%' }}>
+    <main style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
       <ConversationsPage workspace={1} open={open} streams={streams} />
     </main>
   </StrictMode>,

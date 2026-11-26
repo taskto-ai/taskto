@@ -16,6 +16,7 @@ import {
   allRules,
   compounds,
   EVERYWHERE,
+  OLD_STYLESHEETS,
   oldStylesheets,
   optsOut,
   reachesAnywhere,
@@ -40,6 +41,9 @@ import { Toolbar, ToolbarSpacer } from './Toolbar'
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
+  // One test writes the page's elements itself, which cleanup() doesn't know of: the next test,
+  // in whatever order they run, starts from an empty page.
+  document.body.innerHTML = ''
 })
 
 interface Rule {
@@ -171,10 +175,7 @@ function drawEverything() {
 }
 
 test("it reads the old stylesheets themselves: the base and every screen's file", () => {
-  expect(sheets.map((s) => s.file)).toEqual(
-    expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.legacy.css']),
-  )
-  expect(sheets.length).toBeGreaterThan(10)
+  expect(sheets.map((s) => s.file)).toEqual(OLD_STYLESHEETS.map((f) => `src/${f}`))
 })
 
 test('every element a component draws has a ui- class', () => {

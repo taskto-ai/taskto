@@ -90,17 +90,42 @@ async function chosen<R>(go: () => Promise<R>): Promise<R> {
 // while the answer was on its way (a revalidation that narrowed what the person reads) is never
 // written over with what was read for the old one.
 async function stillShown(runtime: Runtime, item: OutboxItem, seen: Seen): Promise<number | null> {
-  if (!runtime.writer.holds()) throw notWriter()
+  if (!runtime.writer.holds()) throw refused(runtime, notWriter())
   const stored = await runtime.store.getItem(item.id)
-  if (!stored || versionOf(stored) !== seen.version || stored.operation !== seen.operation) throw changedElsewhere()
+  if (!stored || versionOf(stored) !== seen.version || stored.operation !== seen.operation) {
+    throw refused(runtime, changedElsewhere())
+  }
   return runtime.store.downloadGeneration(item)
+}
+
+// A refusal made before the store was asked (this tab is not the writer, the item is not the one
+// that was shown) says what the store's own refusals say: what is on screen is stale, so every list
+// of this tab reads the queue again at once (`OfflineStore.refresh`).
+function refused(runtime: Runtime, e: ApiError): ApiError {
+  runtime.store.refresh()
+  return e
 }
 
 // The person's discard of an item that was never acknowledged, as it was shown when they were
 // asked (its version, its operation and its state): nothing else is removed.
 export async function discard(runtime: Runtime, item: OutboxItem, seen: SeenAs): Promise<void> {
-  if (!runtime.writer.holds()) throw notWriter()
-  await chosen(() => runtime.store.discardItem(item.id, seen))
+  if (!runtime.writer.holds()) throw refused(runtime, notWriter())
+  try {
+    await chosen(() => runtime.store.discardItem(item.id, seen))
+  } catch (e) {
+    // The store refused and every list of this tab reads again (`OfflineStore.keep`). When the
+    // item is being sent or the server has it (exactly the states the store never discards:
+    // `syncing` and `synced`), the person is told that, which is the truth, and not only that it
+    // changed. An item that came back to the queue after a send that got no answer
+    // (`unconfirmed`) is not that: it is waiting, and can be discarded, so it gets the plain
+    // answer, "changed in another tab", and the question again on what is there.
+    if (e instanceof ApiError && e.code === 'offline_item_changed') {
+      const now = await runtime.store.getItem(item.id).catch(() => undefined)
+      if (now && (now.state === 'syncing' || now.state === 'synced'))
+        throw new ApiError(409, 'the record is being sent', { code: 'offline_item_sending' })
+    }
+    throw e
+  }
   // A later change to the same record that waited for this one is sendable now.
   await runtime.engine.run()
 }

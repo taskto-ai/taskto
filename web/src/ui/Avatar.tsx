@@ -19,12 +19,21 @@ export interface AvatarProps {
 
 const SIZE_CLASS = { sm: 'ui-avatar-sm', md: '', lg: 'ui-avatar-lg' } as const
 
+// A text's characters as a reader sees them (grapheme clusters): "é" written as "e" and an accent
+// is one, and so is an emoji made of several (a person at a computer). Where the browser can't
+// tell, its code points.
+const segmenter =
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
+function characters(text: string): string[] {
+  return segmenter ? Array.from(segmenter.segment(text), (s) => s.segment) : Array.from(text)
+}
+
 // Up to two letters: the first of the first word and of the last, as written (a whole character,
 // so an accented letter or an emoji is not cut in half).
 export function initials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return ''
-  const first = (w: string) => Array.from(w)[0] ?? ''
+  const first = (w: string) => characters(w)[0] ?? ''
   const letters = words.length === 1 ? first(words[0]) : first(words[0]) + first(words[words.length - 1])
   return letters.toUpperCase()
 }
@@ -34,7 +43,7 @@ export function initials(name: string): string {
 // last; a name of one word, its first two. Names that would still look alike take, after their
 // first letter, the first later one that sets each apart. Whole characters, as initials().
 export function initialsAmong(names: readonly string[]): string[] {
-  const chars = (name: string) => Array.from(name.replace(/\s+/g, ''))
+  const chars = (name: string) => characters(name.replace(/\s+/g, ''))
   const base = names.map((name) => {
     const words = name.trim().split(/\s+/).filter(Boolean)
     if (words.length > 1) return initials(name)

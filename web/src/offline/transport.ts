@@ -275,8 +275,16 @@ export function offlineTransport(
     screen = { session: after.session, queue: after.items }
     return answerChange(download, after.items, action.name, kind, id)
   }
-  const recordChanged = () => new ApiError(409, 'this record changed', { code: 'offline_record_changed' })
-  const notWriter = () => new ApiError(409, 'changes are being made in another tab', { code: NOT_WRITER })
+  // A refusal that says what is on screen is stale: the lists of this tab read the queue again too
+  // (the screen itself is drawn again by the renderer, on `offline_record_changed`).
+  const recordChanged = () => {
+    runtime.store.refresh()
+    return new ApiError(409, 'this record changed', { code: 'offline_record_changed' })
+  }
+  const notWriter = () => {
+    runtime.store.refresh()
+    return new ApiError(409, 'changes are being made in another tab', { code: NOT_WRITER })
+  }
 
   return {
     photos,

@@ -48,19 +48,12 @@ function reaching(el: Element) {
   return rules().filter((r) => r.selector.split(',').some((s) => matches(el, s.trim())))
 }
 
-test('an app’s screen sits bare in its widget: the old frame is taken off, the library’s is left its room', () => {
-  document.body.innerHTML = `
-    <div class="ui-home-widget-body"><section class="tt-app"></section></div>
-    <div class="ui-home-widget-body"><section class="ui-app" data-frame="bare"></section></div>`
-  const [old, library] = [...document.querySelectorAll('section')].map((app) =>
-    reaching(app)
-      .map((r) => r.body)
-      .join(';'),
-  )
-  // The old frame is unlayered, so only !important takes it off from a layer.
-  expect(old).toMatch(/border:\s*0\s*!important/)
-  expect(old).toMatch(/padding:\s*0\s*!important/)
-  expect(old).toMatch(/background:\s*none\s*!important/)
+test('an app’s screen sits bare in its widget, with the room its focus ring and lift reach outside it', () => {
+  document.body.innerHTML =
+    '<div class="ui-home-widget-body"><section class="ui-app" data-frame="bare"></section></div>'
+  const library = reaching(document.querySelector('section') as Element)
+    .map((r) => r.body)
+    .join(';')
   // The library's bare frame has no edge or surface, and keeps the few pixels a focus ring and the
   // primary's lift reach outside it: the widget's body scrolls, and would cut them at no padding.
   expect(library).not.toMatch(/padding/)

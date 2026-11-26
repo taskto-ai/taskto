@@ -164,6 +164,35 @@ without them isn't built yet. The id is the only thing in the path, and it holds
 signature will be the authentication. The reverse proxy must forward `POST /hooks/*` (and
 nothing more has to be exposed for payments). Receiving, verifying and applying events is to come.
 
+## The fakes tests use
+
+`internal/integrations/testprovider` is what the tests of the cards that call a provider run
+against, so none of them needs a network:
+
+- **A fake Stripe**, an in-process HTTP server for the endpoints the integration uses: Checkout
+  Sessions (create, retrieve, list, expire), Payment Links, the events list and a harmless
+  balance call. It answers with the shapes of Stripe's API at the version the adapter pins
+  (`integrations.StripeAPIVersion`; a test checks that the two agree), refuses unknown
+  parameters, wrong keys, other versions and bodies that aren't form-encoded, and keeps
+  idempotency keys as Stripe documents for API v1: the same key and parameters get the saved
+  answer (`Idempotent-Replayed: true`), the same key with other parameters is an
+  `idempotency_error`, and keys are forgotten after 24 hours. A test makes it fail on demand (a
+  server error, rate limiting with `Retry-After`, a refusal, a revoked key, a timeout, a dropped
+  connection), before the work is done or after it, the case where a retry must find the object
+  that was already made. A test plays the payer (pay, delayed payment, declined attempt,
+  expiry, refund), and the fake makes the events Stripe sends for each, several for one payment.
+- **A sender of signed webhook events**, to a URL or straight to an `http.Handler`: the
+  `Stripe-Signature` header in Stripe's format (`t=…,v1=…`, HMAC-SHA256 over `t.body`), signed
+  with the right secret, a wrong one, an old or future timestamp, two secrets (a rotation), the
+  v0 test scheme only, no signature or a malformed one, or a body changed after signing; and
+  duplicate, replayed (the same bytes and the same signature), delayed, reversed and shuffled
+  deliveries.
+- The clock is a constructor option of both (`ManualClock` moves time by hand), and the fake's
+  host reaches the adapter only through the request builder's test option
+  (`integrations.WithTestEndpoint`), never through configuration. The keys and secrets in it are
+  obvious fakes. Nothing in the server imports the package, and a test in `cmd/taskto` fails if
+  its binary links it. The fake Square comes with the Square adapter.
+
 ## Trying an integration by hand
 
 CI never calls a real provider, and nothing here does yet: **check** only looks at what the

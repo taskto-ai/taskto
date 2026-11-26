@@ -31,7 +31,9 @@
       border-color var(--duration-fast) var(--ease-out);
   }
 
-  .ui-check:hover .ui-check-box:not(:disabled) {
+  /* The hover weighs only what the box's own rules weigh (:where), so an invalid box keeps its
+     danger edge under the pointer. */
+  :where(.ui-check:hover) .ui-check-box:not(:disabled) {
     border-color: var(--color-text);
   }
 
