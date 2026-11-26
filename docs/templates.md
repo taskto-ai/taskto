@@ -19,6 +19,12 @@ catalog, so a template that doesn't validate fails the build. Their screens' tex
 any app's; the names and descriptions in the picker are translated. The API is in
 [docs/api.md](api.md#templates-and-copies).
 
+Each template draws a few **icons**: one beside the list's heading, a plus in the button that
+starts a new record and an arrow in each Back button. Like every app's, they are SVG paths in the
+definition on a 24 by 24 view box ([docs/api.md](api.md#the-definition), Icons), drawn in the text's colour, and
+decoration beside a label, so they need no name of their own. Version 2 of each template added
+them; an app installed from version 1 has none, and keeps working as it was.
+
 ## The three templates
 
 ### Expense tracker (for your private space)

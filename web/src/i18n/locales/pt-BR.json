@@ -1072,6 +1072,8 @@
     "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
     "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
+    "app_icon_path": "O ícone “{component}” não é um caminho SVG: ele deve começar com M ou m e só deve ter comandos de caminho, números, vírgulas e espaços, com no máximo {max} caracteres.",
+    "app_icon_label": "O ícone “{component}” está em um botão ou gatilho que só mostra ícones, então precisa de um nome: dê a ele um rótulo de acessibilidade.",
     "app_not_published": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
     "app_release_not_found": "Essa versão do app não existe.",
     "app_release_outdated": "Esta tela é de uma versão antiga do app (versão {release}; a no ar é a {live}). Recarregue o app para continuar.",
