@@ -308,7 +308,6 @@ jobs:
         # The rules are .gitleaks.toml's. The source, .git included, is piped in (and so
         # owned by the container's user, which git requires). The job
         # fails unless commits were actually scanned.
-        run: |
         #
         # What fails the job is the whole history of the commit under test (the pull request
         # merged onto main, the queue's entry, or main): everything this run would merge.
