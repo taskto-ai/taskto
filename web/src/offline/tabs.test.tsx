@@ -435,7 +435,8 @@ test('after a send whose answer was lost, the question no longer says the record
 
   // This tab's confirmation, made on the stale question, is refused; the list reads again.
   fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
-  expect(screen.getByText(NEVER_SENT)).toBeTruthy()
+  expect(screen.queryByText(NEVER_SENT)).toBeNull()
+  expect(screen.getByText(/stops any more attempts/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/changed in another tab/)
   expect(await a.store.listItems()).toHaveLength(1)
@@ -450,15 +451,29 @@ test('after a send whose answer was lost, the question no longer says the record
   expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
 })
 
-test('a record that was only ever queued is still said to be never sent', async () => {
+test('a record that was only ever queued is told what discarding does, without a claim about the server', async () => {
   const { a } = await twoTabs({ announce: false })
   await a.store.enqueue(itemOf({ state: 'queued' }), [])
   render(<Harness runtime={a.runtime} />)
   await screen.findByText(QUEUED)
   fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
   await screen.findByRole('button', { name: 'Yes, discard' })
-  expect(screen.getByText(NEVER_SENT)).toBeTruthy()
+  expect(screen.queryByText(NEVER_SENT)).toBeNull()
+  expect(screen.getByText(/stops any more attempts/)).toBeTruthy()
   expect(screen.queryByText(MAY_BE_THERE)).toBeNull()
+})
+
+test('an entry from before sends were counted (one attempt, no counter) says the server may have the record', async () => {
+  const { a } = await twoTabs({ announce: false })
+  const old = itemOf({ state: 'queued', attempts: 1 })
+  delete (old as { sends?: number }).sends
+  await a.store.enqueue(old, [])
+  render(<Harness runtime={a.runtime} />)
+  await screen.findByText(QUEUED)
+  fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
+  await screen.findByRole('button', { name: 'Yes, discard' })
+  expect(screen.queryByText(NEVER_SENT)).toBeNull()
+  expect(screen.getByText(MAY_BE_THERE)).toBeTruthy()
 })
 
 test('Keep as draft on a row another tab has claimed is refused, says so, and sends nothing of its own', async () => {

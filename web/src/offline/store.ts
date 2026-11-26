@@ -332,11 +332,11 @@ const isSeenAs = (item: OutboxItem, seen: SeenAs) =>
   (item.sends ?? 0) === (seen.sends ?? 0) &&
   leaseOf(item) === (seen.lease ?? '')
 
-// Whether a send was ever started for the item (a claim, or one that was made and gave no answer):
-// the server may already have the record, so what is said of removing it from this device is not
-// "never sent".
-export const mayHaveBeenSent = (item: Pick<OutboxItem, 'sends' | 'lease' | 'unconfirmed'>): boolean =>
-  (item.sends ?? 0) > 0 || item.lease !== undefined || item.unconfirmed === true
+// Whether there is any sign of an earlier send (a claim, one that gave no answer, or, on entries
+// from before `sends` was counted, a recorded attempt): the server may already have the record, so
+// what is said of removing it from this device never promises it was not sent.
+export const mayHaveBeenSent = (item: Pick<OutboxItem, 'sends' | 'lease' | 'unconfirmed' | 'attempts'>): boolean =>
+  (item.sends ?? 0) > 0 || (item.attempts ?? 0) > 0 || item.lease !== undefined || item.unconfirmed === true
 
 // A record's queue as a screen was drawn from it: what an enqueue checks again in its transaction.
 export const queueSignature = (items: readonly OutboxItem[]): string =>

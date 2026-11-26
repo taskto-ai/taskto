@@ -231,11 +231,12 @@ The rules:
   the one opened from the Review screen: the Review screen goes with its row, and the notice is the
   list's.
 - **What the question says about a send that may have happened.** When a send was ever started for
-  the item (`sends` above zero, a claim on it, or `unconfirmed`), the record may already be on the
+  the item (`sends` above zero, a claim on it, `unconfirmed`, or, on old entries with no `sends`, `attempts` above zero), the record may already be on the
   server: a send's request can reach it while its answer is lost (a tab's connection drops, the
-  tab is closed), and the item goes back to the queue. Such a question never says the record is
-  "never sent": it says that the discard removes the copy on this device and stops any more
-  attempts, and that the server may already have the record. The sequence that makes it matter: one
+  tab is closed), and the item goes back to the queue. No question ever says the record is
+  "never sent", since the row it was drawn from can be behind the store (a first discard in a tab whose
+  list was not yet read again): it says that the discard removes the copy on this device and stops
+  any more attempts, and, with any sign of an earlier send, that the server may already have the record. The sequence that makes it matter: one
   tab's send reaches the server and its answer is lost; another tab's confirmation, made before
   that, is refused and its list read again; the question it is asked next is about the item as it is
   then, and says so.
