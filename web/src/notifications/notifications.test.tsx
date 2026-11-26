@@ -1430,3 +1430,27 @@ test('without Web Locks, two tabs ending the subscription at once never rewrite 
     await otherLeaving
   }
 })
+
+test('without Web Locks, a start that registers the device again stops when another tab turned push off meanwhile', async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  const calls = fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
+  // The browser is slow to say which subscription it has.
+  const registration = await navigator.serviceWorker.getRegistration()
+  let answer: () => void = () => {}
+  vi.mocked(registration?.pushManager.getSubscription as () => Promise<unknown>).mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        answer = () => done(sub)
+      }),
+  )
+  const synced = syncPush(1)
+  await vi.waitFor(() => expect(answer).not.toBe(undefined))
+  await new Promise((r) => setTimeout(r, 0))
+  // Meanwhile another tab is turning push off: it marked the flag before asking the server.
+  localStorage.setItem('taskto.push', 'off:1')
+  answer()
+  expect(await synced).toBe(false)
+  expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+})

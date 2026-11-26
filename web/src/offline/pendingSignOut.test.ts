@@ -5,12 +5,14 @@
 
 import { beforeEach, expect, test } from 'vitest'
 import {
+  backFromSignOut,
   confirmSignOut,
   pendingSignOutOf,
   pendingSignOuts,
   recordSignOut,
   settleSignOut,
   signOutPending,
+  unansweredSignOut,
 } from './pendingSignOut'
 
 const KEY = 'taskto:sign-out-pending'
@@ -26,7 +28,7 @@ test('a sign-out is recorded with its login and phase, confirmed, and settled', 
     keep: false,
     approved: [['r1', { version: 2, operation: 'op-1' }]],
   })
-  confirmSignOut(1)
+  confirmSignOut(1, 's1')
   expect(pendingSignOutOf(1)?.phase).toBe('confirmed')
   settleSignOut(1)
   expect(signOutPending(1)).toBe(false)
@@ -57,4 +59,16 @@ test('storage that is not a list is no record at all', () => {
   expect(pendingSignOuts()).toEqual([])
   localStorage.setItem(KEY, JSON.stringify({ user: 1 }))
   expect(pendingSignOuts()).toEqual([])
+})
+
+test("a confirmation of one login's sign-out leaves the record of a newer login of the account as it is", () => {
+  // The person went back from a sign-out of their newer login (its logout got no answer).
+  recordSignOut(1, 's2', false, new Map())
+  unansweredSignOut(1)
+  backFromSignOut(1)
+  // An older login's logout, sent long before, is confirmed now.
+  confirmSignOut(1, 's1')
+  expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'backed' })
+  confirmSignOut(1, 's2')
+  expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'confirmed' })
 })

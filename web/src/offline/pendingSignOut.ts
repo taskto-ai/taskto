@@ -120,9 +120,11 @@ export function backedSignOut(user: number, session: string | undefined): Pendin
   return read().find((p) => p.user === user && p.phase === 'backed' && !!session && p.session === session)
 }
 
-// The server confirmed it: the login is over, what is left is the device's cleanup.
-export function confirmSignOut(user: number): void {
-  write(read().map((p) => (p.user === user ? { ...p, phase: 'confirmed' } : p)))
+// The server confirmed that `user`'s login `session` is over: what is left of its sign-out is the
+// device's cleanup. A record of another login of the account (a newer one's, which the person went
+// back from) stays as it is.
+export function confirmSignOut(user: number, session: string): void {
+  write(read().map((p) => (p.user === user && p.session === session ? { ...p, phase: 'confirmed' } : p)))
 }
 
 // The sign-out is over: finished and verified, or cancelled by the same login.

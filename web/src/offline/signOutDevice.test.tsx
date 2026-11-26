@@ -10,7 +10,7 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import { api } from '../api'
-import { finishUnfinishedSignOuts } from '../signOut'
+import { cleanUpAfterSignOut, finishUnfinishedSignOuts } from '../signOut'
 import { fakeFetch } from '../test/fakes'
 import { activate, deactivate, lastUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
@@ -116,6 +116,8 @@ test('a logout that got no answer and reaches the server after Back finishes the
   await signOutDiscarding()
   fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
   await screen.findByRole('navigation', { name: 'Sections' })
+  // The shell's effects (the listener for a session that ends among them) are in place.
+  await act(async () => {})
   // The stalled logout reaches the server now: the login is over, and the next request says so.
   session = 'over'
   await act(async () => {
@@ -139,6 +141,8 @@ test('a logout the server refused, then Back, is no sign-out: a session that end
   const runtime = await signOutDiscarding()
   fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
   await screen.findByRole('navigation', { name: 'Sections' })
+  // The shell's effects (the listener for a session that ends among them) are in place.
+  await act(async () => {})
   expect(pending()).toEqual([])
   session = 'over'
   await act(async () => {
@@ -251,4 +255,20 @@ test('“Discard and sign out” for a database the person was told can’t be r
   await screen.findByRole('heading', { name: 'Log in' })
   await waitFor(async () => expect(await databases()).not.toContain('taskto-offline-7'))
   expect(pending()).toEqual([])
+})
+
+test('a newer login of the account that starts while the cleanup waits keeps its drafts and data', async () => {
+  await activate(7, 'Pat')
+  runtimeState().runtime?.engine.pause('manual')
+  await finishUnfinishedSignOuts(me as never)
+  localStorage.setItem('taskto:drafts-of', '7')
+  const cleaning = cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map() })
+  // Before the cleanup's first wait is over, another tab starts with a newer login of the same
+  // account, and a draft is begun there.
+  await finishUnfinishedSignOuts({ ...me, session: 's2' } as never)
+  localStorage.setItem('taskto:builder-start:7:1', 'a draft of the newer login')
+  expect(await cleaning).toBe(true)
+  expect(localStorage.getItem('taskto:builder-start:7:1')).toBe('a draft of the newer login')
+  expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
+  expect(await databases()).toContain('taskto-offline-7')
 })

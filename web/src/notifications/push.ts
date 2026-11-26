@@ -394,6 +394,9 @@ async function syncNow(userId: number): Promise<boolean> {
     write(null)
     return false
   }
+  // Asked again after the browser answered: another tab (where nothing orders the changes) may have
+  // begun turning push off meanwhile. Then it is not registered again here.
+  if (read() !== String(userId) || unsubscribeUnresolved()) return false
   await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub), headers: forAccount(userId) }).catch(
     () => {},
   )

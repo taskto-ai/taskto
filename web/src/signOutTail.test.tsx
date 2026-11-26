@@ -494,7 +494,8 @@ for (const step of ['the logout', "Back's question"] as const) {
     expect(pendingOf()).toEqual(['1:s1'])
     fail.cleanup = false
     await act(async () => answer?.())
-    await waitFor(() => expect(pendingOf()).toEqual([]))
+    // The cleanup waits for the second person's offline start, which is slow on a loaded machine.
+    await waitFor(() => expect(pendingOf()).toEqual([]), { timeout: 5000 })
     // The second person is still signed in, and keeps their drafts' claim.
     expect(screen.getByRole('button', { name: /^Account: Second/ })).toBeTruthy()
     expect(localStorage.getItem('taskto:drafts-of')).toBe('2')

@@ -133,7 +133,7 @@ export function App() {
   // cleanup, whatever this page did meanwhile.
   const over = useCallback(async (tail: Tail, mine: () => boolean) => {
     const { user, session, next } = tail
-    confirmSignOut(user)
+    confirmSignOut(user, session)
     const cleared = await cleanUpAfterSignOut(user, session, tail)
     if (!mine()) return
     endSession()

@@ -87,14 +87,20 @@ export async function cleanUpAfterSignOut(
   { keep, approved, discardUnreadable = false }: Decision,
 ): Promise<boolean> {
   // A newer login of the account started here since: nothing on the device is this sign-out's.
-  if (newerLogin(user, session)) {
+  // Asked again after every wait, right before what it would remove: the drafts, removed at once,
+  // and the database, whose deletion keeps anything unsent it wasn't agreed to lose, so what the
+  // newer login saves after that is kept, or refused and said, never lost unseen.
+  const superseded = () => {
+    if (!newerLogin(user, session)) return false
     if (pendingSignOutOf(user)?.session === session) settleSignOut(user)
     return true
   }
+  if (superseded()) return true
   try {
     await bounded(
       (async () => {
         await leavePush(user)
+        if (superseded()) return
         forgetDraftsOf(user)
         const left = await deactivate(
           keep ? { purge: false, keep: true, user } : { purge: true, user, approved, discardUnreadable },
@@ -105,6 +111,7 @@ export async function cleanUpAfterSignOut(
         if (left === 'unreadable' || left.length > 0) await deactivate({ purge: false, keep: true, user })
       })(),
     )
+    if (superseded()) return true
     if (!(await bounded(verifiedClear(user, approved)))) return false
     settleSignOut(user)
     return true
