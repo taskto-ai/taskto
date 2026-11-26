@@ -99,51 +99,16 @@ const SLICE_MS = 20
 // in one transaction: the tasks' and conversations' rows, by which the purge finds every
 // conversation's records, and the lifecycle documents, which say the conversations are retired (so
 // the purge goes on, and they stay closed to new input, until they are gone). Those are a few rows
-// per conversation.
+// per conversation. That last transaction finds the conversations again and takes whatever of
+// theirs is left, so nothing written during the pauses (a task's last entry, a conversation it
+// started) outlives a purge that says it is done.
 //
 // afterSlice, for tests, runs after each short transaction commits.
 export function purgeRecords(path: string, root: number, timeoutMs: number, afterSlice?: () => void): void {
   const db = new DatabaseSync(path, { timeout: timeoutMs })
   try {
     db.exec('PRAGMA secure_delete = ON')
-    const ids = new Set<number>([root])
-    const taskIds = new Set<number>()
-    const list = (set: Set<number>) => [...set].join(',') || 'NULL'
-    for (let grew = true; grew; ) {
-      grew = false
-      const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
-        id: number
-      }[]
-      for (const t of tasks) taskIds.add(Number(t.id))
-      const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
-        id: number
-      }[]
-      for (const c of subs) {
-        if (!ids.has(Number(c.id))) {
-          ids.add(Number(c.id))
-          grew = true
-        }
-      }
-    }
-    const owned = `((scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
-      OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)})))`
-    const docs = `SELECT id FROM documents WHERE ${owned} AND kind <> '${LIFECYCLE_KIND}'`
-    const lifecycle = `SELECT id FROM documents WHERE ${owned} AND kind = '${LIFECYCLE_KIND}'`
-    // Each step deletes the rows of a table that match, by rowid (a record's id), with their
-    // record_ids rows when they are records (a document's revision isn't).
-    type Step = { table: string; where: string; records: boolean }
-    const steps: Step[] = [
-      { table: 'document_revisions', where: `document_id IN (${docs})`, records: false },
-      { table: 'documents', where: `id IN (${docs})`, records: true },
-      { table: 'submissions', where: `conversation_id IN (${list(ids)})`, records: true },
-      { table: 'entries', where: `conversation_id IN (${list(ids)})`, records: true },
-    ]
-    const last: Step[] = [
-      { table: 'document_revisions', where: `document_id IN (${lifecycle})`, records: false },
-      { table: 'documents', where: `id IN (${lifecycle})`, records: true },
-      { table: 'tasks', where: `conversation_id IN (${list(ids)})`, records: true },
-      { table: 'conversations', where: `id IN (${list(ids)})`, records: true },
-    ]
+    const { steps } = purgeSteps(db, root)
     // A chunk of a step's rows, deleted in the transaction that is open: how many there were.
     const deleteChunk = (step: Step): number => {
       const chunk = (
@@ -176,7 +141,9 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     }
     db.exec('BEGIN IMMEDIATE')
     try {
-      for (const step of last) while (deleteChunk(step) === CHUNK);
+      // Found again under the write lock: what was written during the pauses goes too.
+      const now = purgeSteps(db, root)
+      for (const step of [...now.steps, ...now.last]) while (deleteChunk(step) === CHUNK);
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
@@ -187,6 +154,53 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, afte
     truncateWalWithin(db, timeoutMs)
   } finally {
     db.close()
+  }
+}
+
+/** One step of a purge: the rows of a table that match, by rowid (a record's id), with their
+ * record_ids rows when they are records (a document's revision isn't). */
+type Step = { table: string; where: string; records: boolean }
+
+// The conversations of root's purge, as the database has them now (root, the conversations its tasks
+// started, theirs, and so on), and the steps that delete their rows: steps, what was said; last, what
+// the purge finds them and their retirement by.
+function purgeSteps(db: DatabaseSync, root: number): { steps: Step[]; last: Step[] } {
+  const ids = new Set<number>([root])
+  const taskIds = new Set<number>()
+  const list = (set: Set<number>) => [...set].join(',') || 'NULL'
+  for (let grew = true; grew; ) {
+    grew = false
+    const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
+      id: number
+    }[]
+    for (const t of tasks) taskIds.add(Number(t.id))
+    const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
+      id: number
+    }[]
+    for (const c of subs) {
+      if (!ids.has(Number(c.id))) {
+        ids.add(Number(c.id))
+        grew = true
+      }
+    }
+  }
+  const owned = `((scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
+    OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)})))`
+  const docs = `SELECT id FROM documents WHERE ${owned} AND kind <> '${LIFECYCLE_KIND}'`
+  const lifecycle = `SELECT id FROM documents WHERE ${owned} AND kind = '${LIFECYCLE_KIND}'`
+  return {
+    steps: [
+      { table: 'document_revisions', where: `document_id IN (${docs})`, records: false },
+      { table: 'documents', where: `id IN (${docs})`, records: true },
+      { table: 'submissions', where: `conversation_id IN (${list(ids)})`, records: true },
+      { table: 'entries', where: `conversation_id IN (${list(ids)})`, records: true },
+    ],
+    last: [
+      { table: 'document_revisions', where: `document_id IN (${lifecycle})`, records: false },
+      { table: 'documents', where: `id IN (${lifecycle})`, records: true },
+      { table: 'tasks', where: `conversation_id IN (${list(ids)})`, records: true },
+      { table: 'conversations', where: `id IN (${list(ids)})`, records: true },
+    ],
   }
 }
 

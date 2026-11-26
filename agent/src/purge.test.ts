@@ -256,6 +256,37 @@ describe('runPurge', () => {
     }
   }, 30_000)
 
+  // What a task writes while the purge pauses (an entry in the conversation it started, a new task
+  // with a conversation of its own) goes with the rest: nothing of the tree outlives the purge.
+  it('takes what was written during its pauses', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    let wrote = false
+    try {
+      purgeRecords(path, 1, 1000, () => {
+        if (wrote) return
+        wrote = true
+        writer.exec(`
+          INSERT INTO entries (id, conversation_id, text) VALUES (50, 3, '${WORD}');
+          INSERT INTO tasks (id, conversation_id) VALUES (21, 3);
+          INSERT INTO conversations (id, owner_task_id) VALUES (5, 21);
+          INSERT INTO entries (id, conversation_id, text) VALUES (51, 5, '${WORD}');
+          INSERT INTO submissions (id, conversation_id) VALUES (52, 5);
+          INSERT INTO record_ids (id) VALUES (50), (21), (5), (51), (52);
+        `)
+      })
+      expect(wrote).toBe(true)
+      expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
+      expect(writer.prepare('SELECT id FROM entries').all()).toEqual([{ id: 11 }])
+      expect(writer.prepare('SELECT id FROM tasks').all()).toEqual([])
+      expect(writer.prepare('SELECT id FROM submissions').all()).toEqual([])
+      expect(writer.prepare('SELECT id FROM record_ids ORDER BY id').all()).toEqual([{ id: 2 }, { id: 11 }, { id: 42 }])
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  })
+
   it('rejects with the failure of a purge that is not about the log', async () => {
     await expect(runPurge({ path: join(dir, 'missing', 'agent.db'), root: 1, timeoutMs: 100 })).rejects.toThrow()
   })
