@@ -286,10 +286,11 @@
           "createCard": "Creates a card on {board}",
           "updateCard": "Moves the card this record made to {column}",
           "createDocument": "Creates a document at {path} in {space}",
+          "createPaymentLink": "Asks the “{slot}” integration for a link to pay {amount} in {currency}, and puts the link in {url} and its id in {id}",
+          "createPaymentLinkField": "Asks the “{slot}” integration for a link to pay {amount} in the currency of {currencyField}, and puts the link in {url} and its id in {id}",
           "openBoard": "Offers a link to {board}",
           "openCard": "Offers a link to the card this record made",
-          "openDocument": "Offers a link to the document {path} in {space}",
-          "createPaymentLink": "Asks the “{slot}” outside service for a link to pay the amount in “{amount}”"
+          "openDocument": "Offers a link to the document {path} in {space}"
         },
         "target": {
           "board": "{board} ({space})",
@@ -1182,6 +1183,22 @@
     "app_effect_app_offline": "The app is offline or its space is archived.",
     "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
     "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
+    "app_effect_space_changed": "The app was moved to another space after this payment was started, so it was never approved there. Start the payment again.",
+    "integration_unavailable": "This app’s payments integration can’t be used right now: an admin may have revoked it, switched it off or taken this space away. Ask an admin, then retry.",
+    "integration_amount_refused": "The amount can’t be asked for: it must be more than zero and have no more decimals than the currency. Fix the amount on the record, then run the action again.",
+    "integration_amount_above_max": "The amount is above the {max} {currency} that an admin allows for one payment.",
+    "integration_currency_refused": "{currency} isn’t a currency this payments integration allows.",
+    "integration_credentials_refused": "The payment provider didn’t accept this integration’s key. An admin needs to enter a valid one, then you can retry.",
+    "integration_provider_refused": "The payment provider refused to make the payment link. Check the amount and currency, then retry.",
+    "integration_provider_unreachable": "The payment provider didn’t answer. Try again in a few minutes.",
+    "integration_account_changed": "This payment link was started under another account of the payment provider, since the integration’s key was replaced. An admin needs to check that account first: if the earlier link was paid, nothing should be recreated; if not, it must be made unable to take payment before the action is run again.",
+    "integration_changed": "This payment link was made under another payments integration than the one this app uses now. An admin needs to check whether that link was paid, and make it unable to take payment if not, before the action is run again.",
+    "integration_link_already_paid": "An earlier try of this payment link was paid, or can no longer take payment (it was paid, expired by a person or reached its limit), so no new link was made. An admin needs to reconcile that payment in the payment provider’s account before the action is run again.",
+    "integration_outcome_unknown": "The payment provider never said whether it made this payment link, so none was made: a second one could be paid twice. An admin needs to check the payment provider’s account for a link of this payment. If one is there, retry this payment; if none is, the admin confirms that no link exists and a new one is made.",
+    "integration_link_lookup_pending": "The payment provider didn’t say whether it made this payment link. The server keeps looking for it, and makes no other, for a few hours.",
+    "integration_condition_changed": "The record was changed and no longer meets this action’s condition, so no payment link was made. Nobody needs to approve anything: change the record back, or run the action when it qualifies.",
+    "integration_nothing_to_confirm": "This payment isn’t waiting for a decision about an unknown outcome.",
+    "integration_link_not_confirmable": "A link of this payment was already seen at the payment provider, or an earlier try of it was already accounted for, so confirming that none exists can’t allow a new one: a second link could be paid twice. Check the payment provider’s account and reconcile this payment there.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
     "app_icon_label": "The icon “{component}” is in a button or a trigger that shows only icons, so it needs a name: give it an accessibility label.",
@@ -1250,6 +1267,16 @@
     "deletion_pending": "This account is waiting to be deleted: a server operator can cancel that.",
     "deletion_not_pending": "This account isn’t waiting to be deleted.",
     "deletion_purging": "This account is being deleted now: it can’t be cancelled any more."
+  },
+  "payment": {
+    "done": {
+      "title": "Thank you",
+      "body": "Your payment was sent to the payment provider. You can close this page: the provider will confirm it to you."
+    },
+    "cancelled": {
+      "title": "Payment cancelled",
+      "body": "Nothing was charged. You can close this page, or open the payment link again to pay."
+    }
   },
   "language": {
     "label": "Language",
@@ -2097,6 +2124,7 @@
         "integration_enabled": "Integration switched on",
         "integration_spaces_changed": "Integration's spaces changed",
         "integration_spaces_kept": "Integration's spaces kept after an approval",
+        "integration_new_link_allowed": "New payment link allowed after an unknown outcome",
         "app_integration_requested": "App's use of an integration requested",
         "app_integration_approved": "App's use of an integration approved",
         "app_integration_rejected": "App's use of an integration turned down",
@@ -2177,6 +2205,7 @@
         "webhook_secret_changed": "Webhook secret changed",
         "app_id": "App number",
         "integration_id": "Integration number",
+        "effect_id": "Payment number",
         "space_allowed": "Space allowed too"
       },
       "values": {

@@ -275,7 +275,7 @@ export type AppsEffectDetail = {
   column?: string
   path?: string
   route?: string
-  amount?: number
+  amount?: string
   currency?: string
 }
 

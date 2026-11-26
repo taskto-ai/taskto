@@ -17,6 +17,8 @@
 //     when a test calls PayLink.
 //   - GET /v1/events and GET /v1/events/{id}: the events of the last 30 days, newest first.
 //   - GET /v1/balance: a harmless authenticated call, for a connection check.
+//   - GET /v1/account: the account the key belongs to (its id), which a test moves to another
+//     account with SetAccount, the way a key of another account would answer.
 //
 // It honours idempotency keys as Stripe documents for API v1 (the same key and parameters get
 // the saved answer with Idempotent-Replayed: true, the same key with other parameters is an
@@ -61,6 +63,8 @@ const DefaultAPIVersion = "2026-11-18.endive"
 var (
 	// TestAPIKey is the secret key the fake accepts unless WithAPIKey says another.
 	TestAPIKey = "sk_" + "test_" + strings.Repeat("Fake", 6)
+	// TestAccountID is the id of the account the fake answers as, unless WithAccount says another.
+	TestAccountID = "acct_" + strings.Repeat("Fake", 4)
 	// TestWebhookSecret is the signing secret a Sender uses unless told another.
 	TestWebhookSecret = "whsec_" + strings.Repeat("Fake", 6)
 	// OtherWebhookSecret is a second signing secret, for wrong-secret and rotation tests.
@@ -78,11 +82,13 @@ type Stripe struct {
 	anyVersion bool
 	live       bool
 	payer      CustomerDetails
+	account    string
 
 	mu           sync.Mutex
 	sessions     map[string]*session
 	sessionOrder []string
 	links        map[string]*paymentLink
+	linkOrder    []string
 	events       []*Event
 	idem         map[string]*idemEntry
 	faults       []*Fault
@@ -106,6 +112,26 @@ func WithAPIKey(key string) Option {
 // anything but DefaultAPIVersion, so a call that forgets to pin the version fails a test.
 func WithAnyAPIVersion() Option { return func(s *Stripe) { s.anyVersion = true } }
 
+// WithAccount sets the id of the account the key belongs to.
+func WithAccount(id string) Option { return func(s *Stripe) { s.account = id } }
+
+// SetAccount moves the key to another account from now on, as replacing an integration's key with
+// one of another account does: what the fake holds stays, and is what the first account made.
+func (s *Stripe) SetAccount(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.account = id
+}
+
+// SetAPIKey replaces the key the fake accepts from now on, as an admin replacing an integration's key
+// with the same account's key of the other mode does: the account's id stays, and the objects it
+// made, and a key with "_live_" in it makes the fake's new objects live-mode ones.
+func (s *Stripe) SetAPIKey(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apiKey, s.live = key, strings.Contains(key, "_live_")
+}
+
 // NewStripe starts a fake Stripe, stopped when the test ends.
 func NewStripe(t testing.TB, opts ...Option) *Stripe {
 	t.Helper()
@@ -118,6 +144,7 @@ func NewStripe(t testing.TB, opts ...Option) *Stripe {
 		links:    map[string]*paymentLink{},
 		idem:     map[string]*idemEntry{},
 		payer:    DefaultPayer(),
+		account:  TestAccountID,
 	}
 	for _, o := range opts {
 		o(s)
@@ -293,23 +320,27 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	}
 	rec.Form = form
 
+	key := r.Header.Get("Idempotency-Key")
+	fp := r.Method + " " + r.URL.Path + "?" + form.Encode()
+	if e, ok := s.idem[key]; ok && s.clock.Now().Sub(e.at) >= idemTTL {
+		delete(s.idem, key) // forgotten: the request runs as a new one
+	}
 	fault := s.peekFault(r)
 	if fault != nil && !fault.After {
 		s.useFault(fault)
 		rec.Faulted = true
-		return fault.reply()
+		fr := fault.reply()
+		if _, saved := s.idem[key]; fault.Kept && r.Method == http.MethodPost && key != "" && !saved && !fr.drop && !fr.hang {
+			s.idem[key] = &idemEntry{fingerprint: fp, reply: fr.clone(), at: s.clock.Now()}
+		}
+		return fr
 	}
 
-	key := r.Header.Get("Idempotency-Key")
 	var rp reply
 	switch {
 	case r.Method == http.MethodPost && key != "":
 		if len(key) > 255 {
 			return invalid("", "Keys for idempotent requests can only be up to 255 characters.", "")
-		}
-		fp := r.Method + " " + r.URL.Path + "?" + form.Encode()
-		if e, ok := s.idem[key]; ok && s.clock.Now().Sub(e.at) >= idemTTL {
-			delete(s.idem, key) // forgotten: the request runs as a new one
 		}
 		if e, ok := s.idem[key]; ok {
 			if e.fingerprint != fp {
@@ -398,13 +429,16 @@ func route(r *http.Request) (handlerFn, string, bool) {
 		fn, ok := both((*Stripe).listSessions, (*Stripe).createSession)
 		return fn, "", ok
 	case "/v1/payment_links":
-		fn, ok := both(nil, (*Stripe).createLink)
+		fn, ok := both((*Stripe).listLinks, (*Stripe).createLink)
 		return fn, "", ok
 	case "/v1/events":
 		fn, ok := both((*Stripe).listEvents, nil)
 		return fn, "", ok
 	case "/v1/balance":
 		fn, ok := both((*Stripe).balance, nil)
+		return fn, "", ok
+	case "/v1/account":
+		fn, ok := both((*Stripe).retrieveAccount, nil)
 		return fn, "", ok
 	}
 	if rest, ok := strings.CutPrefix(p, "/v1/checkout/sessions/"); ok && rest != "" {
@@ -414,6 +448,11 @@ func route(r *http.Request) (handlerFn, string, bool) {
 			return (*Stripe).retrieveSession, id, true
 		case tail == "expire" && m == http.MethodPost:
 			return (*Stripe).expireSession, id, true
+		}
+	}
+	if rest, ok := strings.CutPrefix(p, "/v1/payment_links/"); ok && m == http.MethodGet {
+		if id, tail, _ := strings.Cut(rest, "/"); id != "" && tail == "line_items" {
+			return (*Stripe).linkLineItems, id, true
 		}
 	}
 	if id, ok := strings.CutPrefix(p, "/v1/payment_links/"); ok && id != "" && !strings.Contains(id, "/") {

@@ -215,15 +215,23 @@ func (s *Stripe) expireDueAt(now time.Time) {
 	}
 }
 
-var sessionListParams = compileAll([]string{`limit`, `starting_after`, `ending_before`, `payment_link`, `status`, `payment_intent`})
+var sessionListParams = compileAll([]string{`limit`, `starting_after`, `ending_before`, `payment_link`, `status`, `payment_intent`,
+	`created`, `created\[(gt|gte|lt|lte)\]`})
 
 func (s *Stripe) listSessions(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, sessionListParams); rp != nil {
 		return *rp
 	}
+	created, rp := createdFilter(form)
+	if rp != nil {
+		return *rp
+	}
 	var ids []string
 	for i := len(s.sessionOrder) - 1; i >= 0; i-- { // newest first
 		ss := s.sessions[s.sessionOrder[i]]
+		if !created(ss.Created) {
+			continue
+		}
 		if v := form.Get("payment_link"); v != "" && (ss.PaymentLink == nil || *ss.PaymentLink != v) {
 			continue
 		}
@@ -244,6 +252,42 @@ func (s *Stripe) listSessions(_ *http.Request, form url.Values, _ string) reply 
 		data = append(data, s.sessions[id].snapshot())
 	}
 	return jsonReply(http.StatusOK, listOf("/v1/checkout/sessions", more, data))
+}
+
+// createdFilter is the `created` filter of a list: an exact second, or a range with gt, gte, lt
+// and lte (whole seconds since the epoch).
+func createdFilter(form url.Values) (func(int64) bool, *reply) {
+	type bound struct {
+		param string
+		ok    func(created, bound int64) bool
+	}
+	var checks []func(int64) bool
+	bounds := []bound{
+		{"created[gt]", func(c, b int64) bool { return c > b }},
+		{"created[gte]", func(c, b int64) bool { return c >= b }},
+		{"created[lt]", func(c, b int64) bool { return c < b }},
+		{"created[lte]", func(c, b int64) bool { return c <= b }},
+		{"created", func(c, b int64) bool { return c == b }},
+	}
+	for _, b := range bounds {
+		v := form.Get(b.param)
+		if v == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, badInteger(b.param, v)
+		}
+		checks = append(checks, func(c int64) bool { return b.ok(c, n) })
+	}
+	return func(c int64) bool {
+		for _, check := range checks {
+			if !check(c) {
+				return false
+			}
+		}
+		return true
+	}, nil
 }
 
 func listOf(path string, more bool, data any) map[string]any {

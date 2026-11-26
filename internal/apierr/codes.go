@@ -190,6 +190,7 @@ const (
 	CodeAppEffectAppOffline   Code = "app_effect_app_offline"   // the app is offline or its space archived
 	CodeAppEffectRecordGone   Code = "app_effect_record_gone"   // the record it came from was deleted: restore it and retry
 	CodeAppEffectGaveUp       Code = "app_effect_gave_up"       // it kept failing for a reason that may pass: retry it
+	CodeAppEffectSpaceChanged Code = "app_effect_space_changed" // the app moved to another space after the payment was queued: what it asked for was never approved there, so it must be started again
 
 	// Querying an app's records (internal/apps/query.go).
 
@@ -466,4 +467,23 @@ const (
 	CodeAppIntegrationKindMismatch    Code = "app_integration_kind_mismatch"     // 422: the integration's provider doesn't do the slot's kind; params: kind
 	CodeAppIntegrationDisabled        Code = "app_integration_disabled"          // 409: the integration is switched off
 	CodeAppIntegrationSpaceNotAllowed Code = "app_integration_space_not_allowed" // 409: the integration is not allowed in the app's space
+
+	// Why a create_payment_link effect failed (internal/apps, internal/integrations): the codes of
+	// an entry's failure, which the web app tells the person who acted.
+
+	CodeIntegrationUnavailable         Code = "integration_unavailable"          // the app's approved integration can't be used now: unapproved, switched off, not allowed in the space, or its key can't be read
+	CodeIntegrationAmountRefused       Code = "integration_amount_refused"       // the amount isn't more than zero, isn't a number, or has more decimals than the currency
+	CodeIntegrationAmountAboveMax      Code = "integration_amount_above_max"     // the amount is above the admin's ceiling; params: max, currency
+	CodeIntegrationCurrencyRefused     Code = "integration_currency_refused"     // the currency isn't one the integration allows; params: currency
+	CodeIntegrationCredentialsRefused  Code = "integration_credentials_refused"  // the provider didn't accept the integration's key
+	CodeIntegrationProviderRefused     Code = "integration_provider_refused"     // the provider refused the request, for good
+	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable" // the provider didn't answer, or answered with an error that may pass: tried again, then waits for a retry
+	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
+	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
+	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
+	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"      // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
+	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"  // a call may have run and nobody knows what it made: only its object is looked for and the call asked again under its own key, for a bounded time, and no other key is used meanwhile
+	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"   // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
+	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable" // 409: an object of the payment link was seen at the provider (an answer named one, or a lookup found one), or one of its keys was resolved already: an admin's confirmation never allows a new key for it
+	CodeIntegrationConditionChanged    Code = "integration_condition_changed"    // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
 )

@@ -433,6 +433,14 @@ to, which someone asking for a reset email could choose. Without `public_url` th
 doesn't email links: it says so in its log at startup, the login page doesn't offer **Forgot
 your password?**, and the invite dialog doesn't offer to email.
 
+**Payment links use it, and work without it.** With `public_url`, the pages a payer returns to from
+Stripe's payment page, `<public_url>/payment/done` and `/payment/cancelled`, are the server's own and
+are built on it. Without one a [payment link](integrations.md#payment-links) is still made, and the
+payer stays on a confirmation page Stripe hosts; but Stripe can't send webhooks to such a server, so
+paid status is to come from polling Stripe (not built yet). The two pages need no session, so a
+reverse proxy that exposes only what payers must reach forwards those two paths (and `POST /hooks/*`
+once webhooks are used).
+
 | Setting | Flag / environment | |
 |---|---|---|
 | `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port (an IPv6 address is written `2001:db8::25` or `[2001:db8::25]`). Empty means no email. |

@@ -347,12 +347,16 @@ export type DraftEffect = {
   card?: string
   path?: string
   route?: 'board' | 'card' | 'document'
-  // A payment link: the slot it asks, the amount's field and the currency (a code, or the choice
-  // field it is read from).
+  // A payment link (create_payment_link): the slot of the app's integrations it asks, the number
+  // field with the amount, the currency (a code, or a choice field of codes), and the two fields the
+  // link and its id are written to. Never a provider, an address or a key.
   integration?: string
   amount_field?: string
   currency?: string
   currency_field?: string
+  description?: string
+  url_field?: string
+  id_field?: string
 }
 
 // The space, and board, an effect of the draft acts on, with the names the caller may be told (none
@@ -542,8 +546,8 @@ export type AppEffect = {
   attempts: number
   next_attempt_at: string | null
   error: { code: string; params?: Params } | null
-  // amount and currency: what a simulated payment link would ask for, in the currency's own units.
-  detail: { title?: string; column?: string; path?: string; route?: string; amount?: number; currency?: string }
+  // A payment link's amount (decimal text with the currency's decimals) and currency code.
+  detail: { title?: string; column?: string; path?: string; route?: string; amount?: string; currency?: string }
   result?: Record<string, unknown>
   created_at?: string
   updated_at?: string

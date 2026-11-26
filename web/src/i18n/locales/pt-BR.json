@@ -290,10 +290,11 @@
           "createCard": "Cria um cartão em {board}",
           "updateCard": "Move para {column} o cartão que este registro criou",
           "createDocument": "Cria um documento em {path} no espaço {space}",
+          "createPaymentLink": "Pede à integração “{slot}” um link para pagar {amount} em {currency} e põe o link em {url} e o seu id em {id}",
+          "createPaymentLinkField": "Pede à integração “{slot}” um link para pagar {amount} na moeda de {currencyField} e põe o link em {url} e o seu id em {id}",
           "openBoard": "Oferece um link para {board}",
           "openCard": "Oferece um link para o cartão que este registro criou",
-          "openDocument": "Oferece um link para o documento {path} no espaço {space}",
-          "createPaymentLink": "Pede ao serviço externo “{slot}” um link para pagar o valor de “{amount}”"
+          "openDocument": "Oferece um link para o documento {path} no espaço {space}"
         },
         "target": {
           "board": "{board} ({space})",
@@ -1189,6 +1190,22 @@
     "app_effect_app_offline": "O app está offline ou o seu espaço está arquivado.",
     "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
     "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
+    "app_effect_space_changed": "O app foi movido para outro espaço depois que este pagamento foi iniciado, então ele nunca foi aprovado lá. Inicie o pagamento de novo.",
+    "integration_unavailable": "A integração de pagamentos deste app não pode ser usada agora: um administrador pode tê-la revogado, desativado ou retirado este espaço. Fale com um administrador e tente de novo.",
+    "integration_amount_refused": "Não dá para pedir esse valor: ele precisa ser maior que zero e ter no máximo as casas decimais da moeda. Corrija o valor no registro e execute a ação de novo.",
+    "integration_amount_above_max": "O valor está acima dos {max} {currency} que um administrador permite por pagamento.",
+    "integration_currency_refused": "{currency} não é uma moeda que esta integração de pagamentos aceita.",
+    "integration_credentials_refused": "O provedor de pagamentos não aceitou a chave desta integração. Um administrador precisa informar uma chave válida; depois você pode tentar de novo.",
+    "integration_provider_refused": "O provedor de pagamentos recusou criar o link de pagamento. Confira o valor e a moeda e tente de novo.",
+    "integration_provider_unreachable": "O provedor de pagamentos não respondeu. Tente de novo em alguns minutos.",
+    "integration_account_changed": "Este link de pagamento foi iniciado em outra conta do provedor de pagamentos, porque a chave da integração foi trocada. Um administrador precisa verificar essa conta primeiro: se o link anterior foi pago, nada deve ser recriado; se não, ele deve ser impedido de receber pagamento antes de a ação ser executada de novo.",
+    "integration_changed": "Este link de pagamento foi criado em outra integração de pagamentos que não a que este app usa agora. Um administrador precisa verificar se esse link foi pago e, se não, impedi-lo de receber pagamento antes de a ação ser executada de novo.",
+    "integration_link_already_paid": "Uma tentativa anterior deste link de pagamento foi paga ou não pode mais receber pagamento (foi paga, foi encerrada por uma pessoa ou atingiu o limite), então nenhum link novo foi criado. Um administrador precisa conciliar esse pagamento na conta do provedor de pagamentos antes de a ação ser executada de novo.",
+    "integration_outcome_unknown": "O provedor de pagamentos nunca informou se criou este link de pagamento, então nenhum outro foi criado: um segundo link poderia ser pago duas vezes. Um administrador precisa verificar, na conta do provedor, se há um link deste pagamento. Se houver, tente este pagamento de novo; se não houver, o administrador confirma que nenhum link existe e um novo é criado.",
+    "integration_link_lookup_pending": "O provedor de pagamentos não informou se criou este link de pagamento. O servidor continua procurando por ele, e não cria outro, por algumas horas.",
+    "integration_condition_changed": "O registro foi alterado e não atende mais à condição desta ação, então nenhum link de pagamento foi criado. Ninguém precisa aprovar nada: desfaça a alteração ou execute a ação quando o registro se qualificar.",
+    "integration_nothing_to_confirm": "Este pagamento não está aguardando uma decisão sobre um resultado desconhecido.",
+    "integration_link_not_confirmable": "Um link deste pagamento já foi visto no provedor de pagamentos, ou uma tentativa anterior dele já foi resolvida, então confirmar que nenhum existe não pode liberar um novo: um segundo link poderia ser pago duas vezes. Verifique a conta do provedor e concilie este pagamento lá.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_icon_path": "O ícone “{component}” não é um caminho SVG: ele deve começar com M ou m e só deve ter comandos de caminho, números, vírgulas e espaços, com no máximo {max} caracteres.",
     "app_icon_label": "O ícone “{component}” está em um botão ou gatilho que só mostra ícones, então precisa de um nome: dê a ele um rótulo de acessibilidade.",
@@ -1257,6 +1274,16 @@
     "deletion_pending": "Esta conta aguarda exclusão: um operador do servidor pode cancelar.",
     "deletion_not_pending": "Esta conta não aguarda exclusão.",
     "deletion_purging": "Esta conta está sendo excluída agora: não dá mais para cancelar."
+  },
+  "payment": {
+    "done": {
+      "title": "Obrigado",
+      "body": "Seu pagamento foi enviado ao provedor de pagamentos. Você pode fechar esta página: o provedor vai confirmá-lo para você."
+    },
+    "cancelled": {
+      "title": "Pagamento cancelado",
+      "body": "Nada foi cobrado. Você pode fechar esta página ou abrir o link de pagamento de novo para pagar."
+    }
   },
   "language": {
     "label": "Idioma",
@@ -2114,6 +2141,7 @@
         "integration_enabled": "Integração ligada",
         "integration_spaces_changed": "Espaços da integração alterados",
         "integration_spaces_kept": "Espaços da integração mantidos após uma aprovação",
+        "integration_new_link_allowed": "Novo link de pagamento permitido após um resultado desconhecido",
         "app_integration_requested": "Uso de uma integração por um app solicitado",
         "app_integration_approved": "Uso de uma integração por um app aprovado",
         "app_integration_rejected": "Uso de uma integração por um app recusado",
@@ -2194,6 +2222,7 @@
         "webhook_secret_changed": "Segredo do webhook alterado",
         "app_id": "Número do app",
         "integration_id": "Número da integração",
+        "effect_id": "Número do pagamento",
         "space_allowed": "Espaço também permitido"
       },
       "values": {

@@ -1589,7 +1589,7 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 	}
 	e := reply.Effects[0]
 	if e.Kind != EffectCreatePaymentLink || e.Status != StateSimulated || e.Error != nil || e.Detail.Currency != "EUR" ||
-		e.Detail.Amount == nil || *e.Detail.Amount != 120 {
+		e.Detail.Amount != "120.00" {
 		t.Fatalf("the simulated link = %+v", e)
 	}
 	// The same through the endpoint that only simulates the effects.
@@ -1601,7 +1601,7 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 		t.Fatalf("simulated = %+v", p)
 	}
 	if e := p.Effects[0]; e.Kind != EffectCreatePaymentLink || e.Status != StateSimulated || e.Detail.Currency != "EUR" ||
-		e.Detail.Amount == nil || *e.Detail.Amount != 120 {
+		e.Detail.Amount != "120.00" {
 		t.Fatalf("the simulated link through the actions route = %+v", e)
 	}
 
@@ -1618,35 +1618,6 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 	expect(t, i.bob.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusForbidden)
 	expect(t, i.mallory.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusNotFound)
 }
-
-// A sample record that has no usable amount is said without one, never guessed, and the currency
-// comes from the field when the effect names one.
-func TestThePreviewedLinkNeverGuessesAnAmount(t *testing.T) {
-	e := Effect{Kind: EffectCreatePaymentLink, AmountField: "total", CurrencyField: "currency", Currency: "USD"}
-	for name, tc := range map[string]struct {
-		data     map[string]any
-		amount   *float64
-		currency string
-	}{
-		"a number":          {map[string]any{"total": 12.5, "currency": "EUR"}, ptr(12.5), "EUR"},
-		"a whole number":    {map[string]any{"total": int64(7), "currency": "EUR"}, ptr(7), "EUR"},
-		"a json number":     {map[string]any{"total": json.Number("3.25")}, ptr(3.25), "USD"},
-		"no amount":         {map[string]any{"currency": "EUR"}, nil, "EUR"},
-		"a null amount":     {map[string]any{"total": nil}, nil, "USD"},
-		"text for a number": {map[string]any{"total": "120"}, nil, "USD"},
-		"not a number":      {map[string]any{"total": math.NaN()}, nil, "USD"},
-		"infinite":          {map[string]any{"total": math.Inf(1)}, nil, "USD"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			d := previewLink(e, tc.data)
-			if (d.Amount == nil) != (tc.amount == nil) || (d.Amount != nil && *d.Amount != *tc.amount) || d.Currency != tc.currency {
-				t.Fatalf("previewLink = %+v, want %v %s", d, tc.amount, tc.currency)
-			}
-		})
-	}
-}
-
-func ptr(f float64) *float64 { return &f }
 
 // ----- review fixes: the queue says, for an approval's own space only, how the space is allowed -----
 
@@ -1757,6 +1728,46 @@ func TestTheQueueRevealsNothingAboutOtherSpaces(t *testing.T) {
 	expect(t, rec, http.StatusOK)
 	if got := decode[IntegrationApproval](t, rec); got.SpaceGrant != "settings" {
 		t.Fatalf("the decision's reply: space_grant = %q", got.SpaceGrant)
+	}
+}
+
+// A preview says the amount a payment link would ask for, exactly as the money rules read the sample
+// record's number (decimal text with the currency's decimals), and in the currency the record chose or
+// else the effect's own. It never guesses one: no amount is shown for a record with none, a null, text
+// that reads like a number, or a number that isn't finite.
+func TestThePreviewedLinkNeverGuessesAnAmount(t *testing.T) {
+	def := invoices(t)
+	e := def.Actions["send"].Effects[0]
+	e.CurrencyField, e.Currency = "currency", "USD"
+	for name, tc := range map[string]struct {
+		data     map[string]any
+		amount   string // "" for none shown
+		currency string
+	}{
+		"a number":                  {map[string]any{"total": 12.5, "currency": "EUR"}, "12.50", "EUR"},
+		"a whole number":            {map[string]any{"total": float64(7), "currency": "EUR"}, "7.00", "EUR"},
+		"cents":                     {map[string]any{"total": 120.1}, "120.10", "USD"},
+		"a json number":             {map[string]any{"total": json.Number("3.25")}, "3.25", "USD"},
+		"no amount":                 {map[string]any{"currency": "EUR"}, "", "EUR"},
+		"a null amount":             {map[string]any{"total": nil}, "", "USD"},
+		"text for a number":         {map[string]any{"total": "120"}, "", "USD"},
+		"text for a decimal number": {map[string]any{"total": "120.50"}, "", "USD"},
+		"not a number":              {map[string]any{"total": math.NaN()}, "", "USD"},
+		"infinite":                  {map[string]any{"total": math.Inf(1)}, "", "USD"},
+		"minus infinite":            {map[string]any{"total": math.Inf(-1)}, "", "USD"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, code := previewPaymentLink(e.payload(def.Collection, tc.data, 1))
+			if d.Amount != tc.amount || d.Currency != tc.currency {
+				t.Fatalf("preview = %+v (%s), want %q %s", d, code, tc.amount, tc.currency)
+			}
+			if tc.amount == "" && code != apierr.CodeIntegrationAmountRefused {
+				t.Fatalf("an amount not shown has code %q", code)
+			}
+			if tc.amount != "" && code != "" {
+				t.Fatalf("code = %q", code)
+			}
+		})
 	}
 }
 
