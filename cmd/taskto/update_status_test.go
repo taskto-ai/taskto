@@ -23,6 +23,7 @@ func (e *updEnv) public() updatestatus.Status {
 // An update leaves the server what it needs to show admins: the last run and change, the
 // version on record, and nothing of the updater's own state.
 func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	// Where the notification goes may hold a secret.
@@ -72,6 +73,7 @@ func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerSaysHoldAndChannel(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/update.hold", "")
@@ -95,6 +97,7 @@ func TestUpdateStatusForTheServerSaysHoldAndChannel(t *testing.T) {
 
 // A dry run changes nothing, the server's status included.
 func TestUpdateDryRunLeavesTheServersStatusAlone(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, _ := e.run("--dry-run"); code != 0 {
@@ -107,6 +110,7 @@ func TestUpdateDryRunLeavesTheServersStatusAlone(t *testing.T) {
 
 // A release that needs a person is said so, until it is done and the install moves on.
 func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -127,6 +131,7 @@ func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
 
 // A changed worker firewall is a manual upgrade too.
 func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/worker-firewall.sh", firewallScript+"# changed\n")
@@ -141,6 +146,7 @@ func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
 // An update that stopped waits for a person: every night says so, and the server's status is
 // made again each time, until `taskto-update --clear-block`.
 func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -181,6 +187,7 @@ func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T
 
 // A server that isn't the version on record is blocked, and the status says what to do.
 func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.setRunning("v0.9.9")
@@ -196,6 +203,7 @@ func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
 
 // A status that can't be written for the server never changes what the run did.
 func TestUpdateWithoutAWritableServerStatusStillUpdates(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	// A file where its directory goes.
@@ -209,6 +217,7 @@ func TestUpdateWithoutAWritableServerStatusStillUpdates(t *testing.T) {
 // The server is only given what the updater writes for it: compose.yaml mounts that one
 // directory, read-only, the safety check says so, and the server's side only reads.
 func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
+	t.Parallel()
 	compose := readRepoFile(t, "compose.yaml")
 	for _, want := range []string{
 		"TASKTO_UPDATE_STATUS_DIR: /update-status",
@@ -236,6 +245,7 @@ func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
 // A pending manual upgrade stays while runs can't look at the releases (a hold, the channel
 // off): the steps weren't done. A run that looks and finds nothing in the way clears it.
 func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -278,6 +288,7 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 
 // A run that couldn't read the releases doesn't clear it either.
 func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "manual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -295,6 +306,7 @@ func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t 
 // The stop's own instructions, from the transaction, come before what an older run said, when
 // the blocked marker can't be read.
 func TestUpdateStatusForTheServerGivesTheCurrentReasonForAStop(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")

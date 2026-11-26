@@ -457,6 +457,7 @@ func (e *updEnv) wantUntouched() {
 }
 
 func TestUpdateNothingNewer(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updOld, "", false, false)
 	// None of these is a release to install: a pre-release, a draft, tags that aren't vX.Y.Z.
@@ -475,6 +476,7 @@ func TestUpdateNothingNewer(t *testing.T) {
 }
 
 func TestUpdateImagesNotPublishedYet(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.unpublish(updNew)
@@ -496,6 +498,7 @@ func TestUpdateImagesNotPublishedYet(t *testing.T) {
 }
 
 func TestUpdateSucceeds(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Notes.\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -620,6 +623,7 @@ func TestUpdateSucceeds(t *testing.T) {
 }
 
 func TestUpdateNeverDowngradesNorRepeats(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.setVersion(updNew)
 	e.setInstallVersion(updNew)
@@ -642,6 +646,7 @@ func TestUpdateNeverDowngradesNorRepeats(t *testing.T) {
 }
 
 func TestUpdateHoldAndOff(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/update.hold", "")
@@ -673,6 +678,7 @@ func TestUpdateHoldAndOff(t *testing.T) {
 }
 
 func TestUpdateSkipsManualUpgrades(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	e.release("v0.4.0", "Nothing special.\n", false, false)
@@ -693,6 +699,7 @@ func TestUpdateSkipsManualUpgrades(t *testing.T) {
 }
 
 func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		setup  func(e *updEnv)
 		reason string
@@ -789,6 +796,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			tc.setup(e)
@@ -809,6 +817,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 
 // Without the firewall's script there is nothing to hold the worker in: the update is refused.
 func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if err := os.Remove(e.firewall); err != nil {
@@ -825,6 +834,7 @@ func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
 
 // A version that changes the worker's firewall is for a person: the run is skipped, whole.
 func TestUpdateChangedFirewallIsAManualUpgrade(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/worker-firewall.sh", firewallScript+"# a new rule\n")
@@ -855,6 +865,7 @@ func TestUpdateChangedFirewallIsAManualUpgrade(t *testing.T) {
 }
 
 func TestUpdateRunsOneAtATime(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/block", "") // the first run waits in its first pull
@@ -887,6 +898,7 @@ func TestUpdateRunsOneAtATime(t *testing.T) {
 }
 
 func TestUpdateDryRunChangesNothing(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	code, out := e.run("--dry-run")
@@ -932,6 +944,7 @@ func mustReadDir(t *testing.T, dir string) []os.DirEntry {
 }
 
 func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
+	t.Parallel()
 	sha := func(c string) string { return strings.Repeat(c, 40) }
 	a, red, diverged, unpublished, green := sha("a"), sha("b"), sha("c"), sha("d"), sha("e")
 	e := newUpdEnv(t)
@@ -982,6 +995,7 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 }
 
 func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	// Five of the updater's own, and what isn't its own: a runbook's by-hand backup, another
@@ -1035,6 +1049,7 @@ func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
 // The updater is a host program, not the server's: nothing in the Compose file gives a
 // container the Docker socket, and the units run it as a nightly one-shot that catches up.
 func TestUpdaterIsOnTheHostOnly(t *testing.T) {
+	t.Parallel()
 	if strings.Contains(readRepoFile(t, "compose.yaml"), "docker.sock") {
 		t.Error("compose.yaml gives a container the Docker socket")
 	}
@@ -1070,6 +1085,7 @@ func TestUpdaterIsOnTheHostOnly(t *testing.T) {
 // The server that answers as another version than the .env says was changed outside the
 // updater: nothing runs until a person has looked.
 func TestUpdateBlocksWhenTheServerIsNotTheVersionOnRecord(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.setVersion(updNew) // the .env says the new one; the server still runs the old
@@ -1093,6 +1109,7 @@ func TestUpdateBlocksWhenTheServerIsNotTheVersionOnRecord(t *testing.T) {
 func tagOfLength(n int) string { return "v1.0.1" + strings.Repeat("0", n-len("v1.0.1")) }
 
 func TestUpdateOnlyTheCanonicalVersionGrammar(t *testing.T) {
+	t.Parallel()
 	// Leading zeros, pre-releases and build metadata aren't releases, or --to values.
 	for _, to := range []string{"v01.0.0", "v1.02.0", "v1.0.0-rc1", "v1.0.0+build", "1.0.0", "v1.0", "V1.0.0", "main", "abc123"} {
 		e := newUpdEnv(t)
@@ -1121,6 +1138,7 @@ func TestUpdateOnlyTheCanonicalVersionGrammar(t *testing.T) {
 
 // Versions compare as numbers, which no shell arithmetic or float would get right.
 func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ installed, release string }{
 		"1.10.0 is newer than 1.9.0":           {"v1.9.0", "v1.10.0"},
 		"2.0.0 is newer than 1.99.99":          {"v1.99.99", "v2.0.0"},
@@ -1130,6 +1148,7 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 		"the newest of several, not the first": {"v1.9.0", "v1.10.0"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.setVersion(tc.installed)
 			e.setInstallVersion(tc.installed)
@@ -1161,6 +1180,7 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 
 // The registry login is in a Docker config of the updater's own, which is gone after.
 func TestUpdateLogsInWithAConfigOfItsOwn(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_REGISTRY_USER='puller'\n")
@@ -1218,6 +1238,7 @@ func workflowStep(t *testing.T, workflow, name string) string {
 // the tag made by the API's create-a-reference call at it (which can't take over a tag that
 // exists), the notes complete before the release counts.
 func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
+	t.Parallel()
 	wf := readRepoFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{
 		`--method POST "repos/$GH_REPO/git/refs"`, // the API creates the reference only if there is none
@@ -1276,6 +1297,7 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 // reference through the API, at the commit and for the version, and it stops, with nothing
 // else made, when the API refuses (the tag exists).
 func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
+	t.Parallel()
 	needTools(t, "bash")
 	step := workflowStep(t, ".github/workflows/release.yml", "Create the tag at the commit CI passed on")
 	for _, tc := range []struct {
@@ -1323,6 +1345,7 @@ func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 // agree: vMAJOR.MINOR.PATCH, at most 100 characters, and the whole input is the version: a
 // second line that isn't, whatever the first says, is refused.
 func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
+	t.Parallel()
 	needTools(t, "bash")
 	var check string
 	for _, line := range strings.Split(readRepoFile(t, ".github/workflows/release.yml"), "\n") {
@@ -1355,6 +1378,7 @@ func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 // Step 12 of the runbook and the updater run one script, and the updater won't update with
 // the rules unchecked.
 func TestSafetyChecksAreOneScript(t *testing.T) {
+	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	if !strings.Contains(runbook, "vm < deploy/safety-check.sh") {
 		t.Error("step 12 doesn't run deploy/safety-check.sh")
