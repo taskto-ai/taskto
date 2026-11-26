@@ -90,6 +90,22 @@ jobs:
           else
             echo "go test wrote no JSON: its error is in the step above"
           fi
+      # The agent job runs only cmd/taskto's *_it_test.go tests, so a test elsewhere in the
+      # package that skips here (the agent isn't built in this job, for one) would run in
+      # neither job. Every skip of the package's other tests fails, whatever the reason or the
+      # helper it skips through. The one exception skips for the runner's file system, the
+      # same in both jobs.
+      - name: No cmd/taskto test skips outside the integration tests
+        if: ${{ !cancelled() }}
+        run: |
+          [ -s go-test.json ] || exit 0
+          export LC_ALL=C
+          allowed=$( { grep -ho '^func Test[A-Za-z0-9_]*' cmd/taskto/*_it_test.go | sed 's/^func //'; echo TestCheckWorkerImage; } | sort -u)
+          skipped=$(jq -r 'select(.Action == "skip" and .Package == "taskto.ai/taskto/cmd/taskto" and .Test != null) | .Test | split("/")[0]' go-test.json | sort -u)
+          if others=$(comm -23 <(echo "$skipped") <(echo "$allowed") | grep .); then
+            echo "::error::cmd/taskto tests skipped outside its *_it_test.go files, so they run in neither this job nor the agent job (their output is in the report above): $(paste -sd" " - <<< "$others")"
+            exit 1
+          fi
       - name: Keep go test's JSON
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -202,10 +218,11 @@ jobs:
       # and adds a provider account through the API that the running sidecar must pick up.
       # Of cmd/taskto, only the tests of its *_it_test.go files run here: the rest of the
       # package doesn't read TASKTO_AGENT_IT (checked first) and runs in the Go job, so running
-      # it here too would only run the same tests twice.
+      # it here too would only run the same tests twice. The Go job fails if one of those
+      # skips there, through a helper or otherwise, so none is left out of both jobs.
       - name: Agent integration tests
         run: |
-          if others=$(ls cmd/taskto/*_test.go | grep -v '_it_test\.go$' | xargs grep -l TASKTO_AGENT_IT); then
+          if others=$(grep -l --exclude='*_it_test.go' TASKTO_AGENT_IT cmd/taskto/*_test.go); then
             echo "::error::TASKTO_AGENT_IT is read outside cmd/taskto's *_it_test.go files: $others"
             exit 1
           fi
@@ -314,11 +331,16 @@ jobs:
         # The other branches' own commits are scanned too, and what is found there is reported
         # as a warning: a leak on another branch fails that branch's own run, and no longer
         # every pull request until the branch is gone.
+        #
+        # A merge commit's own changes are scanned too (--diff-merges=remerge): git log shows
+        # no patch for a merge by default, so a secret added while resolving a conflict, in
+        # neither parent, would otherwise pass. remerge shows only what the merge changed
+        # beyond merging its parents, so the rest of both sides isn't scanned twice.
         run: |
           tar -c . | docker run -i --rm --entrypoint sh \
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             -c 'mkdir /tmp/repo && tar -x -C /tmp/repo && cd /tmp/repo && git config --global --add safe.directory /tmp/repo \
-              && { o=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --log-opts="--all --not HEAD" --source . > /tmp/others 2>&1 || o=$?; \
+              && { o=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --log-opts="--diff-merges=remerge --all --not HEAD" --source . > /tmp/others 2>&1 || o=$?; \
                    if [ $o -ne 0 ]; then cat /tmp/others; echo "::warning title=Secret scan::gitleaks found leaks on other branches, outside this commit'"'"'s history (above)"; fi; \
-                   s=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --log-opts=HEAD --source . > /tmp/out 2>&1 || s=$?; cat /tmp/out; \
+                   s=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --log-opts="--diff-merges=remerge HEAD" --source . > /tmp/out 2>&1 || s=$?; cat /tmp/out; \
                    [ $s -eq 0 ] && grep -Eq "[1-9][0-9]* commits scanned" /tmp/out; }'
