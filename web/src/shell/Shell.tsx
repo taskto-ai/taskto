@@ -87,11 +87,13 @@ function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe
   const first = homeWorkspace(me)?.id ?? null
   if (path === EMAIL_CONFIRM_PATH) {
     const page = <ConfirmEmail token={window.location.hash.slice(1)} workspace={first} />
-    return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'settings', page }} />
+    return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'settings', workspace: first, page }} />
   }
   if (opening !== null) {
     const page = <OpenNotification id={opening} fallbackWorkspace={first} />
-    return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'notifications', page }} />
+    return (
+      <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'notifications', workspace: first, page }} />
+    )
   }
   return <Frame me={me} onLogout={onLogout} onMe={onMe} />
 }
@@ -99,6 +101,9 @@ function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe
 // A page of the frame that is not a section's (above): what it draws, and the section it belongs to.
 interface SpecialPage {
   section: Route['section']
+  // The workspace resolved for the page's own links, which the frame shows too: resolved once, so a
+  // frame drawn again (another tab chose another workspace) stays with its page.
+  workspace: number | null
   page: ReactNode
 }
 
@@ -119,8 +124,8 @@ function Frame({
   const member = (id: number) => me.workspaces.some((w) => w.id === id)
   const fallback = homeWorkspace(me)
   const route: Route | null = special
-    ? fallback
-      ? { workspace: fallback.id, section: special.section }
+    ? special.workspace !== null
+      ? { workspace: special.workspace, section: special.section }
       : null
     : parsed && member(parsed.workspace)
       ? parsed
@@ -157,13 +162,16 @@ function Frame({
   // click on the menu button before it would be undone. The page is the resolved route, not the
   // address: the shell rewriting an address to its canonical form (a trailing slash, a default
   // page, another workspace) isn't a navigation. A hash or a query never reaches either.
-  const drawnAt = useRef(target)
+  // A special page has no target (its address is kept): its address is what changes then (Back from
+  // one notification's link to another's).
+  const shownPage = special ? path : target
+  const drawnAt = useRef(shownPage)
   useEffect(() => {
-    if (drawnAt.current === target) return
-    drawnAt.current = target
+    if (drawnAt.current === shownPage) return
+    drawnAt.current = shownPage
     if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
-  }, [target])
+  }, [shownPage])
   useEffect(() => {
     if (drawer || !focusPage.current) return
     focusPage.current = false

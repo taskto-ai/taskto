@@ -4,11 +4,12 @@
 // confirmation link. For a signed-in person they are pages of the frame (the sidebar, the skip
 // link, <main>); someone signed out gets the sign-in screen alone, as for any address.
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Me } from '../api'
 import { EMAIL_CONFIRM_API, EMAIL_CONFIRM_PATH } from '../notifications/api'
+import { navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { resetToasts } from '../ui/Toast'
 import { Shell } from './Shell'
@@ -101,4 +102,34 @@ test('the page’s own links go to the workspace the frame shows, the one used l
   expect(within(main).getByRole('link', { name: 'Open notification settings' }).getAttribute('href')).toBe(
     '/w/4/settings/notifications',
   )
+})
+
+test('the frame stays with its page’s workspace when another tab chooses another one', async () => {
+  window.history.replaceState(null, '', '/notification/9')
+  fakeFetch({ 'GET /api/me/notifications/9': { status: 404, body: { error: 'not found', code: 'not_found' } } })
+  const two = { ...me, workspaces: [...me.workspaces, { id: 4, name: 'Team', role: 'member' }] } as Me
+  render(<Shell me={two} onLogout={() => {}} />)
+  await screen.findByRole('alert')
+  // Another tab uses Team now; this frame is drawn again (its menu opened), its page unchanged.
+  localStorage.setItem('taskto.workspace', '4')
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  expect(screen.getByRole('button', { name: 'Workspace: Home' })).toBeTruthy()
+  expect(
+    within(screen.getByRole('main')).getByRole('link', { name: 'Open your notifications' }).getAttribute('href'),
+  ).toBe('/w/1/notifications')
+})
+
+test('going from one notification’s link to another closes the phone’s menu, and the page is usable', async () => {
+  window.history.replaceState(null, '', '/notification/2')
+  fakeFetch({
+    'GET /api/me/notifications/2': { status: 404, body: { error: 'not found', code: 'not_found' } },
+    'GET /api/me/notifications/1': { status: 404, body: { error: 'not found', code: 'not_found' } },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('alert')
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  expect(screen.getByRole('main').hasAttribute('inert')).toBe(true)
+  act(() => navigate('/notification/1'))
+  await waitFor(() => expect(screen.getByRole('main').hasAttribute('inert')).toBe(false))
+  expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy()
 })
