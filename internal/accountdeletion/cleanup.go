@@ -257,7 +257,7 @@ func (s *Service) agentTimeout() time.Duration {
 	return defaultAgentTimeout
 }
 
-// The kinds of CLI worker, as cli_worker_history names them (migration 0059): where a worker keeps
+// The kinds of CLI worker, as cli_worker_history names them (migration 0057): where a worker keeps
 // a user's files.
 const (
 	cliLocal     = "local"     // under the data directory, <data>/cli/u<id>
