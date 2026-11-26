@@ -1219,3 +1219,42 @@ func TestPurgeUploadsKeepsTheRowUntilTheFilesAreRemoved(t *testing.T) {
 		t.Error("the row remains")
 	}
 }
+
+// What the caller keeps of a removed upload is written in the transaction that deletes its row:
+// when it can't be, the row stays, to be removed (and counted) by the retry.
+func TestPurgeUploadsNotingCountsInTheRemovalsTransaction(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.createPhotos(w.alice, s, "Photos")
+	id := w.start(w.alice, s, a, "photos", 100)
+	w.send(w.alice, s, a, id, make([]byte, 40), 40)
+	rows := func() int {
+		var n int
+		if err := w.e.db.QueryRow(`SELECT count(*) FROM app_attachments WHERE id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	refused := errors.New("can't keep the count")
+	if _, err := w.e.s.PurgeUploadsNoting(context.Background(), w.alice.id, func(context.Context, *sql.Tx) error { return refused }); !errors.Is(err, refused) {
+		t.Fatalf("err = %v, want the caller's", err)
+	}
+	if rows() != 1 {
+		t.Fatal("the row went without its count")
+	}
+	calls := 0
+	n, err := w.e.s.PurgeUploadsNoting(context.Background(), w.alice.id, func(_ context.Context, tx *sql.Tx) error {
+		calls++
+		var left int
+		if err := tx.QueryRow(`SELECT count(*) FROM app_attachments WHERE id = ?`, id).Scan(&left); err != nil {
+			return err
+		}
+		if left != 0 {
+			return errors.New("called before the row was deleted")
+		}
+		return nil
+	})
+	if err != nil || n != 1 || calls != 1 || rows() != 0 {
+		t.Fatalf("PurgeUploadsNoting = %d, %v; %d calls, %d rows left", n, err, calls, rows())
+	}
+}
