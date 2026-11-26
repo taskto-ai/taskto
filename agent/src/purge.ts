@@ -44,8 +44,8 @@ export function purgeRecords(dbPath: string, root: number, walBusyMs: number): v
     const list = (set: Set<number>) => [...set].join(',') || 'NULL'
     const ids = new Set<number>([root])
     const taskIds = new Set<number>()
-    const transaction = <T>(work: () => T): T => {
-      db.exec('BEGIN IMMEDIATE')
+    const transaction = <T>(work: () => T, begin = 'BEGIN IMMEDIATE'): T => {
+      db.exec(begin)
       try {
         const result = work()
         db.exec('COMMIT')
@@ -74,7 +74,9 @@ export function purgeRecords(dbPath: string, root: number, walBusyMs: number): v
           }
         }
       }
-    })
+      // A read transaction: a consistent view of the tree takes no write lock, which the harness's
+      // writes would wait for while a deep tree is walked.
+    }, 'BEGIN')
     const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
       OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
     // Runs `batch(limit)` in transactions until it finds fewer rows than the limit, resting between.
