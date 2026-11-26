@@ -1203,7 +1203,9 @@ next start, whoever joins or leaves a workspace meanwhile); the account itself, 
 (`account_purged`, which holds only counts), goes last, in one transaction. The steps about files and
 other processes (the agent runtime's records of the conversations, the agent browsers' processes and
 profile, the CLI worker's directory, the providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
-the CLI workers to be on stays recorded after the account is gone and is done when they are: the
+the CLI workers to be on stays recorded after the account is gone and is done when they are (the CLI
+step only for each kind of worker that has run on the server, and the container worker's copy only by
+that worker: [privacy and account deletion](install.md#privacy-and-account-deletion)): the
 event says how many are waiting (`cleanups_pending`), and the server doesn't log the purge as complete
 until none is.
 

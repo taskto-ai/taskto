@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
@@ -156,18 +159,36 @@ func (s *Service) Pending(ctx context.Context, userID int64) (int, error) {
 	return n, err
 }
 
+// waiting is the steps that wait for something to be on, by what they wait for (waitsFor) and
+// account: how many steps each.
+type waiting map[string]map[int64]int
+
+// waitsFor names what a step that is waiting waits for, for the log.
+func waitsFor(c cleanup) string {
+	switch {
+	case c.kind == cleanAgentConversation:
+		return "agent_runtime"
+	case c.kind == cleanCLIHome && strings.HasPrefix(c.target, cliContainer+":"):
+		return "cli_worker_container"
+	case c.kind == cleanCLIHome:
+		return "cli_worker_local"
+	}
+	return c.kind
+}
+
 // runCleanups does the recorded steps of userID's purge (every account's if userID is 0), and
 // removes each that is done. It returns the steps that were tried and failed; a step that is
 // waiting for a subsystem to be on is neither (it is counted in waiting).
-func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, err error) {
+func (s *Service) runCleanups(ctx context.Context, userID int64) (wait waiting, err error) {
+	wait = waiting{}
 	todo, err := s.pending(ctx, userID)
 	if err != nil {
-		return 0, err
+		return wait, err
 	}
 	var errs []error
 	for _, c := range todo {
 		if err := ctx.Err(); err != nil {
-			return waiting, errors.Join(append(errs, err)...)
+			return wait, errors.Join(append(errs, err)...)
 		}
 		switch rerr := s.runCleanup(ctx, c); {
 		case rerr == nil:
@@ -175,7 +196,11 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, e
 				errs = append(errs, err)
 			}
 		case errors.Is(rerr, errWaiting):
-			waiting++
+			on := waitsFor(c)
+			if wait[on] == nil {
+				wait[on] = map[int64]int{}
+			}
+			wait[on][c.user]++
 		default:
 			// Only the step's reason is kept (last_error: a fixed word, see failSidecarBusy), and
 			// it is not in the error returned, which the server's log prints. The error says which
@@ -186,7 +211,7 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, e
 			errs = append(errs, fmt.Errorf("step %d (%s) of account %d failed: %s", c.id, c.kind, c.user, reason))
 		}
 	}
-	return waiting, errors.Join(errs...)
+	return wait, errors.Join(errs...)
 }
 
 func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
@@ -219,15 +244,16 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		}
 		return s.forgetBrowser(ctx, user)
 	case cleanCLIHome:
-		user, err := strconv.ParseInt(c.target, 10, 64)
-		if err != nil || user <= 0 {
+		kind, id, _ := strings.Cut(c.target, ":")
+		user, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || user <= 0 || (kind != cliLocal && kind != cliContainer) {
 			return failed(failBadTarget, nil)
 		}
 		// Bounded, so one attempt's time is known: the worker stops the user's turns (a grace
 		// period) and waits for the requests in flight; a cut call is made again.
 		cctx, cancel := context.WithTimeout(ctx, cliForgetTimeout)
 		defer cancel()
-		return s.forgetCLI(cctx, user)
+		return s.forgetCLI(cctx, kind, user)
 	case cleanProviders:
 		return s.syncProviders(ctx)
 	}
@@ -247,6 +273,53 @@ func (s *Service) agentTimeout() time.Duration {
 		return s.stepTimeout
 	}
 	return defaultAgentTimeout
+}
+
+// The kinds of CLI worker, as cli_worker_history names them (migration 0059): where a worker keeps
+// a user's files.
+const (
+	cliLocal     = "local"     // under the data directory, <data>/cli/u<id>
+	cliContainer = "container" // in the container worker's own volume
+	cliUnknown   = "unknown"   // either may have run, before the record was kept
+)
+
+// recordCLIHomes records, within tx, a step for each kind of CLI worker that may hold userID's files:
+// each kind that has run on this data directory, and both if one of unknown kind may have run while
+// the account existed. None when no worker could have run for them, so an install that never had CLI
+// workers has nothing waiting. A kind that runs later, before the account is gone, is added by the
+// purge's next try.
+func (s *Service) recordCLIHomes(ctx context.Context, tx *sql.Tx, userID int64) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT h.worker FROM cli_worker_history h
+		WHERE h.worker <> ? OR h.since >= coalesce((SELECT created_at FROM users WHERE id = ?), '')`, cliUnknown, userID)
+	if err != nil {
+		return err
+	}
+	kinds := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if k == cliUnknown {
+			kinds[cliLocal], kinds[cliContainer] = true, true
+		} else {
+			kinds[k] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err // a partial list would leave out a worker that holds their files
+	}
+	for _, k := range []string{cliLocal, cliContainer} {
+		if !kinds[k] {
+			continue
+		}
+		if err := s.record(ctx, tx, userID, cleanCLIHome, k+":"+strconv.FormatInt(userID, 10)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // defaultBrowserTimeout bounds one attempt at stopping an account's browsers and removing their
@@ -282,33 +355,36 @@ func (s *Service) browserPending(ctx context.Context, user int64) (bool, error) 
 	return n > 0, err
 }
 
-// forgetCLI removes everything kept for user's CLI logins: the worker's directory (when CLI workers
-// are on) and, in any mode, the directory the local worker keeps under the data directory, which
-// stays when the mode is later turned off. It is waiting while the worker is off, since a
-// container worker keeps its own copy, out of reach.
-func (s *Service) forgetCLI(ctx context.Context, user int64) error {
+// forgetCLI removes what a CLI worker of kind kept for user's CLI logins (sessions, working
+// directories and the browser's profile). Only that kind of worker can say its copy is gone: the
+// local one's directory is under the data directory, and is removed from here whatever the mode (by
+// the local worker first when it runs, so its logins in progress stop); the container worker's is in
+// its own volume, and the step waits until this server runs that worker, which removes it.
+func (s *Service) forgetCLI(ctx context.Context, kind string, user int64) error {
 	// Its directory holds the browser's profile: not before the browsers are stopped and gone.
 	if pending, err := s.browserPending(ctx, user); err != nil {
 		return err
 	} else if pending {
 		return errWaiting
 	}
-	var worker error
+	running := ""
 	if s.o.CLI != nil {
-		worker = s.o.CLI.Forget(ctx, user)
-	} else {
-		worker = cliaccounts.ErrOff
+		running = s.o.CLI.WorkerKind()
 	}
-	if worker != nil && !errors.Is(worker, cliaccounts.ErrOff) {
-		return failed(failCLIWorker, worker)
+	if running == kind {
+		if err := s.o.CLI.Forget(ctx, user); err != nil {
+			if errors.Is(err, cliaccounts.ErrOff) {
+				return errWaiting
+			}
+			return failed(failCLIWorker, err)
+		}
+	} else if kind == cliContainer {
+		return errWaiting
 	}
-	if s.o.DataDir != "" {
+	if kind == cliLocal && s.o.DataDir != "" {
 		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
 			return failed(failFileRemove, err)
 		}
-	}
-	if worker != nil {
-		return errWaiting
 	}
 	return nil
 }
@@ -345,9 +421,14 @@ func (s *Service) syncProviders(ctx context.Context) error {
 // couldn't. Call it at start, once the agent runtime's client is set (SetAgent), and again whenever
 // something a step waits for comes on; Maintain does it on a timer.
 func (s *Service) RunCleanups(ctx context.Context) error {
-	waiting, err := s.runCleanups(ctx, 0)
-	if waiting > 0 {
-		slog.Info("account deletion: steps of purges are waiting for the agent runtime or the CLI workers to be on", "steps", waiting)
+	wait, err := s.runCleanups(ctx, 0)
+	for _, on := range slices.Sorted(maps.Keys(wait)) {
+		steps := 0
+		for _, n := range wait[on] {
+			steps += n
+		}
+		slog.Info("account deletion: steps of purges are waiting for what they need to be on",
+			"waits_for", on, "accounts", len(wait[on]), "steps", steps)
 	}
 	return err
 }
