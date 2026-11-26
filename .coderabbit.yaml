@@ -1,6 +1,9 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 # CodeRabbit's pull request reviews (free for public repositories). Reviews are in English,
 # like the code and docs; translations are reviewed too, lock files aren't.
+# CodeRabbit reviews a pull request when it opens, and again only when someone comments
+# `@coderabbitai review`: a push, such as moving the branch onto a newer main, doesn't start
+# another review, whose new threads would block merging (conversations must be resolved).
 language: en-US
 reviews:
   profile: chill
@@ -15,5 +18,6 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    auto_incremental_review: false
 chat:
   auto_reply: true
