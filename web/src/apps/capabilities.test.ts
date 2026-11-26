@@ -68,7 +68,8 @@ function reachedFrom(entry: string, read = (f: string) => readFileSync(f, 'utf8'
 
 // The renderer: A2UI's packages, its schema libraries (with their subpaths, `zod/v3`), and the
 // catalog that holds them.
-const RENDERER = /^@a2ui\/|^zod(?:\/|$)|^zod-to-json-schema(?:\/|$)|^redos-detector(?:\/|$)|apps\/catalog\.tsx$/
+const RENDERER =
+  /^@a2ui\/|^zod(?:\/|$)|^zod-to-json-schema(?:\/|$)|^redos-detector(?:\/|$)|apps\/catalog\.tsx$|apps\/AppView\.tsx$/
 
 function renderer(reached: Map<string, string | null>): string[] {
   return [...reached.keys()].filter((k) => RENDERER.test(k)).map((k) => `${k} (imported by ${reached.get(k)})`)
@@ -79,6 +80,17 @@ test('the renderer is loaded only when an app is drawn, never by the entry', () 
   // The proof the walk works: the entry reaches the shell and the offline download.
   expect([...reached.keys()].some((f) => f.endsWith('offline/download.ts'))).toBe(true)
   expect(renderer(reached)).toEqual([])
+})
+
+test('Home and the Apps page load the renderer only when they draw an app (LazyAppView)', () => {
+  for (const page of ['home/HomePage.tsx', 'apps/AppsPage.tsx']) {
+    const reached = reachedFrom(join(src, page))
+    expect(
+      [...reached.keys()].some((f) => f.endsWith('apps/LazyAppView.tsx')),
+      page,
+    ).toBe(true)
+    expect(renderer(reached), page).toEqual([])
+  }
 })
 
 test('the walk sees an import a comment with a quote sits in, and a package’s subpath', () => {

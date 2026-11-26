@@ -588,6 +588,13 @@ test('the server unreachable says what happened, and Try again tries again', () 
   expect(retry).toHaveBeenCalledOnce()
 })
 
+test('the server unreachable and no workspace are the frame’s own form: a display title, no box inside the card', () => {
+  render(<ServerUnreachable error="Failed to fetch" onRetry={() => {}} />)
+  const title = screen.getByRole('heading', { level: 1, name: "Can't reach the server" })
+  expect(title.getAttribute('data-size')).toBe('display')
+  expect(document.querySelector('.ui-auth-card .ui-empty')).toBeNull()
+})
+
 test('an invite for someone signed in names the account, joins with one button, and offers to log out', async () => {
   const onLogout = vi.fn()
   const joined = { ...owner, workspaces: [{ id: 7 }] }

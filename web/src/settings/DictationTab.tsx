@@ -108,7 +108,11 @@ function Current({
             <p className="settings-muted">{codeText(status.reason_code, status.reason_params, status.reason)}</p>
           )}
         </div>
-        {status.engine ? (
+        {status.engine === 'local' && local && local.state !== 'ready' ? (
+          // The local model is chosen but can't take a dictation yet (not downloaded, downloading,
+          // failed): not "On", which would promise what the microphone can't do.
+          <Badge tone="warning">{t('settings.dictation.notReadyBadge')}</Badge>
+        ) : status.engine ? (
           <Badge tone="success" dot>
             {t('settings.dictation.onBadge')}
           </Badge>

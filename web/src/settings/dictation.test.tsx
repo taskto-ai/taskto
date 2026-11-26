@@ -174,3 +174,20 @@ test('where the operator turned the local model off, it is still listed, and onl
   expect(again.value).toBe('api')
   expect(again.options[0].disabled).toBe(true)
 })
+
+test('the local model says On only once it is ready; before that, Not ready yet', async () => {
+  for (const [state, badge] of [
+    ['not_downloaded', 'Not ready yet'],
+    ['downloading', 'Not ready yet'],
+    ['failed', 'Not ready yet'],
+    ['ready', 'On'],
+  ] as const) {
+    fakeFetch({
+      'GET /api/workspaces/1/dictation': { body: status({ local: { model: 'parakeet-v3', state, progress: 0.4 } }) },
+    })
+    const { unmount } = render(<SettingsPage me={me} workspace={member} tab="dictation" />)
+    expect(await screen.findByText(badge, { exact: true }), state).toBeTruthy()
+    if (badge !== 'On') expect(screen.queryByText('On', { exact: true }), state).toBeNull()
+    unmount()
+  }
+})

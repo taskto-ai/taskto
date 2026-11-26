@@ -143,6 +143,16 @@ test('an archived conversation cannot be sent to', async () => {
   expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true)
 })
 
+test('with no conversation, the words say what each button does', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/workspaces/1/conversations': { body: { conversations: [] } } })
+  render(<Page streams={fakeStreams().factory} />)
+  expect(await screen.findByText('No conversations yet.')).toBeTruthy()
+  expect(screen.getByText('Start one with New, or ask the agent to build an app.')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'New' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Build an app' })).toBeTruthy()
+})
+
 // Lets the probe's promise settle under fake timers.
 const settle = () => act(async () => {})
 

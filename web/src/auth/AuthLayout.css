@@ -141,6 +141,15 @@
     margin-block: auto;
   }
 
+  /* On a touch screen a button is the touch target's height, the field's too: the button inside the
+     field keeps a space's clearance from its edges, so its fill and its focus ring sit inside the
+     field's edge, not over it. The field's whole height around it still takes the tap. */
+  @media (pointer: coarse) {
+    .ui-auth-password > .ui-button {
+      block-size: calc(var(--control-touch) - var(--space-2));
+    }
+  }
+
   /* Before the app knows who is signed in: the logo and the shape of a form, still. */
   .ui-auth-skeleton {
     display: grid;

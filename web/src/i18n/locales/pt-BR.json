@@ -1847,6 +1847,7 @@
       "hostedNote": "A fala só vai para este endpoint quando o mecanismo acima é a API hospedada; definir uma chave não muda para ela. O glossário nunca vai: ele é aplicado neste servidor.",
       "removeKey": "Remover a chave de API",
       "onBadge": "Ligado",
+      "notReadyBadge": "Ainda não está pronto",
       "offBadge": "Desligado"
     },
     "search": {
@@ -2300,8 +2301,8 @@
       "label": "Buscar na base de conhecimento",
       "placeholder": "Buscar…",
       "where": "Onde buscar",
-      "inSpace": "Em {space}",
-      "everywhere": "Em todos os espaços",
+      "inSpace": "Buscar em {space}",
+      "everywhere": "Buscar em todos os espaços",
       "submit": "Buscar"
     },
     "results": {
@@ -2359,7 +2360,8 @@
     "showArchivedTitle": "Mostrar as conversas arquivadas",
     "new": "Nova",
     "nothingArchived": "Nenhuma conversa arquivada.",
-    "none": "Nenhuma conversa ainda. Comece uma em Nova.",
+    "none": "Nenhuma conversa ainda.",
+    "noneHelp": "Comece uma em Nova, ou peça ao agente para criar um app.",
     "pick": "Escolha uma conversa ou comece uma nova.",
     "untitled": "Conversa de {date}",
     "conversation": "Conversa",
