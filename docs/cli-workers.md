@@ -440,7 +440,9 @@ The UI shows what the command prints.
     of accounts whose purge has begun (it forgets the worker's files before it deletes the
     account).
 
-  A directory that can't be removed yet (a process of it doesn't end in time) is kept and its user
+  A purge that had begun before the start still finishes: its browser step, the helper's removal of
+  the browser's directory, is let through for a forgotten user, and is done when the directory is
+  already gone. A directory that can't be removed yet (a process of it doesn't end in time) is kept and its user
   refused (`ErrForgotten`) until a later attempt removes it; the answer is `ErrIncomplete` (`409`,
   `incomplete`), and the server goes on and tries again. Until the worker has been told, since this
   server started, the server asks nothing of it for a user: a sign-in, a status check, a sign-out,

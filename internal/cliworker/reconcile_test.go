@@ -265,3 +265,47 @@ func TestRemoteReconcile(t *testing.T) {
 		t.Errorf("Reconcile over the API = %v, want ErrIncomplete alone", err)
 	}
 }
+
+// The census of a server with many users fits in the worker's API.
+func TestRemoteReconcileTakesALargeCensus(t *testing.T) {
+	h := newHarness(t, nil)
+	r := serve(t, h)
+	census := cliworker.Census{Created: map[int64]time.Time{}, Next: 50_001, Before: time.Now()}
+	at := time.Now().Add(-time.Hour)
+	for user := int64(1); user <= 50_000; user++ {
+		census.Live = append(census.Live, user)
+		census.Created[user] = at
+	}
+	if err := r.Reconcile(context.Background(), census); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A purge that had begun when the server stopped finishes after a start whose Reconcile removed
+// the account's directory: its browser step, which comes before the worker's, isn't refused.
+func TestABrowserPurgeAfterReconcileIsDone(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.user(t, 3, cliworker.Claude, clitest.Scenario{}, true)
+	if err := os.MkdirAll(h.layout.BrowserPaths(3).Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// 3's purge has begun: not live, below the next number.
+	if err := h.w.Reconcile(ctx, cliworker.Census{Live: []int64{1}, Next: 4, Before: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	gone(t, h.layout.User(3).Root)
+	host := h.w.BrowserHost(nil)
+	if err := host.Purge(3); err != nil {
+		t.Errorf("the purge's browser step after the directory went: %v", err)
+	}
+	gone(t, h.layout.User(3).Root)
+	// And with the directory still there (a removal that ended busy), it runs, as the user.
+	if err := os.MkdirAll(h.layout.BrowserPaths(3).Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Purge(3); err != nil {
+		t.Errorf("the purge's browser step for a forgotten user: %v", err)
+	}
+	gone(t, h.layout.BrowserPaths(3).Root)
+}

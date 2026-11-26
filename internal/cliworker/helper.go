@@ -260,14 +260,17 @@ func credentials(cli CLI) string {
 // header() first).
 func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
 	w.helperLaunches.Add(1)
-	// Every op but the one that removes the user's directory makes it (and a login's files in
-	// it): none runs for a forgotten user (forget.go).
-	if req.Op != "forget" && w.isForgotten(user) {
+	// Every op but the ones that only remove (the user's directory, or their browser's) makes the
+	// directory (and a login's files in it): none runs for a forgotten user (forget.go). A purge's
+	// browser step may come after the user was forgotten: a Reconcile at the server's start removes
+	// the directory of an account whose purge has begun.
+	removal := req.Op == "forget" || req.Op == "browser-purge"
+	if !removal && w.isForgotten(user) {
 		return nil, nil, ErrForgotten
 	}
 	// Recorded before anything of the user's is made (asUser makes their directory): Reconcile
 	// tells a directory of someone who had the number before by it (forget.go).
-	if req.Op != "forget" {
+	if !removal {
 		if err := w.noteBirth(user); err != nil {
 			return nil, nil, fmt.Errorf("recording the user's first use: %w", err)
 		}

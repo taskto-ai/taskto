@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -198,8 +199,12 @@ func (h *browserHost) Clean(user int64) error {
 	return h.quickOp(user, "browser-clean", "removing the testing profile")
 }
 
-// Purge removes the user's whole browser directory, as the user, for a deleted account.
+// Purge removes the user's whole browser directory, as the user, for a deleted account. With the
+// user's directory gone (Forget, Reconcile), the browser's went with it: nothing is made again.
 func (h *browserHost) Purge(user int64) error {
+	if _, err := os.Lstat(h.w.cfg.Layout.User(user).Root); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	return h.quickOp(user, "browser-purge", "removing the browser's files")
 }
 

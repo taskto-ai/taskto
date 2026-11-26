@@ -165,7 +165,7 @@ func (w *Worker) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
 		var req Census
-		if !decodeBody(rw, r, &req) {
+		if !decodeBodyLimit(rw, r, &req, maxCensus) {
 			return
 		}
 		if req.Next <= 0 || req.Before.IsZero() {
@@ -309,8 +309,16 @@ func refuse(rw http.ResponseWriter, err error) {
 // badRequest is the caller's mistake (a bad body, spec or argument), not the worker's trouble.
 type badRequest struct{ error }
 
+// maxCensus bounds a Reconcile's census: a number and a time for each user, some 60 bytes, so
+// room for a few hundred thousand users.
+const maxCensus = 32 << 20
+
 func decodeBody(rw http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<20))
+	return decodeBodyLimit(rw, r, v, 1<<20)
+}
+
+func decodeBodyLimit(rw http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(rw, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		refuse(rw, badRequest{fmt.Errorf("invalid body: %w", err)})
