@@ -4,7 +4,7 @@
 // what is queued on this device, never the server's totals.
 
 import { api, forAccount, type OfflineApp } from '../api'
-import { unsupportedBy } from '../apps/catalog'
+import { unsupportedBy } from '../apps/capabilities'
 import { assertSignedIn } from './account'
 import { type Download, type OfflineStore, type Scope, StaleDownload, scopeKey } from './store'
 
