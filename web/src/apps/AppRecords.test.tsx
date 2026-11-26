@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { AppAccess, AppDefinition } from '../api'
-import { navigate } from '../router'
+import { beforeLeaving, navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { AppRecords, RecordsButton } from './AppRecords'
 
@@ -934,4 +934,21 @@ test('closing or reloading the tab over a record not saved gets the browser’s 
   const after = new Event('beforeunload', { cancelable: true })
   window.dispatchEvent(after)
   expect(after.defaultPrevented).toBe(false)
+})
+
+test('a sign-out’s question about a record not saved only asks: the drawer keeps the change until the sign-out is certain', async () => {
+  await editing()
+  // Log out asks the page (the router's question for leaving the whole app).
+  let mayGo = false
+  act(() =>
+    beforeLeaving(() => {
+      mayGo = true
+    }),
+  )
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(mayGo).toBe(true))
+  // The next question (records not sent) may still be cancelled: the drawer and its change are
+  // still there, as they were.
+  expect(screen.getByRole('region', { name: 'Record 4' })).toBeTruthy()
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
 })

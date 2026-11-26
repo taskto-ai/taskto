@@ -665,7 +665,24 @@ cookie:
 
 ### `POST /api/logout`
 
-Revokes the session and clears the cookie. `204`, also without a session.
+Revokes the session the request carries. `204`, also without a session. It never expires the
+browser's session cookie: by the time the answer arrives, another tab may have signed in and
+replaced it, and an expiring cookie can't be limited to the session it was for. The revoked token
+is refused like any unknown one (`401`, which doesn't touch the cookie either), and the next login
+replaces it.
+
+An optional body names the login the sign-out is for, as `GET /api/me` names it:
+
+```json
+{"session": "c1d2e3"}
+```
+
+The session is then revoked only if it is the one the request carries. If the request carries
+another login that is still going on, nothing is revoked and the answer is
+`409 session_account_changed`: a sign-out tried again after its first answer was
+lost, from a page whose browser has signed in again since (the same account in another tab), never
+ends that newer login. A request whose login is over already (revoked, expired) has nothing to end,
+and is answered `204` whatever it names. The web app always names it.
 
 ### `GET /api/me`
 
@@ -674,9 +691,15 @@ Revokes the session and clears the cookie. `204`, also without a session.
   "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR", "time_zone": "Europe/Lisbon"},
   "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
   "can_create_workspace": true,
-  "is_operator": true
+  "is_operator": true,
+  "session": "4f1c…"
 }
 ```
+
+`session` is the public id of the login the reply is for, as `GET /api/me/sessions` names it: the
+one a login just made (in the replies of the calls that sign in), or the one the request came
+with; empty for an access token. The web app compares it to know a login is still the same one,
+not only the same account.
 
 Workspaces are listed oldest first. Requires a login. `can_create_workspace` is whether
 [`POST /api/workspaces`](#post-apiworkspaces) would let this user in now, which the web
@@ -3537,7 +3560,10 @@ space the session can't open is not a `404` then): nothing is read or written as
 account, and the client pauses the queue rather than count a failure. The check is made for
 **every `/api` route** that carries the header, not only an app's (the offline client names the
 account on its downloads, on the space and app checks that revalidate them, and on the queue): the
-answer is the same `409` before the route's own checks. A request without the header
+answer is the same `409` before the route's own checks. The web app also names the signed-in
+account on every request that changes something while its session lasts (`web/src/api.ts`), so a
+page whose browser session became someone else's, in another tab, can't change that person's
+data. A request without the header
 is as it always was; a value that is no account's id is `400`. An insert that names a photo (an attachment id) is accepted only when the
 photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
 uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before

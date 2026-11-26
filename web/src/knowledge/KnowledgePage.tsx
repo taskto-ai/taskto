@@ -74,7 +74,7 @@ export function KnowledgePage({
   const { ask } = guard
   // Leaving the page (another section, another workspace, the browser's Back) asks the same, while
   // a draft would be lost.
-  useBeforeLeave(ask)
+  useBeforeLeave((go) => ask(go))
   // What is shown now: a delete or a restore that finishes after the person went to another
   // space or document is not theirs to show there.
   const now = useLatest({ base, path: open?.path })

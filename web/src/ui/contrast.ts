@@ -27,6 +27,7 @@ export const PAGE_GROUNDS: readonly Ground[] = [
   'surface-own',
   ['hover', 'bg'],
   ['hover', 'surface'],
+  ['hover', 'bg-sunken'],
   ['selected', 'bg'],
   ['selected', 'bg-sunken'],
   ['accent-soft', 'bg'],

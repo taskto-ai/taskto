@@ -671,6 +671,7 @@ export type Me = {
   workspaces: Workspace[]
   can_create_workspace: boolean
   is_operator: boolean
+  session: string
 }
 
 export type Member = {

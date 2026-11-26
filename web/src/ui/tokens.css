@@ -71,6 +71,10 @@
     --control-md: 36px;
     --control-touch: 44px;
 
+    /* The logo's height, as .tt-logo draws it (legacy-shared.css): in rem, so a box cut to its mark
+       (as wide as it is high) follows the reader's font size with it. */
+    --logo-height: 1.5rem;
+
     /* Lines: a control's edge, the primary button's ink outline and a checked box's, and the
        focus ring with the gap between it and what it rings. */
     --line-thin: 1px;

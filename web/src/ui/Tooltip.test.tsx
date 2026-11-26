@@ -294,6 +294,51 @@ describe('Tooltip', () => {
     expect(Number.parseFloat(rtl.style.left)).toBeLessThan(960)
   })
 
+  test('beside the control with room on neither side, it goes above or below it, never over it', () => {
+    vi.stubGlobal('innerWidth', 320)
+    render(
+      <Tooltip content="Northwind Studio" describes={false} side="inline-end">
+        <button type="button">N</button>
+      </Tooltip>,
+    )
+    const b = screen.getByRole('button', { name: 'N' })
+    const rect = { top: 100, bottom: 144, left: 16, right: 304, width: 288, height: 44, x: 16, y: 100 }
+    b.getBoundingClientRect = () => ({ ...rect, toJSON: () => ({}) })
+    Object.defineProperty(tip(), 'offsetWidth', { configurable: true, get: () => 134 })
+    Object.defineProperty(tip(), 'offsetHeight', { configurable: true, get: () => 28 })
+    act(() => b.focus())
+    const top = Number.parseFloat(tip().style.top)
+    const left = Number.parseFloat(tip().style.left)
+    expect(tip().dataset.side).toBeUndefined()
+    expect(top + 28 <= rect.top || top >= rect.bottom).toBe(true)
+    expect(left).toBeGreaterThanOrEqual(8)
+    expect(left + 134).toBeLessThanOrEqual(320 - 8)
+    vi.unstubAllGlobals()
+  })
+
+  test("doesn't open on the focus that comes back from the menu its control opened, and does on a new one", () => {
+    render(
+      <div>
+        <Tooltip content="Workspace" describes={false}>
+          <button type="button" aria-controls="its-menu" aria-expanded="true">
+            W
+          </button>
+        </Tooltip>
+        <div id="its-menu">
+          <button type="button">Item</button>
+        </div>
+        <button type="button">Elsewhere</button>
+      </div>,
+    )
+    const control = screen.getByRole('button', { name: 'W' })
+    act(() => screen.getByRole('button', { name: 'Item' }).focus())
+    act(() => control.focus())
+    expect(isOpen()).toBe(false)
+    act(() => screen.getByRole('button', { name: 'Elsewhere' }).focus())
+    act(() => control.focus())
+    expect(isOpen()).toBe(true)
+  })
+
   test('without describing, it is hidden from screen readers and adds no description', () => {
     const b = setup(false)
     expect(b.hasAttribute('aria-describedby')).toBe(false)

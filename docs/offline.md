@@ -554,6 +554,17 @@ signing in is dealt with when it signs in:
   that this version can't check, and chooses *Keep them and sign out* (nothing is deleted; the
   database stays for the version or the moment that can read it) or *Discard and sign out*
   (asks again).
+- **A sign-out once it is certain** is recorded in the browser before anything of it waits: who,
+  from which login (`session`, as `GET /api/me` names it), how far it got, and what the person
+  decided. The shell goes at once and only *Signing out* is shown; nothing on the device is deleted
+  before the server confirms the logout. While the record is there, no tab's queue claims or sends
+  anything for that account, and no offline start opens it. The logout names its login, so a *Try
+  again* after a lost answer never ends a newer login of the same account. *Back to the app* asks
+  `GET /api/me` and starts the app afresh (what wasn't saved on a page is not kept) only for that same
+  login, and only if no tab signed in while it asked; otherwise *The account changed*. A tab that
+  starts with that login takes the sign-out up again rather than signing in. The record goes once the
+  device is verified clear, or when that login goes back, or when the account signs in with a newer
+  login.
 - **Another tab changes the account.** A tab learns that the account signed in on this browser
   changed (another tab signed in as someone else, or out: the browser's `storage` event and a
   BroadcastChannel; or the server answered `409 session_account_changed` to one of its requests)

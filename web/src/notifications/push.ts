@@ -143,9 +143,10 @@ export async function disablePush(): Promise<void> {
 }
 
 /**
- * Called when the person signs out, or the session ended: this device stops receiving what is
- * theirs, whatever it takes. Best effort and bounded: the server removes a session's subscription
- * itself, and a push service that is told the subscription is over answers "gone" to the next one.
+ * Called once the person's session has ended (the server confirmed the sign-out, or said the
+ * session is gone): this device stops receiving what is theirs. The server has already removed the
+ * session's subscription with it, so only the browser's is left to end. Best effort and bounded: a
+ * push service that is told the subscription is over answers "gone" to the next one.
  */
 export async function leavePush(): Promise<void> {
   if (!pushSupported()) return
@@ -153,7 +154,6 @@ export async function leavePush(): Promise<void> {
   const leave = async () => {
     const sub = await (await registration())?.pushManager.getSubscription()
     if (!sub) return
-    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint } }).catch(() => {})
     await sub.unsubscribe().catch(() => {})
   }
   // Bounded: signing out never waits long on a browser that is slow to answer.
