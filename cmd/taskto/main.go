@@ -292,6 +292,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	integrationSvc := integrations.New(integrationStore, integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
 	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb, Payments: integrationSvc}).WithDeletedRetention(cfg.AppDeletedRetention())
+	// A verified payment event is applied to the app's record by the apps, as the integration and only as
+	// the app's approved contract allows; until this is set, stored events wait.
+	integrationSvc.UseRecords(appSvc)
 	// The apps' effects (cards, documents) are done in the background, as the users who acted,
 	// so they go on when nobody has the app open. Stopped before the database closes.
 	stopEffects := appSvc.StartOutbox(ctx)
@@ -418,9 +421,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		stopMaintain()
 		maintaining.Wait()
 	}()
-	// The integrations' webhook route stores the events providers send; their worker applies them
-	// (the apply step is set by the card that adds it, until when events wait), stopped before the
-	// database closes.
+	// The integrations' webhook route stores the events providers send; their worker applies them to
+	// the apps' records (UseRecords), stopped before the database closes.
 	stopIntegrationEvents := integrationSvc.StartEvents(ctx)
 	defer stopIntegrationEvents()
 	var accounts *auth.Service

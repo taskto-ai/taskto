@@ -23,6 +23,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/integrations/testprovider"
+	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/paylink"
 )
 
@@ -64,6 +65,8 @@ type pay struct {
 	space access.Space
 	in    Integration
 	app   apps.App
+	// approval is the admin's approval of the app's payments contract.
+	approval apps.IntegrationApproval
 	// offset moves the apps' clock on, in nanoseconds.
 	offset *atomic.Int64
 	stop   func()
@@ -76,7 +79,10 @@ func providerKinds(provider string) []string {
 	return nil
 }
 
-func newPay(t *testing.T, public string) *pay {
+func newPay(t *testing.T, public string) *pay { return newPayWith(t, public, invoiceApp) }
+
+// newPayWith is newPay with the invoicing app's definition, for a test that needs another.
+func newPayWith(t *testing.T, public, definition string) *pay {
 	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
@@ -93,12 +99,19 @@ func newPay(t *testing.T, public string) *pay {
 	spaces := access.New(e.db, a)
 	spaces.Routes(mux)
 	svc.Routes(mux, a, spaces)
+	svc.HookRoutes(mux)
 	p := &pay{env: e, fake: fake, svc: svc, offset: offset}
 	p.apps = apps.New(e.db, spaces).WithPlatform(apps.Platform{ProviderKinds: providerKinds, Payments: svc}).
 		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) })
 	p.apps.Routes(mux)
 	p.apps.ApprovalRoutes(mux, a)
-	e.h = auth.CSRF(mux)
+	svc.UseRecords(p.apps) // stored events are applied (by drainEvents: the tests run the worker by hand)
+	inbox, err := notifications.New(ctx, e.db, spaces, notifications.Options{Key: e.key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox.Routes(mux, a)
+	e.h = a.ClientAddr(auth.CSRF(mux))
 
 	p.owner, p.ws = e.setup()
 	rec := p.owner.do(http.MethodPost, wsPath(p.ws, "spaces"), map[string]string{"name": "Team"})
@@ -106,27 +119,34 @@ func newPay(t *testing.T, public string) *pay {
 	p.space = decode[access.Space](t, rec)
 
 	body := stripeBody("main")
-	body["secrets"] = map[string]string{"api_key": fake.APIKey()}
+	body["secrets"] = map[string]string{"api_key": fake.APIKey(), "webhook_secret": stripeHook}
 	body["currencies"] = []string{"EUR", "JPY"}
 	p.in = e.create(p.owner, p.ws, body)
 	if _, err := e.db.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, p.in.ID, p.space.ID); err != nil {
 		t.Fatal(err)
 	}
-
-	rec = p.owner.do(http.MethodPost, p.appsPath(""), map[string]any{"name": "Invoices", "definition": rawJSON(invoiceApp)})
-	expect(t, rec, http.StatusCreated)
-	p.app = decode[apps.App](t, rec)
-	rec = p.owner.do(http.MethodGet, p.appsPath(fmt.Sprintf("/%d/integrations", p.app.ID)), nil)
-	expect(t, rec, http.StatusOK)
-	hash := decode[apps.IntegrationStatus](t, rec).Slots[0].ContractHash
-	rec = p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/integrations/payments/request", p.app.ID)), map[string]any{"contract_hash": hash})
-	expect(t, rec, http.StatusOK)
-	approval := decode[apps.IntegrationApproval](t, rec)
-	expect(t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integration-approvals/%d/approve", approval.ID)),
-		map[string]any{"integration_id": p.in.ID}), http.StatusOK)
-	expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/publish", p.app.ID)),
-		map[string]any{"version": p.app.Version, "acknowledge": []any{}}), http.StatusOK)
+	p.app, p.approval = p.publishApp("Invoices", definition)
 	return p
+}
+
+// publishApp builds an app from the definition in the pay space, has its payments contract approved
+// for the integration and publishes it.
+func (p *pay) publishApp(name, definition string) (apps.App, apps.IntegrationApproval) {
+	p.t.Helper()
+	rec := p.owner.do(http.MethodPost, p.appsPath(""), map[string]any{"name": name, "definition": rawJSON(definition)})
+	expect(p.t, rec, http.StatusCreated)
+	app := decode[apps.App](p.t, rec)
+	rec = p.owner.do(http.MethodGet, p.appsPath(fmt.Sprintf("/%d/integrations", app.ID)), nil)
+	expect(p.t, rec, http.StatusOK)
+	hash := decode[apps.IntegrationStatus](p.t, rec).Slots[0].ContractHash
+	rec = p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/integrations/payments/request", app.ID)), map[string]any{"contract_hash": hash})
+	expect(p.t, rec, http.StatusOK)
+	approval := decode[apps.IntegrationApproval](p.t, rec)
+	expect(p.t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integration-approvals/%d/approve", approval.ID)),
+		map[string]any{"integration_id": p.in.ID}), http.StatusOK)
+	expect(p.t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/publish", app.ID)),
+		map[string]any{"version": app.Version, "acknowledge": []any{}}), http.StatusOK)
+	return app, approval
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -2788,5 +2808,64 @@ func TestACrashAfterTheCallBeforeItsAnswerIsNotedMakesOneLink(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A link saved on an earlier try is given again only while a payer can use it: its state is read at
+// the provider first. An expired or paid one is not given, and nothing else is made; a read that fails
+// gives nothing and makes nothing.
+func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
+	for name, end := range map[string]func(p *pay, session string) error{
+		"expired": func(p *pay, session string) error { _, err := p.fake.Expire(session); return err },
+		"paid":    func(p *pay, session string) error { _, err := p.fake.Pay(session); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, publicURL)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-saved-0001")
+			ctx := context.Background()
+			first, err := p.svc.OpenPaymentLink(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
+			if again, err := p.svc.OpenPaymentLink(ctx, req); err != nil || again != first {
+				t.Fatalf("again = %+v, %v", again, err)
+			}
+			if n := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID)); n != reads+1 {
+				t.Fatalf("the saved link was given with %d reads of its state, want %d", n, reads+1)
+			}
+
+			// The read fails: nothing is given, and nothing made.
+			p.fake.Fail(testprovider.ServerError().On(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
+			link, err := p.svc.OpenPaymentLink(ctx, req)
+			var pe *paylink.Error
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationProviderUnreachable || !pe.Transient || link.URL != "" {
+				t.Fatalf("with the read failing: %+v, %v", link, err)
+			}
+
+			// A key of another account (same mode) never reads it: nothing given, nothing read.
+			p.fake.SetAccount(otherAccount)
+			reads = len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
+			link, err = p.svc.OpenPaymentLink(ctx, req)
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationAccountChanged || link.URL != "" {
+				t.Fatalf("under another account: %+v, %v", link, err)
+			}
+			if n := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID)); n != reads {
+				t.Fatal("another account's key read the saved session")
+			}
+			p.fake.SetAccount(testprovider.TestAccountID)
+
+			if err := end(p, first.ObjectID); err != nil {
+				t.Fatal(err)
+			}
+			link, err = p.svc.OpenPaymentLink(ctx, req)
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkAlreadyPaid || link.URL != "" {
+				t.Fatalf("the %s link: %+v, %v", name, link, err)
+			}
+			if n := len(p.posts()); n != 1 || len(p.fake.Sessions()) != 1 {
+				t.Fatalf("%d calls, %d sessions: something else was made", n, len(p.fake.Sessions()))
+			}
+		})
 	}
 }

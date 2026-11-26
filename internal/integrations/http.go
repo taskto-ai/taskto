@@ -119,6 +119,8 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, spaces *access.Che
 	mux.Handle("DELETE "+base+"/{integration}", admin(s.handleDelete))
 	mux.Handle("PUT "+base+"/{integration}/spaces", admin(s.handleSpaces))
 	mux.Handle("POST "+base+"/{integration}/check", admin(s.handleCheck))
+	mux.Handle("GET "+base+"/{integration}/events", admin(s.handleEvents))
+	mux.Handle("POST "+base+"/{integration}/events/{event}/retry", admin(s.handleRetryEvent))
 	mux.Handle("GET "+base+"/{integration}/payment-links/unresolved", admin(s.handleUnresolved))
 	mux.Handle("POST "+base+"/{integration}/payment-links/{effect}/confirm-no-link", admin(s.handleConfirmNoLink))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/integrations",

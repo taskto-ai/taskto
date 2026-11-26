@@ -20,7 +20,7 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
 - **Allowed spaces**: which spaces' apps may use an integration. A new integration has none.
 - The **webhook route**, `POST /hooks/<public id>`, which verifies a provider's signature and
   keeps the event ([Webhooks and the public URL](#webhooks-and-the-public-url)), and the worker
-  that will apply what it keeps.
+  that applies what it keeps to the apps' records ([Applying events](#applying-events)).
 - The **egress policy** for calls to providers and the **request builder** that pins each
   adapter's hosts ([Egress](#egress)).
 - **Audit events** for every change ([audit.md](audit.md)).
@@ -32,9 +32,12 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
 - **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe and
   writes its address to the record ([Payment links](#payment-links)).
 
-The webhook is received and its events are stored, but no stored event is applied to a record
-yet. Those arrive as separate changes, in this order: applying a payment to a record; polling the
-provider for payments the webhook missed. The rules below are the ones those changes have to keep.
+- **Applying events**: a verified payment event marks the record of its payment link paid (or
+  refunded) as the integration, and only as the app's approved contract allows
+  ([Applying events](#applying-events)).
+
+Polling the provider for payments the webhook missed arrives as a separate change. The rules below
+are the ones it has to keep.
 
 ## Concepts
 
@@ -427,6 +430,14 @@ write.
   under it. A completed session and an inactive link stop the entry with
   `integration_link_already_paid`. If the state can't be read, the object stays on the key and the
   outcome stays unknown (above).
+- **A saved link is read again before it is given again.** An entry done again after its link was
+  saved (its try stopped before the record held the link, or the entry runs once more) gets the
+  saved link only if its state, read again at the provider in the reference's own account and mode
+  (another account's or mode's key is refused with `integration_account_changed` and reads nothing),
+  still says a payer can use it. One that
+  expired or was paid since, or that the reference's own verified events ended, is not given, and
+  nothing else is made for the entry: it stops with `integration_link_already_paid` for a person to
+  reconcile. A read that fails gives nothing and makes nothing, and the entry tries again.
 - **A reference belongs to its account and its request.** When the reference is made, the integration
   reads the account its key belongs to (`GET /v1/account`, which with no id answers the account of the
   key; <https://docs.stripe.com/api/accounts/retrieve>, so the key must be allowed to read it) and
@@ -547,7 +558,110 @@ What a delivery goes through, in this order, each step cheaper than the next:
 A stored event is applied after the answer, by the **event worker**: leased to one worker at a
 time (a lease that runs out, because the server died, gives the event to the next try), at most
 five tries with growing waits, and finished events are purged after 30 days (failed ones after
-90). The apply step is the next card's: until one is set, events wait in `pending`, untouched.
+90). The apply step is [below](#applying-events): until the server sets one, events wait in
+`pending`, untouched.
+
+## Applying events
+
+The event worker hands each stored event to the apps. It is the only code that reads what a
+provider said and changes what an app holds, so it believes little:
+
+- **The record is found through a token the server issued, and nothing else.** A ref has one token
+  for each of its idempotency keys (`integration_ref_attempts`; the first key's is the ref's own),
+  and a payment echoes the token of the key whose object was paid, which is a later key's after an
+  earlier one expired or was given up, so any of them finds the ref. A token no key of any ref
+  carries names nothing (`integration_event_ref_unknown`, ignored). The provider's metadata,
+  descriptions and ids name no record, app or space. The ref
+  (`integration_refs`) belongs to one integration, which must be the event's (another's token
+  names nothing: `integration_event_ref_unknown`, ignored), and to one mode of the provider's
+  account, which must be the mode of the event (`livemode`): money of the other mode is ignored
+  (`integration_event_mode_mismatch`).
+- **A refund carries no token of ours.** It is mapped through the payment (the payment intent)
+  that the ref learned from the verified event that paid it, in the event's own integration.
+  Stripe tells events in no set order, so a full refund can arrive before the payment it undoes. A
+  refund of a payment no ref has been paid by **waits for that payment** (`pending`,
+  `integration_event_payment_unknown`) when the payment may still be one of this integration's: a
+  verified event of the integration told the payment with one of our tokens, or a ref of the
+  integration that isn't paid yet asks exactly the amount, currency and mode the refund gives back
+  (a ref is made before its payment, and the payment before its refund). It is tried again on a
+  growing wait (30 seconds to 30 minutes) that uses up none of its tries, and the payment's own
+  apply makes it due at once, so the invoice ends refunded. It waits for **72 hours** from when it
+  arrived, the time Stripe retries a webhook it couldn't deliver; then it **fails** with the same
+  code, and the admins are told. A payment that applies after that still tries its failed refund
+  again. Any other refund is of a payment this integration never made a link for, and is ignored
+  (`integration_event_ref_unknown`): it changes no record.
+- **Money is checked exactly.** The amount (in the smallest unit) and the currency must equal what
+  the ref asked for, else the event is **failed** with `integration_amount_mismatch`, not applied and
+  shown to the admins; a refund must be in the ref's currency and not above what was paid. Only a
+  refund of **all** of the payment moves the ref and the record to refunded: a partial one is ignored
+  (`integration_event_partial_refund`), since the invoice isn't refunded yet, and the full one
+  that completes it is applied (Stripe's `charge.refunded` reports the total refunded so far).
+- **The ref's state only moves forward**: `creating`, `open` or `failed` (and `expired`, since money
+  is never turned away for the state it finds) to `paid`; `creating` or `open` to `expired` or `failed`;
+  `paid` to `refunded`. The change is a conditional `UPDATE … WHERE state IN (…)` made in the
+  transaction that writes the record, so the state and the record change together or not at all. An
+  event that finds the ref already there is a **duplicate** (`integration_event_duplicate`), one that
+  finds it past there is **late** (`integration_event_late`), both ignored.
+- **A ref whose link's outcome is unknown** (the provider never said whether a call under the ref's
+  current key made the link, so the ref is `creating` with no object and its entry only looks for it;
+  "unknown" is a property of that key's row, not of the ref) can still be paid: a payer may have used
+  a link the server never heard of. A verified paid event for a token of any of the ref's keys is real
+  money and applies once, as for any ref: the record is marked paid, the ref takes the event's object
+  as its own if the event names one and no other ref has it, and the key the payment came through,
+  if it had no outcome, becomes `settled` (the other keys keep theirs). The paid ref leaves the
+  admin's list of unresolved links, and confirming that no link exists finds nothing to decide,
+  whichever key the payment came through, so no new key is allowed. The entry that asked for the link
+  then stops with `integration_link_already_paid` and makes no link: the record is paid, and there
+  is no address to write. An end that is not money (`expired`, `failed`) is not applied to a ref with
+  no object (`integration_event_late`): the entry's lookup may still adopt the link. Nor is one for an
+  object that isn't the ref's link, such as the session of an earlier key that expired, since the
+  ref has moved on to a link of a later key that is still open (`integration_event_late`).
+- **A second payment** on a ref that was paid, by another payment, is never applied: it is
+  recorded in `integration_ref_duplicates` (kept as long as the ref, unlike the event, once per
+  payment) and the admins are told (`integration_event_second_payment`, ignored); the row and the
+  event's end are one transaction, and the same second payment told again (after the purge) is a
+  duplicate, with no second notification. Two paid events
+  are the same payment when both name the same payment (the payment intent), or, when either names
+  none, the same object; two that can't be told apart by either id are two payments, so a payment
+  is never taken for a repeat because both lack an id.
+- **Re-checked when it is applied**, in the transaction that writes, against the live release: the
+  app is online and its space isn't archived, its live release declares the slot, the release's
+  contract is approved, the integration is switched on and allowed in the space, and it is the
+  integration the ref was made under. Otherwise the event is **failed** with
+  `integration_event_unavailable`, `integration_event_integration_changed` or
+  `integration_event_app_offline`, the ref stays as it was, and the admins are told. A record that is
+  gone is `integration_event_record_gone`. A failed event is **retried** by an admin once what is
+  wrong is fixed ([api.md](api.md#post-apiworkspacesworkspaceintegrationsintegrationeventseventretry)).
+  Money that arrives is never dropped silently: an event ends applied, ignored with a reason, or
+  failed with a reason an admin sees.
+- **What is written** is the contract's handler for the event: its declared fields, its literals and
+  the sources it names (`occurred_at`, `paid_at`, `amount`, `currency`, `payment_id`), under its
+  `only_if` rule, as it holds of the record then. A rule that doesn't hold writes nothing; the ref is
+  still settled, since the money arrived, and an admin is told when it was a payment
+  (`integration_event_condition_unmet`, ignored). An event for which the app declares no handler
+  settles the ref and writes nothing (`integration_event_no_handler`, ignored). `receipt_url` is
+  never written: Stripe's checkout events carry none, and the adapter keeps no text. The write
+  still goes through `Collection.Fits`; a record it would make invalid is refused with nothing
+  changed (`integration_event_record_refused`, failed). The history's actor is the integration, the
+  action the normalized event, and no effect is queued (there is no user to run it as).
+- **Idempotent.** The store forgets an event when it is purged, and the provider's retry of it is
+  stored again, so the same event can arrive a second time long after the first. The second finds the
+  ref where the first left it, is a duplicate and changes nothing: a person's later edit of the record
+  isn't undone by it. An event's own outcome (applied, or ignored because the app's rule didn't hold
+  or it has no handler) is stored in the transaction that moves the ref and writes the record, so a
+  worker that stops after that commit leaves an event that is ended, with its reason, and never one
+  a later try would find settled and take for a duplicate. Only the claim that holds the event
+  writes: a worker whose lease ran out has its write rolled back.
+- **The admins** are told (an inbox notification of the kind `integration_event`, to each admin of
+  the workspace, naming the integration and nothing of the payment) of every failed event, of a
+  second payment and of a payment the app's rule left unrecorded. The event's end and the debt of
+  its notification (one per end, so a later end never replaces an earlier one's) are stored
+  together, and the notification is written by a step of its own, after every ten events and once
+  the queue is empty: one that can't be written is tried again every minute until it is, and never
+  holds back the event or the events after it. An event that still owes one is not purged. An admin lists an integration's
+  events and retries a failed one through [the API](api.md#get-apiworkspacesworkspaceintegrationsintegrationevents); an
+  event shows its kind, amount, state and code, never the app or record, since an admin has no read
+  access to a private app's records. A notification to the record's creator is not sent.
 
 ### What the adapter was written against (Stripe)
 

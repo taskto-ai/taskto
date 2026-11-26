@@ -481,9 +481,34 @@ const (
 	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
 	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
 	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
-	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"      // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
-	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"  // a call may have run and nobody knows what it made: only its object is looked for and the call asked again under its own key, for a bounded time, and no other key is used meanwhile
-	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"   // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
-	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable" // 409: an object of the payment link was seen at the provider (an answer named one, or a lookup found one), or one of its keys was resolved already: an admin's confirmation never allows a new key for it
-	CodeIntegrationConditionChanged    Code = "integration_condition_changed"    // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
+
+	// What became of a verified provider event the integrations' worker applies to a record
+	// (internal/integrations apply.go). The first group are an event's failures: it waits for an
+	// admin and is tried again once what is wrong is fixed. The second are events that are real
+	// and change nothing, kept as ignored with the reason.
+
+	CodeIntegrationEventUnavailable        Code = "integration_event_unavailable"         // the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot
+	CodeIntegrationEventIntegrationChanged Code = "integration_event_integration_changed" // the app's slot is bound to another integration than the one whose payment this is
+	CodeIntegrationEventAppOffline         Code = "integration_event_app_offline"         // the app is offline, archived or not published, or its space is archived
+	CodeIntegrationEventRecordGone         Code = "integration_event_record_gone"         // the record, or its app, is gone or is in another workspace
+	CodeIntegrationEventRecordRefused      Code = "integration_event_record_refused"      // the record, as the event would leave it, doesn't fit the app
+	CodeIntegrationAmountMismatch          Code = "integration_amount_mismatch"           // the payment isn't the amount and currency the payment link asked: not applied
+	CodeIntegrationEventPaymentUnknown     Code = "integration_event_payment_unknown"     // a full refund of a payment no reference has been paid by yet, which one may still be: waits for that payment for up to 72 hours, then waits for an admin
+
+	CodeIntegrationEventNotFound     Code = "integration_event_not_found"     // 404: no such event in this integration
+	CodeIntegrationEventNotRetriable Code = "integration_event_not_retriable" // 409: only a failed event is retried
+
+	CodeIntegrationEventRefUnknown     Code = "integration_event_ref_unknown"     // ignored: no payment link of this integration has the event's reference
+	CodeIntegrationEventModeMismatch   Code = "integration_event_mode_mismatch"   // ignored: an event of live money for a link made in test mode, or the other way round
+	CodeIntegrationEventDuplicate      Code = "integration_event_duplicate"       // ignored: the event is the payment or the end the reference already has
+	CodeIntegrationEventLate           Code = "integration_event_late"            // ignored: the reference has moved past what the event says
+	CodeIntegrationEventNoHandler      Code = "integration_event_no_handler"      // ignored: the app declares nothing for the event, so its record is left as it is
+	CodeIntegrationEventConditionUnmet Code = "integration_event_condition_unmet" // ignored: the record didn't meet the rule of the app's handler, so it is left as it is
+	CodeIntegrationEventPartialRefund  Code = "integration_event_partial_refund"  // ignored: a refund of part of the payment
+	CodeIntegrationEventSecondPayment  Code = "integration_event_second_payment"  // ignored: a second payment for a reference that was paid, kept for the admins to reconcile
+	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"       // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
+	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"   // a call may have run and nobody knows what it made: only its object is looked for and the call asked again under its own key, for a bounded time, and no other key is used meanwhile
+	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"    // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
+	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable"  // 409: an object of the payment link was seen at the provider (an answer named one, or a lookup found one), or one of its keys was resolved already: an admin's confirmation never allows a new key for it
+	CodeIntegrationConditionChanged    Code = "integration_condition_changed"     // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
 )

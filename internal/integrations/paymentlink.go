@@ -127,8 +127,8 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if found && (ref.appID != req.AppID || ref.recordID != req.RecordID) {
 		return paylink.Link{}, unavailable() // an entry's number is its own: never another's
 	}
-	if found && ref.objectID != "" {
-		return madeLink(ref, req)
+	if found && (ref.objectID != "" || paidWithoutLink(ref)) {
+		return s.savedLink(ctx, rec, provider, ref, req)
 	}
 	if found && ref.integrationID != req.IntegrationID {
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged} // before anything is asked of anyone
@@ -499,7 +499,75 @@ func madeLink(r ref, req paylink.Request) (paylink.Link, error) {
 	if r.integrationID != req.IntegrationID {
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
 	}
+	if r.url == "" {
+		// Paid before the entry noted its link (a verified payment event learned the object): there is
+		// no address to give, and none is made. The record is the event's to settle; the entry stops.
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+	}
 	return r.link(), nil
+}
+
+// savedLink is the link the entry saved on an earlier try, given again (the try that saved it stopped
+// before the record held it, or the entry is done again): only if a payer can still use it. It was
+// open when it was saved, and may have expired or been paid since, so its state is read again at the
+// provider, as the object of an answer is before it is saved (try.settle): an open one is given; an
+// expired or paid one, or one the ref's own events ended, is not, and nothing else is made for the
+// entry (integration_link_already_paid: a person reconciles it). A read that fails tells nothing, and
+// gives nothing and makes nothing: the entry tries again.
+func (s *Service) savedLink(ctx context.Context, rec record, provider PaymentProvider, r ref, req paylink.Request) (paylink.Link, error) {
+	if r.integrationID != req.IntegrationID || r.url == "" {
+		return madeLink(r, req)
+	}
+	if r.state == "paid" || r.state == "refunded" || r.state == "expired" {
+		// A verified event of the ref ended the link: no payer can use it.
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+	}
+	creds, err := s.store.credentials(ctx, req.WorkspaceID, req.IntegrationID)
+	if err != nil || creds.APIKey == "" {
+		var unreadable unreadableError
+		if err == nil || errors.As(err, &unreadable) {
+			return paylink.Link{}, unavailable()
+		}
+		return paylink.Link{}, err
+	}
+	// The object is the ref's mode's: a key of the other mode can't read it, and says nothing of it.
+	if mode := Lookup(rec.Provider).Mode(rec.Settings, creds.APIKey.Reveal()); r.accountMode != "" && mode != r.accountMode {
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+	}
+	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
+	readFailed := func(err error) error {
+		ce, ok := IsCall(err)
+		if !ok {
+			return err
+		}
+		logFailure(rec, ce)
+		return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+	}
+	// And the account's: the object is looked for only where it was made. A key of another account
+	// can't read it and says nothing of it; a rotated key of the same account reads it.
+	if r.accountID != "" {
+		account, err := provider.AccountID(ctx, creds, client)
+		if err != nil {
+			return paylink.Link{}, readFailed(err)
+		}
+		if account != r.accountID {
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+		}
+	}
+	state, err := provider.LinkState(ctx, creds, client, r.successURL == "", r.objectID)
+	if err != nil {
+		return paylink.Link{}, readFailed(err)
+	}
+	if state != LinkOpen {
+		slog.Warn("integrations: a saved payment link can no longer take a payment; an admin reconciles it", "ref", r.id)
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+	}
+	return madeLink(r, req)
+}
+
+// paidWithoutLink is a ref a payment settled before its entry had the link: it has no address.
+func paidWithoutLink(r ref) bool {
+	return r.url == "" && (r.state == "paid" || r.state == "refunded")
 }
 
 // refHolds is what the ref holds now, read again: its link, checked as any finished ref is, or
@@ -612,6 +680,9 @@ type ref struct {
 	// that read it (test or live), and successURL and cancelURL the pages its calls ask the payer to
 	// return to, both empty for a link that is hosted by the provider.
 	accountID, accountMode, successURL, cancelURL string
+	// paidObjectID and paymentID are what the verified event that paid the ref said: the provider's
+	// object the payment arrived on and the payment itself (apply.go), empty until then.
+	paidObjectID, paymentID string
 }
 
 // newLink is what the provider is asked for under key a: the key's token, the ref's money and the
@@ -630,12 +701,14 @@ func (r ref) link() paylink.Link {
 
 // refColumns are integration_refs' own, so a query of that table alone reads a ref.
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
-	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url`
+	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
+	coalesce(paid_object_id, ''), coalesce(payment_id, '')`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
-		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL)
+		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
+		&r.paidObjectID, &r.paymentID)
 	return r, err
 }
 

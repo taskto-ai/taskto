@@ -181,6 +181,7 @@ test('nothing is asked or subscribed until the person turns push on, and then on
       card_comment: 'A card of yours has a new comment',
       card_mention: 'You were mentioned in a comment',
       app_effect_failed: 'An app action needs your attention',
+      integration_event: 'A payment needs an admin',
       changed: 'Something changed',
     },
   })

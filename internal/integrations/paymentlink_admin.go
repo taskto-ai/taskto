@@ -84,6 +84,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		JOIN apps a ON a.id = r.app_id
 		LEFT JOIN app_effects e ON e.id = r.effect_id
 		WHERE r.integration_id = ? AND r.provider_object_id IS NULL AND k.outcome IS NULL AND k.sends > k.clean_sends AND r.effect_id IS NOT NULL
+			AND r.state NOT IN ('paid', 'refunded')
 		ORDER BY r.id`, integration)
 	if err != nil {
 		return nil, err
@@ -140,16 +141,16 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 			return err
 		}
 		var refID, keySeq, appID, spaceID int64
-		var object, state, code string
+		var object, refState, state, code string
 		var unknown, clean bool
 		err = tx.QueryRowContext(ctx, `
-			SELECT r.id, r.key_seq, r.app_id, coalesce(r.provider_object_id, ''), a.space_id,
+			SELECT r.id, r.key_seq, r.app_id, coalesce(r.provider_object_id, ''), r.state, a.space_id,
 				coalesce(k.outcome IS NULL AND k.sends > k.clean_sends, 0), coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`
 			FROM integration_refs r
 			JOIN apps a ON a.id = r.app_id
 			LEFT JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
 			LEFT JOIN app_effects e ON e.id = r.effect_id
-			WHERE r.effect_id = ? AND r.integration_id = ?`, effect, integration).Scan(&refID, &keySeq, &appID, &object, &spaceID, &unknown, &state, &code, &clean)
+			WHERE r.effect_id = ? AND r.integration_id = ?`, effect, integration).Scan(&refID, &keySeq, &appID, &object, &refState, &spaceID, &unknown, &state, &code, &clean)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && !spaces[spaceID]) {
 			return errNotFound // another space's, or none: nothing says which
 		}
@@ -158,7 +159,8 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 		}
 		nothing := apierr.New(http.StatusConflict, apierr.CodeIntegrationNothingToConfirm,
 			"this payment link isn't waiting for a decision about an unknown outcome")
-		if object != "" || !unknown || state != "failed" || code != string(apierr.CodeIntegrationOutcomeUnknown) {
+		// A payment settled the ref (a verified event, for any of its keys' tokens): nothing is unknown any more.
+		if object != "" || !unknown || refState == "paid" || refState == "refunded" || state != "failed" || code != string(apierr.CodeIntegrationOutcomeUnknown) {
 			return nothing
 		}
 		// Something of the ref was seen at the provider (an object an answer named or a lookup found, kept
@@ -182,7 +184,7 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 			return nothing
 		}
 		if res, err = tx.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1
-			WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL`, refID, keySeq); err != nil {
+			WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL AND state NOT IN ('paid', 'refunded')`, refID, keySeq); err != nil {
 			return err
 		}
 		if n, err := res.RowsAffected(); err != nil {
