@@ -36,13 +36,23 @@ import (
 // key, the provider is asked for an object of the ref's token, which is adopted as if the call had
 // answered it; and if it can't be asked, nothing is made and the entry waits (FindPaymentLink).
 //
+// A ref belongs to what its first try was: the provider's account (read from the provider with the
+// integration's key when the ref is made), and the shape of the request (the two pages the payer
+// returns to, or none). A retry sends the same parameters and looks among the same kind of objects
+// in the same account, whatever the server's public address and the integration's key are by then.
+// A key replaced by another account's leaves the unfinished refs of the old account as they are, and
+// their entries fail (integration_account_changed): nothing is looked for or made in the new account,
+// where an object the old one made could not be found. A link the ref already has is never given
+// under another integration than the one that made it (integration_changed).
+//
 // The ref is made before the call and the money is checked before the ref, so a refused amount
 // leaves nothing behind. The key of the integration is opened here, for the call, and goes nowhere
 // else: not into an error, a log line, the ref or the record.
 
 // The server's own pages the payer returns to from the provider's hosted page (the web app's
 // routes), when the server has a public URL: never a definition's, never a request's. Without one
-// the payer stays on a confirmation page the provider hosts.
+// the payer stays on a confirmation page the provider hosts. A ref takes the pages the server has
+// when the ref is made and keeps them: they are the parameters of its calls.
 const (
 	PaymentDonePath      = "/payment/done"
 	PaymentCancelledPath = "/payment/cancelled"
@@ -83,6 +93,11 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return paylink.Link{}, unavailable() // an entry's number is its own: never another's
 	}
 	if found && ref.objectID != "" {
+		// The link belongs to the integration that made it: another one, bound since, is not the one
+		// the record may be written with, and no second link is made for the entry.
+		if ref.integrationID != req.IntegrationID {
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
+		}
 		return ref.link(), nil
 	}
 
@@ -91,9 +106,6 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if err != nil {
 		return paylink.Link{}, err
 	}
-	// With no public URL there are no pages of ours: both are empty and the provider hosts the
-	// payer's confirmation (a link is made all the same).
-	success, cancel := s.pageURLs()
 	creds, err := s.store.credentials(ctx, req.WorkspaceID, req.IntegrationID)
 	if err != nil || creds.APIKey == "" {
 		var unreadable unreadableError
@@ -103,7 +115,21 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return paylink.Link{}, err
 	}
 
-	ref, err = s.beginRef(ctx, req, minor, cur)
+	// Whose account the key is now: a ref is made, and its unfinished call is looked for and
+	// repeated, only in the account it was made in.
+	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
+	account, err := provider.AccountID(ctx, creds, client)
+	if err != nil {
+		ce, ok := IsCall(err)
+		if !ok {
+			return paylink.Link{}, err
+		}
+		return paylink.Link{}, s.callFailed(ctx, nil, rec, ce)
+	}
+	// With no public URL there are no pages of ours: both are empty and the provider hosts the
+	// payer's confirmation (a link is made all the same). A ref already made keeps its own.
+	success, cancel := s.pageURLs()
+	ref, err = s.beginRef(ctx, req, minor, cur, account, success, cancel)
 	if err != nil {
 		return paylink.Link{}, err
 	}
@@ -111,10 +137,9 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return ref.link(), nil
 	}
 
-	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
 	nl := NewLink{
 		Token: ref.token, KeySeq: ref.keySeq, AmountMinor: minor, Currency: cur, Description: req.Description,
-		SuccessURL: success, CancelURL: cancel,
+		SuccessURL: ref.successURL, CancelURL: ref.cancelURL,
 	}
 	// A key of its own means an earlier call answered an error the provider kept, which it also
 	// gives for a call it executed: the object may exist. Another under the new key could make a
@@ -129,7 +154,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if ref.keySeq > 0 || s.store.now().Sub(since) >= keyTrusted {
 		found, ok, err := provider.FindPaymentLink(ctx, creds, client, nl, since)
 		if err != nil {
-			return paylink.Link{}, s.callFailed(ctx, ref, rec, err)
+			return paylink.Link{}, s.callFailed(ctx, &ref, rec, err)
 		}
 		if ok {
 			if err := s.noteLink(ctx, ref, found); err != nil {
@@ -141,7 +166,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	}
 	link, err := provider.CreatePaymentLink(ctx, creds, client, nl)
 	if err != nil {
-		return paylink.Link{}, s.callFailed(ctx, ref, rec, err)
+		return paylink.Link{}, s.callFailed(ctx, &ref, rec, err)
 	}
 	if err := s.noteLink(ctx, ref, link); err != nil {
 		return paylink.Link{}, err
@@ -236,6 +261,9 @@ type ref struct {
 	keySeq                             int
 	state                              string
 	createdAt                          string
+	// accountID is the provider's account the ref was made under, and successURL and cancelURL the
+	// pages its calls ask the payer to return to, both empty for a link that is hosted by the provider.
+	accountID, successURL, cancelURL string
 }
 
 func (r ref) link() paylink.Link {
@@ -243,12 +271,12 @@ func (r ref) link() paylink.Link {
 }
 
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
-	amount_minor, currency, key_seq, state, created_at`
+	amount_minor, currency, key_seq, state, created_at, account_id, success_url, cancel_url`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
-		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt)
+		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.successURL, &r.cancelURL)
 	return r, err
 }
 
@@ -272,8 +300,11 @@ func newToken() (string, error) {
 // beginRef makes the entry's ref, or finds it, ready for a call: in one transaction that holds the
 // write lock, so two workers that took the same entry find one ref. A ref that has no object is
 // updated to what this try asks (the entry's amount is fixed, but the integration it is bound to
-// may be another since); a failed one starts anew with a key of its own.
-func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string) (ref, error) {
+// may be another since); a failed one starts anew with a key of its own. What a ref was made with
+// (its account and its pages) is the first try's and is never updated: a ref with no object that was
+// made in another account than account is left exactly as it is and the try is refused, since
+// whatever its calls made is in that account.
+func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur, account, successURL, cancelURL string) (ref, error) {
 	token, err := newToken()
 	if err != nil {
 		return ref{}, err
@@ -286,14 +317,17 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 	defer func() { _ = tx.Rollback() }()
 	at := s.store.stamp(s.store.now())
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (effect_id) DO NOTHING`,
-		token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at); err != nil {
+		INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at, account_id, success_url, cancel_url)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (effect_id) DO NOTHING`,
+		token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at, account, successURL, cancelURL); err != nil {
 		return ref{}, err
 	}
 	out, err = scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
 	if err != nil {
 		return ref{}, err
+	}
+	if out.objectID == "" && out.accountID != account {
+		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
 	}
 	if out.objectID == "" && (out.integrationID != req.IntegrationID || out.amountMinor != minor || out.currency != cur || out.state == "failed") {
 		if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET integration_id = ?, amount_minor = ?, currency = ?, state = 'creating'
@@ -324,34 +358,39 @@ func (s *Service) noteLink(ctx context.Context, r ref, l Link) error {
 	return nil
 }
 
-// callFailed notes what a failed call means for the ref and turns it into the entry's failure.
-func (s *Service) callFailed(ctx context.Context, r ref, rec record, err error) error {
+// callFailed notes what a failed call means for the ref (nothing, when r is nil: a read made before
+// the ref) and turns it into the entry's failure.
+func (s *Service) callFailed(ctx context.Context, r *ref, rec record, err error) error {
 	ce, ok := IsCall(err)
 	if !ok {
 		return err
 	}
-	switch {
-	case ce.Kind != CallUnreachable:
-		// A refusal is for good: the ref is failed (a retry of the entry starts it anew). The key moves
-		// on only from the one the failed call used, so a late failure of an older call (an entry
-		// done twice) can't skip a key that a later call is using.
-		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'failed', key_seq = key_seq + (? AND key_seq = ?)
-			WHERE id = ? AND provider_object_id IS NULL`, boolInt(ce.KeyKept), r.keySeq, r.id); uerr != nil {
-			return uerr
-		}
-	case ce.KeyKept:
-		if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1 WHERE id = ? AND provider_object_id IS NULL AND key_seq = ?`, r.id, r.keySeq); uerr != nil {
-			return uerr
+	if r != nil {
+		switch {
+		case ce.Kind != CallUnreachable:
+			// A refusal is for good: the ref is failed (a retry of the entry starts it anew). The key moves
+			// on only from the one the failed call used, so a late failure of an older call (an entry
+			// done twice) can't skip a key that a later call is using.
+			if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'failed', key_seq = key_seq + (? AND key_seq = ?)
+				WHERE id = ? AND provider_object_id IS NULL`, boolInt(ce.KeyKept), r.keySeq, r.id); uerr != nil {
+				return uerr
+			}
+		case ce.KeyKept:
+			if _, uerr := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1 WHERE id = ? AND provider_object_id IS NULL AND key_seq = ?`, r.id, r.keySeq); uerr != nil {
+				return uerr
+			}
 		}
 	}
 	// What is logged is what happened, never what was said: not the key, not the provider's words.
-	slog.Warn("integrations: a payment link wasn't made", "integration", r.integrationID, "provider", rec.Provider,
+	slog.Warn("integrations: a payment link wasn't made", "integration", rec.ID, "provider", rec.Provider,
 		"kind", int(ce.Kind), "status", ce.Status)
 	switch ce.Kind {
 	case CallCredentials:
 		return &paylink.Error{Code: apierr.CodeIntegrationCredentialsRefused}
 	case CallRefused:
 		return &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
+	case CallLookupIncomplete:
+		return &paylink.Error{Code: apierr.CodeIntegrationLookupIncomplete}
 	}
 	return &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
 }

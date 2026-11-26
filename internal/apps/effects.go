@@ -625,6 +625,12 @@ type payload struct {
 	Description string `json:"description,omitempty"`
 	URLField    string `json:"url_field,omitempty"`
 	IDField     string `json:"id_field,omitempty"`
+	// Describes and DescribesID are what the description was filled with, as the approved contract
+	// states it (ContractLink): the fields it sends out as text, sorted, and whether it sends the
+	// record's id. When the entry runs they are checked against the live release's contract, so a
+	// release that no longer approves sending a field stops the entry that would still send it.
+	Describes   []string `json:"describes,omitempty"`
+	DescribesID bool     `json:"describes_id,omitempty"`
 	// Uses names the fields of the record whose values the templates were filled with, and their
 	// types then: what is shown of the entry is shown only while the live release still declares
 	// them so (usesHold), as a field the release removed or retyped is not for people to read.
@@ -721,6 +727,7 @@ func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
 	case EffectCreatePaymentLink:
 		p.Slot, p.AmountField, p.URLField, p.IDField = e.Integration, e.AmountField, e.URLField, e.IDField
 		p.Description = render(e.Description, c, data, id, modeLine)
+		p.Describes, p.DescribesID = e.describes()
 		p.Amount, p.Currency = e.moneyOf(c, data)
 	}
 	return p
@@ -747,4 +754,20 @@ func (e Effect) moneyOf(c Collection, data map[string]any) (amount, code string)
 		}
 	}
 	return amount, strings.ToUpper(code)
+}
+
+// describes is what the effect's description names: the fields, sorted, and whether it names the
+// record's id. It is what a contract states of the text sent out (ContractLink.Describes).
+func (e Effect) describes() (fields []string, id bool) {
+	fields = []string{}
+	_ = holes(e.Description, func(text string, isHole bool) error {
+		switch {
+		case isHole && text == "id":
+			id = true
+		case isHole:
+			fields = mergeSorted(fields, []string{text})
+		}
+		return nil
+	})
+	return fields, id
 }

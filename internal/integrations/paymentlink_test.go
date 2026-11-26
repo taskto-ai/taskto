@@ -78,7 +78,7 @@ func newPay(t *testing.T, public string) *pay {
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
 	fake := testprovider.NewStripe(t)
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
-		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host())}})
+		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host()), WithoutConnectionReuse()}})
 
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
@@ -858,6 +858,9 @@ func TestALookupOnAnIncompleteListFindsNothingOut(t *testing.T) {
 		"more and none shown": `{"object":"list","has_more":true,"data":[]}`,
 		"no list":             `{}`,
 		"no data":             `{"object":"list","has_more":false}`,
+		"no has_more":         `{"object":"list","data":[]}`,
+		"null has_more":       `{"object":"list","has_more":null,"data":[]}`,
+		"more and no cursor":  `{"object":"list","has_more":true,"data":[{"id":""}]}`,
 		"not a list":          `{"object":"checkout.session","data":[]}`,
 		"not json":            `<html>`,
 	} {
@@ -962,7 +965,7 @@ func TestAFailureMovesTheKeyOnOnlyFromTheKeyItUsed(t *testing.T) {
 	rec := record{Provider: "stripe"}
 	stale := ref{id: refs[0].id, keySeq: 0}
 	for _, kind := range []CallKind{CallUnreachable, CallRefused} {
-		if err := p.svc.callFailed(context.Background(), stale, rec, &CallError{Kind: kind, Status: 500, KeyKept: true}); err == nil {
+		if err := p.svc.callFailed(context.Background(), &stale, rec, &CallError{Kind: kind, Status: 500, KeyKept: true}); err == nil {
 			t.Fatal("no error")
 		}
 		if r := p.refs(); r[0].keySeq != 1 {
@@ -970,7 +973,7 @@ func TestAFailureMovesTheKeyOnOnlyFromTheKeyItUsed(t *testing.T) {
 		}
 	}
 	current := ref{id: refs[0].id, keySeq: 1}
-	_ = p.svc.callFailed(context.Background(), current, rec, &CallError{Kind: CallUnreachable, Status: 500, KeyKept: true})
+	_ = p.svc.callFailed(context.Background(), &current, rec, &CallError{Kind: CallUnreachable, Status: 500, KeyKept: true})
 	if r := p.refs(); r[0].keySeq != 2 {
 		t.Fatalf("a failure of the key in use left it at %d", r[0].keySeq)
 	}
@@ -1214,4 +1217,226 @@ func TestTheKeyNeverLeavesTheCall(t *testing.T) {
 func isUnavailable(err error) bool {
 	var pe *paylink.Error
 	return errors.As(err, &pe) && pe.Code == apierr.CodeIntegrationUnavailable
+}
+
+// ----- a ref keeps what its first try was -----
+
+// direct is the request of the only entry, for the tests that call the integration's side without
+// the worker (so nothing else reads what they change).
+func (p *pay) direct(record int64, op string) paylink.Request {
+	p.t.Helper()
+	p.send(record, op)
+	entry := p.entries()[0]
+	return paylink.Request{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: entry.id,
+		Slot: "payments", Amount: "10", Currency: "EUR", Description: "Invoice"}
+}
+
+// A lost answer, then a restart with another public address (or none, or one where there was none):
+// the retry asks what the first try asked, so Stripe's key finds the object, and a lookup after the
+// key is forgotten reads the same kind of objects.
+func TestARetryAsksWhatTheFirstTryAskedWhateverTheServersAddressIsNow(t *testing.T) {
+	const otherURL = "https://moved.example.com"
+	for name, tc := range map[string]struct {
+		first, later string
+		path         string
+		other        string // the path of the kind the later address would have made
+		success      string
+	}{
+		"a session, then no address":      {publicURL, "", "/v1/checkout/sessions", "/v1/payment_links", publicURL + PaymentDonePath},
+		"a session, then another":         {publicURL, otherURL, "/v1/checkout/sessions", "/v1/payment_links", publicURL + PaymentDonePath},
+		"a payment link, then an address": {"", publicURL, "/v1/payment_links", "/v1/checkout/sessions", ""},
+	} {
+		for _, aged := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, key forgotten %v", name, aged), func(t *testing.T) {
+				p := newPay(t, tc.first)
+				record := p.invoice(10, "EUR")
+				req := p.direct(record, "op-shape-0001")
+				p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, tc.path))
+				if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+					t.Fatal("the lost answer was no error")
+				}
+				if r := p.refs(); len(r) != 1 || r[0].object != "" {
+					t.Fatalf("refs = %+v", r)
+				}
+				var success, cancel string
+				if err := p.db.QueryRow(`SELECT success_url, cancel_url FROM integration_refs`).Scan(&success, &cancel); err != nil || success != tc.success {
+					t.Fatalf("the ref keeps its pages %q %q, %v; want %q", success, cancel, err, tc.success)
+				}
+				p.svc.publicURL = tc.later // the server restarted with another address
+				if aged {
+					p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
+				}
+				link, err := p.svc.OpenPaymentLink(context.Background(), req)
+				if err != nil || link.ObjectID == "" {
+					t.Fatalf("link = %+v, %v", link, err)
+				}
+				if n := p.objects(tc.path); n != 1 {
+					t.Fatalf("%d objects of the first kind, want the one the first try made", n)
+				}
+				if n := p.objects(tc.other); n != 0 || len(p.fake.RequestsTo(http.MethodPost, tc.other)) != 0 {
+					t.Fatalf("%d objects of the other kind, %d calls: the retry took the address of now", n, len(p.fake.RequestsTo(http.MethodPost, tc.other)))
+				}
+				posts := p.fake.RequestsTo(http.MethodPost, tc.path)
+				if aged {
+					// Found by the look, not by a call under the old key.
+					if len(posts) != 1 || len(p.fake.RequestsTo(http.MethodGet, tc.path)) != 1 {
+						t.Fatalf("posts %d, lists %d", len(posts), len(p.fake.RequestsTo(http.MethodGet, tc.path)))
+					}
+				} else if len(posts) != 2 || posts[0].IdempotencyKey != posts[1].IdempotencyKey || !posts[1].Replayed ||
+					posts[0].Form.Encode() != posts[1].Form.Encode() {
+					t.Fatalf("the retry's parameters are not the first try's: %+v", posts)
+				}
+			})
+		}
+	}
+}
+
+// ----- the account a ref was made under -----
+
+const otherAccount = "acct_" + "Other0123456789"
+
+// A key replaced by another account's: an unfinished ref belongs to the account it was made in. The
+// retry looks nowhere and makes nothing; the entry fails for an admin to settle; the ref stays.
+func TestAKeyOfAnotherAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-account-0001")
+			p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
+				t.Fatal("the lost answer was no error")
+			}
+			before := p.refs()
+			var account string
+			if err := p.db.QueryRow(`SELECT account_id FROM integration_refs`).Scan(&account); err != nil || account != testprovider.TestAccountID {
+				t.Fatalf("the ref's account = %q, %v", account, err)
+			}
+			if p.objects(shape.path) != 1 {
+				t.Fatal("the first try made no object")
+			}
+			requests := len(p.fake.Requests())
+
+			p.fake.SetAccount(otherAccount) // the integration's key is another account's now
+			p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
+			_, err := p.svc.OpenPaymentLink(context.Background(), req)
+			var pe *paylink.Error
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationAccountChanged || pe.Transient {
+				t.Fatalf("err = %v", err)
+			}
+			// Only the account was asked: no list, no call that makes an object.
+			for _, r := range p.fake.Requests()[requests:] {
+				if r.Path != "/v1/account" {
+					t.Fatalf("after the key changed, %s %s was called", r.Method, r.Path)
+				}
+			}
+			if after := p.refs(); len(after) != 1 || after[0] != before[0] {
+				t.Fatalf("the ref changed: %+v, was %+v", after, before)
+			}
+			if n := p.objects(shape.path); n != 1 {
+				t.Fatalf("%d objects, want the first account's one", n)
+			}
+			// The same account again: the ref carries on, and finds its object.
+			p.fake.SetAccount(testprovider.TestAccountID)
+			link, err := p.svc.OpenPaymentLink(context.Background(), req)
+			if err != nil || link.ObjectID != p.objectID(shape.path) {
+				t.Fatalf("link = %+v, %v", link, err)
+			}
+		})
+	}
+}
+
+// The entry fails with a code a person can act on, and never again asks anyone.
+func TestAnEntryOfAnotherAccountsKeyFailsForAnAdmin(t *testing.T) {
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	p.startWorker()
+	p.send(record, "op-account-0002")
+	p.waitFor("the entry waits", func() bool { es := p.entries(); return len(es) == 1 && es[0].state == "pending" && es[0].attempts == 1 })
+	p.fake.SetAccount(otherAccount)
+	p.later(time.Minute)
+	e := p.settled(apps.StateFailed)
+	if e.code != string(apierr.CodeIntegrationAccountChanged) {
+		t.Fatalf("entry = %+v", e)
+	}
+	if n := len(p.posts()); n != 1 || p.count(`SELECT count(*) FROM integration_refs WHERE provider_object_id IS NOT NULL`) != 0 {
+		t.Fatalf("%d calls that make an object", n)
+	}
+}
+
+// A link the ref made is the integration's that made it: another bound since is refused, and no
+// second link is made for the entry.
+func TestALinkMadeUnderOneIntegrationIsNeverGivenUnderAnother(t *testing.T) {
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-other-0001")
+	first, err := p.svc.OpenPaymentLink(context.Background(), req)
+	if err != nil || first.ObjectID == "" {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	body := stripeBody("second")
+	body["secrets"] = map[string]string{"api_key": p.fake.APIKey()}
+	body["currencies"] = []string{"EUR"}
+	second := p.create(p.owner, p.ws, body)
+	p.exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, second.ID, p.space.ID)
+	req.IntegrationID = second.ID
+	_, err = p.svc.OpenPaymentLink(context.Background(), req)
+	var pe *paylink.Error
+	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationChanged || pe.Transient {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(p.posts()); n != 1 || p.count(`SELECT count(*) FROM integration_refs`) != 1 {
+		t.Fatalf("%d calls, a second link may have been made", n)
+	}
+	if r := p.refs(); r[0].integration != p.in.ID {
+		t.Fatalf("the ref was bound to %d", r[0].integration)
+	}
+}
+
+// ----- the lookup's reach -----
+
+// More active links than a lookup reads, none of them the token's: the lookup can't say, asking
+// again reads the same, so the entry fails for a person instead of waiting for ever.
+func TestALookupThatCannotSeeEverythingFailsTheEntryForAPerson(t *testing.T) {
+	p := newPay(t, "")
+	record := p.invoice(10, "EUR")
+	form := url.Values{}
+	form.Set("after_completion[type]", "hosted_confirmation")
+	form.Set("line_items[0][quantity]", "1")
+	form.Set("line_items[0][price_data][currency]", "eur")
+	form.Set("line_items[0][price_data][unit_amount]", "1000")
+	form.Set("line_items[0][price_data][product_data][name]", "Other")
+	for range findPageSize*findMaxPages + 1 {
+		p.mustPost("/v1/payment_links", form)
+	}
+	others := len(p.linkPosts())
+	// A call that made nothing answers a 5xx: the retry has to look first.
+	p.fake.Fail(testprovider.ServerError().On(http.MethodPost, "/v1/payment_links"))
+	p.startWorker()
+	p.send(record, "op-cap-0001")
+	p.waitFor("the entry waits", func() bool { es := p.entries(); return len(es) == 1 && es[0].state == "pending" })
+	p.later(time.Minute)
+	e := p.settled(apps.StateFailed)
+	if e.code != string(apierr.CodeIntegrationLookupIncomplete) {
+		t.Fatalf("entry = %+v", e)
+	}
+	lists := 0
+	for _, r := range p.fake.RequestsTo(http.MethodGet, "/v1/payment_links") {
+		if r.Query.Get("limit") != "" {
+			lists++
+		}
+	}
+	if lists != findMaxPages {
+		t.Fatalf("%d pages read, want %d", lists, findMaxPages)
+	}
+	if n := len(p.linkPosts()) - others; n != 1 {
+		t.Fatalf("%d calls that make a link: nothing may be made on a lookup that couldn't see everything", n)
+	}
+	// It is not tried again by itself.
+	p.later(time.Hour)
+	time.Sleep(200 * time.Millisecond)
+	if got := p.entries()[0]; got.state != apps.StateFailed || got.attempts != e.attempts {
+		t.Fatalf("entry = %+v, was %+v", got, e)
+	}
 }

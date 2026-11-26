@@ -17,6 +17,8 @@
 //     when a test calls PayLink.
 //   - GET /v1/events and GET /v1/events/{id}: the events of the last 30 days, newest first.
 //   - GET /v1/balance: a harmless authenticated call, for a connection check.
+//   - GET /v1/account: the account the key belongs to (its id), which a test moves to another
+//     account with SetAccount, the way a key of another account would answer.
 //
 // It honours idempotency keys as Stripe documents for API v1 (the same key and parameters get
 // the saved answer with Idempotent-Replayed: true, the same key with other parameters is an
@@ -61,6 +63,8 @@ const DefaultAPIVersion = "2026-11-18.endive"
 var (
 	// TestAPIKey is the secret key the fake accepts unless WithAPIKey says another.
 	TestAPIKey = "sk_" + "test_" + strings.Repeat("Fake", 6)
+	// TestAccountID is the id of the account the fake answers as, unless WithAccount says another.
+	TestAccountID = "acct_" + strings.Repeat("Fake", 4)
 	// TestWebhookSecret is the signing secret a Sender uses unless told another.
 	TestWebhookSecret = "whsec_" + strings.Repeat("Fake", 6)
 	// OtherWebhookSecret is a second signing secret, for wrong-secret and rotation tests.
@@ -78,6 +82,7 @@ type Stripe struct {
 	anyVersion bool
 	live       bool
 	payer      CustomerDetails
+	account    string
 
 	mu           sync.Mutex
 	sessions     map[string]*session
@@ -107,6 +112,17 @@ func WithAPIKey(key string) Option {
 // anything but DefaultAPIVersion, so a call that forgets to pin the version fails a test.
 func WithAnyAPIVersion() Option { return func(s *Stripe) { s.anyVersion = true } }
 
+// WithAccount sets the id of the account the key belongs to.
+func WithAccount(id string) Option { return func(s *Stripe) { s.account = id } }
+
+// SetAccount moves the key to another account from now on, as replacing an integration's key with
+// one of another account does: what the fake holds stays, and is what the first account made.
+func (s *Stripe) SetAccount(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.account = id
+}
+
 // NewStripe starts a fake Stripe, stopped when the test ends.
 func NewStripe(t testing.TB, opts ...Option) *Stripe {
 	t.Helper()
@@ -119,6 +135,7 @@ func NewStripe(t testing.TB, opts ...Option) *Stripe {
 		links:    map[string]*paymentLink{},
 		idem:     map[string]*idemEntry{},
 		payer:    DefaultPayer(),
+		account:  TestAccountID,
 	}
 	for _, o := range opts {
 		o(s)
@@ -406,6 +423,9 @@ func route(r *http.Request) (handlerFn, string, bool) {
 		return fn, "", ok
 	case "/v1/balance":
 		fn, ok := both((*Stripe).balance, nil)
+		return fn, "", ok
+	case "/v1/account":
+		fn, ok := both((*Stripe).retrieveAccount, nil)
 		return fn, "", ok
 	}
 	if rest, ok := strings.CutPrefix(p, "/v1/checkout/sessions/"); ok && rest != "" {

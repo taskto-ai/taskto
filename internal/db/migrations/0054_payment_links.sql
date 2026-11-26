@@ -91,6 +91,15 @@ CREATE TABLE integration_refs (
     -- next call uses a key of its own (a provider that saved a failure answers it again to the same
     -- key), so a call whose answer never came back is the only one that is repeated under its key.
     key_seq            INTEGER NOT NULL DEFAULT 0 CHECK (key_seq >= 0),
+    -- The provider's account the reference was made under (read from the provider with the integration's
+    -- key when the reference was made), and the shape of the request: the two pages the payer returns
+    -- to, both empty for a link whose payer stays on the provider's own confirmation. A provider
+    -- keeps a call's key only for its own parameters, and finds what a lost call made only in the
+    -- account and among the kind of objects it was made as, so a retry after a restart, a changed
+    -- public address or another account's key must ask what the first try asked, and nowhere else.
+    account_id         TEXT NOT NULL DEFAULT '',
+    success_url        TEXT NOT NULL DEFAULT '',
+    cancel_url         TEXT NOT NULL DEFAULT '',
     -- Only forward: creating, then open, then one of paid, expired, failed (and paid, then refunded).
     state              TEXT NOT NULL DEFAULT 'creating' CHECK (state IN ('creating', 'open', 'paid', 'expired', 'failed', 'refunded')),
     created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"slices"
 
@@ -28,6 +29,14 @@ import (
 // done again after a crash between them, the integration finds the link it already made (it keeps
 // its address with the reference), and writing it to the record again sets what is there already,
 // which is no change and no new revision.
+//
+// The newest entry wins. An entry runs once its predecessors have, but one that is tried again
+// later (after a failure, a crash or a retry by its user) could write its link after a newer entry
+// asked for another amount of the same record and wrote its own: it would put a link for an
+// earlier amount over the right one. So an entry is superseded when a newer entry exists for the
+// same record and the same two fields, in any state: it asks the provider for nothing and writes
+// nothing, and ends done (nothing is left for it to do). The check is made before the call and
+// again, in the write's own transaction, just before the link is written (SystemWrite.Guard).
 
 // WithPaymentLinks sets what makes payment links, and returns the service.
 func (s *Service) WithPaymentLinks(p paylink.Opener) *Service {
@@ -58,9 +67,13 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	// The live release must still ask for this very link: the approved contract holds the action,
 	// the amount and where the link goes, and an entry queued by an older release that asked for
 	// anything else has no authority now.
+	// What the description sends out is part of what an admin approved: the entry's description was
+	// filled when it was queued, from the fields its release named, and the live contract must still
+	// name each of them (and the id, if the text holds it). Wording alone is not in the contract.
 	asked := slices.ContainsFunc(b.Contract.Links, func(l ContractLink) bool {
 		inCurrency := (l.Currency != "" && l.Currency == p.Currency) || (l.Currency == "" && slices.Contains(l.CurrencyOptions, p.Currency))
-		return l.Action == e.action && l.AmountField == p.AmountField && l.URLField == p.URLField && l.IDField == p.IDField && inCurrency
+		described := (!p.DescribesID || l.DescribesID) && !slices.ContainsFunc(p.Describes, func(f string) bool { return !slices.Contains(l.Describes, f) })
+		return l.Action == e.action && l.AmountField == p.AmountField && l.URLField == p.URLField && l.IDField == p.IDField && inCurrency && described
 	})
 	if !asked {
 		return nil, refuse(apierr.CodeIntegrationUnavailable)
@@ -69,6 +82,12 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	if err := s.db.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`,
 		e.appID).Scan(&spaceID, &workspaceID); err != nil {
 		return nil, err
+	}
+	superseded := map[string]any{"workspace_id": workspaceID, "space_id": spaceID, "superseded": true}
+	if newer, err := s.paymentLinkSuperseded(ctx, s.db, e); err != nil {
+		return nil, err
+	} else if newer {
+		return superseded, nil
 	}
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
@@ -86,8 +105,18 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 		Action:   "payment_link.created",
 		Declared: []string{p.URLField, p.IDField},
 		Set:      map[string]any{p.URLField: link.URL, p.IDField: link.ObjectID},
+		Guard: func(ctx context.Context, tx *sql.Tx) error {
+			if newer, err := s.paymentLinkSuperseded(ctx, tx, e); err != nil {
+				return err
+			} else if newer {
+				return errSuperseded
+			}
+			return nil
+		},
 	})
 	switch {
+	case errors.Is(err, errSuperseded):
+		return superseded, nil
 	case errors.Is(err, ErrNotFound):
 		return nil, refuse(apierr.CodeAppEffectRecordGone)
 	case errors.Is(err, ErrOffline), errors.Is(err, ErrReadOnly):
@@ -122,4 +151,23 @@ func previewPaymentLink(p payload) (EffectDetail, apierr.Code) {
 	}
 	d.Amount = currency.Format(minor, p.Currency)
 	return d, ""
+}
+
+// errSuperseded is the Guard's refusal of a write whose entry a newer one has replaced.
+var errSuperseded = errors.New("a newer payment link entry replaced this one")
+
+// paymentLinkSuperseded is whether a newer entry (a higher number, since numbers are given in the
+// order entries are queued and never again) asks for a payment link of the same record into the
+// same two fields, in any state: that entry's link is the record's, and this one's must never
+// replace it.
+func (s *Service) paymentLinkSuperseded(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, e effectRow) (bool, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `
+		SELECT count(*) FROM app_effects
+		WHERE app_id = ? AND record_id = ? AND kind = ? AND id > ?
+		  AND json_extract(payload, '$.url_field') = ? AND json_extract(payload, '$.id_field') = ?`,
+		e.appID, e.recordID, EffectCreatePaymentLink, e.id, e.payload.URLField, e.payload.IDField).Scan(&n)
+	return n > 0, err
 }

@@ -278,7 +278,8 @@ write.
   outbox entry. A retry finds the reference and either the object Stripe made (not asked again) or,
   with none noted, asks again under the same key, which Stripe answers with the object it made. Stripe
   keeps idempotency keys for at least 24 hours, so a crash and then a wait of more than a day with
-  no object noted is the one case that can leave two payable links for one reference. A failure that
+  no object noted is the one case that can leave two payable links for one reference (it is looked
+  for first, below). A failure that
   Stripe keeps under a key (a `5xx`) would be answered to the same key for ever, so the next try has
   a key of its own; but Stripe documents a `5xx` as an indeterminate result, the object may have been
   made, so before that call the integration lists what the account made (the open Checkout Sessions
@@ -288,11 +289,41 @@ write.
   and the currency of the payment (an object of the token that doesn't is never given to a payer, and
   the entry fails with the provider's refusal for a person to settle). The same look comes before a
   call under the same key once the reference is a day old, when Stripe may have forgotten the key.
-  When the listing can't be read in full (a failed read, an answer that isn't a whole list, more
-  pages than a lookup reads), nothing is made: the entry waits and tries again.
+  When the listing can't be read (a failed read, an answer that isn't a whole list: no `object: list`,
+  no `data`, no `has_more`, or `has_more` with nothing to read on from), nothing is made: the entry
+  waits and tries again.
+- **A lookup that can't see everything fails the entry.** A lookup reads at most 20 pages of 100,
+  newest first. If every read worked and the account still holds more (for example more than 2,000
+  active Payment Links, none of them the reference's), the lookup can't say whether an earlier try made
+  the object, and asking again reads the same pages, so the entry doesn't wait for ever: it fails with
+  `integration_lookup_incomplete`, nothing is made and the reference stays. An admin settles it by
+  deactivating the links the account no longer uses (the lookup reads only active links), then the
+  person who acted retries the entry.
+- **A reference belongs to its account and its request.** When the reference is made, the integration
+  reads the account its key belongs to (`GET /v1/account`, which with no id answers the account of the
+  key; <https://docs.stripe.com/api/accounts/retrieve>, so the key must be allowed to read it) and
+  keeps the account's id, and the two pages of the request (or none) as the first try asked them.
+  A retry sends the same parameters, which Stripe requires of a retry under a key, and looks among
+  the same kind of objects (Checkout Sessions or Payment Links), whatever the server's public URL is
+  by then. If the integration's key has been replaced by another account's while a reference has no
+  object, nothing is looked for or made in the new account, where an object the old one made could
+  not be found: the entry fails with `integration_account_changed` and the reference is left as it is,
+  for an admin to check the old account for a link and to recreate it from the record. A link a
+  reference already made is only ever given under the integration that made it
+  (`integration_changed` otherwise), so a record is never written with a link of an integration that
+  is no longer the slot's.
+- **The newest entry wins, and what is sent is what was approved.** Entries are done in the order they
+  were queued, but one tried again later could write its link after a newer entry for the same record
+  and fields wrote its own. An entry for which a newer one exists (same record, same two fields, any
+  state) asks the provider for nothing and writes nothing, and ends done with a result that says it
+  was superseded; the check is made again in the transaction that writes the link. And an entry's
+  description names the fields it was filled from: the live contract must still name each of them (and
+  the record's id, if it was in the text), or the entry fails as no longer approved
+  (`integration_unavailable`); wording alone is not in the contract.
 - **The server's own pages, or none.** With `-public-url` the payer comes back to
   `<public URL>/payment/done` or `/payment/cancelled`, web app pages that show a short message and
   call nothing; without it the payer stays on Stripe's confirmation page and no URL of ours is sent.
+  A new reference takes the server's address at that moment and keeps it for its tries.
   A definition can't name a URL, so no app can send a payer elsewhere.
 - **A preview never calls the network**: it says what the link would ask and refuses an amount the
   currency can't hold, with no integration, key or reference.

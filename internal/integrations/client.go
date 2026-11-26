@@ -49,6 +49,18 @@ func WithTestEndpoint(hostport string) ClientOption {
 	}
 }
 
+// WithoutConnectionReuse makes every request use a connection of its own. A fake provider that drops
+// a connection after executing a request is then seen as a lost answer; on a connection already used
+// for an earlier request Go's transport sends a request that has an Idempotency-Key again by itself,
+// which hides the loss from the code under test. Not reachable from configuration.
+func WithoutConnectionReuse() ClientOption {
+	return func(c *Client) {
+		if t, ok := c.http.Transport.(*http.Transport); ok {
+			t.DisableKeepAlives = true
+		}
+	}
+}
+
 // NewClient returns the client for provider p of an integration with these settings, calling
 // through the policy's HTTP client.
 func NewClient(p Provider, settings map[string]string, policy egress.Policy, opts ...ClientOption) *Client {

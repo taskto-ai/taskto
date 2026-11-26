@@ -457,4 +457,7 @@ const (
 	CodeIntegrationCredentialsRefused  Code = "integration_credentials_refused"  // the provider didn't accept the integration's key
 	CodeIntegrationProviderRefused     Code = "integration_provider_refused"     // the provider refused the request, for good
 	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable" // the provider didn't answer, or answered with an error that may pass: tried again, then waits for a retry
+	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
+	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
+	CodeIntegrationLookupIncomplete    Code = "integration_lookup_incomplete"    // the provider's account has more objects than a lookup for an earlier try's link reads: an admin must settle it
 )

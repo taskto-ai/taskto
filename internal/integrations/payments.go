@@ -31,6 +31,11 @@ type PaymentProvider interface {
 	// no such object: a read that couldn't be finished is an error, never "not found". Its
 	// failures are *CallError that are never KeyKept.
 	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found bool, err error)
+	// AccountID is the id of the provider's account the credentials belong to. A reference keeps
+	// it: what a call made is only to be looked for, and a call only to be repeated, in the account
+	// it was made in, and a key replaced by another account's must not move an unfinished call there.
+	// Its failures are *CallError.
+	AccountID(ctx context.Context, creds Credentials, c *Client) (string, error)
 }
 
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
@@ -49,7 +54,9 @@ type NewLink struct {
 	// Currency is the code, upper case.
 	Currency    string
 	Description string
-	// SuccessURL and CancelURL are the server's own pages (both set), or both empty.
+	// SuccessURL and CancelURL are the server's own pages (both set), or both empty. They are the
+	// reference's, as its first try asked: a retry sends the same parameters (a provider answers
+	// a key used with other parameters with an error) and looks among the same kind of objects.
 	SuccessURL string
 	CancelURL  string
 }
@@ -82,6 +89,10 @@ const (
 	CallRefused
 	// CallCredentials: the provider doesn't accept the integration's key.
 	CallCredentials
+	// CallLookupIncomplete: the provider was read, every read worked, and the account holds more
+	// than a lookup reads, so it can't be said whether an earlier try made the object. Asking again
+	// reads the same, so the call is not tried again: a person settles it.
+	CallLookupIncomplete
 )
 
 // CallError is the failure of a call to a provider. It carries no text of the provider's.
@@ -100,6 +111,8 @@ func (e *CallError) Error() string {
 		return "the provider doesn't accept the key (status " + strconv.Itoa(e.Status) + ")"
 	case CallRefused:
 		return "the provider refused the request (status " + strconv.Itoa(e.Status) + ")"
+	case CallLookupIncomplete:
+		return "the provider holds more than a lookup reads"
 	}
 	return "the provider didn't answer (status " + strconv.Itoa(e.Status) + ")"
 }
@@ -134,6 +147,8 @@ const (
 var (
 	// stripeSessionID is what the id of a Checkout Session looks like.
 	stripeSessionID = regexp.MustCompile(`^cs_(test|live)_[A-Za-z0-9]{1,200}$`)
+	// stripeAccountID is what the id of an account looks like.
+	stripeAccountID = regexp.MustCompile(`^acct_[A-Za-z0-9]{1,200}$`)
 	// stripeLinkID is what the id of a Payment Link looks like.
 	stripeLinkID = regexp.MustCompile(`^plink_[A-Za-z0-9]{1,200}$`)
 	// stripeCheckoutHost is the domain of the pages Stripe hosts for a Checkout Session, and
@@ -284,8 +299,8 @@ const (
 	// findPageSize is the most Stripe lists in a page, and findMaxPages how many pages a lookup
 	// reads, newest first: the object looked for is among the newest, since its call was one of
 	// the last the integration's account saw (a Checkout Session is also bounded by its creation
-	// time). A lookup that reaches the last page with more behind it finds nothing out, so it
-	// fails and the entry is tried again.
+	// time). A lookup that reaches the last page with more behind it finds nothing out: it fails
+	// with CallLookupIncomplete, which is not tried again (the next one reads the same pages).
 	findPageSize = 100
 	findMaxPages = 20
 	// findSkew is how far before the ref's creation a session may have been created by the
@@ -334,7 +349,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 		}
 		var page struct {
 			Object  string `json:"object"`
-			HasMore bool   `json:"has_more"`
+			HasMore *bool  `json:"has_more"`
 			Data    *[]struct {
 				ID                string            `json:"id"`
 				Object            string            `json:"object"`
@@ -345,12 +360,13 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				Metadata          map[string]string `json:"metadata"`
 			} `json:"data"`
 		}
-		// A negative answer is only as good as the page it rests on: an answer that isn't a list, or
-		// that says there is more and shows none, says nothing about the object.
-		if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || (page.HasMore && len(*page.Data) == 0) {
+		// A negative answer is only as good as the page it rests on: an answer that isn't a list,
+		// that doesn't say whether there is more, or that says there is more and shows none, says
+		// nothing about the object.
+		if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || page.HasMore == nil || (*page.HasMore && len(*page.Data) == 0) {
 			return Link{}, false, &CallError{Kind: CallUnreachable, Status: status}
 		}
-		data := *page.Data
+		data, more := *page.Data, *page.HasMore
 		for _, o := range data {
 			var ours bool
 			if hosted {
@@ -380,12 +396,17 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			}
 			return link, true, nil
 		}
-		if !page.HasMore {
+		if !more {
 			return Link{}, false, nil
 		}
-		q.Set("starting_after", data[len(data)-1].ID)
+		last := data[len(data)-1].ID
+		if last == "" {
+			return Link{}, false, &CallError{Kind: CallUnreachable, Status: status} // no cursor to read on from
+		}
+		q.Set("starting_after", last)
 	}
-	return Link{}, false, &CallError{Kind: CallUnreachable} // not read in full
+	// Every page read was whole, and there is more behind them: asking again reads the same.
+	return Link{}, false, &CallError{Kind: CallLookupIncomplete}
 }
 
 // stripeLinkAmount is what a Payment Link asks, from its line items
@@ -472,4 +493,22 @@ func stripeFailure(status int, body []byte) error {
 		return &CallError{Kind: CallRefused, Status: status, KeyKept: true}
 	}
 	return &CallError{Kind: CallRefused, Status: status}
+}
+
+// AccountID is the id of the account the key belongs to: Stripe's "Retrieve account" with no id
+// answers the account of the authenticating key (https://docs.stripe.com/api/accounts/retrieve).
+// The id is an acct_ followed by letters and digits, and an answer without one is no answer.
+func (stripe) AccountID(ctx context.Context, creds Credentials, c *Client) (string, error) {
+	body, status, err := stripeGet(ctx, creds, c, "/v1/account")
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Object string `json:"object"`
+		ID     string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Object != "account" || !stripeAccountID.MatchString(out.ID) {
+		return "", &CallError{Kind: CallUnreachable, Status: status}
+	}
+	return out.ID, nil
 }

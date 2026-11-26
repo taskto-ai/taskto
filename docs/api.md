@@ -215,6 +215,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
 | `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
 | `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
+| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account than the integration's key belongs to now: nothing is looked up or made in the new account; an admin recreates the link. |
+| `integration_changed` | — | A failed `create_payment_link` entry whose link was made under another integration than the slot is bound to now: it is never written to the record; an admin recreates the link. |
+| `integration_lookup_incomplete` | — | A failed `create_payment_link` entry whose earlier try's link could not be looked for in full (the account holds more objects than a lookup reads): nothing is made; an admin deactivates unused links, then it is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -3570,7 +3573,12 @@ none, it is asked again under the same key, which the provider answers with the 
 made. A failure the provider keeps under a key gets a key of its own on the next try, after the provider
 is asked for an object of the reference's token that the failed call may have made (a `5xx` is an
 indeterminate result): one found is adopted as the call's answer, and while the provider can't say,
-nothing is made and the entry is tried again. The link and its
+nothing is made and the entry is tried again; a lookup that worked but can't see all the account holds
+fails the entry with `integration_lookup_incomplete`. A reference keeps the provider account and the
+pages of its first try: after the integration's key is replaced by another account's, an unfinished
+reference's entry fails with `integration_account_changed`, and a link made under another integration
+than the slot's is not given (`integration_changed`). A newer entry for the same record and fields
+supersedes an older one, which ends done with `result.superseded` and writes nothing. The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
 again changes nothing. A Checkout Session expires by itself within the provider's default of 24

@@ -22,9 +22,17 @@ type stubLinks struct {
 	calls []paylink.Request
 	made  map[int64]paylink.Link
 	fail  error
+	// onOpen, if set, runs while the integration's side is asked (the entry is mid-call).
+	onOpen func(req paylink.Request)
 }
 
 func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (paylink.Link, error) {
+	s.mu.Lock()
+	hook := s.onOpen
+	s.mu.Unlock()
+	if hook != nil {
+		hook(req)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, req)
@@ -394,4 +402,149 @@ func TestAPreviewRefusesAnAmountTheCurrencyCannotHold(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sendTotal sends the invoice again with another total: another entry for the same record.
+func (p *payFX) sendTotal(operation string, total float64) {
+	p.e.t.Helper()
+	a := action(p.fresh(p.alice, p.shared, p.app), "send", map[string]any{"id": p.invoice, "status": "sent", "total": total})
+	a.Operation = operation
+	expect(p.e.t, p.alice.do(http.MethodPost, appPath(p.shared, p.app.ID, "/actions"), a), http.StatusOK)
+}
+
+func (p *payFX) effectIDs() (ids []int64) {
+	p.e.t.Helper()
+	rows, err := p.e.db.Query(`SELECT id FROM app_effects ORDER BY id`)
+	if err != nil {
+		p.e.t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			p.e.t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// An entry that is tried again after a newer one for the same record has written its link must not
+// put its own, for an earlier amount, over it.
+func TestAnOlderEntryTriedAgainNeverReplacesTheNewerLink(t *testing.T) {
+	p := newPay(t)
+	p.links.fail = &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+	p.send(p.alice, "op-send-0001")
+	p.work() // the first entry fails for now and waits to be tried again
+	p.links.fail = nil
+	p.sendTotal("op-send-0002", 50)
+	p.work() // the newer entry is the only one due: it makes its link
+	ids := p.effectIDs()
+	if len(ids) != 2 {
+		t.Fatalf("entries = %v", ids)
+	}
+	data, rev, _ := p.row()
+	if !strings.Contains(data, `"pay_url":"https://pay.example.test/c/1"`) {
+		t.Fatalf("record = %s", data)
+	}
+	calls := p.links.count()
+
+	// The older one is due again: it has been replaced, and neither asks nor writes.
+	p.e.s.clock = func() time.Time { return time.Now().Add(time.Hour) }
+	p.work()
+	if p.links.count() != calls {
+		t.Fatalf("the older entry asked for a link again: %d calls, was %d", p.links.count(), calls)
+	}
+	if after, rev2, _ := p.row(); after != data || rev2 != rev {
+		t.Fatalf("the older entry changed the record: %s (revision %d), was %s (revision %d)", after, rev2, data, rev)
+	}
+	for _, e := range p.entries(p.alice).Effects {
+		if e.Status != StateDone {
+			t.Fatalf("entry %d is %s", e.ID, e.Status)
+		}
+		if e.ID == ids[0] && e.Result["superseded"] != true {
+			t.Fatalf("the older entry's result = %+v", e.Result)
+		}
+	}
+}
+
+// The check is made again where the link is written, under the write lock: a newer entry that is
+// queued while the older one is asking the provider still wins.
+func TestANewerEntryQueuedWhileTheOlderAsksTheProviderWins(t *testing.T) {
+	p := newPay(t)
+	p.send(p.alice, "op-send-0001")
+	first := p.effectIDs()[0]
+	queued := false
+	p.links.onOpen = func(req paylink.Request) {
+		if req.EffectID == first && !queued {
+			queued = true
+			p.sendTotal("op-send-0002", 50)
+		}
+	}
+	p.work()
+	data, _, _ := p.row()
+	if strings.Contains(data, `"pay_url":"https://pay.example.test/c/1"`) {
+		t.Fatalf("the older entry wrote its link over the newer entry's turn: %s", data)
+	}
+	if !strings.Contains(data, `"pay_url":"https://pay.example.test/c/2"`) {
+		t.Fatalf("record = %s", data)
+	}
+	// The older entry never wrote, even for a moment: the record's history has the newer link only.
+	if n := p.count(`SELECT count(*) FROM app_row_history WHERE row_id = ? AND action = 'payment_link.created'`, p.invoice); n != 1 {
+		t.Fatalf("%d link writes in the record's history, want 1", n)
+	}
+}
+
+// What an entry's description sends out was approved with the release that queued it: a live
+// contract that no longer names a field (or the id) the entry filled in stops it.
+func TestAnEntryWhoseDescriptionSendsWhatTheLiveContractNoLongerApprovesIsRefused(t *testing.T) {
+	p := newPay(t)
+	p.send(p.alice, "op-send-0001")
+	if !strings.Contains(p.payloadOf(), `"describes":["customer","number"]`) {
+		t.Fatalf("payload = %s", p.payloadOf())
+	}
+	d, err := changed(t, `"description": "Invoice {{number}} for {{customer}}"`, `"description": "Invoice {{number}}"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := p.fresh(p.alice, p.shared, p.app)
+	expect(t, p.alice.do(http.MethodPatch, appPath(p.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
+	expect(t, p.approve2(), http.StatusOK)
+	expect(t, p.tryPublish(p.alice, p.shared, p.fresh(p.alice, p.shared, p.app)), http.StatusOK)
+	p.work()
+	if p.links.count() != 0 {
+		t.Fatal("an entry that sends a field the live contract doesn't name called the provider's side")
+	}
+	if e := p.entries(p.alice).Effects[0]; e.Status != StateFailed || e.Error.Code != apierr.CodeIntegrationUnavailable {
+		t.Fatalf("entry = %+v", e)
+	}
+}
+
+// Wording alone is not in the contract: the same fields in other words still run.
+func TestAnEntryWhoseDescriptionOnlyChangedWordingStillRuns(t *testing.T) {
+	p := newPay(t)
+	p.send(p.alice, "op-send-0001")
+	d, err := changed(t, `"description": "Invoice {{number}} for {{customer}}"`, `"description": "Bill {{customer}}, invoice {{number}}"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := p.fresh(p.alice, p.shared, p.app)
+	expect(t, p.alice.do(http.MethodPatch, appPath(p.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
+	// The contract holds no wording: the approval still covers the new release.
+	expect(t, p.tryPublish(p.alice, p.shared, p.fresh(p.alice, p.shared, p.app)), http.StatusOK)
+	p.work()
+	if p.links.count() != 1 {
+		t.Fatalf("calls = %d", p.links.count())
+	}
+	if e := p.entries(p.alice).Effects[0]; e.Status != StateDone {
+		t.Fatalf("entry = %+v", e)
+	}
+}
+
+func (p *payFX) payloadOf() (payload string) {
+	p.e.t.Helper()
+	if err := p.e.db.QueryRow(`SELECT payload FROM app_effects ORDER BY id LIMIT 1`).Scan(&payload); err != nil {
+		p.e.t.Fatal(err)
+	}
+	return payload
 }

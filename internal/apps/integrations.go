@@ -570,17 +570,9 @@ func (d Definition) contract(slot string) Contract {
 				continue
 			}
 			c.Operations = mergeSorted(c.Operations, []string{e.Kind})
-			link := ContractLink{Action: name, ActionKind: d.Actions[name].Kind, AmountField: e.AmountField, Describes: []string{}, Currency: e.Currency, CurrencyField: e.CurrencyField,
+			describes, describesID := e.describes()
+			link := ContractLink{Action: name, ActionKind: d.Actions[name].Kind, AmountField: e.AmountField, Describes: describes, DescribesID: describesID, Currency: e.Currency, CurrencyField: e.CurrencyField,
 				URLField: e.URLField, IDField: e.IDField, When: e.When}
-			_ = holes(e.Description, func(text string, isHole bool) error {
-				switch {
-				case isHole && text == "id":
-					link.DescribesID = true
-				case isHole:
-					link.Describes = mergeSorted(link.Describes, []string{text})
-				}
-				return nil
-			})
 			sends[e.AmountField] = true
 			if e.CurrencyField != "" {
 				sends[e.CurrencyField] = true
