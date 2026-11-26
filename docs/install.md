@@ -438,8 +438,9 @@ Stripe's payment page, `<public_url>/payment/done` and `/payment/cancelled`, are
 are built on it. Without one a [payment link](integrations.md#payment-links) is still made, and the
 payer stays on a confirmation page Stripe hosts; but Stripe can't send webhooks to such a server, so
 paid status comes from polling Stripe. The two pages need no session, so a
-reverse proxy that exposes only what payers must reach forwards those two paths (and `POST /hooks/*`
-once webhooks are used).
+reverse proxy that exposes only what payers must reach forwards those two paths and `/assets/*`,
+where the web app's scripts, styles and fonts are (the two pages are the web app's, and without them
+the payer sees a blank page), and `POST /hooks/*` once webhooks are used.
 
 | Setting | Flag / environment | |
 |---|---|---|
