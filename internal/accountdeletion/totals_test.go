@@ -135,3 +135,45 @@ func TestPurgeTotalsSurviveAStepThatFailsAfterItsWork(t *testing.T) {
 		t.Errorf("uploads_removed = %v, documents_anonymized = %v, want 1 and 2", got["uploads_removed"], got["documents_anonymized"])
 	}
 }
+
+// stopsBeforeJournalKB keeps the count and then stops before the rewrite is journaled, as a try
+// that ends between the two does: the history is as it was, and the retry counts the same commits.
+type stopsBeforeJournalKB struct {
+	Knowledge
+	stop bool
+}
+
+func (k *stopsBeforeJournalKB) AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(int) error) (int, error) {
+	return k.Knowledge.AnonymizeAuthorsNoting(ctx, sp, emails, func(n int) error {
+		if err := planned(n); err != nil {
+			return err
+		}
+		if k.stop {
+			return errors.New("stopped before the rewrite was journaled")
+		}
+		return nil
+	})
+}
+
+// A space's count kept by a try that stopped before its rewrite is replaced by the retry's, which
+// counts the same commits again, not added to it.
+func TestARewriteCountedTwiceBeforeItsJournalIsCountedOnce(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	kb := &stopsBeforeJournalKB{Knowledge: w.kb, stop: true}
+	w.svc.o.Knowledge = kb
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err == nil {
+		t.Fatal("the stopped rewrite was passed over")
+	}
+	if n := w.count(`SELECT commits FROM purge_anonymized WHERE user_id = ? AND space_id = ?`, w.leaver, w.team.ID); n != 2 {
+		t.Fatalf("fixture: the stopped try kept %d, want 2", n)
+	}
+	kb.stop = false
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.purgedDetails()["documents_anonymized"]; got != float64(2) {
+		t.Errorf("documents_anonymized = %v, want 2", got)
+	}
+}
