@@ -12,7 +12,8 @@ import type { App } from '../api'
 import { useT } from '../i18n'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
-import { AppView, httpTransport } from './AppView'
+import { LazyAppView as AppView } from './LazyAppView'
+import { httpTransport } from './transport'
 import './Apps.css'
 
 // reloadKey is changed by the page when the app's data changed behind the screen (a record was restored);

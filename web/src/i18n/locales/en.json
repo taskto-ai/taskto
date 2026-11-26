@@ -580,7 +580,8 @@
     "takeOfflineConfirm": {
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
-    }
+    },
+    "rendererFailed": "This screen couldn't be loaded: its code didn't arrive. Check your connection, then try again."
   },
   "auth": {
     "methods": {
@@ -1836,6 +1837,8 @@
       "hostedNote": "Speech goes to this endpoint only when the engine above is the hosted API; setting a key doesn't switch to it. The glossary never does: it is applied on this server.",
       "removeKey": "Remove the API key",
       "onBadge": "On",
+      "notReadyBadge": "Not ready yet",
+      "unavailableBadge": "Not available on this server",
       "offBadge": "Off"
     },
     "search": {
@@ -2286,8 +2289,8 @@
       "label": "Search the knowledge base",
       "placeholder": "Search…",
       "where": "Where to search",
-      "inSpace": "In {space}",
-      "everywhere": "In all spaces",
+      "inSpace": "Search in {space}",
+      "everywhere": "Search in all spaces",
       "submit": "Search"
     },
     "results": {
@@ -2344,7 +2347,8 @@
     "showArchivedTitle": "Show archived conversations",
     "new": "New",
     "nothingArchived": "Nothing archived.",
-    "none": "No conversations yet. Start one with New.",
+    "none": "No conversations yet.",
+    "noneHelp": "Start one with New, or ask the agent to build an app.",
     "pick": "Pick a conversation, or start a new one.",
     "untitled": "Conversation of {date}",
     "conversation": "Conversation",

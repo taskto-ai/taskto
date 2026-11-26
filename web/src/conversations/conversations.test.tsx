@@ -143,6 +143,16 @@ test('an archived conversation cannot be sent to', async () => {
   expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true)
 })
 
+test('with no conversation, the words say what each button does', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/workspaces/1/conversations': { body: { conversations: [] } } })
+  render(<Page streams={fakeStreams().factory} />)
+  expect(await screen.findByText('No conversations yet.')).toBeTruthy()
+  expect(screen.getByText('Start one with New, or ask the agent to build an app.')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'New' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Build an app' })).toBeTruthy()
+})
+
 // Lets the probe's promise settle under fake timers.
 const settle = () => act(async () => {})
 
@@ -669,7 +679,9 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
 
   // The preview is a lazily loaded component that fetches the app and then its screen: wait for
   // each thing it shows (findBy… waits as long as src/test/setup.ts says), never for a time.
-  const app = await screen.findByRole('region', { name: 'Expenses' })
+  // The app's frame is drawn at once with its loading shape, and drawn anew once the renderer is in.
+  await screen.findByText('Expense tracker')
+  const app = screen.getByRole('region', { name: 'Expenses' })
   await within(app).findByText('Expense tracker')
   await within(app).findByText('Coffee')
   // What it shows is labelled: the live release, which everyone uses.
