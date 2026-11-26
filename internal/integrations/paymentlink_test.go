@@ -2841,6 +2841,29 @@ func TestAKeyPastItsWindowAfterTheWriteAheadIsNotSent(t *testing.T) {
 	}
 }
 
+// The key's window bounds the call itself: a call that is about to leave as the window closes and is
+// delayed past it never reaches the provider.
+func TestAKeyWhoseWindowClosesAsTheCallLeavesIsNotSent(t *testing.T) {
+	ctx := context.Background()
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-window-0002")
+	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, shape.path))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the 5xx was no error")
+	}
+	p.later(stripeKeyKept - 300*time.Millisecond)
+	p.svc.beforeCall = func() { time.Sleep(600 * time.Millisecond) }
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("a call past the key's window answered")
+	}
+	p.svc.beforeCall = nil
+	if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+		t.Fatalf("%d calls, want the first only", n)
+	}
+}
+
 // A crash between the write-ahead and the call: nothing left, and the key's outcome reads unknown all
 // the same. The next try finds nothing and asks again under the same key, which makes the one link.
 func TestACrashBetweenTheWriteAheadAndTheCallMakesOneLink(t *testing.T) {

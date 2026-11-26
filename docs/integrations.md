@@ -408,8 +408,10 @@ write.
     from the key's first call; Stripe keeps keys at least 24): Stripe answers with what the first call
     made (an object, or the failure it kept), or runs the call if it never ran. Past that window the
     key is never called again, since Stripe may have forgotten it and would run it a second time; the
-    window is checked again just before the call leaves, after it is written ahead. A provider that
-    documents no window (Square) is never asked again under a key whose outcome is unknown.
+    window is checked again just before the call leaves, after it is written ahead, and bounds the
+    call: one that hasn't left when the window closes never does. A clock that reads earlier than the
+    key's first call relies on no window. A provider that documents no window (Square) is never asked
+    again under a key whose outcome is unknown.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
     and a failed read of whose account the key is or of an object's state, leave the outcome as it was,

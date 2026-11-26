@@ -689,3 +689,30 @@ func TestSquareAnUnknownOutcomeIsOnlyLookedForUntilAnAdminDecides(t *testing.T) 
 		t.Fatalf("refs = %+v", r)
 	}
 }
+
+// A clock that reads earlier than a key's first call says nothing of how long ago it was: the key is
+// not relied on, and a Square key whose outcome is unknown is still only looked for.
+func TestAClockThatWentBackDoesNotResendAKey(t *testing.T) {
+	ctx := context.Background()
+	p := newSquarePay(t, publicURL)
+	record := p.invoice(10, "USD")
+	req := p.direct(record, "op-square-clock-0001")
+	req.Currency = "USD"
+	p.sq.FailNext(http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", false)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the failure was no error")
+	}
+	p.later(-time.Hour)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationLinkLookupPending) {
+		t.Fatalf("err = %v", err)
+	}
+	n := 0
+	for _, r := range p.sq.Requests() {
+		if r.Method == http.MethodPost {
+			n++
+		}
+	}
+	if n != 1 || len(p.sq.Links()) != 0 {
+		t.Fatalf("%d creations, %d links after the clock went back", n, len(p.sq.Links()))
+	}
+}

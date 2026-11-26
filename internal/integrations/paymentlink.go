@@ -248,13 +248,23 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 				return paylink.Link{}, err
 			}
 		}
-		// The key's time is checked again just before the call leaves: a write-ahead (or anything
-		// between) that ran past the time the provider keeps the key must not send under a key it may
-		// have forgotten. The send written ahead stays on record, so the outcome stays unknown.
-		if a.unknown() && !s.keyKept(a, provider) {
-			return paylink.Link{}, s.stillUnknown(ctx, a)
+		// The key's time is checked again just before the call leaves, and bounds the call: a write-ahead
+		// (or anything between) that ran past the time the provider keeps the key must not send under a
+		// key it may have forgotten, and a call that hasn't left by then never does. The send written
+		// ahead stays on record, so the outcome stays unknown.
+		callCtx, cancel := ctx, context.CancelFunc(func() {})
+		if a.unknown() {
+			left := s.keyLeft(a, provider)
+			if left <= 0 {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+			callCtx, cancel = context.WithTimeout(ctx, left)
 		}
-		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(a, req.Description))
+		if s.beforeCall != nil {
+			s.beforeCall()
+		}
+		made, err := provider.CreatePaymentLink(callCtx, creds, client, ref.newLink(a, req.Description))
+		cancel()
 		if err != nil {
 			ce, ok := IsCall(err)
 			if !ok {
@@ -493,9 +503,21 @@ func (s *Service) stillUnknown(ctx context.Context, a attempt) error {
 
 // keyKept says whether the provider still keeps the key's first call, so that a call under the same
 // key is answered with what that call made (or runs, if it never did) and can't make a second object.
-func (s *Service) keyKept(a attempt, p PaymentProvider) bool {
+func (s *Service) keyKept(a attempt, p PaymentProvider) bool { return s.keyLeft(a, p) > 0 }
+
+// keyLeft is how much longer the provider is known to keep the key, from its first call: 0 when it
+// isn't (a provider that documents no window, a first call not on record, or a clock that reads
+// earlier than the first call, which says nothing of how long ago it was).
+func (s *Service) keyLeft(a attempt, p PaymentProvider) time.Duration {
 	first, err := time.Parse(timeFormat, a.firstSentAt)
-	return err == nil && s.store.now().Sub(first) < p.KeyKept()
+	if err != nil || p.KeyKept() <= 0 {
+		return 0
+	}
+	elapsed := s.store.now().Sub(first)
+	if elapsed < 0 || elapsed >= p.KeyKept() {
+		return 0
+	}
+	return p.KeyKept() - elapsed
 }
 
 // madeLink is the link a ref already has. It belongs to the integration that made it: another one,
