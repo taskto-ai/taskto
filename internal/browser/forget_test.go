@@ -160,7 +160,14 @@ func waitEnded(t *testing.T, c io.Reader) {
 // serveRemote serves m's API on a Unix socket, as the CLI worker does, and returns the client.
 func serveRemote(t *testing.T, m *Manager) *Remote {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "w.sock")
+	// A short directory: a Unix socket path is limited to about 104 bytes on macOS, which
+	// t.TempDir() with a long test name can exceed.
+	dir, err := os.MkdirTemp("", "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "w.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
