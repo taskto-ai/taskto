@@ -480,7 +480,7 @@ func TestEventsSurviveABriefDatabaseError(t *testing.T) {
 	e.svc.heartbeatTicks = func() (<-chan time.Time, func()) { return ticks, func() {} }
 	s := owner.openEvents(srv, ws, conv.ID)
 	e.rt.watch(t, 0)
-	check := func() sse {
+	tick := func() {
 		t.Helper()
 		// A handler that returned without an end line has nobody left to take the tick: fail
 		// instead of waiting for the test binary's timeout.
@@ -489,6 +489,10 @@ func TestEventsSurviveABriefDatabaseError(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("the stream took no heartbeat: it ended without an end event")
 		}
+	}
+	check := func() sse {
+		t.Helper()
+		tick()
 		return s.next()
 	}
 	rename := func(from, to string) {
@@ -522,9 +526,9 @@ func TestEventsSurviveABriefDatabaseError(t *testing.T) {
 	}
 
 	// For good: the third failed check in a row ends the stream.
-	if got := check(); got.data != interruptedLine {
-		t.Fatalf("event = %+v, want the end after the third failed check in a row", got)
-	}
+	// The end event is the last thing on the connection: the handler returns after it.
+	tick()
+	s.expectEnd(interruptedLine)
 }
 
 // A line that can't be one event (it holds a line break) ends the stream with the end event,

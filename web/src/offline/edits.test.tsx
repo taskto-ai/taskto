@@ -2066,3 +2066,29 @@ test('the discard question names its record; cancelling or Escape keeps it, and 
   const [left] = await store.listItems()
   expect(left.action.context).toMatchObject({ description: 'Tea' })
 })
+
+test('a press the transport refuses before the store is asked also makes the lists of the tab read again', async () => {
+  const { store, d, runtime } = await setup()
+  const told = vi.fn()
+  store.subscribe(told)
+
+  // A screen drawn from another revision than the device holds now: refused on the screen check.
+  const stale = offlineTransport(runtime, d)
+  await stale.load()
+  await store.putDownload(download(7, { messages: withRevision(2, { description: 'Coffee', amount: 20 }) }))
+  told.mockClear()
+  await expect(stale.act(press('edit_expense', { id: 1, description: 'Stale' }, 1))).rejects.toMatchObject({
+    code: 'offline_record_changed',
+  })
+  expect(told).toHaveBeenCalled()
+
+  // A tab that is not the writer.
+  told.mockClear()
+  const reader = { ...runtime, writer: { ...soleWriter, holds: () => false } } as unknown as typeof runtime
+  await expect(offlineTransport(reader, d).act(press('edit_expense', { id: 1, amount: '9' }, 1))).rejects.toMatchObject(
+    {
+      code: 'offline_not_writer',
+    },
+  )
+  expect(told).toHaveBeenCalled()
+})
