@@ -1,7 +1,9 @@
 {
   "app": {
     "loading": "Carregando…",
-    "unreachable": "Não foi possível falar com o servidor: {error}",
+    "unreachableTitle": "Não foi possível falar com o servidor",
+    "unreachableHelp": "Verifique a sua conexão, ou pergunte a quem cuida deste servidor se ele está no ar, e tente de novo.",
+    "unreachableDetail": "O que deu errado: {error}",
     "tryAgain": "Tentar de novo"
   },
   "apps": {
@@ -600,7 +602,6 @@
       "intro": "Sua senha está certa. Digite o código do seu app autenticador para concluir o login.",
       "introReset": "Sua nova senha foi definida. Digite o código do seu app autenticador para concluir o login.",
       "code": "Código do app ou código de recuperação",
-      "busy": "Verificando…",
       "submit": "Entrar",
       "back": "Voltar para a senha",
       "toLogin": "Ir para o login",
@@ -610,7 +611,6 @@
     "login": {
       "forgot": "Esqueceu sua senha? Peça um link de redefinição a um administrador do espaço de trabalho.",
       "title": "Entrar",
-      "busy": "Entrando…",
       "submit": "Entrar",
       "forgotByEmail": "Esqueceu sua senha?"
     },
@@ -618,7 +618,6 @@
       "title": "Redefina sua senha",
       "intro": "Informe o e-mail da sua conta. Se houver uma conta com ele, enviaremos um link para escolher uma nova senha.",
       "submit": "Enviar o link por e-mail",
-      "busy": "Enviando…",
       "sentTitle": "Veja seu e-mail",
       "sent": "Se houver uma conta com {email}, um link para escolher uma nova senha está a caminho.",
       "sentHelp": "O link funciona uma única vez e expira. Se nada chegar em alguns minutos, olhe a caixa de spam ou peça um link de redefinição a um administrador do espaço de trabalho.",
@@ -633,27 +632,29 @@
       "hint": "Pelo menos 12 caracteres.",
       "again": "Repita a nova senha",
       "mismatch": "As senhas não coincidem.",
-      "setting": "Definindo…",
       "submit": "Definir a senha"
     },
     "email": "E-mail",
     "password": "Senha",
     "yourName": "Seu nome",
     "passwordHint": "Pelo menos {min} caracteres.",
+    "show": "Mostrar",
+    "hide": "Ocultar",
+    "showPassword": "Mostrar senha",
+    "hidePassword": "Ocultar senha",
     "setup": {
       "title": "Configurar este servidor",
-      "intro": "Crie a conta do proprietário. O token de configuração está no log do servidor, na linha com <code>setup_token=</code>, impresso enquanto não existe nenhuma conta. Ele muda a cada inicialização.",
+      "lede": "Crie a conta do proprietário e o primeiro espaço de trabalho.",
       "token": "Token de configuração",
+      "tokenHint": "Está no log do servidor, na linha com <code>setup_token=</code>, impresso enquanto não existe nenhuma conta. Ele muda a cada inicialização.",
       "workspaceName": "Nome do espaço de trabalho",
       "defaultWorkspace": "Início",
-      "busy": "Configurando…",
       "submit": "Criar o proprietário"
     },
     "invite": {
       "title": "Entrar em um espaço de trabalho",
       "incomplete": "Este link de convite está incompleto: abra o link inteiro que você recebeu.",
       "loggedInAs": "Você está conectado como {email}. O convite vale para o endereço ao qual foi enviado.",
-      "joining": "Entrando…",
       "join": "Entrar no espaço de trabalho",
       "logOut": "Sair, para usar outra conta",
       "ssoIntro": "Você foi convidado. Entre com o seu provedor, usando o endereço para o qual o convite foi enviado.",
@@ -661,7 +662,6 @@
       "loginIntro": "Entre na conta do endereço ao qual o convite foi enviado.",
       "loginSubmit": "Entrar e participar",
       "newIntro": "Você foi convidado. Crie sua conta: seu e-mail é o endereço ao qual o convite foi enviado.",
-      "creating": "Criando…",
       "create": "Criar a conta"
     }
   },
@@ -2744,7 +2744,6 @@
       "body_many": "{count} de registros neste dispositivo não chegaram ao servidor. Sair agora os perderia, a menos que você os sincronize ou descarte.",
       "body_other": "{count} registros neste dispositivo não chegaram ao servidor. Sair agora os perderia, a menos que você os sincronize ou descarte.",
       "sync": "Sincronizar agora",
-      "syncing": "Sincronizando…",
       "discard": "Descartar e sair",
       "cancel": "Cancelar",
       "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",

@@ -101,19 +101,6 @@
     min-height: 2.4rem;
   }
 
-  .tt-muted {
-    color: var(--tt-muted);
-  }
-
-  .tt-small {
-    font-size: var(--tt-text-small);
-  }
-
-  .tt-error {
-    color: var(--tt-danger);
-    margin: var(--tt-error-margin);
-  }
-
   /* Fingers: every control is at least 44px each way (--tt-touch). */
   @media (pointer: coarse) {
     input:not(:where([class^="ui-"], [class*=" ui-"])),
