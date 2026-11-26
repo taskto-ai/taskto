@@ -415,7 +415,6 @@ export const OLD_STYLESHEETS = [
   'ui/base.css',
   'legacy-shared.css',
   'auth/auth.legacy.css',
-  'boards/boards.legacy.css',
   'markdown.legacy.css',
   'settings/settings.legacy.css',
   'pwa/pwa.legacy.css',

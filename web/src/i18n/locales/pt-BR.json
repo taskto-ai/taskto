@@ -1594,6 +1594,7 @@
     },
     "integrations": {
       "title": "Integrações",
+      "accounts": "Contas conectadas",
       "intro": "Conecte uma conta de um provedor de pagamentos. As credenciais ficam criptografadas no servidor e nunca são mostradas de novo, e nenhum app, agente ou membro consegue lê-las. Você escolhe quais espaços podem usar a conta, o maior valor e as moedas de um pagamento.",
       "backupHint": "Um backup guarda a chave do servidor junto das credenciais, então é tão sensível quanto elas. Depois de restaurar um backup em outra máquina, troque cada credencial no provedor e aqui.",
       "webhooksUnavailable": "Webhooks indisponíveis: defina a URL pública do servidor (-public-url). A conferência de pagamentos sem webhooks ainda não foi construída.",
@@ -1634,16 +1635,17 @@
       "ceilingHint": "Na menor unidade da moeda: centavos para o euro, ienes inteiros para o iene.",
       "ceilingPreview": "Isso dá {amounts}.",
       "currencies": "Moedas que um pagamento pode pedir",
+      "currenciesChosen_one": "{count} escolhida",
+      "currenciesChosen_many": "{count} de escolhidas",
+      "currenciesChosen_other": "{count} escolhidas",
       "limits": "Até {amounts} por pagamento",
       "allowedIn": "Permitida em: {spaces}",
       "allowedNowhere": "Ainda não permitida em nenhum espaço, então nenhum app pode usá-la.",
       "webhookAddress": "Registre este endereço no provedor:",
       "polling": "Sem URL pública: os webhooks ficam indisponíveis, e a conferência de pagamentos sem eles ainda não foi construída.",
-      "switchedOff": "desligada",
+      "switchedOff": "Desligada",
       "switchOff": "Desligar",
       "switchOn": "Ligar",
-      "switchOffNamed": "Desligar {name}",
-      "switchOnNamed": "Ligar {name}",
       "checking": "Verificando…",
       "checkOk": "As credenciais guardadas abrem e as configurações estão certas. O provedor não foi consultado.",
       "spaces": "Espaços",
@@ -2066,7 +2068,8 @@
       "password": "Sua senha e o login em duas etapas.",
       "cliAccounts": "Os logins do Claude Code, Codex e Grok Build em que suas conversas rodam.",
       "providers": "Os endpoints de modelos que as conversas podem usar.",
-      "search": "Como a busca encontra documentos e quais espaços consentem com a busca semântica."
+      "search": "Como a busca encontra documentos e quais espaços consentem com a busca semântica.",
+      "integrations": "Contas em provedores de pagamento que os apps podem usar."
     },
     "actionsColumn": "Ações"
   },
@@ -2797,7 +2800,9 @@
     "markAllRead": "Marcar todas como lidas",
     "older": "Mostrar mais antigas",
     "unread": "Não lida:",
+    "linkTitle": "Notificação",
     "unavailable": "Esta notificação não está mais disponível.",
+    "linkFailed": "Não foi possível abrir a notificação: o servidor não respondeu. Verifique sua conexão e tente de novo.",
     "openInbox": "Abrir suas notificações",
     "kind": {
       "card_assigned": "Um cartão foi atribuído a você: {title}",
@@ -2873,7 +2878,8 @@
       "title": "Confirme seu endereço de e-mail",
       "working": "Confirmando seu endereço…",
       "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
-      "settings": "Abrir as configurações de notificações"
+      "settings": "Abrir as configurações de notificações",
+      "failed": "Não foi possível confirmar seu endereço: o servidor não respondeu. Verifique sua conexão e abra de novo o link do email."
     },
     "noneHelp": "Quando um cartão for atribuído a você, um comentário mencionar você ou um app precisar de você, isso aparece aqui.",
     "in": "{where} ·"

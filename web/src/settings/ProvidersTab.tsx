@@ -19,7 +19,7 @@ import { MenuItem, MenuSeparator, MoreMenu } from '../ui/Menu'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Textarea } from '../ui/Textarea'
-import { Alert, Loading, Section, SettingsTab, useAction } from './parts'
+import { Alert, Loading, Section, SettingsTab, useAction, useRefocus } from './parts'
 
 export function ProvidersTab({ workspace, admin }: { workspace: number; admin: boolean }) {
   const t = useT()
@@ -46,8 +46,16 @@ function Accounts({ title, base, editable, intro }: { title: string; base: strin
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [confirmDialog, confirm] = useConfirm()
   const t = useT()
+  // The removed row's menu, or the empty state's button once the first account is in, had the
+  // keyboard: the section's title takes it.
+  const refocus = useRefocus(accounts.data)
   const done = () => {
+    if (accounts.data?.length === 0) refocus.after()
     setEditing(null)
+    accounts.reload()
+  }
+  const removed = () => {
+    refocus.after()
     accounts.reload()
   }
   const add = (
@@ -58,7 +66,7 @@ function Accounts({ title, base, editable, intro }: { title: string; base: strin
   const empty = accounts.data?.length === 0
   const account = typeof editing === 'number' ? accounts.data?.find((a) => a.id === editing) : undefined
   return (
-    <Section title={title} help={intro} actions={editable && !empty && add}>
+    <Section title={title} help={intro} actions={editable && !empty && add} headingRef={refocus.heading}>
       <Alert error={accounts.error} />
       {!accounts.data && !accounts.error && <Loading lines={2} />}
       {empty && (
@@ -78,7 +86,7 @@ function Accounts({ title, base, editable, intro }: { title: string; base: strin
                 account={a}
                 editable={editable}
                 onEdit={() => setEditing(a.id)}
-                onRemoved={done}
+                onRemoved={removed}
                 confirm={confirm}
               />
             ))}

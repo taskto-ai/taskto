@@ -1587,6 +1587,7 @@
     },
     "integrations": {
       "title": "Integrations",
+      "accounts": "Connected accounts",
       "intro": "Connect an account at a payment provider. The credentials are stored encrypted on the server and never shown again, and no app, agent or member can read them. You choose which spaces may use an account and the largest amount and the currencies one payment may have.",
       "backupHint": "A backup holds the server's key next to the stored credentials, so it is as sensitive as they are. After restoring a backup on another machine, replace each credential at its provider and here.",
       "webhooksUnavailable": "Webhooks unavailable: set the server's public URL (-public-url). Reconciling payments without webhooks isn't built yet.",
@@ -1627,16 +1628,16 @@
       "ceilingHint": "In the smallest unit of the currency: cents for euros, whole yen for yen.",
       "ceilingPreview": "That is {amounts}.",
       "currencies": "Currencies a payment may ask for",
+      "currenciesChosen_one": "{count} chosen",
+      "currenciesChosen_other": "{count} chosen",
       "limits": "Up to {amounts} per payment",
       "allowedIn": "Allowed in: {spaces}",
       "allowedNowhere": "Not allowed in any space yet, so no app can use it.",
       "webhookAddress": "Register this address at the provider:",
       "polling": "No public URL: webhooks are unavailable, and reconciling payments without them isn't built yet.",
-      "switchedOff": "switched off",
+      "switchedOff": "Switched off",
       "switchOff": "Switch off",
       "switchOn": "Switch on",
-      "switchOffNamed": "Switch off {name}",
-      "switchOnNamed": "Switch on {name}",
       "checking": "Checking…",
       "checkOk": "The stored credentials open and the settings are right. The provider wasn't called.",
       "spaces": "Spaces",
@@ -2052,7 +2053,8 @@
       "password": "Your password and two-factor login.",
       "cliAccounts": "The Claude Code, Codex and Grok Build logins your conversations run on.",
       "providers": "The model endpoints conversations can use.",
-      "search": "How search finds documents, and which spaces consent to semantic search."
+      "search": "How search finds documents, and which spaces consent to semantic search.",
+      "integrations": "Accounts at payment providers that apps may use."
     },
     "actionsColumn": "Actions"
   },
@@ -2773,7 +2775,9 @@
     "markAllRead": "Mark all as read",
     "older": "Show older",
     "unread": "Unread:",
+    "linkTitle": "Notification",
     "unavailable": "This notification isn't available any more.",
+    "linkFailed": "The notification couldn't be opened: the server didn't answer. Check your connection and try again.",
     "openInbox": "Open your notifications",
     "kind": {
       "card_assigned": "A card was assigned to you: {title}",
@@ -2849,7 +2853,8 @@
       "title": "Confirm your email address",
       "working": "Confirming your address…",
       "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
-      "settings": "Open notification settings"
+      "settings": "Open notification settings",
+      "failed": "Your address couldn't be confirmed: the server didn't answer. Check your connection, then open the link in the email again."
     },
     "noneHelp": "When a card is assigned to you, a comment mentions you or an app needs you, it shows here.",
     "in": "{where} ·"

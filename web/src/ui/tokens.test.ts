@@ -225,8 +225,6 @@ const OLD_NAMES = [
   'link',
   'logo-dot',
   'danger',
-  'success',
-  'warning',
   'clear-icon',
   'scrim',
   'shadow-lift',
@@ -258,8 +256,6 @@ const OLD_COLORS: Record<string, [string, string]> = {
   link: ['#006b45', '#4cefa8'],
   'logo-dot': ['#00a86b', '#00a86b'],
   danger: ['#b42318', '#ff8a82'],
-  success: ['#006b45', '#4cefa8'],
-  warning: ['#9a4700', '#ffb04d'],
   scrim: ['rgba(17, 17, 16, 0.42)', 'rgba(0, 0, 0, 0.6)'],
 }
 
