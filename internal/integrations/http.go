@@ -59,8 +59,10 @@ type Service struct {
 	// hookIP and hookID limit the webhook route (webhook.go); applier applies stored events and
 	// wake tells the worker (events.go).
 	hookIP, hookID *ratelimit.Limiter
-	applier        atomic.Pointer[Applier]
-	wake           chan struct{}
+	// decoy is the secret a delivery with no usable one is verified against (webhook.go).
+	decoy   WebhookSecrets
+	applier atomic.Pointer[Applier]
+	wake    chan struct{}
 }
 
 // New returns the API over store.
@@ -75,7 +77,7 @@ func New(store *Store, opts Options) *Service {
 	} else {
 		store.now = now
 	}
-	s := &Service{store: store, publicURL: opts.PublicURL, egress: policy, now: now, wake: make(chan struct{}, 1)}
+	s := &Service{store: store, publicURL: opts.PublicURL, egress: policy, now: now, wake: make(chan struct{}, 1), decoy: newDecoy()}
 	s.hookIP, s.hookID = newHookLimits(now)
 	return s
 }

@@ -267,7 +267,8 @@ func TestAValidEventIsAcceptedOnce(t *testing.T) {
 	}
 
 	// The same event again, as Stripe does when a delivery isn't acknowledged in time: signed
-	// afresh, answered alike, stored once.
+	// afresh, with a new timestamp, answered alike, stored once.
+	r.clock.Advance(time.Second)
 	ds, err := r.send.Duplicate(context.Background(), completed, 3)
 	if err != nil {
 		t.Fatal(err)
@@ -430,10 +431,10 @@ func TestEveryNotFoundIsOneAnswer(t *testing.T) {
 
 	_, _, squareSender := r.integration(squareBody("shop2"), stripeHook)
 
-	disabled, _, disabledSender := r.integration(stripeBody("off"), stripeHook)
+	disabled, _, disabledSender := r.integration(stripeBody("off"), hookFor("off"))
 	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", disabled.ID)), map[string]any{"disabled": true}), http.StatusOK)
 
-	broken, _, brokenSender := r.integration(stripeBody("broken"), stripeHook)
+	broken, _, brokenSender := r.integration(stripeBody("broken"), hookFor("broken"))
 	if _, err := r.db.Exec(`UPDATE integration_secrets SET sealed = x'00' WHERE integration_id = ? AND name = 'webhook_secret'`, broken.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -609,18 +610,28 @@ func TestTheRouteIsLimited(t *testing.T) {
 		t.Errorf("after the window = %d", rec.Code)
 	}
 
-	// One id, from many addresses: the same limit whether the id exists or not, so the answer
-	// is no way to tell.
+	// Unsigned requests for one id, from many addresses, whether the id exists or not, are
+	// refused alike and never run out the id's quota: only a delivery that verified counts.
 	for name, id := range map[string]string{"known": r.id, "unknown": token()} {
 		for i := range hookIDAttempts + 1 {
-			rec := r.post(HookPrefix+id, []byte("{}"), nil, from(i))
-			want := http.StatusNotFound
-			if i == hookIDAttempts {
-				want = http.StatusTooManyRequests
+			if rec := r.post(HookPrefix+id, []byte("{}"), nil, from(i)); rec.Code != http.StatusNotFound {
+				t.Fatalf("%s id, unsigned attempt %d = %d, want 404", name, i, rec.Code)
 			}
-			if rec.Code != want {
-				t.Fatalf("%s id, attempt %d = %d, want %d", name, i, rec.Code, want)
-			}
+		}
+	}
+	r.clock.Advance(hookWindow)
+	// Signed deliveries from many addresses are counted per id, and past the limit they are asked
+	// to retry later.
+	r.must(r.fake.Pay(func() string { s, _ := r.session(1000, "eur"); return s.ID }()))
+	ev := r.completed()
+	signed := http.Header{StripeSignatureHeader: {testprovider.Sign(stripeHook, r.clock.Now(), ev.Body())}}
+	for i := range hookIDAttempts + 1 {
+		want := http.StatusOK
+		if i == hookIDAttempts {
+			want = http.StatusTooManyRequests
+		}
+		if rec := r.post(HookPrefix+r.id, ev.Body(), signed, from(i)); rec.Code != want {
+			t.Fatalf("signed delivery %d = %d, want %d", i, rec.Code, want)
 		}
 	}
 	// An IPv6 client is one address per /64.
@@ -730,7 +741,7 @@ func TestNothingPrivateIsKept(t *testing.T) {
 	}
 	haystacks := map[string]string{"the table": dump.String(), "the log": r.logs.String(), "the answers": answers.String() + r.bodies.String()}
 	for name, hay := range haystacks {
-		for _, secret := range []string{stripeHook, stripeHookNew, stripeTestKey, testprovider.Payer.Email, testprovider.Payer.Name} {
+		for _, secret := range []string{stripeHook, stripeHookNew, stripeTestKey, r.fake.Payer().Email, r.fake.Payer().Name} {
 			if strings.Contains(hay, secret) {
 				t.Errorf("%s holds %q", name, secret)
 			}

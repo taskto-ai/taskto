@@ -296,13 +296,13 @@ func (stripe) Normalize(body []byte) (Event, bool) {
 		if obj.Object != "charge" || !stripeChargeIDRe.MatchString(obj.ID) || obj.AmountRefunded <= 0 {
 			return Event{}, false
 		}
-		out.ObjectID, out.AmountMinor = obj.ID, obj.AmountRefunded
-		if obj.PaymentIntent != nil {
-			if !stripeIntentIDRe.MatchString(*obj.PaymentIntent) {
-				return Event{}, false
-			}
-			out.PaymentID = *obj.PaymentIntent
+		// A refund is mapped to its payment through the payment intent, the one id the charge
+		// shares with the session's events: a charge with none (not made by a Checkout Session)
+		// can't be mapped to anything of ours, and isn't stored.
+		if obj.PaymentIntent == nil || !stripeIntentIDRe.MatchString(*obj.PaymentIntent) {
+			return Event{}, false
 		}
+		out.ObjectID, out.AmountMinor, out.PaymentID = obj.ID, obj.AmountRefunded, *obj.PaymentIntent
 		return out, true
 	}
 	// A Checkout Session of one-time payments, made by us: it carries our token.

@@ -329,7 +329,7 @@ func TestAWebhookWakesTheWorker(t *testing.T) {
 // removed with the integration.
 func TestEventsBelongToTheirIntegration(t *testing.T) {
 	r := newRig(t)
-	other, _, _ := r.integration(stripeBody("second"), stripeHook)
+	other, _, _ := r.integration(stripeBody("second"), hookFor("second"))
 	ev := Event{ID: "evt_same", Kind: EventPaymentExpired, RefToken: token(), ObjectID: "cs_test_x", AmountMinor: 100, Currency: "USD", OccurredAt: r.clock.Now()}
 	ctx := context.Background()
 	for _, in := range []int64{r.in.ID, other.ID} {

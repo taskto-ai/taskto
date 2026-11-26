@@ -1,6 +1,9 @@
 package integrations
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -21,10 +24,11 @@ const (
 	// maxHookBody is the most of a delivery's body the server reads. Stripe's events are a few
 	// KiB; a body over this is refused before anything is read of it or looked up.
 	maxHookBody = 256 << 10
-	// The limits, per window: a client address, and a public id. Both are counted before the id
-	// is looked up, so a refusal says nothing of whether an integration exists. A provider
-	// sends from a few addresses and a busy account sends a few events a second at most; an
-	// answer 429 makes it retry later (Stripe retries for days).
+	// The limits, per window: a client address, counted before anything is looked up or verified,
+	// so a refusal says nothing of whether an integration exists; and a public id, counted only
+	// for deliveries that verified, so unsigned traffic from anywhere can't use up the quota of
+	// the real ones. A provider sends from a few addresses and a busy account sends a few events
+	// a second at most; an answer 429 makes it retry later (Stripe retries for days).
 	hookIPAttempts = 600
 	hookIDAttempts = 600
 	hookWindow     = time.Minute
@@ -80,16 +84,10 @@ func hookClient(r *http.Request) string {
 func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 	// Nothing below reads the request's cookies, a session or a CSRF header, and nothing sets one.
 	w.Header().Set("Cache-Control", "no-store")
+	// The address's limit is the only one before the signature is verified: a flood of unsigned
+	// requests is held back by where it comes from, and can't use up the quota of an id's real
+	// deliveries.
 	if ok, wait := s.hookIP.Take(hookClient(r)); !ok {
-		tooMany(w, wait)
-		return
-	}
-	publicID := r.PathValue("public_id")
-	if !publicIDRe.MatchString(publicID) {
-		notFound(w)
-		return
-	}
-	if ok, wait := s.hookID.Take(publicID); !ok {
 		tooMany(w, wait)
 		return
 	}
@@ -111,61 +109,122 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	target, err := s.store.byPublicID(ctx, publicID)
+	sub, err := s.hookSubject(ctx, r.PathValue("public_id"))
 	if err != nil {
-		if !errors.Is(err, errNotFound) {
-			s.hookFailed(w, r, err)
-			return
-		}
-		notFound(w)
-		return
-	}
-	provider, ok := Lookup(target.provider).(Receiver)
-	if !ok {
-		notFound(w)
-		return
-	}
-	creds, err := s.store.credentials(ctx, target.workspace, target.id)
-	if err != nil {
-		var unreadable unreadableError
-		if errors.As(err, &unreadable) {
-			// The server key isn't the one that sealed the secrets. The admin is told by the
-			// integration's own check; here it is one more answer that verifies nothing.
-			slog.Warn("integrations: a webhook secret can't be opened", "integration", target.id)
-			notFound(w)
-			return
-		}
 		s.hookFailed(w, r, err)
 		return
 	}
-	secrets := WebhookSecrets{Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious}
-	if err := provider.VerifyWebhook(r.Header, body, secrets, s.now()); err != nil {
-		// Why is for the log at debug, with the integration and never the header, the body or a
-		// secret: the caller gets the one answer.
-		slog.Debug("integrations: a webhook was refused", "integration", target.id, "reason", err.Error())
+	// The signature is verified on every path, against a key of the server's own when there is no
+	// usable one, so a refusal costs the same whatever the id is. What the check says counts only
+	// when there is an integration to deliver to, and is never logged: the caller gets one answer.
+	verr := sub.provider.VerifyWebhook(r.Header, body, sub.secrets, s.now())
+	if verr != nil || !sub.live {
 		notFound(w)
+		return
+	}
+	// The delivery is authentic: now it counts against the id's quota, which signed deliveries only
+	// can use up.
+	if ok, wait := s.hookID.Take(r.PathValue("public_id")); !ok {
+		tooMany(w, wait)
 		return
 	}
 
 	// From here the delivery is authentic: what is stored or ignored is about the event, and the
-	// answer is 200 either way, since a provider disables an endpoint that answers errors.
-	ev, ok := provider.Normalize(body)
-	if !ok || ev.Livemode != (target.mode == ModeLive) {
+	// answer is 200 either way, since a provider disables an endpoint that answers errors. The
+	// writes check again that the integration is the one that was verified against.
+	guard := &hookGuard{mode: sub.target.mode, revision: sub.revision}
+	ev, ok := sub.provider.Normalize(body)
+	if !ok || ev.Livemode != (sub.target.mode == ModeLive) {
 		// A type the server doesn't act on, or an event of the other mode than the integration's
 		// (which a secret of one mode can't sign: a refusal worth nothing more than ignoring).
-		if err := s.store.noteEvent(ctx, target.id); err != nil {
-			s.hookFailed(w, r, err)
+		if err := s.store.noteEvent(ctx, sub.target.id, guard); err != nil {
+			s.hookWriteFailed(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if _, err := s.store.record(ctx, target.id, ev, SourceWebhook, body); err != nil {
-		s.hookFailed(w, r, err)
+	if _, err := s.store.recordGuarded(ctx, sub.target.id, guard, ev, SourceWebhook, body); err != nil {
+		s.hookWriteFailed(w, r, err)
 		return
 	}
 	s.poke()
 	w.WriteHeader(http.StatusOK)
+}
+
+// hookSubject is what a delivery to a public id is verified against.
+type hookSubject struct {
+	target   hookTarget
+	provider Receiver
+	secrets  WebhookSecrets
+	// revision is the webhook secrets' revision the secrets were read at (see hookGuard).
+	revision string
+	// live is whether a delivery that verifies may be accepted: the integration exists, is
+	// enabled, has a webhook secret and a provider that receives webhooks.
+	live bool
+}
+
+// hookSubject finds what to verify a delivery to publicID against. An id that can't be delivered
+// to, for any reason, gets the server's decoy secret and a Receiver to run it with, so the work is
+// the same and the answer is decided afterwards. An error is a failure of the server's own.
+func (s *Service) hookSubject(ctx context.Context, publicID string) (hookSubject, error) {
+	sub := hookSubject{provider: decoyReceiver, secrets: s.decoy}
+	if !publicIDRe.MatchString(publicID) {
+		return sub, nil
+	}
+	target, err := s.store.byPublicID(ctx, publicID)
+	if errors.Is(err, errNotFound) {
+		return sub, nil
+	}
+	if err != nil {
+		return sub, err
+	}
+	provider, ok := Lookup(target.provider).(Receiver)
+	if !ok {
+		return sub, nil
+	}
+	creds, revision, err := s.store.hookCredentials(ctx, target.workspace, target.id)
+	if err != nil {
+		var unreadable unreadableError
+		if errors.As(err, &unreadable) {
+			// The server key isn't the one that sealed the secrets. The admin is told by the
+			// integration's own check; here it is one more answer that verifies nothing, and a
+			// line in the log would name an integration to whoever asked.
+			return sub, nil
+		}
+		return sub, err
+	}
+	if creds.WebhookSecret == "" && creds.WebhookSecretPrevious == "" {
+		return sub, nil
+	}
+	return hookSubject{
+		target: target, provider: provider, revision: revision,
+		secrets: WebhookSecrets{Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious},
+		live:    !target.disabled,
+	}, nil
+}
+
+// decoyReceiver runs the verification of a delivery that has no integration behind it.
+var decoyReceiver Receiver = stripe{}
+
+// newDecoy makes the secret that deliveries with no usable secret of their own are verified
+// against: random, kept in memory only and known to nobody, so nothing signs for it.
+func newDecoy() WebhookSecrets {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		panic("integrations: no randomness for the webhook route: " + err.Error())
+	}
+	return WebhookSecrets{Current: Secret("whsec_" + hex.EncodeToString(raw))}
+}
+
+// hookWriteFailed answers a failed write of a verified delivery: one the integration changed
+// under is a refusal like the others, and any other failure is the server's, retried.
+func (s *Service) hookWriteFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errHookRefused) {
+		notFound(w)
+		return
+	}
+	s.hookFailed(w, r, err)
 }
 
 // hookFailed answers a failure of the server's own (the database) so that the provider retries:

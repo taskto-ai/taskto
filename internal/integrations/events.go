@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -108,10 +109,60 @@ const (
 // first delivery. last_event_at moves for every verified delivery, a replay too: it tells an admin
 // the webhook arrives.
 func (s *Store) record(ctx context.Context, integration int64, ev Event, source string, body []byte) (accepted, error) {
+	return s.recordGuarded(ctx, integration, nil, ev, source, body)
+}
+
+// errHookRefused is a delivery that verified but may not be stored any more: the integration was
+// disabled, or its mode or webhook secrets changed, after the route looked it up. It is answered
+// like every other refusal.
+var errHookRefused = errors.New("the integration changed since the delivery was verified")
+
+// hookGuard is what the route saw of the integration when it verified a delivery: the write
+// checks it again inside its own transaction, so a delivery that was in flight when an admin
+// disabled the integration or rotated its secret stores nothing.
+type hookGuard struct {
+	mode     string
+	revision string
+}
+
+// check reads the integration in tx and says errHookRefused unless it is still enabled, of the
+// same mode, with the webhook secrets the delivery was verified against.
+func (g *hookGuard) check(ctx context.Context, s *Store, tx *sql.Tx, integration int64) error {
+	if g == nil {
+		return nil
+	}
+	var disabled bool
+	var mode string
+	err := tx.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL, mode FROM integrations WHERE id = ?`, integration).Scan(&disabled, &mode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errHookRefused
+	}
+	if err != nil {
+		return err
+	}
+	if disabled || mode != g.mode {
+		return errHookRefused
+	}
+	rev, err := s.credentialRevision(ctx, tx, integration)
+	if err != nil {
+		return err
+	}
+	if rev != g.revision {
+		return errHookRefused
+	}
+	return nil
+}
+
+// recordGuarded is record for a delivery that was verified against the state guard describes (nil
+// for events that didn't come in through the route).
+func (s *Store) recordGuarded(ctx context.Context, integration int64, guard *hookGuard, ev Event, source string, body []byte) (accepted, error) {
 	sum := sha256.Sum256(body)
 	at := s.now()
 	result := storedNew
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := guard.check(ctx, s, tx, integration); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO integration_events
 			(integration_id, provider_event_id, source, kind, ref_token, object_id, provider_payment_id, amount_minor, currency,
 			 body_sha256, occurred_at, received_at, state, next_attempt_at)
@@ -139,8 +190,42 @@ func (s *Store) touchEvent(ctx context.Context, tx *sql.Tx, integration int64, a
 	return err
 }
 
-func (s *Store) noteEvent(ctx context.Context, integration int64) error {
-	return s.tx(ctx, func(tx *sql.Tx) error { return s.touchEvent(ctx, tx, integration, s.now()) })
+func (s *Store) noteEvent(ctx context.Context, integration int64, guard *hookGuard) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if err := guard.check(ctx, s, tx, integration); err != nil {
+			return err
+		}
+		return s.touchEvent(ctx, tx, integration, s.now())
+	})
+}
+
+// credentialRevision is a digest of the integration's sealed webhook secrets, current and
+// previous: it changes whenever either is set, replaced or dropped, and says nothing of them.
+func (s *Store) credentialRevision(ctx context.Context, q querier, integration int64) (string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT name, sealed, coalesce(expires_at, '') FROM integration_secrets
+		WHERE integration_id = ? AND name IN (?, ?) ORDER BY name`, integration, SecretWebhookSecret, SecretWebhookSecretPrevious)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	for rows.Next() {
+		var name, expires string
+		var sealed []byte
+		if err := rows.Scan(&name, &sealed, &expires); err != nil {
+			_ = rows.Close()
+			return "", err
+		}
+		for _, part := range [][]byte{[]byte(name), sealed, []byte(expires)} {
+			var n [8]byte
+			binary.BigEndian.PutUint64(n[:], uint64(len(part)))
+			h.Write(n[:])
+			h.Write(part)
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func nullString(v string) any {
@@ -176,14 +261,15 @@ type hookTarget struct {
 	workspace int64
 	provider  string
 	mode      string
+	disabled  bool
 }
 
-// byPublicID finds the enabled integration with the public id. A missing one and a disabled one
-// are the same answer, errNotFound.
+// byPublicID finds the integration with the public id, disabled or not: the route does the same
+// work for a disabled one as for an enabled one, and refuses it afterwards.
 func (s *Store) byPublicID(ctx context.Context, publicID string) (hookTarget, error) {
 	var t hookTarget
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, provider, mode FROM integrations
-		WHERE public_id = ? AND disabled_at IS NULL`, publicID).Scan(&t.id, &t.workspace, &t.provider, &t.mode)
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, provider, mode, disabled_at IS NOT NULL FROM integrations
+		WHERE public_id = ?`, publicID).Scan(&t.id, &t.workspace, &t.provider, &t.mode, &t.disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hookTarget{}, errNotFound
 	}
@@ -264,8 +350,10 @@ func (s *Service) drainEvents(ctx context.Context) {
 
 // purgeEvents removes the events nobody needs any more: finished ones after keepEventsDone, and
 // whatever has stopped moving (a failed one that nobody retried) after keepEventsAll. An event
-// that waits or runs is never removed: it is the worker's. A replay of a purged event can't be
-// accepted again, since a signature older than the tolerance is refused first.
+// that waits or runs is never removed: it is the worker's. A purged event is forgotten, so the
+// provider's retry of it, signed afresh, is stored again: whoever applies events must be safe
+// against an event it has already seen (docs/integrations.md#events). A recorded delivery replayed
+// as it was is still refused, since its signature is older than the tolerance.
 func (s *Service) purgeEvents(ctx context.Context) error {
 	t := s.now()
 	_, err := s.store.db.ExecContext(ctx, `DELETE FROM integration_events

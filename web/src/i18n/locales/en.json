@@ -964,6 +964,7 @@
     "integration_display_name_invalid": "The display name can have up to {max} printable characters.",
     "integration_provider_unknown": "This provider isn't supported.",
     "integration_secret_required": "Enter the {secret}.",
+    "integration_webhook_secret_reused": "Another integration already uses this webhook secret. Each endpoint has its own: copy the one shown for this endpoint at the provider.",
     "integration_secret_invalid": "The {secret} doesn't look like this provider's: check that you copied the right one.",
     "integration_secret_unreadable": "The saved {secret} can't be read, because the server's key has changed. Enter it again.",
     "integration_setting_invalid": "The setting {setting} is missing or not valid.",

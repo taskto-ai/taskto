@@ -294,13 +294,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_secret_required` | 400 | A secret the provider needs (`secret`) isn't given. In a check's answer: it isn't set. |
 | `integration_secret_invalid` | 400 | The value given for a secret (`secret`) isn't one the provider's credentials look like. It never quotes the value. |
 | `integration_secret_unreadable` | 200 | In a check's answer (`code`): a sealed secret (`secret`) doesn't open, usually because the server key changed since it was saved: set it again. |
+| `integration_webhook_secret_reused` | 409 | The webhook secret is already used by another integration (of any workspace): each integration needs its own, so a delivery's signature opens one only. It says nothing of which. |
 | `integration_setting_invalid` | 400 | A setting (`setting`) is unknown, missing, or not a value the provider accepts. |
 | `integration_limit_invalid` | 400 | The amount ceiling must be a whole number from 1 to `max`. |
 | `integration_currency_invalid` | 400 | The currencies must be 1 to `max` distinct codes from the list the server knows. |
 | `too_many_integrations` | 409 | The workspace has `max` integrations. |
 | `integration_in_use` | 409 | Something still names the integration (an approval of an app): disable it instead. |
 | `integration_event_gave_up` | none | The last reason kept on a stored provider event whose tries ran out, or that failed in a way that may pass; it is never in a response. |
-| `webhook_rate_limited` | 429 | `POST /hooks/{public_id}`: too many requests from this client address or for this id lately. `Retry-After` says when to try again. |
+| `webhook_rate_limited` | 429 | `POST /hooks/{public_id}`: too many requests from this client address lately, or for this id (counting verified deliveries only). `Retry-After` says when to try again. |
 | `webhook_too_large` | 413 | `POST /hooks/{public_id}`: the body is over 256 KiB. |
 | `base_url_invalid` | 400 | Not an http or https URL of up to `max` characters, without a query or fragment (provider accounts, shared CLI accounts, dictation). |
 | `base_url_credentials` | 400 | The base URL has credentials in it: the key goes in `api_key`. |
@@ -3917,8 +3918,9 @@ Admin only. `provider`, `name`, `secrets` (with the provider's required ones), `
 `display_name` is optional. Unknown fields are refused. `201` with the integration; `400` for
 an invalid field (`integration_provider_unknown`, `integration_name_invalid`,
 `integration_secret_required`, `integration_secret_invalid`, `integration_setting_invalid`,
-`integration_limit_invalid`, `integration_currency_invalid`); `409` if the name is taken or
-the workspace has 20 integrations.
+`integration_limit_invalid`, `integration_currency_invalid`); `409` if the name is taken, the
+workspace has 20 integrations or the webhook secret is one another integration uses
+(`integration_webhook_secret_reused`).
 
 ### `GET /api/workspaces/{workspace}/integrations/{integration}`
 
@@ -3973,16 +3975,19 @@ nothing else under `/hooks/` exists. The reverse proxy has to forward `POST /hoo
 
 In order:
 
-1. The client address and the id are counted against two limits, per minute, before anything is
-   looked up: 600 requests per client address (an IPv6 client counts as its /64) and 600 per
-   id. Over either: `429 webhook_rate_limited` with `Retry-After`. An id that isn't 32 lowercase
-   hex digits can't exist and is answered `404` without a lookup.
+1. The client address is counted against a limit, per minute, before anything is looked up or
+   verified: 600 requests per client address (an IPv6 client counts as its /64). Over it:
+   `429 webhook_rate_limited` with `Retry-After`.
 2. The body is read up to 256 KiB (`413 webhook_too_large` over it, for every id alike, before
    anything is looked up).
 3. The integration is found by `public_id`. The signature is verified **over the raw bytes,
    before the body is parsed**, in constant time, against the integration's webhook secret and,
    for a day after an admin replaces it, the one it replaced. The provider's tolerance applies
-   to the signed timestamp, in both directions (Stripe: five minutes).
+   to the signed timestamp, in both directions (Stripe: five minutes). The same work is done
+   for an id that can't be delivered to (one that doesn't exist, is disabled or has no secret,
+   or isn't of the shape of an id), against a secret of the server's own.
+   Only a delivery that verifies counts against the second limit, 600 per minute per id (over
+   it: `429 webhook_rate_limited`), so unsigned requests can't use up an integration's quota.
 4. Every way of not getting this far is **one answer**, byte for byte: `404 not_found`, with
    the same headers. An id that doesn't exist, one that is disabled or has no webhook secret,
    an id of a provider that has no webhooks yet, a secret that doesn't open, a missing,
@@ -3995,7 +4000,9 @@ In order:
    endpoints that answer errors). Otherwise it is stored once, by `(integration, provider event
    id)` with `ON CONFLICT DO NOTHING`, and answered `200` whether it was new or a replay: the
    provider can't tell which. **The body is never stored**, only its SHA-256 and closed, typed
-   fields.
+   fields. The write re-checks, in its own transaction, that the integration is still enabled
+   and has the same mode and webhook secrets as when the signature was verified; if not,
+   nothing is stored and the answer is the one `404`.
 6. A failure of the server's own (the database) is a `500` with no detail, so the provider
    retries.
 

@@ -165,7 +165,8 @@ func TestNormalizeStripe(t *testing.T) {
 			t.Errorf("fields: %+v", e)
 		}
 	})
-	ok("a refund with no intent", "charge.refunded", charge(map[string]any{"payment_intent": nil}), EventPaymentRefunded, nil)
+	// A refund is mapped through its payment intent: without one there is nothing to map it to.
+	no("a refund with no intent", "charge.refunded", charge(map[string]any{"payment_intent": nil}))
 
 	// What isn't the payment's.
 	no("a paid-looking completed but unpaid", "checkout.session.completed", session(map[string]any{"payment_status": "unpaid"}))

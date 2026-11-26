@@ -333,6 +333,11 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 		if count >= maxIntegrations {
 			return errTooMany
 		}
+		if secret, ok := d.secrets[SecretWebhookSecret]; ok {
+			if err := s.checkWebhookSecretFree(ctx, tx, 0, secret); err != nil {
+				return err
+			}
+		}
 		publicID, err := newPublicID()
 		if err != nil {
 			return err
@@ -452,6 +457,9 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 			// with it before the change took effect there aren't refused. Sending the secret that
 			// is already current (a retry whose answer was lost) leaves both slots as they are:
 			// copying it into the previous slot would drop the one it replaced.
+			if err := s.checkWebhookSecretFree(ctx, tx, id, webhook); err != nil {
+				return err
+			}
 			if err := s.keepPrevious(ctx, tx, ref, now); err != nil {
 				return err
 			}
@@ -508,6 +516,41 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		return err
 	})
 	return rec, err
+}
+
+// checkWebhookSecretFree refuses value as the webhook secret of integration except (0 for one not
+// made yet) when another integration, in any workspace, verifies deliveries with it: as its
+// current secret or as a previous one that hasn't expired. A signature has to open exactly one
+// integration, so one secret can't serve two. Every sealed secret is opened and compared whatever
+// the result, in constant time, and the answer names nothing of the integration that holds it.
+func (s *Store) checkWebhookSecretFree(ctx context.Context, tx *sql.Tx, except int64, value string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT i.id, i.workspace_id, i.public_id, s.name, s.sealed
+		FROM integration_secrets s JOIN integrations i ON i.id = s.integration_id
+		WHERE s.name IN (?, ?) AND i.id <> ? AND (s.expires_at IS NULL OR s.expires_at > ?)`,
+		SecretWebhookSecret, SecretWebhookSecretPrevious, except, s.stamp(s.now()))
+	if err != nil {
+		return err
+	}
+	taken := 0
+	for rows.Next() {
+		var ref sealRef
+		var name string
+		var sealed []byte
+		if err := rows.Scan(&ref.id, &ref.workspace, &ref.publicID, &name, &sealed); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if plain, err := s.key.Open(sealed, ref.ad(name)); err == nil {
+			taken |= subtle.ConstantTimeCompare(plain, []byte(value))
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	if taken == 1 {
+		return errWebhookSecretReused
+	}
+	return nil
 }
 
 // holds says whether the integration's stored secret called name is, once opened, value. A
@@ -648,6 +691,19 @@ func (s *Store) credentials(ctx context.Context, workspace, id int64) (creds Cre
 		return err
 	})
 	return creds, err
+}
+
+// hookCredentials is credentials with the revision of the webhook secrets it read, from the same
+// snapshot, for the webhook route's guard.
+func (s *Store) hookCredentials(ctx context.Context, workspace, id int64) (creds Credentials, revision string, err error) {
+	err = s.read(ctx, func(tx *sql.Tx) error {
+		if creds, err = s.openCredentials(ctx, tx, workspace, id); err != nil {
+			return err
+		}
+		revision, err = s.credentialRevision(ctx, tx, id)
+		return err
+	})
+	return creds, revision, err
 }
 
 func (s *Store) openCredentials(ctx context.Context, tx *sql.Tx, workspace, id int64) (Credentials, error) {

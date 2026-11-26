@@ -969,6 +969,7 @@
     "integration_display_name_invalid": "O nome de exibição pode ter até {max} caracteres imprimíveis.",
     "integration_provider_unknown": "Este provedor não é compatível.",
     "integration_secret_required": "Informe o campo {secret}.",
+    "integration_webhook_secret_reused": "Outra integração já usa este segredo de webhook. Cada endpoint tem o seu: copie o que o provedor mostra para este endpoint.",
     "integration_secret_invalid": "O campo {secret} não parece ser deste provedor: confira se copiou o correto.",
     "integration_secret_unreadable": "O campo {secret} salvo não pode ser lido, porque a chave do servidor mudou. Informe-o de novo.",
     "integration_setting_invalid": "A configuração {setting} está faltando ou não é válida.",
