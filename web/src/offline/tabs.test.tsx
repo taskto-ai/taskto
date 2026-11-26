@@ -476,6 +476,16 @@ test('an entry from before sends were counted (one attempt, no counter) says the
   expect(screen.getByText(MAY_BE_THERE)).toBeTruthy()
 })
 
+test('a deletion that may have been sent says the server may already have deleted the record', async () => {
+  const { a } = await twoTabs({ announce: false })
+  await a.store.enqueue(itemOf({ state: 'queued', kind: 'delete', attempts: 1 }), [])
+  render(<Harness runtime={a.runtime} />)
+  await screen.findByText(QUEUED)
+  fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
+  await screen.findByRole('button', { name: 'Yes, discard' })
+  expect(screen.getByText(/may already have deleted the record/)).toBeTruthy()
+})
+
 test('Keep as draft on a row another tab has claimed is refused, says so, and sends nothing of its own', async () => {
   const { a, b } = await twoTabs({ announce: false })
   await a.store.enqueue(itemOf({ state: 'queued' }), [])

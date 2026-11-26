@@ -2636,6 +2636,7 @@
       "discardTitle": "Discard {name}?",
       "discardBody": "This removes the copy on this device and stops any more attempts to send it.",
       "discardBodySent": "This removes the copy on this device and stops any more attempts to send it. An earlier attempt may already have reached the server, so the record may exist there: discarding does not undo that.",
+      "discardBodySentDelete": "This removes the copy on this device and stops any more attempts to send it. An earlier attempt may already have deleted the record on the server: discarding does not restore it.",
       "discardConfirm": "Yes, discard",
       "discardClosed": "The question about discarding a record was closed because the record changed in another tab or window (it is being sent, or that tab took over). Nothing was removed. The list shows where it stands.",
       "clearSynced": "Clear synced records",

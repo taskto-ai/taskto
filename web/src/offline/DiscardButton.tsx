@@ -11,7 +11,7 @@ import { Button } from '../ui/Button'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { discard } from './choices'
 import type { Runtime } from './runtime'
-import { mayHaveBeenSent, type OutboxItem, type SeenAs, seenAs } from './store'
+import { kindOf, mayHaveBeenSent, type OutboxItem, type SeenAs, seenAs } from './store'
 
 export function DiscardButton({
   runtime,
@@ -35,7 +35,7 @@ export function DiscardButton({
   // question is on screen, and null otherwise.
   // `sent`: a send was started for it before (a claim, or one nobody answered): the server may
   // already have the record, which the question says.
-  const [asked, setAsked] = useState<{ seen: SeenAs; sent: boolean } | null>(null)
+  const [asked, setAsked] = useState<{ seen: SeenAs; sent: boolean; removal: boolean } | null>(null)
   // What to say if the question is taken away from under the person (this button unmounts while it
   // is open: it is not answered, it is gone). Set by the person's own presses, never from a render:
   // an answer and a list read again can land in one render, and the answer must already count.
@@ -66,7 +66,7 @@ export function DiscardButton({
         aria-label={t('common.labelFor', { label, name })}
         onClick={() => {
           open.current = true
-          setAsked({ seen: seenAs(item), sent: mayHaveBeenSent(item) })
+          setAsked({ seen: seenAs(item), sent: mayHaveBeenSent(item), removal: kindOf(item) === 'delete' })
         }}
       >
         {label}
@@ -81,7 +81,13 @@ export function DiscardButton({
           onConfirm={() => answer(true)}
           onCancel={() => answer(false)}
         >
-          {t(asked.sent ? 'offline.queue.discardBodySent' : 'offline.queue.discardBody')}
+          {t(
+            !asked.sent
+              ? 'offline.queue.discardBody'
+              : asked.removal
+                ? 'offline.queue.discardBodySentDelete'
+                : 'offline.queue.discardBodySent',
+          )}
         </ConfirmDialog>
       )}
     </>
