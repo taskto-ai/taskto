@@ -82,7 +82,7 @@ type Worker interface {
 }
 
 // RecordWorker notes, in sqlDB, that CLI workers of mode's kind run on this data directory
-// (cli_worker_history, migration 0055): the purge of a deleted account waits for each kind that
+// (cli_worker_history, migration 0059): the purge of a deleted account waits for each kind that
 // ever ran to remove the person's files there. The server calls it at start, before the worker is
 // used; Off records nothing.
 func RecordWorker(ctx context.Context, sqlDB *sql.DB, mode Mode) error {

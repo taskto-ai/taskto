@@ -559,7 +559,7 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 }
 
 // forgetWorkerHistory marks the CLI workers' history of the restored server database at p as
-// unknown up to now (cli_worker_history, migration 0055). The backup's record says which workers
+// unknown up to now (cli_worker_history, migration 0059). The backup's record says which workers
 // had run when it was made, not which ran since, while its accounts were still in use: a purge of
 // one of those accounts must wait for either worker to remove their files. A database from a
 // version without the record gets it when the server migrates it.

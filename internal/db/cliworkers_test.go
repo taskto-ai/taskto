@@ -29,7 +29,7 @@ func TestCLIWorkerHistoryIsEmptyOnANewInstall(t *testing.T) {
 func TestCLIWorkerHistoryOfAnOlderInstallIsUnknown(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
-	if _, err := migrate(ctx, sqlDB, upTo(t, 54)); err != nil {
+	if _, err := migrate(ctx, sqlDB, upTo(t, 58)); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
