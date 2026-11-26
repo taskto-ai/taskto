@@ -5,7 +5,6 @@
 @layer tokens {
   :root {
     --tt-canvas: var(--color-bg);
-    --tt-stone: var(--color-bg-sunken);
     --tt-surface: var(--color-surface);
     --tt-hover: var(--color-hover);
 
@@ -21,8 +20,6 @@
     --tt-focus: var(--color-focus);
     --tt-link: var(--color-link);
     --tt-logo-dot: var(--color-logo);
-
-    --tt-danger: var(--color-danger);
 
     --tt-font: var(--font-sans);
     --tt-display: var(--font-display);

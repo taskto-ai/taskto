@@ -411,12 +411,7 @@ const THEMES = 'src/ui/themes/'
 // as src/styles.css lists them: the order is the cascade (most are in no layer, where the later of
 // two equal rules wins), so it is pinned here. A screen's new stylesheet is not one of these: its
 // component imports it. Paths are under src/.
-export const OLD_STYLESHEETS = [
-  'ui/base.css',
-  'legacy-shared.css',
-  'markdown.legacy.css',
-  'settings/settings.legacy.css',
-]
+export const OLD_STYLESHEETS = ['ui/base.css', 'legacy-shared.css', 'markdown.legacy.css']
 const LIST = 'src/styles.css'
 // The cascade layers, in order, as ui/index.css and index.html declare them.
 export const LAYERS = ['tokens', 'themes', 'base', 'components', 'screens']

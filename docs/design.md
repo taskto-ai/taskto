@@ -61,9 +61,8 @@ that needs one (a shadow, the lift) takes it from a role. **No colour literal is
 `web/src/ui/themes/`**: `web/scripts/css-check.mjs` fails on a hex colour, a colour function or a
 named colour in any other stylesheet's declarations.
 
-**The older names.** What is left of the old stylesheets (the screens outside the shell, the
-base's element rules in `ui/base.css`, Markdown outside the knowledge base, and the rules a screen
-still in the middle of its move keeps) still uses `--tt-surface`, `--tt-fg`, `--tt-radius` and a few
+**The older names.** What is left of the old stylesheets (the base's element rules in
+`ui/base.css`, the logo's proportions, and Markdown outside the knowledge base) still uses `--tt-surface`, `--tt-fg`, `--tt-radius` and a few
 others. `legacy.css` keeps each such name as an alias of its role or scale (`--tt-surface:
 var(--color-surface)`), and only those: `css-check` fails on an alias nothing reads (so a deleted one
 can't come back unread), and a test checks that every one left still resolves, to the value it had. New CSS uses the roles and scales; the file goes
@@ -75,7 +74,7 @@ with the last old rule.
 |---|---|
 | Space | `--space-1` 4px, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-10` 40, `-12` 48, `-16` 64 |
 | Type sizes | `--text-xs` 12px, `-sm` 13, `-md` 14 (the interface), `-lg` 16 (reading), `-xl` 20, `-2xl` 24 |
-| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for what the old stylesheets still draw (the base's fields, Markdown, the screens outside the shell) |
+| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for what the old stylesheets still draw (the base's fields, Markdown outside the knowledge base) |
 | Control height | `--control-sm` 28px, `--control-md` 36, `--control-touch` 44 (the touch target) |
 | Elevation | `--shadow-lift` and `--shadow-lift-hover` (the primary button's hard lift), `--shadow-pop` (a menu, a popover), `--shadow-dialog` |
 | Motion | `--duration-fast` 120ms, `-base` 160, `-slow` 240; `--ease-out`, `--ease-in-out`; all of it stops under `prefers-reduced-motion` |
@@ -122,8 +121,8 @@ better at small sizes. JetBrains Mono is for code, paths, commands and ids.
 | `--type-code` | JetBrains Mono | 13 / 20 | 400 | code, paths |
 
 Every screen in the shell sets its text by these roles. The old base's 15px text and heavy
-display-face headings reach only what the old stylesheets still draw (the screens outside the shell)
-and a bare element a screen writes itself, which is why a screen's heading is `Heading`.
+display-face headings reach only Markdown outside the knowledge base (a message, a card's
+description and comments) and a bare element a screen writes itself, which is why a screen's heading is `Heading`.
 
 ### The colour roles
 
@@ -271,7 +270,7 @@ dark-mode badge ended up white on salmon.
 | `web/src/ui/base.css` | `base`, and two parts in none | the elements (the page, headings, links, the focus ring, form fields) and three utilities (`tt-muted`, `tt-small`, `tt-error`); in no layer, what reaches every element on purpose and the touch screen's checkbox rules (below) |
 | `web/src/ui/<Name>.css` | `components` | a component's rules, beside `<Name>.tsx`, which imports it |
 | `web/src/<screen>/<Name>.css` | `screens` | a screen's own layout, beside the screen's components, which import it (`boards/boards.css`, `settings/Settings.css`) |
-| `web/src/legacy-shared.css`, `web/src/<screen>/<screen>.legacy.css`, `web/src/markdown.legacy.css` | none | the old stylesheet's rules that something still uses: the screens outside the shell (sign-in, the offline guards, the update banner: `auth`, `offline`, `pwa`), Markdown outside the knowledge base, and what a screen still in the middle of its move keeps. Nothing new goes in; each goes when its last user moves onto the components |
+| `web/src/legacy-shared.css`, `web/src/markdown.legacy.css` | none | the old stylesheet's rules that something still uses: the logo's proportions (`BrandLogo.tsx`), and the Markdown of a message, a card's description and its comments (the knowledge base's documents use the components' `ui-prose`). Nothing new goes in; each goes when its last user moves onto the components |
 | `web/src/styles.css` | | the list of `@import`s of the old stylesheets, in the order of the cascade, and nothing else |
 
 `web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components and
@@ -375,8 +374,8 @@ a `<button>`, an `<input>`, a `<select>` or a `<textarea>` of its own:
 `web/scripts/controls-check.mjs`, run with css-check (`pnpm --filter @taskto/web run css`), fails on
 one written outside `web/src/ui/`, found by parsing each module. Its `ALLOWED` list names the few
 files that may keep one, how many and why: a file picker, which only `<input type="file">` opens; a
-read-only checkbox in a rendered document; a board's card, whose whole surface is the button that
-opens it; and the screens outside the shell until they are rebuilt.
+read-only checkbox in a rendered document; and a board's card, whose whole surface is the button
+that opens it.
 
 - **One height per size.** Buttons, fields, selects and segmented controls of one size are one
   height (36px regular, 28px small), so they line up in a row; on a touch screen every one of
