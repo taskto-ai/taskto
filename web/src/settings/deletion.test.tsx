@@ -34,6 +34,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   sessionStorage.clear()
+  takeDeletion() // a date a test left in memory
 })
 afterEach(() => {
   cleanup()

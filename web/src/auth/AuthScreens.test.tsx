@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, ResetPasswordScreen } from './AuthScreens'
-import { rememberDeletion } from './deleted'
+import { rememberDeletion, takeDeletion } from './deleted'
 
 afterEach(async () => {
   cleanup()
@@ -464,4 +464,19 @@ test('a sign-in screen already up when the deletion is answered still says when 
   // A 401 had mounted it; now the deletion succeeds.
   act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
+})
+
+test('the deletion notice is told even when the browser’s storage refuses, once', () => {
+  sessionStorage.clear()
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')
+  expect(takeDeletion()).toBeNull()
+  set.mockRestore()
+  get.mockRestore()
 })

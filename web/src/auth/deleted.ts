@@ -9,7 +9,12 @@ const KEY = 'taskto.accountDeleted'
 // there.
 export const DELETION_EVENT = 'taskto:account-deleted'
 
+// Kept in memory too, for a browser whose storage throws: the notice is then told to a sign-in screen
+// of this page, and not to one after a reload.
+let inMemory: string | null = null
+
 export function rememberDeletion(purgeAt: string): void {
+  inMemory = purgeAt
   try {
     window.sessionStorage.setItem(KEY, purgeAt)
   } catch {
@@ -20,11 +25,13 @@ export function rememberDeletion(purgeAt: string): void {
 
 // The purge date to tell the person, once.
 export function takeDeletion(): string | null {
+  const kept = inMemory
+  inMemory = null
   try {
     const at = window.sessionStorage.getItem(KEY)
     window.sessionStorage.removeItem(KEY)
-    return at
+    return at ?? kept
   } catch {
-    return null
+    return kept
   }
 }
