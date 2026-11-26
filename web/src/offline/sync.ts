@@ -197,7 +197,8 @@ export const RESOLVE = new Set<AttentionReason>(['conflict', 'deleted', 'schema'
 export type SyncStatus = {
   // Why nothing is being sent, if so: the session ended, the browser is signed in as someone
   // else than the queue's owner, or the person said so.
-  paused: null | 'session' | 'account' | 'manual'
+  // 'signing-out': the person's sign-out is certain and not finished; nothing more is sent for them.
+  paused: null | 'session' | 'account' | 'manual' | 'signing-out'
   running: boolean
   // The browser's own idea of the network: a hint, never proof.
   online: boolean
@@ -376,7 +377,7 @@ export class SyncEngine {
     return this.revalidating
   }
 
-  pause(reason: 'session' | 'account' | 'manual') {
+  pause(reason: 'session' | 'account' | 'manual' | 'signing-out') {
     this.paused = reason
     this.clear()
     this.emit()

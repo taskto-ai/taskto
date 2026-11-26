@@ -10,8 +10,8 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
-import { setPreferences } from '../i18n'
 import { ApiError, api, forAccount, SESSION_LOST, sessionLostFor } from '../api'
+import { setPreferences } from '../i18n'
 import { type BeforeLeave, useBeforeLeave } from '../router'
 import { sameSession, sessionUser } from '../session'
 import { fakeFetch } from '../test/fakes'
@@ -711,4 +711,63 @@ test('"Discard and sign out" with a logout the server refuses discards nothing: 
   // Nothing of this device was touched before the server confirmed: the record waits as it was.
   expect(await runtime.store.listItems()).toHaveLength(1)
   expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
+})
+
+test('while signing out waits for the server, the queue starts no send, even when the connection comes back', async () => {
+  let confirm: (() => void) | null = null
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      }),
+    [`POST ${base}/actions`]: { body: [] },
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  // The device has no connection: the record made waits, unsent.
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
+  await runtime.store.enqueue(queued(), [])
+  const sends = () => calls.filter((c) => c.method === 'POST' && c.path === `${base}/actions`).length
+  logOut()
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await waitFor(() => expect(confirm).not.toBeNull())
+  // The connection comes back while the server hasn't answered the sign-out yet: the record the
+  // person chose to discard is not sent.
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+  act(() => {
+    window.dispatchEvent(new Event('online'))
+  })
+  await new Promise((r) => setTimeout(r, 50))
+  expect(sends()).toBe(0)
+  await act(async () => confirm?.())
+  // The sign-out finishes before the test does.
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  Reflect.deleteProperty(navigator, 'onLine')
+})
+
+test('a sign-out cut short by the tab closing leaves nothing an offline start would open: the account stays closed until it is finished', async () => {
+  let confirm: (() => void) | null = null
+  fakeFetch({
+    ...signedIn,
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      }),
+  })
+  await signedInAs()
+  logOut()
+  await waitFor(() => expect(confirm).not.toBeNull())
+  // The tab closes while the sign-out is on its way; the next start has no server.
+  cleanup()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))),
+  )
+  render(<App />)
+  expect(await screen.findByRole('heading', { name: "Can't reach the server" })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Offline' })).toBeNull()
 })

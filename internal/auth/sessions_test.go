@@ -617,3 +617,32 @@ func TestSessionAfterTheSecondStepRecordsItsDevice(t *testing.T) {
 		t.Fatal("the session made at the second step is not listed as the current one")
 	}
 }
+
+// The reply of /api/me, and of a login, names the login it is for: the web app tells by it that a
+// login is still the same one, not only the same account.
+func TestMeNamesItsSession(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.setup()
+	first := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
+	current := func(c *client) string {
+		for _, s := range e.sessionsOf(c) {
+			if s.Current {
+				return s.ID
+			}
+		}
+		t.Fatal("no current session")
+		return ""
+	}
+	rec := first.do(http.MethodGet, "/api/me", nil)
+	expect(t, rec, http.StatusOK)
+	if got, want := decode[Me](t, rec).Session, current(first); got == "" || got != want {
+		t.Fatalf("/api/me session = %q, want %q", got, want)
+	}
+	// Signing in again in the same browser: the reply names the new login, not the one replaced.
+	before := decode[Me](t, rec).Session
+	again := first.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword})
+	expect(t, again, http.StatusOK)
+	if got := decode[Me](t, again).Session; got == "" || got == before || got != current(first) {
+		t.Fatalf("login reply session = %q; the one before was %q, the current one is %q", got, before, current(first))
+	}
+}

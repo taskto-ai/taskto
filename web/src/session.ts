@@ -21,6 +21,8 @@
 
 let generation = 0
 let user: number | null = null
+// The account of a session that ended in a sign-out not finished yet (see `leaving`).
+let departing: number | null = null
 const listeners = new Set<() => void>()
 
 function changed() {
@@ -31,14 +33,25 @@ function changed() {
 // Someone signed in: their session begins (a new one, even for the same person again).
 export function beginSession(id: number): void {
   user = id
+  departing = null
   changed()
 }
 
 // The session ended. Nothing to do when none is going on.
 export function endSession(): void {
+  departing = null
   if (user === null) return
   user = null
   changed()
+}
+
+// The session ends because its person is signing out, and the sign-out isn't finished: what the
+// page still sends meanwhile (the shell is kept, hidden, in case the server doesn't confirm it) names
+// the departing account, so it is refused if the browser became someone else's in another tab. It
+// lasts until the sign-out ends one way or another (endSession, or beginSession on the way back).
+export function leaving(id: number): void {
+  endSession()
+  departing = id
 }
 
 // The account of the session going on, or null.
@@ -46,9 +59,16 @@ export function sessionUser(): number | null {
   return user
 }
 
+// The account a request that changes something names (api.ts): the session's, or the departing one's
+// while its sign-out finishes.
+export function requestAccount(): number | null {
+  return user ?? departing
+}
+
 // For tests: no session, and a new generation, so nothing of one test's session reaches the next.
 export function resetSession(): void {
   user = null
+  departing = null
   changed()
 }
 

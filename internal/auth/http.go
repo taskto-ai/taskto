@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +72,10 @@ type Me struct {
 	// IsOperator is whether the user is an admin of the workspace the server's setup made: only
 	// then does the web app show what belongs to the whole server (backups, email).
 	IsOperator bool `json:"is_operator"`
+	// Session is the public id of the login this reply is for (the one a login just made, or the one
+	// the request came with), as GET /api/me/sessions names it; empty for an access token. The web
+	// app compares it to know a login is still the same one, not only the same account.
+	Session string `json:"session"`
 }
 
 func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u User) {
@@ -78,7 +84,27 @@ func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u 
 		serverError(w, r, err)
 		return
 	}
+	// A login that was just made (its cookie is on this answer) is the one the reply is for.
+	for _, ck := range (&http.Response{Header: w.Header()}).Cookies() {
+		if ck.Name == s.cookieName() && ck.Value != "" {
+			if reply.Session, err = s.sessionPublicID(r.Context(), ck.Value); err != nil {
+				serverError(w, r, err)
+				return
+			}
+		}
+	}
 	writeJSON(w, status, reply)
+}
+
+// sessionPublicID is the public id of the live session whose token this is, or "" when none is.
+func (s *Service) sessionPublicID(ctx context.Context, token string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT public_id FROM sessions WHERE token_hash = ? AND expires_at > ?`,
+		hashToken(token), stamp(s.now())).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 func (s *Service) meOf(r *http.Request, u User) (Me, error) {
@@ -102,7 +128,21 @@ func (s *Service) meOf(r *http.Request, u User) (Me, error) {
 	if err != nil {
 		return Me{}, err
 	}
-	return Me{User: MeUser{User: u, Locale: locale, TimeZone: zone}, Workspaces: ws, CanCreateWorkspace: can, IsOperator: operator}, nil
+	session := ""
+	if token := s.sessionToken(r); token != "" {
+		if _, isBearer := BearerToken(r); !isBearer {
+			if session, err = s.sessionPublicID(r.Context(), token); err != nil {
+				return Me{}, err
+			}
+		}
+	}
+	return Me{
+		User:               MeUser{User: u, Locale: locale, TimeZone: zone},
+		Workspaces:         ws,
+		CanCreateWorkspace: can,
+		IsOperator:         operator,
+		Session:            session,
+	}, nil
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {

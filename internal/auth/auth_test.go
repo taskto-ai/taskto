@@ -226,7 +226,11 @@ func TestSetup(t *testing.T) {
 	want := me{User: meUser{User: User{ID: got.User.ID, Email: "owner@example.com", Name: "Owner"}},
 		Workspaces:         []Membership{{WorkspaceID: ws, WorkspaceName: "Home", Role: RoleAdmin}},
 		CanCreateWorkspace: true, // the owner administers a workspace, and the default lets admins make more
-		IsOperator:         true} // and it is the one setup made
+		IsOperator:         true, // and it is the one setup made
+		Session:            got.Session}
+	if got.Session == "" {
+		t.Fatal("GET /api/me names no session")
+	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("GET /api/me = %+v, want %+v", got, want)
 	}

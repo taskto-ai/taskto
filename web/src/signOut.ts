@@ -1,18 +1,21 @@
 // What a sign-out does on this device once the server has confirmed it, and only then: the push
 // subscription, the drafts, the offline database. Everything here is the browser's, shared by its
 // tabs, so each step acts only on what is still the departing account's when it runs (another tab
-// may have signed someone else in meanwhile). A cleanup that fails or hangs doesn't keep the person
-// on the sign-out: it is remembered, and tried again the next time the app starts.
+// may have signed someone else in meanwhile).
+//
+// The sign-out and the person's decision are recorded before anything of it waits
+// (offline/pendingSignOut.ts), so a tab that closes in the middle leaves it to the next start, which
+// finishes it with the same decision before any account's offline data is opened, and forgets it only
+// once the device is verified clear.
 
 import { leavePush } from './notifications/push'
-import { deactivate } from './offline/runtime'
-import type { Approval } from './offline/store'
+import { pendingSignOuts, settleSignOut } from './offline/pendingSignOut'
+import { deactivate, lastUser, stillAgreed } from './offline/runtime'
+import { type Approval, OfflineStore } from './offline/store'
 import { forgetDraftsOf } from './uiState'
 
 // The longest a step of signing out waits: the server's answer, then this device's cleanup.
 export const SIGN_OUT_WAIT_MS = 15_000
-
-const UNFINISHED = 'taskto:sign-out-unfinished'
 
 function bounded<T>(work: Promise<T>, ms = SIGN_OUT_WAIT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -30,10 +33,21 @@ function bounded<T>(work: Promise<T>, ms = SIGN_OUT_WAIT_MS): Promise<T> {
   })
 }
 
-// `keep`: the person chose to keep the account's database (this version couldn't tell whether it
-// holds unsent records). `approved`: the unsent records they agreed to lose, as they were shown.
-// Resolves true when everything was cleared, false when something couldn't be (remembered, and tried
-// again at the next start).
+// Whether the device holds nothing more of `user`'s that the sign-out was to remove: no unsent record
+// the person agreed to lose, and no marker that would let an offline start open the account. What is
+// left is only what they did not agree to lose (made after they were asked), kept for the account.
+async function verifiedClear(user: number, approved: Approval): Promise<boolean> {
+  if (lastUser()?.id === user) return false
+  // Gone altogether (the usual end). Asked without opening it, since opening one makes it again.
+  const names = await globalThis.indexedDB?.databases?.().catch(() => undefined)
+  if (names && !names.some((d) => d.name === OfflineStore.databaseName(user))) return true
+  const left = await stillAgreed(user, new Map())
+  return !left.some((r) => approved.has(r.id))
+}
+
+// Clears the device for `user`, as they decided (`keep`: their database stays; `approved`: the unsent
+// records they agreed to lose). Resolves true when it is done and verified (the pending sign-out is
+// then forgotten), false when it isn't (it stays recorded, for the next start).
 export async function cleanUpAfterSignOut(user: number, keep: boolean, approved: Approval): Promise<boolean> {
   try {
     await bounded(
@@ -46,50 +60,23 @@ export async function cleanUpAfterSignOut(user: number, keep: boolean, approved:
         if (left.length > 0) await deactivate({ purge: false, keep: true, user })
       })(),
     )
+    if (!(await bounded(verifiedClear(user, approved)))) return false
+    settleSignOut(user)
     return true
   } catch {
-    remember(user)
     return false
   }
 }
 
-function read(): number[] {
-  try {
-    const v = JSON.parse(window.localStorage.getItem(UNFINISHED) ?? '[]')
-    return Array.isArray(v) ? v.filter((n): n is number => Number.isInteger(n)) : []
-  } catch {
-    return []
-  }
-}
-
-function write(users: number[]) {
-  try {
-    if (users.length === 0) window.localStorage.removeItem(UNFINISHED)
-    else window.localStorage.setItem(UNFINISHED, JSON.stringify(users))
-  } catch {
-    // Not remembered: nothing more can be done from here.
-  }
-}
-
-function remember(user: number) {
-  write([...new Set([...read(), user])])
-}
-
-// At the start, once the app knows who is signed in (`current`, or null): the cleanups that didn't
-// finish are tried again for the accounts that aren't. One that is signed in again keeps what is
-// its own, and its entry goes.
+// At the start, once the app knows who is signed in (`current`, or null), and before any account's
+// offline data is opened: each sign-out that didn't finish is finished now, with the decision its
+// person made. One whose account is signed in again is not to be: what is there is theirs.
 export async function finishUnfinishedSignOuts(current: number | null): Promise<void> {
-  const users = read()
-  if (users.length === 0) return
-  const left: number[] = []
-  for (const user of users) {
-    if (user === current) continue
-    try {
-      forgetDraftsOf(user)
-      await bounded(deactivate({ purge: true, user }))
-    } catch {
-      left.push(user)
+  for (const p of pendingSignOuts()) {
+    if (p.user === current) {
+      settleSignOut(p.user)
+      continue
     }
+    await cleanUpAfterSignOut(p.user, p.keep, new Map(p.approved))
   }
-  write(left)
 }

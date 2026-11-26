@@ -5,7 +5,16 @@
 // sets the password, and signs in.
 
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from 'react'
-import { ACCOUNT_CHANGED_EVENT, ApiError, api, concernsAccount, errorText, forAccount, type Me, SESSION_LOST } from './api'
+import {
+  ACCOUNT_CHANGED_EVENT,
+  ApiError,
+  api,
+  concernsAccount,
+  errorText,
+  forAccount,
+  type Me,
+  SESSION_LOST,
+} from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen, StartingScreen } from './auth/AuthScreens'
 import { ServerUnreachable } from './auth/ServerUnreachable'
 import { SigningOut } from './auth/SigningOut'
@@ -17,10 +26,11 @@ import { onAccountSignal, watchAccount } from './offline/account'
 import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
-import { activate, discardForeign, lastUser, stillAgreed, type Unsent, unsentOf } from './offline/runtime'
+import { recordSignOut, settleSignOut, signOutPending } from './offline/pendingSignOut'
+import { activate, discardForeign, lastUser, runtimeState, stillAgreed, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
 import { beforeLeaving, navigate } from './router'
-import { beginSession, endSession, sameSession } from './session'
+import { beginSession, endSession, sameSession, leaving as signingOut } from './session'
 import { Shell } from './shell/Shell'
 import { cleanUpAfterSignOut, finishUnfinishedSignOuts, SIGN_OUT_WAIT_MS } from './signOut'
 import { reportTimeZone } from './timezone'
@@ -62,6 +72,10 @@ export function App() {
   // person first, `foreign`). Sending what the account queued starts (or goes on, after the
   // session ended and this person signed in again).
   const claim = useCallback(async (me: Me) => {
+    // A sign-out on this device that didn't finish (its tab closed, its cleanup failed) is finished
+    // first, with its person's decision, before any account's offline data opens here; one of this
+    // account's is not to be, since it is signed in again.
+    await finishUnfinishedSignOuts(me.user.id)
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
   }, [])
@@ -78,6 +92,14 @@ export function App() {
   )
   // Records made on this device that haven't reached the server: asked about before signing out.
   const [leaving, setLeaving] = useState<Asked | null>(null)
+  // A sign-out whose cleanup on this device didn't finish: said once, on the screen after it (raised
+  // once the shell, and the toasts it drew, are gone).
+  const [notCleared, setNotCleared] = useState(false)
+  useEffect(() => {
+    if (!notCleared || session.state === 'leaving' || session.state === 'in') return
+    setNotCleared(false)
+    toast({ message: translate('app.deviceNotCleared'), tone: 'danger' })
+  }, [notCleared, session.state])
 
   const load = useCallback(async () => {
     try {
@@ -98,20 +120,20 @@ export function App() {
         return setSession({ state: 'invite', me })
       }
       const me = await api<Me>('/api/me')
-      // A sign-out whose cleanup didn't finish on this device is finished now, for any account but
-      // the one signed in again.
-      void finishUnfinishedSignOuts(me.user.id)
       await setPreferences({ user: me.user.locale ?? null })
       await signIn(me)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
-        void finishUnfinishedSignOuts(null)
+        // Nobody is signed in: a sign-out that didn't finish here is finished now.
+        await finishUnfinishedSignOuts(null)
         return setSession({ state: 'login' })
       }
       // No answer at all (not a server's error): offline. If someone signed in here, the apps they
-      // downloaded can still be used.
+      // downloaded can still be used; not those of an account whose sign-out isn't finished (its
+      // tab closed on the way): its data is going, and stays closed until a start with the server
+      // finishes it.
       const before = !(e instanceof ApiError) ? lastUser() : null
-      if (before) {
+      if (before && !signOutPending(before.id)) {
         void activate(before.id)
         setSession({ state: 'offline', name: before.name })
       } else {
@@ -238,9 +260,10 @@ export function App() {
       }
       const cleared = await cleanUpAfterSignOut(user, keep, approved)
       if (!mine()) return
+      endSession()
       setLeaving(null)
       setSession(next)
-      if (!cleared) toast({ message: translate('app.deviceNotCleared'), tone: 'danger' })
+      if (!cleared) setNotCleared(true)
     },
     [accountChanged],
   )
@@ -261,8 +284,13 @@ export function App() {
           return
         }
       }
-      // Certain: the session ends here, and the shell goes with it.
-      endSession()
+      // Certain. The sign-out and its decision are recorded before anything of it waits (the tab may
+      // close), the session ends, and the queue sends nothing more for this account; the shell is
+      // kept, hidden and inert, in case the server doesn't confirm it and the person goes back.
+      recordSignOut(user, keep, approved)
+      signingOut(user)
+      const queue = runtimeState().runtime
+      if (queue?.user === user) queue.engine.pause('signing-out')
       const tail: Tail = { user, next, keep, approved }
       setLeaving(null)
       setSession((s) => ({ state: 'leaving', tail, back: s.state === 'leaving' ? s.back : s }))
@@ -291,13 +319,21 @@ export function App() {
   // The server didn't confirm the sign-out and the person goes back. Who the browser is signed in as
   // is asked first: their own shell again only if it is still them (the logout may have gone through
   // before the connection dropped, or another tab signed someone else in meanwhile).
+  // Only the same login (the session the shell was for), not only the same account: another login of
+  // it made meanwhile is another session, which a page reloaded opens as itself.
   const goBack = useCallback(
     async (back: Session, user: number) => {
       try {
         const me = await api<Me>('/api/me')
-        if (me.user.id !== user) return accountChanged()
+        const was = back.state === 'in' || back.state === 'invite' ? back.me?.session : undefined
+        if (me.user.id !== user || (was !== undefined && me.session !== was)) return accountChanged()
+        // Not signing out after all: nothing of it is to be finished, and the queue goes on.
+        settleSignOut(user)
         beginSession(me.user.id)
-        setSession(back.state === 'invite' ? { state: 'invite', me } : { state: 'in', me })
+        const queue = runtimeState().runtime
+        if (queue?.user === user && queue.engine.status().paused === 'signing-out') queue.engine.resume()
+        // The same state the person left (the shell was kept, with what they were editing).
+        setSession(back)
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) return setSession({ state: 'login' })
         setSession((s) => (s.state === 'leaving' ? { ...s, failed: errorText(e) } : s))
@@ -352,6 +388,31 @@ export function App() {
       </>
     )
 
+  // The signed-in shell, the same element whether the person is in it or signing out from it, so
+  // React keeps its state across a sign-out the server didn't confirm.
+  const shellFor = (me: Me, out: Extract<Session, { state: 'leaving' }> | null) => (
+    <>
+      <div hidden={out !== null} inert={out !== null} style={out ? undefined : { display: 'contents' }}>
+        <Shell
+          me={me}
+          onLogout={() => logOut({ user: me.user.id, next: { state: 'login' } })}
+          onMe={(next) =>
+            // Only the account still signed in: an answer that comes after logout must not bring the shell back.
+            setSession((s) => (s.state === 'in' && s.me.user.id === next.user.id ? { state: 'in', me: next } : s))
+          }
+        />
+      </div>
+      {out && (
+        <SigningOut
+          failed={out.failed}
+          onRetry={() => void finish(out.tail)}
+          onBack={() => void goBack(out.back, out.tail.user)}
+        />
+      )}
+      {leavingGuard}
+    </>
+  )
+
   // Another account is signed in on this browser than the one this page holds: nothing of the
   // account's is shown, and the page is reloaded to go on as whoever is signed in.
   if (problem === 'account' || changed) return <AccountChanged />
@@ -383,6 +444,10 @@ export function App() {
     case 'error':
       return <ServerUnreachable error={session.error} onRetry={load} />
     case 'leaving':
+      // The shell the person signs out from stays mounted, hidden and inert, behind the sign-out's
+      // screen: if the server doesn't confirm it and they go back, it is as they left it, with what
+      // they were editing. Nothing of it can be pressed meanwhile.
+      if (session.back.state === 'in') return shellFor(session.back.me, session)
       return (
         <>
           <SigningOut
@@ -400,21 +465,8 @@ export function App() {
         </Suspense>
       )
     case 'in': {
-      const me = session.me
-      if (foreign) return foreignGuard(me)
-      return (
-        <>
-          <Shell
-            me={me}
-            onLogout={() => logOut({ user: me.user.id, next: { state: 'login' } })}
-            onMe={(next) =>
-              // Only the account still signed in: an answer that comes after logout must not bring the shell back.
-              setSession((s) => (s.state === 'in' && s.me.user.id === next.user.id ? { state: 'in', me: next } : s))
-            }
-          />
-          {leavingGuard}
-        </>
-      )
+      if (foreign) return foreignGuard(session.me)
+      return shellFor(session.me, null)
     }
   }
 }

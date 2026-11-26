@@ -4,7 +4,7 @@
 
 import type { Rule } from './apps/rules'
 import { has, type Key, type Params, t } from './i18n'
-import { endSession, sameSession, sessionUser } from './session'
+import { endSession, requestAccount, sameSession } from './session'
 
 export class ApiError extends Error {
   constructor(
@@ -75,7 +75,7 @@ export type RequestInit = {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? 'GET'
   const same = sameSession()
-  const account = sessionUser()
+  const account = requestAccount()
   // A header's name is the same in any case: one the caller names is found whatever its case.
   const named = Object.keys(init.headers ?? {}).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
   const extra =
@@ -174,6 +174,8 @@ export type Me = {
   workspaces: Workspace[]
   can_create_workspace: boolean
   is_operator: boolean
+  // The login this is for (GET /api/me/sessions's id); empty for an access token.
+  session?: string
 }
 
 export type Conversation = {

@@ -677,9 +677,15 @@ replaces it.
   "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR", "time_zone": "Europe/Lisbon"},
   "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
   "can_create_workspace": true,
-  "is_operator": true
+  "is_operator": true,
+  "session": "4f1c…"
 }
 ```
+
+`session` is the public id of the login the reply is for, as `GET /api/me/sessions` names it: the
+one a login just made (in the replies of the calls that sign in), or the one the request came
+with; empty for an access token. The web app compares it to know a login is still the same one,
+not only the same account.
 
 Workspaces are listed oldest first. Requires a login. `can_create_workspace` is whether
 [`POST /api/workspaces`](#post-apiworkspaces) would let this user in now, which the web

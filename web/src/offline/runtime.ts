@@ -27,6 +27,7 @@ import {
   watchAccount,
 } from './account'
 import { SchemaTooNew } from './idb'
+import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
 import { type Approval, type Download, OfflineStore, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
@@ -195,7 +196,8 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   const attempt = (async () => {
     await teardown(false)
     // A browser whose marker can't be trusted opens no database offline.
-    if (!name && (await offlineRefused())) {
+    // Nor one whose sign-out is certain and not finished (pendingSignOut.ts): what it held is going.
+    if (!name && ((await offlineRefused()) || signOutPending(user))) {
       set({ runtime: null, problem: 'unavailable', foreign: null })
       return state
     }
