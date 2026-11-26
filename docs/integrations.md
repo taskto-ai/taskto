@@ -203,8 +203,9 @@ Records, and in later changes payments and events, are never copied.
 
 `POST …/check` looks at what the server holds: the provider's required secrets are set and
 open with the server's key, and the settings are the provider's. It also says when another
-integration has the same webhook secret (`integration_webhook_secret_shared`, which names neither
-the integration nor its workspace): such a secret verifies no delivery, for either. It does
+integration's webhook secret was found shared with another (`integration_webhook_secret_shared`,
+which names neither the integration nor its workspace; the other holder may have changed theirs
+since): such a secret verifies no delivery and must be replaced. It does
 **not** call the provider yet (`remote` is `false` in the answer). It answers `200` with `ok`, or
 with a code, and never with a provider's reply. The one harmless call that proves the credentials work
 comes with the first change that calls a provider.

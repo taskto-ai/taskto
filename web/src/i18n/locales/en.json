@@ -968,7 +968,7 @@
     "integration_webhook_secret_reused": "Another integration already uses this webhook secret. Each endpoint has its own: copy the one shown for this endpoint at the provider.",
     "integration_secret_invalid": "The {secret} doesn't look like this provider's: check that you copied the right one.",
     "integration_secret_unreadable": "The saved {secret} can't be read, because the server's key has changed. Enter it again.",
-    "integration_webhook_secret_shared": "Another integration has the same webhook secret as this one's {secret}, so deliveries signed with it are refused for both. Each endpoint has its own: copy the one the provider shows for this endpoint and enter it here.",
+    "integration_webhook_secret_shared": "This integration's {secret} was found shared with another integration, so deliveries signed with it are refused and it must be replaced. Each endpoint has its own: copy the one the provider shows for this endpoint and enter it here.",
     "integration_setting_invalid": "The setting {setting} is missing or not valid.",
     "integration_limit_invalid": "The amount ceiling must be a whole number from 1 to {max}.",
     "integration_currency_invalid": "Choose 1 to {max} currencies from the list.",

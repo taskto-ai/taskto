@@ -973,7 +973,7 @@
     "integration_webhook_secret_reused": "Outra integração já usa este segredo de webhook. Cada endpoint tem o seu: copie o que o provedor mostra para este endpoint.",
     "integration_secret_invalid": "O campo {secret} não parece ser deste provedor: confira se copiou o correto.",
     "integration_secret_unreadable": "O campo {secret} salvo não pode ser lido, porque a chave do servidor mudou. Informe-o de novo.",
-    "integration_webhook_secret_shared": "Outra integração tem o mesmo segredo de webhook que o {secret} desta, então as entregas assinadas com ele são recusadas nas duas. Cada endpoint tem o seu: copie o que o provedor mostra para este endpoint e informe aqui.",
+    "integration_webhook_secret_shared": "O {secret} desta integração foi encontrado compartilhado com outra integração, então as entregas assinadas com ele são recusadas e ele precisa ser substituído. Cada endpoint tem o seu: copie o que o provedor mostra para este endpoint e informe aqui.",
     "integration_setting_invalid": "A configuração {setting} está faltando ou não é válida.",
     "integration_limit_invalid": "O teto do valor deve ser um número inteiro de 1 a {max}.",
     "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
