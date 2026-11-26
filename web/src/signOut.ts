@@ -162,6 +162,9 @@ export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()
       if ((p.at ?? 0) <= asked) settleSignOut(p.user, p.session)
       continue
     }
+    // Recorded after this start asked: a login that began since is signing out (its logout may not
+    // be answered yet), not one this start found over. Its own tab finishes it, or the next start.
+    if ((p.at ?? 0) > asked) continue
     await cleanUpAfterSignOut(p.user, p.session, decisionOf(p))
   }
 }

@@ -40,10 +40,14 @@ const SUBSCRIPTION_PATH = '/api/me/push/subscription'
 
 const TURNING_OFF = 'off:'
 
-// Whose the flag is: the person who turned push on, or who is turning it off (`off:<id>:<turn>`, each
-// turning off its own, so one that fails puts back only what it found, and only while it is its own).
+// Whose the flag is: the person who turned push on, or who is turning it off. A turn-off's marker is
+// its own (`off:<id>:<turn>:<base>`) and carries the flag as it was before any turn-off began
+// (`base`): one that fails puts that back, and only while the marker is still its own, so it never
+// undoes another tab's turn-off, nor brings back the marker of one that is over.
 const ownerOf = (flag: string | null) =>
   flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[0] : flag
+const baseOf = (flag: string | null): string | null =>
+  flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[2] || null : flag
 
 function read(): string | null {
   try {
@@ -317,13 +321,14 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   const sub = s.check(await (await registration())?.pushManager.getSubscription())
   if (sub) {
     // Turning off from here on, for every tab and the next start, until it is done or given up.
-    const turningOff = `${TURNING_OFF}${who}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    const turn = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    const turningOff = `${TURNING_OFF}${who}:${turn}:${baseOf(before) ?? ''}`
     write(turningOff)
     try {
       await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
     } catch (e) {
       // The server still knows the device: as it was, unless someone claimed the flag meanwhile.
-      if (read() === turningOff) write(before)
+      if (read() === turningOff) write(baseOf(before))
       throw e
     }
     s.check(undefined)
@@ -334,7 +339,7 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
     if (now !== null && ownerOf(now) !== String(who) && now !== before) return
     if (!(await unsubscribe(sub).catch(() => false))) {
       // The browser kept it: shown as it was, for the person to try again.
-      if (read() === turningOff) write(before)
+      if (read() === turningOff) write(baseOf(before))
       throw new PushUnsubscribeFailed()
     }
     s.check(undefined)

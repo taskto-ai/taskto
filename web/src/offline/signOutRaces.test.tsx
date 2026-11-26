@@ -447,3 +447,29 @@ test('a start whose answer comes late never takes a newer login of the account b
   expect(await cleanUpAfterSignOut(7, 's2', { keep: false, approved: new Map() })).toBe(true)
   expect(lastUser()).toBeNull()
 })
+
+test('a start answered 401 leaves a sign-out another tab recorded after it asked to that tab', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 401, body: { error: 'not logged in' } })
+      }),
+  })
+  await activate(7, 'Pat')
+  runtimeState().runtime?.engine.pause('manual')
+  render(<App />)
+  await waitFor(() => expect(answer).not.toBe(undefined))
+  await new Promise((r) => setTimeout(r, 20))
+  // Another tab, signed in as Pat, begins signing out: its logout isn't answered yet.
+  recordSignOut(7, 's2', false, new Map())
+  // This tab's start is answered now: the login its cookie held when it asked is over.
+  await act(async () => answer())
+  await screen.findByRole('heading', { name: 'Log in' })
+  await new Promise((r) => setTimeout(r, 50))
+  // That sign-out is the other tab's to finish (or the next start's): nothing of Pat's is touched.
+  expect(pendingSignOutOf(7)).toMatchObject({ session: 's2' })
+  expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
+  expect(await databases()).toContain('taskto-offline-7')
+})

@@ -525,10 +525,12 @@ export function App() {
     if (payment) return setSession({ state: 'payment', outcome: payment })
     // The login the browser's cookie is, as far as this browser knows: a 401 says it is over.
     const before = browserLogin()
+    // When this start began asking: a sign-out recorded after it is a newer login's.
+    const started = Date.now()
     const lapsed = async () => {
       if (before) forgetLogin(before.user, before.session)
       // Nobody is signed in: a sign-out that didn't finish here is finished now.
-      await finishUnfinishedSignOuts(null)
+      await finishUnfinishedSignOuts(null, started)
     }
     try {
       const setup = await api<{ needed: boolean }>('/api/setup')

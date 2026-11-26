@@ -1519,3 +1519,32 @@ test("without Web Locks, a turn-off that fails never puts push back on over anot
   // The other tab's turn-off stands: push is not shown on, nor registered again at a start.
   expect(localStorage.getItem('taskto.push')).not.toBe('1')
 })
+
+test('without Web Locks, two turn-offs that both fail leave push on as it was, registered again at a start', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  const fails: (() => void)[] = []
+  const calls = fakeFetch({
+    'DELETE /api/me/push/subscription': () =>
+      new Promise((done) => {
+        fails.push(() => done({ status: 500, body: { error: 'internal error', code: 'internal' } }))
+      }),
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  const first = disablePush().catch(() => {})
+  await vi.waitFor(() => expect(fails).toHaveLength(1))
+  vi.resetModules()
+  const other = await import('./push')
+  ;(await import('../session')).beginSession(1)
+  const second = other.disablePush().catch(() => {})
+  await vi.waitFor(() => expect(fails).toHaveLength(2))
+  // The first fails first, then the second.
+  fails[0]()
+  await first
+  fails[1]()
+  await second
+  // Neither reached the server: push is as it was, and a start registers it again.
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+  expect(await other.syncPush(1)).toBe(true)
+  expect(calls.some((c) => c.method === 'PUT')).toBe(true)
+})
