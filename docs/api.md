@@ -396,7 +396,13 @@ deletes the session at once. With `insecure_cookies` (local plain-http developme
 the cookie is called `taskto_session` and isn't `Secure`, since browsers refuse a
 `__Host-` cookie without it.
 
-A route that needs a login answers `401` without a valid session.
+A route that needs a login answers `401` without a valid session. That answer leaves the cookie
+as it is, whether the session is unknown, expired or revoked: a stale session's cookie is inert, and
+expiring it could wipe the cookie of a newer sign-in made in the same browser while the request was
+on its way (two tabs submitting an account's deletion, the second answered after another account
+signed in). Only logging out clears the cookie, its own. A request made for an account (the
+`X-Taskto-Expected-User` header) that is answered `401` ends the web app's session for that account
+only: a window signed in as another account stays signed in.
 
 Each session keeps what [your sessions](#your-sessions) list: when it was made, when it was last
 used (written at most once a minute) and the names of the browser and system its login was made

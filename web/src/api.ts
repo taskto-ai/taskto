@@ -84,8 +84,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     return null
   })
   if (!res.ok) {
-    // A session that ended (logged out elsewhere, expired) sends the app back to the login.
-    if (res.status === 401) window.dispatchEvent(new Event(SESSION_LOST))
+    // A session that ended (logged out elsewhere, expired) sends the app back to the login. A
+    // request made for an account (forAccount) says whose session ended: a window that is signed in
+    // as another account by now, because a sign-in came after the request was sent, is left alone.
+    if (res.status === 401) {
+      const expected = Number(extra[EXPECTED_USER_HEADER])
+      window.dispatchEvent(
+        Number.isInteger(expected) && expected > 0 ? sessionLostFor(expected) : new Event(SESSION_LOST),
+      )
+    }
     if (res.status === 409 && data?.code === ACCOUNT_CHANGED) {
       const expected = Number(extra[EXPECTED_USER_HEADER])
       window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))

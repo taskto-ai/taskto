@@ -471,3 +471,45 @@ func TestADelayedDeletionAnswerLeavesANewerSessionsCookie(t *testing.T) {
 	// And the deleted account's own cookie opens nothing.
 	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 }
+
+// Two tabs submit the deletion: the first commits, the second reaches authentication with the
+// session the first revoked and is answered 401. That answer must not expire the cookie of an
+// account that signed in here in the meantime: the revoked session's cookie is inert anyway.
+func TestASecondDeletionRefusedAsStaleLeavesANewerSessionsCookie(t *testing.T) {
+	tm, _ := newDeletionTeam(t)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse("https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := tm.member.cookie
+	jar.SetCookies(u, []*http.Cookie{stale})
+	// The first tab's deletion commits.
+	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
+	// The second tab's request was sent with the old cookie, and is answered after the owner
+	// signed in here: the jar holds the owner's cookie by then.
+	req := tm.member.req(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword})
+	req.Header.Del("Cookie")
+	req.AddCookie(stale)
+	rec := httptest.NewRecorder()
+	tm.e.h.ServeHTTP(rec, req)
+	expect(t, rec, http.StatusUnauthorized)
+	jar.SetCookies(u, []*http.Cookie{tm.owner.cookie})
+	jar.SetCookies(u, rec.Result().Cookies())
+	var held string
+	for _, c := range jar.Cookies(u) {
+		if c.Name == tm.owner.cookie.Name {
+			held = c.Value
+		}
+	}
+	if held != tm.owner.cookie.Value {
+		t.Fatalf("the owner's cookie is %q after the stale 401, want it kept", held)
+	}
+	if got := rec.Result().Header.Values("Set-Cookie"); len(got) != 0 {
+		t.Errorf("a stale session's 401 set cookies: %v", got)
+	}
+	expect(t, tm.owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
+}

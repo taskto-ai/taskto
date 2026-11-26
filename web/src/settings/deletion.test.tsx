@@ -125,6 +125,25 @@ test('an account with two-factor login sends its code too, and a wrong password 
   window.removeEventListener(SESSION_LOST, lost)
 })
 
+test('a deletion refused because its session ended already, in another tab, ends the session of this account only and remembers no date', async () => {
+  fakeFetch({
+    'GET /api/me/deletion': { body: status() },
+    'POST /api/me/deletion': { status: 401, body: { error: 'log in first', code: 'not_logged_in' } },
+  })
+  const lost = vi.fn()
+  window.addEventListener(SESSION_LOST, lost)
+  render(<SettingsPage me={me(false)} workspace={plain} tab="data" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete my account…' }))
+  const form = await screen.findByRole('form', { name: 'Delete your account' })
+  fireEvent.change(within(form).getByLabelText('Your password'), { target: { value: 'fake-test-password' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Delete my account' }))
+  await waitFor(() => expect(lost).toHaveBeenCalled())
+  // Told for the owner (1), whose form this is: a window signed in as another account ignores it.
+  expect((lost.mock.calls[0][0] as CustomEvent).detail).toEqual({ user: 1 })
+  expect(takeDeletion()).toBeNull()
+  window.removeEventListener(SESSION_LOST, lost)
+})
+
 test('the only admin of a workspace is told which, and can not start', async () => {
   fakeFetch({
     'GET /api/me/deletion': {

@@ -317,9 +317,9 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (u User, 
 		return User{}, nil, false
 	}
 	if !ok {
-		if s.sessionToken(r) != "" {
-			s.clearSessionCookie(w)
-		}
+		// The cookie is left as it is: a stale session's is inert (its row is revoked or expired),
+		// and expiring it here would wipe a newer one that a sign-in in the same browser set while
+		// this request was on its way. Only logging out clears the cookie.
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return User{}, nil, false
 	}

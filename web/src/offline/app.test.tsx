@@ -10,7 +10,7 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
-import { SESSION_LOST, sessionLostFor } from '../api'
+import { ApiError, api, forAccount, SESSION_LOST, sessionLostFor } from '../api'
 import { type BeforeLeave, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
@@ -208,6 +208,27 @@ test('the end of another account’s session, heard after this one signed in, le
   act(() => {
     window.dispatchEvent(sessionLostFor(7))
   })
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+})
+
+test('a request made for another account that is refused as signed out, answered after this one signed in, leaves it signed in', async () => {
+  fakeFetch({
+    ...signedIn,
+    'POST /api/me/deletion': { status: 401, body: { error: 'log in first', code: 'not_logged_in' } },
+  })
+  await signedInAs()
+  // The second tab's deletion of account 99, whose session the first tab's deletion ended, is refused.
+  await expect(api('/api/me/deletion', { method: 'POST', body: {}, headers: forAccount(99) })).rejects.toBeInstanceOf(
+    ApiError,
+  )
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
+  expect(screen.getByRole('banner')).toBeTruthy()
+  expect(runtimeState().runtime?.engine.status().paused).not.toBe('session')
+  // The same refusal for this account (7) is a real session loss.
+  await expect(api('/api/me/deletion', { method: 'POST', body: {}, headers: forAccount(7) })).rejects.toBeInstanceOf(
+    ApiError,
+  )
   await screen.findByRole('heading', { name: /sign in|log in/i })
 })
 
