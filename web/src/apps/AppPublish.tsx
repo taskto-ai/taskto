@@ -26,6 +26,8 @@ import { Dialog } from '../ui/Dialog'
 import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { effectLines } from './effectLines'
 
 // What went wrong with a change to an app, for people. A role that doesn't allow it names what is
@@ -140,7 +142,14 @@ function Audience({ app, space, spaceBase, base }: { app: App; space: Space; spa
   if (space.kind === 'private') return <p>{t('apps.builder.audience.private')}</p>
   if (!app.access.restricted) return <p>{t('apps.builder.audience.space', { space: spaceLabel(space) })}</p>
   if (!roles.data) {
-    return <p>{t(named && !roles.error ? 'app.loading' : 'apps.builder.audience.restricted')}</p>
+    if (!named || roles.error) return <p>{t('apps.builder.audience.restricted')}</p>
+    // Who may use it is still on its way: the shape of the line, and a word for screen readers.
+    return (
+      <div role="status" aria-busy="true">
+        <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+        <Skeleton width="60%" />
+      </div>
+    )
   }
   const [{ grants }, { members }] = roles.data
   const line = (name: string, held: AppRole[]) =>

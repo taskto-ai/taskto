@@ -2,7 +2,7 @@
 // change and showing its error, the shape of what is loading, a read-only value to copy, a list of
 // facts, and dates. Every tab is built from these and the components in ../ui, so they read alike.
 
-import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
+import { type ReactNode, type Ref, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { format, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -16,9 +16,13 @@ import { VisuallyHidden } from '../ui/VisuallyHidden'
 import './Settings.css'
 
 // Runs one change at a time; a failure is kept, to show next to what failed.
-export function useAction() {
+// `labels` names a form's fields as the person sees them, for an error the server says of one
+// ("the api_key isn't valid" reads "the Secret key isn't valid").
+export function useAction(labels?: ReadonlyMap<string, string>) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const named = useRef(labels)
+  named.current = labels
   const run = useCallback(async (change: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true)
     setError(null)
@@ -26,7 +30,7 @@ export function useAction() {
       await change()
       return true
     } catch (e) {
-      setError(errorText(e))
+      setError(errorText(e, named.current))
       return false
     } finally {
       setBusy(false)
@@ -39,6 +43,22 @@ export function useAction() {
 export function Alert({ error }: { error: string | null | undefined }) {
   if (!error) return null
   return <Notice tone="danger">{error}</Notice>
+}
+
+// A form's error, in a long form (a dialog that scrolls): the notice takes the focus when it
+// appears, which also scrolls it into view, so a refused save is seen wherever the form was
+// scrolled to, and a screen reader is taken to it.
+export function FormError({ error }: { error: string | null | undefined }) {
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (error) box.current?.focus()
+  }, [error])
+  if (!error) return null
+  return (
+    <div ref={box} tabIndex={-1} className="settings-form-error">
+      <Notice tone="danger">{error}</Notice>
+    </div>
+  )
 }
 
 // A tab: the page at the reading width, its name and a line on what it is for, then its sections.
@@ -69,6 +89,7 @@ export function Section({
   actions,
   label,
   level = 2,
+  headingRef,
   children,
 }: {
   title?: ReactNode
@@ -77,6 +98,9 @@ export function Section({
   // The section's name when it has no visible title.
   label?: string
   level?: 2 | 3
+  // The title, to move the keyboard to when what had it is gone (a row removed, an empty state
+  // replaced); given one, the title takes the focus from a script, not from Tab.
+  headingRef?: Ref<HTMLHeadingElement>
   children?: ReactNode
 }) {
   const id = useId()
@@ -91,7 +115,13 @@ export function Section({
         <header className="settings-section-head">
           <div className="settings-section-titles">
             {title && (
-              <Heading level={level} size={level === 2 ? 'section' : 'subsection'} id={`${id}-title`}>
+              <Heading
+                level={level}
+                size={level === 2 ? 'section' : 'subsection'}
+                id={`${id}-title`}
+                ref={headingRef}
+                tabIndex={headingRef ? -1 : undefined}
+              >
                 {title}
               </Heading>
             )}
@@ -183,4 +213,19 @@ export function Facts({ items }: { items: { term: ReactNode; value: ReactNode; k
 // A form's actions: its one primary button first, then the rest.
 export function FormActions({ children }: { children: ReactNode }) {
   return <div className="settings-actions">{children}</div>
+}
+
+// After a change that takes away what had the keyboard (a row removed, the empty state replaced by
+// the first row), the keyboard goes to a section's title once the list has been read again: call
+// `after()` with the change; the title is focused when `data` next changes.
+export function useRefocus(data: unknown) {
+  const heading = useRef<HTMLHeadingElement>(null)
+  const [pending, setPending] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the list is read again
+  useEffect(() => {
+    if (!pending) return
+    setPending(false)
+    heading.current?.focus()
+  }, [data])
+  return { heading, after: () => setPending(true) }
 }

@@ -35,3 +35,29 @@ test('a box that scrolls up and down hides what is above or below it', () => {
 test('out of the window is out of sight', () => {
   expect(scrolledAway(setup('visible', 'visible', rect(-100, 120, 32, 32)))).toBe(true)
 })
+
+test('two boxes that each show a part of it, but not the same part, hide it', () => {
+  document.body.innerHTML =
+    '<div id="outer" style="overflow-y: auto"><div id="inner" style="overflow-y: auto"><button id="b">x</button></div></div>'
+  const el = document.getElementById('b') as HTMLElement
+  vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(rect(100, 100, 100, 32))
+  // The inner box shows its top 40px, the outer its bottom 40px: nothing of it is left.
+  vi.spyOn(document.getElementById('inner') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+    rect(100, 0, 40, 500),
+  )
+  vi.spyOn(document.getElementById('outer') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+    rect(160, 0, 40, 500),
+  )
+  expect(scrolledAway(el)).toBe(true)
+})
+
+test('a box that shows only a part of it outside the window hides it', () => {
+  document.body.innerHTML = '<div id="box" style="overflow-y: auto"><button id="b">x</button></div>'
+  const el = document.getElementById('b') as HTMLElement
+  // Half of it is in the window, but the box shows only a part above the window.
+  vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(rect(-100, 100, 200, 32))
+  vi.spyOn(document.getElementById('box') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+    rect(-100, 0, 80, 500),
+  )
+  expect(scrolledAway(el)).toBe(true)
+})

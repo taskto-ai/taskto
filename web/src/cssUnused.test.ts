@@ -36,6 +36,25 @@ test('a rule whose class no module uses fails, once per class, with its line', (
   ])
 })
 
+test('a class named only in a nested rule is found unused like any other, with & or without it', () => {
+  const root = web({
+    'src/old.legacy.css': [
+      '.tt-card {',
+      '  margin: 0;',
+      '  & .tt-inner { padding: 0; }',
+      '  &.tt-on { color: inherit; }',
+      '  .tt-plain { margin: 0; }',
+      '  @media (max-width: 40rem) { &:is(.tt-narrow) { margin: 0; } }',
+      '}',
+      '',
+    ].join('\n'),
+    'src/Card.tsx': 'export const C = () => <p className="tt-card tt-inner" />\n',
+  })
+  const unused = (cls: string, line: number) =>
+    `src/old.legacy.css:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules (or, if a module builds the name from pieces, add it to BUILT_FROM_PIECES with where)`
+  expect(unusedClassErrors(root)).toEqual([unused('tt-on', 4), unused('tt-plain', 5), unused('tt-narrow', 6)])
+})
+
 test('a comment, a test or the gallery does not keep a rule alive, nor a longer name', () => {
   const root = web({
     'src/old.legacy.css': '.tt-x { margin: 0; }\n',

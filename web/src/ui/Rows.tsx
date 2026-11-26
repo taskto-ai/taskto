@@ -19,7 +19,9 @@ export interface RowsProps {
 export function Rows({ label, ordered = false, children }: RowsProps) {
   const List = ordered ? 'ol' : 'ul'
   return (
-    <List className="ui-rows" aria-label={label}>
+    // role="list" says again what the element says: Safari drops a list's role when its markers
+    // are styled away (list-style: none) and it has no name.
+    <List className="ui-rows" role="list" aria-label={label}>
       {children}
     </List>
   )

@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Integration, IntegrationRegistry, Me, Space, Workspace } from '../api'
 import { type Call, fakeFetch } from '../test/fakes'
+import { chooseFromMenu } from '../test/ui'
 import { SettingsPage } from './SettingsPage'
 
 const me: Me = {
@@ -83,6 +86,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+// An integration's row: the list item its name is the title of.
+const findRow = async (name: string) =>
+  (await screen.findByText(name, { selector: '.ui-row-title' })).closest('li') as HTMLElement
+
+// The dialog a form is in, whose footer has the form's buttons.
+const dialogOf = (form: HTMLElement) => form.closest('dialog') as HTMLElement
+
 const sent = (calls: Call[], method: string, path: string) =>
   calls.filter((c) => c.method === method && c.path === path).map((c) => c.body)
 
@@ -96,20 +106,20 @@ test('the integrations tab is the admin’s', async () => {
 test('an integration is listed by what it is, with its secrets only said to be set', async () => {
   fakeFetch(routes())
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  const row = await findRow('Shop')
   expect(within(row).getByText(/Stripe · Payments · Test mode/)).toBeTruthy()
   expect(within(row).getByText(/Secret key set · Webhook signing secret not set/)).toBeTruthy()
   // The same number of smallest units is not the same sum in euros and in yen.
   expect(within(row).getByText(/€5,000\.00 and ¥500,000 per payment/)).toBeTruthy()
   expect(within(row).getByText('Allowed in: Shop floor')).toBeTruthy()
   expect(within(row).getByText(/No public URL: webhooks are unavailable/)).toBeTruthy()
-  expect(screen.getByRole('status').textContent).toContain('Webhooks unavailable')
+  expect(screen.getByText(/Webhooks unavailable: set the server/)).toBeTruthy()
 })
 
 test('an amount is written with the server’s decimals, not the browser’s', async () => {
   fakeFetch(routes([{ ...shop, currencies: ['COP'], max_amount_minor: 500000 }]))
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  const row = await findRow('Shop')
   // The server counts pesos in hundredths; Intl alone would say 500,000 whole pesos.
   expect(within(row).getByText(/COP\s?5,000\.00 per payment/)).toBeTruthy()
 })
@@ -117,12 +127,12 @@ test('an amount is written with the server’s decimals, not the browser’s', a
 test('a private space of another admin is only counted, never named', async () => {
   fakeFetch(routes([{ ...shop, other_spaces: 2 }]))
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  const row = await findRow('Shop')
   expect(within(row).getByText(/Allowed in: Shop floor/).textContent).toContain('And 2 private spaces of other members')
   cleanup()
   fakeFetch(routes([{ ...shop, spaces: [], other_spaces: 1 }]))
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  const only = await screen.findByRole('listitem', { name: 'Shop' })
+  const only = await findRow('Shop')
   expect(within(only).getByText(/And 1 private space of another member/)).toBeTruthy()
   expect(within(only).queryByText(/Not allowed in any space yet/)).toBeNull()
 })
@@ -135,9 +145,9 @@ test('with a public URL the row shows the address to register', async () => {
     ),
   )
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  const row = await findRow('Shop')
   expect(within(row).getByText('https://tasks.example.com/hooks/0123456789abcdef0123456789abcdef')).toBeTruthy()
-  expect(screen.queryByRole('status')).toBeNull()
+  expect(screen.queryByText(/Webhooks unavailable: set the server/)).toBeNull()
 })
 
 test('an admin connects a Stripe account: the key is sent once and the form is cleared', async () => {
@@ -149,7 +159,7 @@ test('an admin connects a Stripe account: the key is sent once and the form is c
   fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-key-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500000' } })
   // A currency is needed before the form can be sent.
-  const add = within(form).getByRole('button', { name: 'Add' }) as HTMLButtonElement
+  const add = within(dialogOf(form)).getByRole('button', { name: 'Add' }) as HTMLButtonElement
   expect(add.disabled).toBe(true)
   fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
   fireEvent.click(within(form).getByRole('checkbox', { name: 'JPY' }))
@@ -181,7 +191,7 @@ test("Square's form asks for its environment and location, as the registry says"
   fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-square-token-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '1000' } })
   fireEvent.click(within(form).getByRole('checkbox', { name: 'USD' }))
-  fireEvent.click(within(form).getByRole('button', { name: 'Add' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
   await waitFor(() => expect(sent(calls, 'POST', '/api/workspaces/1/integrations')).toHaveLength(1))
   expect(sent(calls, 'POST', '/api/workspaces/1/integrations')[0]).toMatchObject({
     provider: 'square',
@@ -193,14 +203,15 @@ test("Square's form asks for its environment and location, as the registry says"
 test('editing keeps a stored secret unless a new one is typed, and never shows it', async () => {
   const calls = fakeFetch({ ...routes(), 'PATCH /api/workspaces/1/integrations/7': { body: shop } })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit Shop' }))
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Edit')
   const form = screen.getByRole('form', { name: 'Edit Shop' })
   const key = within(form).getByLabelText('New Secret key') as HTMLInputElement
   expect(key.value).toBe('')
   expect(key.required).toBe(false)
   expect(within(form).queryByLabelText('Name')).toBeNull()
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '90000' } })
-  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(sent(calls, 'PATCH', '/api/workspaces/1/integrations/7')).toHaveLength(1))
   const body = sent(calls, 'PATCH', '/api/workspaces/1/integrations/7')[0] as Record<string, unknown>
   expect(body.secrets).toBeUndefined()
@@ -222,13 +233,14 @@ test('a check shows ok, or the code of what is wrong, never anything of the prov
 test('an admin chooses the spaces, and only the ones that can be allowed are offered', async () => {
   const calls = fakeFetch({ ...routes(), 'PUT /api/workspaces/1/integrations/7/spaces': { body: shop } })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Spaces of Shop' }))
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Spaces')
   const form = screen.getByRole('form', { name: 'Spaces of Shop' })
   // An archived space the integration isn't allowed in can't be chosen.
   expect(within(form).queryByRole('checkbox', { name: /Old/ })).toBeNull()
   expect((within(form).getByRole('checkbox', { name: 'Shop floor' }) as HTMLInputElement).checked).toBe(true)
   fireEvent.click(within(form).getByRole('checkbox', { name: 'Private (private)' }))
-  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')).toHaveLength(1))
   expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')[0]).toEqual({ spaces: [12, 11] })
 })
@@ -239,14 +251,14 @@ test('an archived space the integration is still allowed in is listed, marked, a
     'PUT /api/workspaces/1/integrations/7/spaces': { body: shop },
   })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  const row = await screen.findByRole('listitem', { name: 'Shop' })
+  const row = await findRow('Shop')
   expect(within(row).getByText('Allowed in: Shop floor and Old (archived)')).toBeTruthy()
-  fireEvent.click(within(row).getByRole('button', { name: 'Spaces of Shop' }))
+  chooseFromMenu('More actions for Shop', 'Spaces')
   const form = screen.getByRole('form', { name: 'Spaces of Shop' })
   const old = within(form).getByRole('checkbox', { name: 'Old (archived)' }) as HTMLInputElement
   expect(old.checked).toBe(true)
   fireEvent.click(old)
-  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')).toHaveLength(1))
   expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')[0]).toEqual({ spaces: [12] })
 })
@@ -267,7 +279,7 @@ test('a provider change drops what was typed for the last one, and a check says 
   fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-square-token-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '1000' } })
   fireEvent.click(within(form).getByRole('checkbox', { name: 'USD' }))
-  fireEvent.click(within(form).getByRole('button', { name: 'Add' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
   await waitFor(() => expect(sent(calls, 'POST', '/api/workspaces/1/integrations')).toHaveLength(1))
   expect((sent(calls, 'POST', '/api/workspaces/1/integrations')[0] as { secrets: unknown }).secrets).toEqual({
     api_key: 'fake-square-token-for-the-form',
@@ -287,7 +299,8 @@ test('"Checking…" is shown only for a check, not while switching off or removi
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Switch off Shop' }))
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Switch off')
   await waitFor(() =>
     expect((screen.getByRole('button', { name: 'Test Shop' }) as HTMLButtonElement).disabled).toBe(true),
   )
@@ -302,10 +315,11 @@ test('switching off and removing ask the server, and removing asks first', async
     'DELETE /api/workspaces/1/integrations/7': { status: 204 },
   })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Switch off Shop' }))
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Switch off')
   await waitFor(() => expect(sent(calls, 'PATCH', '/api/workspaces/1/integrations/7')).toEqual([{ disabled: true }]))
 
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Shop' }))
+  chooseFromMenu('More actions for Shop', 'Remove')
   expect(sent(calls, 'DELETE', '/api/workspaces/1/integrations/7')).toHaveLength(0)
   expect(screen.getByText(/Its credentials are deleted with it/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }))
@@ -321,7 +335,8 @@ test('an error of the server is shown in words, from its code', async () => {
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Remove Shop' }))
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Remove')
   fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }))
   expect(await screen.findByText(/An app still uses this integration/)).toBeTruthy()
 })
@@ -337,7 +352,7 @@ test('a space an approval allowed is marked, and saving the list does not keep i
   fireEvent.click(within(row).getByRole('button', { name: 'Spaces of Shop' }))
   const form = await screen.findByRole('form', { name: 'Spaces of Shop' })
   expect(within(form).getByText(/ends when the approval does/)).toBeTruthy()
-  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')).toHaveLength(1))
   expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')[0]).toEqual({ spaces: [12] })
 })
@@ -352,7 +367,159 @@ test('keeping an approval’s space after the approval ends is asked for by name
   fireEvent.click(within(row).getByRole('button', { name: 'Spaces of Shop' }))
   const form = await screen.findByRole('form', { name: 'Spaces of Shop' })
   fireEvent.click(within(form).getByLabelText('Keep Shop floor after the approval ends'))
-  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')).toHaveLength(1))
   expect(sent(calls, 'PUT', '/api/workspaces/1/integrations/7/spaces')[0]).toEqual({ spaces: [12], keep: [12] })
+})
+
+test('the tab reads like the other tabs: the page heading, a section of accounts, and no old class', async () => {
+  fakeFetch(routes())
+  const { container } = render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  expect(screen.getByRole('heading', { level: 1, name: 'Integrations' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { level: 2, name: 'Connected accounts' })).toBeTruthy()
+  await findRow('Shop')
+  expect(container.querySelector('[class*="tt-"]')).toBeNull()
+})
+
+test('with nothing connected, the empty state offers to connect an account', async () => {
+  fakeFetch(routes([]))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  expect(await screen.findByText('No accounts connected yet.')).toBeTruthy()
+  expect(screen.getAllByRole('button', { name: 'Connect an account' })).toHaveLength(1)
+})
+
+test('a save the server refuses keeps the dialog and what was typed, and the error takes the focus', async () => {
+  fakeFetch({
+    ...routes([]),
+    'POST /api/workspaces/1/integrations': {
+      status: 400,
+      body: {
+        error: 'the secret is not the provider’s shape',
+        code: 'integration_secret_invalid',
+        params: { secret: 'api_key' },
+      },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
+  const form = screen.getByRole('form', { name: 'New integration' })
+  fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })
+  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'not-a-key' } })
+  fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500' } })
+  fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
+  const alert = await within(form).findByRole('alert')
+  // The secret by its label, not its code.
+  expect(alert.textContent).toContain("The Secret key doesn't look like this provider's")
+  // Focused, so it is scrolled into view and read, wherever the long form was scrolled to.
+  await waitFor(() => expect(alert.closest('.settings-form-error')).toBe(document.activeElement))
+  expect(screen.getByRole('form', { name: 'New integration' })).toBe(form)
+  const key = within(form).getByLabelText('Secret key') as HTMLInputElement
+  expect(key.type).toBe('password')
+  expect(key.value).toBe('not-a-key')
+  expect((within(form).getByRole('checkbox', { name: 'EUR' }) as HTMLInputElement).checked).toBe(true)
+})
+
+test('the currencies are a bounded box of several columns, with how many are chosen', async () => {
+  fakeFetch(routes([]))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
+  const form = screen.getByRole('form', { name: 'New integration' })
+  const group = within(form).getByRole('group', { name: /Currencies a payment may ask for · 0 chosen/ })
+  expect(group.querySelector('.settings-many-choices')?.querySelectorAll('input[type="checkbox"]')).toHaveLength(4)
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'USD' }))
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'EUR' }))
+  expect(within(form).getByRole('group', { name: /· 2 chosen/ })).toBe(group)
+})
+
+test('while it saves, the dialog can’t be closed: Escape and Cancel do nothing', async () => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    ...routes(),
+    'PATCH /api/workspaces/1/integrations/7': async () => {
+      await gate
+      return { body: shop }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Edit')
+  const form = screen.getByRole('form', { name: 'Edit Shop' })
+  const dialog = dialogOf(form)
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  const cancel = within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+  await waitFor(() => expect(cancel.disabled).toBe(true))
+  dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+  fireEvent.keyDown(dialog, { key: 'Escape' })
+  fireEvent.click(cancel)
+  expect(screen.getByRole('form', { name: 'Edit Shop' })).toBe(form)
+  release()
+  await waitFor(() => expect(screen.queryByRole('form', { name: 'Edit Shop' })).toBeNull())
+})
+
+test('after a removal, and after the first account is in, the keyboard goes to the section’s title', async () => {
+  let list: Integration[] = [shop]
+  fakeFetch({
+    ...routes(),
+    'GET /api/workspaces/1/integrations': () => ({ body: { integrations: list } }),
+    'DELETE /api/workspaces/1/integrations/7': () => {
+      list = []
+      return { status: 204 }
+    },
+    'POST /api/workspaces/1/integrations': () => {
+      list = [shop]
+      return { status: 201, body: shop }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Remove')
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }))
+  const heading = screen.getByRole('heading', { level: 2, name: 'Connected accounts' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+
+  // The empty state's button opens the form; once the account is in, that button is gone.
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
+  const form = screen.getByRole('form', { name: 'New integration' })
+  fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })
+  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-key-for-the-form' } })
+  fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500' } })
+  fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
+  await findRow('Shop')
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+})
+
+test('a check’s outcome is said in a live region that is there before it arrives, "Checking…" too', async () => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    ...routes(),
+    'POST /api/workspaces/1/integrations/7/check': async () => {
+      await gate
+      return { body: { ok: true } }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await findRow('Shop')
+  const live = row.querySelector('.settings-check-status') as HTMLElement
+  expect(live.getAttribute('role')).toBe('status')
+  expect(live.textContent).toBe('')
+  fireEvent.click(within(row).getByRole('button', { name: 'Test Shop' }))
+  await waitFor(() => expect(live.textContent).toBe('Checking…'))
+  release()
+  await waitFor(() => expect(live.textContent).toMatch(/The stored credentials open/))
+  expect(row.querySelector('.settings-check-status')).toBe(live)
+})
+
+test('the empty live region stays in the accessibility tree: out of sight, never display: none', () => {
+  const css = readFileSync(join(__dirname, 'Settings.css'), 'utf8')
+  const rule = css.match(/\.settings-check-status:empty\s*\{([^}]*)\}/)?.[1] ?? ''
+  expect(rule).toMatch(/clip-path:\s*inset\(50%\)/)
+  expect(rule).not.toMatch(/display:\s*none|visibility:\s*hidden/)
 })
