@@ -493,7 +493,6 @@ test('the deletion notice is told even when the browser’s storage refuses, onc
   get.mockRestore()
 })
 
-
 // --- The rework on the component library: what it adds to the screens.
 
 test('the password can be shown and hidden again, and the button says which it does', async () => {
