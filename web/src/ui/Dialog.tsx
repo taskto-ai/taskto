@@ -142,12 +142,23 @@ function OpenDialog({
     }
   }, [])
 
-  // A press on the backdrop is a click on the <dialog> itself, outside its box.
-  const pressOutside = (e: MouseEvent<HTMLDialogElement>) => {
-    if (!closeOnOutsidePress || !canClose.current || e.target !== e.currentTarget) return
+  // A press on the backdrop is a click on the <dialog> itself, outside its box. It must have
+  // begun there too: a drag that starts inside (selecting text) and ends on the backdrop also
+  // clicks the <dialog>, and must not close it.
+  const outside = (e: MouseEvent<HTMLDialogElement>) => {
+    if (e.target !== e.currentTarget) return false
     const r = e.currentTarget.getBoundingClientRect()
-    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
-    if (!inside) close.current()
+    return !(e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)
+  }
+  const pressStartedOutside = useRef(false)
+  const pressDown = (e: MouseEvent<HTMLDialogElement>) => {
+    pressStartedOutside.current = outside(e)
+  }
+  const pressOutside = (e: MouseEvent<HTMLDialogElement>) => {
+    const began = pressStartedOutside.current
+    pressStartedOutside.current = false
+    if (!closeOnOutsidePress || !canClose.current || !began) return
+    if (outside(e)) close.current()
   }
 
   return (
@@ -161,6 +172,7 @@ function OpenDialog({
       aria-describedby={description ? `${id}-description` : undefined}
       // Focus that lands on the dialog itself shows no ring.
       tabIndex={-1}
+      onMouseDown={pressDown}
       onClick={pressOutside}
     >
       {/* Not a <header>: that would be a banner, a landmark of the page, which a dialog's top is not. */}

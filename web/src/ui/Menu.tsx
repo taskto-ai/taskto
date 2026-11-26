@@ -198,6 +198,9 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       const anchor = button.current
       if (!anchor) return
       const a = anchor.getBoundingClientRect()
+      // Measured at its full height, its height limit off for a moment: the browser would reset
+      // a long menu's scroll then, so it is kept and given back.
+      const scrolled = el.scrollTop
       el.style.maxBlockSize = ''
       const box = el.getBoundingClientRect()
       const p = place(
@@ -210,11 +213,14 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       el.style.top = `${p.top}px`
       el.style.left = `${p.left}px`
       el.style.maxBlockSize = `${p.maxHeight}px`
+      el.scrollTop = scrolled
       el.dataset.side = p.side
     }
     position()
     const items = el.querySelectorAll<HTMLElement>(ITEM)
-    items[start === 'first' ? 0 : items.length - 1]?.focus()
+    // A menu with no items takes the focus itself, so its keys (Escape) are still its own and
+    // don't reach a drawer under it.
+    ;(items[start === 'first' ? 0 : items.length - 1] ?? el).focus()
 
     // Keep it beside the button while the page scrolls or the window changes size.
     let frame = 0
@@ -227,7 +233,10 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(position)
     }
-    const scrolled = () => {
+    // The menu's own scrolling (a long one, inside the window) moves nothing: placing it again
+    // would take its height limit off for a moment, and the browser would reset its scroll.
+    const scrolled = (e: Event) => {
+      if (e.target instanceof Node && el.contains(e.target)) return
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(follow)
     }

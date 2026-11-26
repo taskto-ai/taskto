@@ -3,12 +3,18 @@
 // of the address bar whatever comes of it.
 
 import { useEffect, useRef, useState } from 'react'
-import { api, errorText } from '../api'
+import { ApiError, api, errorText } from '../api'
 import { useT } from '../i18n'
-import { Link, routePath } from '../router'
+import { routePath } from '../router'
+import { ButtonLink } from '../ui/Button'
+import { Notice } from '../ui/Notice'
+import { Page } from '../ui/Page'
+import { PageHeader } from '../ui/PageHeader'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { EMAIL_CONFIRM_API } from './api'
 
-type Outcome = { state: 'working' } | { state: 'done' } | { state: 'failed'; message: string }
+type Outcome = { state: 'working' } | { state: 'done' } | { state: 'failed'; message: string | null }
 
 export function ConfirmEmail({ token, workspace }: { token: string; workspace: number | null }) {
   const t = useT()
@@ -21,23 +27,34 @@ export function ConfirmEmail({ token, workspace }: { token: string; workspace: n
     request.current ??= api(EMAIL_CONFIRM_API, { method: 'POST', body: { token } })
     request.current.then(
       () => live && setOutcome({ state: 'done' }),
-      (e) => live && setOutcome({ state: 'failed', message: errorText(e) }),
+      // An answer of the server's says what it refused; no answer is said in the app's words when
+      // drawn, never the browser's ("Failed to fetch").
+      (e) => live && setOutcome({ state: 'failed', message: e instanceof ApiError ? errorText(e) : null }),
     )
     return () => {
       live = false
     }
   }, [token])
   return (
-    <div className="tt-center">
-      <h1>{t('notifications.confirmEmail.title')}</h1>
-      {outcome.state === 'working' && <p className="tt-muted">{t('notifications.confirmEmail.working')}</p>}
-      {outcome.state === 'done' && <p role="status">{t('notifications.confirmEmail.done')}</p>}
-      {outcome.state === 'failed' && <p role="alert">{outcome.message}</p>}
-      {workspace !== null && (
-        <Link className="tt-button" href={routePath({ workspace, section: 'settings', item: 'notifications' })}>
-          {t('notifications.confirmEmail.settings')}
-        </Link>
+    <Page width="reading">
+      <PageHeader title={t('notifications.confirmEmail.title')} />
+      {outcome.state === 'working' && (
+        <div role="status" aria-busy="true">
+          <VisuallyHidden>{t('notifications.confirmEmail.working')}</VisuallyHidden>
+          <Skeleton width="60%" />
+        </div>
       )}
-    </div>
+      {outcome.state === 'done' && <Notice tone="success">{t('notifications.confirmEmail.done')}</Notice>}
+      {outcome.state === 'failed' && (
+        <Notice tone="danger">{outcome.message ?? t('notifications.confirmEmail.failed')}</Notice>
+      )}
+      {workspace !== null && (
+        <div>
+          <ButtonLink href={routePath({ workspace, section: 'settings', item: 'notifications' })}>
+            {t('notifications.confirmEmail.settings')}
+          </ButtonLink>
+        </div>
+      )}
+    </Page>
   )
 }

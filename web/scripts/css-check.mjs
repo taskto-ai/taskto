@@ -10,6 +10,8 @@
 //   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
 //   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
 // - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
+// - the reverse for the old classes: a rule naming a `tt-` class that no module mentions (a dead rule,
+//   left behind when a screen moved onto the components; see unusedClassErrors);
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
 //   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
@@ -413,19 +415,10 @@ export const OLD_STYLESHEETS = [
   'ui/base.css',
   'legacy-shared.css',
   'auth/auth.legacy.css',
-  'shell/shell.legacy.css',
-  'conversations/conversations.legacy.css',
-  'knowledge/knowledge.legacy.css',
-  'boards/boards.legacy.css',
   'markdown.legacy.css',
-  'search/search.legacy.css',
-  'apps/apps.legacy.css',
   'settings/settings.legacy.css',
-  'browser/browser.legacy.css',
   'pwa/pwa.legacy.css',
-  'home/home.legacy.css',
   'offline/offline.legacy.css',
-  'notifications/notifications.legacy.css',
 ]
 const LIST = 'src/styles.css'
 // The cascade layers, in order, as ui/index.css and index.html declare them.
@@ -801,8 +794,10 @@ export function scaleLiteral(value, property) {
 
 export const OPT_OUT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
 
-// What wraps every page: a rule scoped by one of these still reaches every component.
-export const WRAPPERS = new Set(['#root', '.tt-shell', '.tt-body', '.tt-page', '#tt-main'])
+// What wraps every page: a rule scoped by one of these still reaches every component. (The old
+// shell's wrappers, `.tt-shell`, `.tt-body` and `.tt-page`, are gone with their rules; a rule naming
+// one fails as a rule nothing uses.)
+export const WRAPPERS = new Set(['#root', '#tt-main'])
 
 // Rules that deliberately reach every element, the design system's too: the selector, the only
 // properties it may set, and the reason. A rule that sets anything else is not allowed by it.
@@ -880,16 +875,72 @@ export const EVERYWHERE = new Map([
   ],
 ])
 
+// A nested rule's selectors as the ones they stand for, one for each way of choosing a parent for
+// each `&`: `&` is the parent (`.tt-card { &:hover }` is `.tt-card:hover`), and a selector without
+// `&`, or one that starts with a combinator, has the parent in front (`.tt-card { h2 }` is
+// `.tt-card h2`, `.tt-card { + .x + & }` is `.tt-card + .x + .tt-card`). Each `&` is the whole
+// parent list, so `.a, .b { & + & }` is four selectors. At the start of a compound, `&` is the
+// parent's text, which ends in the compound the rest is added to; after the start of one it is
+// `:is(parent)` (`.tt-page&` is not `.tt-pagebody`). Only a bare `&` is the nesting selector: one
+// in a string (`a[href*="&"]`) or escaped (`\\&`) is a character.
+export function nestedSelectors(parents, child) {
+  // The child as text between its `&`s, and for each `&` whether it follows a compound's start.
+  const texts = ['']
+  const glued = []
+  for (let i = 0; i < child.length; i++) {
+    const c = child[i]
+    if (c === '\\') {
+      texts[texts.length - 1] += child.slice(i, i + 2)
+      i++
+    } else if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < child.length && child[j] !== c) j += child[j] === '\\' ? 2 : 1
+      texts[texts.length - 1] += child.slice(i, j + 1)
+      i = j
+    } else if (c === '&') {
+      glued.push(/[^\s>+~(]$/.test(texts.at(-1)))
+      texts.push('')
+    } else texts[texts.length - 1] += c
+  }
+  if (glued.length === 0 || /^\s*[>+~]/.test(child)) {
+    texts.unshift('')
+    texts[1] = ` ${texts[1].trimStart()}`
+    glued.unshift(false)
+  }
+  let out = [texts[0]]
+  glued.forEach((isGlued, k) => {
+    out = out.flatMap((sofar) => parents.map((p) => sofar + (isGlued ? `:is(${p})` : p) + texts[k + 1]))
+  })
+  return out
+}
+
+export function nestedSelector(parent, child) {
+  return nestedSelectors([parent], child)[0]
+}
+
+// The style rule a nested block is in, through the conditional rules between them (`input {
+// @media (…) { … } }` styles `input`): none for a block at the top or only in at-rules.
+function enclosingRule(blocks) {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i].kind === 'rule') return blocks[i]
+    if (blocks[i].kind === 'keyframes') return null
+  }
+  return null
+}
+
 // Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
 // whose `from` and `to` are not elements), each with its line and the properties its block sets.
+// A nested rule is recorded as the selectors it stands for (nestedSelectors), and the declarations
+// in a conditional rule nested in a style rule are that style rule's.
 export function allRules(css) {
   const out = []
-  const blocks = [] // for each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  // For each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  const blocks = []
   let prelude = ''
   let preludeLine = 1
   let line = 1
   const declare = (text) => {
-    const top = blocks.at(-1)
+    const top = blocks.at(-1)?.kind === 'at' ? enclosingRule(blocks) : blocks.at(-1)
     if (top?.kind !== 'rule') return
     const colon = text.indexOf(':')
     if (colon < 0) return
@@ -919,10 +970,13 @@ export function allRules(css) {
       else {
         const rules = []
         if (!blocks.some((b) => b.kind === 'keyframes')) {
-          for (const selector of splitSelectors(text)) {
-            const r = { selector, line: preludeLine, properties: [] }
-            rules.push(r)
-            out.push(r)
+          const parents = enclosingRule(blocks)?.rules.map((r) => r.selector)
+          for (const own of splitSelectors(text)) {
+            for (const selector of parents ? nestedSelectors(parents, own) : [own]) {
+              const r = { selector, line: preludeLine, properties: [] }
+              rules.push(r)
+              out.push(r)
+            }
           }
         }
         blocks.push({ kind: 'rule', rules })
@@ -1087,16 +1141,123 @@ export function check(web) {
   return errors
 }
 
+// --- Old rules and names nothing uses ---------------------------------------------------------
+
+// A rule that names a `tt-` class (the old stylesheet's) that no module of the app mentions can
+// match nothing: it was left behind when its screen moved onto the components, and it goes. A
+// module mentions a class when the name is anywhere in its code (a className, a lookup table, a
+// string a class is built from), its comments left out; the app's modules under src/ and the
+// end-to-end harnesses under e2e/ count (a harness draws a screen as the app would), tests and the
+// gallery's specimens don't, nor does a name that is only the start of a longer one. Only the old
+// classes are held to it: a component's `ui-` class can be built from pieces
+// (`ui-button-${variant}`), which a search for the name doesn't see.
+
+// Old classes a module builds from pieces (`'tt-' + kind`), so no search finds their names: each with
+// where it is built. None today; a class goes here only when it can't be written out.
+export const BUILT_FROM_PIECES = new Map([])
+
+// The text of an HTML page outside its comments (`<!-- … -->`); an unclosed one runs to the end.
+function outsideHtmlComments(html) {
+  let out = ''
+  let at = 0
+  for (;;) {
+    const open = html.indexOf('<!--', at)
+    if (open < 0) return out + html.slice(at)
+    out += html.slice(at, open)
+    const close = html.indexOf('-->', open + 4)
+    if (close < 0) return out
+    at = close + 3
+  }
+}
+
+// The code that may use an old class or an old name: the app's modules and the end-to-end
+// harnesses (not tests, not the gallery), comments left out, and the page's markup.
+function usersCode(web) {
+  const dirs = [join(web, 'src'), join(web, 'e2e')].filter((d) => existsSync(d))
+  const code = dirs
+    .flatMap((d) => components(d))
+    .filter((f) => !/\.gallery\.tsx?$/.test(f))
+    .map((f) => blankComments(readFileSync(f, 'utf8')))
+  const html = join(web, 'index.html')
+  if (existsSync(html)) code.push(outsideHtmlComments(readFileSync(html, 'utf8')))
+  return code
+}
+
+export function unusedClassErrors(web, built = BUILT_FROM_PIECES) {
+  const src = join(web, 'src')
+  const used = new Set(
+    usersCode(web).flatMap((c) => [...c.matchAll(/(?<![\w-])tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g)].map((m) => m[0])),
+  )
+  const errors = []
+  for (const path of stylesheets(src)) {
+    const file = relative(web, path).split('\\').join('/')
+    // The rules' selectors only: not a declaration's value (`content: ".tt-x"`), an attribute
+    // selector's value or a comment.
+    const reported = new Set()
+    for (const { selector, line } of allRules(readFileSync(path, 'utf8'))) {
+      for (const cls of classSelectors(selector)) {
+        if (!cls.startsWith('tt-') || used.has(cls) || built.has(cls) || reported.has(cls)) continue
+        reported.add(cls)
+        errors.push(
+          `${file}:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules (or, if a module builds the name from pieces, add it to BUILT_FROM_PIECES with where)`,
+        )
+      }
+    }
+  }
+  for (const cls of built.keys()) {
+    if (!used.has(cls) && ![...stylesheets(src)].some((p) => readFileSync(p, 'utf8').includes(`.${cls}`))) {
+      errors.push(`${cls} is in BUILT_FROM_PIECES but no rule names it: remove it from the list`)
+    }
+  }
+  return errors
+}
+
+// The old `--tt-*` names (src/ui/legacy.css) are aliases kept only while something reads them: one
+// that no stylesheet (legacy.css itself aside) and no module reads is gone, and fails if it comes
+// back. Read means written as `var(--tt-name…`, or the name in a module's code (a script that reads
+// or sets it).
+export const ALIASES = 'src/ui/legacy.css'
+
+export function unusedAliasErrors(web) {
+  const path = join(web, ALIASES)
+  if (!existsSync(path)) return []
+  const defined = allDeclarations(readFileSync(path, 'utf8'))
+  const name = /--tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g
+  // Read by a stylesheet: only through var() (an override, `--tt-x: …`, defines it again and reads
+  // nothing). Read by a module: any mention (a script that reads or sets it).
+  const read = new Set()
+  for (const p of stylesheets(join(web, 'src'))) {
+    if (relative(web, p).split('\\').join('/') === ALIASES) continue
+    const css = blankCssComments(readFileSync(p, 'utf8'))
+    for (const m of css.matchAll(/var\(\s*(--tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g)) read.add(m[1])
+  }
+  for (const code of usersCode(web)) for (const m of code.matchAll(name)) read.add(m[0])
+  return defined
+    .filter(({ name }) => !read.has(name))
+    .map(({ name, line }) => `${ALIASES}:${line}: ${name} is defined but nothing reads it: delete it`)
+}
+
+// The custom properties a stylesheet defines (`--tt-x: …`), with their lines, comments left out.
+function allDeclarations(css) {
+  const text = blankCssComments(css)
+  const out = []
+  for (const m of text.matchAll(/(?<![\w-])(--tt-[a-z0-9-]+)\s*:/g)) {
+    out.push({ name: m[1], line: text.slice(0, m.index).split('\n').length })
+  }
+  return out
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const at = process.argv.indexOf('--root')
   const web = at > 0 ? process.argv[at + 1] : join(dirname(fileURLToPath(import.meta.url)), '..')
-  const errors = check(web)
+  // The app's own tree (not a test's): its old rules nothing uses any more, too.
+  const errors = [...check(web), ...(at > 0 ? [] : [...unusedClassErrors(web), ...unusedAliasErrors(web)])]
   if (errors.length > 0) {
     console.error(`css-check: ${errors.length} problem${errors.length === 1 ? '' : 's'}\n`)
     for (const e of errors) console.error(`  ${e}`)
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, no old rule reaches into a component, and src/ui/ takes its sizes, spaces, radii, shadows and durations from the tokens',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule and every tt- class a rule names is used, no colour is written outside the themes, no old rule reaches into a component, and src/ui/ takes its sizes, spaces, radii, shadows and durations from the tokens',
   )
 }

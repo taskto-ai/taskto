@@ -28,6 +28,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { focusVisible, listenForInput } from './focusInput'
 import './Tooltip.css'
 
 // How long the pointer rests before it opens, and how long it may be away (on its way to the
@@ -73,28 +74,6 @@ function visible(el: HTMLElement): boolean {
 }
 
 const canPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
-
-// The last input on the page, a key or a pointer, heard once for every tooltip. Before any, focus
-// counts as the keyboard's (a page that moves the focus itself, on load, does it for a keyboard).
-let lastInput: 'keyboard' | 'pointer' = 'keyboard'
-let listening = false
-function listenForInput() {
-  if (listening || typeof document === 'undefined') return
-  listening = true
-  document.addEventListener('keydown', () => (lastInput = 'keyboard'), true)
-  document.addEventListener('pointerdown', () => (lastInput = 'pointer'), true)
-}
-
-// Whether this focus came from the keyboard: the last input was a key, and the browser shows the
-// focus (:focus-visible), where it knows it.
-function focusVisible(el: Element): boolean {
-  if (lastInput !== 'keyboard') return false
-  try {
-    return el.matches(':focus-visible')
-  } catch {
-    return true
-  }
-}
 
 export function Tooltip({ content, children, describes = true, side = 'block' }: TooltipProps) {
   const id = useId()
@@ -226,6 +205,12 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     hovered.current = true
     clearTimeout(timer.current)
   }
+  // Off the tooltip and straight back onto the control: still hovering. The wrapper around both
+  // was never left, so it hears no new enter that would hold it again.
+  const tipOut = (e: ReactPointerEvent) => {
+    if (e.relatedTarget instanceof Node && anchor.current?.contains(e.relatedTarget)) return
+    pointerOut(e)
+  }
   const focus = (e: ReactFocusEvent) => {
     if (!focusVisible(e.target) || fromOwnPopup(e.target, e.relatedTarget)) return
     focused.current = true
@@ -235,7 +220,9 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     focused.current = false
     release(0)
   }
-  // Pressing the control is using it: the tooltip goes, whatever held it.
+  // Pressing the control is using it: the tooltip goes, whatever held it. A press of the pointer
+  // closes it at once; Enter or Space give the control a click and no pointer-down, so the click
+  // closes it too.
   const press = () => {
     hovered.current = false
     focused.current = false
@@ -247,13 +234,15 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     .join(' ')
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer and focus events; the control is what is interactive.
+    // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer, click and focus events; the control is what is interactive.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the click it hears is the control's, from a pointer or from the keyboard's Enter or Space
     <span
       ref={anchor}
       className="ui-tooltip-anchor"
       onPointerEnter={pointerIn}
       onPointerLeave={pointerOut}
       onPointerDown={press}
+      onClick={press}
       onFocus={focus}
       onBlur={blur}
     >
@@ -267,7 +256,7 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
         data-open={open ? '' : undefined}
         aria-hidden={describes ? undefined : true}
         onPointerEnter={tipIn}
-        onPointerLeave={pointerOut}
+        onPointerLeave={tipOut}
       >
         {content}
       </span>

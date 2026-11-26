@@ -1,23 +1,6 @@
 /* The frame of a launched app (LaunchedApp). */
 
 @layer screens {
-  /* The way back to every app, above the app's name, in the path's muted colour: underlined only
-     when it is pointed at. */
-  .ui-launched-back {
-    color: inherit;
-    text-decoration: none;
-    border-radius: var(--radius-sm);
-  }
-
-  .ui-launched-back:hover {
-    text-decoration: underline;
-  }
-
-  .ui-launched-back:focus-visible {
-    outline: var(--line-focus) solid var(--color-focus);
-    outline-offset: var(--line-focus-offset);
-  }
-
   .ui-launched-loading {
     display: grid;
   }

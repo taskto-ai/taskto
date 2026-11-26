@@ -156,6 +156,90 @@ describe('Menu', () => {
     vi.restoreAllMocks()
   })
 
+  test('scrolling inside the menu leaves it where it is, and its height limit on', async () => {
+    const { button } = setup()
+    fireEvent.click(button)
+    list().style.maxBlockSize = '123px'
+    await act(async () => {
+      list().dispatchEvent(new Event('scroll'))
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(list().style.maxBlockSize).toBe('123px')
+    // The page's scrolling still places it again (its button in sight).
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+      top: 300,
+      bottom: 332,
+      left: 100,
+      right: 132,
+      width: 32,
+      height: 32,
+      x: 100,
+      y: 300,
+      toJSON() {},
+    } as DOMRect)
+    await act(async () => {
+      window.dispatchEvent(new Event('scroll'))
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(list().style.maxBlockSize).not.toBe('123px')
+    vi.restoreAllMocks()
+  })
+
+  test('placed again (the page scrolls, the window changes size), a long menu keeps its scroll', async () => {
+    const { button } = setup()
+    fireEvent.click(button)
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+      top: 300,
+      bottom: 332,
+      left: 100,
+      right: 132,
+      width: 32,
+      height: 32,
+      x: 100,
+      y: 300,
+      toJSON() {},
+    } as DOMRect)
+    // A browser resets the scroll when it lays the list out with its height limit off, to
+    // measure it.
+    const el = list()
+    let top = 0
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = v
+      },
+    })
+    const measure = el.getBoundingClientRect.bind(el)
+    vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => {
+      if (el.style.maxBlockSize === '') top = 0
+      return measure()
+    })
+    el.scrollTop = 600
+    await act(async () => {
+      window.dispatchEvent(new Event('scroll'))
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(el.scrollTop).toBe(600)
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(el.scrollTop).toBe(600)
+    vi.restoreAllMocks()
+  })
+
+  test('a menu with no items takes the focus, so Escape is still its own', () => {
+    render(<MoreMenu>{null}</MoreMenu>)
+    const button = screen.getByRole('button', { name: 'More actions' })
+    button.focus()
+    fireEvent.click(button)
+    expect(document.activeElement).toBe(list())
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(button)
+  })
+
   test('choosing an item runs it, closes the menu and gives the focus back to the button', () => {
     const { button, rename } = setup()
     fireEvent.click(button)

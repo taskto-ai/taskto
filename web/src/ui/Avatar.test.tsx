@@ -10,6 +10,8 @@ describe('initialsAmong', () => {
   test('names that start alike are told apart by their letters, not by hue alone', () => {
     expect(initials('Equipment')).toBe(initials('Expenses'))
     expect(initialsAmong(['Equipment', 'Expenses'])).toEqual(['EQ', 'EX'])
+    // A combining accent stays with its letter.
+    expect(initialsAmong(['E\u0301tudes'])).toEqual(['E\u0301T'])
   })
 
   test('a name of several words keeps its usual initials', () => {

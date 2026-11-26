@@ -72,6 +72,10 @@ async function menuItems(region: HTMLElement, name: string): Promise<string[]> {
   return items
 }
 
+// The elements a person can see: those not inside something `hidden`, like the live screen kept
+// drawn behind a draft's preview (text queries find hidden elements too).
+const shown = (els: HTMLElement[]) => els.filter((el) => !el.closest('[hidden]'))
+
 // Chooses one item of an app's "more" menu.
 async function choose(region: HTMLElement, name: string, item: string) {
   fireEvent.click(await within(region).findByRole('button', { name: `More actions for ${name}` }))
@@ -582,7 +586,10 @@ test('a launched app says it is live, and those who may review it can try the dr
   fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
   await screen.findByText('Preview · sample data')
   expect(screen.getByText(/preview of changes that aren’t published yet, on sample data/)).toBeTruthy()
-  await screen.findByText('Coffee')
+  // The live screen stays drawn, hidden, beside the draft (so what was typed into it is kept): its
+  // "Coffee" is in the page too, and a query for the text alone sees one or two of them depending on
+  // whether the draft has loaded yet. What is waited for is the draft's own, the one that is shown.
+  await waitFor(() => expect(shown(screen.getAllByText('Coffee'))).toHaveLength(1))
   // Its buttons work, on the sample rows the preview sent: they never reach the app's own actions.
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
   // …and say what the button would have set going on boards and documents, which changes nothing:

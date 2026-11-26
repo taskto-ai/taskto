@@ -148,6 +148,9 @@ describe('Avatar', () => {
     expect(initials('  ')).toBe('')
     expect(initials('Élodie Ödegaard')).toBe('ÉÖ')
     expect(initials('😀 Smile')).toBe('😀S')
+    // An accent written as a letter and a combining mark, and an emoji of several code points.
+    expect(initials('E\u0301lodie O\u0308degaard')).toBe('E\u0301O\u0308')
+    expect(initials('👩\u200d💻 Smith')).toBe('👩\u200d💻S')
   })
 
   test('is named for a screen reader, or decorative beside the name', () => {

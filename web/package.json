@@ -10,7 +10,7 @@
     "test": "vitest run",
     "e2e": "node --test --test-reporter=spec \"e2e/app/*.e2e.mjs\"",
     "i18n": "node scripts/i18n-check.mjs",
-    "css": "node scripts/css-check.mjs"
+    "css": "node scripts/css-check.mjs && node scripts/controls-check.mjs"
   },
   "dependencies": {
     "@a2ui/react": "0.15.0",

@@ -24,9 +24,10 @@ import { createRoot } from 'react-dom/client'
 import { useT } from '../i18n'
 import { onSessionChange, sameSession } from '../session'
 import { Button } from './Button'
+import { focusVisible } from './focusInput'
 import { Icon } from './Icon'
 import { IconButton } from './IconButton'
-import { onModalChange, topModal } from './layers'
+import { onModalChange, refocus, topModal } from './layers'
 import './Toast.css'
 import './VisuallyHidden.css'
 
@@ -209,6 +210,10 @@ function Stack() {
   )
 }
 
+// Where the focus was in the page when it came into the toasts: it goes back there when the last
+// toast it is in goes, whichever toasts it went through.
+let cameFrom: Element | null = null
+
 const ICONS = { neutral: 'info', success: 'check', danger: 'alert' } as const
 
 function ToastView({ item }: { item: ToastItem }) {
@@ -218,23 +223,51 @@ function ToastView({ item }: { item: ToastItem }) {
   const [pointer, setPointer] = useState(false)
   const [focus, setFocus] = useState(false)
   const held = pointer || focus
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Going with the keyboard's focus in it (its action or its dismiss button pressed, and the
+  // action didn't move the focus itself), it doesn't leave the focus to <body>: it goes to the
+  // dismiss button of the toast beside this one (never its action, which one more Enter would
+  // run), or else back to where it came from. After a press of the pointer, the focus is not
+  // the person's place, and is left alone.
+  useLayoutEffect(() => {
+    const el = ref.current
+    return () => {
+      const now = document.activeElement
+      if (!now || !el?.contains(now) || !focusVisible(now)) return
+      const beside = [el.nextElementSibling, el.previousElementSibling].find((n) => n?.classList.contains('ui-toast'))
+      const next = beside?.querySelector<HTMLElement>('[data-toast-dismiss]')
+      if (next) next.focus()
+      else refocus(cameFrom)
+    }
+  }, [])
 
   // It leaves by itself, unless the pointer or the focus is on it: then the time starts again
-  // once both have left.
+  // once both have left. The focus is asked of the page too when the time is up: one handed to
+  // it by a toast that went came while React drew, and React heard no focus event.
   useEffect(() => {
     if (held) return
-    const timer = setTimeout(() => dismissToast(item.id), item.duration)
+    const timer = setTimeout(() => {
+      if (ref.current?.contains(document.activeElement)) setFocus(true)
+      else dismissToast(item.id)
+    }, item.duration)
     return () => clearTimeout(timer)
   }, [held, item.id, item.duration])
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hovering only pauses the timer
     <div
+      ref={ref}
       className="ui-toast"
       data-tone={item.tone}
       onPointerEnter={() => setPointer(true)}
       onPointerLeave={() => setPointer(false)}
-      onFocus={() => setFocus(true)}
+      onFocus={(e) => {
+        // From the page, not from another toast (one that is going, which hands the focus on).
+        const before = e.relatedTarget
+        if (!(before instanceof Element && before.closest('.ui-toaster'))) cameFrom = before
+        setFocus(true)
+      }}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocus(false)
       }}
@@ -255,7 +288,13 @@ function ToastView({ item }: { item: ToastItem }) {
           {item.action.label}
         </Button>
       )}
-      <IconButton icon="close" size="sm" label={t('ui.dismiss')} onClick={() => dismissToast(item.id)} />
+      <IconButton
+        icon="close"
+        size="sm"
+        label={t('ui.dismiss')}
+        data-toast-dismiss=""
+        onClick={() => dismissToast(item.id)}
+      />
     </div>
   )
 }

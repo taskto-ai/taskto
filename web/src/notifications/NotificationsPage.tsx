@@ -8,7 +8,7 @@
 // something changed.
 
 import { useCallback, useEffect, useState } from 'react'
-import { api, errorText } from '../api'
+import { ApiError, api, errorText } from '../api'
 import { type Key, useFormat, useT } from '../i18n'
 import { Link, navigate, routePath } from '../router'
 import { Button, ButtonLink } from '../ui/Button'
@@ -219,7 +219,9 @@ function InboxSkeleton() {
  */
 export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallbackWorkspace: number | null }) {
   const t = useT()
-  const [gone, setGone] = useState(false)
+  // Gone: the server answered that there is no such notification for this person (404, or 403).
+  // Failed: anything else (no answer, the server's own failure), which says nothing about it.
+  const [outcome, setOutcome] = useState<'waiting' | 'gone' | 'failed'>('waiting')
   useEffect(() => {
     let live = true
     api<NotificationItem>(`/api/me/notifications/${id}`).then(
@@ -231,21 +233,42 @@ export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallba
         )
         navigate(routePath({ workspace: item.workspace_id, ...item.target }), { replace: true })
       },
-      () => live && setGone(true),
+      (e) => live && setOutcome(e instanceof ApiError && (e.status === 404 || e.status === 403) ? 'gone' : 'failed'),
     )
     return () => {
       live = false
     }
   }, [id])
-  if (!gone) return <p className="tt-center tt-muted">{t('app.loading')}</p>
+  const inbox = fallbackWorkspace !== null && (
+    <ButtonLink href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
+      {t('notifications.openInbox')}
+    </ButtonLink>
+  )
   return (
-    <div className="tt-center">
-      <p role="alert">{t('notifications.unavailable')}</p>
-      {fallbackWorkspace !== null && (
-        <ButtonLink href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
-          {t('notifications.openInbox')}
-        </ButtonLink>
+    <Page width="list">
+      <PageHeader title={t('notifications.linkTitle')} />
+      {outcome === 'waiting' && <InboxSkeleton />}
+      {outcome === 'gone' && (
+        <Panel>
+          <EmptyState
+            icon={<Icon name="bell" />}
+            title={<span role="alert">{t('notifications.unavailable')}</span>}
+            actions={inbox}
+          />
+        </Panel>
       )}
-    </div>
+      {outcome === 'failed' && (
+        <Notice
+          tone="danger"
+          action={
+            <Button size="sm" onClick={() => window.location.reload()}>
+              {t('app.tryAgain')}
+            </Button>
+          }
+        >
+          {t('notifications.linkFailed')}
+        </Notice>
+      )}
+    </Page>
   )
 }

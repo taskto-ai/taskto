@@ -208,7 +208,6 @@
 
   /* A launched app wider than the pane scrolls in its own frame, not the pane (the frame's old
      class, and the library's). */
-  .apps-builder-preview .tt-app,
   .apps-builder-preview .ui-app {
     min-inline-size: 0;
     overflow: auto;
