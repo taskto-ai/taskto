@@ -115,3 +115,37 @@ func TestTheServersJobsRunInTheirTurn(t *testing.T) {
 		t.Fatalf("ran %v, want %v", order, want)
 	}
 }
+
+// The other way round: a server job about the person takes none of their room. With 999 jobs of
+// their own and the purge waiting, they can still make their 1,000th, by a new job or by making a
+// finished one wait again.
+func TestTheServersJobTakesNoneOfThePersonsRoom(t *testing.T) {
+	ctx := context.Background()
+	for _, how := range []string{"schedule", "reactivate"} {
+		t.Run(how, func(t *testing.T) {
+			w := newWorld(t)
+			w.register(remind)
+			if err := w.s.RegisterServer(serverKind, func(context.Context, Job) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			w.fillKind(remind, MaxPerUser-1)
+			if !w.schedule(w.serverJob("purge")) {
+				t.Fatal("the server's job wasn't made")
+			}
+			var err error
+			if how == "schedule" {
+				_, err = w.s.Schedule(ctx, w.db, w.job("the 1,000th", time.Hour))
+			} else {
+				exec(t, w.db, `INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, state, created_at, updated_at)
+					VALUES (?, ?, ?, 'finished', ?, 'done', ?, ?)`, string(remind), w.alice, w.ws, at(start), at(start), at(start))
+				_, err = w.s.Reschedule(ctx, w.db, w.job("finished", time.Hour))
+			}
+			if err != nil {
+				t.Fatalf("the person's 1,000th job beside the server's: %v", err)
+			}
+			if _, err := w.s.Schedule(ctx, w.db, w.job("the 1,001st", time.Hour)); !errors.Is(err, ErrTooMany) {
+				t.Fatalf("past the person's bound = %v, want ErrTooMany", err)
+			}
+		})
+	}
+}
