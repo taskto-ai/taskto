@@ -11,11 +11,12 @@ import (
 )
 
 // The purge of a deleted account (internal/accountdeletion) deletes the conversations the person
-// owned. The agent runtime never deletes a conversation (Pi Durable keeps its records), so the
-// server retires each one first: its work stops and the runtime refuses it from then on, as for one
-// that never existed, and then deletes its own row, which is the only thing that says whose it was.
-// The runtime's records of what was said stay in its own database, unreachable and tied to no
-// one (docs/install.md#privacy-and-account-deletion).
+// owned. The agent runtime has no way to delete a conversation (Pi Durable keeps its records), so
+// the server retires each one first: its work stops and the runtime refuses it from then on, as
+// for one that never existed. The runtime then purges what it kept of it in its own database (what
+// was said, its tasks, its documents), and the server deletes its own row, which is the only thing
+// that says whose it was. Both steps are the runtime's to do, and are repeated until they are done
+// (the purge keeps a record of each until then, docs/install.md#privacy-and-account-deletion).
 
 // Owned is a conversation a user owns, as the purge needs it.
 type Owned struct {
@@ -43,27 +44,35 @@ func OwnedBy(ctx context.Context, q interface {
 	return out, rows.Err()
 }
 
-// RetireOwned retires the agent runtime's conversation of each, and returns how many it retired:
-// one the runtime no longer has (404) counts as done, and isn't counted. Retiring is idempotent,
-// so a purge that stops halfway does it again.
-func RetireOwned(ctx context.Context, rt Sidecar, owned []Owned) (int, error) {
-	n := 0
-	for _, o := range owned {
-		var se *agentrt.StatusError
-		switch err := rt.RetireConversation(ctx, o.AgentID); {
-		case err == nil:
-			n++
-		case errors.As(err, &se) && se.Code == http.StatusNotFound:
-		default:
-			return n, fmt.Errorf("retiring the agent runtime's conversation %d: %w", o.AgentID, err)
+// Purger is the agent runtime as the purge of an account needs it: a Sidecar that can also purge
+// a retired conversation's records (an *agentrt.Client).
+type Purger interface {
+	Sidecar
+	PurgeConversation(ctx context.Context, conversation int64) error
+}
+
+// PurgeConversation retires the runtime's conversation agentID, if it isn't already, and purges its
+// records from the runtime's database. A conversation the runtime no longer has is done. It is
+// idempotent, so a step that stopped halfway is done again.
+func PurgeConversation(ctx context.Context, rt Purger, agentID int64) error {
+	var se *agentrt.StatusError
+	if err := rt.RetireConversation(ctx, agentID); err != nil {
+		if !errors.As(err, &se) || se.Code != http.StatusNotFound {
+			return fmt.Errorf("retiring the agent runtime's conversation %d: %w", agentID, err)
 		}
 	}
-	return n, nil
+	if err := rt.PurgeConversation(ctx, agentID); err != nil {
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return nil
+		}
+		return fmt.Errorf("purging the agent runtime's conversation %d: %w", agentID, err)
+	}
+	return nil
 }
 
 // DeleteOwned deletes owner's conversations' rows (and, with them, the CLI sessions recorded for
 // each), and returns how many. Call it in the transaction that deletes the account, after
-// RetireOwned.
+// PurgeConversation.
 func DeleteOwned(ctx context.Context, tx interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }, owner int64) (int64, error) {

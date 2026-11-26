@@ -9,6 +9,8 @@
 //   GET  /conversations                      → { conversations: [{ id, createdAt, retired }] }, oldest first
 //   POST /conversations                      { model?: { provider, modelId } } → { id, model }
 //   POST /conversations/:id/retire           → 204: stops its work; from then on it is unknown (404)
+//   POST /conversations/:id/purge            → 204: deletes a retired conversation's records from the database
+//                                              (409 if it isn't retired; 204 if it is gone already)
 //   POST /conversations/:id/abort            → 204 once idle: withdraws queued input and stops the running work
 //   GET  /conversations/:id/model            → { provider, modelId }
 //   PUT  /conversations/:id/model            { provider, modelId } → { provider, modelId }
@@ -32,7 +34,8 @@
 //
 // Pi Durable never deletes a conversation, so one the server has no use for any more (an orphan,
 // left when the server failed to record it) is retired instead: its work is aborted and every
-// route answers 404 for it, as for one that never existed. Its records stay in the database.
+// route answers 404 for it, as for one that never existed. Its records stay in the database
+// until the server, for an account that was deleted, asks for them to be purged.
 //
 // The watch stream carries Chord operations as they are. A client keeps the view current with
 // applyImmutable(view, ops) from @earendil-works/chord/delta, so nothing in between has to understand them.
@@ -40,6 +43,7 @@
 import { chmodSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
+import { DatabaseSync } from 'node:sqlite'
 import { format } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -238,6 +242,71 @@ async function listConversations() {
   return out
 }
 
+// Deletes a conversation's records, and those of the conversations its tasks started, from the
+// database: its entries (what was said), tasks, submissions and documents with their revisions.
+// Pi Durable has no way to delete a conversation, so this is a second connection to its database
+// (WAL: it waits for the harness's writes, and the harness for its). Only a retired conversation
+// is purged: its work has stopped, so nothing writes the rows that go. secure_delete zeroes the
+// deleted content in the file, and the checkpoint takes it out of the write-ahead log.
+function purgeRecords(root: number): void {
+  const db = new DatabaseSync(dbPath as string, { timeout: 15_000 })
+  try {
+    db.exec('PRAGMA secure_delete = ON')
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const ids = new Set<number>([root])
+      const taskIds = new Set<number>()
+      const list = (set: Set<number>) => [...set].join(',') || 'NULL'
+      for (let grew = true; grew; ) {
+        grew = false
+        const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
+          id: number
+        }[]
+        for (const t of tasks) taskIds.add(Number(t.id))
+        const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
+          id: number
+        }[]
+        for (const c of subs) {
+          if (!ids.has(Number(c.id))) {
+            ids.add(Number(c.id))
+            grew = true
+          }
+        }
+      }
+      const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
+        OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
+      const records = [
+        `SELECT id FROM entries WHERE conversation_id IN (${list(ids)})`,
+        `SELECT id FROM submissions WHERE conversation_id IN (${list(ids)})`,
+        docs,
+      ]
+      const gone = new Set<number>([...ids, ...taskIds])
+      for (const q of records) for (const r of db.prepare(q).all() as { id: number }[]) gone.add(Number(r.id))
+      db.exec(`DELETE FROM document_revisions WHERE document_id IN (${docs})`)
+      db.exec(`DELETE FROM documents WHERE id IN (${docs})`)
+      db.exec(`DELETE FROM submissions WHERE conversation_id IN (${list(ids)})`)
+      db.exec(`DELETE FROM entries WHERE conversation_id IN (${list(ids)})`)
+      db.exec(`DELETE FROM tasks WHERE conversation_id IN (${list(ids)})`)
+      db.exec(`DELETE FROM conversations WHERE id IN (${list(ids)})`)
+      // Deleted in chunks: a long conversation has more records than a statement may name.
+      const all = [...gone]
+      for (let i = 0; i < all.length; i += 500)
+        db.exec(`DELETE FROM record_ids WHERE id IN (${all.slice(i, i + 500).join(',')})`)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+    try {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    } catch {
+      // The harness is reading: the log is folded in by its own checkpoints.
+    }
+  } finally {
+    db.close()
+  }
+}
+
 // Entries a page holds by default and at most: a view's window holds 50 to 100.
 const PAGE_ENTRIES = 50
 const MAX_PAGE_ENTRIES = 100
@@ -402,6 +471,20 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }, context)
       await found.abort(context) // withdraws queued input and stops the running work
       console.error(`conversation ${found.id} retired`)
+      res.writeHead(204).end()
+      return
+    }
+    if (req.method === 'POST' && action === 'purge') {
+      const num = parseId(id) as ConversationId
+      const found = await harness.conversation(num, context)
+      if (found) {
+        if ((await harness.snapshot(Lifecycle, num, context))?.retiredAt == null) {
+          throw new HttpError(409, 'retire the conversation before purging it')
+        }
+        await found.abort(context) // idle, as retiring left it
+        purgeRecords(num)
+        console.error(`conversation ${num} purged`)
+      }
       res.writeHead(204).end()
       return
     }

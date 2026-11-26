@@ -109,14 +109,14 @@ func TestDeletingYourOwnAccountNeedsYourPasswordAndSwitchesItOffAtOnce(t *testin
 	}
 
 	// The record says who and what, and the admin sees it in the members' list and the operator's list.
-	if n := e.count(`SELECT count(*) FROM audit_events WHERE action = ? AND actor_id = ? AND target_id = ? AND json_extract(details, '$.by_self') = 1`,
+	if n := e.count(`SELECT count(*) FROM audit_events WHERE action = ? AND actor_id = ? AND target_id = ?`,
 		audit.AccountDeletionRequested, tm.memberID, tm.memberID); n != 1 {
 		t.Errorf("%d deletion events", n)
 	}
 	prec := tm.owner.do(http.MethodGet, tm.pendingPath(), nil)
 	expect(t, prec, http.StatusOK)
 	pending := decode[struct{ Deletions []PendingDeletion }](t, prec)
-	if len(pending.Deletions) != 1 || pending.Deletions[0].User.ID != tm.memberID || !pending.Deletions[0].BySelf {
+	if len(pending.Deletions) != 1 || pending.Deletions[0].User.ID != tm.memberID {
 		t.Fatalf("pending = %+v", pending)
 	}
 	roster := decode[struct{ Members []Member }](t, tm.owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/members", tm.ws), nil))
@@ -220,57 +220,41 @@ func TestTheLastWorkingAdminCantDeleteTheAccount(t *testing.T) {
 	}
 }
 
-func TestAnAdminDeletesAMemberUnderTheResetLinkRule(t *testing.T) {
+func TestNobodyButThePersonDeletesAnAccount(t *testing.T) {
 	tm, sched := newDeletionTeam(t)
 	e := tm.e
 
-	// Not a member's own to do to others, nor to oneself through this route.
-	expect(t, tm.member.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.ownerID), nil), http.StatusForbidden)
-	rec := tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.ownerID), nil)
-	expect(t, rec, http.StatusBadRequest)
-	if got := errCode(t, rec); got != string(apierr.CodeDeletionOwn) {
-		t.Fatalf("code = %q", got)
+	// The route an admin deleted a member's account by is gone: an admin, who administers every
+	// workspace the member belongs to, gets neither an acceptance nor a refusal of a kind that
+	// would say the route exists.
+	for _, c := range []struct {
+		who  *client
+		user int64
+	}{{tm.owner, tm.memberID}, {tm.owner, tm.ownerID}, {tm.member, tm.ownerID}, {tm.member, tm.memberID}} {
+		rec := c.who.do(http.MethodPost, tm.memberDeletionPath(tm.ws, c.user), map[string]string{})
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s: %d, want 404 or 405", tm.memberDeletionPath(tm.ws, c.user), rec.Code)
+		}
 	}
-	// A person that isn't in the workspace is not found, whoever they are.
-	stranger, _ := e.join(e.invite(tm.owner, e.addWorkspace(tm.ownerID, "Elsewhere"), "stranger@example.com", RoleMember), "Stranger")
-	expect(t, tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, e.userID(stranger)), nil), http.StatusNotFound)
+	if n := e.count(`SELECT count(*) FROM account_deletions`); n != 0 {
+		t.Fatalf("%d deletions were recorded by a route that is gone", n)
+	}
+	if n := e.count(`SELECT count(*) FROM users WHERE disabled_at IS NOT NULL`); n != 0 {
+		t.Fatal("an account was switched off")
+	}
+	if len(sched.scheduled) != 0 {
+		t.Fatal("a purge was scheduled")
+	}
+	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// A member who is also in a workspace the admin doesn't administer: refused, as for a reset link.
-	spare := e.addWorkspace(tm.memberID, "Member's own")
-	rec = tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.memberID), nil)
-	expect(t, rec, http.StatusForbidden)
-	if got := errCode(t, rec); got != string(apierr.CodeDeletionElsewhere) {
-		t.Fatalf("code = %q", got)
+	// What an admin may still do with a member is remove them from the workspace, which leaves
+	// their account, and what they own, alone.
+	expect(t, tm.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", tm.ws, tm.memberID), nil), http.StatusNoContent)
+	if n := e.count(`SELECT count(*) FROM users WHERE id = ?`, tm.memberID); n != 1 {
+		t.Fatal("removing a member deleted their account")
 	}
-	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'admin')`, spare, tm.ownerID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'admin')`, spare, tm.ownerID+1000); err == nil {
-		t.Fatal("fixture: a membership of a user that doesn't exist")
-	}
-
-	// Their own workspace has the member as its only admin, and the owner too now: fine.
-	rec = tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.memberID), nil)
-	expect(t, rec, http.StatusAccepted)
-	if _, ok := sched.scheduled[tm.memberID]; !ok {
-		t.Fatal("no purge was scheduled")
-	}
-	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	if n := e.count(`SELECT count(*) FROM audit_events WHERE action = ? AND actor_id = ? AND target_id = ? AND json_extract(details, '$.by_self') = 0`,
-		audit.AccountDeletionRequested, tm.ownerID, tm.memberID); n < 1 {
-		t.Errorf("no event says the admin deleted the account")
-	}
-
-	// It is waiting already: again is refused, and so is disabling or enabling it.
-	rec = tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.memberID), nil)
-	expect(t, rec, http.StatusConflict)
-	if got := errCode(t, rec); got != string(apierr.CodeDeletionPending) {
-		t.Fatalf("code = %q", got)
-	}
-	rec = tm.owner.do(http.MethodPost, e.disablePath(tm.ws, tm.memberID, "enable"), nil)
-	expect(t, rec, http.StatusConflict)
-	if got := errCode(t, rec); got != string(apierr.CodeDeletionPending) {
-		t.Fatalf("enable: code = %q", got)
+	if n := e.count(`SELECT count(*) FROM account_deletions`); n != 0 {
+		t.Fatal("removing a member recorded a deletion")
 	}
 }
 
@@ -317,7 +301,13 @@ func TestOnlyAnOperatorCancelsADeletionAndTheAccountComesBack(t *testing.T) {
 func TestACancelledDeletionLeavesADisabledAccountDisabled(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	tm.disable()
-	expect(t, tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.memberID), nil), http.StatusAccepted)
+	// The member can't sign in to ask, so the deletion is recorded as the person's request would.
+	if err := tm.e.svc.write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tm.e.svc.requestDeletion(context.Background(), tx, tm.memberID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	expect(t, tm.owner.do(http.MethodDelete, tm.cancelPath(tm.memberID), nil), http.StatusNoContent)
 	if n := tm.e.count(`SELECT count(*) FROM users WHERE id = ? AND disabled_at IS NOT NULL`, tm.memberID); n != 1 {
 		t.Fatal("cancelling the deletion enabled an account an admin had disabled")
@@ -348,7 +338,6 @@ func TestDeletionRoutesTakeNoAccessTokens(t *testing.T) {
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, tm.deletionPath()},
 		{http.MethodPost, tm.deletionPath()},
-		{http.MethodPost, tm.memberDeletionPath(tm.ws, tm.memberID)},
 		{http.MethodGet, tm.pendingPath()},
 		{http.MethodDelete, tm.cancelPath(tm.memberID)},
 	} {
@@ -361,17 +350,62 @@ func TestDeletionRoutesTakeNoAccessTokens(t *testing.T) {
 	}
 }
 
-func TestRemovingAMemberWhoseAccountIsWaitingKeepsItsPurge(t *testing.T) {
+func TestRemovingAMemberWhoseAccountIsWaitingLeavesItsPurge(t *testing.T) {
 	tm, sched := newDeletionTeam(t)
 	e := tm.e
 	second := e.addWorkspace(tm.memberID, "Second")
 	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'admin')`, second, tm.ownerID); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, tm.owner.do(http.MethodPost, tm.memberDeletionPath(tm.ws, tm.memberID), nil), http.StatusAccepted)
-	delete(sched.scheduled, tm.memberID) // as the scheduler's own trigger does when the membership goes
+	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
 	expect(t, tm.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", tm.ws, tm.memberID), nil), http.StatusNoContent)
 	if _, ok := sched.scheduled[tm.memberID]; !ok {
-		t.Fatal("the purge was not filed again when the member was removed")
+		t.Fatal("the purge was dropped when the member was removed")
+	}
+	if len(sched.cancelled) != 0 {
+		t.Fatal("removing the member cancelled their purge")
+	}
+}
+
+// SQLite gives the next account the largest id plus one, so the newest account's id would go to
+// whoever registers after it is purged. What is kept by id (a browser's drafts and offline records,
+// the mentions in comments) would then be theirs. The id is never given again.
+func TestAPurgedNewestAccountsIDIsNotGivenToTheNextToRegister(t *testing.T) {
+	tm, _ := newDeletionTeam(t)
+	e := tm.e
+	last, _ := e.join(e.invite(tm.owner, tm.ws, "last@example.com", RoleMember), "Last")
+	lastID := e.userID(last)
+	var newest int64
+	if err := e.db.QueryRow(`SELECT max(id) FROM users`).Scan(&newest); err != nil || newest != lastID {
+		t.Fatalf("fixture: the newest account is %d, %v; want %d", newest, err, lastID)
+	}
+
+	// What the purge does, last: the account's private spaces and then its row go.
+	for _, q := range []string{`DELETE FROM spaces WHERE owner_id = ?`, `DELETE FROM users WHERE id = ?`} {
+		if _, err := e.db.Exec(q, lastID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again, _ := e.join(e.invite(tm.owner, tm.ws, "last@example.com", RoleMember), "Last Again")
+	if got := e.userID(again); got <= lastID {
+		t.Fatalf("the same address registered again got id %d, which is not above the purged account's %d", got, lastID)
+	}
+	other, _ := e.join(e.invite(tm.owner, tm.ws, "another@example.com", RoleMember), "Another")
+	if got := e.userID(other); got <= lastID {
+		t.Fatalf("a new account got id %d, which the purged account %d had", got, lastID)
+	}
+	// Deleting the highest again, and the mark stays where it was or goes up, never down.
+	var before int64
+	if err := e.db.QueryRow(`SELECT high FROM user_ids`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`DELETE FROM spaces WHERE owner_id = ?`, `DELETE FROM users WHERE id = ?`} {
+		if _, err := e.db.Exec(q, e.userID(other)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var after int64
+	if err := e.db.QueryRow(`SELECT high FROM user_ids`).Scan(&after); err != nil || after < before {
+		t.Fatalf("the mark went from %d to %d, %v", before, after, err)
 	}
 }

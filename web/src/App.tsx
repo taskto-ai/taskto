@@ -7,6 +7,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
+import { deletionNoted } from './auth/deleted'
 import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
@@ -41,6 +42,20 @@ const RESET_PATH = '/reset-password'
 // Signing out is the same from wherever it is asked: who, and where it leaves to.
 type Leaving = { user: number; next: Session }
 type Asked = Leaving & Unsent
+
+// Removes everything this device kept of user's account: the drafts and the offline database,
+// whatever it still holds unsent (the account is gone, so there is no one to send it to).
+async function forgetAccount(user: number): Promise<void> {
+  forgetDrafts()
+  try {
+    let left = await deactivate({ purge: true, user })
+    // Deleting is refused while records that weren't shown to the person are unsent: they are
+    // shown now, by being named, and the account's deletion is what approves them.
+    if (left.length > 0) left = await deactivate({ purge: true, user, approved: approvalOf(left) })
+  } catch {
+    // The database can't be opened (a newer version's, no storage): nothing more can be done here.
+  }
+}
 
 export function App() {
   const t = useT()
@@ -106,16 +121,22 @@ export function App() {
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
   // lost while the login is showing.
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
+  const user = session.state === 'in' ? session.me.user.id : null
   useEffect(() => {
     if (!signedIn) return
     // The session ended elsewhere (or expired): this device stops receiving the person's pushes.
     const lost = () => {
       void leavePush()
+      // The person deleted their own account here: nothing this device kept of it (drafts, the
+      // offline database with its downloads and queue) will ever be sent or read again, and it is
+      // theirs to be gone, not left for whoever signs in next. A session that ended any other way
+      // leaves the queue for the next sign-in to send.
+      if (user !== null && deletionNoted()) void forgetAccount(user)
       setSession({ state: 'login' })
     }
     window.addEventListener(SESSION_LOST, lost)
     return () => window.removeEventListener(SESSION_LOST, lost)
-  }, [signedIn])
+  }, [signedIn, user])
 
   const logIn = useCallback(
     async (me: Me) => {

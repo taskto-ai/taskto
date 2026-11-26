@@ -274,11 +274,13 @@ func (s *Service) Providers() []providers.CLIProvider {
 // Forget removes everything kept for user's CLI accounts, for an account that is deleted
 // (internal/accountdeletion): the worker's directories, with the logins, sessions, working
 // directories and the browser's profile, and what the service remembers of their logins. The
-// rows of their accounts go with the user (the schema's cascade). Nothing happens while CLI workers
-// are off, and it is idempotent, so a purge that stopped halfway runs it again.
+// rows of their accounts go with the user (the schema's cascade). While CLI workers are off it
+// can't reach the worker and answers ErrOff, which the purge keeps as a step still to do (the
+// worker's directory may hold their files); it is idempotent, so a purge that stopped halfway runs
+// it again.
 func (s *Service) Forget(ctx context.Context, user int64) error {
 	if s.worker == nil {
-		return nil
+		return ErrOff
 	}
 	if err := s.worker.Forget(ctx, user); err != nil {
 		return fmt.Errorf("removing the CLI worker's files of user %d: %w", user, err)

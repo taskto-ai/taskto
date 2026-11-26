@@ -328,8 +328,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			return err
 		}
 		defer func() { stuck.note("the agent runtime's tools socket", agent.stop()) }()
-		// A purged account's conversations are retired in the agent runtime too.
-		deletions.SetAgent(func(ctx context.Context) (conversations.Sidecar, error) {
+		// A purged account's conversations are retired and purged in the agent runtime too, and its
+		// providers file and keys are rewritten.
+		deletions.SetProviders(agent.feed.Sync)
+		deletions.SetAgent(func(ctx context.Context) (conversations.Purger, error) {
 			c, err := agent.ready(ctx)
 			if err != nil {
 				return nil, err
@@ -433,6 +435,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
 		AppsReady: func(svc *apps.Service) {
+			// A purged account's photos in a moved app are finished, and its uploads removed.
+			deletions.SetApps(svc)
 			maintaining.Add(1)
 			go func() {
 				defer maintaining.Done()
@@ -448,6 +452,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	if err := deletions.Reconcile(ctx); err != nil {
 		return err
 	}
+	// The steps of purges that couldn't be done then (the agent runtime or the CLI workers were
+	// off) are done now if they are on, and again every ten minutes, as is any purge that ran out of
+	// tries.
+	if err := deletions.RunCleanups(ctx); err != nil {
+		slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
+	}
+	maintaining.Add(1)
+	go func() {
+		defer maintaining.Done()
+		deletions.Maintain(maintainCtx, 10*time.Minute)
+	}()
 
 	// No server-wide ReadTimeout or WriteTimeout: agent replies stream for minutes and
 	// knowledge-base uploads can be large, so those limits belong on individual handlers.

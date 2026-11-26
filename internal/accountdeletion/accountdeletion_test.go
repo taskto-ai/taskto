@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agentrt"
+	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/db"
@@ -30,16 +32,37 @@ const (
 type fakeAgent struct {
 	mu      sync.Mutex
 	retired []int64
+	purged  []int64
 	gone    map[int64]bool // conversations the runtime no longer has: 404
+	down    error          // what the runtime answers to every request, while set
 }
 
 func (f *fakeAgent) Conversations(context.Context) ([]agentrt.ConversationInfo, error) {
 	return nil, nil
 }
 
+func (f *fakeAgent) PurgeConversation(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down != nil {
+		return f.down
+	}
+	if f.gone[id] {
+		return nil // as the sidecar answers for one it no longer has
+	}
+	if !slices.Contains(f.retired, id) {
+		return &agentrt.StatusError{Code: http.StatusConflict}
+	}
+	f.purged = append(f.purged, id)
+	return nil
+}
+
 func (f *fakeAgent) RetireConversation(_ context.Context, id int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.down != nil {
+		return f.down
+	}
 	if f.gone[id] {
 		return &agentrt.StatusError{Code: http.StatusNotFound}
 	}
@@ -73,6 +96,7 @@ type world struct {
 	agent    *fakeAgent
 	cli      *fakeCLI
 	svc      *Service
+	apps     *apps.Service
 	sched    *schedule.Service
 	ws       int64
 	leaver   int64
@@ -182,8 +206,9 @@ func newWorld(t *testing.T) *world {
 	}
 
 	w.sched = schedule.New(sqlDB, access.New(sqlDB, nil), schedule.Options{Poll: 10 * time.Millisecond})
-	w.svc = New(Options{DB: sqlDB, DataDir: dir, Scheduler: w.sched, Knowledge: w.kb, CLI: w.cli,
-		Agent: func(context.Context) (conversations.Sidecar, error) { return w.agent, nil }})
+	w.apps = apps.New(sqlDB, access.New(sqlDB, nil)).WithFiles(dir)
+	w.svc = New(Options{DB: sqlDB, DataDir: dir, Scheduler: w.sched, Knowledge: w.kb, CLI: w.cli, Apps: w.apps,
+		Agent: func(context.Context) (conversations.Purger, error) { return w.agent, nil }})
 	return w
 }
 
@@ -198,10 +223,10 @@ func (w *world) count(query string, args ...any) int {
 
 // deleteAccount does what a deletion request does to the rows, without the HTTP: the account is
 // disabled and waits.
-func (w *world) deleteAccount(by bool) {
+func (w *world) deleteAccount() {
 	w.t.Helper()
 	exec(w.t, w.db, `UPDATE users SET disabled_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.leaver)
-	exec(w.t, w.db, `INSERT INTO account_deletions (user_id, requested_at, purge_at, by_self) VALUES (?, '2026-01-01T00:00:00.000Z', '2026-01-15T00:00:00.000Z', ?)`, w.leaver, by)
+	exec(w.t, w.db, `INSERT INTO account_deletions (user_id, requested_at, purge_at) VALUES (?, '2026-01-01T00:00:00.000Z', '2026-01-15T00:00:00.000Z')`, w.leaver)
 }
 
 // everythingAbout scans every table of the database for text that holds needle, and reports where.
@@ -257,7 +282,7 @@ func (w *world) everythingAbout(needle string) []string {
 func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
-	w.deleteAccount(true)
+	w.deleteAccount()
 	privateDir := w.private.Dir(w.dir)
 	if _, err := os.Stat(privateDir); err != nil {
 		t.Fatalf("the private space's directory before: %v", err)
@@ -300,10 +325,16 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 		}
 	}
 
-	// The runtime's copies were retired (the one it no longer has isn't an error), and the CLI
-	// worker's files forgotten.
+	// The runtime's copies were retired and then purged from its database (the one it no longer
+	// has isn't an error), and the CLI worker's files forgotten.
 	if len(w.agent.retired) != 1 || w.agent.retired[0] != 101 {
 		t.Errorf("retired = %v, want [101]", w.agent.retired)
+	}
+	if !slices.Equal(w.agent.purged, []int64{101}) {
+		t.Errorf("purged = %v, want [101]", w.agent.purged)
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups`); n != 0 {
+		t.Errorf("%d steps are still recorded after a purge that completed", n)
 	}
 	if len(w.cli.users) != 1 || w.cli.users[0] != w.leaver {
 		t.Errorf("the CLI worker forgot %v", w.cli.users)
@@ -333,7 +364,7 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 	if err := w.db.QueryRow(`SELECT body FROM card_comments WHERE id = ?`, w.comment).Scan(&body); err != nil {
 		t.Fatal(err)
 	}
-	if want := fmt.Sprintf("thanks @[Deleted user](user:%d), and @[Carol](user:%d) too", w.leaver, w.carol); body != want {
+	if want := fmt.Sprintf("thanks @[Deleted user](user:0), and @[Carol](user:%d) too", w.carol); body != want {
 		t.Errorf("the mention reads %q, want %q", body, want)
 	}
 	// The documents they wrote in the shared space are there, now by "a deleted user".
@@ -378,7 +409,7 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 func TestPurgeIsIdempotentAndResumesAfterAFailure(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
-	w.deleteAccount(false)
+	w.deleteAccount()
 
 	// A step that fails stops the purge before the account goes; the deletion can't be cancelled
 	// any more, and nothing but what that step had reached is deleted.
@@ -437,7 +468,7 @@ func TestTheSchedulerRunsThePurgeForADisabledAccountWhenItIsDue(t *testing.T) {
 	stop := w.sched.Start(context.Background())
 	defer stop()
 
-	w.deleteAccount(true)
+	w.deleteAccount()
 	tx, err := w.db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -482,7 +513,7 @@ func TestReconcileSchedulesAPurgeThatHasNoJob(t *testing.T) {
 	if err := w.svc.Attach(); err != nil {
 		t.Fatal(err)
 	}
-	w.deleteAccount(true)
+	w.deleteAccount()
 	if n := w.count(`SELECT count(*) FROM scheduled_jobs`); n != 0 {
 		t.Fatalf("%d jobs before", n)
 	}

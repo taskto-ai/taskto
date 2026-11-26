@@ -582,7 +582,6 @@ export type PendingDeletion = {
   requested_at: string
   purge_at: string
   purging: boolean
-  by_self: boolean
 }
 
 export type Pin = {

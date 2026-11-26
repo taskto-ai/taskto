@@ -12,12 +12,13 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// Deleting an account (docs/api.md#deleting-an-account). A person deletes their own account, with
-// their password (and a code, if they have two-factor login on) or, with no password, a login made
-// minutes ago; or an admin deletes a member's, by the rule for reset links (administersAll). Either
-// way the account is disabled at once, with the same switch as disabling a member, and kept for a
-// grace period, after which the purge (internal/accountdeletion, run by the scheduler) deletes
-// what the person owned alone and then the account. An operator can cancel it until then.
+// Deleting an account (docs/api.md#deleting-an-account). Only the person deletes their own account,
+// with their password (and a code, if they have two-factor login on) or, with no password, a login
+// made minutes ago: nobody else can, not an admin and not the operator (an admin removes a member
+// from a workspace, which leaves the account as it is). The account is disabled at once, with the
+// same switch as disabling a member, and kept for a grace period, after which the purge
+// (internal/accountdeletion, run by the scheduler) deletes what the person owned alone and then the
+// account. An operator can cancel it until then.
 //
 // This file is the account's side of it: asking, cancelling, who may, and what a deletion can't
 // leave behind (a workspace with no admin in use). The purge deletes files and talks to the agent
@@ -25,12 +26,10 @@ import (
 // here for what must hold at the time (DeletionBlockers).
 
 var (
-	errDeletionOwn       = errors.New("delete your own account from your own settings")
-	errDeletionElsewhere = errors.New("this member also belongs to a workspace you aren't an admin of: only someone who administers all of their workspaces can delete their account")
-	errDeletionPending   = errors.New("this account is waiting to be deleted: an operator can cancel that")
-	errDeletionNotFound  = errors.New("this account isn't waiting to be deleted")
-	errDeletionPurging   = errors.New("this account is being deleted now: it can't be cancelled any more")
-	errReauth            = errors.New("sign in again with your provider, then try again")
+	errDeletionPending  = errors.New("this account is waiting to be deleted: an operator can cancel that")
+	errDeletionNotFound = errors.New("this account isn't waiting to be deleted")
+	errDeletionPurging  = errors.New("this account is being deleted now: it can't be cancelled any more")
+	errReauth           = errors.New("sign in again with your provider, then try again")
 )
 
 // freshLogin is how recent a login must be to stand for a password: an account that signs in with a
@@ -112,8 +111,6 @@ func (s *Service) deletionRoutes(mux *http.ServeMux) {
 	// These take no access tokens: they act on the whole account.
 	mux.Handle("GET /api/me/deletion", refuseTokens(s.RequireUser(http.HandlerFunc(s.handleDeletionStatus)).ServeHTTP))
 	mux.Handle("POST /api/me/deletion", refuseTokens(s.RequireUser(http.HandlerFunc(s.handleDeleteOwn)).ServeHTTP))
-	mux.Handle("POST /api/workspaces/{workspace}/members/{user}/deletion",
-		refuseTokens(s.RequireAdmin(http.HandlerFunc(s.handleDeleteMember)).ServeHTTP))
 	mux.Handle("GET /api/workspaces/{workspace}/account-deletions",
 		refuseTokens(s.RequireOperator(http.HandlerFunc(s.handlePendingDeletions)).ServeHTTP))
 	mux.Handle("DELETE /api/workspaces/{workspace}/account-deletions/{user}",
@@ -205,7 +202,7 @@ func (s *Service) handleDeleteOwn(w http.ResponseWriter, r *http.Request) {
 	}
 	var purgeAt time.Time
 	ok := s.ownReauth(w, r, u, req.Password, req.Code, func(tx *sql.Tx) (err error) {
-		purgeAt, err = s.requestDeletion(r.Context(), tx, u.ID, 0)
+		purgeAt, err = s.requestDeletion(r.Context(), tx, u.ID)
 		return err
 	})
 	if !ok {
@@ -294,10 +291,6 @@ func (s *Service) deletionFailed(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, http.StatusForbidden, apierr.CodeDeletionReauth, err.Error())
 	case errors.Is(err, errDeletionPending):
 		writeError(w, http.StatusConflict, apierr.CodeDeletionPending, err.Error())
-	case errors.Is(err, errDeletionOwn):
-		writeError(w, http.StatusBadRequest, apierr.CodeDeletionOwn, err.Error())
-	case errors.Is(err, errDeletionElsewhere):
-		writeError(w, http.StatusForbidden, apierr.CodeDeletionElsewhere, err.Error())
 	case errors.Is(err, errNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeMemberNotFound, "member not found")
 	case errors.Is(err, errAccountDisabled):
@@ -310,54 +303,11 @@ func (s *Service) deletionFailed(w http.ResponseWriter, r *http.Request, err err
 	return false
 }
 
-func (s *Service) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
-	m, _ := MembershipFrom(r.Context())
-	admin, _ := UserFrom(r.Context())
-	userID, ok := pathID(w, r, "user", apierr.CodeMemberNotFound, "member not found")
-	if !ok {
-		return
-	}
-	if !readEmptyBody(w, r) {
-		return
-	}
-	var purgeAt time.Time
-	err := s.write(r.Context(), func(tx *sql.Tx) error {
-		if _, err := roleIn(r.Context(), tx, m.WorkspaceID, userID); err != nil {
-			return err
-		}
-		if userID == admin.ID {
-			return errDeletionOwn
-		}
-		if all, err := administersAll(r.Context(), tx, admin.ID, userID); err != nil {
-			return err
-		} else if !all {
-			return errDeletionElsewhere
-		}
-		// Read in the transaction, which holds the write lock: an admin disabled meanwhile deletes
-		// nothing.
-		if off, err := s.isDisabled(r.Context(), tx, admin.ID); err != nil {
-			return err
-		} else if off {
-			return errAccountDisabled
-		}
-		var err error
-		purgeAt, err = s.requestDeletion(r.Context(), tx, userID, admin.ID)
-		return err
-	})
-	if !s.deletionFailed(w, r, err) {
-		return
-	}
-	slog.InfoContext(r.Context(), "a member's account was deleted by an admin; it is purged after the grace period",
-		"user_id", userID, "by", admin.ID, "workspace_id", m.WorkspaceID)
-	s.endLive(userID, "")
-	writeJSON(w, http.StatusAccepted, DeletionReply{PurgeAt: stamp(purgeAt)})
-}
-
-// requestDeletion switches userID's account off and records its deletion, within tx: by is the admin
-// who asks, or 0 for the person themselves. It fails with errDeletionPending if the account is
-// waiting already, and with a *blockedError if it would leave a workspace with no admin in use.
-// Its sessions, reset links and half-done logins end; what it owns is kept until the purge.
-func (s *Service) requestDeletion(ctx context.Context, tx *sql.Tx, userID, by int64) (time.Time, error) {
+// requestDeletion switches userID's account off and records its deletion, within tx, for the person
+// themselves. It fails with errDeletionPending if the account is waiting already, and with a
+// *blockedError if it would leave a workspace with no admin in use. Its sessions, reset links and
+// half-done logins end; what it owns is kept until the purge.
+func (s *Service) requestDeletion(ctx context.Context, tx *sql.Tx, userID int64) (time.Time, error) {
 	var disabled bool
 	var pending bool
 	err := tx.QueryRowContext(ctx, `
@@ -381,18 +331,15 @@ func (s *Service) requestDeletion(ctx context.Context, tx *sql.Tx, userID, by in
 	}
 	now := s.now()
 	purgeAt := now.Add(s.graceOf())
-	var requestedBy any
-	if by != 0 {
-		requestedBy = by
-	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO account_deletions (user_id, requested_at, purge_at, requested_by, by_self, was_disabled)
-		VALUES (?, ?, ?, ?, ?, ?)`, userID, stamp(now), stamp(purgeAt), requestedBy, by == 0, disabled); err != nil {
+		INSERT INTO account_deletions (user_id, requested_at, purge_at, was_disabled)
+		VALUES (?, ?, ?, ?)`, userID, stamp(now), stamp(purgeAt), disabled); err != nil {
 		return time.Time{}, err
 	}
 	if !disabled {
-		if _, err := tx.ExecContext(ctx, `UPDATE users SET disabled_at = ?, disabled_by = ? WHERE id = ?`,
-			stamp(now), requestedBy, userID); err != nil {
+		// Nobody else switched it off: the person did.
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET disabled_at = ?, disabled_by = NULL WHERE id = ?`,
+			stamp(now), userID); err != nil {
 			return time.Time{}, err
 		}
 	}
@@ -416,14 +363,10 @@ func (s *Service) requestDeletion(ctx context.Context, tx *sql.Tx, userID, by in
 			return time.Time{}, err
 		}
 	}
-	actor := by
-	if actor == 0 {
-		actor = userID
-	}
 	for _, ws := range workspaces.all {
-		if err := audit.Record(ctx, tx, audit.Event{Workspace: ws, Actor: actor, Action: audit.AccountDeletionRequested,
+		if err := audit.Record(ctx, tx, audit.Event{Workspace: ws, Actor: userID, Action: audit.AccountDeletionRequested,
 			TargetType: audit.TargetUser, Target: userID,
-			Details: audit.Details{"by_self": by == 0, "purge_days": int64(s.graceOf() / (24 * time.Hour)), "logins_ended": sessions}}); err != nil {
+			Details: audit.Details{"purge_days": int64(s.graceOf() / (24 * time.Hour)), "logins_ended": sessions}}); err != nil {
 			return time.Time{}, err
 		}
 	}
@@ -474,13 +417,11 @@ type PendingDeletion struct {
 	PurgeAt     string `json:"purge_at"`
 	// Purging says the purge has begun, so the deletion can't be cancelled any more.
 	Purging bool `json:"purging"`
-	// BySelf says the person deleted their own account; otherwise an admin did.
-	BySelf bool `json:"by_self"`
 }
 
 func (s *Service) handlePendingDeletions(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT u.id, u.email, u.name, d.requested_at, d.purge_at, d.purge_started_at IS NOT NULL, d.by_self
+		SELECT u.id, u.email, u.name, d.requested_at, d.purge_at, d.purge_started_at IS NOT NULL
 		FROM account_deletions d JOIN users u ON u.id = d.user_id
 		ORDER BY d.purge_at, u.id`)
 	if err != nil {
@@ -491,7 +432,7 @@ func (s *Service) handlePendingDeletions(w http.ResponseWriter, r *http.Request)
 	out := []PendingDeletion{}
 	for rows.Next() {
 		var p PendingDeletion
-		if err := rows.Scan(&p.User.ID, &p.User.Email, &p.User.Name, &p.RequestedAt, &p.PurgeAt, &p.Purging, &p.BySelf); err != nil {
+		if err := rows.Scan(&p.User.ID, &p.User.Email, &p.User.Name, &p.RequestedAt, &p.PurgeAt, &p.Purging); err != nil {
 			serverError(w, r, err)
 			return
 		}
@@ -585,30 +526,4 @@ func isDeleting(ctx context.Context, q querier, userID int64) (bool, error) {
 	var pending bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = ?)`, userID).Scan(&pending)
 	return pending, err
-}
-
-// rehomePurge files the purge of userID again, if their account is waiting to be deleted: the
-// scheduler drops a person's jobs of a workspace when they leave it (or are removed), and the
-// purge must outlive that. It runs in the transaction that removes the membership.
-func (s *Service) rehomePurge(ctx context.Context, tx *sql.Tx, userID int64) error {
-	if s.deletions == nil {
-		return nil
-	}
-	var purgeAt string
-	err := tx.QueryRowContext(ctx, `SELECT purge_at FROM account_deletions WHERE user_id = ? AND purge_started_at IS NULL`, userID).Scan(&purgeAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	at, err := time.Parse(timeFormat, purgeAt)
-	if err != nil {
-		return err
-	}
-	workspaces, err := workspaceIDs(ctx, tx, userID)
-	if err != nil {
-		return err
-	}
-	return s.deletions.SchedulePurge(ctx, tx, userID, workspaces.home, at)
 }

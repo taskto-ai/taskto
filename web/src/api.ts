@@ -589,7 +589,6 @@ export type PendingDeletion = {
   requested_at: string
   purge_at: string
   purging: boolean
-  by_self: boolean
 }
 
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }

@@ -68,9 +68,9 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `invite_emailed` | an admin had an invite's link emailed to its address, and the SMTP server took the message (the invite itself is `invite_created`) | the invite's | invite | |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |
 | `member_role_changed` | an admin changes a member's role | the workspace | user | `from`, `to` |
-| `account_deletion_requested` | a person deletes their own account, or an admin deletes a member's ([Deleting an account](api.md#deleting-an-account)); one event in each workspace the account belongs to | each of them | user | `by_self`, `purge_days` (the grace period), `logins_ended` |
+| `account_deletion_requested` | a person deletes their own account ([Deleting an account](api.md#deleting-an-account)); one event in each workspace the account belongs to | each of them | user | `purge_days` (the grace period), `logins_ended` |
 | `account_deletion_cancelled` | an operator cancels it before the purge | each of the account's workspaces | user | |
-| `account_purged` | the grace period ended and the account was deleted for good | each of the account's workspaces | user (the account, deleted) | `by_self`, and how many of each the purge deleted: `private_spaces`, `conversations`, `access_grants` (access tokens), `cli_accounts`, `push_subscriptions`, `documents_anonymized` (commits whose author was replaced), `mentions_anonymized` (comments changed). No name and no address |
+| `account_purged` | the grace period ended and the account was deleted for good | each of the account's workspaces | user (the account, deleted) | how many of each the purge deleted: `private_spaces`, `conversations`, `access_grants` (access tokens), `cli_accounts`, `push_subscriptions`, `documents_anonymized` (commits whose author was replaced), `mentions_anonymized` (comments changed), `uploads_removed` (unfinished uploads), and `cleanups_pending` (steps that wait for the agent runtime or the CLI workers to be on). No name and no address |
 | `member_disabled`, `member_enabled` | an admin switches a member's account off or on (one already in that state records nothing) | the workspace the admin asked in | user | `logins_ended` on a disable: the sessions it signed out |
 | `member_removed` | an admin removes a member | the workspace | user | `role`; the tokens and shared-space seats that go with it are events of their own (see below) |
 | `access_token_created`, `access_token_revoked` | a member makes or revokes their own token | the token's | access token | `expires`; `cascade` on one revoked by a member's removal |
@@ -164,7 +164,7 @@ the person, in the same transaction that deletes the account:
 - the events it did lose their `actor_id` (the schema sets it to null with the account), which would
   read like an anonymous attempt; they are marked `actor_deleted`, and the log shows "Deleted user";
 - the events about the account (`target_type` `user`, matched by its id *and* its creation time,
-  since an id is given again) are marked `target_deleted`;
+  since an id is never given again, the creation time makes it certain) are marked `target_deleted`;
 - the invitations to the account's address, which hold the address in their details, lose it
   (`invite_created`, `invite_revoked`);
 - nothing else in an event is about a person: details are typed and name no one but by the number

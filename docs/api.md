@@ -127,8 +127,6 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `deletion_reauth_required` | 403 | Deleting an account that has no password needs a sign-in made in the last 5 minutes ([Deleting an account](#deleting-an-account)). |
 | `deletion_last_admin` | 409 | The account is the only admin in use of a workspace; `params.workspace` names it. |
 | `deletion_last_operator` | 409 | The account is the only admin in use of the workspace the server's setup made, whose admins are its operators; `params.workspace` names it. |
-| `deletion_own` | 400 | An admin deletes their own account from their own settings, not through the member route. |
-| `deletion_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `deletion_pending` | 409 | The account is waiting to be deleted already; disabling or enabling it is refused too. |
 | `deletion_not_pending` | 404 | The account isn't waiting to be deleted. |
 | `deletion_purging` | 409 | The purge has begun: the deletion can't be cancelled any more. |
@@ -1047,9 +1045,10 @@ read the admin's account again in their transaction and answer `403 account_disa
 
 ### Deleting an account
 
-A person can delete their own account, and an admin can delete a member's. It is the one way an
-account goes: [removing a member](#delete-apiworkspacesworkspacemembersuser) only ends their access
-to one workspace and keeps their private space closed.
+A person can delete their own account, and only they can: not an admin, and not the operator (who
+can only cancel a deletion that is waiting). It is the one way an account goes: [removing a
+member](#delete-apiworkspacesworkspacemembersuser) only ends their access to one workspace and keeps
+their private space closed.
 
 **What happens.** The account is switched off at once, with the switch of [disabling a
 member](#disabling-a-member) (every login ended, no new one, its tokens, agents and jobs refused),
@@ -1063,10 +1062,14 @@ stays disabled). When the period ends, the scheduler runs the **purge**, once, a
 - their private space in every workspace: the documents with the unversioned files and the large
   files' bytes, their personal board, and their private apps with their records and photos, from
   disk and from the database, and the [search](#search) index's rows for them;
-- their conversations, and the agent runtime's copies, which are retired (the runtime has no way to
-  delete one, see [install.md](install.md#privacy-and-account-deletion));
+- their conversations, and the agent runtime's copies: each is retired and then purged from the
+  runtime's database, which holds what was said (see
+  [install.md](install.md#privacy-and-account-deletion));
 - their CLI logins and shared-account mappings, with everything the CLI worker kept for them
-  (sessions, working directories, the agent browser's profile);
+  (sessions, working directories, the agent browser's profile), and the agent runtime's providers
+  file and key files, which hold their provider accounts;
+- their unfinished uploads of photos in shared apps, with the files (a photo already on a record
+  stays with the record);
 - their access tokens, sessions, push subscriptions, notification settings and email ledger,
   two-factor data, single sign-on identities, reset links, and the invitations to their address;
 - the account itself, with its name and email.
@@ -1081,19 +1084,25 @@ or `target_deleted`, and a document's [history](#get-apiworkspacesworkspacespace
 <deleted-user@deleted.invalid>`: the purge replaces their name and address, in every shared space
 of the server, in each commit they authored or committed (a [history
 rewrite](#taking-a-files-old-versions-out-of-history), so those commits get new IDs; the documents' versions don't change).
-A comment's `@[Name](user:ID)` mention keeps its place and loses the label the writer typed.
+A comment's `@[Name](user:ID)` mention becomes `@[Deleted user](user:0)`, whatever digits the ID was
+written with: user 0 is no one, and no account is ever given the number of a deleted one (user IDs
+are never reused). The photos of a shared app's records stay, even those whose files an unfinished
+move of the app had left in the person's private space (the purge finishes the move first), and so
+does what the app's [effects](#effects-of-actions) did, without who; effects that had not run yet are
+cancelled.
 
-**Who may.** The person, proving it is them (below); or an admin of **every** workspace the account
-belongs to, by the rule for [password reset
-links](#post-apiworkspacesworkspacemembersuserpassword-reset), with nothing more to prove. The
-account must not be the only admin in use of a workspace (`409 deletion_last_admin`), and for the
-workspace the server's setup made, whose admins are its operators, not the last one
-(`409 deletion_last_operator`): make someone else an admin first. A disabled admin doesn't count as
-"in use". All of these take a session, never an access token (`403`).
+**Who may.** The person, proving it is them (below), and no one else. The account must not be the
+only admin in use of a workspace (`409 deletion_last_admin`), and for the workspace the server's
+setup made, whose admins are its operators, not the last one (`409 deletion_last_operator`): make
+someone else an admin first. A disabled admin doesn't count as "in use". These take a session, never
+an access token (`403`). There is no route for an admin to delete a member's account: an admin can
+[remove the member](#delete-apiworkspacesworkspacemembersuser) from their workspace, which leaves
+the account and what it owns alone.
 
 **Offering the export.** The web app offers [the person's data export](#export-my-data) before it
-asks to confirm. The server doesn't require it: an admin's deletion of a member's account can't
-(the data is the person's).
+asks to confirm. The server doesn't require it. When the person's session ends with the deletion,
+the browser that asked removes what it kept of the account (the drafts and the offline database,
+with whatever it had not sent).
 
 #### `GET /api/me/deletion`
 
@@ -1116,14 +1125,8 @@ account has two-factor login on; `{}` for an account with no password, which nee
 (`403 deletion_reauth_required` otherwise). A wrong password is `403 wrong_password` and a wrong
 code `403 wrong_two_factor_code`, both counted by the login limits like a failed login. `202` with
 `{"purge_at": "…"}`; the session is ended and its cookie cleared. `409` with the blocker's code
-above; `409 deletion_pending` if it was asked for already.
-
-#### `POST /api/workspaces/{workspace}/members/{user}/deletion`
-
-Admin only, no body. The same, for a member, with no password to prove. `202` with
-`{"purge_at": "…"}`; `404 member_not_found`; `400 deletion_own` for the caller's own account;
-`403 deletion_elsewhere` if the member belongs to a workspace the caller doesn't administer; the
-`409`s above. Recorded in the [audit log](audit.md) as `account_deletion_requested`.
+above; `409 deletion_pending` if it was asked for already. Recorded in the [audit log](audit.md) as
+`account_deletion_requested`.
 
 #### `GET /api/workspaces/{workspace}/account-deletions`
 
@@ -1131,7 +1134,7 @@ Operators only ([Operators](#operators)): every account waiting to be deleted, s
 
 ```json
 {"deletions": [{"user": {"id": 2, "email": "…", "name": "…"}, "requested_at": "…", "purge_at": "…",
-                "purging": false, "by_self": true}]}
+                "purging": false}]}
 ```
 
 #### `DELETE /api/workspaces/{workspace}/account-deletions/{user}`
@@ -1141,8 +1144,14 @@ before (its logins ended with the deletion). `404 deletion_not_pending`; `409 de
 once the purge has begun, which can't be undone. Recorded as `account_deletion_cancelled`.
 
 **The purge is safe to repeat.** Each step finds what is left and finishes it, so a purge that was
-stopped or failed is tried again (with backoff, and at the next start); the account itself, with
-the audit events (`account_purged`, which holds only counts), goes last, in one transaction.
+stopped or failed is tried again (with backoff, every ten minutes after the tries run out, and at the
+next start, whoever joins or leaves a workspace meanwhile); the account itself, with the audit events
+(`account_purged`, which holds only counts), goes last, in one transaction. The steps about files and
+other processes (the agent runtime's records of the conversations, the CLI worker's directory, the
+providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
+the CLI workers to be on stays recorded after the account is gone and is done when they are: the
+event says how many are waiting (`cleanups_pending`), and the server doesn't log the purge as complete
+until none is.
 
 ## Invites
 

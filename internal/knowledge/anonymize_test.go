@@ -8,6 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"taskto.ai/taskto/internal/access"
 )
 
 // history writes three versions of a document, by alice, bob and alice again (whose address is
@@ -137,6 +142,68 @@ func TestAnonymizeAuthorsRecoversFromACrash(t *testing.T) {
 			gitFsck(t, dataDir, sp)
 		})
 	}
+}
+
+// A purge that stopped after main moved and is tried again (the scheduler's retry, not a restart)
+// must finish the rewrite, not find main clean and call it done: the journal still names the
+// address and the old commits, which hold it, are still in the object store.
+func TestAnonymizeAuthorsAgainAfterAStopAfterTheRefMovedFinishesTheRewrite(t *testing.T) {
+	s, dataDir := anonymizeFixture(t)
+	sp := writable(1)
+	rewriteFault = func(at string) error {
+		if at == "ref" {
+			return errors.New("stopped")
+		}
+		return nil
+	}
+	t.Cleanup(func() { rewriteFault = nil })
+	if _, err := s.AnonymizeAuthors(ctx, sp, []string{"alice@example.com"}); err == nil {
+		t.Fatal("the stop didn't stop it")
+	}
+	rewriteFault = nil
+	journal := filepath.Join(sp.Dir(dataDir), filepath.FromSlash(rewriteFile))
+	if _, err := os.Stat(journal); err != nil {
+		t.Fatalf("no journal after the stop: %v", err)
+	}
+	if !storeHolds(t, dataDir, sp, "alice@example.com") {
+		t.Fatal("fixture: the old commits aren't in the store after the stop")
+	}
+
+	// The same call again, on the same Store, with no restart in between.
+	if _, err := s.AnonymizeAuthors(ctx, sp, []string{"alice@example.com"}); err != nil {
+		t.Fatalf("the second attempt: %v", err)
+	}
+	if _, err := os.Stat(journal); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the journal, which names the address, is still there: %v", err)
+	}
+	if storeHolds(t, dataDir, sp, "alice@example.com") {
+		t.Error("a commit holding the address is still in the object store")
+	}
+	gitFsck(t, dataDir, sp)
+}
+
+// storeHolds reports whether any commit in the repository's object store, reachable or not, has
+// an author or committer with the address.
+func storeHolds(t *testing.T, dataDir string, sp access.Space, email string) bool {
+	t.Helper()
+	repo, err := git.PlainOpen(sp.Dir(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, err := repo.CommitObjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	if err := it.ForEach(func(c *object.Commit) error {
+		if strings.EqualFold(c.Author.Email, email) || strings.EqualFold(c.Committer.Email, email) {
+			found = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return found
 }
 
 func TestRemoveSpaceDeletesItsFilesAndIsRepeatable(t *testing.T) {

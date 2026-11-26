@@ -482,17 +482,25 @@ func (s *Service) mentionedPeople(ctx context.Context, sp access.Space, viewer i
 	return nil
 }
 
-// AnonymizeMentions replaces the label of every mention of userID in the comments of every card
-// with label, for the purge of an account (internal/accountdeletion): the web app never shows a
-// mention's label, only the name the server resolves from the ID, but the stored text holds what
-// the writer typed, which is the person's name. The ID stays, so the mention keeps its place. It
-// returns how many comments it changed, and runs in tx, with the write lock.
+// DeletedMention is the ID a deleted person's mentions are rewritten to: no account has it (IDs
+// start at 1, and Mentions skips it), so the token can never resolve to anyone, now or after
+// another account registers.
+const DeletedMention = 0
+
+// AnonymizeMentions rewrites every mention of userID in the comments of every card to label and
+// DeletedMention, for the purge of an account (internal/accountdeletion): the web app never shows a
+// mention's label, only the name the server resolves from the ID, but the stored text holds what the
+// writer typed, which is the person's name, and the ID would go on naming whoever the number is
+// given to. The ID in a token is read as a number, whatever its digits (user:007 is user 7), so a
+// padded token is found too. It returns how many comments it changed, and runs in tx, with the
+// write lock.
 func AnonymizeMentions(ctx context.Context, tx *sql.Tx, userID int64, label string) (int64, error) {
 	type row struct {
 		id   int64
 		body string
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, body FROM card_comments WHERE instr(body, ?) > 0`, "(user:"+strconv.FormatInt(userID, 10)+")")
+	// Every comment with a token; the number inside is compared below, as a number.
+	rows, err := tx.QueryContext(ctx, `SELECT id, body FROM card_comments WHERE instr(body, '(user:') > 0`)
 	if err != nil {
 		return 0, err
 	}
@@ -515,10 +523,13 @@ func AnonymizeMentions(ctx context.Context, tx *sql.Tx, userID int64, label stri
 	for _, r := range todo {
 		body := mentionPattern.ReplaceAllStringFunc(r.body, func(m string) string {
 			sub := mentionPattern.FindStringSubmatch(m)
-			if len(sub) != 2 || sub[1] != strconv.FormatInt(userID, 10) {
+			if len(sub) != 2 {
 				return m
 			}
-			return "@[" + label + "](user:" + sub[1] + ")"
+			if id, err := strconv.ParseInt(sub[1], 10, 64); err != nil || id != userID {
+				return m
+			}
+			return "@[" + label + "](user:" + strconv.Itoa(DeletedMention) + ")"
 		})
 		if body == r.body {
 			continue

@@ -270,14 +270,20 @@ func (s *Service) checkWorkspaceLimits(ctx context.Context, tx *sql.Tx, userID i
 	return nil
 }
 
+// insertUser adds a user, whose id is above every id there has been: SQLite alone would give a
+// purged account's id to the next one when it was the newest (users_remember_id, migration 0050).
+// What is kept by a user's id (the browser's drafts and offline records, mentions in comments)
+// would then be the new person's.
 func insertUser(ctx context.Context, tx *sql.Tx, email, name, passwordHash string) (User, error) {
-	res, err := tx.ExecContext(ctx, `INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)`,
-		email, name, passwordHash)
+	var id int64
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO users (id, email, name, password_hash)
+		VALUES (max(coalesce((SELECT max(id) FROM users), 0), (SELECT high FROM user_ids WHERE id = 1)) + 1, ?, ?, ?)
+		RETURNING id`, email, name, passwordHash).Scan(&id)
 	if err != nil {
 		return User{}, err
 	}
-	id, err := res.LastInsertId()
-	return User{ID: id, Email: email, Name: name}, err
+	return User{ID: id, Email: email, Name: name}, nil
 }
 
 // userByEmail returns the user with email and their password hash, or errNotFound.
@@ -572,10 +578,9 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 			workspaceID, userID); err != nil {
 			return err
 		}
-		// The scheduler's jobs of the member in this workspace went with it, a deletion's purge too.
-		if err := s.rehomePurge(ctx, tx, userID); err != nil {
-			return err
-		}
+		// The scheduler's jobs of the member in this workspace went with it, but not the purge of an
+		// account that is waiting to be deleted: that job doesn't depend on any membership (migration
+		// 0050), so a purge that failed is tried again whoever leaves what.
 		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"role": string(current)}}); err != nil {
 			return err

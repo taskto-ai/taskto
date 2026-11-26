@@ -449,6 +449,96 @@ func TestListAndRetireConversations(t *testing.T) {
 	}
 }
 
+// Pi Durable can't delete a conversation, so the sidecar purges a retired one's records from its
+// database itself, for the purge of a deleted account: what was said is gone from the file, and the
+// other conversations are intact.
+func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	say := func(conv int64, text string) {
+		t.Helper()
+		sub, err := s.client.Submit(ctx, conv, Input{Content: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		if _, err := s.client.Wait(waitCtx, sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const keptWord, doomedWord = "kept-quince-4419", "doomed-marmalade-7731"
+	say(keep, "remember "+keptWord)
+	say(doomed, "remember "+doomedWord)
+	holds := func(word string) bool {
+		t.Helper()
+		for _, name := range []string{"agent.db", "agent.db-wal"} {
+			b, err := os.ReadFile(filepath.Join(s.dir, name))
+			if err == nil && bytes.Contains(b, []byte(word)) {
+				return true
+			}
+		}
+		return false
+	}
+	if !holds(doomedWord) || !holds(keptWord) {
+		t.Fatal("fixture: the database doesn't hold what was said")
+	}
+
+	// Only a retired conversation is purged: one in use is refused, and untouched.
+	var se *StatusError
+	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 409 {
+		t.Fatalf("purging a conversation that isn't retired: err = %v, want a 409", err)
+	}
+	if _, err := s.client.Messages(ctx, doomed); err != nil {
+		t.Fatalf("the refused purge changed the conversation: %v", err)
+	}
+
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.PurgeConversation(ctx, doomed); err != nil {
+		t.Fatalf("purging a retired conversation: %v", err)
+	}
+	if holds(doomedWord) {
+		t.Error("what was said in the purged conversation is still in the sidecar's database")
+	}
+	if !holds(keptWord) {
+		t.Error("the purge took the other conversation's records")
+	}
+	if msgs, err := s.client.Messages(ctx, keep); err != nil || !strings.Contains(fmt.Sprint(msgs), keptWord) {
+		t.Fatalf("the kept conversation: %v, %v", msgs, err)
+	}
+	// Again, and for one it never had: done, not an error.
+	for _, id := range []int64{doomed, doomed + 1000} {
+		if err := s.client.PurgeConversation(ctx, id); err != nil {
+			t.Fatalf("purging conversation %d again: %v", id, err)
+		}
+	}
+	// It stays gone after a restart, and the sidecar goes on working.
+	s.kill()
+	s.start()
+	list, err := s.client.Conversations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != keep {
+		t.Fatalf("conversations after a restart = %+v, want only %d", list, keep)
+	}
+	fresh, err := s.client.CreateConversation(ctx)
+	if err != nil || fresh == doomed {
+		t.Fatalf("a new conversation after the purge: %d, %v (it must not reuse %d)", fresh, err, doomed)
+	}
+	say(fresh, "still working")
+}
+
 func TestAbortStopsTheRunningWork(t *testing.T) {
 	s := startSidecar(t)
 	ctx := ctxFor(t)

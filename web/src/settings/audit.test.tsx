@@ -247,7 +247,7 @@ test('an event of a deleted account says so, and its target is not a stray numbe
             target_name: null,
             target_user: null,
             target_deleted: true,
-            details: { by_self: true, private_spaces: 1, conversations: 3 },
+            details: { private_spaces: 1, conversations: 3 },
           }),
         ],
       },

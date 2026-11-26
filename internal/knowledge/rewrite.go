@@ -902,15 +902,21 @@ func (s *Store) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []
 	slices.Sort(plan)
 	sp.Access = access.Write
 	// A look first, under the read lock and without telling the search index of a change: most
-	// spaces of a server have nothing of the person's.
+	// spaces of a server have nothing of the person's. A rewrite a crash left half done (its journal
+	// names addresses, and the commits it was to replace may still be in the object store) isn't
+	// nothing, though main may already be rewritten: it is finished before the space is called clean.
 	var found bool
 	err := s.read(sp, func(r *repo) error {
 		head, err := r.head()
 		if err != nil || head == nil {
 			return err
 		}
+		pending, err := r.rewritePending()
+		if err != nil {
+			return err
+		}
 		n, err := r.countAuthored(ctx, head, set)
-		found = n > 0
+		found = n > 0 || pending
 		return err
 	})
 	if errors.Is(err, errNoRepo) {
@@ -922,6 +928,16 @@ func (s *Store) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []
 	var rewritten int
 	// It frees what it replaces: a full repository takes it too.
 	err = s.write(sp, -1, false, func(r *repo) error {
+		// Any rewrite in the journal first, whose it is: a write does this as it starts but goes on
+		// when it can't, and what is reported done here must be done.
+		if _, err := r.resumeRewrite(sp); err != nil {
+			return fmt.Errorf("finishing a history rewrite that was left half done: %w", err)
+		}
+		if pending, err := r.rewritePending(); err != nil {
+			return err
+		} else if pending {
+			return errors.New("a history rewrite is still waiting in the journal")
+		}
 		head, err := r.head()
 		if err != nil || head == nil {
 			return err
@@ -941,6 +957,17 @@ func (s *Store) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []
 		return 0, nil
 	}
 	return rewritten, err
+}
+
+// rewritePending reports whether a history rewrite's journal is there.
+func (r *repo) rewritePending() (bool, error) {
+	if _, err := r.root.Stat(rewriteFile); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // countAuthored counts the commits main reaches from head whose author or committer has one of

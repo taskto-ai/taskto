@@ -1478,4 +1478,3 @@ test("a card whose assignee's account was deleted says so, and choosing someone 
   await within(view).findByRole('button', { name: 'Assignee: Bo' })
   expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, assignee: { kind: 'user', id: 5 } }])
 })
-

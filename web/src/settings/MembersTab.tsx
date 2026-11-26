@@ -70,10 +70,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
         : Promise.resolve([] as PendingDeletion[]),
     [base, operator],
   )
-  const deleteAccount = (m: Member) =>
-    action
-      .run(() => api(`${base}/members/${m.id}/deletion`, { method: 'POST' }))
-      .then(() => Promise.all([members.reload(), deletions.reload()]))
   const cancelDeletion = (user: number) =>
     action
       .run(() => api(`${base}/account-deletions/${user}`, { method: 'DELETE' }))
@@ -118,15 +114,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
       tone: 'danger',
     })
     if (yes) clearTwoFactor(m)
-  }
-  const askDeleteAccount = async (m: Member) => {
-    const yes = await confirm({
-      title: t('common.labelFor', { label: t('settings.members.deleteAccount'), name: m.name }),
-      body: t('settings.members.deleteAccountQuestion', { name: m.name }),
-      confirmLabel: t('settings.members.deleteAccountConfirm'),
-      tone: 'danger',
-    })
-    if (yes) deleteAccount(m)
   }
   const askCancelDeletion = async (d: PendingDeletion) => {
     const yes = await confirm({
@@ -237,11 +224,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
                             </MenuItem>
                           )}
                           <MenuSeparator />
-                          {!m.deletion_at && (
-                            <MenuItem tone="danger" onSelect={() => askDeleteAccount(m)} disabled={action.busy}>
-                              {t('settings.members.deleteAccount')}
-                            </MenuItem>
-                          )}
                           <MenuItem tone="danger" onSelect={() => askRemove(m)} disabled={action.busy}>
                             {t('settings.members.remove')}
                           </MenuItem>
@@ -295,7 +277,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
                         {' · '}
                         {t(d.purging ? 'settings.members.deletionPurging' : 'settings.members.deletionDetails', {
                           date: f.date(d.purge_at),
-                          by: t(d.by_self ? 'settings.members.deletedBySelf' : 'settings.members.deletedByAdmin'),
                         })}
                       </>
                     }

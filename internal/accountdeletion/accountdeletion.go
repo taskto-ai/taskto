@@ -1,7 +1,7 @@
 // Package accountdeletion purges a deleted account (docs/api.md#deleting-an-account).
 //
-// A person deletes their own account, or an admin deletes a member's (package auth), and the
-// account is switched off at once and kept for a grace period, which an operator can cancel. When
+// A person deletes their own account (package auth; nobody else can), and the account is switched
+// off at once and kept for a grace period, which an operator can cancel. When
 // it ends, the scheduler runs the purge here, as the server and for no one's access: the
 // scheduler's kind is registered with RegisterServer, so the account being disabled doesn't hold
 // the job.
@@ -11,10 +11,12 @@
 //   - their private spaces (in every workspace): the documents, with the unversioned files and
 //     the large files' bytes, the personal boards, and the private apps with their records and
 //     photos, from disk and from the database, and the search index's rows with them;
-//   - their conversations, and the agent runtime's copies (retired: Pi Durable keeps no way to
-//     delete a conversation, see package conversations);
+//   - their conversations, and the agent runtime's copies (retired, then purged from its database:
+//     Pi Durable has no way to delete a conversation, see package conversations);
 //   - their CLI logins and shared-account mappings, with what the CLI worker kept for them
-//     (sessions, working directories and the browser's profile);
+//     (sessions, working directories and the browser's profile), and the providers file and keys of
+//     the agent runtime, which hold their provider accounts;
+//   - their unfinished uploads in shared apps, with the files;
 //   - their access tokens, sessions, push subscriptions, notification settings and email ledger,
 //     two-factor data, single sign-on identities, reset links and the addresses of invitations to
 //     them: all rows of the account, which the schema deletes with it;
@@ -27,14 +29,21 @@
 // account by the schema's ON DELETE SET NULL, which the product shows as "Deleted user"; the
 // assignee, a document's author and the audit actor, for which no account would read like no one,
 // say so with a mark (cards.assignee_deleted, the placeholder author, audit_events.actor_deleted).
-// A comment's mention keeps its place but loses the label the writer typed.
+// A comment's mention becomes one of nobody (user 0), which no account can ever be. The photos of
+// a shared app's records stay, even those whose files an interrupted move of the app left in the
+// person's private space (finished first), and so does what the effects of a shared app did, without
+// who. Their entries that hadn't run yet are cancelled: no one is left to act for.
 //
 // # Safety
 //
 // The purge is idempotent: each step finds what is left and finishes it, so a handler that was
 // stopped or timed out runs again to the end. Once it has begun (account_deletions.purge_started_at)
 // the deletion can't be cancelled. The account itself goes last, in one transaction with the audit
-// events, so nothing that names the person survives a purge that completed.
+// events, so nothing that names the person survives a purge that completed. What is about files and
+// other processes (the agent runtime's records, the CLI worker's directory, the providers file) is
+// recorded first (purge_cleanups) and removed from the record when done: a step whose subsystem
+// is off stays recorded after the account is gone and is done when it is on, and the purge says it
+// completed only when none is left (the audit event's cleanups_pending, the log line).
 package accountdeletion
 
 import (
@@ -43,6 +52,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -58,6 +68,15 @@ const Kind schedule.Kind = "account.purge"
 
 // jobKey is the purge job's dedupe key: one per account.
 const jobKey = "purge"
+
+// Apps is what the purge needs of the apps: *apps.Service.
+type Apps interface {
+	// FinishMoves completes the moves of apps that involve the space, so no shared app's photo is
+	// left in it, and fails if one is.
+	FinishMoves(ctx context.Context, space int64) error
+	// PurgeUploads removes the account's unfinished uploads and unattached photos, with files.
+	PurgeUploads(ctx context.Context, owner int64) (int, error)
+}
 
 // Knowledge is what the purge needs of the knowledge base: *knowledge.Store.
 type Knowledge interface {
@@ -80,11 +99,16 @@ type Options struct {
 	Scheduler *schedule.Service
 	// Knowledge removes the private spaces' files and rewrites the shared ones' authors. Required.
 	Knowledge Knowledge
-	// Agent returns the agent runtime's client for retiring conversations, or an error if it isn't
-	// ready (the purge is tried again). Nil when the agent runtime is off: there are no runtime
-	// conversations to retire.
-	Agent func(ctx context.Context) (conversations.Sidecar, error)
-	// CLI forgets the CLI worker's files of the person. Nil when CLI workers are off.
+	// Apps finishes apps' moves and removes uploads. Required once the server serves: the apps
+	// service is made with the server's handler, so it may be set later (SetApps); a purge before
+	// that fails, and is tried again, rather than skip what the apps keep.
+	Apps Apps
+	// Agent returns the agent runtime's client for purging conversations, or an error if it isn't
+	// ready (the purge is tried again). Nil when the agent runtime is off: a conversation's records
+	// stay recorded as a step to do when it is on.
+	Agent func(ctx context.Context) (conversations.Purger, error)
+	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
+	// CLI workers are off: that step stays recorded for when they are on.
 	CLI CLIWorkers
 	// Clock is the time; time.Now by default.
 	Clock func() time.Time
@@ -94,8 +118,10 @@ type Options struct {
 type Service struct {
 	o Options
 
-	mu    sync.Mutex
-	agent func(ctx context.Context) (conversations.Sidecar, error)
+	mu        sync.Mutex
+	apps      Apps
+	agent     func(ctx context.Context) (conversations.Purger, error)
+	providers func(ctx context.Context) error
 }
 
 // New returns the service. Attach it to the scheduler before the scheduler starts, and give it to
@@ -104,18 +130,25 @@ func New(o Options) *Service {
 	if o.Clock == nil {
 		o.Clock = time.Now
 	}
-	return &Service{o: o, agent: o.Agent}
+	return &Service{o: o, agent: o.Agent, apps: o.Apps}
 }
 
 // SetAgent sets the agent runtime's client (Options.Agent), for a server that starts the agent
 // runtime after the scheduler has the purge's handler. Call it before the server serves.
-func (s *Service) SetAgent(agent func(ctx context.Context) (conversations.Sidecar, error)) {
+func (s *Service) SetAgent(agent func(ctx context.Context) (conversations.Purger, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.agent = agent
 }
 
-func (s *Service) runtime(ctx context.Context) (conversations.Sidecar, error) {
+// SetApps sets the apps service (Options.Apps).
+func (s *Service) SetApps(a Apps) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apps = a
+}
+
+func (s *Service) runtime(ctx context.Context) (conversations.Purger, error) {
 	s.mu.Lock()
 	agent := s.agent
 	s.mu.Unlock()
@@ -217,7 +250,10 @@ type Result struct {
 	PushSubscriptions   int64
 	DocumentsAnonymized int64
 	MentionsAnonymized  int64
-	BySelf              bool
+	UploadsRemoved      int64
+	// CleanupsPending is how many of the purge's steps about files and other processes are still
+	// recorded when the account goes: they wait for the agent runtime or the CLI workers to be on.
+	CleanupsPending int64
 }
 
 // Purge deletes everything userID owned alone, and the account. It does nothing for an account
@@ -227,7 +263,7 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err != nil || !ok {
 		return err
 	}
-	res := Result{BySelf: acct.bySelf}
+	res := Result{}
 
 	// What is to go, read once the purge has begun: nothing new can be made by an account that
 	// is switched off, and what the steps below delete is found again by a retry.
@@ -244,24 +280,51 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 		return err
 	}
 
-	// The agent runtime's copies first: a retry that finds the rows gone could no longer say
-	// which of its conversations were theirs.
-	if len(owned) > 0 {
-		rt, err := s.runtime(ctx)
-		if err != nil {
-			return fmt.Errorf("the agent runtime isn't ready to retire the account's conversations: %w", err)
-		}
-		if rt != nil {
-			if _, err := conversations.RetireOwned(ctx, rt, owned); err != nil {
+	// The steps about files and other processes, recorded before anything is deleted: a retry that
+	// finds the rows gone could no longer say which conversations were theirs, and a step that has
+	// to wait for the agent runtime or the CLI workers to be on is still known after the account.
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		for _, o := range owned {
+			if err := s.record(ctx, tx, userID, cleanAgentConversation, strconv.FormatInt(o.AgentID, 10)); err != nil {
 				return err
 			}
 		}
+		return s.record(ctx, tx, userID, cleanCLIHome, strconv.FormatInt(userID, 10))
+	})
+	if err != nil {
+		return err
 	}
-	if s.o.CLI != nil {
-		if err := s.o.CLI.Forget(ctx, userID); err != nil {
+
+	// What an app moved out of (or into) a private space still holds there is moved first, so the
+	// removal of the space below never takes a shared record's photo with it.
+	s.mu.Lock()
+	apps := s.apps
+	s.mu.Unlock()
+	if apps == nil {
+		return errors.New("the apps service isn't set yet: the purge waits for it, so what the apps keep isn't skipped")
+	}
+	for _, sp := range private {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := apps.FinishMoves(ctx, sp.ID); err != nil {
 			return err
 		}
 	}
+	// Their unfinished uploads in any app (a shared app's are theirs alone): with files. The photos
+	// already on records stay with the records.
+	n, err := apps.PurgeUploads(ctx, userID)
+	if err != nil {
+		return err
+	}
+	res.UploadsRemoved = int64(n)
+
+	// The agent runtime's records, the CLI worker's directory: each is done now, or stays recorded
+	// when what it waits for is off. One that is on and fails fails the purge, which is tried again.
+	if _, err := s.runCleanups(ctx, userID); err != nil {
+		return err
+	}
+
 	// Files before rows: a purge that stops between the two still finds the spaces to finish.
 	for _, sp := range private {
 		if err := ctx.Err(); err != nil {
@@ -286,12 +349,30 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.finish(ctx, userID, acct, &res)
+	if err := s.finish(ctx, userID, private, acct, &res); err != nil {
+		return err
+	}
+	// The providers file and the key files, now that the database has no account of theirs. A
+	// failure leaves the step recorded: it is the account that is gone, and the step is tried again.
+	if _, err := s.runCleanups(ctx, userID); err != nil {
+		slog.Warn("account deletion: a step after the account was deleted failed; it is tried again", "user_id", userID, "err", err)
+	}
+	pending, err := s.Pending(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if pending > 0 {
+		slog.Warn("account deletion: purged an account, with steps still to do when the agent runtime or the CLI workers are on",
+			"user_id", userID, "steps", pending)
+	} else {
+		slog.Info("account deletion: purged an account", "user_id", userID, "private_spaces", res.PrivateSpaces,
+			"conversations", res.Conversations, "documents_anonymized", res.DocumentsAnonymized)
+	}
+	return nil
 }
 
 type account struct {
 	email, name, created string
-	bySelf               bool
 }
 
 // begin marks the purge as begun and reads who it is for. ok is false when there is nothing to
@@ -299,9 +380,9 @@ type account struct {
 func (s *Service) begin(ctx context.Context, userID int64) (acct account, ok bool, err error) {
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `
-			SELECT u.email, u.name, u.created_at, d.by_self
+			SELECT u.email, u.name, u.created_at
 			FROM account_deletions d JOIN users u ON u.id = d.user_id WHERE d.user_id = ?`, userID).
-			Scan(&acct.email, &acct.name, &acct.created, &acct.bySelf)
+			Scan(&acct.email, &acct.name, &acct.created)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -334,7 +415,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 }
 
 // finish deletes the rows, and the account last, with the audit events, in one transaction.
-func (s *Service) finish(ctx context.Context, userID int64, acct account, res *Result) error {
+func (s *Service) finish(ctx context.Context, userID int64, private []access.Space, acct account, res *Result) error {
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		// The workspaces they belong to, to say the purge in each one's log.
 		var workspaces []int64
@@ -355,6 +436,19 @@ func (s *Service) finish(ctx context.Context, userID int64, acct account, res *R
 		}
 		if len(workspaces) == 0 {
 			workspaces = []int64{0}
+		}
+		// The space's rows take the photos of the apps in it with them (the schema's cascade): a
+		// photo of an app that lives elsewhere, still recorded here, is a shared record's, and the
+		// purge stops rather than delete it. FinishMoves moved them before the files went.
+		var stranded int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM app_attachments t JOIN apps a ON a.id = t.app_id
+			JOIN spaces s ON s.id = t.space_id AND s.owner_id = ?
+			WHERE a.space_id != t.space_id`, userID).Scan(&stranded); err != nil {
+			return err
+		}
+		if stranded > 0 {
+			return fmt.Errorf("%d attachments of apps in other spaces are still recorded in the account's private spaces", stranded)
 		}
 		for _, c := range []struct {
 			into  *int64
@@ -378,6 +472,11 @@ func (s *Service) finish(ctx context.Context, userID int64, acct account, res *R
 		if _, err := tx.ExecContext(ctx, `UPDATE cards SET assignee_deleted = 1 WHERE assignee_id = ?`, userID); err != nil {
 			return err
 		}
+		// What the effects of apps did for them stays (the schema sets their user to none), but an
+		// entry that hasn't run can't: it would act as them.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM app_effects WHERE user_id = ? AND state IN ('pending', 'running')`, userID); err != nil {
+			return err
+		}
 		// Their private spaces go with everything in them (boards, apps, records, photos' rows, the
 		// search index's rows), by the schema's cascade; their files went before.
 		spaces, err := tx.ExecContext(ctx, `DELETE FROM spaces WHERE owner_id = ?`, userID)
@@ -391,13 +490,23 @@ func (s *Service) finish(ctx context.Context, userID int64, acct account, res *R
 		if _, err := tx.ExecContext(ctx, `DELETE FROM invites WHERE email = ?`, acct.email); err != nil {
 			return err
 		}
+		// The providers file the agent runtime reads holds their provider accounts, which go with
+		// the account: its rewriting is recorded in the transaction that makes it necessary.
+		if err := s.record(ctx, tx, userID, cleanProviders, "feed"); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE user_id = ? AND kind <> ?`, userID, cleanProviders).
+			Scan(&res.CleanupsPending); err != nil {
+			return err
+		}
 		for _, ws := range workspaces {
 			if err := audit.Record(ctx, tx, audit.Event{Workspace: ws, Action: audit.AccountPurged,
 				TargetType: audit.TargetUser, Target: userID, TargetCreated: acct.created,
 				Details: audit.Details{
-					"by_self": res.BySelf, "private_spaces": res.PrivateSpaces, "conversations": res.Conversations,
+					"private_spaces": res.PrivateSpaces, "conversations": res.Conversations,
 					"access_grants": res.AccessTokens, "cli_accounts": res.CLIAccounts, "push_subscriptions": res.PushSubscriptions,
 					"documents_anonymized": res.DocumentsAnonymized, "mentions_anonymized": res.MentionsAnonymized,
+					"uploads_removed": res.UploadsRemoved, "cleanups_pending": res.CleanupsPending,
 				}}); err != nil {
 				return err
 			}
@@ -412,12 +521,7 @@ func (s *Service) finish(ctx context.Context, userID int64, acct account, res *R
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	slog.Info("account deletion: purged an account", "user_id", userID, "private_spaces", res.PrivateSpaces,
-		"conversations", res.Conversations, "documents_anonymized", res.DocumentsAnonymized)
-	return nil
+	return err
 }
 
 // write runs fn in a transaction that takes the write lock when it begins, rolled back on error.

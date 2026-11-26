@@ -10,6 +10,8 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
+import { SESSION_LOST } from '../api'
+import { rememberDeletion } from '../auth/deleted'
 import { fakeFetch } from '../test/fakes'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
@@ -147,6 +149,28 @@ test('signing out with records not sent asks first: cancel keeps everything, dis
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
+})
+
+test('deleting the account here clears what the device kept of it: the offline database with its unsent records, and the drafts', async () => {
+  sessionStorage.clear()
+  fakeFetch({ ...signedIn })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  window.localStorage.setItem('taskto:message:7:1', 'half a message')
+  expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
+
+  // What DeleteAccount does once the server has accepted the deletion and ended the session.
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  window.dispatchEvent(new Event(SESSION_LOST))
+
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  await waitFor(async () => expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7'))
+  expect(window.localStorage.getItem('taskto:message:7:1')).toBeNull()
+  expect(lastUser()).toBeNull()
+  sessionStorage.clear()
 })
 
 test('an ended session leaves the queue where it is, and signing in again sends it', async () => {

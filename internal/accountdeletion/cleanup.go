@@ -1,0 +1,222 @@
+package accountdeletion
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/conversations"
+)
+
+// The steps of a purge that are about files and other processes, not rows (purge_cleanups,
+// migration 0050): the agent runtime's records of the account's conversations, the CLI worker's
+// directory of the account, and the providers file and key files, which hold the account's provider
+// accounts. Each is recorded before it is tried and removed when it is done, so one that can't be
+// done now (the agent runtime or the CLI worker is off, or doesn't answer) is tried again by the
+// next purge attempt, by the next start and while the server runs (Maintain), and the purge is not
+// reported complete while one is left.
+const (
+	cleanAgentConversation = "agent_conversation"
+	cleanCLIHome           = "cli_home"
+	cleanProviders         = "providers"
+)
+
+// errWaiting is a step that can't be done until something is on again: not a failure, and not
+// done. It stays recorded.
+var errWaiting = errors.New("waiting for the agent runtime or the CLI workers to be on")
+
+// SetProviders sets what rewrites the agent runtime's providers file and key files from the
+// database and has the runtime reload them (providers.Feed.Sync), for a server that starts the
+// agent runtime after the scheduler has the purge's handler. Without one (the agent runtime is
+// off) the files are deleted: the next start writes them again from the database.
+func (s *Service) SetProviders(sync func(ctx context.Context) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.providers = sync
+}
+
+// record notes a step to do for userID, within q. Noting it again changes nothing.
+func (s *Service) record(ctx context.Context, q execer, userID int64, kind, target string) error {
+	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (kind, target) DO NOTHING`, userID, kind, target, s.o.Clock().UTC().Format("2006-01-02T15:04:05.000Z"))
+	return err
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type cleanup struct {
+	id           int64
+	user         int64
+	kind, target string
+}
+
+// pending lists the recorded steps, of userID's purge, or of every account's if userID is 0.
+func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) {
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target FROM purge_cleanups
+		WHERE ? = 0 OR user_id = ? ORDER BY id`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []cleanup
+	for rows.Next() {
+		var c cleanup
+		if err := rows.Scan(&c.id, &c.user, &c.kind, &c.target); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// Pending counts the steps still recorded for userID's purge (all accounts' if userID is 0).
+func (s *Service) Pending(ctx context.Context, userID int64) (int, error) {
+	var n int
+	err := s.o.DB.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE ? = 0 OR user_id = ?`, userID, userID).Scan(&n)
+	return n, err
+}
+
+// runCleanups does the recorded steps of userID's purge (every account's if userID is 0), and
+// removes each that is done. It returns the steps that were tried and failed; a step that is
+// waiting for a subsystem to be on is neither (it is counted in waiting).
+func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, err error) {
+	todo, err := s.pending(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	var errs []error
+	for _, c := range todo {
+		if err := ctx.Err(); err != nil {
+			return waiting, errors.Join(append(errs, err)...)
+		}
+		switch rerr := s.runCleanup(ctx, c); {
+		case rerr == nil:
+			if _, err := s.o.DB.ExecContext(ctx, `DELETE FROM purge_cleanups WHERE id = ?`, c.id); err != nil {
+				errs = append(errs, err)
+			}
+		case errors.Is(rerr, errWaiting):
+			waiting++
+		default:
+			errs = append(errs, fmt.Errorf("%s %s of account %d: %w", c.kind, c.target, c.user, rerr))
+			// Only the cause is kept, never what a step handled.
+			_, _ = s.o.DB.ExecContext(ctx, `UPDATE purge_cleanups SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
+				rerr.Error(), c.id)
+		}
+	}
+	return waiting, errors.Join(errs...)
+}
+
+func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
+	switch c.kind {
+	case cleanAgentConversation:
+		id, err := strconv.ParseInt(c.target, 10, 64)
+		if err != nil {
+			return fmt.Errorf("a conversation id that isn't one: %w", err)
+		}
+		rt, err := s.runtime(ctx)
+		if err != nil {
+			return fmt.Errorf("the agent runtime isn't ready: %w", err)
+		}
+		if rt == nil {
+			return errWaiting
+		}
+		return conversations.PurgeConversation(ctx, rt, id)
+	case cleanCLIHome:
+		user, err := strconv.ParseInt(c.target, 10, 64)
+		if err != nil || user <= 0 {
+			return fmt.Errorf("a user id that isn't one: %v", c.target)
+		}
+		return s.forgetCLI(ctx, user)
+	case cleanProviders:
+		return s.syncProviders(ctx)
+	}
+	return fmt.Errorf("an unknown step %q", c.kind)
+}
+
+// forgetCLI removes everything kept for user's CLI logins: the worker's directory (when CLI workers
+// are on) and, in any mode, the directory the local worker keeps under the data directory, which
+// stays when the mode is later turned off. It is waiting while the worker is off, since a
+// container worker keeps its own copy, out of reach.
+func (s *Service) forgetCLI(ctx context.Context, user int64) error {
+	var worker error
+	if s.o.CLI != nil {
+		worker = s.o.CLI.Forget(ctx, user)
+	} else {
+		worker = cliaccounts.ErrOff
+	}
+	if worker != nil && !errors.Is(worker, cliaccounts.ErrOff) {
+		return worker
+	}
+	if s.o.DataDir != "" {
+		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
+			return fmt.Errorf("removing the account's CLI directory: %w", err)
+		}
+	}
+	if worker != nil {
+		return errWaiting
+	}
+	return nil
+}
+
+// syncProviders makes the agent runtime's providers file and key files match the database, which
+// no longer has the account's provider accounts. Without the runtime's feed the files are removed:
+// the runtime isn't running, and the next start writes them again.
+func (s *Service) syncProviders(ctx context.Context) error {
+	s.mu.Lock()
+	sync := s.providers
+	s.mu.Unlock()
+	if sync != nil {
+		return sync(ctx)
+	}
+	if s.o.DataDir == "" {
+		return nil
+	}
+	dir := filepath.Join(s.o.DataDir, "agent")
+	for _, name := range []string{"providers.json", "keys"} {
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			return fmt.Errorf("removing the agent runtime's %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// RunCleanups does every recorded step of every account's purge that isn't done, and logs what it
+// couldn't. Call it at start, once the agent runtime's client is set (SetAgent), and again whenever
+// something a step waits for comes on; Maintain does it on a timer.
+func (s *Service) RunCleanups(ctx context.Context) error {
+	waiting, err := s.runCleanups(ctx, 0)
+	if waiting > 0 {
+		slog.Info("account deletion: steps of purges are waiting for the agent runtime or the CLI workers to be on", "steps", waiting)
+	}
+	return err
+}
+
+// Maintain does, every interval until ctx ends, what must go on without a restart: the recorded
+// steps that aren't done, and the purge job of an account whose tries ran out or whose job was lost
+// (Reconcile), so a purge that failed is tried again for as long as it takes.
+func (s *Service) Maintain(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := s.Reconcile(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("account deletion: scheduling a purge failed; it is tried again", "err", err)
+			}
+			if err := s.RunCleanups(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
+			}
+		}
+	}
+}

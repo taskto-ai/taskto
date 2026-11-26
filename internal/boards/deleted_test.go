@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
+
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/auth"
 )
 
 // A card whose assignee's account was deleted has no assignee id (the schema sets it null) and
@@ -49,7 +53,7 @@ func TestACardWhoseAssigneeWasDeletedSaysSoUntilItIsAssigned(t *testing.T) {
 	}
 }
 
-func TestAnonymizeMentionsRewritesOnlyTheLabelsOfThatPerson(t *testing.T) {
+func TestAnonymizeMentionsRewritesOnlyTheMentionsOfThatPerson(t *testing.T) {
 	w := newWorld(t)
 	b := w.createBoard(w.alice, w.shared, "Work")
 	c := w.createCard(w.alice, w.shared, b, map[string]any{"title": "Ship it"})
@@ -58,6 +62,8 @@ func TestAnonymizeMentionsRewritesOnlyTheLabelsOfThatPerson(t *testing.T) {
 		fmt.Sprintf("again @[Bob](user:%d), @[Bob](user:%d)", w.bob.id, w.bob.id),
 		fmt.Sprintf("in code: `@[Bob](user:%d)` is still the person's label", w.bob.id),
 		fmt.Sprintf("another person's id that starts the same: @[Bo](user:%d0)", w.bob.id),
+		// The same number written with zeros in front is the same person.
+		fmt.Sprintf("padded @[Bob Smith](user:%03d) and @[Bob](user:0%d)", w.bob.id, w.bob.id),
 		"nobody",
 	}
 	ids := make([]int64, len(bodies))
@@ -79,12 +85,14 @@ func TestAnonymizeMentionsRewritesOnlyTheLabelsOfThatPerson(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	// The mention goes to an ID no account has, so it can never name whoever is given Bob's number.
 	want := []string{
-		fmt.Sprintf("thanks @[Deleted user](user:%d) and @[Alice](user:%d)", w.bob.id, w.alice.id),
-		fmt.Sprintf("again @[Deleted user](user:%d), @[Deleted user](user:%d)", w.bob.id, w.bob.id),
+		fmt.Sprintf("thanks @[Deleted user](user:0) and @[Alice](user:%d)", w.alice.id),
+		"again @[Deleted user](user:0), @[Deleted user](user:0)",
 		// Code isn't a mention, but it holds a name the writer typed: it is the person's all the same.
-		fmt.Sprintf("in code: `@[Deleted user](user:%d)` is still the person's label", w.bob.id),
+		"in code: `@[Deleted user](user:0)` is still the person's label",
 		bodies[3],
+		"padded @[Deleted user](user:0) and @[Deleted user](user:0)",
 		"nobody",
 	}
 	for i, id := range ids {
@@ -96,7 +104,74 @@ func TestAnonymizeMentionsRewritesOnlyTheLabelsOfThatPerson(t *testing.T) {
 			t.Errorf("comment %d = %q, want %q", i, got, want[i])
 		}
 	}
-	if n != 3 {
-		t.Errorf("changed %d comments, want 3", n)
+	if n != 4 {
+		t.Errorf("changed %d comments, want 4", n)
 	}
+	// None of the rewritten ones tells anyone, or resolves to a person.
+	for _, i := range []int{0, 1, 4} {
+		for _, id := range Mentions(want[i]) {
+			if id == w.bob.id {
+				t.Errorf("comment %d still mentions Bob", i)
+			}
+			if id == 0 {
+				t.Errorf("comment %d mentions the placeholder as a person", i)
+			}
+		}
+	}
+}
+
+// A deleted account's mentions name no one afterwards, and the number is never given to whoever
+// registers next: the comment that mentioned the newest account can't come to mention the account
+// that takes its place.
+func TestADeletedAccountsMentionsNeverResolveToALaterAccount(t *testing.T) {
+	w := newWorld(t)
+	late := w.e.join(w.owner, w.ws, "Late", auth.RoleMember)
+	w.e.addMember(w.owner, w.shared, late, access.RoleEditor)
+	var newest int64
+	if err := w.e.db.QueryRow(`SELECT max(id) FROM users`).Scan(&newest); err != nil || newest != late.id {
+		t.Fatalf("fixture: the newest account is %d, %v; want %d", newest, err, late.id)
+	}
+	rewritten := w.commentTo(w.alice, w.teamCard, fmt.Sprintf("hello @[Late](user:%d) and @[Bob](user:%d)", late.id, w.bob.id))
+	// One the purge didn't see (made by a stale writer after it, say) still holds the old number.
+	untouched := fmt.Sprintf("a stale @[Late](user:%d)", late.id)
+
+	// What the purge does to the person's account, in its last transaction.
+	tx, err := w.e.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AnonymizeMentions(context.Background(), tx, late.id, "Deleted user"); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`DELETE FROM spaces WHERE owner_id = ?`, `DELETE FROM conversations WHERE owner_id = ?`, `DELETE FROM users WHERE id = ?`} {
+		if _, err := tx.Exec(q, late.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.db.Exec(`INSERT INTO card_comments (card_id, author_id, body) VALUES (?, ?, ?)`, w.teamCard.ID, w.alice.id, untouched); err != nil {
+		t.Fatal(err)
+	}
+
+	next := w.e.join(w.owner, w.ws, "Newcomer", auth.RoleMember)
+	w.e.addMember(w.owner, w.shared, next, access.RoleEditor)
+	if next.id <= late.id {
+		t.Fatalf("the next account got id %d, which is not above the deleted one's %d", next.id, late.id)
+	}
+	for _, c := range w.card(w.alice, w.shared, w.teamCard).Comments {
+		for _, m := range c.Mentions {
+			if m.ID == next.id || m.Name == "Newcomer" || m.Name == "Late" {
+				t.Errorf("comment %q mentions %+v after the account was deleted", c.Body, m)
+			}
+		}
+		if strings.Contains(c.Body, "Late") && c.Body != untouched {
+			t.Errorf("a comment still carries the deleted person's name: %q", c.Body)
+		}
+	}
+	if got := w.card(w.alice, w.shared, w.teamCard).Comments[0].Body; got != fmt.Sprintf("hello @[Deleted user](user:0) and @[Bob](user:%d)", w.bob.id) {
+		t.Errorf("the rewritten comment reads %q", got)
+	}
+	_ = rewritten
 }

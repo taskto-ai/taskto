@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { type DeletionStatus, type Me, type Member, type PendingDeletion, SESSION_LOST, type Workspace } from '../api'
 import { takeDeletion } from '../auth/deleted'
 import { type Call, fakeFetch } from '../test/fakes'
-import { answer, chooseFromMenu } from '../test/ui'
+import { answer } from '../test/ui'
 import { SettingsPage } from './SettingsPage'
 
 const me = (operator: boolean): Me => ({
@@ -139,40 +139,37 @@ const member = (over: Partial<Member>): Member => ({
   ...over,
 })
 
-test('an admin deletes a member after a question, and the row shows when it is purged', async () => {
-  let people = [member({ id: 1, name: 'Owner', email: 'owner@example.com', role: 'admin' }), member({})]
+test('an admin has no action that deletes a member’s account: only the person deletes theirs', async () => {
+  const people = [
+    member({ id: 1, name: 'Owner', email: 'owner@example.com', role: 'admin' }),
+    member({}),
+    member({ id: 3, name: 'Bob', email: 'bob@example.com', disabled: true, deletion_at: '2026-12-08T10:00:00.000Z' }),
+  ]
   const calls = fakeFetch({
-    'GET /api/workspaces/1/members': () => ({ body: { members: people } }),
+    'GET /api/workspaces/1/members': { body: { members: people } },
     'GET /api/workspaces/1/invites': { body: { invites: [] } },
     'GET /api/login/methods': { body: { password: true } },
-    'POST /api/workspaces/1/members/2/deletion': () => {
-      people = people.map((p) => (p.id === 2 ? { ...p, disabled: true, deletion_at: '2026-12-08T10:00:00.000Z' } : p))
-      return { status: 202, body: { purge_at: '2026-12-08T10:00:00.000Z' } }
-    },
   })
   render(<SettingsPage me={me(false)} workspace={admin} tab="members" />)
-  const row = async () => (await screen.findByText('alice@example.com')).closest('tr') as HTMLElement
+  await screen.findByText('alice@example.com')
 
-  // Not for yourself.
-  await screen.findByText('owner@example.com')
-  expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
-
-  await row()
-  chooseFromMenu('More actions for Alice', 'Delete account')
-  expect(sent(calls, 'POST', '/api/workspaces/1/members/2/deletion')).toHaveLength(0)
-  within(await screen.findByRole('alertdialog', { name: 'Delete account Alice' })).getByText(
-    /shared spaces stays, as “Deleted user”/,
-  )
-  await answer('Yes, delete the account')
-  await within(await row()).findByText(/Deleting on/)
-  // While it waits, the account has no menu entries that would act on it, but removing it.
+  // Not in the menu of an ordinary member, of one who is waiting to be deleted, nor anywhere else:
+  // an admin can remove a member from the workspace, and that is all they can do about the account.
   fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
-  expect(screen.queryByRole('menuitem', { name: 'Delete account' })).toBeNull()
+  expect(screen.getByRole('menuitem', { name: 'Remove' })).toBeTruthy()
+  expect(screen.queryByRole('menuitem', { name: /Delete account/ })).toBeNull()
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Remove' }), { key: 'Escape' })
+  // The row of an account that waits to be deleted shows when, with nothing to act on it but removing.
+  const row = screen.getByText('bob@example.com').closest('tr') as HTMLElement
+  await within(row).findByText(/Deleting on/)
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Bob' }))
+  expect(screen.queryByRole('menuitem', { name: /Delete account/ })).toBeNull()
   expect(screen.queryByRole('menuitem', { name: 'Enable' })).toBeNull()
   expect(screen.queryByRole('menuitem', { name: 'Disable' })).toBeNull()
   // A plain admin sees no list of waiting accounts: that is the operator's.
   expect(screen.queryByRole('heading', { name: 'Accounts waiting to be deleted' })).toBeNull()
   expect(sent(calls, 'GET', '/api/workspaces/1/account-deletions')).toHaveLength(0)
+  expect(calls.filter((c) => c.path.endsWith('/deletion'))).toHaveLength(0)
 })
 
 test('an operator sees every account waiting to be deleted and cancels one', async () => {
@@ -182,14 +179,12 @@ test('an operator sees every account waiting to be deleted and cancels one', asy
       requested_at: '2026-11-24T10:00:00.000Z',
       purge_at: '2026-12-08T10:00:00.000Z',
       purging: false,
-      by_self: true,
     },
     {
       user: { id: 3, email: 'bob@example.com', name: 'Bob' },
       requested_at: '2026-11-01T10:00:00.000Z',
       purge_at: '2026-11-15T10:00:00.000Z',
       purging: true,
-      by_self: false,
     },
   ]
   const calls = fakeFetch({
@@ -208,9 +203,9 @@ test('an operator sees every account waiting to be deleted and cancels one', asy
   const list = await screen.findByRole('list', { name: 'Accounts waiting to be deleted' })
   const alice = within(list).getByText('Alice').closest('li') as HTMLElement
   const bob = within(list).getByText('Bob').closest('li') as HTMLElement
-  expect(within(alice).getByText(/deleted by themselves/)).toBeTruthy()
+  expect(within(alice).getByText(/Purged on/)).toBeTruthy()
   // Once the purge has begun it can no longer be cancelled, and the list says so.
-  expect(within(bob).getByText(/Being purged now, deleted by an admin/)).toBeTruthy()
+  expect(within(bob).getByText(/Being purged now/)).toBeTruthy()
   expect(within(bob).queryByRole('button')).toBeNull()
 
   fireEvent.click(within(alice).getByRole('button', { name: 'Cancel deletion Alice' }))
