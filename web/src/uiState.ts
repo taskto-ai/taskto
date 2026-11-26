@@ -78,10 +78,16 @@ export function writeDraft(key: string | null, value: string | null): void {
 // forgetDrafts removes every unsent message and builder session kept in this browser, and this
 // page's claim on them.
 export function forgetDrafts(): void {
-  owner = null
-  setOperationUser(null)
   // The app submissions still waiting for an answer hold what was typed in them: they go too.
   forgetOperations()
+  clearDrafts()
+}
+
+// The browser's drafts and claim, without this tab's pending submissions (which claimDrafts sorts by
+// account itself).
+function clearDrafts(): void {
+  owner = null
+  setOperationUser(null)
   try {
     const keys: string[] = []
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -124,7 +130,7 @@ export function forgetDraftsOf(user: number): void {
 // claimDrafts keeps the drafts in this browser for user, forgetting them first if they were
 // someone else's.
 export function claimDrafts(user: number): void {
-  if (claimed() !== String(user)) forgetDrafts()
+  if (claimed() !== String(user)) clearDrafts()
   // The pending submissions are this tab's own (session storage), which the browser-wide claim
   // above doesn't see: another account's are removed whatever it says. A person signed out by a 401
   // keeps theirs on the login screen until someone signs in: their own again, or removed then.

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Consent, Me, ProviderAccount, SearchSettings, Space, SpaceMember, Token, Workspace } from '../api'
 import { setPreferences } from '../i18n'
-import { beginSession, endSession } from '../session'
+import { beginSession, endSession, resetSession } from '../session'
 import { type Call, fakeFetch } from '../test/fakes'
 import { answer, chooseFromMenu } from '../test/ui'
 import { resetToasts } from '../ui/Toast'
@@ -35,6 +35,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  // No session of one test reaches the next.
+  resetSession()
   act(() => resetToasts())
   vi.unstubAllGlobals()
 })
@@ -1283,7 +1285,7 @@ test('the new-token dialog stays open while the token is being made, so its one 
 for (const ending of ['the person leaves the tab', 'the session ends'] as const) {
   test(`an export that answers after ${ending} doesn't take the tab to its download`, async () => {
     const assign = stubAssign()
-    let answer: () => void = () => {}
+    let answer: (() => void) | null = null
     fakeFetch({
       'POST /api/workspaces/1/export': () =>
         new Promise((done) => {
@@ -1293,9 +1295,11 @@ for (const ending of ['the person leaves the tab', 'the session ends'] as const)
     beginSession(1)
     const { unmount } = render(<SettingsPage me={me} workspace={member} tab="data" />)
     fireEvent.click(screen.getByRole('button', { name: 'Download my data' }))
+    // The export has started: its request is on its way.
+    await waitFor(() => expect(answer).not.toBeNull())
     if (ending === 'the person leaves the tab') unmount()
     else endSession()
-    await act(async () => answer())
+    await act(async () => answer?.())
     await new Promise((r) => setTimeout(r, 20))
     expect(assign).not.toHaveBeenCalled()
   })

@@ -159,3 +159,28 @@ test("forgetting an account's drafts forgets its pending app submissions, and no
   }).catch(() => {})
   expect(again).not.toBe(first)
 })
+
+// Another account claimed the browser's drafts in another tab, then this tab's person signs in here
+// again: their submission still waiting for an answer keeps its key, so pressing it again can't make it
+// twice.
+test("a claim that changes hands keeps the claiming account's pending submissions", async () => {
+  const unknown = () => Promise.reject(new ApiError(502, 'bad gateway'))
+  const press = { name: 'add', context: { amount: '3' } }
+  claimDrafts(1)
+  let first = ''
+  await withOperation('app-1', press, (op) => {
+    first = op
+    return unknown()
+  }).catch(() => {})
+  // Another tab: the second person claims the drafts.
+  localStorage.setItem('taskto:drafts-of', '2')
+  claimDrafts(1)
+  expect(sessionStorage.getItem('taskto:operations:1')).toContain(first)
+  let again = ''
+  await withOperation('app-1', press, (op) => {
+    again = op
+    return unknown()
+  }).catch(() => {})
+  expect(again).toBe(first)
+  forgetDrafts()
+})

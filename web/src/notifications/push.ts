@@ -304,6 +304,10 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   if (sub) {
     await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
     s.check(undefined)
+    // Asked at the moment it would be ended: another account (another tab, where the order of
+    // changes isn't kept) may have claimed the browser's subscription meanwhile. It is theirs then,
+    // with their flag; this account's turning off is done with the server's answer.
+    if (someoneElses(who)) return
     if (!(await unsubscribe(sub).catch(() => false))) throw new PushUnsubscribeFailed()
     s.check(undefined)
   }
@@ -332,6 +336,9 @@ export async function leavePush(userId: number): Promise<void> {
   if (!theirs()) write(null)
   const leave = () =>
     withPushLock(async () => {
+      // Its turn may come after another account's claim failed and gave the flag back to this one:
+      // the sign-out has the last word on it, unless a session began here since.
+      if (!theirs() && mine()) write(null)
       const sub = await (await registration())?.pushManager.getSubscription()
       if (!sub || !mine() || theirs()) return
       await unsubscribe(sub).catch(() => {})

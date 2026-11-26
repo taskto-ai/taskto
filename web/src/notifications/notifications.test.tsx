@@ -1295,3 +1295,49 @@ test('waiting for a turn to change push is bounded, and the turn held by a chang
     vi.useRealTimers()
   }
 })
+
+test('turning push off never ends a subscription another account claimed while the server answered', async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  let answer: () => void = () => {}
+  fakeFetch({
+    'DELETE /api/me/push/subscription': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 204 })
+      }),
+  })
+  const off = disablePush()
+  await vi.waitFor(() => expect(localStorage.getItem('taskto.push')).toBe('1'))
+  await new Promise((r) => setTimeout(r, 0))
+  // Another tab, without Web Locks to order it: the second person turns push on with it.
+  localStorage.setItem('taskto.push', '2')
+  answer()
+  await off
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+})
+
+test("a sign-out's turn after another account's failed turning on leaves no opt-in of the departing account", async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  let refuse: () => void = () => {}
+  fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+      }),
+  })
+  // The second person turns push on; the flag is theirs while it registers.
+  beginSession(2)
+  const on = enablePush(2).catch(() => {})
+  await vi.waitFor(() => expect(localStorage.getItem('taskto.push')).toBe('2'))
+  // The first person's sign-out (from another tab) comes now: the flag isn't theirs, so it waits its turn.
+  const leaving = leavePush(1)
+  // The second person's turning on fails, and gives the flag back as it found it.
+  refuse()
+  await on
+  await leaving
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+})
