@@ -81,7 +81,8 @@
         "create_card": "Create a card",
         "update_card": "Move a card",
         "create_document": "Create a document",
-        "open_route": "Open a place"
+        "open_route": "Open a place",
+        "create_payment_link": "Create a payment link"
       },
       "status": {
         "pending": "Waiting",
@@ -971,6 +972,15 @@
     "integration_currency_invalid": "Choose 1 to {max} currencies from the list.",
     "too_many_integrations": "You can have at most {max} integrations in a workspace: remove one first.",
     "integration_in_use": "An app still uses this integration: switch it off instead of removing it.",
+    "app_integration_unapproved": "An admin hasn't approved what this app asks of the integration \"{slot}\" in its current form, or the integration it was connected to is switched off or no longer allowed in this space. Ask an admin to approve it.",
+    "app_integration_slot_unknown": "This draft doesn't declare an integration called \"{slot}\".",
+    "app_integration_contract_changed": "The app changed since you read what it asks of the integration. Read it again and ask for that.",
+    "app_integration_not_pending": "This request was already decided.",
+    "app_integration_not_approved": "Only an approval can be revoked.",
+    "app_integration_approval_not_found": "Approval request not found.",
+    "app_integration_kind_mismatch": "This integration can't be used for {kind}.",
+    "app_integration_disabled": "This integration is switched off.",
+    "app_integration_space_not_allowed": "This integration isn't allowed in the app's space yet.",
     "base_url_invalid": "Enter an http or https URL of up to {max} characters, without a query or fragment.",
     "base_url_credentials": "The URL can't contain a user name or password: put the key in the API key field.",
     "base_url_insecure": "Use https: a key is only sent over plain http to this machine.",
@@ -1645,6 +1655,9 @@
       "spacesHint": "Apps in the spaces you choose may use this account, once you approve them. Another person's private space can't be chosen.",
       "privateSpace": "{name} (private)",
       "archivedSpace": "{name} (archived)",
+      "approvalSpace": "{name} (by an app's approval)",
+      "approvalSpaceNote": "Allowed by an app's approval: it ends when the approval does, unless you keep it.",
+      "keepSpace": "Keep {name} after the approval ends",
       "otherSpaces_one": "And {count} private space of another member, which you can't see.",
       "otherSpaces_other": "And {count} private spaces of other members, which you can't see.",
       "removeQuestion": "Remove {name}? Its credentials are deleted with it."
@@ -1937,6 +1950,11 @@
         "integration_disabled": "Integration switched off",
         "integration_enabled": "Integration switched on",
         "integration_spaces_changed": "Integration's spaces changed",
+        "integration_spaces_kept": "Integration's spaces kept after an approval",
+        "app_integration_requested": "App's use of an integration requested",
+        "app_integration_approved": "App's use of an integration approved",
+        "app_integration_rejected": "App's use of an integration turned down",
+        "app_integration_revoked": "App's use of an integration revoked",
         "data_export_started": "Data export started",
         "workspace_export_started": "Workspace export started",
         "server_update_requested": "Update requested",
@@ -1953,7 +1971,8 @@
         "access_token": "Access token",
         "provider_account": "Model provider account",
         "shared_cli_account": "Shared CLI account",
-        "integration": "Integration"
+        "integration": "Integration",
+        "app_integration_approval": "App integration approval"
       },
       "details": {
         "account": "Account",
@@ -1993,9 +2012,13 @@
         "user_id": "Member number",
         "added": "Spaces added",
         "removed": "Spaces removed",
+        "kept": "Spaces kept",
         "mode": "Mode",
         "webhook_secret_set": "Webhook secret set",
-        "webhook_secret_changed": "Webhook secret changed"
+        "webhook_secret_changed": "Webhook secret changed",
+        "app_id": "App number",
+        "integration_id": "Integration number",
+        "space_allowed": "Space allowed too"
       },
       "values": {
         "admin": "Admin",

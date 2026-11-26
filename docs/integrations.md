@@ -23,11 +23,15 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
   adapter's hosts ([Egress](#egress)).
 - **Audit events** for every change ([audit.md](audit.md)).
 
-Nothing calls a provider yet: no payment link is made, no event is received and no app can
-name an integration. Those arrive as separate changes, in this order: the declaration in an
-app's definition with the admin's approval of its contract; the payment link; the webhook and
-its verification; applying a payment to a record; polling the provider for payments the
-webhook missed. The rules below are the ones those changes have to keep.
+- **Slots in an app's definition**, the **contract** the server works out from them and the
+  **approval** by an admin of that contract's hash, which a publish and a rollback need
+  ([Apps and approval](#apps-and-approval)).
+
+Nothing calls a provider yet: no payment link is made, no event is received, and a
+`create_payment_link` effect that an app declares does nothing when an action runs. Those arrive
+as separate changes, in this order: the payment link; the webhook and its verification; applying a
+payment to a record; polling the provider for payments the webhook missed. The rules below are the
+ones those changes have to keep.
 
 ## Concepts
 
@@ -36,11 +40,12 @@ webhook missed. The rules below are the ones those changes have to keep.
 | **Provider** | An entry of the registry in Go (`stripe`, `square`): the secrets and settings it needs, its fixed API hosts, the kinds it implements. |
 | **Kind** | A closed class of operations an app may use. Today `payments`: create a payment link, and four normalized events (`payment.succeeded`, `payment.expired`, `payment.failed`, `payment.refunded`). |
 | **Integration** | A workspace admin's connection to one provider account: sealed secrets, settings, limits, the spaces that may use it, and a random `public_id` for its webhook address. |
-| **Slot** | (To come.) A name in an app's definition (`payments`) of a kind. It holds no id and no secret; the admin binds it to an integration when approving the app. |
-| **Contract** | (To come.) What the server derives from an app's draft for one slot: what it sends out and which fields the provider's events may write. An admin approves one by its hash. |
+| **Slot** | A name in an app's definition (`payments`) of a kind. It holds no id and no secret; the admin binds it to an integration when approving the app. |
+| **Contract** | What the server derives from an app's draft for one slot: what it sends out and which fields the provider's events may write. An admin approves one by its hash. |
+| **Approval** | An admin's decision, for one app, slot and contract hash, naming the integration the slot uses. |
 
-An app will never name a provider or an integration, and nothing in a definition, an action or
-an effect will hold a URL, a header, a method, a body, a secret or a limit. The providers are a
+An app never names a provider or an integration, and nothing in a definition, an action or
+an effect holds a URL, a header, a method, a body, a secret or a limit. The providers are a
 closed registry, not data: an operator, an admin or an app can't add one.
 
 ## Providers
@@ -105,6 +110,10 @@ validated in Go.
   lists only the allowed spaces the caller manages, and counts the others. A change of the
   list changes only the caller's own subset, so one admin can't take away another's private
   space. The database refuses an allowance across workspaces, on insert and on update.
+- A space an app's approval allowed (the admin ticked "allow the space" when approving) is the
+  approval's: it is marked in the integration's settings and goes with the approval. Saving the
+  settings' list never makes it the admin's; only naming it in `keep`, which the settings offer
+  as "Keep after the approval ends", does, and that is an audit event of its own.
 - Anyone who can read a space sees which integrations are allowed there, with a name, kind and
   status. No secret, no webhook address, no limit, no provider.
 - The name, provider and workspace of an integration, and its `public_id`, never change (the
@@ -125,6 +134,66 @@ An integration is **usable** in a space when it exists in the workspace, isn't s
 the space is allowed. `Service.Usable` is that question, and the code that calls a provider for
 an app asks it at every call, so switching an integration off or removing a space stops the
 app at once. Removing an integration is refused while an approval of an app names it.
+
+## Apps and approval
+
+An app declares what it uses of an outside service in the `integrations` block of its definition
+([api.md](api.md#integrations-of-an-app)), strictly checked when it is saved: a slot of a kind, the
+effect that asks for a payment link, and for each event of the kind the fields it may set, with a
+literal or one of a closed list of values the server takes from the verified event. The definition
+has no place for a URL, a redirect, a header, a secret, a provider, an integration id or a limit;
+those are the admin's, on the integration.
+
+**The contract** is computed by the server from the draft, never sent by a client: the kind, the
+operations the app asks for, the record fields it sends out (names only), the currencies, the events
+it handles, for each field the integration may write the literals and sources it may write, and the
+rules that gate them, for each payment link the action that asks and what it does (insert, update
+or delete: it decides who may trigger it), its amount, its currency, its `when` and whether its
+description names the record's id, and the constraints of every field the integration reads, writes
+or is gated by (type, whether it is required, length, bounds, options, a barcode's format, whether a
+captured value may be replaced, and an attachment's limits), and the fields those depend on through a
+`required_when`, followed all the way. It has no wording, so a
+changed description that names the same fields needs no new approval; sending another field or the
+record's id, writing another field or value, writing a value in another event, asking in another
+currency or from another action, changing what the action does, loosening a field's constraints
+(a higher maximum, another option, no barcode format), dropping a `when`, or loosening a rule does. Its
+SHA-256 is the contract's **hash**.
+
+**Approval is by hash, through a queue.**
+
+1. The person who may publish the app reads the slot's contract and **requests** its approval,
+   naming the hash they read; the request is refused if the slot's contract hash has changed since.
+2. A workspace admin sees the queue: the app's and its space's names, who asked and the
+   contract. Nothing of the app or its records is in it, which is why an app in another person's
+   private space, which an admin can't open, is approved the same way.
+3. The admin **approves**, choosing an integration of the workspace of the right kind that is switched
+   on, or **rejects**. Approving may also allow the app's space for the integration when the admin
+   says so: the space is the one the request is in, which an admin can't otherwise allow when it is
+   another person's private space. Approving a request is how they consent to that app using the
+   integration there. The space stays allowed while an approval needs it: revoking the last approval
+   that allowed it takes it back (as does the app's moving or deletion), while a space an admin
+   allowed in the integration's settings stays.
+   A contract asked for again after a rejection or a revocation is a new request, with its own id and
+   its own place in the queue; the old one keeps its decision.
+4. **Publish and rollback refuse** (`app_integration_unapproved`) a release with a slot whose contract
+   has no approval whose integration is still switched on and allowed in the space. The check runs
+   under the write lock, next to the check of the effects' targets. A rollback is checked for the
+   release it returns to.
+5. The code that uses an integration for an app asks again each time (`Service.Binding`): the app is
+   online, its live release declares the slot, that release's contract is approved, the integration is
+   on and the space allowed. An admin who **revokes** an approval, switches the integration off or
+   removes the space stops the app's use of the integration at once; the app stays online.
+
+An approval is for the next draft as much as the live release: the live release's stays approved
+while the draft's is decided. In a one-person install the publisher is the admin: requesting,
+approving and publishing are the same person's three calls, which the web app will offer as one
+"approve and publish" step.
+
+**Copies carry nothing.** Approvals belong to an app, not to a definition. A duplicate and an
+installed template have the slots and no approval, and can't be published until their own contract
+is approved, so a template works with whichever integration the admin binds. Moving an app to
+another space deletes its approvals, as it drops its roles: they were given for the old space.
+Records, and in later changes payments and events, are never copied.
 
 ## Checking a connection
 
