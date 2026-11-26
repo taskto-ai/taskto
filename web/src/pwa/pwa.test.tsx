@@ -75,7 +75,7 @@ test('an update that installs while the app runs prompts, and reloads nothing by
     ;(next.worker as { state: string }).state = 'installed'
     next.handlers.statechange()
   })
-  expect(screen.getByRole('status').textContent).toContain('A new version of TaskTo.AI is ready')
+  expect(screen.getByRole('status').textContent).toContain('A new version of taskto.ai is ready')
   expect(next.worker.postMessage).not.toHaveBeenCalled()
   expect(reload).not.toHaveBeenCalled()
 })
@@ -159,7 +159,7 @@ test('on iOS, the guidance is Add to Home Screen, with no install button', () =>
   render(<InstallPanel />)
   expect(screen.getByRole('heading', { name: 'Install the app' })).toBeTruthy()
   expect(screen.getByText(/Add to Home Screen/)).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Install TaskTo.AI' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Install taskto.ai' })).toBeNull()
 })
 
 test('on Android without a prompt, the guidance is the browser menu', () => {

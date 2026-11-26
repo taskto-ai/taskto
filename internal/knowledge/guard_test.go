@@ -47,21 +47,21 @@ func TestPutIfRunsItsGuardUnderTheWriteLockAndStopsTheCommit(t *testing.T) {
 func TestFindCommitFindsAChangeByItsMessageWhateverBecameOfTheDocument(t *testing.T) {
 	s, _ := newStore(t, Options{})
 	sp := writable(1)
-	agent := Author{Name: "Alice", Email: "alice@example.com", Agent: "TaskTo app"}
+	agent := Author{Name: "Alice", Email: "alice@example.com", Agent: "taskto app"}
 	made := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("x"), "", agent, "Created by an app [effect 1/2]"))
 	must[Result](t)(s.Put(ctx, sp, "a.md", []byte("edited"), made.Doc.Version, alice, "edit"))
 	must[Result](t)(s.Move(ctx, sp, "a.md", "moved/a.md", "", alice, "move"))
 
-	c, ok, err := s.FindCommit(ctx, sp, "Created by an app [effect 1/2]", "TaskTo app")
+	c, ok, err := s.FindCommit(ctx, sp, "Created by an app [effect 1/2]", "taskto app")
 	if err != nil || !ok || c.Message != "Created by an app [effect 1/2]" {
 		t.Fatalf("found = %+v, %v, %v", c, ok, err)
 	}
 	// Another entry's, or one a person wrote with the same words, is not it.
-	if _, ok, _ := s.FindCommit(ctx, sp, "Created by an app [effect 1/3]", "TaskTo app"); ok {
+	if _, ok, _ := s.FindCommit(ctx, sp, "Created by an app [effect 1/3]", "taskto app"); ok {
 		t.Fatal("found another entry's commit")
 	}
 	must[Result](t)(s.Put(ctx, sp, "c.md", []byte("z"), "", alice, "Created by an app [effect 1/9]"))
-	if _, ok, _ := s.FindCommit(ctx, sp, "Created by an app [effect 1/9]", "TaskTo app"); ok {
+	if _, ok, _ := s.FindCommit(ctx, sp, "Created by an app [effect 1/9]", "taskto app"); ok {
 		t.Fatal("found a commit a person made")
 	}
 	// A space without a repository has no commits.

@@ -6,7 +6,7 @@
 // capabilities.test.ts keeps these names equal to the catalog's, and apps.test.tsx to the server's.
 
 // The version of the definition format this client reads (internal/apps DefinitionVersion), which
-// is TaskTo.AI's and has nothing to do with the A2UI protocol's.
+// is taskto.ai's and has nothing to do with the A2UI protocol's.
 export const DEFINITION_VERSION = 3
 
 // The kinds of effect an action may set going (internal/apps EffectKinds), which this client shows

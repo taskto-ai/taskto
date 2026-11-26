@@ -15,7 +15,7 @@ func (w *Worker) LayoutForTest() Layout { return w.cfg.Layout }
 // ApprovalSocketForTest exposes where the approval socket goes.
 var ApprovalSocketForTest = approvalSocket
 
-// ToolsReadOnlyForTest exposes the read-only policy for TaskTo's tools.
+// ToolsReadOnlyForTest exposes the read-only policy for taskto's tools.
 func ToolsReadOnlyForTest(t *Tools, cli CLI, tool string, input []byte) bool {
 	return t.readOnly(cli, tool, input)
 }

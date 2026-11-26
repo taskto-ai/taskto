@@ -158,7 +158,7 @@ builds and runs the Compose stack and calls a model.
   access code, only after signing in with a password only the test knows.
 - **The model.** It is a provider account of whoever runs the test, on an OpenAI-compatible gateway:
   `TASKTO_HANDOVER_E2E_BASE_URL`, `TASKTO_HANDOVER_E2E_KEY_FILE` and `TASKTO_HANDOVER_E2E_MODEL`.
-  The key goes from its file to TaskTo's API only. `TASKTO_HANDOVER_E2E_RELAY=1` relays TCP to the
+  The key goes from its file to taskto's API only. `TASKTO_HANDOVER_E2E_RELAY=1` relays TCP to the
   gateway from the host, for a Docker VM that can't reach it (a VM-based Docker and a gateway only on the LAN); TLS
   still ends at the gateway.
 - **The user.** Playwright drives the web app in Chromium:

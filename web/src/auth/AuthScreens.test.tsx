@@ -573,7 +573,7 @@ test('a reset whose two passwords differ says so under the second, and sends not
 test('before the login methods are known, the logo and a still form are shown, not a word alone', async () => {
   fakeFetch({ 'GET /api/login/methods': () => new Promise(() => {}) })
   render(<LoginScreen onDone={() => {}} />)
-  expect(screen.getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'taskto.ai' })).toBeTruthy()
   expect(screen.getByRole('main').getAttribute('aria-busy')).toBe('true')
   expect(screen.queryByRole('heading')).toBeNull()
   expect(screen.queryByLabelText('Password')).toBeNull()

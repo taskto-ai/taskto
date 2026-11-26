@@ -1,4 +1,4 @@
-# Contributing to TaskTo.AI
+# Contributing to taskto.ai
 
 Thanks for helping. Bug reports, fixes, docs, translations and features are all welcome.
 For anything larger than a fix, open an issue first so we can agree on the approach before
@@ -85,5 +85,5 @@ The app picks the file up by its name and lays right-to-left scripts out on its 
 
 ## Licence
 
-TaskTo.AI is under the [MIT licence](LICENSE). By contributing, you agree that your
+taskto.ai is under the [MIT licence](LICENSE). By contributing, you agree that your
 contribution is licensed under it too.

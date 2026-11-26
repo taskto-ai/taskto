@@ -11,7 +11,7 @@ import (
 )
 
 // Add-ons are programs the operator installs, from vendors whose licences keep them out of
-// this repository and its image. TaskTo only knows of them: their name, the notice to show
+// this repository and its image. taskto only knows of them: their name, the notice to show
 // before an admin turns one on, and the attribution to show while it is on. The operator
 // installs one at <addons_dir>/<id>/<entry>, and the server finds it at start.
 //
@@ -22,7 +22,7 @@ import (
 // language is known, and writes {"text": "…"} on standard output.
 const KindSpeechToText = "speech-to-text"
 
-// Addon is an add-on TaskTo knows of.
+// Addon is an add-on taskto knows of.
 type Addon struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -37,7 +37,7 @@ type Addon struct {
 	entry       string // the program's name in its folder
 }
 
-// Addons are the add-ons TaskTo knows of.
+// Addons are the add-ons taskto knows of.
 var Addons = []Addon{{
 	ID: "desertant-voz", Name: "Voz", Vendor: "Desert Ant Labs", Kind: KindSpeechToText,
 	LicenceName: "Desert Ant Labs Source-Available License 1.1", LicenceURL: "https://license.desertant.com/",

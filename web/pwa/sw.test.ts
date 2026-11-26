@@ -246,7 +246,7 @@ test('a push shows the brand and the words for its kind, tagged and carrying onl
   await sw.emit('push', pushOf({ id: 42, kind: 'card_assigned' }))
   expect(shown(sw)).toHaveLength(1)
   const [title, options] = shown(sw)[0] as [string, Record<string, unknown>]
-  expect(title).toBe('TaskTo.AI')
+  expect(title).toBe('taskto.ai')
   expect(options).toEqual({
     body: 'A card was assigned to you',
     tag: 'taskto-notification-42',
@@ -273,7 +273,7 @@ test('a push shows something whatever it carries: unknown kinds and unreadable d
   const calls = shown(sw) as [string, { body: string; tag: string; data: { id: number } }][]
   expect(calls).toHaveLength(6)
   for (const call of calls.slice(1)) {
-    expect(call[0]).toBe('TaskTo.AI')
+    expect(call[0]).toBe('taskto.ai')
     expect(call[1].body).toBe('Something changed')
   }
   // Data that isn't a notification's ID is never used as one, and nothing the push said but the

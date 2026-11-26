@@ -14,7 +14,7 @@ import (
 
 // Integrations (docs/integrations.md).
 //
-// An app may use a service outside TaskTo.AI, starting with payments, without ever naming one. It
+// An app may use a service outside taskto.ai, starting with payments, without ever naming one. It
 // declares a slot of a kind in Definition.Integrations ("payments", of the kind "payments"), and
 // effects and event handlers refer to the slot by name. What the slot is connected to (a provider
 // account, its keys, its limits) is a workspace admin's, bound when they approve the app's contract

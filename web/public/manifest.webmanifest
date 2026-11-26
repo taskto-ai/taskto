@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "TaskTo.AI",
-  "short_name": "TaskTo",
+  "name": "taskto.ai",
+  "short_name": "taskto",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

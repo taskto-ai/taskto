@@ -257,7 +257,7 @@ func (w *Worker) turnForHook(user int64, cli CLI, session string) (turn *Turn, u
 }
 
 // decide answers a hook's question for turn t: at once for an AllowAll turn, a read-only
-// TaskTo tool or a read-only PreToolUse call, or else by asking the owner.
+// taskto tool or a read-only PreToolUse call, or else by asking the owner.
 func (w *Worker) decide(t *Turn, h hookInput) (bool, string) {
 	if t.spec.Permissions == AllowAll {
 		return true, ""
@@ -265,7 +265,7 @@ func (w *Worker) decide(t *Turn, h hookInput) (bool, string) {
 	if h.Event != hookPermissionRequest && h.Event != hookPreToolUse {
 		return false, "unknown hook event " + strconv.Quote(cut(h.Event, 40))
 	}
-	// Claude Code asks about every MCP tool, read-only or not: TaskTo's read-only tools don't
+	// Claude Code asks about every MCP tool, read-only or not: taskto's read-only tools don't
 	// ask, whichever hook it is.
 	if t.spec.Tools.readOnly(t.spec.CLI, h.Tool, h.Input) {
 		return true, ""
@@ -301,7 +301,7 @@ func runApprove(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err == nil {
 		err = json.Unmarshal(in, &h)
 	}
-	reply := approveReply{Reason: "TaskTo's permission check failed"}
+	reply := approveReply{Reason: "taskto's permission check failed"}
 	if err == nil && len(args) == 2 {
 		reply, err = askWorker(args[0], CLI(args[1]), in)
 	} else if err == nil {
@@ -309,7 +309,7 @@ func runApprove(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "cli-approve:", err)
-		reply = approveReply{Reason: "TaskTo's permission check failed: " + err.Error()}
+		reply = approveReply{Reason: "taskto's permission check failed: " + err.Error()}
 	}
 	out := hookReply(h.Event, reply)
 	_, _ = stdout.Write(append(out, '\n'))

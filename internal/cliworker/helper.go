@@ -50,7 +50,7 @@ type helperRequest struct {
 	Slot Slot `json:"slot,omitempty"`
 	// Proxy, for a turn on a shared account (see TurnSpec.Proxy).
 	Proxy *Proxy `json:"proxy,omitempty"`
-	// Tools, for a turn with TaskTo's tools (see TurnSpec.Tools).
+	// Tools, for a turn with taskto's tools (see TurnSpec.Tools).
 	Tools     *Tools    `json:"tools,omitempty"`
 	Bin       string    `json:"bin,omitempty"`
 	Args      []string  `json:"args,omitempty"`

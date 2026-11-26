@@ -59,7 +59,7 @@ func TestSendWithSTARTTLSAndSignIn(t *testing.T) {
 	if subject != "Olá, mundo" {
 		t.Fatalf("subject = %q", subject)
 	}
-	if from := msg.Header.Get("From"); !strings.Contains(from, "taskto@example.com") || !strings.Contains(from, "TaskTo") {
+	if from := msg.Header.Get("From"); !strings.Contains(from, "taskto@example.com") || !strings.Contains(from, "taskto") {
 		t.Fatalf("From = %q", from)
 	}
 	if msg.Header.Get("Message-ID") == "" || msg.Header.Get("Date") == "" || msg.Header.Get("Auto-Submitted") != "auto-generated" {
@@ -343,7 +343,7 @@ func TestNewSMTPChecksItsSettings(t *testing.T) {
 }
 
 func TestInfoNeverHoldsThePassword(t *testing.T) {
-	m, _ := NewSMTP(SMTPConfig{Host: "smtp.example.com", From: "TaskTo <t@example.com>", Username: "user-x", Password: "pw-y"})
+	m, _ := NewSMTP(SMTPConfig{Host: "smtp.example.com", From: "taskto <t@example.com>", Username: "user-x", Password: "pw-y"})
 	info := m.Info()
 	if !info.SignsIn || info.Host != "smtp.example.com" || info.Port != 587 {
 		t.Fatalf("%+v", info)

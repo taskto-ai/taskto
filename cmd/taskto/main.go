@@ -1,4 +1,4 @@
-// Command taskto is the single TaskTo.AI binary.
+// Command taskto is the single taskto.ai binary.
 package main
 
 import (

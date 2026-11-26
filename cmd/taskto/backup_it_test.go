@@ -121,7 +121,7 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 	})
 	itWaitListening(t, restAddr)
 
-	// The TaskTo.AI server's side: the append-only user, as compose.yaml's backup service.
+	// The taskto.ai server's side: the append-only user, as compose.yaml's backup service.
 	repoURL := fmt.Sprintf("http://%s:%s@%s/%s/", itRestUser, itRestPassword, restAddr, itRestUser)
 	server := itResticEnv(dir, "rest:"+repoURL, "TASKTO_DATA_DIR="+cfg.DataDir)
 	itRun(t, ctx, server, restic, "init")

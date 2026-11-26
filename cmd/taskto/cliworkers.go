@@ -29,7 +29,7 @@ import (
 // that ends every CLI turn and login. Off, the service only says so.
 //
 // In local mode the worker runs in this process: the CLIs on the PATH run as the server's
-// own OS user, each TaskTo user in their own directories under <data>/cli/. That separates
+// own OS user, each taskto user in their own directories under <data>/cli/. That separates
 // sessions and settings, not secrets, which is why the service refuses the CLIs as soon as
 // a second user exists (unless the mode is local-unsafe).
 func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key *serverkey.Key) (*cliaccounts.Service, func() error, error) {
@@ -238,7 +238,7 @@ func listenProxySocket(ctx context.Context, path string) (net.Listener, error) {
 	return ln, nil
 }
 
-// enableCLITools gives the CLIs of conversations' turns TaskTo's tools (docs/cli-tools.md): the
+// enableCLITools gives the CLIs of conversations' turns taskto's tools (docs/cli-tools.md): the
 // MCP endpoint for turns on the proxy's listener, the browser's tools with it while the agent
 // browser is on. Without the proxy's listener the CLIs can't reach it, and turns get none.
 func enableCLITools(cfg config.Config, cli *cliaccounts.Service, tools *agenttools.Service) {
@@ -261,7 +261,7 @@ func enableCLITools(cfg config.Config, cli *cliaccounts.Service, tools *agenttoo
 		ReadOnly: readOnly,
 	})
 	if !cli.ToolsReachable() {
-		slog.Warn("CLI turns get no TaskTo tools: the per-turn proxy has no listener (-cli-proxy-listen, -cli-proxy-url)")
+		slog.Warn("CLI turns get no taskto tools: the per-turn proxy has no listener (-cli-proxy-listen, -cli-proxy-url)")
 	}
 }
 

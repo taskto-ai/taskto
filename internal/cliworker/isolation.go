@@ -3,7 +3,7 @@ package cliworker
 // minUIDBase is the lowest first uid the worker accepts.
 const minUIDBase = 65536
 
-// Isolation runs each TaskTo user's CLIs as a Unix user of their own: the worker's container
+// Isolation runs each taskto user's CLIs as a Unix user of their own: the worker's container
 // mode (docs/cli-workers.md). It needs Linux and a worker running as root (with CAP_SETUID,
 // CAP_SETGID, CAP_CHOWN and CAP_KILL at least).
 //
