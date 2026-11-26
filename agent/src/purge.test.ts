@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -154,8 +155,12 @@ describe('runPurge', () => {
       gap = Math.max(gap, now - last)
       last = now
     }, 10)
+    let report: unknown
     const settled = work.then(
-      () => undefined,
+      (value) => {
+        report = value
+        return undefined
+      },
       (error: unknown) => error,
     )
     void settled.then(() => {
@@ -172,7 +177,9 @@ describe('runPurge', () => {
     const took = performance.now() - began
     clearInterval(timer)
     db.close()
-    return { longest, gap, writes, took, error: await settled }
+    const error = await settled
+    // What the purge's own transactions took (lock, deleting, commit), to say which a stall was.
+    return { longest, gap, writes, took, error, report: JSON.stringify(report) }
   }
 
   it('waits for a reader off the calling thread, which keeps running meanwhile', async () => {
@@ -428,12 +435,12 @@ describe('runPurge', () => {
     writer.exec('COMMIT')
     settle(writer)
     try {
-      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000 }))
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000, report: true }))
       expect(probe.error).toBeUndefined()
       // A fixed bound on the longest stall, whatever the history's length: no transaction of the
       // purge grows with it (in one last transaction a write waited for nearly all of it).
-      expect(probe.longest).toBeLessThan(250)
-      expect(probe.gap).toBeLessThan(250)
+      expect(probe.longest, probe.report).toBeLessThan(250)
+      expect(probe.gap, probe.report).toBeLessThan(250)
       expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
       expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([{ id: 2 }])
     } finally {
@@ -887,10 +894,10 @@ describe('runPurge', () => {
     writer.exec('COMMIT')
     settle(writer)
     try {
-      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000 }))
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000, report: true }))
       expect(probe.error).toBeUndefined()
-      expect(probe.longest).toBeLessThan(250)
-      expect(probe.gap).toBeLessThan(250)
+      expect(probe.longest, probe.report).toBeLessThan(250)
+      expect(probe.gap, probe.report).toBeLessThan(250)
     } finally {
       reader.close()
       writer.close()
@@ -978,6 +985,27 @@ describe('runPurge', () => {
     await stopping
     await new Promise((r) => setTimeout(r, 200))
     expect(again).toBe(1)
+  })
+
+  // The checkpointer's thread doesn't keep a process alive: one that started it and has nothing
+  // else to do ends on its own.
+  it('lets the process end while the checkpointer runs', () => {
+    const { writer, reader } = fixture()
+    reader.close()
+    writer.close()
+    // A script of its own (not --eval: the worker would inherit --input-type and fail to start).
+    const purge = new URL('./purge.ts', import.meta.url).href
+    const script = join(dir, 'start.mjs')
+    writeFileSync(
+      script,
+      `import { startCheckpointer } from ${JSON.stringify(purge)}
+startCheckpointer(${JSON.stringify(path)}, 50, { started: () => console.log('started') })
+`,
+    )
+    const child = spawnSync(process.execPath, [script], { timeout: 10_000, encoding: 'utf8' })
+    expect(child.stdout).toContain('started')
+    expect(child.signal, child.stderr).toBeNull()
+    expect(child.status, child.stderr).toBe(0)
   })
 
   it('rejects with the failure of a purge that is not about the log', async () => {

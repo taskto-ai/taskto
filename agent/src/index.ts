@@ -54,12 +54,12 @@ import {
   Harness,
   type SubmissionId,
 } from '@earendil-works/pi-durable'
-import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
-import { HARNESS_DB_OPTIONS, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
+import { purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
+import { compactOnce, openHarnessStorage, recordFresh } from './storage.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
@@ -126,8 +126,12 @@ if (toolsSocket) {
 
 // The commits don't checkpoint the log (HARNESS_DB_OPTIONS): a thread of its own does, so a log a
 // purge or a reader let grow is never copied on this thread.
+// A database from before the harness's connection set secure_delete is compacted once, before the
+// harness opens it (storage.ts), so what was deleted then is gone from the file too.
+const compaction = compactOnce(dbPath as string)
+if (compaction === 'compacted') console.error('agent.db compacted once, so content deleted before is gone from it')
 const harness = await Harness.open(
-  await openNodeSqliteStorage(dbPath, HARNESS_DB_OPTIONS),
+  await openHarnessStorage(dbPath as string),
   {
     models,
     registry,
@@ -136,6 +140,7 @@ const harness = await Harness.open(
   },
   context,
 )
+if (compaction === 'fresh') recordFresh(dbPath as string)
 harness.resume() // synchronous: continue whatever the last process left unfinished
 startCheckpointer(dbPath as string)
 // A storage failure closes the Harness for good; exit so the supervisor starts a fresh process,
@@ -423,8 +428,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         console.error(`conversation ${num} purged`)
       } else {
         // Gone already, perhaps by an earlier purge that deleted the rows and couldn't truncate the
-        // log: what was said can still be in it, so done means the log is empty too.
-        await purgeOnce({ path: dbPath as string, timeoutMs: walBusyMs })
+        // log: what was said can still be in it, so done means the log is empty too. With the root
+        // all the same: a lifecycle document the server's retry wrote again for it (when this
+        // process still had it in memory, and then started again) goes too.
+        await purgeOnce({ path: dbPath as string, root: num, timeoutMs: walBusyMs })
       }
       res.writeHead(204).end()
       return

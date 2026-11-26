@@ -191,12 +191,22 @@ const SWEEP = 200
 /** How long one of the purge's transactions goes on deleting before it commits and pauses. */
 const SLICE_MS = 20
 
+/**
+ * How many pages one of the purge's transactions frees at most before it commits: each is written
+ * at the commit (overwritten with zeros, secure_delete), so this bounds the commit's work, as
+ * SLICE_MS bounds the deleting. Large records (a task's, an entry's) free a page or more each.
+ */
+export const SLICE_PAGES = 2048
+
+/** One short transaction's time, in ms: taking the write lock, the deleting, and the commit. */
+export type SliceTiming = { lock: number; work: number; commit: number; pages: number }
+
 /** What purgeRecords tells a test. */
 export type PurgeHooks = {
   /** Runs after each short transaction commits. */
   afterSlice?: () => void
-  /** Each short transaction's length, from taking the write lock to its commit, in ms. */
-  slice?: (ms: number) => void
+  /** Each short transaction's length, from taking the write lock to its commit, in ms, and its parts. */
+  slice?: (ms: number, timing: SliceTiming) => void
   /** The last transaction's length, from taking the write lock to its commit, in ms. */
   final?: (ms: number) => void
 }
@@ -234,24 +244,38 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
       root,
     )
     const step = sweepStep(db, root)
-    // Transactions of at most about SLICE_MS each, with a pause between them in which the harness's
-    // writes get the lock.
+    const freelist = db.prepare('PRAGMA freelist_count')
+    const freePages = () => Number((freelist.get() as { freelist_count: number | bigint }).freelist_count)
+    // Transactions of at most about SLICE_MS each and SLICE_PAGES freed, with a pause between them
+    // in which the harness's writes get the lock.
     for (let more = true; more; ) {
       const began = performance.now()
       db.exec('BEGIN IMMEDIATE')
+      const locked = performance.now()
+      let worked = locked
+      let freed = 0
       try {
-        while (performance.now() - began < SLICE_MS) {
+        const free = freePages()
+        while (performance.now() - locked < SLICE_MS && freed < SLICE_PAGES) {
           if (step() === 0) {
             more = false
             break
           }
+          freed = freePages() - free
         }
+        worked = performance.now()
         db.exec('COMMIT')
       } catch (error) {
         db.exec('ROLLBACK')
         throw error
       }
-      hooks?.slice?.(performance.now() - began)
+      const ended = performance.now()
+      hooks?.slice?.(ended - began, {
+        lock: locked - began,
+        work: worked - locked,
+        commit: ended - worked,
+        pages: freed,
+      })
       hooks?.afterSlice?.()
       sleep(PAUSE_MS)
     }
@@ -481,17 +505,44 @@ function discover(db: DatabaseSync, root: number, seen?: Tree): Tree {
 }
 
 /** What runPurge does: purge a conversation's records (root), or only truncate the log (no root). */
-export type PurgeJob = { path: string; timeoutMs: number; root?: number }
+export type PurgeJob = {
+  path: string
+  timeoutMs: number
+  root?: number
+  /** For tests: report the short transactions' times (runPurge's result). */
+  report?: boolean
+}
 
-type Outcome = { ok: true } | { ok: false; busy: boolean; message: string }
+/** The short transactions of a purge, for a test: how many, and the longest of each part. */
+export type PurgeReport = {
+  slices: number
+  longest: SliceTiming & { ms: number }
+  lock: number
+  work: number
+  commit: number
+}
+
+type Outcome = { ok: true; report?: PurgeReport } | { ok: false; busy: boolean; message: string }
 
 const MARK = 'taskto.purge'
 
 function run(job: PurgeJob): Outcome {
   try {
-    if (job.root === undefined) truncateWalAt(job.path, job.timeoutMs)
-    else purgeRecords(job.path, job.root, job.timeoutMs)
-    return { ok: true }
+    if (job.root === undefined) {
+      truncateWalAt(job.path, job.timeoutMs)
+      return { ok: true }
+    }
+    let report: PurgeReport | undefined
+    const slice = (ms: number, t: SliceTiming) => {
+      report ??= { slices: 0, longest: { ms, ...t }, lock: 0, work: 0, commit: 0 }
+      report.slices++
+      if (ms > report.longest.ms) report.longest = { ms, ...t }
+      report.lock = Math.max(report.lock, t.lock)
+      report.work = Math.max(report.work, t.work)
+      report.commit = Math.max(report.commit, t.commit)
+    }
+    purgeRecords(job.path, job.root, job.timeoutMs, job.report ? { slice } : undefined)
+    return { ok: true, report }
   } catch (error) {
     return { ok: false, busy: error instanceof WalBusyError, message: (error as Error).message ?? String(error) }
   }
@@ -509,7 +560,7 @@ export function purgeWorkersStarted(): number {
  * a reader held the log, and with an Error for any other failure. The calling thread is free
  * meanwhile. The sidecar calls purgeOnce, which runs one at a time.
  */
-export function runPurge(job: PurgeJob): Promise<void> {
+export function runPurge(job: PurgeJob): Promise<PurgeReport | undefined> {
   workers++
   running++
   mostAtOnce = Math.max(mostAtOnce, running)
@@ -523,7 +574,9 @@ export function runPurge(job: PurgeJob): Promise<void> {
     }
     const worker = new Worker(new URL(import.meta.url), { workerData: { [MARK]: job } })
     worker.once('message', (out: Outcome) => {
-      settle(() => (out.ok ? resolve() : reject(out.busy ? new WalBusyError(out.message) : new Error(out.message))))
+      settle(() =>
+        out.ok ? resolve(out.report) : reject(out.busy ? new WalBusyError(out.message) : new Error(out.message)),
+      )
     })
     worker.once('error', (error) => settle(() => reject(error)))
     worker.once('exit', (code) => settle(() => reject(new Error(`the purge's worker thread exited with code ${code}`))))
@@ -555,7 +608,7 @@ export function purgeOnce(job: PurgeJob): Promise<void> {
   const key = `${job.path}\u0000${job.root ?? 'log'}`
   const running = asked.get(key)
   if (running) return running
-  const result = queue.then(() => runPurge(job))
+  const result = queue.then(() => runPurge(job)).then(() => undefined)
   queue = result.catch(() => undefined)
   asked.set(key, result)
   const forget = () => {
@@ -613,7 +666,6 @@ export function startCheckpointer(
     if (stopped()) return
     const w = new Worker(new URL(import.meta.url), { workerData: { [CHECKPOINTER]: { path, everyMs, stop } } })
     worker = w
-    w.unref()
     hooks?.started?.()
     w.on('message', (m: { failed?: number }) => {
       if (typeof m?.failed === 'number') hooks?.failed?.(m.failed)
@@ -626,6 +678,8 @@ export function startCheckpointer(
         hooks?.restarting?.()
       }
     })
+    // Last: a listener added after unref() refs the worker again, and then it keeps the process up.
+    w.unref()
   }
   start()
   return async () => {

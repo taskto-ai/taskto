@@ -873,8 +873,17 @@ is a decision about the workspace's records, not an account's.
   restored account that was purged is a live one again.
 - **Steps that wait for the agent runtime or the CLI workers.** Pi Durable, the runtime, has no way
   to delete a conversation, so the purge **retires** each one (its work stops and the runtime refuses
-  it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`, with the
-  deleted content zeroed in the file. It also rewrites the runtime's providers file, and removes the
+  it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`. What is
+  deleted there is overwritten with zeros in the file, whoever deletes it: the purge, and the
+  runtime's own work as it goes (input withdrawn from a queue, a document's older versions), since
+  every connection the runtime opens sets SQLite's `secure_delete`; the purge ends by emptying the
+  write-ahead log. A database written by a version before this one can still hold what was deleted
+  then: the runtime compacts it once (`VACUUM`) when it next starts, before it serves, if it is at
+  most 256 MiB and the disk has room for twice its size. A larger one is left as it is, and the log
+  says so at each start: compact it by hand, with the server stopped, and record that it was
+  (`sqlite3 <data>/agent/agent.db "VACUUM; INSERT OR REPLACE INTO taskto_maintenance VALUES
+  ('secure_delete_vacuum', 0)"`). Removed files' blocks on the disk
+  itself are the file system's (see SQLite and the filesystem below). It also rewrites the runtime's providers file, and removes the
   CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
