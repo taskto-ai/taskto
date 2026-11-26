@@ -59,8 +59,34 @@ type helperRun struct {
 	done   chan struct{}
 }
 
-// groupRec is a process group started for an account.
-type groupRec struct{ scope }
+// groupRec is a process group started for an account. seq is the registration's own number: a
+// process group ID can be given again by the system, and a record that was seen dead must not be
+// taken for the one that replaced it (dropGroups).
+type groupRec struct {
+	scope
+	seq uint64
+}
+
+// groupSeen is a record as it was looked at: the group ID and the registration's number.
+type groupSeen struct {
+	pgid int
+	seq  uint64
+}
+
+// dropGroups lets go of the records that were seen to hold no live process, unless the record of
+// that group ID is a newer registration by now.
+func (w *Worker) dropGroups(seen []groupSeen) {
+	if len(seen) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, g := range seen {
+		if rec, ok := w.groups[g.pgid]; ok && rec.seq == g.seq {
+			delete(w.groups, g.pgid)
+		}
+	}
+}
 
 // gated reports whether a removal's gate covers the account of user's cli in slot. The caller
 // holds w.mu.
@@ -111,29 +137,24 @@ func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) {
 		return
 	}
 	w.mu.Lock()
-	w.groups[pgid] = groupRec{scope{user: user, cli: cli, slot: slot}}
-	var old []int
+	w.groupSeq++
+	w.groups[pgid] = groupRec{scope: scope{user: user, cli: cli, slot: slot}, seq: w.groupSeq}
+	var old []groupSeen
 	if len(w.groups) > maxGroups {
-		for p := range w.groups {
+		for p, rec := range w.groups {
 			if p != pgid {
-				old = append(old, p)
+				old = append(old, groupSeen{p, rec.seq})
 			}
 		}
 	}
 	w.mu.Unlock()
-	var over []int
-	for _, p := range old {
-		if !groupLive(p) {
-			over = append(over, p)
+	var over []groupSeen
+	for _, g := range old {
+		if !groupLive(g.pgid) {
+			over = append(over, g)
 		}
 	}
-	if len(over) > 0 {
-		w.mu.Lock()
-		for _, p := range over {
-			delete(w.groups, p)
-		}
-		w.mu.Unlock()
-	}
+	w.dropGroups(over)
 }
 
 // beginGate closes what sc covers (one account, or all of a user's) to new turns, sign-ins and
@@ -253,26 +274,22 @@ func (w *Worker) waitGroups(ctx context.Context, sc scope) error {
 	defer tick.Stop()
 	for {
 		w.mu.Lock()
-		var pgids []int
+		var seen []groupSeen
 		for p, g := range w.groups {
 			if sc.covers(g.user, g.cli, g.slot) {
-				pgids = append(pgids, p)
+				seen = append(seen, groupSeen{p, g.seq})
 			}
 		}
 		w.mu.Unlock()
-		var live, over []int
-		for _, p := range pgids {
-			if groupLive(p) {
-				live = append(live, p)
+		var live, over []groupSeen
+		for _, g := range seen {
+			if groupLive(g.pgid) {
+				live = append(live, g)
 			} else {
-				over = append(over, p)
+				over = append(over, g)
 			}
 		}
-		w.mu.Lock()
-		for _, p := range over {
-			delete(w.groups, p)
-		}
-		w.mu.Unlock()
+		w.dropGroups(over)
 		if len(live) == 0 {
 			return nil
 		}

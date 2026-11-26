@@ -220,6 +220,10 @@ type fake struct {
 	args     []string
 	scenario Scenario
 	out      *json.Encoder
+	// term receives the signals that stop a turn with a tool to run. It is set up before the CLI
+	// says anything, so a stop that comes the moment a test sees the first event is not lost to the
+	// default action of the signal.
+	term chan os.Signal
 }
 
 func run(name string, args []string) int {
@@ -231,6 +235,10 @@ func run(name string, args []string) int {
 	f := &fake{name: name, config: config, args: args, out: json.NewEncoder(os.Stdout)}
 	if b, err := os.ReadFile(filepath.Join(config, "scenario.json")); err == nil {
 		_ = json.Unmarshal(b, &f.scenario)
+	}
+	if f.scenario.SleepMS > 0 {
+		f.term = make(chan os.Signal, 1)
+		signal.Notify(f.term, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	}
 	switch {
 	case name == "claude" && len(args) >= 2 && args[0] == "auth":
@@ -302,14 +310,12 @@ func (f *fake) work() error {
 		_ = os.Rename(pidFile+".tmp", pidFile)
 	}
 	if f.scenario.SleepMS > 0 {
-		interrupted := make(chan os.Signal, 1)
-		signal.Notify(interrupted, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-		defer signal.Stop(interrupted)
+		defer signal.Stop(f.term)
 		timer := time.NewTimer(time.Duration(f.scenario.SleepMS) * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-		case sig := <-interrupted:
+		case sig := <-f.term:
 			f.writeOnTerm()
 			return fmt.Errorf("the tool was interrupted by %v", sig)
 		}

@@ -138,12 +138,14 @@ func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("Logout waited %v for the check instead of cancelling it", took)
 	}
+	// Logout returns only when the check's helper is over; its caller may need a moment to
+	// publish what it got.
 	select {
 	case err := <-errs:
 		if err == nil {
 			t.Error("the cancelled check answered")
 		}
-	default:
+	case <-time.After(5 * time.Second):
 		t.Fatal("Logout returned while the check was still running")
 	}
 	if _, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), clitest.StatusFinished)); !errors.Is(err, fs.ErrNotExist) {
@@ -310,4 +312,25 @@ func TestAnAlreadyCancelledRemovalRemovesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	gone(t, dirs.Root)
+}
+
+// A process group ID can be given again by the system: a record seen to hold no live process is let
+// go only while it is still the registration that was looked at, or a removal could take the
+// replacement for the dead group and remove files a live process writes.
+func TestAGroupRecordSeenDeadIsNotTakenForItsReplacement(t *testing.T) {
+	h := newHarness(t, nil)
+	const pgid = 4242
+	h.w.TrackGroupForTest(pgid, 1, cliworker.Claude, "")
+	seen := h.w.GroupSeqForTest(pgid)
+	// The group ID is given again to a group of the same account, which is registered anew.
+	h.w.TrackGroupForTest(pgid, 1, cliworker.Claude, "")
+	if now := h.w.GroupSeqForTest(pgid); now == seen {
+		t.Fatal("fixture: the new registration has the old one's number")
+	}
+	if !h.w.DropStaleGroupForTest(pgid, seen) {
+		t.Error("the record of a newer group was dropped because the old one with its ID was seen dead")
+	}
+	if h.w.DropStaleGroupForTest(pgid, h.w.GroupSeqForTest(pgid)) {
+		t.Error("the record that was seen dead was not collected")
+	}
 }

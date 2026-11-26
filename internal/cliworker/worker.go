@@ -75,6 +75,7 @@ type Worker struct {
 	helpers   map[*helperRun]struct{}
 	groups    map[int]groupRec
 	groupWait time.Duration
+	groupSeq  uint64
 	// helperLaunches counts the helpers built to run, for tests.
 	helperLaunches atomic.Int64
 	loginRuns      map[*Login]struct{}

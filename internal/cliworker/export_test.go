@@ -31,6 +31,25 @@ func (w *Worker) TrackGroupForTest(pgid int, user int64, cli CLI, slot Slot) {
 	w.trackGroup(pgid, user, cli, slot)
 }
 
+// DropStaleGroupForTest is what a removal's wait does when it saw the record of group pgid, with
+// the registration number seq, hold no live process: it lets the record go, unless the system gave
+// the group ID again and the record is a newer registration's. It reports whether the record is
+// still listed.
+func (w *Worker) DropStaleGroupForTest(pgid int, seq uint64) bool {
+	w.dropGroups([]groupSeen{{pgid, seq}})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, ok := w.groups[pgid]
+	return ok
+}
+
+// GroupSeqForTest is the registration number of the record listed for group pgid, 0 for none.
+func (w *Worker) GroupSeqForTest(pgid int) uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.groups[pgid].seq
+}
+
 // SetGroupWaitForTest sets how long a removal waits for process groups to hold no live process;
 // a negative time stops the worker from listing groups at all, so that a test of what a removal
 // waits for otherwise (a turn's end, a sign-in's) is not answered by the groups' wait.

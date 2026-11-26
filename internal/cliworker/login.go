@@ -531,6 +531,11 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 			}
 		}
 	}
+	// The sign-out's own process group may still hold a process that is finishing a write: the
+	// reset would then remove files it is about to write.
+	if err := w.waitGroups(ctx, sc); err != nil {
+		return err
+	}
 	_, _, err = w.runHelper(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
 	return err
 }
