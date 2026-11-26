@@ -283,9 +283,14 @@ acted, with that user's access then (`docs/api.md`, [Payment links](api.md#payme
 re-checks that the live release still asks for exactly this link and has an approved contract for it
 (the action and its kind, the amount field and its bounds, the currency and where it is read from, the
 rule the record must meet, where the link goes), that the integration is switched on and allowed in
-the app's space, and the admin's limits. These are read in one snapshot before the provider is asked,
-and again in the transaction that writes the link, with the user's access: what changes while the
-provider answers stops the write. It makes
+the app's space, and the admin's limits. These are read in one snapshot before the provider is asked
+(the app's place, the approval, and the user's access through the same read transaction, so no check
+mixes two instants), and again in the transaction that writes the link, with the user's access: what
+changes while the provider answers stops the write. An entry runs only in the space it was queued in:
+moving an app clears its approvals, and what an admin approves again in the new space is not what the
+entry asked of the old one, so the entry fails with `app_effect_space_changed` and the payment is
+started again. A record edited so that it no longer meets the action's condition (`when`) fails the
+entry with `integration_condition_changed`, which says so (nothing was created; no admin is needed). It makes
 the link at the provider with the integration's key, which is opened only for the call; and it writes
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
@@ -329,25 +334,65 @@ write.
 - **Once, through crashes.** The entry's reference (`integration_refs`) has a random token that is
   Stripe's `Idempotency-Key` and the `client_reference_id` its events echo back, and is unique by the
   outbox entry. A retry finds the reference and either the object Stripe made (not asked again) or,
-  with none noted, asks again under the same key, which Stripe answers with the object it made. Stripe
-  keeps idempotency keys for at least 24 hours, so a crash and then a wait of more than a day with
-  no object noted is the one case that can leave two payable links for one reference (it is looked
-  for first, below). A failure that
-  Stripe keeps under a key (a `5xx`) would be answered to the same key for ever, so the next try has
-  a key of its own; but Stripe documents a `5xx` as an indeterminate result, the object may have been
-  made, so before that call the integration lists what the account made (the Checkout Sessions of any
-  status created since the reference, matched on `client_reference_id`, or the Payment Links, active
-  or not, newest first, matched on `metadata[taskto_ref]`; neither has a filter for them and the
-  search API doesn't cover them) and adopts an object of the token as if a call had answered it, if it
-  is open (an active link) and asks the amount and the currency of the payment. An object of the token
-  that doesn't ask them, a completed session and a link that is inactive (deactivated, or at its limit
-  of payments) are never given to a payer and stop the call: the entry fails with the provider's
-  refusal, nothing else is made, and a person reconciles the payment. An expired session can't be
-  paid and is passed over. The same look comes before a
-  call under the same key once the reference is a day old, when Stripe may have forgotten the key.
-  When the listing can't be read (a failed read, an answer that isn't a whole list: no `object: list`,
-  no `data`, no `has_more`, or `has_more` with nothing to read on from), nothing is made: the entry
-  waits and tries again.
+  with none noted, asks again under the same key, which Stripe answers with the object it made, while
+  the key is trusted: Stripe keeps idempotency keys for at least 24 hours, so a reference a day old
+  with a call made and no object noted looks for the object first (below).
+- **Nothing is saved as the link until its state is read.** What a call answers, and above all what
+  Stripe replays for a key it kept, is the object as it was made: a Checkout Session replayed a day
+  later still says it is open. So before an object is saved as the link, whether a call made it, a
+  replay returned it or the lookup adopted it, it is retrieved (`GET /v1/checkout/sessions/{id}`,
+  `GET /v1/payment_links/{id}`) and saved only if a payer can use it now: an `open` session, an
+  `active` Payment Link. An expired session is never given: the call is made again under a key of its
+  own, once. A completed session and an inactive link stop the entry with
+  `integration_link_already_paid`. If the state can't be read, the object is not saved either and the
+  outcome is marked unknown (next item).
+- **An unknown outcome is never answered with a second link.** Stripe documents a `5xx` as
+  indeterminate: "the operation might have produced side effects even though you received an error",
+  and says not to "retry with a new idempotency key until you've resolved the original outcome"
+  (<https://docs.stripe.com/error-low-level#server-errors>). A call whose outcome is unknown (a `5xx`,
+  which Stripe keeps under the key; a request that may have reached Stripe and got no answer, such as
+  a timeout or a dropped connection; an answer that can't be read; an object whose state can't be
+  read) marks the reference (`outcome_unknown_at`), and from then on the reference **never gets a new
+  key by itself**, and no call that makes anything is made for it. A request that certainly never left
+  (the connection was not made) and one Stripe says it didn't execute (`429`, `409`, `408`) leave the
+  outcome known: they are tried again under the same key.
+  - *The entry only looks.* Each try lists what the account made (the Checkout Sessions of any status
+    created since the reference, matched on `client_reference_id`, or the Payment Links, active or
+    not, newest first, matched on `metadata[taskto_ref]`; neither has a filter for them and the search
+    API doesn't cover them). An object of the token that is open (an active link) and asks the amount
+    and the currency of the payment is adopted as if a call had answered it, after its state is read.
+    An object of the token that doesn't ask them, a completed session and an inactive link
+    (deactivated, or at its limit of payments) are never given to a payer and stop the entry
+    (`integration_link_already_paid` or the provider's refusal): nothing else is made, and a person
+    reconciles the payment. An expired session can't be paid and was never given: it accounts for the
+    call, whose outcome is then known, and the entry goes on under a key of its own.
+  - *The wait is bounded.* Between lookups the entry waits half the time the outcome has been unknown,
+    at least 30 seconds and at most 30 minutes (the entry shows `integration_link_lookup_pending`; these
+    waits don't use up its tries), for at most **6 hours** from when the outcome became unknown
+    (`outcomeWait`). When the listing can't be read (a failed read, an answer that isn't a whole list:
+    no `object: list`, no `data`, no `has_more`, or `has_more` with nothing to read on from), nothing is
+    made, and the entry tries again as for any failed read.
+  - *Then a person decides.* If the 6 hours end with nothing found, the entry fails with
+    `integration_outcome_unknown`, which tells an admin to check the Stripe account for an object of
+    the reference (a Payment Link's `metadata.taskto_ref`, a Checkout Session's `client_reference_id`)
+    and then either
+    - *adopt one*: if the link is there, the person who acted retries the entry; its first step is the
+      lookup, which adopts the link (it fails again at once if it still sees none); or
+    - *confirm that none exists*: an admin of the workspace confirms "no link exists, create a new
+      one" (`POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`,
+      [api.md](api.md#confirm-that-no-payment-link-exists)), which allows **exactly one** new key for
+      the reference, queues the entry again as it was (the person who acted, with the access they have
+      then), and is recorded in the audit log (`integration_new_link_allowed`). The next try still looks
+      before it calls, so a link that turned up since is adopted, not doubled. If that call too has an
+      unknown outcome, the cycle starts again and needs another confirmation. The admins' list of what
+      waits for a decision is `GET …/integrations/{integration}/payment-links/unresolved`. Both routes
+      cover only the spaces the admin manages (a private space's payments are not another admin's to
+      decide).
+- **A lookup is kept on the reference until it has been made.** A refusal (a `4xx`, which Stripe may
+  keep under the key too) fails the reference and sets `lookup_required`; a retry of the entry clears
+  "failed" but not that need, which only a lookup that read the account in full ends. So a try whose
+  lookup could not be read is followed by one that looks, never by one that calls under the old key
+  and is answered with what Stripe kept of it.
 - **A lookup that can't see everything fails the entry.** A lookup reads at most 20 pages of 100,
   newest first. If every read worked and the account still holds more (for example more than 2,000
   active Payment Links, none of them the reference's), the lookup can't say whether an earlier try made
@@ -376,14 +421,15 @@ write.
   reference is only ever used under the integration that made it, with its link or without
   (`integration_changed` otherwise, wherever the reference is found), so a record is never written
   with a link of an integration that is no longer the slot's; the same reconciliation applies.
-- **A key that may hold a dead answer is not used again.** Stripe answers a call's saved result to the
-  same key, a refusal (a 4xx included) and an object that has expired since. So a retry of a failed
-  reference, and a try that looks for the reference's object and finds only an expired Checkout
-  Session, moves on to a key of its own (once a call was made under the current one) before it makes
-  one. A lookup that finds an object of the reference that was paid, or that can't take payment for a
-  reason that doesn't say it wasn't (a completed session, a Payment Link deactivated or at its limit),
-  fails the entry with `integration_link_already_paid`: nothing is made, and an admin reconciles it
-  in the provider's account.
+- **A key that may hold a dead answer is not used again, once its outcome is known.** Stripe answers
+  a call's saved result to the same key, a refusal (a 4xx included) and an object that has expired
+  since. So a retry of a failed reference (a refusal is a known outcome), and a try that looks for the
+  reference's object and finds only an expired Checkout Session, moves on to a key of its own (once a
+  call was made under the current one) before it makes one. An unknown outcome never moves the key
+  (above). A lookup that finds an object of the reference that was paid, or that can't take payment for
+  a reason that doesn't say it wasn't (a completed session, a Payment Link deactivated or at its
+  limit), fails the entry with `integration_link_already_paid`: nothing is made, and an admin
+  reconciles it in the provider's account.
 - **The newest entry wins, and what is sent is what was approved.** Entries are done in the order they
   were queued, but one tried again later could write its link after a newer entry for the same record
   and fields wrote its own. An entry for which a newer one exists (same record, either of the same two fields, any

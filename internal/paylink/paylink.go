@@ -7,6 +7,7 @@ package paylink
 
 import (
 	"context"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 )
@@ -50,6 +51,10 @@ type Error struct {
 	Code      apierr.Code
 	Params    apierr.Params
 	Transient bool
+	// Wait, when positive, asks for the entry to be looked at again after that long without the try
+	// counting against its tries: the integration is waiting for the provider to say whether an earlier
+	// call made the link, and bounds that wait itself.
+	Wait time.Duration
 }
 
 func (e *Error) Error() string { return string(e.Code) }

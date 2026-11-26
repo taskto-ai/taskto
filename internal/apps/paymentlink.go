@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/currency"
 	"taskto.ai/taskto/internal/paylink"
@@ -102,15 +103,22 @@ func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, sp
 	// What the description sends out is part of what an admin approved: the entry's description was
 	// filled when it was queued, from the fields its release named, and the live contract must still
 	// name each of them (and the id, if the text holds it). Wording alone is not in the contract.
-	asked := slices.ContainsFunc(b.Contract.Links, func(l ContractLink) bool {
+	asks := func(l ContractLink) bool {
 		inCurrency := (l.Currency != "" && l.Currency == p.Currency) || (l.Currency == "" && slices.Contains(l.CurrencyOptions, p.Currency))
 		described := (!p.DescribesID || l.DescribesID) && !slices.ContainsFunc(p.Describes, func(f string) bool { return !slices.Contains(l.Describes, f) })
 		return l.Action == e.action && l.ActionKind == e.actionKind && l.AmountField == p.AmountField && l.CurrencyField == p.CurrencyField &&
-			l.URLField == p.URLField && l.IDField == p.IDField && inCurrency && described &&
-			(l.When == nil || ap.liveDef.Collection.holds(*l.When, data)) && amountWithinBounds(b.Contract, l.AmountField, p.Amount)
-	})
-	if !asked {
+			l.URLField == p.URLField && l.IDField == p.IDField && inCurrency && described && amountWithinBounds(b.Contract, l.AmountField, p.Amount)
+	}
+	if !slices.ContainsFunc(b.Contract.Links, asks) {
 		return paymentGrant{}, refuse(apierr.CodeIntegrationUnavailable)
+	}
+	// The link is still approved as it was asked; what has changed is the record, which an ordinary
+	// edit may have made fail the rule (`when`) of every link that asks for exactly this. That is no
+	// matter for an admin: the record no longer meets the action's condition, and nothing was made.
+	if !slices.ContainsFunc(b.Contract.Links, func(l ContractLink) bool {
+		return asks(l) && (l.When == nil || ap.liveDef.Collection.holds(*l.When, data))
+	}) {
+		return paymentGrant{}, refuse(apierr.CodeIntegrationConditionChanged)
 	}
 	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
 }
@@ -136,23 +144,32 @@ func amountWithinBounds(c Contract, field, amount string) bool {
 }
 
 // paymentSnapshot is the authorization of an entry before the provider is asked, as of one moment:
-// the app's place, who may do what, and what the live release approves are read in one read
-// transaction, and the user's access is checked for the space that same read named.
+// the app's place, who may do what, and what the live release approves are all read in one read
+// transaction, access included (through a checker over that transaction), so no check mixes the
+// state of one instant with another's. The app must still be in the space the entry was queued in: a
+// move clears an app's approvals, and what an admin approves again in the new space is not what the
+// entry asked of the old one.
 func (s *Service) paymentSnapshot(ctx context.Context, e effectRow) (paymentGrant, error) {
 	var g paymentGrant
-	err := s.snapshot(ctx, func(q queryer) error {
+	err := s.access.Snapshot(ctx, func(snap *access.Checker, tx *sql.Tx) error {
 		var spaceID, workspaceID int64
-		if err := q.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`,
+		if err := tx.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`,
 			e.appID).Scan(&spaceID, &workspaceID); errors.Is(err, sql.ErrNoRows) {
 			return refuse(apierr.CodeAppEffectAppAccess)
 		} else if err != nil {
 			return err
 		}
-		if err := s.authorizeAppIn(ctx, e, spaceID); err != nil {
+		if s.hooks.afterPaymentSnapshotRead != nil {
+			s.hooks.afterPaymentSnapshotRead()
+		}
+		if e.payload.SpaceID != spaceID {
+			return refuse(apierr.CodeAppEffectSpaceChanged)
+		}
+		if err := s.authorizeAppOn(ctx, tx, snap, e, spaceID); err != nil {
 			return err
 		}
 		var err error
-		g, err = s.paymentGrantOf(ctx, q, e, spaceID, workspaceID)
+		g, err = s.paymentGrantOf(ctx, tx, e, spaceID, workspaceID)
 		return err
 	})
 	return g, err
@@ -182,7 +199,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	if err != nil {
 		var pe *paylink.Error
 		if errors.As(err, &pe) {
-			return nil, &effectError{code: pe.Code, params: pe.Params, transient: pe.Transient}
+			return nil, &effectError{code: pe.Code, params: pe.Params, transient: pe.Transient, wait: pe.Wait}
 		}
 		return nil, err
 	}
@@ -201,7 +218,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 			} else if newer {
 				return errSuperseded
 			}
-			if err := s.authorizeAppIn(ctx, e, spaceID); err != nil {
+			if err := s.authorizeAppOn(ctx, tx, s.access.On(tx), e, spaceID); err != nil {
 				return err
 			}
 			now, err := s.paymentGrantOf(ctx, tx, e, spaceID, workspaceID)

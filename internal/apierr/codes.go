@@ -190,6 +190,7 @@ const (
 	CodeAppEffectAppOffline   Code = "app_effect_app_offline"   // the app is offline or its space archived
 	CodeAppEffectRecordGone   Code = "app_effect_record_gone"   // the record it came from was deleted: restore it and retry
 	CodeAppEffectGaveUp       Code = "app_effect_gave_up"       // it kept failing for a reason that may pass: retry it
+	CodeAppEffectSpaceChanged Code = "app_effect_space_changed" // the app moved to another space after the payment was queued: what it asked for was never approved there, so it must be started again
 
 	// Querying an app's records (internal/apps/query.go).
 
@@ -477,4 +478,8 @@ const (
 	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
 	CodeIntegrationLookupIncomplete    Code = "integration_lookup_incomplete"    // the provider's account has more objects than a lookup for an earlier try's link reads: an admin must settle it
 	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
+	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"      // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
+	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"  // the provider didn't say whether the payment link was made: only a lookup is retried, for a bounded time, and no second link is made meanwhile
+	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"   // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
+	CodeIntegrationConditionChanged    Code = "integration_condition_changed"    // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
 )

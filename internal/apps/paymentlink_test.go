@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/paylink"
 )
@@ -581,14 +582,17 @@ func (p *payFX) releaseAck(ack []SchemaChange, pairs ...string) {
 }
 
 // refused is the one entry's failure with the integration unavailable, and no call to the provider.
-func (p *payFX) refused() {
+func (p *payFX) refused() { p.e.t.Helper(); p.refusedWith(apierr.CodeIntegrationUnavailable) }
+
+// refusedWith is the one entry's failure with the code, and no call to the provider.
+func (p *payFX) refusedWith(want apierr.Code) {
 	p.e.t.Helper()
 	p.work()
 	if p.links.count() != 0 {
 		p.e.t.Fatal("the entry called the provider's side")
 	}
-	if e := p.entries(p.alice).Effects[0]; e.Status != StateFailed || e.Error == nil || e.Error.Code != apierr.CodeIntegrationUnavailable {
-		p.e.t.Fatalf("entry = %+v", e)
+	if e := p.entries(p.alice).Effects[0]; e.Status != StateFailed || e.Error == nil || e.Error.Code != want {
+		p.e.t.Fatalf("entry = %+v, want %s", e, want)
 	}
 	if data, _, _ := p.row(); strings.Contains(data, "pay_url\":\"h") {
 		p.e.t.Fatalf("the record got a link: %s", data)
@@ -618,7 +622,12 @@ func TestAnEntryQueuedUnderAnotherContractOfTheSameLinkIsRefused(t *testing.T) {
 				ack = []SchemaChange{{Change: "field_narrowed", Field: "total"}}
 			}
 			p.releaseAck(ack, tc.from, tc.to)
-			p.refused()
+			if name == "a rule the record fails" {
+				// The rule is the contract's; the record no longer meets it.
+				p.refusedWith(apierr.CodeIntegrationConditionChanged)
+			} else {
+				p.refused()
+			}
 		})
 	}
 }
@@ -854,5 +863,79 @@ func TestANewerEntryOfEitherSharedFieldSupersedesAnOlderOne(t *testing.T) {
 	}
 	if n := p.count(`SELECT count(*) FROM app_payment_link_latest WHERE effect_id = 20`); n != 2 {
 		t.Fatalf("%d fields marked by the newest entry, want 2", n)
+	}
+}
+
+// ----- review: the record's own change, one snapshot, and the app's place -----
+
+// An ordinary edit of the record can make the rule of the action's payment link fail after the entry
+// was queued. That is not an admin's matter: the entry fails with the code that says the record no
+// longer meets the action's condition, and nothing is created.
+func TestAnEditThatBreaksTheLinksConditionSaysSoAndCreatesNothing(t *testing.T) {
+	p := newPay(t)
+	p.release(`"amount_field": "total", "currency": "EUR",`, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "sent"},`)
+	p.send(p.alice, "op-send-0001")
+	p.exec(`UPDATE app_rows SET data = json_set(data, '$.status', 'draft') WHERE id = ?`, p.invoice)
+	p.refusedWith(apierr.CodeIntegrationConditionChanged)
+}
+
+// Every read of an entry's authorization before the provider is called is of one snapshot. The user
+// may not write the space when the entry is looked at; before its checks go on, the user is made an
+// editor and the approval is revoked (two later states, which never held together with the first).
+// Reading the access through the pool saw the user an editor while the binding, read in the
+// transaction, was still the approved one: no state existed in which both held, and the provider
+// was asked.
+func TestThePreAuthorizationReadsOneSnapshot(t *testing.T) {
+	p := newPay(t)
+	p.send(p.alice, "op-send-0001")
+	p.exec(`UPDATE space_members SET role = ? WHERE space_id = ? AND user_id = ?`, access.RoleViewer, p.shared.ID, p.alice.id)
+	changed := false
+	p.e.s.hooks.afterPaymentSnapshotRead = func() {
+		if changed {
+			return
+		}
+		changed = true
+		p.exec(`UPDATE space_members SET role = ? WHERE space_id = ? AND user_id = ?`, access.RoleEditor, p.shared.ID, p.alice.id)
+		expect(p.e.t, p.decide(p.owner, p.ws, p.approve, "revoke", nil), http.StatusOK)
+	}
+	p.work()
+	if !changed {
+		t.Fatal("the hook never ran")
+	}
+	if p.links.count() != 0 {
+		t.Fatalf("the provider's side was asked %d times on a mix of two states", p.links.count())
+	}
+	if e := p.entries(p.alice).Effects[0]; e.Status != StateFailed || e.Error == nil || e.Error.Code != apierr.CodeAppEffectAppAccess {
+		t.Fatalf("entry = %+v", e)
+	}
+}
+
+// A move clears an app's approvals, so an entry queued before it must not run after an admin approves
+// the app again in the new space: it asked for what was approved in the old one.
+func TestAnEntryQueuedBeforeAMoveNeverRunsAfterIt(t *testing.T) {
+	p := newPay(t)
+	p.send(p.alice, "op-send-0001")
+
+	next := p.e.createShared(p.owner, p.ws, "Second")
+	p.e.addMember(p.owner, next, p.alice, access.RoleEditor)
+	app := p.fresh(p.alice, p.shared, p.app)
+	expect(t, p.alice.do(http.MethodPost, appPath(p.shared, app.ID, "/move"), map[string]any{"version": app.Version, "space_id": next.ID}), http.StatusOK)
+	p.allow(p.stripe, next)
+	req := p.mustRequest(p.alice, next, p.app)
+	expect(t, p.inv.approve(p.owner, req.ID, p.stripe), http.StatusOK)
+
+	p.work()
+	if p.links.count() != 0 {
+		t.Fatalf("the provider's side was asked %d times for an entry of the old space", p.links.count())
+	}
+	var state, code string
+	if err := p.e.db.QueryRow(`SELECT state, coalesce(error_code, '') FROM app_effects`).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != StateFailed || code != string(apierr.CodeAppEffectSpaceChanged) {
+		t.Fatalf("entry = %s, %s; want failed, %s", state, code, apierr.CodeAppEffectSpaceChanged)
+	}
+	if data, _, _ := p.row(); strings.Contains(data, "pay_url\":\"h") {
+		t.Fatalf("the record got a link: %s", data)
 	}
 }

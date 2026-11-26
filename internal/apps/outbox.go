@@ -321,6 +321,10 @@ type effectError struct {
 	code      apierr.Code
 	params    apierr.Params
 	transient bool
+	// wait, when positive, puts the entry back to pending for that long and gives the try back: the
+	// work is waiting for something outside that bounds its own wait (a payment link whose outcome at
+	// the provider is not known yet).
+	wait time.Duration
 }
 
 func (e *effectError) Error() string { return string(e.code) }
@@ -566,6 +570,13 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 		raw, _ := json.Marshal(ee.params)
 		params = string(raw)
 	}
+	if ee.wait > 0 {
+		// Not a failed try: the entry waits, and the wait's own bound ends it (hold's way).
+		_, err := s.db.ExecContext(ctx, `
+			UPDATE app_effects SET state = 'pending', attempts = max(attempts - 1, 0), next_attempt_at = ?, lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
+			WHERE id = ? AND state = 'running' AND lease = ?`, s.stamp(t.Add(ee.wait)), string(ee.code), params, s.stamp(t), e.id, e.lease)
+		return err
+	}
 	if ee.transient && e.attempts < maxAttempts {
 		wait := min(backoffBase<<(e.attempts-1), backoffMax)
 		_, err := s.db.ExecContext(ctx, `
@@ -648,16 +659,23 @@ func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
 // authorizeAppIn is authorizeApp for a caller that has read other things of the app in a space it
 // names (inSpace, 0 for none): an app that is in another space now, moved since, is not found.
 func (s *Service) authorizeAppIn(ctx context.Context, e effectRow, inSpace int64) error {
+	return s.authorizeAppOn(ctx, s.db, s.access, e, inSpace)
+}
+
+// authorizeAppOn is authorizeAppIn reading through q and ac: a caller that holds a transaction passes
+// it, and the checker over it (access.Checker.On, Snapshot), so that every read of the check, and the
+// caller's own, are of one state of the database and not of several instants.
+func (s *Service) authorizeAppOn(ctx context.Context, q queryer, ac *access.Checker, e effectRow, inSpace int64) error {
 	var spaceID int64
 	var archived sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT space_id, archived_at FROM apps WHERE id = ?`, e.appID).Scan(&spaceID, &archived)
+	err := q.QueryRowContext(ctx, `SELECT space_id, archived_at FROM apps WHERE id = ?`, e.appID).Scan(&spaceID, &archived)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && inSpace != 0 && spaceID != inSpace) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
 	if err != nil {
 		return err
 	}
-	sp, err := s.access.Check(ctx, e.userID, spaceID)
+	sp, err := ac.Check(ctx, e.userID, spaceID)
 	if errors.Is(err, access.ErrNotFound) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
@@ -670,7 +688,7 @@ func (s *Service) authorizeAppIn(ctx context.Context, e effectRow, inSpace int64
 		}
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
-	acc, err := s.access.App(ctx, e.userID, spaceID, e.appID)
+	acc, err := ac.App(ctx, e.userID, spaceID, e.appID)
 	if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
@@ -685,7 +703,7 @@ func (s *Service) authorizeAppIn(ctx context.Context, e effectRow, inSpace int64
 	}
 	var creator sql.NullInt64
 	var deleted sql.NullString
-	err = s.db.QueryRowContext(ctx, `SELECT created_by, deleted_at FROM app_rows WHERE id = ? AND app_id = ?`, e.recordID, e.appID).Scan(&creator, &deleted)
+	err = q.QueryRowContext(ctx, `SELECT created_by, deleted_at FROM app_rows WHERE id = ? AND app_id = ?`, e.recordID, e.appID).Scan(&creator, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return refuse(apierr.CodeAppEffectRecordGone)
 	}

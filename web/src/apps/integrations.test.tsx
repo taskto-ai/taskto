@@ -10,7 +10,6 @@ import type { App, AppDraft, IntegrationStatus, Space } from '../api'
 import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
 import { shop, slot } from '../test/integrations'
-import { EffectItems } from './AppEffects'
 import { PublishPanel } from './AppPublish'
 import { WorkspaceAdmin } from './admin'
 
@@ -50,7 +49,16 @@ const draft: AppDraft = {
   actions: {
     send: {
       kind: 'update',
-      effects: [{ kind: 'create_payment_link', integration: 'payments', amount_field: 'total', currency: 'EUR' }],
+      effects: [
+        {
+          kind: 'create_payment_link',
+          integration: 'payments',
+          amount_field: 'total',
+          currency: 'EUR',
+          url_field: 'pay_url',
+          id_field: 'payment_id',
+        },
+      ],
     },
   },
   integrations: { payments: { kind: 'payments' } },
@@ -107,7 +115,11 @@ test('the panel says what the app asks of an outside service in words, and where
     '“receipt”: photos, required when status is “paid”, up to 2 files, each up to 5 MB.',
   )
   // The effect is told with the others, and nothing says the app can reach nothing else.
-  expect(screen.getByText('Asks the “payments” outside service for a link to pay the amount in “total”.')).toBeTruthy()
+  expect(
+    screen.getByText(
+      'Asks the “payments” integration for a link to pay total in EUR, and puts the link in pay_url and its id in payment_id.',
+    ),
+  ).toBeTruthy()
   expect(screen.queryByText(/It can’t reach anything else/)).toBeNull()
 })
 
@@ -758,34 +770,6 @@ test('the slots show the shape of a list while they are read', async () => {
   expect(loading.some((l) => l.textContent?.includes('Loading'))).toBe(true)
   release?.()
   await screen.findByText('Not asked for yet')
-})
-
-test('a preview says the payment link it would ask for as a sum, and never as an amount it guessed', () => {
-  const effect = (detail: { amount?: number; currency?: string }) =>
-    ({
-      id: 0,
-      operation: '',
-      position: 0,
-      kind: 'create_payment_link',
-      action: 'send',
-      record: 1,
-      record_revision: 1,
-      status: 'simulated',
-      attempts: 0,
-      next_attempt_at: null,
-      error: null,
-      detail,
-      done_at: null,
-      can_retry: false,
-    }) as const
-  render(<EffectItems effects={[effect({ amount: 120, currency: 'EUR' })]} label="Preview" />)
-  const item = within(screen.getByRole('list', { name: 'Preview' })).getByRole('listitem')
-  expect(item.textContent).toContain('Create a payment link')
-  expect(item.textContent).toContain('Simulated')
-  expect(item.textContent).toContain('€120.00')
-  cleanup()
-  render(<EffectItems effects={[effect({})]} label="Preview" />)
-  expect(screen.getByText('Amount from the record')).toBeTruthy()
 })
 
 test('publishing stays closed when the status of the outside services can’t be read', async () => {

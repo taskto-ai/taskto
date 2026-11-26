@@ -6,6 +6,9 @@
 -- rebuilt. Nothing refers to app_effects (cards remember which entry made them by its number, in
 -- a column of their own), so no row of another table is touched by dropping it.
 --
+-- user_id stays optional with ON DELETE SET NULL, as the account deletion made it (migration 0050):
+-- what an entry did for a person is a record of the shared app, which stays without who.
+--
 -- Its rows are numbered with AUTOINCREMENT, and the number must never be given again after its
 -- row is cleaned up: cards and documents remember which entry made them by the entry's number,
 -- and a payment link's reference is found by it. A rebuilt table starts its own sequence at the
@@ -20,7 +23,7 @@ CREATE TABLE app_effects_new (
     kind           TEXT NOT NULL CHECK (kind IN ('create_card', 'update_card', 'create_document', 'open_route', 'create_payment_link')),
     record_id      INTEGER NOT NULL REFERENCES app_rows (id) ON DELETE CASCADE,
     record_revision INTEGER NOT NULL,
-    user_id        INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    user_id        INTEGER REFERENCES users (id) ON DELETE SET NULL,
     acted_by_agent INTEGER NOT NULL DEFAULT 0 CHECK (acted_by_agent IN (0, 1)),
     acted_via      TEXT,
     action_kind    TEXT NOT NULL CHECK (action_kind IN ('insert', 'update')),
@@ -108,6 +111,16 @@ CREATE TABLE integration_refs (
     account_mode       TEXT NOT NULL DEFAULT '',
     success_url        TEXT NOT NULL DEFAULT '',
     cancel_url         TEXT NOT NULL DEFAULT '',
+    -- A lookup for an object of the reference must finish before any call: set when a call was
+    -- refused (a refusal may be kept under its key too) and cleared only by a lookup that read the
+    -- provider in full, so a try that ends before its lookup does can't be followed by one that skips it.
+    lookup_required    INTEGER NOT NULL DEFAULT 0 CHECK (lookup_required IN (0, 1)),
+    -- When the outcome of a call became unknown: a 5xx the provider keeps under the key, or a request
+    -- that may have reached it and got no answer. The provider may still make the object, so the
+    -- reference gets no new key while this is set: only the lookup is repeated, for a bounded time, and
+    -- then an admin decides (an admin who confirms that no link exists allows exactly one new key, which
+    -- clears it). NULL: the outcome is known.
+    outcome_unknown_at TEXT,
     -- Only forward: creating, then open, then one of paid, expired, failed (and paid, then refunded).
     state              TEXT NOT NULL DEFAULT 'creating' CHECK (state IN ('creating', 'open', 'paid', 'expired', 'failed', 'refunded')),
     created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

@@ -226,6 +226,11 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now: nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
 | `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
 | `integration_lookup_incomplete` | — | A failed `create_payment_link` entry whose earlier try's link could not be looked for in full (the account holds more objects than a lookup reads): nothing is made. An admin looks in the provider's account for an object of the reference (a Payment Link's `metadata.taskto_ref`, a Checkout Session's `client_reference_id`) and reconciles it as above before running the action again; deactivating other links does not help, since the lookup reads inactive ones too. |
+| `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing else is made (a second link could be paid twice), and the entry looked for 6 hours without finding one. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
+| `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): the provider didn't say whether an earlier call made the link, so only a lookup is repeated, for at most 6 hours, and nothing is made meanwhile. |
+| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
+| `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
@@ -3752,7 +3757,11 @@ asks for exactly this link (the same action, amount field, currency and fields t
 approved contract for the slot, that the integration the approval named is switched on and allowed in
 the app's space, and the admin's limits. Anything less fails the entry with
 `integration_unavailable`, and nothing is sent: revoking the approval, switching the integration off
-or taking the space away stops entries that are waiting.
+or taking the space away stops entries that are waiting. Those reads, and the user's access, are of
+one snapshot. An entry runs only in the space it was queued in: an app that was moved since (which
+clears its approvals) fails the entry with `app_effect_space_changed`, and the payment is started
+again. A record edited so that it no longer meets the `when` of the action's link fails it with
+`integration_condition_changed`: nothing was created.
 
 **Money is exact.** The amount is the number field's value written as the shortest decimal text that
 reads back as the same number, read digit by digit into the currency's smallest unit (2 decimals for
@@ -3769,10 +3778,15 @@ entry's number) with a random 128-bit token, the provider's idempotency key and 
 provider echoes back with the payment, and it keeps the provider's answer. An entry done again after
 a crash finds its reference: with the provider's object noted, the provider is not asked again; with
 none, it is asked again under the same key, which the provider answers with the object it already
-made. A failure the provider keeps under a key gets a key of its own on the next try, after the provider
-is asked for an object of the reference's token that the failed call may have made (a `5xx` is an
-indeterminate result): one found is adopted as the call's answer, and while the provider can't say,
-nothing is made and the entry is tried again; a lookup that worked but can't see all the account holds
+made. A call whose **outcome is unknown** (a `5xx`, which the provider documents as indeterminate; a
+request that may have reached it and got no answer) never gets a new key by itself: the entry only
+looks for an object of the reference's token, with a growing wait (`integration_link_lookup_pending`),
+and adopts the one it finds; if none shows within **6 hours** the entry fails with
+`integration_outcome_unknown`, and an admin checks the provider's account and either has the entry
+retried once the link is visible (which adopts it) or confirms that none exists
+([below](#confirm-that-no-payment-link-exists)), which allows exactly one new key. Nothing is saved as
+the link before its state is read from the provider and a payer can use it (an expired session is never
+given); a lookup that worked but can't see all the account holds
 fails the entry with `integration_lookup_incomplete`. A reference keeps the provider account and the
 pages of its first try: after the integration's key is replaced by another account's, an unfinished
 reference's entry fails with `integration_account_changed` (so does a key of the same account's other
@@ -4386,6 +4400,33 @@ provider in this version (`remote` is `false`). `200`, always, with
 secret (an old install can: it is refused now), so deliveries signed with it open neither; it names
 neither the integration nor its workspace.
 It never carries a provider's reply or a secret. `404` for another workspace's integration.
+
+### `GET /api/workspaces/{workspace}/integrations/{integration}/payment-links/unresolved`
+
+Admin only. The payment links of this integration whose outcome at the provider is unknown and that
+have no object, in the spaces the admin manages (another person's private space is not listed):
+`{"payment_links": [{"effect_id", "app_id", "space_id", "record_id", "amount", "currency", "since",
+"waiting", "can_confirm"}]}`. `effect_id` is the entry's number, as in the app's effects; `amount` is
+decimal text with the currency's decimals; `since` is when the outcome became unknown. `waiting` is
+true while the server still looks (nothing is asked of the admin); `can_confirm` is true once the
+entry failed with `integration_outcome_unknown`. `403` for a member, `404` for another workspace's
+integration.
+
+### Confirm that no payment link exists
+
+`POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`
+
+Admin only, body `{}`. For a payment link whose entry failed with `integration_outcome_unknown`: the
+admin checked the provider's account for an object of the reference (a Payment Link's
+`metadata.taskto_ref`, a Checkout Session's `client_reference_id`) and found none. Allows **exactly one**
+new key for the reference and queues the entry again as it was, run as the user who acted with their
+access then; the next try still looks before it calls. Recorded in the audit log
+(`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
+integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
+entry isn't waiting for this decision (not failed with that code, the link was found, or it was
+confirmed already: a second request never allows a second key). If the new call too has an unknown
+outcome, the cycle starts again and needs another confirmation. The flow is in
+[integrations.md](integrations.md#payment-links).
 
 ### `DELETE /api/workspaces/{workspace}/integrations/{integration}`
 

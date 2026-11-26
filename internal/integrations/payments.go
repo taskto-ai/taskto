@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -25,12 +26,19 @@ type PaymentProvider interface {
 	CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error)
 	// FindPaymentLink looks for the object an earlier call for the same reference may have made
 	// without its answer being noted: a call that failed with an indeterminate result (a 5xx, a
-	// timeout, a dropped connection) may have been executed, and the next call has a key of its
-	// own, which would make a second object. since is when the reference was first made; nothing
-	// of it was created before. found is false only when the provider was read in full and has
-	// no such object: a read that couldn't be finished is an error, never "not found". Its
+	// timeout, a dropped connection) may have been executed, and a call under a new key would make a
+	// second object. since is when the reference was first made; nothing of it was created before.
+	// found is false only when the provider was read in full and has no such object that a payer can
+	// use: a read that couldn't be finished is an error, never "not found". expired says that it
+	// saw an object of the reference that no payer can use and that was never paid (an expired
+	// Checkout Session): the earlier call's outcome is then known, and another may be made. Its
 	// failures are *CallError that are never KeyKept.
-	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found bool, err error)
+	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found, expired bool, err error)
+	// LinkState reads, from the provider, whether the object (the one a call answered or a lookup
+	// found) can take a payment now. What a call answered, and above all what the provider replays for
+	// a key it kept, is the object as it was made: a session replayed a day later says "open" in its
+	// own words and may have expired since. Nothing is saved as the link before this says LinkOpen.
+	LinkState(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (LinkState, error)
 	// AccountID is the id of the provider's account the credentials belong to. A reference keeps
 	// it: what a call made is only to be looked for, and a call only to be repeated, in the account
 	// it was made in, and a key replaced by another account's must not move an unfinished call there.
@@ -78,6 +86,19 @@ type Link struct {
 	ObjectID string
 }
 
+// LinkState is what an object at the provider can do now.
+type LinkState int
+
+const (
+	// LinkOpen: a payer can pay it.
+	LinkOpen LinkState = iota + 1
+	// LinkExpired: no payer can use it, and it was never paid (an expired Checkout Session).
+	LinkExpired
+	// LinkSettled: it was paid, or no payer can use it for a reason that doesn't say it wasn't paid (a
+	// completed session, a Payment Link deactivated or at its limit).
+	LinkSettled
+)
+
 // CallKind says what kind of failure a call had, which decides what happens next.
 type CallKind int
 
@@ -107,6 +128,12 @@ type CallError struct {
 	// KeyKept is whether the provider may have kept this failure under the call's idempotency key,
 	// so that asking again under the same key would get the same failure.
 	KeyKept bool
+	// OutcomeUnknown is whether the call may have been executed, and what it made, if anything, is not
+	// known: a 5xx, a request that may have reached the provider and got no answer, an answer that
+	// could not be read. The provider documents it as indeterminate and says to resolve the original
+	// outcome before another call under a new key (https://docs.stripe.com/error-low-level#server-errors),
+	// so the reference gets no new key until it is resolved.
+	OutcomeUnknown bool
 }
 
 func (e *CallError) Error() string {
@@ -236,14 +263,15 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 
 	resp, err := c.Do(req)
 	if err != nil {
-		// The call may or may not have been made: asked again under the same key, the provider
-		// answers with the object if it was. Nothing of err is kept: it can quote the address.
-		return Link{}, &CallError{Kind: CallUnreachable}
+		// The call may or may not have been made: unless the connection was never made, the request
+		// may have reached the provider, which then holds what it made and says nothing of it. Nothing
+		// of err is kept: it can quote the address.
+		return Link{}, &CallError{Kind: CallUnreachable, OutcomeUnknown: !notSent(err)}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
 	if err != nil {
-		return Link{}, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
+		return Link{}, &CallError{Kind: CallUnreachable, Status: resp.StatusCode, OutcomeUnknown: true}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return Link{}, stripeFailure(resp.StatusCode, body)
@@ -256,13 +284,21 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 	if err := json.Unmarshal(body, &out); err != nil {
 		// An answer that isn't the object asked for: the call was made, and nothing says what became
 		// of it, so it is not tried again as if it had not been.
-		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode, OutcomeUnknown: true}
 	}
 	link, ok := stripeLinkOf(hosted, l.Token, out.Object, out.ID, out.URL)
 	if !ok {
-		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode, OutcomeUnknown: true}
 	}
 	return link, nil
+}
+
+// notSent says whether a failed call certainly never reached the provider: the connection was not
+// made (the address didn't resolve, nothing listened, the egress policy refused it). Any other
+// failure may have come after the request was written.
+func notSent(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }
 
 func stripeHeaders(req *http.Request, creds Credentials) {
@@ -341,8 +377,10 @@ const (
 // link is adopted, an expired session is passed over (it can't be paid), and a completed session or
 // an inactive link (deactivated, or at its limit of payments) stops the call with a refusal, so no
 // second object is made and a person reconciles the payment.
-func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, error) {
+func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
 	hosted := l.SuccessURL == ""
+	// sawExpired: an object of the token that can't be paid and never was.
+	sawExpired := false
 	path := "/v1/checkout/sessions"
 	q := url.Values{"limit": {strconv.Itoa(findPageSize)}}
 	if hosted {
@@ -353,7 +391,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 	for range findMaxPages {
 		body, status, err := stripeGet(ctx, creds, c, path+"?"+q.Encode())
 		if err != nil {
-			return Link{}, false, err
+			return Link{}, false, false, err
 		}
 		var page struct {
 			Object  string `json:"object"`
@@ -374,7 +412,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 		// that doesn't say whether there is more, or that says there is more and shows none, says
 		// nothing about the object.
 		if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || page.HasMore == nil || (*page.HasMore && len(*page.Data) == 0) {
-			return Link{}, false, &CallError{Kind: CallUnreachable, Status: status}
+			return Link{}, false, false, &CallError{Kind: CallUnreachable, Status: status}
 		}
 		data, more := *page.Data, *page.HasMore
 		for _, o := range data {
@@ -392,50 +430,98 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			// must not read as "not made" (the next call would make a second payable link).
 			if hosted && (o.Active == nil || !*o.Active) {
 				// Deactivated by a person, or by its limit of payments: no one can say it wasn't paid.
-				return Link{}, false, &CallError{Kind: CallSettled, Status: status}
+				return Link{}, false, false, &CallError{Kind: CallSettled, Status: status}
 			}
 			if !hosted {
 				switch o.Status {
 				case "open":
 				case "expired":
-					continue // can't be paid, and the payer was never given an address that works
+					// Can't be paid, and the payer was never given an address that works: the call that
+					// made it is accounted for, and another may be made.
+					sawExpired = true
+					continue
 				default:
 					if o.Status == "complete" {
-						return Link{}, false, &CallError{Kind: CallSettled, Status: status}
+						return Link{}, false, false, &CallError{Kind: CallSettled, Status: status}
 					}
-					return Link{}, false, &CallError{Kind: CallRefused, Status: status} // a state not said
+					return Link{}, false, false, &CallError{Kind: CallRefused, Status: status} // a state not said
 				}
 			}
 			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
 			if !ok || !strings.EqualFold(o.Currency, l.Currency) {
 				// Ours, and not a link the payer could be given: nothing says what it is.
-				return Link{}, false, &CallError{Kind: CallRefused, Status: status}
+				return Link{}, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			amount := o.AmountTotal
 			if hosted {
 				// A link's list entry has no amount: its line items do.
 				if amount, err = stripeLinkAmount(ctx, creds, c, o.ID, l.Currency); err != nil {
-					return Link{}, false, err
+					return Link{}, false, false, err
 				}
 			}
 			if amount != l.AmountMinor {
 				// Made for another amount than the one asked for now: its address is never given
 				// to a payer, and no other is made while it stands.
-				return Link{}, false, &CallError{Kind: CallRefused, Status: status}
+				return Link{}, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
-			return link, true, nil
+			return link, true, false, nil
 		}
 		if !more {
-			return Link{}, false, nil
+			return Link{}, false, sawExpired, nil
 		}
 		last := data[len(data)-1].ID
 		if last == "" {
-			return Link{}, false, &CallError{Kind: CallUnreachable, Status: status} // no cursor to read on from
+			return Link{}, false, false, &CallError{Kind: CallUnreachable, Status: status} // no cursor to read on from
 		}
 		q.Set("starting_after", last)
 	}
 	// Every page read was whole, and there is more behind them: asking again reads the same.
-	return Link{}, false, &CallError{Kind: CallLookupIncomplete}
+	return Link{}, false, false, &CallError{Kind: CallLookupIncomplete}
+}
+
+// LinkState retrieves the object and says what it can do now: a Checkout Session by its status
+// (https://docs.stripe.com/api/checkout/sessions/retrieve: open, complete or expired), a Payment Link
+// by whether it is active (https://docs.stripe.com/api/payment-links/payment_links/retrieve; one at
+// its limit of payments or deactivated is not, and nothing says it wasn't paid).
+func (stripe) LinkState(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (LinkState, error) {
+	want, idPattern, path := "checkout.session", stripeSessionID, "/v1/checkout/sessions/"
+	if hosted {
+		want, idPattern, path = "payment_link", stripeLinkID, "/v1/payment_links/"
+	}
+	if !idPattern.MatchString(objectID) {
+		return 0, &CallError{Kind: CallRefused}
+	}
+	body, status, err := stripeGet(ctx, creds, c, path+objectID)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID     string `json:"id"`
+		Object string `json:"object"`
+		Status string `json:"status"`
+		Active *bool  `json:"active"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Object != want || out.ID != objectID {
+		return 0, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	if hosted {
+		switch {
+		case out.Active == nil:
+			return 0, &CallError{Kind: CallUnreachable, Status: status}
+		case *out.Active:
+			return LinkOpen, nil
+		}
+		return LinkSettled, nil
+	}
+	switch out.Status {
+	case "open":
+		return LinkOpen, nil
+	case "expired":
+		return LinkExpired, nil
+	case "complete":
+		return LinkSettled, nil
+	}
+	return 0, &CallError{Kind: CallRefused, Status: status} // a state not said
 }
 
 // stripeLinkAmount is what a Payment Link asks, from its line items
@@ -517,7 +603,7 @@ func stripeFailure(status int, body []byte) error {
 		return &CallError{Kind: CallUnreachable, Status: status}
 	case status >= 500:
 		// Stripe saves a failure of an executed request under its key: the same key gets it again.
-		return &CallError{Kind: CallUnreachable, Status: status, KeyKept: true}
+		return &CallError{Kind: CallUnreachable, Status: status, KeyKept: true, OutcomeUnknown: true}
 	case e.Error.Type == "idempotency_error":
 		return &CallError{Kind: CallRefused, Status: status, KeyKept: true}
 	}
