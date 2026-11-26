@@ -11,11 +11,24 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { ApiError, api, forAccount, SESSION_LOST, sessionLostFor } from '../api'
-import { peekDeletion, rememberDeletion, resetDeletion, startDeletion } from '../auth/deleted'
+import { noteSignIn, peekDeletion, rememberDeletion, resetDeletion, startDeletion } from '../auth/deleted'
 import { type BeforeLeave, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
+
+// The language of the account that signs in may load a moment: a test holds it with `languageGate`.
+const languageGate: { wait: Promise<void> | null } = { wait: null }
+vi.mock('../i18n', async (original) => {
+  const m = await original<typeof import('../i18n')>()
+  return {
+    ...m,
+    setPreferences: async (...args: Parameters<typeof m.setPreferences>) => {
+      await languageGate.wait
+      return m.setPreferences(...args)
+    },
+  }
+})
 
 const me = {
   user: { id: 7, email: 'pat@example.com', name: 'Pat' },
@@ -149,6 +162,36 @@ test('a deletion answered after another account signed in here is not told when 
   await screen.findByRole('heading', { name: /sign in|log in/i })
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+})
+
+test('a deletion answered while the account that signs in is still loading its language is not kept either', async () => {
+  window.sessionStorage.clear()
+  // Account 1 was here and asked for its deletion; 7 has typed its password and the language loads.
+  noteSignIn(1)
+  const request = startDeletion(1)
+  let release = () => {}
+  languageGate.wait = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls = fakeFetch({
+    ...signedIn,
+    'GET /api/me': { status: 401, body: { error: 'sign in' } },
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: me },
+  })
+  try {
+    render(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'pat@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-test-password' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in|log in/i }))
+    await waitFor(() => expect(calls.some((c) => c.path === '/api/login')).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    rememberDeletion(request, '2026-12-08T10:00:00.000Z')
+    expect(peekDeletion()).toBeNull()
+  } finally {
+    languageGate.wait = null
+    release()
+  }
 })
 
 test('signing out with records not sent asks first: cancel keeps everything, discard deletes it', async () => {

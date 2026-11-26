@@ -78,7 +78,7 @@ function retire(n: Notice) {
 export function noteSignIn(user: number): void {
   if (signedIn !== user) epoch++
   signedIn = user
-  const waiting = memory ?? stored()
+  const waiting = current()
   if (waiting && !waiting.shown && keyOf(waiting) !== spent) retire(waiting)
 }
 
@@ -107,16 +107,23 @@ export function rememberDeletion(request: DeletionRequest, purgeAt: string): voi
   window.dispatchEvent(new Event(DELETION_EVENT))
 }
 
+// The notice as this page knows it. One read from storage is kept in memory: retiring it must not
+// need a second successful read (a read that fails between showing and retiring it).
+function current(): Notice | null {
+  if (!memory) memory = stored()
+  return memory
+}
+
 // The purge date to tell the person, if there is one. It stays until `deletionShown` or a sign-in.
 export function peekDeletion(): string | null {
-  const n = memory ?? stored()
+  const n = current()
   if (!n || n.shown || keyOf(n) === spent) return null
   return n.purgeAt
 }
 
 // The notice has been drawn: it is told no more.
 export function deletionShown(): void {
-  const n = memory ?? stored()
+  const n = current()
   if (n) retire(n)
 }
 

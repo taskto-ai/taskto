@@ -132,6 +132,9 @@ export function App() {
 
   const logIn = useCallback(
     async (me: Me) => {
+      // Recorded before anything is awaited (the language may load): a deletion answered for the
+      // account that was here before, in that time, is already too late to be kept.
+      noteSignIn(me.user.id)
       await setPreferences({ user: me.user.locale ?? null })
       await signIn(me)
     },
@@ -187,6 +190,7 @@ export function App() {
       const known = new Set(before?.workspaces.map((w) => w.id))
       const workspace = me.workspaces.find((w) => !known.has(w.id)) ?? me.workspaces[0]
       navigate(workspace ? `/w/${workspace.id}/conversations` : '/', { replace: true })
+      noteSignIn(me.user.id)
       void setPreferences({ user: me.user.locale ?? null })
       void signIn(me)
     },
@@ -196,6 +200,7 @@ export function App() {
   const resetDone = useCallback(
     (me: Me) => {
       navigate('/', { replace: true })
+      noteSignIn(me.user.id)
       void setPreferences({ user: me.user.locale ?? null })
       void signIn(me)
     },

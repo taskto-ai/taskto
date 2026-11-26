@@ -525,6 +525,23 @@ test('a refused getItem does not stop the notice, nor bring it back after it was
   get.mockRestore()
 })
 
+test('a notice read from storage is retired even when the read fails by the time it is shown', () => {
+  sessionStorage.clear()
+  resetDeletion()
+  // As after a reload: the notice is in storage only.
+  sessionStorage.setItem('taskto.accountDeleted', JSON.stringify({ user: 1, purgeAt: DATE }))
+  expect(peekDeletion()).toBe(DATE)
+  const get = refuse('getItem')
+  const set = refuse('setItem')
+  const remove = refuse('removeItem')
+  deletionShown()
+  get.mockRestore()
+  set.mockRestore()
+  remove.mockRestore()
+  // Storage works again (and still holds the notice, as nothing could be written): it is not told again.
+  expect(peekDeletion()).toBeNull()
+})
+
 test('a refused removeItem does not replay the notice once it was shown', async () => {
   sessionStorage.clear()
   rememberDeletion(startDeletion(1), DATE)
