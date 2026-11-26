@@ -40,8 +40,10 @@ const SUBSCRIPTION_PATH = '/api/me/push/subscription'
 
 const TURNING_OFF = 'off:'
 
-// Whose the flag is: the person who turned push on, or who is turning it off.
-const ownerOf = (flag: string | null) => (flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length) : flag)
+// Whose the flag is: the person who turned push on, or who is turning it off (`off:<id>:<turn>`, each
+// turning off its own, so one that fails puts back only what it found, and only while it is its own).
+const ownerOf = (flag: string | null) =>
+  flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[0] : flag
 
 function read(): string | null {
   try {
@@ -315,7 +317,7 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   const sub = s.check(await (await registration())?.pushManager.getSubscription())
   if (sub) {
     // Turning off from here on, for every tab and the next start, until it is done or given up.
-    const turningOff = `${TURNING_OFF}${who}`
+    const turningOff = `${TURNING_OFF}${who}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
     write(turningOff)
     try {
       await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
@@ -329,7 +331,7 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
     // changes isn't kept) may have claimed the browser's subscription while the server answered.
     // It is theirs then, with their flag; this account's turning off is done with the server's answer.
     const now = read()
-    if (now !== null && now !== turningOff && now !== String(who) && now !== before) return
+    if (now !== null && ownerOf(now) !== String(who) && now !== before) return
     if (!(await unsubscribe(sub).catch(() => false))) {
       // The browser kept it: shown as it was, for the person to try again.
       if (read() === turningOff) write(before)

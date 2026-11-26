@@ -24,7 +24,7 @@ import {
   settleSignOut,
 } from './offline/pendingSignOut'
 import { deactivate, lastUser, unsentState } from './offline/runtime'
-import { type Approval, OfflineStore } from './offline/store'
+import { type Approval, databaseExists } from './offline/store'
 import { forgetDraftsOf } from './uiState'
 
 // The longest a step of signing out waits: the server's answer, then this device's cleanup.
@@ -56,20 +56,23 @@ async function verifiedClear(user: number, { keep, approved, discardUnreadable }
   if (lastUser()?.id === user) return false
   // A browser with no IndexedDB holds no database; one the person chose to keep is theirs.
   if (typeof indexedDB === 'undefined' || keep) return true
-  // Gone altogether (the usual end). Asked without opening it, since opening one makes it again.
-  const names = await indexedDB.databases?.().catch(() => undefined)
-  const present = names?.some((d) => d.name === OfflineStore.databaseName(user))
+  // Gone altogether (the usual end), asked without leaving one made by asking.
+  const present = await databaseExists(user)
   if (present === false) return true
-  if (present && discardUnreadable) return false
+  // One they chose to discard whatever it held is verified gone, or not at all.
+  if (discardUnreadable) return false
   const { left, unreadable } = await unsentState(user, new Map())
   return !unreadable && !left.some((r) => approved.has(r.id))
 }
 
 // Whether the browser started with a newer login of `user`'s than `session` since, which isn't known
 // to be over (`forgetLogin` lets go of one that ended): the device is that login's then.
+// A login learned before this sign-out was recorded is not newer than it, whatever its session.
 function newerLogin(user: number, session: string): boolean {
   const now = browserLogin()
-  return !!session && now?.user === user && now.session !== session
+  if (!session || now?.user !== user || now.session === session) return false
+  const recorded = pendingSignOuts().find((p) => p.user === user && p.session === session)?.at ?? 0
+  return now.at >= recorded
 }
 
 // What the person decided when the sign-out became certain.
@@ -146,15 +149,17 @@ export function signOutToResume(me: Me): PendingSignOut | undefined {
 // its person made; a device that can't be cleared keeps the record (that account isn't opened offline)
 // and the start goes on for whoever is signing in.
 // The login found is remembered first, for a cleanup of an older one that is still on its way.
-export async function finishUnfinishedSignOuts(me: Me | null): Promise<void> {
-  if (me) rememberLogin(me.user.id, me.session)
+// `asked`: when the server was asked who is signed in (a start's answer may come late): a sign-out
+// recorded after that is a newer login's, never one this start's login replaced.
+export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()): Promise<void> {
+  if (me) rememberLogin(me.user.id, me.session, asked)
   for (const listed of pendingSignOuts()) {
     // Read again: an earlier cleanup waited, and another tab may have settled or replaced it since.
     const p = pendingSignOuts().find((r) => r.user === listed.user && r.session === listed.session)
     if (!p) continue
     if (me && sameLogin(p, me)) continue
     if (me && p.user === me.user.id) {
-      settleSignOut(p.user, p.session)
+      if ((p.at ?? 0) <= asked) settleSignOut(p.user, p.session)
       continue
     }
     await cleanUpAfterSignOut(p.user, p.session, decisionOf(p))

@@ -577,7 +577,9 @@ signing in is dealt with when it signs in:
   the request was sent) touches nothing on the device: the drafts, the database and the push
   subscription are that login's. The browser remembers the login it started with last, and forgets it
   as soon as that login is known to be over (a `401`, a lost session, its own sign-out), so a login
-  that has ended shields nothing. Every step of the cleanup asks again, after each wait, whether a
+  that has ended shields nothing. It keeps the one it learned of last, by when the server was asked
+  (a start answered late never puts an older login back), and only a login learned after a sign-out
+  was recorded counts as newer than it. Every step of the cleanup asks again, after each wait, whether a
   newer login started, and settles only its own login's record. Its deletion of the database is
   **one at a time with opening it** (a Web Lock per account; where the browser has none, only the
   moment between the check and the deletion is unguarded), and removes only the database it retired:

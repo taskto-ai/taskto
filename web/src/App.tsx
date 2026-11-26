@@ -115,18 +115,19 @@ export function App() {
   // is the same: this account's, and no other's (another account's unsent records are put to the
   // person first, `foreign`). Sending what the account queued starts (or goes on, after the
   // session ended and this person signed in again).
-  const claim = useCallback(async (me: Me) => {
+  // `asked`: when the server was asked who `me` is (a start, Back); a sign-in's answer is the newest.
+  const claim = useCallback(async (me: Me, asked = Date.now()) => {
     // A sign-out on this device that didn't finish (its tab closed, its cleanup failed) is finished
     // first, with its person's decision, before any account's offline data opens here; one of this
     // account's under a newer login is not to be, since the person signed in again (signOut.ts).
-    await finishUnfinishedSignOuts(me)
+    await finishUnfinishedSignOuts(me, asked)
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
   }, [])
   // Whichever way they signed in, an account with no time zone gets this browser's, once.
   const enter = useCallback(
-    async (me: Me) => {
-      await claim(me)
+    async (me: Me, asked?: number) => {
+      await claim(me, asked)
       return reportTimeZone(me)
     },
     [claim],
@@ -135,8 +136,8 @@ export function App() {
   // account change, which it is not for this page. Until someone signs in here again.
   const [finishedElsewhere, setFinishedElsewhere] = useState(false)
   const signIn = useCallback(
-    async (me: Me) => {
-      const now = await enter(me)
+    async (me: Me, asked?: number) => {
+      const now = await enter(me, asked)
       // The session begins before the shell is drawn, so what the shell starts is in it.
       beginSession(now.user.id)
       setFinishedElsewhere(false)
@@ -443,6 +444,7 @@ export function App() {
         heard = who
       })
       try {
+        const asked = Date.now()
         const me = await api<Me>('/api/me')
         if (!mine()) return
         if (heard !== undefined || me.user.id !== tail.user || !tail.session || me.session !== tail.session)
@@ -458,8 +460,8 @@ export function App() {
         if (heard !== undefined) return accountChanged()
         const invite = tail.next.state === 'invite'
         let now = me
-        if (invite) await claim(me)
-        else now = await enter(me)
+        if (invite) await claim(me, asked)
+        else now = await enter(me, asked)
         if (!mine() || heard !== undefined) {
           await deactivate({ purge: false, user: me.user.id }).catch(() => {})
           if (heard === null) forgetLast(me.user.id)
@@ -506,10 +508,10 @@ export function App() {
   // This login's sign-out didn't finish (its tab closed, or this is another tab of it): it goes on,
   // as its person decided, rather than signing them in again. False when there is none.
   const resumed = useCallback(
-    async (me: Me, next: Session) => {
+    async (me: Me, next: Session, asked?: number) => {
       const pending = signOutToResume(me)
       if (!pending) return false
-      await finishUnfinishedSignOuts(me)
+      await finishUnfinishedSignOuts(me, asked)
       const tail: Tail = { user: pending.user, session: pending.session, next, ...decisionOf(pending) }
       setSession({ state: 'leaving', tail })
       void finish(tail)
@@ -533,6 +535,7 @@ export function App() {
       if (setup.needed) return setSession({ state: 'setup' })
       if (window.location.pathname === RESET_PATH) return setSession({ state: 'reset' })
       if (window.location.pathname === INVITE_PATH) {
+        const asked = Date.now()
         const me = await api<Me>('/api/me').catch((e) => {
           if (e instanceof ApiError && e.status === 401) return null
           throw e
@@ -540,17 +543,18 @@ export function App() {
         if (!me) await lapsed()
         // Signed in on the invite page is signed in: what this device keeps of the account is
         // theirs from here, and is what signing out from the page takes away.
-        if (me && (await resumed(me, { state: 'invite', me: null }))) return
+        if (me && (await resumed(me, { state: 'invite', me: null }, asked))) return
         if (me) {
-          await claim(me)
+          await claim(me, asked)
           beginSession(me.user.id)
         }
         return setSession({ state: 'invite', me })
       }
+      const asked = Date.now()
       const me = await api<Me>('/api/me')
       await setPreferences({ user: me.user.locale ?? null })
-      if (await resumed(me, { state: 'login' })) return
-      await signIn(me)
+      if (await resumed(me, { state: 'login' }, asked)) return
+      await signIn(me, asked)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         await lapsed()

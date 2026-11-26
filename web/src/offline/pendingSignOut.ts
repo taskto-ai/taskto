@@ -31,6 +31,8 @@ export type PendingSignOut = {
   unanswered?: boolean
   // The person was told the database couldn't be read, and chose to discard it.
   discardUnreadable?: boolean
+  // When it was recorded (this browser's clock), to tell it from what a start learned before it.
+  at?: number
 }
 
 const isSeen = (v: unknown): v is Seen =>
@@ -49,6 +51,7 @@ function valid(p: unknown): p is PendingSignOut {
     typeof r.keep === 'boolean' &&
     (r.unanswered === undefined || typeof r.unanswered === 'boolean') &&
     (r.discardUnreadable === undefined || typeof r.discardUnreadable === 'boolean') &&
+    (r.at === undefined || Number.isFinite(r.at)) &&
     Array.isArray(r.approved) &&
     r.approved.every((a) => Array.isArray(a) && a.length === 2 && typeof a[0] === 'string' && isSeen(a[1]))
   )
@@ -103,6 +106,7 @@ export function recordSignOut(
       approved: [...approved],
       ...(discardUnreadable ? { discardUnreadable } : {}),
       ...(unanswered ? { unanswered } : {}),
+      at: Date.now(),
     },
   ])
 }
@@ -152,12 +156,17 @@ export function signOutPending(user: number): boolean {
 
 // The login this browser started with last (a sign-in, or a start that found one), shared by its
 // tabs: a sign-out of an older login of the same account, confirmed late, leaves what is on the
-// device to it (signOut.ts).
+// device to it (signOut.ts). With when the server was asked about it (`at`, this browser's clock): a
+// start answered late never puts an older login of the account back over one learned since.
 const LOGIN = 'taskto:login'
 
-export function rememberLogin(user: number, session: string | undefined): void {
+export type BrowserLogin = { user: number; session: string; at: number }
+
+export function rememberLogin(user: number, session: string | undefined, asked = Date.now()): void {
+  const now = browserLogin()
+  if (now && now.user === user && now.at > asked) return
   try {
-    if (session) window.localStorage.setItem(LOGIN, JSON.stringify({ user, session }))
+    if (session) window.localStorage.setItem(LOGIN, JSON.stringify({ user, session, at: asked }))
     else window.localStorage.removeItem(LOGIN)
   } catch {
     // Not kept: a late sign-out of an older login clears the device as it would have.
@@ -176,11 +185,15 @@ export function forgetLogin(user: number, session: string | undefined): void {
   }
 }
 
-export function browserLogin(): { user: number; session: string } | null {
+export function browserLogin(): BrowserLogin | null {
   try {
-    const v = JSON.parse(window.localStorage.getItem(LOGIN) ?? 'null') as { user?: unknown; session?: unknown } | null
+    const v = JSON.parse(window.localStorage.getItem(LOGIN) ?? 'null') as {
+      user?: unknown
+      session?: unknown
+      at?: unknown
+    } | null
     return v && Number.isInteger(v.user) && typeof v.session === 'string' && v.session !== ''
-      ? { user: v.user as number, session: v.session }
+      ? { user: v.user as number, session: v.session, at: Number.isFinite(v.at) ? (v.at as number) : 0 }
       : null
   } catch {
     return null

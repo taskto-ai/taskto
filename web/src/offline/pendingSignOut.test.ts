@@ -6,10 +6,13 @@
 import { beforeEach, expect, test } from 'vitest'
 import {
   backFromSignOut,
+  browserLogin,
   confirmSignOut,
+  forgetLogin,
   pendingSignOutOf,
   pendingSignOuts,
   recordSignOut,
+  rememberLogin,
   settleSignOut,
   signOutPending,
   unansweredSignOut,
@@ -27,6 +30,7 @@ test('a sign-out is recorded with its login and phase, confirmed, and settled', 
     phase: 'requested',
     keep: false,
     approved: [['r1', { version: 2, operation: 'op-1' }]],
+    at: expect.any(Number),
   })
   confirmSignOut(1, 's1')
   expect(pendingSignOutOf(1)?.phase).toBe('confirmed')
@@ -96,4 +100,18 @@ test('a sign-out of the same login again keeps that an earlier logout of it got 
   // Not for another login of the account.
   recordSignOut(1, 's2', false, new Map())
   expect(pendingSignOutOf(1)?.unanswered).toBeUndefined()
+})
+
+test('the browser keeps the login it learned last of an account, whatever order the answers come in', () => {
+  rememberLogin(1, 's2', 200)
+  // A start that asked earlier is answered now.
+  rememberLogin(1, 's1', 100)
+  expect(browserLogin()).toMatchObject({ user: 1, session: 's2' })
+  // Another account's is the browser's from its sign-in on.
+  rememberLogin(2, 't1', 300)
+  expect(browserLogin()).toMatchObject({ user: 2, session: 't1' })
+  forgetLogin(2, 't0')
+  expect(browserLogin()).toMatchObject({ user: 2, session: 't1' })
+  forgetLogin(2, 't1')
+  expect(browserLogin()).toBeNull()
 })

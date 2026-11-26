@@ -947,6 +947,45 @@ export class OfflineStore {
   }
 }
 
+// Whether `user`'s database is on this device, asked without leaving one made by asking: from the
+// browser's list of databases, or else by opening it (one that opening made is removed again).
+// Undefined when it can't be told.
+export function databaseExists(user: number): Promise<boolean | undefined> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(false)
+  const name = OfflineStore.databaseName(user)
+  return (async () => {
+    const names = await indexedDB.databases?.().catch(() => undefined)
+    if (names) return names.some((d) => d.name === name)
+    return withLock(user, () => probe(name))
+  })()
+}
+
+function probe(name: string): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    let made = false
+    let request: IDBOpenDBRequest
+    try {
+      request = indexedDB.open(name)
+    } catch {
+      resolve(undefined)
+      return
+    }
+    request.onupgradeneeded = (e) => {
+      if (e.oldVersion === 0) made = true
+    }
+    request.onsuccess = () => {
+      request.result.close()
+      if (!made) return resolve(true)
+      deleteDatabase(name).then(
+        () => resolve(false),
+        () => resolve(undefined),
+      )
+    }
+    request.onerror = () => resolve(undefined)
+    request.onblocked = () => resolve(undefined)
+  })
+}
+
 // One at a time per account, across the browser's tabs: opening its database, and a sign-out's
 // deletion of it. Where the browser has no Web Locks, the deletion still removes only a retired
 // database, which leaves only the moment between that check and the deletion unguarded.

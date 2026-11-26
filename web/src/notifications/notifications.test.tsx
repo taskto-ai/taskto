@@ -1489,3 +1489,33 @@ test('marks of unsubscribes long over, or that are no time at all, are removed w
   expect(localStorage.getItem('taskto.push-unsubscribing:closed-tab')).toBeNull()
   expect(localStorage.getItem('taskto.push-unsubscribing:garbled')).toBeNull()
 })
+
+test("without Web Locks, a turn-off that fails never puts push back on over another tab's turn-off", async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  let deletes = 0
+  let fail: () => void = () => {}
+  fakeFetch({
+    'DELETE /api/me/push/subscription': () => {
+      deletes++
+      // This tab's request fails, later; the other tab's is still on its way.
+      return deletes === 1
+        ? new Promise((done) => {
+            fail = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+          })
+        : new Promise(() => {})
+    },
+  })
+  const mine = disablePush().catch(() => {})
+  await vi.waitFor(() => expect(deletes).toBe(1))
+  // Another tab, with nothing to order it with this one, turns push off too.
+  vi.resetModules()
+  const other = await import('./push')
+  ;(await import('../session')).beginSession(1)
+  void other.disablePush().catch(() => {})
+  await vi.waitFor(() => expect(deletes).toBe(2))
+  fail()
+  await mine
+  // The other tab's turn-off stands: push is not shown on, nor registered again at a start.
+  expect(localStorage.getItem('taskto.push')).not.toBe('1')
+})

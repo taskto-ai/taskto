@@ -163,18 +163,17 @@ async function backWithPreferencesHeld() {
   return release
 }
 
-test('a newer login that is over shields nothing: a sign-out of the older one then clears the device', async () => {
-  fakeFetch({
-    ...signedIn,
-    'GET /api/me': { body: me },
-    // The browser's cookie is the newer login's, which has ended: the logout is answered 401.
-    'POST /api/logout': { status: 401, body: { error: 'not logged in' } },
-  })
+test('a newer login that is over shields nothing: Try again, answered 401 for it, clears the device', async () => {
+  let logout: { status: number; body: unknown } = { status: 503, body: { error: 'unavailable', code: 'internal' } }
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me }, 'POST /api/logout': () => logout })
   await signedInAs()
-  // Another tab started with a newer login of the same person (its start remembered it); that login
-  // ended since, without a tab to see it.
-  await finishUnfinishedSignOuts({ ...me, session: 's2' })
   logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // Another tab starts with a newer login of the same person (its start remembers it), and that
+  // login ends: the browser's cookie is its, so Try again is answered 401.
+  await finishUnfinishedSignOuts({ ...me, session: 's2' })
+  logout = { status: 401, body: { error: 'not logged in' } }
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await screen.findByRole('heading', { name: 'Log in' })
   await waitFor(() => expect(lastUser()).toBeNull())
   expect(await databases()).not.toContain('taskto-offline-7')
@@ -401,5 +400,50 @@ test('Back whose claim comes just after another tab finished the sign-out takes 
   await new Promise((r) => setTimeout(r, 50))
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
   // The claim wrote the account back as the browser's: it is taken away again.
+  expect(lastUser()).toBeNull()
+})
+
+test('one the person chose to discard is not verified clear while it may still be there, even where databases cannot be listed', async () => {
+  recordSignOut(7, 's1', false, new Map(), true)
+  await activate(7, 'Pat')
+  const runtime = runtimeState().runtime
+  runtime?.engine.pause('manual')
+  await runtime?.store.enqueue(queued(), [])
+  await deactivate({ purge: false, user: 7 })
+  vi.spyOn(OfflineStore.prototype, 'retireOrKeepUnsent').mockRejectedValue(new Error('read failed'))
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(() => {
+    const request = { error: new DOMException('refused', 'UnknownError') } as unknown as IDBOpenDBRequest
+    setTimeout(() => request.onerror?.(new Event('error')), 0)
+    return request
+  })
+  Object.defineProperty(indexedDB, 'databases', { configurable: true, value: undefined })
+  expect(await cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map(), discardUnreadable: true })).toBe(false)
+  expect(pendingSignOutOf(7)).toMatchObject({ session: 's1' })
+})
+
+test('a start whose answer comes late never takes a newer login of the account back, nor settles its sign-out', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': () =>
+      new Promise((done) => {
+        answer = () => done({ body: me })
+      }),
+  })
+  render(<App />)
+  await waitFor(() => expect(answer).not.toBe(undefined))
+  await new Promise((r) => setTimeout(r, 20))
+  // Meanwhile the same person signs in again in another tab, with a newer login, downloads an app's
+  // data there, and begins signing that login out.
+  await finishUnfinishedSignOuts({ ...me, session: 's2' })
+  await activate(7, 'Pat')
+  recordSignOut(7, 's2', false, new Map())
+  // This tab's start is answered only now, for the login the cookie held when it asked.
+  await act(async () => answer())
+  await screen.findByRole('banner')
+  expect(pendingSignOutOf(7)).toMatchObject({ session: 's2' })
+  // The newer login's sign-out is finished: the device is cleared, not shielded by the older login.
+  await deactivate({ purge: false })
+  expect(await cleanUpAfterSignOut(7, 's2', { keep: false, approved: new Map() })).toBe(true)
   expect(lastUser()).toBeNull()
 })
