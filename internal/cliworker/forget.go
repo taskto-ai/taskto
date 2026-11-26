@@ -18,18 +18,13 @@ import (
 // afterwards makes the directory and a login's files in it again. So Forget first marks the user
 // forgotten, durably, which refuses everything that would start for them (Start, StartLogin
 // and every helper request, helperCommand); then stops what is running for them and waits for it
-// to end (their turns, queued ones included, their logins and the short helper requests in
-// flight); and only then removes the directory.
+// to end (removal.go); and only then removes the directory.
 //
 // A mark outlives the worker's restarts, but not a restore of the server's data: user numbers
 // are never reused within one database's history, and a restore goes back in it (the person
 // whose account was purged may be back, and the numbers after the backup are given again), while
 // the worker's directory, in container mode, is not part of the backup. So the server says at
 // every start which numbers are live and which come next (Reconcile), and the marks of those go.
-
-// forgetWait is how long Forget gives what runs for the user to end, beyond a stopped CLI's own
-// grace: the short helper requests are bounded to 30 s.
-const forgetWait = 35 * time.Second
 
 // forgottenMark is the file in the worker's own directory that records user as forgotten.
 func (w *Worker) forgottenMark(user int64) string {
@@ -85,34 +80,12 @@ func (w *Worker) markForgotten(user int64) error {
 	return root.Sync()
 }
 
-// beginQuick counts a short helper request for user that is about to run, or refuses it if the
-// user was forgotten. Forget waits for the counted ones.
-func (w *Worker) beginQuick(user int64) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.isForgotten(user) {
-		return ErrForgotten
-	}
-	w.quick[user]++
-	return nil
-}
-
-func (w *Worker) endQuick(user int64) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.quick[user]--; w.quick[user] <= 0 {
-		delete(w.quick, user)
-	}
-	close(w.quickEnded)
-	w.quickEnded = make(chan struct{})
-}
-
 // Forget removes everything the worker keeps for user, for an account that is deleted. It
-// refuses everything that would start for them from now on (ErrForgotten), stops their turns
-// (the ones waiting for a place too) and logins and waits for them and for the helper requests in
-// flight to end, so nothing writes into their directory any more, and only then removes it,
-// with their logins, sessions, working directories and browser profile. Idempotent: a call that failed halfway is
-// made again, and the mark stays.
+// refuses everything that would start for them from now on (ErrForgotten), stops what runs for
+// them (their turns, the ones waiting for a place too, their sign-ins and the helper requests in
+// flight) and waits for it, so nothing writes into their directory any more (removal.go), and only
+// then removes it, with their logins, sessions, working directories and browser profile.
+// Idempotent: a call that failed halfway (ErrBusy, say) is made again, and the mark stays.
 func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if user <= 0 {
 		return errors.New("invalid user")
@@ -120,62 +93,10 @@ func (w *Worker) Forget(ctx context.Context, user int64) error {
 	if err := w.markForgotten(user); err != nil {
 		return fmt.Errorf("recording that the user was forgotten: %w", err)
 	}
-	// A turn or a login that started before the mark is in these maps (they are added under the
-	// lock the check is made under); one that starts after it is refused.
-	w.mu.Lock()
-	var turns []*Turn
-	for _, t := range w.turns {
-		if t.spec.User == user {
-			turns = append(turns, t)
-		}
+	if err := w.quiesce(ctx, scope{user: user, all: true}); err != nil {
+		return err
 	}
-	// Every execution, not only the current login of each account: a cancelled one that a new
-	// sign-in replaced may still be running.
-	var logins []*Login
-	for l := range w.loginRuns {
-		if l.user == user {
-			logins = append(logins, l)
-		}
-	}
-	w.mu.Unlock()
-	for _, t := range turns {
-		t.stop()
-	}
-	for _, l := range logins {
-		l.stop()
-	}
-
-	wctx, cancel := context.WithTimeout(ctx, w.cfg.StopGrace+forgetWait)
-	defer cancel()
-	for _, t := range turns {
-		select {
-		case <-t.ended:
-		case <-wctx.Done():
-			return fmt.Errorf("a turn of the user didn't end: %w", wctx.Err())
-		}
-	}
-	for _, l := range logins {
-		select {
-		case <-l.Done():
-		case <-wctx.Done():
-			return fmt.Errorf("a sign-in of the user didn't end: %w", wctx.Err())
-		}
-	}
-	for {
-		w.mu.Lock()
-		n, ended := w.quick[user], w.quickEnded
-		w.mu.Unlock()
-		if n == 0 {
-			break
-		}
-		select {
-		case <-ended:
-		case <-wctx.Done():
-			return fmt.Errorf("a request for the user didn't end: %w", wctx.Err())
-		}
-	}
-
-	_, _, err := w.runQuick(ctx, user, helperRequest{Op: "forget"})
+	_, _, err := w.runHelper(ctx, user, helperRequest{Op: "forget"})
 	return err
 }
 

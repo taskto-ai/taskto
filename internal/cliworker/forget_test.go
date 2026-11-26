@@ -52,6 +52,7 @@ func gone(t *testing.T, path string) {
 // and refreshed credentials back after Forget returned.
 func TestForgetStopsARunningTurnBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
+	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	// The CLI takes a moment to stop and saves a file into its directory as it goes, as a real
 	// one saves its session: Forget must wait for that, and remove the directory after it.
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, TermWriteMS: 300}, true)
@@ -83,6 +84,7 @@ func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 	for _, cli := range []cliworker.CLI{cliworker.Claude, cliworker.Codex} {
 		t.Run(string(cli), func(t *testing.T) {
 			h := newHarness(t, nil)
+			h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 			dirs := h.user(t, 1, cli, clitest.Scenario{TermWriteMS: 300}, false)
 			l, err := h.w.StartLogin(1, cli, "")
 			if err != nil {
@@ -110,6 +112,7 @@ func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 // login of the account is the new one): Forget waits for it too.
 func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
 	old, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
@@ -150,6 +153,7 @@ func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 // ends) is waited for too.
 func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
+	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{StatusSleepMS: 1500}, true)
 	answered := make(chan struct{})
 	go func() {
@@ -179,6 +183,7 @@ func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 // directory again and run on a login that was just removed.
 func TestForgetEndsAQueuedTurnWithoutStartingIt(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.MaxTurnsPerUser = 1 })
+	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, TermWriteMS: 200}, true)
 	first, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "work"))
 	if err != nil {

@@ -49,6 +49,8 @@ var remoteErrors = map[string]error{
 	"no_code_needed": ErrNoCodeNeeded,
 	"no_permission":  ErrNoPermission,
 	"forgotten":      ErrForgotten,
+	"removing":       ErrRemoving,
+	"busy":           ErrBusy,
 }
 
 // remoteWait bounds how long an events request waits for a new event.
@@ -288,7 +290,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy):
 				status = http.StatusConflict
 			}
 		}
