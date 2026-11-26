@@ -7,11 +7,17 @@
 // address names it) and opens the workspace. A save the person cancelled that still succeeds made a
 // workspace all the same: the account is updated and a toast says so, with a way to open it, but
 // the page stays where the person is. One that fails after Cancel made nothing, and isn't shown.
+// One that ends after the session did (logged out, or the session lost) does nothing at all: no
+// toast and no change of address on the login screen, or in the next person's session. One that
+// ends while the dialog is gone but the session isn't (the shell is showing a push's notification)
+// still updates the account and says so, and opens nothing.
 
 import { type FormEvent, useEffect, useId, useRef, useState } from 'react'
 import { api, errorText, forAccount, type Me, type Workspace } from '../api'
 import { useT } from '../i18n'
+import { useMounted } from '../mounted'
 import { navigate, routePath } from '../router'
+import { sameSession } from '../session'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { Field } from '../ui/Field'
@@ -47,6 +53,7 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
   // belongs to the opening it was started in, and outlives a Cancel: when it ends, it acts on the
   // dialog only if that same opening is still there (not one opened again since).
   const opening = useRef(0)
+  const mounted = useMounted()
 
   // Each opening starts clean: no name, no error and no save left from one before.
   useEffect(() => {
@@ -62,6 +69,7 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
     if (busy || name.trim() === '') return
     const mine = opening.current
     const still = () => opening.current === mine
+    const session = sameSession()
     setBusy(true)
     setError(null)
     try {
@@ -70,8 +78,9 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
         headers: forAccount(user),
         body: { name: name.trim() },
       })
+      if (!session()) return
       onMe(me)
-      if (still()) {
+      if (mounted.current && still()) {
         onClose()
         openWorkspace(workspace.id)
       } else {
@@ -82,9 +91,9 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
         })
       }
     } catch (err) {
-      if (still()) setError(errorText(err))
+      if (mounted.current && still()) setError(errorText(err))
     } finally {
-      if (still()) setBusy(false)
+      if (mounted.current && still()) setBusy(false)
     }
   }
 

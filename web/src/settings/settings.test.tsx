@@ -218,6 +218,30 @@ test("admins set the workspace's default language, which members without a pick 
   await act(() => setPreferences({ workspace: null }))
 })
 
+test('a default language saved after the tab went (the session ended) changes nothing and says nothing', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'PATCH /api/workspaces/1': () =>
+      new Promise((done) => {
+        answer = () => done({ body: { ...admin, locale: 'pt-BR' } })
+      }),
+  })
+  vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['fr-FR'])
+  const lang = document.documentElement.lang
+  const { unmount } = render(<SettingsPage me={me} workspace={admin} />)
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Default language' }), { target: { value: 'pt-BR' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  unmount()
+  // Long enough for the answer to reach whatever it would change (the language's file is loaded).
+  await act(async () => {
+    answer()
+    await new Promise((r) => setTimeout(r, 200))
+  })
+  expect(document.documentElement.lang).toBe(lang)
+  expect(screen.queryByText(/^(Salvo|Saved)\.$/)).toBeNull()
+  vi.restoreAllMocks()
+})
+
 test('admins invite, change roles, remove members and withdraw invites', async () => {
   let invites = [
     {

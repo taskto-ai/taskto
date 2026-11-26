@@ -19,14 +19,15 @@ import (
 )
 
 // The steps of a purge that are about files and other processes, not rows (purge_cleanups,
-// migration 0050): the agent runtime's records of the account's conversations, the CLI worker's
-// directory of the account, and the providers file and key files, which hold the account's provider
-// accounts. Each is recorded before it is tried and removed when it is done, so one that can't be
+// migration 0050): the agent runtime's records of the account's conversations, the account's agent
+// browsers (stopped, then their profile removed), the CLI worker's directory of the account, and the
+// providers file and key files, which hold the account's provider accounts. Each is recorded before it is tried and removed when it is done, so one that can't be
 // done now (the agent runtime or the CLI worker is off, or doesn't answer) is tried again by the
 // next purge attempt, by the next start and while the server runs (Maintain), and the purge is not
 // reported complete while one is left.
 const (
 	cleanAgentConversation = "agent_conversation"
+	cleanBrowser           = "browser"
 	cleanCLIHome           = "cli_home"
 	cleanProviders         = "providers"
 )
@@ -42,6 +43,7 @@ const (
 	failSidecarUnreachable = "sidecar_unreachable"    // it didn't answer, or isn't ready
 	failCLIWorker          = "cli_worker_failed"      // the CLI worker couldn't remove the account's files
 	failFileRemove         = "file_remove_failed"     // a file or directory here couldn't be removed
+	failBrowser            = "browser_failed"         // the browsers couldn't be stopped, or their files removed
 	failProviderReload     = "provider_reload_failed" // the runtime refused the providers file, or it couldn't be written
 	failProviderKey        = "provider_key_not_removed"
 	failBadTarget          = "invalid_target"
@@ -126,10 +128,12 @@ type cleanup struct {
 	kind, target string
 }
 
-// pending lists the recorded steps, of userID's purge, or of every account's if userID is 0.
+// pending lists the recorded steps, of userID's purge, or of every account's if userID is 0. The
+// browsers' steps come first: the CLI home, which holds their directory, is removed after them even
+// when it was recorded before them.
 func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) {
 	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target FROM purge_cleanups
-		WHERE ? = 0 OR user_id = ? ORDER BY id`, userID, userID)
+		WHERE ? = 0 OR user_id = ? ORDER BY kind <> ?, id`, userID, userID, cleanBrowser)
 	if err != nil {
 		return nil, err
 	}
@@ -208,17 +212,31 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 			return sidecarFailure(err)
 		}
 		return nil
+	case cleanBrowser:
+		user, err := strconv.ParseInt(c.target, 10, 64)
+		if err != nil || user <= 0 {
+			return failed(failBadTarget, nil)
+		}
+		return s.forgetBrowser(ctx, user)
 	case cleanCLIHome:
 		user, err := strconv.ParseInt(c.target, 10, 64)
 		if err != nil || user <= 0 {
 			return failed(failBadTarget, nil)
 		}
-		return s.forgetCLI(ctx, user)
+		// Bounded, so one attempt's time is known: the worker stops the user's turns (a grace
+		// period) and waits for the requests in flight; a cut call is made again.
+		cctx, cancel := context.WithTimeout(ctx, cliForgetTimeout)
+		defer cancel()
+		return s.forgetCLI(cctx, user)
 	case cleanProviders:
 		return s.syncProviders(ctx)
 	}
 	return failed(failUnknownStep, nil)
 }
+
+// cliForgetTimeout bounds one attempt at the CLI worker's step: the worker's own waits add up to
+// about 70 seconds.
+const cliForgetTimeout = 2 * time.Minute
 
 // defaultAgentTimeout bounds one attempt at an agent runtime step: longer than the runtime's own wait
 // for a pinned log, so its busy answer arrives first.
@@ -231,11 +249,50 @@ func (s *Service) agentTimeout() time.Duration {
 	return defaultAgentTimeout
 }
 
+// defaultBrowserTimeout bounds one attempt at stopping an account's browsers and removing their
+// files: a browser takes a few seconds to close, and the worker's own limits are shorter than this.
+const defaultBrowserTimeout = 2 * time.Minute
+
+// forgetBrowser stops user's agent browsers and removes their profile and the rest of their browser
+// directory (Browsers.Forget): no browser of theirs starts meanwhile, their live views are closed, and
+// the step is done only once their processes are gone and the files removed. Without agent browsers
+// in this server (Options.Browsers is nil: no worker has any) there is nothing to stop, and the
+// CLI home step removes the files.
+func (s *Service) forgetBrowser(ctx context.Context, user int64) error {
+	if s.o.Browsers == nil {
+		return nil
+	}
+	timeout := defaultBrowserTimeout
+	if s.stepTimeout > 0 {
+		timeout = s.stepTimeout
+	}
+	bctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := s.o.Browsers.Forget(bctx, user); err != nil {
+		return failed(failBrowser, err)
+	}
+	return nil
+}
+
+// browserPending reports whether user's browser step is still recorded: the CLI home, which holds
+// the browser's directory, is not removed under a browser that may still run.
+func (s *Service) browserPending(ctx context.Context, user int64) (bool, error) {
+	var n int
+	err := s.o.DB.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE user_id = ? AND kind = ?`, user, cleanBrowser).Scan(&n)
+	return n > 0, err
+}
+
 // forgetCLI removes everything kept for user's CLI logins: the worker's directory (when CLI workers
 // are on) and, in any mode, the directory the local worker keeps under the data directory, which
 // stays when the mode is later turned off. It is waiting while the worker is off, since a
 // container worker keeps its own copy, out of reach.
 func (s *Service) forgetCLI(ctx context.Context, user int64) error {
+	// Its directory holds the browser's profile: not before the browsers are stopped and gone.
+	if pending, err := s.browserPending(ctx, user); err != nil {
+		return err
+	} else if pending {
+		return errWaiting
+	}
 	var worker error
 	if s.o.CLI != nil {
 		worker = s.o.CLI.Forget(ctx, user)

@@ -263,7 +263,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	defer func() { stuck.note("the CLI workers' proxy", stopCLI()) }()
 	// The agent browser, in the CLI worker (or with it, in local mode).
-	browsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
+	browsers, purgeBrowsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
 	defer stopBrowsers()
 
 	// The knowledge-base, board, app and browser tools, for the sidecar and the MCP endpoint:
@@ -303,7 +303,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// The purge of a deleted account, after its grace period: a job of the scheduler too, so its
 	// handler is registered before the scheduler starts.
 	deletions := accountdeletion.New(accountdeletion.Options{
-		DB: sqlDB, DataDir: cfg.DataDir, Scheduler: scheduler, Knowledge: kb, CLI: cliAccounts,
+		DB: sqlDB, DataDir: cfg.DataDir, Scheduler: scheduler, Knowledge: kb, CLI: cliAccounts, Browsers: purgeBrowsers,
 	})
 	if err := deletions.Attach(); err != nil {
 		return err

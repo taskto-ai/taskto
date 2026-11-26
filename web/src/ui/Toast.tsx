@@ -22,6 +22,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncEx
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { useT } from '../i18n'
+import { onSessionChange } from '../session'
 import { Button } from './Button'
 import { focusVisible } from './focusInput'
 import { Icon } from './Icon'
@@ -95,10 +96,13 @@ export function dismissToast(id: number): void {
   set({ items: state.items.filter((i) => i.id !== id) })
 }
 
-// For tests: no toast, nothing being said.
-export function resetToasts(): void {
+// No toast, nothing being said: when a session begins or ends (session.ts), at that moment, so one
+// person's toasts never reach the next, whichever Toaster draws them; and between tests.
+export function clearToasts(): void {
   set({ items: [], said: [] })
 }
+export const resetToasts = clearToasts
+onSessionChange(clearToasts)
 
 const subscribe = (fn: () => void) => {
   listeners.add(fn)

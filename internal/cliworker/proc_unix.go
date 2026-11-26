@@ -30,6 +30,12 @@ func signalGroup(pgid int, sig syscall.Signal) error {
 	return err
 }
 
+// groupExists reports whether any process of group pgid still exists, a zombie (killed, not yet
+// reaped by its parent) included. Whether one of them is alive is groupLive's question.
+func groupExists(pgid int) bool {
+	return !errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH)
+}
+
 const (
 	sigTerm = syscall.SIGTERM
 	sigKill = syscall.SIGKILL

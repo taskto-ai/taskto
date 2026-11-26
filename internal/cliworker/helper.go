@@ -31,7 +31,7 @@ import (
 //     PromptFile it is read into a file the CLI gets instead (Grok Build) and stdin closes.
 //   - "limits": prints the usage limits Codex recorded for a thread, as JSON.
 //   - "authfile": prints whether the CLI's credentials file exists, as JSON.
-//   - "browser", "browser-vnc", "browser-clean": the user's agent browser (browser.go).
+//   - "browser", "browser-vnc", "browser-clean", "browser-purge": the user's agent browser (browser.go).
 //
 // The exec replaces the helper, so the CLI keeps its PID: the worker's process group,
 // records and signals work as if it had started the CLI itself.
@@ -259,6 +259,12 @@ func credentials(cli CLI) string {
 // CLI's stdin), unless the caller wires stdin itself (then extra is nil and it must write
 // header() first).
 func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
+	w.helperLaunches.Add(1)
+	// Every op but the one that removes the user's directory makes it (and a login's files in
+	// it): none runs for a forgotten user (forget.go).
+	if req.Op != "forget" && w.isForgotten(user) {
+		return nil, nil, ErrForgotten
+	}
 	req.LayoutRoot, req.User = w.cfg.Layout.Root, user
 	if req.Path == "" {
 		req.Path = w.cfg.Path

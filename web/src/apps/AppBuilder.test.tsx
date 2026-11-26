@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { parseRoute, usePath } from '../router'
+import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { claimDrafts } from '../uiState'
 import { AppsPage } from './AppsPage'
@@ -880,4 +881,75 @@ test('on a phone a shared space is chosen with the select, then the shared space
   fireEvent.click(screen.getByRole('button', { name: 'Start building' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/build-9'))
   expect(sentToAgent(calls)).toContain('the shared space “Team” (space id 3)')
+})
+
+// --- A build whose session ends, or whose page goes, between its steps ---------------------
+
+// The steps of starting a build, each held in turn: after the person leaves the page or their
+// session ends while one waits, nothing more is sent (not their prompt, not its title), no draft is
+// kept and nothing is opened.
+const NEW = 'POST /api/workspaces/1/conversations'
+const MESSAGES = 'POST /api/workspaces/1/conversations/9/messages'
+const TITLE = 'PATCH /api/workspaces/1/conversations/9'
+const ENTRIES = 'GET /api/workspaces/1/conversations/9/entries'
+
+async function startHeld(hold: string, page: '/w/1/apps/build' | '/w/1/apps/build-9') {
+  narrowScreen(false)
+  window.history.replaceState(null, '', page)
+  let release: () => void = () => {}
+  const answers: Record<string, { status?: number; body?: unknown }> = {
+    [NEW]: { status: 201, body: conversation(9) },
+    [MESSAGES]: { status: 202, body: { submission_id: 1 } },
+    [TITLE]: { body: conversation(9) },
+    [ENTRIES]: { body: { entries: [] } },
+  }
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/conversations/9': { body: conversation(9) },
+    ...answers,
+    [hold]: () =>
+      new Promise((done) => {
+        release = () => done(answers[hold])
+      }),
+  })
+  beginSession(USER)
+  const view = render(<Routed />)
+  fireEvent.change(await screen.findByLabelText('What should the app do?'), { target: { value: 'Private plans' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Start building' }))
+  const [method, path] = hold.split(' ')
+  await waitFor(() => expect(calls.some((c) => c.method === method && c.path === path)).toBe(true))
+  const sent = () => calls.map((c) => `${c.method} ${c.path}`)
+  const before = sent().length
+  return { calls, view, release: () => act(async () => release()), after: () => sent().slice(before) }
+}
+
+for (const [hold, page, ending] of [
+  [NEW, '/w/1/apps/build', 'unmount'],
+  [NEW, '/w/1/apps/build', 'session'],
+  [MESSAGES, '/w/1/apps/build', 'session'],
+  [TITLE, '/w/1/apps/build', 'unmount'],
+  [ENTRIES, '/w/1/apps/build-9', 'session'],
+] as const) {
+  test(`a build whose ${hold} answers after the ${ending === 'unmount' ? 'page went' : 'session ended'} goes no further`, async () => {
+    const started = await startHeld(hold, page)
+    if (ending === 'unmount') started.view.unmount()
+    else endSession()
+    await started.release()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(started.after().filter((c) => c.startsWith('POST') || c.startsWith('PATCH'))).toEqual([])
+    expect(window.localStorage.getItem(SESSION)).toBeNull()
+    expect(window.location.pathname).toBe(page)
+  })
+}
+
+test('a build whose session changed while it waited leaves its button ready on the page that is still here', async () => {
+  const started = await startHeld(NEW, '/w/1/apps/build')
+  // Logging out began and was then called off (records to ask about): a new session, same page.
+  endSession()
+  beginSession(USER)
+  await started.release()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Start building' }).getAttribute('aria-busy')).toBeNull(),
+  )
+  expect(window.location.pathname).toBe('/w/1/apps/build')
 })

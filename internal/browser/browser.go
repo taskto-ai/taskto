@@ -95,6 +95,9 @@ var (
 	ErrStaleRef    = errors.New("no such element on the page now: take a new snapshot")
 	ErrTooManyLive = errors.New("too many live views of this browser are open: close one first")
 	ErrClosed      = errors.New("the browser service is shutting down")
+	// ErrAccountClosing is a start refused while the browsers of the user's deleted account are
+	// being stopped and their files removed (Manager.Forget).
+	ErrAccountClosing = errors.New("this account is being deleted: its browsers can't be started")
 )
 
 // BadAction is a mistake in an Action's arguments; its message says which.

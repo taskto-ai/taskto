@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { MailStatus, Me, Workspace } from '../api'
 import { setPreferences } from '../i18n'
+import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { resetToasts } from '../ui/Toast'
 import { SettingsPage } from './SettingsPage'
@@ -97,4 +98,43 @@ test("an admin who doesn't run the server doesn't see the email settings or ask 
   await screen.findByRole('heading', { name: 'General' })
   expect(screen.queryByRole('heading', { name: 'Email' })).toBeNull()
   expect(calls.filter((c) => c.path.includes('/mail'))).toEqual([])
+})
+
+test('a test email sent after the person left the tab is not said: it may be the next person’s screen', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'GET /api/workspaces/1/mail': { body: configured },
+    'POST /api/workspaces/1/mail/test': () =>
+      new Promise((done) => {
+        answer = () => done({ body: { sent_to: 'owner@example.com' } })
+      }),
+  })
+  const { unmount } = render(<SettingsPage me={me} workspace={admin} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Send a test email' }))
+  unmount()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByText(/Test email sent to/)).toBeNull()
+})
+
+test('a test email sent after the session ended, the tab still showing, is not said', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'GET /api/workspaces/1/mail': { body: configured },
+    'POST /api/workspaces/1/mail/test': () =>
+      new Promise((done) => {
+        answer = () => done({ body: { sent_to: 'owner@example.com' } })
+      }),
+  })
+  beginSession(1)
+  render(<SettingsPage me={me} workspace={admin} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Send a test email' }))
+  // Signing out has begun: the session is over though the shell is not gone yet.
+  endSession()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByText(/Test email sent to/)).toBeNull()
+  expect(
+    (screen.getByRole('button', { name: 'Send a test email' }) as HTMLButtonElement).getAttribute('aria-busy'),
+  ).toBeNull()
 })

@@ -100,6 +100,8 @@ func (h *fakeHost) DialVNC(context.Context, int64) (io.ReadWriteCloser, error) {
 
 func (h *fakeHost) Clean(int64) error { return nil }
 
+func (h *fakeHost) Purge(int64) error { return nil }
+
 // A browser stopped for being idle may still be writing its profile when the next request
 // comes: the new one starts only once the old one is gone, so they never share the profile.
 func TestRestartWaitsForTheOldBrowser(t *testing.T) {

@@ -227,10 +227,6 @@ func (s *Service) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, s.sessionCookie(token, int(s.opts.SessionTTL/time.Second)))
 }
 
-func (s *Service) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, s.sessionCookie("", -1))
-}
-
 func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
 	// #nosec G124 -- Secure is off only when the operator sets insecure_cookies, for
 	// plain-http development; HttpOnly and SameSite are always set.
@@ -320,7 +316,7 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (u User, 
 	if !ok {
 		// The cookie is left as it is: a stale session's is inert (its row is revoked or expired),
 		// and expiring it here would wipe a newer one that a sign-in in the same browser set while
-		// this request was on its way. Only logging out clears the cookie.
+		// this request was on its way. No answer expires it, logging out included (handleLogout).
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return User{}, nil, false
 	}

@@ -170,7 +170,7 @@ func toolError(ctx context.Context, name string, err error) error {
 		return refuse(http.StatusNotFound, "%s", err.Error())
 	case errors.Is(err, browser.ErrStaleRef), errors.Is(err, browser.ErrNotAgentTab):
 		return refuse(http.StatusConflict, "%s", err.Error())
-	case errors.Is(err, browser.ErrUnavailable), errors.Is(err, browser.ErrBusy), errors.Is(err, browser.ErrClosed), errors.Is(err, browser.ErrNotRunning):
+	case errors.Is(err, browser.ErrUnavailable), errors.Is(err, browser.ErrBusy), errors.Is(err, browser.ErrClosed), errors.Is(err, browser.ErrNotRunning), errors.Is(err, browser.ErrAccountClosing):
 		return refuse(http.StatusServiceUnavailable, "%s", err.Error())
 	case ctx.Err() != nil:
 		return ctx.Err()

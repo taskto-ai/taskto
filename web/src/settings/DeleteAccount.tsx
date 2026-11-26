@@ -7,7 +7,7 @@
 
 import { type FormEvent, useState } from 'react'
 import { api, type DeletionReply, type DeletionStatus, exportPath, forAccount, sessionLostFor } from '../api'
-import { rememberDeletion } from '../auth/deleted'
+import { beginDeletion, rememberDeletion } from '../auth/deleted'
 import { forgetAccount } from '../auth/forgetAccount'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -35,9 +35,11 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
       window.location.assign(download)
     })
   const submit = async (e: FormEvent) => {
+    // Sent now: if someone submits a sign-in before the answer comes, it is not for them.
+    const since = beginDeletion()
     e.preventDefault()
     let reply: DeletionReply | undefined
-    const ok = await deleting.run(async () => {
+    await deleting.run(async () => {
       reply = await api<DeletionReply>('/api/me/deletion', {
         method: 'POST',
         // The account whose form this is: a tab left open while another account signed in here
@@ -46,13 +48,15 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
         body: s?.method === 'password' ? { password, ...(s.two_factor ? { code } : {}) } : {},
       })
     })
-    if (ok && reply) {
+    // From the server's answer itself, not from the form's: the form may be gone by now (useAction
+    // then says nothing more), and what the device kept of the deleted account goes all the same.
+    if (reply) {
       // The server accepted the deletion and ended this session. What this device kept of the
       // account (drafts, the offline database with its downloads and queue) will never be sent or
       // read again, and is gone now, from this answer and for the account whose form this is: a
       // request refused a moment earlier may have taken the app to the sign-in screen already, which
       // is no longer listening for the session to end.
-      rememberDeletion(reply.purge_at)
+      rememberDeletion(reply.purge_at, since)
       await forgetAccount(user)
       // On to the sign-in screen, which says when the account is purged: told for this account,
       // so a window another account signed in to meanwhile stays as it is.

@@ -88,7 +88,7 @@
     flex: none;
     color: var(--color-text);
     direction: ltr;
-    inline-size: var(--space-6);
+    inline-size: var(--logo-height);
     overflow: hidden;
   }
 
@@ -343,7 +343,8 @@
   /* A tablet: the sidebar is a rail of icons, each named by its tooltip. */
   @media (min-width: 48.0001rem) and (max-width: 56.25rem) {
     .ui-shell {
-      grid-template-columns: calc(var(--control-touch) + var(--space-4)) minmax(0, 1fr);
+      /* A 44px control, the sidebar's padding on either side, and its edge. */
+      grid-template-columns: calc(var(--control-touch) + var(--space-4) + var(--line-thin)) minmax(0, 1fr);
     }
 
     .ui-shell-sidebar {
@@ -356,7 +357,7 @@
       align-self: center;
       margin-inline: 0;
       direction: ltr;
-      inline-size: var(--space-6);
+      inline-size: var(--logo-height);
       overflow: hidden;
     }
 
@@ -381,13 +382,18 @@
       white-space: nowrap;
     }
 
-    .ui-shell-switcher-button.ui-button,
-    .ui-shell-switcher-button.ui-button:hover {
+    .ui-shell-switcher-button.ui-button {
       inline-size: var(--control-touch);
       justify-content: center;
       padding: 0;
       border-color: transparent;
       background: none;
+    }
+
+    /* Hovered, the ground the rail's links have. */
+    .ui-shell-switcher-button.ui-button:hover {
+      border-color: transparent;
+      background: var(--color-hover);
     }
 
     .ui-shell-switcher-button .ui-button-content,
@@ -412,11 +418,12 @@
       padding: 0;
     }
 
-    /* The count sits on the bell's corner. */
+    /* The count sits on the bell's corner, out in the sidebar's padding, so it covers the bell's
+       corner only and not its top. */
     .ui-shell-count {
       position: absolute;
-      inset-block-start: 0;
-      inset-inline-end: 0;
+      inset-block-start: calc(-1 * var(--space-1));
+      inset-inline-end: calc(-1 * var(--space-2));
     }
 
     .ui-shell-pins {

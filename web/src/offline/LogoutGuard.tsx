@@ -7,9 +7,11 @@
 // there and that this version can't check, and chooses to keep the database (sign out without
 // deleting it) or to discard it.
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
+import { useMounted } from '../mounted'
+import { steps } from '../session'
 import { Button } from '../ui/Button'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Dialog } from '../ui/Dialog'
@@ -47,15 +49,11 @@ export function LogoutGuard({
   // A sync is under way: one at a time (a second press before React draws `busy` is refused too),
   // and the guard can't be closed meanwhile, since its end may sign the person out.
   const syncing = useRef(false)
-  // The guard is still on screen. Once it is gone (cancelled, or the page moved on) a sync that ends
-  // later signs nobody out and changes nothing: the person was shown the app again.
-  const live = useRef(true)
-  useEffect(() => {
-    live.current = true
-    return () => {
-      live.current = false
-    }
-  }, [])
+  // The guard is still on screen, in the session it was opened in (session.ts). Once it is gone
+  // (cancelled, or the page moved on) or the session ended (another account in another tab), a sync
+  // that ends later signs nobody out and changes nothing: the person was shown the app again, or
+  // the page belongs to someone else now.
+  const mounted = useMounted()
 
   const sync = async () => {
     if (syncing.current) return
@@ -63,6 +61,7 @@ export function LogoutGuard({
     setBusy(true)
     setStuck(false)
     setFailure(null)
+    const s = steps(mounted)
     try {
       if (!runtime) return
       // Trying again changes items that need attention, which only the offline writer does (writer.ts).
@@ -71,26 +70,25 @@ export function LogoutGuard({
       // is told, and nothing is attempted.
       if (!runtime.writer.holds()) {
         await runtime.writer.takeOver()
-        if (!live.current) return
+        if (!s.ok()) return
         if (!runtime.writer.holds()) {
           setFailure(t('offline.logout.notWriter'))
           return
         }
       }
       await runtime.engine.retry()
-      if (!live.current) return
       const unsent = await runtime.store.unsynced()
-      if (!live.current) return
+      // Gone, or its session over, while it synced: nobody is signed out.
+      if (!s.ok()) return
       setLeft(unsent.length)
       if (unsent.length === 0) onSignOut()
       else setStuck(true)
     } catch (e) {
-      if (!live.current) return
       // The right was lost while this ran (another tab took it), or the device refused.
       setFailure(e instanceof NotWriter ? t('offline.logout.notWriter') : errorText(e))
     } finally {
       syncing.current = false
-      if (live.current) setBusy(false)
+      if (mounted.current) setBusy(false)
     }
   }
   // Escape and the close button are Cancel, but not while a sync runs.

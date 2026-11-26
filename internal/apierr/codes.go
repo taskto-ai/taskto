@@ -301,15 +301,16 @@ const (
 
 	// The agent browser (internal/agentbrowser). The CLI workers' rule applies to it too.
 
-	CodeBrowserOff           Code = "browser_off"             // the server runs without -browser
-	CodeBrowserCLIWorkersOff Code = "browser_cli_workers_off" // the CLI workers it runs with are off
-	CodeBrowserSingleUser    Code = "browser_single_user"     // local mode, and the server has more than one user
-	CodeBrowserUnusable      Code = "browser_unusable"        // another reason it can't be used now
-	CodeBrowserNotInstalled  Code = "browser_not_installed"
-	CodeBrowserNotRunning    Code = "browser_not_running"
-	CodeBrowserTooManyLive   Code = "browser_too_many_live"
-	CodeBrowserBusy          Code = "browser_busy" // too many browsers run on the server
-	CodeBrowserShuttingDown  Code = "browser_shutting_down"
+	CodeBrowserOff            Code = "browser_off"             // the server runs without -browser
+	CodeBrowserCLIWorkersOff  Code = "browser_cli_workers_off" // the CLI workers it runs with are off
+	CodeBrowserSingleUser     Code = "browser_single_user"     // local mode, and the server has more than one user
+	CodeBrowserUnusable       Code = "browser_unusable"        // another reason it can't be used now
+	CodeBrowserNotInstalled   Code = "browser_not_installed"
+	CodeBrowserNotRunning     Code = "browser_not_running"
+	CodeBrowserTooManyLive    Code = "browser_too_many_live"
+	CodeBrowserBusy           Code = "browser_busy" // too many browsers run on the server
+	CodeBrowserShuttingDown   Code = "browser_shutting_down"
+	CodeBrowserAccountClosing Code = "browser_account_closing" // the account's deletion is removing its browsers
 
 	// Model provider accounts (internal/providers). The endpoint's codes are also those of
 	// the other settings that keep an endpoint of their own: shared CLI accounts and
@@ -365,6 +366,9 @@ const (
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
 	CodeCLINotInstalled        Code = "cli_not_installed" // params: cli
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
+	CodeCLIAccountForgotten    Code = "cli_account_forgotten" // the worker removed the account's CLI files and refuses it
+	CodeCLIAccountRemoving     Code = "cli_account_removing"  // 409: the account's CLI files are being removed (it is being disconnected)
+	CodeCLIAccountBusy         Code = "cli_account_busy"      // 409: a process of the account is still running; nothing was removed, try again
 	CodeCLINoLogin             Code = "cli_no_login"
 	CodeCLILoginCodeInvalid    Code = "cli_login_code_invalid" // params: max
 	CodeCLILoginNoCode         Code = "cli_login_no_code"
