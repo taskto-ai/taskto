@@ -93,7 +93,8 @@ export function ackDeletion(shownDate?: string): void {
   }
 }
 
-// Someone submitted a sign-in form on this page (a login, its code, setup, an invite, a reset): the
+// Someone submitted a form at the sign-in screens (a login, its code, setup, an invite, a reset, a
+// reset link asked for), or a session began on this page (`beginSession`, with or without a form): the
 // person at the screen is not necessarily the one who deleted their account, so the notice ends here
 // and an answer still on its way to be told is refused.
 export function signInSubmitted(): void {

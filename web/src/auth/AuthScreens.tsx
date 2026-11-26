@@ -434,7 +434,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   if (!methods) return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   if (forgotShown) {
-    return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} />
+    return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} onAsk={() => setDeleted(null)} />
   }
   const errors = placed(failure, ['email', 'password'])
   return (
@@ -551,7 +551,15 @@ function TwoFactorStep({
 
 // Asking for a reset link by email, from the login page. The server answers the same whether or
 // not an account has the address, and so does this: it never says which.
-function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+function ForgotPasswordScreen({
+  initialEmail,
+  onBack,
+  onAsk,
+}: {
+  initialEmail: string
+  onBack: () => void
+  onAsk: () => void
+}) {
   const t = useT()
   const [email, setEmail] = useState(initialEmail)
   const [busy, setBusy] = useState(false)
@@ -566,6 +574,10 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
     inFlight.current = true
     setBusy(true)
     setFailure(null)
+    // Someone is at this screen with their own address: as a login, it ends a notice still waiting,
+    // here and on the login they come back to.
+    signInSubmitted()
+    onAsk()
     try {
       await api('/api/password-reset/request', { method: 'POST', body: { email } })
       setSentTo(email.trim())

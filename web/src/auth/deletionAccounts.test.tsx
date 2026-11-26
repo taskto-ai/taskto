@@ -242,3 +242,64 @@ test('case 3: a notice dropped while the storage could not even be read is not t
   set.mockRestore()
   expect(peekDeletion()).toBeNull()
 })
+
+test('case 4: a reset link asked for at the sign-in screen is a submission too: the waiting notice is not told after it', async () => {
+  rememberDeletion(PURGE)
+  let state: DocumentVisibilityState = 'hidden'
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state)
+  fakeFetch({
+    'GET /api/login/methods': { body: { ...methods, reset_by_email: true } },
+    'POST /api/password-reset/request': { status: 202, body: {} },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Forgot your password?' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'next@example.com' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
+  await screen.findByRole('button', { name: 'Back to login' })
+  fireEvent.click(screen.getByRole('button', { name: 'Back to login' }))
+  await screen.findByLabelText('Password')
+  state = 'visible'
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  expect(screen.queryByText(NOTICE)).toBeNull()
+  expect(peekDeletion()).toBeNull()
+})
+
+test('case 3: a storage that refuses both a removal and the write over it still does not tell the notice again in this page', () => {
+  rememberDeletion(PURGE)
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  ackDeletion(PURGE)
+  expect(peekDeletion()).toBeNull()
+})
+
+test('case 3: a removal that is refused is written over, so a reload does not tell the notice again either', async () => {
+  rememberDeletion(PURGE)
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  ackDeletion(PURGE)
+  expect(sessionStorage.getItem('taskto.accountDeleted')).toBe('')
+  // A reload: a page with nothing in memory, and the storage as it is.
+  vi.resetModules()
+  const reloaded = await import('./deleted')
+  expect(reloaded.peekDeletion()).toBeNull()
+})
+
+test('case 3: an older date the storage kept and cannot remove is not told once the newer one was shown', () => {
+  sessionStorage.setItem('taskto.accountDeleted', '2026-11-02T10:00:00.000Z')
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  rememberDeletion(PURGE)
+  ackDeletion(PURGE)
+  expect(peekDeletion()).toBeNull()
+})
