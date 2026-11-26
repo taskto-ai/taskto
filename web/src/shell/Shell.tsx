@@ -26,7 +26,7 @@ import { Toaster } from '../ui/Toast'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ErrorBoundary } from './ErrorBoundary'
 import { NoWorkspace } from './NoWorkspace'
-import { MAIN_ID, SECTION_LABEL } from './nav'
+import { MAIN_ID } from './nav'
 import { PhoneBar } from './PhoneBar'
 import { Sidebar } from './Sidebar'
 import './Shell.css'
@@ -54,8 +54,11 @@ function rememberWorkspace(id: number) {
   }
 }
 
-// A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
-// outside the shell, which would take that address for an unknown route.
+// Two addresses that come from outside the app are pages of the frame without being sections: a
+// push's /notification/{id} (read as the signed-in person and followed to where it leads) and an
+// email's confirmation link. They are drawn inside the frame (the sidebar, the skip link, <main>),
+// with the section they belong to marked, and the frame doesn't take their address for an unknown
+// route and rewrite it. Someone signed out never gets here: the sign-in screen comes first.
 // `onMe` takes the account's new state when the shell changed it (a workspace was created).
 //
 // The toasts' stack is drawn here, once, before anything shows one: its live regions are then on
@@ -73,23 +76,45 @@ export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; on
 function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   const opening = parseNotificationPath(path)
+  const first = me.workspaces[0]?.id ?? null
   if (path === EMAIL_CONFIRM_PATH) {
-    return <ConfirmEmail token={window.location.hash.slice(1)} workspace={me.workspaces[0]?.id ?? null} />
+    const page = <ConfirmEmail token={window.location.hash.slice(1)} workspace={first} />
+    return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'settings', page }} />
   }
   if (opening !== null) {
-    return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
+    const page = <OpenNotification id={opening} fallbackWorkspace={first} />
+    return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'notifications', page }} />
   }
   return <Frame me={me} onLogout={onLogout} onMe={onMe} />
 }
 
-function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
+// A page of the frame that is not a section's (above): what it draws, and the section it belongs to.
+interface SpecialPage {
+  section: Route['section']
+  page: ReactNode
+}
+
+function Frame({
+  me,
+  onLogout,
+  onMe,
+  special,
+}: {
+  me: Me
+  onLogout: () => void
+  onMe?: (me: Me) => void
+  special?: SpecialPage
+}) {
   const path = usePath()
   usePushSync(me.user.id, me.workspaces.length > 0)
   const parsed = parseRoute(path)
   const member = (id: number) => me.workspaces.some((w) => w.id === id)
   const fallback = me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
-  const route: Route | null =
-    parsed && member(parsed.workspace)
+  const route: Route | null = special
+    ? fallback
+      ? { workspace: fallback.id, section: special.section }
+      : null
+    : parsed && member(parsed.workspace)
       ? parsed
       : fallback
         ? { workspace: fallback.id, section: parsed?.section ?? 'conversations' }
@@ -102,7 +127,8 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
   const main = useRef<HTMLElement>(null)
   const t = useT()
 
-  const target = route ? routePath(route) : null
+  // A special page keeps its own address (its link's): the frame rewrites only a section's.
+  const target = route && !special ? routePath(route) : null
   useEffect(() => {
     if (target && target !== path) navigate(target, { replace: true })
   }, [target, path])
@@ -168,7 +194,8 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
     }
   }, [drawer])
 
-  if (!route) return <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
+  // With no workspace there is no frame to draw a special page in: it is drawn alone, as before.
+  if (!route) return special ? special.page : <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
 
   const workspace = me.workspaces.find((w) => w.id === route.workspace) ?? me.workspaces[0]
   return (
@@ -176,13 +203,7 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
       <Button className="ui-shell-skip" onClick={() => main.current?.focus()}>
         {t('shell.skipToContent')}
       </Button>
-      <PhoneBar
-        drawer={drawer}
-        onToggle={() => setDrawer((d) => !d)}
-        menuButton={menuButton}
-        section={t(SECTION_LABEL[route.section])}
-        t={t}
-      />
+      <PhoneBar drawer={drawer} onToggle={() => setDrawer((d) => !d)} menuButton={menuButton} t={t} />
       <Sidebar
         me={me}
         workspace={workspace}
@@ -204,11 +225,11 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
         tabIndex={-1}
         className="ui-shell-main"
         inert={drawer || undefined}
-        key={`${workspace.id}/${route.section}`}
+        key={special ? path : `${workspace.id}/${route.section}`}
       >
         {/* A page that fails to draw leaves the shell around it (the menu, the settings) usable. */}
         <ErrorBoundary fallback={<PageFailed />} resetKey={path}>
-          <Page route={route} me={me} workspace={workspace} />
+          {special ? special.page : <Page route={route} me={me} workspace={workspace} />}
         </ErrorBoundary>
       </main>
     </div>

@@ -1,0 +1,90 @@
+// @vitest-environment jsdom
+
+// The two pages a link from outside the app opens: a push's /notification/{id} and an email's
+// confirmation link. For a signed-in person they are pages of the frame (the sidebar, the skip
+// link, <main>); someone signed out gets the sign-in screen alone, as for any address.
+
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { App } from '../App'
+import type { Me } from '../api'
+import { EMAIL_CONFIRM_API, EMAIL_CONFIRM_PATH } from '../notifications/api'
+import { fakeFetch } from '../test/fakes'
+import { resetToasts } from '../ui/Toast'
+import { Shell } from './Shell'
+
+const me = {
+  user: { id: 1, email: 'owner@example.com', name: 'Owner' },
+  workspaces: [{ id: 1, name: 'Home', role: 'admin' }],
+} as Me
+
+beforeEach(() => {
+  resetToasts()
+  localStorage.clear()
+})
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
+})
+
+// The frame around a page, as a screen reader finds it.
+function frame() {
+  return {
+    nav: screen.queryByRole('navigation', { name: 'Sections' }),
+    main: screen.queryByRole('main'),
+    skip: screen.queryByRole('button', { name: 'Skip to the content' }),
+  }
+}
+
+test('signed in, a notification’s link is a page of the frame, its address kept, the inbox marked', async () => {
+  window.history.replaceState(null, '', '/notification/9')
+  fakeFetch({ 'GET /api/me/notifications/9': { status: 404, body: { error: 'not found', code: 'not_found' } } })
+  render(<Shell me={me} onLogout={() => {}} />)
+  const { nav, main, skip } = frame()
+  expect(nav).toBeTruthy()
+  expect(skip).toBeTruthy()
+  expect(within(main as HTMLElement).getByRole('heading', { level: 1, name: 'Notification' })).toBeTruthy()
+  expect(await within(main as HTMLElement).findByRole('alert')).toBeTruthy()
+  expect(
+    within(nav as HTMLElement)
+      .getByRole('link', { name: /Notifications/ })
+      .getAttribute('aria-current'),
+  ).toBe('page')
+  // The frame doesn't take the address for an unknown route and rewrite it.
+  expect(window.location.pathname).toBe('/notification/9')
+})
+
+test('signed in, the email confirmation is a page of the frame; the request is made once, the token leaves at once', async () => {
+  window.history.replaceState(null, '', `${EMAIL_CONFIRM_PATH}#a-token-for-the-test`)
+  const calls = fakeFetch({ [`POST ${EMAIL_CONFIRM_API}`]: { body: {} } })
+  render(<Shell me={me} onLogout={() => {}} />)
+  expect(window.location.hash).toBe('')
+  const { nav, main } = frame()
+  expect(nav).toBeTruthy()
+  expect(
+    within(main as HTMLElement).getByRole('heading', { level: 1, name: 'Confirm your email address' }),
+  ).toBeTruthy()
+  await within(main as HTMLElement).findByText(/Your address is confirmed/)
+  const sent = calls.filter((c) => c.method === 'POST' && c.path === EMAIL_CONFIRM_API)
+  expect(sent).toHaveLength(1)
+  expect(sent[0].body).toEqual({ token: 'a-token-for-the-test' })
+  expect(window.location.pathname).toBe(EMAIL_CONFIRM_PATH)
+})
+
+for (const [label, path] of [
+  ['a notification’s link', '/notification/9'],
+  ['the email confirmation', `${EMAIL_CONFIRM_PATH}#a-token-for-the-test`],
+] as const) {
+  test(`signed out, ${label} is the sign-in screen alone, with no frame and no request`, async () => {
+    window.history.replaceState(null, '', path)
+    const calls = fakeFetch({
+      'GET /api/setup': { body: { needed: false } },
+      'GET /api/me': { status: 401, body: { error: 'not logged in' } },
+    })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Log in' })
+    await waitFor(() => expect(frame().nav).toBeNull())
+    expect(calls.some((c) => c.path === EMAIL_CONFIRM_API || c.path.startsWith('/api/me/notifications'))).toBe(false)
+  })
+}

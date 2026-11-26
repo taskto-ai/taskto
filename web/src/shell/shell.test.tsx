@@ -506,7 +506,7 @@ test("the theme picked in the app also sets the browser's theme-color, and the s
   for (const m of added) m.remove()
 })
 
-test('a long workspace name is cut in the switcher and whole in its tooltip; the phone bar has the menu, the mark and the section', async () => {
+test('a long workspace name is cut in the switcher and whole in its tooltip; the phone bar has the menu and the mark, not the section', async () => {
   const long = 'Operations and Field Services'
   fakeFetch({
     'GET /api/setup': { body: { needed: false } },
@@ -522,10 +522,11 @@ test('a long workspace name is cut in the switcher and whole in its tooltip; the
 
   // The phone's bar: what stays in it, each reachable by its label. The logo is one image with the
   // product's name, which the stylesheet crops to its mark.
-  const bar = screen.getByRole('banner')
+  const bar = screen.getByRole('banner', { name: 'App bar' })
   expect(within(bar).getByRole('button', { name: 'Open the menu' })).toBeTruthy()
   expect(within(bar).getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
-  expect(within(bar).getByText('Conversations')).toBeTruthy()
+  // The page's own title is the one place the section's name appears.
+  expect(within(bar).queryByText('Conversations')).toBeNull()
   // The page owns its title: no heading in the bar.
   expect(within(bar).queryByRole('heading')).toBeNull()
 })

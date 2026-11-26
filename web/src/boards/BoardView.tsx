@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react'
 import { api, type Card, type Space } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -105,9 +105,9 @@ export function BoardView({
     ;((column && focusables(column)[0]) ?? (board && focusables(board)[0]))?.focus()
   }, [cards.data, open])
 
-  // The open card's own tile, brought into view beside the drawer (the board made room for the
-  // drawer in the same commit), once per opening: when it opens, or when the board's cards arrive
-  // for a card opened from its address.
+  // The open card's own tile, brought into view beside the drawer (the columns' scroll-padding keeps
+  // it out from under the drawer, boards.css), once per opening: when it opens, or when the board's
+  // cards arrive for a card opened from its address.
   const shownTile = useRef<number | null>(null)
   useEffect(() => {
     if (open === null) {
@@ -167,7 +167,7 @@ export function BoardView({
       <div role="status" className="ui-board-said">
         <VisuallyHidden key={said.n}>{said.text}</VisuallyHidden>
       </div>
-      <div className="ui-board-columns">
+      <div className="ui-board-columns" style={{ '--board-columns': COLUMNS.length } as CSSProperties}>
         {COLUMNS.map((col) => (
           <BoardColumn
             key={col.id}
@@ -192,6 +192,9 @@ export function BoardView({
             }}
           />
         ))}
+        {/* With a card open on a wide board, room as wide as the drawer after the last column, so
+            the board's sideways scroll brings that column out from under the card. */}
+        {open !== null && <div className="ui-board-drawer-room" aria-hidden="true" />}
       </div>
       {open && (
         <CardView

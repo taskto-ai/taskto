@@ -15,9 +15,12 @@
     border: 0;
   }
 
-  /* The board: its head, its notices and its columns. While a card is open beside a wide board,
-     it keeps the drawer's width free at its end, so the head's actions stay in reach and the
-     columns scroll out from under the drawer. */
+  /* The board: its head, its notices and its columns. While a card is open on a wide board, the
+     card lies over the columns, which keep the width they have with it closed: the head and the
+     notices keep clear of the drawer (its actions, Add a card and the filters, stay in reach), and
+     the columns end with room as wide as the drawer, so their sideways scroll brings the last one
+     out from under it. A card that takes the keyboard is scrolled beside the drawer, not under it
+     (scroll-padding), and so is the open card's own tile. */
   .ui-board {
     display: flex;
     flex-direction: column;
@@ -25,9 +28,32 @@
     min-inline-size: 0;
   }
 
+  .ui-board-drawer-room {
+    display: none;
+  }
+
   @media (min-width: 64.0625rem) {
-    .ui-board[data-drawer] {
+    .ui-board[data-drawer] > :not(.ui-board-columns) {
       padding-inline-end: var(--width-drawer);
+    }
+
+    .ui-board[data-drawer] .ui-board-columns {
+      /* The columns as wide as with the card closed (they share the board's width, none narrower
+         than a column may be), then the drawer's room. */
+      grid-template-columns:
+        repeat(
+          var(--board-columns),
+          max(
+            var(--width-board-column),
+            calc((100% - (var(--board-columns) - 1) * var(--space-3)) / var(--board-columns))
+          )
+        )
+        var(--width-drawer);
+      scroll-padding-inline-end: calc(var(--width-drawer) + var(--space-3));
+    }
+
+    .ui-board[data-drawer] .ui-board-drawer-room {
+      display: block;
     }
   }
 

@@ -2097,6 +2097,7 @@
     },
     "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
     "logOut": "Log out",
+    "phoneBar": "App bar",
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
     "workspace": "Workspace",
