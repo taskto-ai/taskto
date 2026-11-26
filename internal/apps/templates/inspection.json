@@ -1,7 +1,7 @@
 {
   "template_version": 1,
   "id": "inspection",
-  "version": 1,
+  "version": 2,
   "name": "Inspection",
   "description": "Walk a site, record pass or fail with the place and a signature, and have every failure become a card on a board you choose.",
   "recommended_space": "shared",
@@ -11,15 +11,19 @@
         "name": "list",
         "root": "list-root",
         "components": [
-          { "id": "list-root", "component": "Column", "children": ["list-title", "list-failures", "list-new", "list-items"] },
+          { "id": "list-root", "component": "Column", "children": ["list-head", "list-failures", "list-new", "list-items"] },
           { "id": "list-title", "component": "Text", "text": "Inspections", "variant": "h2" },
+          { "id": "list-icon", "component": "Icon", "name": { "svgPath": "M8 2h8v2h3v18H5V4h3zm2 2v1h4V4zM10 17l8-8-1.5-1.5-6.5 6.5-2.5-2.5L6 13z" } },
+          { "id": "list-head", "component": "Row", "align": "center", "children": ["list-icon", "list-title"] },
           { "id": "list-failures", "component": "Stat", "label": "Open failures", "value": { "path": "/open_failures" } },
           { "id": "list-new-label", "component": "Text", "text": "New inspection" },
+          { "id": "list-new-icon", "component": "Icon", "name": { "svgPath": "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z" } },
+          { "id": "list-new-content", "component": "Row", "align": "center", "children": ["list-new-icon", "list-new-label"] },
           {
             "id": "list-new",
             "component": "Button",
             "variant": "primary",
-            "child": "list-new-label",
+            "child": "list-new-content",
             "action": { "event": { "name": "new_inspection" } }
           },
           { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
@@ -64,10 +68,12 @@
           { "id": "new-signed", "component": "SignatureInput", "field": "signed", "label": "Inspector's signature", "value": { "path": "/draft/signed" } },
           { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
           { "id": "new-back-label", "component": "Text", "text": "Back" },
+          { "id": "new-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
+          { "id": "new-back-content", "component": "Row", "align": "center", "children": ["new-back-icon", "new-back-label"] },
           {
             "id": "new-back",
             "component": "Button",
-            "child": "new-back-label",
+            "child": "new-back-content",
             "action": { "event": { "name": "back_to_list" } }
           },
           { "id": "new-save-label", "component": "Text", "text": "Submit inspection" },
@@ -127,10 +133,12 @@
             "action": { "event": { "name": "close_inspection", "context": { "id": { "path": "/record/id" }, "status": "closed" } } }
           },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          { "id": "detail-back-icon", "component": "Icon", "name": { "svgPath": "M3 12l8-8v5h10v6H11v5z" } },
+          { "id": "detail-back-content", "component": "Row", "align": "center", "children": ["detail-back-icon", "detail-back-label"] },
           {
             "id": "detail-back",
             "component": "Button",
-            "child": "detail-back-label",
+            "child": "detail-back-content",
             "action": { "event": { "name": "back_to_list" } }
           }
         ]

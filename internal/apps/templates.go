@@ -377,6 +377,10 @@ func (s *Service) duplicateApp(ctx context.Context, sp access.Space, a Actor, ap
 	if err := s.clearForeignTargets(ctx, dest.WorkspaceID, a, &def); err != nil {
 		return App{}, err
 	}
+	// A copy of a live release saved before the icon label rule may break it; the copier didn't
+	// write it and may not be able to change the source, so the copy is made as it is. The rule
+	// holds again when someone who edits the copy saves or publishes it.
+	def.copied = true
 	name := req.Name
 	if strings.TrimSpace(name) == "" {
 		name = src.Name

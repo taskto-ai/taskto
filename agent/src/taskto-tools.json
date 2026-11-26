@@ -1001,7 +1001,7 @@
   },
   {
     "name": "app_catalog",
-    "description": "What a personal app may be made of: the components and their props, the functions, the collection's field types, the actions, the rules, and an example app. Read it before create_app or update_app.",
+    "description": "What a personal app may be made of: the components and their props, the functions, the collection's field types, the actions, the rules (icons among them: SVG paths you write), and an example app. Read it before create_app or update_app.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -1209,7 +1209,7 @@
               "items": {
                 "type": "object"
               },
-              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both"
+              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both. An Icon is drawn from one SVG path you write: {\"name\": {\"svgPath\": \"M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z\"}} on a 24 by 24 view box, filled; app_catalog's rule on icons says the rest"
             },
             "screens": {
               "type": "array",
@@ -1699,7 +1699,7 @@
               "items": {
                 "type": "object"
               },
-              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both"
+              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both. An Icon is drawn from one SVG path you write: {\"name\": {\"svgPath\": \"M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z\"}} on a 24 by 24 view box, filled; app_catalog's rule on icons says the rest"
             },
             "screens": {
               "type": "array",
