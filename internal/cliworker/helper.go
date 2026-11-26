@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,6 +102,25 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 		return errors.New("invalid request")
 	}
 	layout := Layout{Root: req.LayoutRoot}
+	if req.Op == "forget" {
+		// A deleted account: the user's whole directory goes, logins, sessions, working
+		// directories and the browser's profile with it. It is not made again.
+		// The user's Unix user (container mode) owns what is inside the directory, not the
+		// directory's place in the layout: its contents go first, then the directory if it can.
+		root := layout.User(req.User).Root
+		entries, err := os.ReadDir(root)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		for _, e := range entries {
+			if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
+				return err
+			}
+		}
+		_ = os.Remove(root)
+		_, err = io.WriteString(stdout, "{}\n")
+		return err
+	}
 	if strings.HasPrefix(req.Op, "browser") {
 		return runBrowserOp(req, layout, stdout)
 	}

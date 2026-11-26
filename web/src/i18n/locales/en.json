@@ -68,7 +68,7 @@
       "restoreOp": "Restored",
       "version": "{operation} · revision {revision} · {when} · {name}",
       "agent": "{name} (through the agent)",
-      "unknownUser": "a removed account",
+      "unknownUser": "Deleted user",
       "system": {
         "generic": "an integration",
         "named": "{name} (integration)",
@@ -122,7 +122,8 @@
         "intro": "This action would set going:",
         "none": "This action would set nothing going.",
         "wouldFail": "It would fail for you: {error}"
-      }
+      },
+      "paymentLinkNoAmount": "Amount from the record"
     },
     "roles": {
       "open": "Roles",
@@ -287,7 +288,8 @@
           "createDocument": "Creates a document at {path} in {space}",
           "openBoard": "Offers a link to {board}",
           "openCard": "Offers a link to the card this record made",
-          "openDocument": "Offers a link to the document {path} in {space}"
+          "openDocument": "Offers a link to the document {path} in {space}",
+          "createPaymentLink": "Asks the “{slot}” outside service for a link to pay the amount in “{amount}”"
         },
         "target": {
           "board": "{board} ({space})",
@@ -587,6 +589,103 @@
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
     },
+    "integrations": {
+      "title": "Outside services",
+      "intro": "This app asks these outside services for something. An admin has to approve exactly what is listed before it can be published, and changing any of it needs a new approval. To change what it asks, ask the agent in the conversation.",
+      "slotNamed": "Service “{slot}”",
+      "status": {
+        "none": "Not asked for yet",
+        "requested": "Waiting for an admin",
+        "approved": "Approved",
+        "rejected": "Turned down",
+        "revoked": "Revoked",
+        "unusable": "Approved, but not usable now"
+      },
+      "was": {
+        "rejected": "An admin turned this down. You can change the app and ask again, or ask again as it is.",
+        "revoked": "An admin withdrew this approval. Ask again to get it back."
+      },
+      "waiting": "An admin will see this request in Settings, under Integration approvals. Publishing waits for their answer.",
+      "openQueue": "Open the approvals to decide",
+      "request": "Ask an admin to approve",
+      "requestAgain": "Ask again",
+      "connectedTo": "Connected to {name}.",
+      "connectedUnusable": "Connected to {name}, which is switched off or not allowed in this space now. An admin changes that in Settings, under Integrations.",
+      "liveUnusable": "The live release can’t use this service right now: an admin withdrew the approval, switched the integration off or no longer allows it in this space.",
+      "publishWaits": "Publishing waits for an admin to approve what this app asks of {slots}.",
+      "publishBroken": "The integration for {slots} is switched off or isn’t allowed in this space. An admin has to change that in Settings, under Integrations, before this can be published.",
+      "approveAndPublish": "Approve and publish…",
+      "approve": {
+        "title": "Approve and publish",
+        "intro": "You are an admin of this workspace, so you can approve what this app asks of the outside services below and publish it in one step.",
+        "connect": "Connect it to",
+        "choose": "Choose an integration",
+        "option": "{name} ({mode})",
+        "none": "No integration for {kind} is connected and switched on yet.",
+        "openSettings": "Open the integrations",
+        "allowSpace": "This also allows the integration in {space}, for as long as an approval needs it. An admin keeps it longer in the integration’s spaces, in Settings.",
+        "consent": "By continuing you approve exactly what is listed above, for this app, and publish it.",
+        "confirm": "Approve and publish",
+        "nothingLeft": "Everything this app asks of outside services is approved already. Close this and publish as usual.",
+        "kept": "These approvals went through and stay active: {slots}. They are not undone by this refusal; revoke them in Settings, under Integration approvals, if you don’t want them."
+      },
+      "contract": {
+        "field": "“{name}”",
+        "service": {
+          "payments": "payment"
+        },
+        "sends": "Sends to the {service} service the values of {fields}.",
+        "link": "When the action {action} ({kind}) runs, it asks for a payment link for the amount in {amount}, in {currency}, and writes the link to {url} and its number to {id}.",
+        "actionKind": {
+          "insert": "it adds a record",
+          "update": "it changes a record",
+          "delete": "it deletes a record"
+        },
+        "describes": "The description it sends names {what}.",
+        "recordNumber": "the record’s number",
+        "linkWhen": "{link} Only when {rule}.",
+        "linkCurrencyField": "the currency in {field} ({options})",
+        "handlersIntro": "When the service reports something about a payment, it may write to the record:",
+        "event": "When {event}:",
+        "eventWhen": "When {event}, only if {rule}:",
+        "events": {
+          "payment": {
+            "succeeded": "a payment succeeds",
+            "expired": "a payment link expires",
+            "failed": "a payment fails",
+            "refunded": "a payment is refunded"
+          }
+        },
+        "setValue": "sets {field} to {value}",
+        "setFrom": "sets {field} to {source}",
+        "source": {
+          "occurred_at": "the time the payment happened",
+          "paid_at": "the time it was paid",
+          "amount": "the amount paid",
+          "currency": "the currency it was paid in",
+          "receipt_url": "the address of the receipt",
+          "payment_id": "the payment’s number at the service"
+        },
+        "fieldsIntro": "What each of these fields may hold. Raising a limit, adding an option or dropping a requirement needs a new approval:",
+        "fieldLine": "{field}: {rules}.",
+        "constraint": {
+          "required": "required",
+          "requiredWhen": "required when {rule}",
+          "optional": "may be left empty",
+          "maxLength_one": "up to {count} character",
+          "maxLength_other": "up to {count} characters",
+          "min": "at least {value}",
+          "max": "at most {value}",
+          "options": "one of {options}",
+          "format": "reads {format} codes",
+          "editable": "can be replaced once stored",
+          "maxFiles_one": "up to {count} file",
+          "maxFiles_other": "up to {count} files",
+          "maxBytes": "each up to {size}"
+        },
+        "limits": "Nothing else: no other field, no web address, no key. An admin connects the account and sets its limits."
+      }
+    },
     "rendererFailed": "This screen couldn't be loaded: its code didn't arrive. Check your connection, then try again."
   },
   "auth": {
@@ -665,7 +764,8 @@
       "loginSubmit": "Log in and join",
       "newIntro": "You were invited. Create your account: your email is the address the invite was sent to.",
       "create": "Create the account"
-    }
+    },
+    "accountDeleted": "Your account was deleted. It is switched off now and will be erased for good on {date}; an operator of this server can cancel that until then."
   },
   "boards": {
     "board": "Board",
@@ -697,7 +797,7 @@
     "blocked": "Blocked",
     "agent": "Agent",
     "assigned": "Assigned",
-    "someone": "Someone",
+    "someone": "Deleted user",
     "byAgent": "{name} (agent)",
     "byAgentVia": "{name} (agent, {via})",
     "addCard": "Add a card",
@@ -972,13 +1072,18 @@
     "integration_display_name_invalid": "The display name can have up to {max} printable characters.",
     "integration_provider_unknown": "This provider isn't supported.",
     "integration_secret_required": "Enter the {secret}.",
+    "integration_webhook_secret_reused": "Another integration already uses this webhook secret. Each endpoint has its own: copy the one shown for this endpoint at the provider.",
     "integration_secret_invalid": "The {secret} doesn't look like this provider's: check that you copied the right one.",
     "integration_secret_unreadable": "The saved {secret} can't be read, because the server's key has changed. Enter it again.",
+    "integration_webhook_secret_shared": "This integration's {secret} was found shared with another integration, so deliveries signed with it are refused and it must be replaced. Each endpoint has its own: copy the one the provider shows for this endpoint and enter it here.",
     "integration_setting_invalid": "The setting {setting} is missing or not valid.",
     "integration_limit_invalid": "The amount ceiling must be a whole number from 1 to {max}.",
     "integration_currency_invalid": "Choose 1 to {max} currencies from the list.",
     "too_many_integrations": "You can have at most {max} integrations in a workspace: remove one first.",
     "integration_in_use": "An app still uses this integration: switch it off instead of removing it.",
+    "integration_event_gave_up": "The event couldn't be applied after several tries.",
+    "webhook_rate_limited": "Too many requests: try again later.",
+    "webhook_too_large": "The request is too large.",
     "app_integration_unapproved": "An admin hasn't approved what this app asks of the integration \"{slot}\" in its current form, or the integration it was connected to is switched off or no longer allowed in this space. Ask an admin to approve it.",
     "app_integration_slot_unknown": "This draft doesn't declare an integration called \"{slot}\".",
     "app_integration_contract_changed": "The app changed since you read what it asks of the integration. Read it again and ask for that.",
@@ -1134,7 +1239,13 @@
     "notification_email_verification_too_soon": "A link was sent a moment ago. Check your inbox, or try again in {seconds} seconds.",
     "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again.",
     "too_many_resets": "Too many reset requests: try again later.",
-    "too_many_invite_emails": "Too many invitations emailed: try again later."
+    "too_many_invite_emails": "Too many invitations emailed: try again later.",
+    "deletion_reauth_required": "Sign in again with your provider, then try again: deleting an account that has no password needs a sign-in made in the last few minutes.",
+    "deletion_last_admin": "You are the only admin of {workspace}: make someone else an admin first.",
+    "deletion_last_operator": "This account is the only admin of {workspace}, which runs this server: make someone else an admin there first.",
+    "deletion_pending": "This account is waiting to be deleted: a server operator can cancel that.",
+    "deletion_not_pending": "This account isn’t waiting to be deleted.",
+    "deletion_purging": "This account is being deleted now: it can’t be cancelled any more."
   },
   "language": {
     "label": "Language",
@@ -1159,7 +1270,8 @@
       "data": "Your data",
       "tokens": "Access tokens",
       "about": "About",
-      "notifications": "Notifications"
+      "notifications": "Notifications",
+      "integrationApprovals": "Integration approvals"
     },
     "general": {
       "language": "Default language",
@@ -1264,7 +1376,16 @@
       "pending": "Pending",
       "invitesHelp": "An invite is a link that works once, until it expires.",
       "emailPlaceholder": "name@company.com",
-      "noEmail": "This server doesn't email invites, so an invite is a link you copy and send yourself."
+      "noEmail": "This server doesn't email invites, so an invite is a link you copy and send yourself.",
+      "deletionPending": "Deleting on {date}",
+      "deletions": "Accounts waiting to be deleted",
+      "deletionsHelp": "As an operator of this server you see every account that is waiting out its grace period. Cancelling a deletion switches the account back on, unless an admin had disabled it before, which stays; once the purge has begun it can’t be cancelled.",
+      "noDeletions": "No accounts are waiting to be deleted.",
+      "deletionDetails": "Purged on {date}",
+      "deletionPurging": "Being purged now",
+      "cancelDeletion": "Cancel deletion",
+      "cancelDeletionQuestion": "Cancel the deletion of {name}’s account? It is switched on again (unless an admin had disabled it before, which stays), and they sign in as before.",
+      "cancelDeletionConfirm": "Yes, cancel it"
     },
     "password": {
       "intro": "Changing your password signs you out everywhere else. This browser stays signed in. Your access tokens keep working: revoke them under Access tokens.",
@@ -1972,7 +2093,10 @@
         "two_factor_enabled": "Two-factor login turned on",
         "two_factor_disabled": "Two-factor login turned off",
         "two_factor_recovery_codes_replaced": "Recovery codes replaced",
-        "two_factor_cleared": "Two-factor login cleared by an admin"
+        "two_factor_cleared": "Two-factor login cleared by an admin",
+        "account_deletion_requested": "Account deletion asked for",
+        "account_deletion_cancelled": "Account deletion cancelled",
+        "account_purged": "Account purged"
       },
       "targets": {
         "user": "Member",
@@ -2021,6 +2145,16 @@
         "spaces": "Shared spaces",
         "to": "To",
         "user_id": "Member number",
+        "purge_days": "Days until the purge",
+        "private_spaces": "Private spaces deleted",
+        "conversations": "Conversations deleted",
+        "access_grants": "Access tokens deleted",
+        "cli_accounts": "CLI accounts removed",
+        "push_subscriptions": "Push subscriptions deleted",
+        "documents_anonymized": "Commits whose author was replaced (in the last attempt)",
+        "uploads_removed": "Unfinished uploads removed",
+        "cleanups_pending": "Steps waiting for the agent runtime or CLI workers",
+        "mentions_anonymized": "Mentions anonymized",
         "added": "Spaces added",
         "removed": "Spaces removed",
         "kept": "Spaces kept",
@@ -2070,6 +2204,30 @@
       "event": "Event",
       "when": "When"
     },
+    "delete": {
+      "title": "Delete your account",
+      "intro": "Deleting your account switches it off at once and signs you out everywhere. It is kept for {days} days, and a server operator can cancel the deletion until then; after that it is deleted for good.",
+      "removed": "What is deleted:",
+      "removedPrivate": "Your private space in every workspace: documents and files, boards, and apps with their records and photos.",
+      "removedConversations": "Your conversations with the agent.",
+      "removedLogins": "Your CLI logins, access tokens, sessions, push subscriptions, notification settings, two-factor login and single sign-on identities.",
+      "kept": "What you made for others stays: cards, comments, documents and app records in shared spaces, and the audit log. They are shown as “Deleted user”, and your name and email are taken out of their history.",
+      "cancel": "Until the grace period ends, a server operator can cancel the deletion.",
+      "blocked": "You can’t delete your account yet:",
+      "blockedAdmin": "You are the only admin of {workspace}: make someone else an admin first.",
+      "blockedOperator": "You are the only admin of {workspace}, which runs this server: make someone else an admin there first.",
+      "exportFirst": "Download my data first",
+      "start": "Delete my account…",
+      "signInAgain": "Sign in again with your provider, then come back here: deleting an account that has no password needs a sign-in made in the last few minutes.",
+      "formLabel": "Delete your account",
+      "confirmIntro": "Enter your password to delete your account. You are signed out right away.",
+      "confirmIntroFresh": "You signed in a moment ago, which confirms it is you. Deleting the account signs you out right away.",
+      "password": "Your password",
+      "code": "Two-factor code or recovery code",
+      "confirm": "Delete my account",
+      "deleting": "Deleting…",
+      "summary": "Delete your account and what you own alone: your private space, conversations and logins. What you made for others stays. You can download your data first."
+    },
     "groups": {
       "workspace": "Workspace",
       "you": "You",
@@ -2090,7 +2248,49 @@
       "search": "How search finds documents, and which spaces consent to semantic search.",
       "integrations": "Accounts at payment providers that apps may use."
     },
-    "actionsColumn": "Actions"
+    "actionsColumn": "Actions",
+    "approvals": {
+      "title": "Integration approvals",
+      "intro": "Apps ask here to use an outside service, such as taking payments. You see what an app asks in plain words, who asked and where, and never the app or its records. Approving connects the app to one of the workspace’s integrations.",
+      "filter": "Show requests that are",
+      "filters": {
+        "requested": "Waiting",
+        "approved": "Approved",
+        "rejected": "Turned down",
+        "revoked": "Revoked"
+      },
+      "empty": {
+        "requested": "No requests are waiting.",
+        "approved": "Nothing is approved.",
+        "rejected": "Nothing was turned down.",
+        "revoked": "Nothing was revoked."
+      },
+      "list": "Requests",
+      "detail": "{slot} · {space} · asked by {who}, {when}",
+      "unknownPerson": "someone who has left",
+      "review": "Review",
+      "view": "View",
+      "reviewNamed": "Review the request of {app}",
+      "older": "Show older requests",
+      "dialogTitle": "Request of {app}",
+      "dialogDetail": "Service {slot} in {space}. Asked by {who}, {when}.",
+      "reject": "Turn down",
+      "approve": "Approve",
+      "revoke": "Revoke approval",
+      "approved": "Approved {app}. It can be published now.",
+      "rejected": "Turned down the request of {app}.",
+      "revoked": "Revoked the approval of {app}.",
+      "isLive": "This is what the live release asks.",
+      "decidedBy": "Decided by {who}, {when}.",
+      "allowSpace": "The integration isn’t allowed in {space} yet. Approving also allows it there, for as long as an approval needs it.",
+      "keepLink": "To keep it allowed afterwards, tick “Keep … after the approval ends” in the integration’s spaces.",
+      "revokeQuestion": "Revoke the approval of {app}?",
+      "revokeBody": "The app stops using the integration at once. It can’t be published, or rolled back to, with this contract until it is approved again.",
+      "revokeLive": "This is what the live release asks. It stops using the integration at once, though it stays online, and it can’t be published or rolled back to until it is approved again.",
+      "revokeSpace": "If no other approval needs it, {space} also stops being allowed for the integration, unless it is kept in the integration’s spaces.",
+      "allowSpaceTemporary": "Approving also allows the integration in that space, for as long as this approval lasts. It isn’t a space you manage, so it can’t be kept after the approval ends.",
+      "revokeSpaceTemporary": "If no other approval needs it, that space also stops being allowed for the integration. It isn’t a space you manage, so it can’t be kept."
+    }
   },
   "pwa": {
     "update": {
@@ -2161,7 +2361,9 @@
     "copy": "Copy",
     "copied": "Copied",
     "copyNamed": "Copy {name}",
-    "labelFor": "{label} {name}"
+    "labelFor": "{label} {name}",
+    "deletedUser": "Deleted user",
+    "close": "Close"
   },
   "knowledge": {
     "new": "New",
@@ -2670,9 +2872,11 @@
       "sendNamed": "Send {name}",
       "discard": "Discard",
       "discardNamed": "Discard {name}",
-      "discardQuestion": "Discard this record? It is deleted from this device and never sent.",
+      "discardQuestion": "Discard this record? It is deleted from this device and no more attempts are made to send it.",
       "discardTitle": "Discard {name}?",
-      "discardBody": "It is deleted from this device and never sent.",
+      "discardBody": "This removes the copy on this device and stops any more attempts to send it.",
+      "discardBodySent": "This removes the copy on this device and stops any more attempts to send it. An earlier attempt may already have reached the server, so the record may exist there: discarding does not undo that.",
+      "discardBodySentDelete": "This removes the copy on this device and stops any more attempts to send it. An earlier attempt may already have deleted the record on the server: discarding does not restore it.",
       "discardConfirm": "Yes, discard",
       "discardClosed": "The question about discarding a record was closed because the record changed in another tab or window (it is being sent, or that tab took over). Nothing was removed. The list shows where it stands.",
       "clearSynced": "Clear synced records",

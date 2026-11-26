@@ -420,6 +420,27 @@ export async function deactivate({
   return []
 }
 
+// Deletes one account's database and nothing else's, for the page that deleted that account: its
+// answer can arrive after another account signed in on this tab or another, whose database is then
+// the one in use, and which must stay as it is (`deactivate` lets go of the one in use). The same
+// condition as signing out holds: unsent records the person wasn't shown (`approved`) stop it, and
+// are the answer.
+export async function purgeAccount(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  if (opening) await opening.catch(() => {})
+  const left = await settle(user, approved)
+  if (left.length > 0) return left
+  // Looked at again after the waits above: the one in use may have changed.
+  const runtime = state.runtime
+  if (runtime?.user === user) {
+    await teardown(true, user)
+  } else {
+    await OfflineStore.destroyFor(user).catch(() => {})
+    writeUsers(readUsers().filter((id) => id !== user))
+    forgetLast(user)
+  }
+  return []
+}
+
 // Removes every downloaded app of the user's, and what was queued for it stays. (Used when the
 // device is told it may not keep them.)
 export async function forgetDownloads(store: OfflineStore): Promise<void> {

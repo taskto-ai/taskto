@@ -17,6 +17,7 @@ import (
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/ratelimit"
 )
 
 // Routes mounts the account endpoints on mux. docs/api.md describes them.
@@ -47,6 +48,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 
 	s.passwordRoutes(mux)
 	s.disableRoutes(mux)
+	s.deletionRoutes(mux)
 	s.sessionRoutes(mux)
 	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)
@@ -239,7 +241,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// other two per window, whatever addresses it tries.
 	ip := s.clientIP(r)
 	limits := []struct {
-		l   *limiter
+		l   *ratelimit.Limiter
 		key string
 	}{
 		{s.perIP, ip},
@@ -247,9 +249,9 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		{s.perAccount, email},
 	}
 	for i, lim := range limits {
-		if ok, wait := lim.l.take(lim.key); !ok {
+		if ok, wait := lim.l.Take(lim.key); !ok {
 			for _, taken := range limits[:i] {
-				taken.l.give(taken.key)
+				taken.l.Give(taken.key)
 			}
 			tooMany(w, wait)
 			return
@@ -271,7 +273,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// A server-side failure isn't a failed attempt: hand the attempts back.
 	refund := func() {
 		for _, lim := range limits {
-			lim.l.give(lim.key)
+			lim.l.Give(lim.key)
 		}
 	}
 	match, err := s.hasher.verify(r.Context(), req.Password, hash)

@@ -699,17 +699,29 @@ func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64) 
 // removeFiles deletes an attachment's files from the space that held them. A failure is logged and
 // leaves a stray file, which Sweep removes later.
 func (s *Service) removeFiles(ctx context.Context, spaceID, appID int64, id string) {
-	root, err := s.filesRoot(ctx, spaceID)
-	if err != nil {
+	if err := s.unlinkFiles(ctx, spaceID, appID, id); err != nil {
 		slog.Warn("apps: removing attachment files", "app", appID, "err", err)
-		return
+	}
+}
+
+// unlinkFiles deletes an attachment's files from the space that held them, and reports a file that
+// couldn't be removed (all are tried). One already gone is not a failure.
+func (s *Service) unlinkFiles(ctx context.Context, spaceID, appID int64, id string) error {
+	root, err := s.filesRoot(ctx, spaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // the space is gone, and its directory with it
+	}
+	if err != nil {
+		return err
 	}
 	defer root.Close()
+	var errs []error
 	for _, suffix := range []string{"", ".part", ".thumb", ".thumb.tmp", ".tmp"} {
 		if err := root.Remove(fileName(appID, id, suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("apps: removing attachment file", "app", appID, "err", err)
+			errs = append(errs, err)
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // File is an attachment (or its thumbnail) opened for reading.
@@ -1321,4 +1333,129 @@ func (s *Service) Maintain(ctx context.Context, every time.Duration) {
 		case <-t.C:
 		}
 	}
+}
+
+// FinishMoves completes the moves of apps that involve the space spaceID, for the purge of a
+// private space (internal/accountdeletion): an app moved to or from it keeps its attachments'
+// files and rows where they were until relocate has copied them, and a move that stopped halfway
+// leaves some in the space that is about to go. It relocates every app that has attachments in
+// the space but lives elsewhere, and every app that lives there with attachments elsewhere, and
+// fails if any are left, so the space is never removed with a record's photo in it.
+func (s *Service) FinishMoves(ctx context.Context, spaceID int64) error {
+	if s.dataDir == "" {
+		return nil
+	}
+	moving := func() ([]int64, error) {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT DISTINCT a.id FROM app_attachments t JOIN apps a ON a.id = t.app_id
+			WHERE t.space_id != a.space_id AND (t.space_id = ? OR a.space_id = ?) ORDER BY a.id`, spaceID, spaceID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		return ids, rows.Err()
+	}
+	ids, err := moving()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		errs = append(errs, s.relocate(ctx, id))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("finishing the move of an app's attachments out of space %d: %w", spaceID, err)
+	}
+	left, err := moving()
+	if err != nil {
+		return err
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("apps %v still have attachments in two spaces, one of them space %d", left, spaceID)
+	}
+	return nil
+}
+
+// PurgeUploads removes the unfinished uploads and the photos never attached to a record that owner
+// made, in every app of every space, with their files, for the purge of an account
+// (internal/accountdeletion): an upload of a shared app belongs to the uploader alone, and a photo
+// already on a record belongs to the record, which stays. It returns how many it removed.
+func (s *Service) PurgeUploads(ctx context.Context, owner int64) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, app_id FROM app_attachments WHERE owner = ? AND row_id IS NULL`, owner)
+	if err != nil {
+		return 0, err
+	}
+	type upload struct {
+		id  string
+		app int64
+	}
+	var todo []upload
+	for rows.Next() {
+		var u upload
+		if err := rows.Scan(&u.id, &u.app); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		todo = append(todo, u)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, u := range todo {
+		if err := ctx.Err(); err != nil {
+			return n, err
+		}
+		done, err := s.deleteUpload(ctx, u.id, u.app, owner)
+		if err != nil {
+			return n, err
+		}
+		if done {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// deleteUpload removes attachment id if it still is owner's and unattached (it may have been
+// attached since it was found): its files from the space that holds them, and then its row. The
+// row is what says a file is still to be removed, so a file that can't be removed leaves it, and
+// the error, for the purge to try again; the attachment's lock keeps it from being attached in
+// between.
+func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int64) (bool, error) {
+	defer s.lock(id)()
+	var spaceID int64
+	err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL`,
+		id, owner).Scan(&spaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := s.unlinkFiles(ctx, spaceID, appID, id); err != nil {
+		return false, fmt.Errorf("removing the files of upload %s: %w", id, err)
+	}
+	var gone bool
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL`, id, owner)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		gone = n > 0
+		return err
+	})
+	return gone, err
 }

@@ -12,7 +12,7 @@ import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Skeleton } from '../ui/Skeleton'
 import { Content } from './Content'
-import { type Change, type Commit, encodePath, isStale, useDoc, useLatest } from './docs'
+import { authorName, type Change, type Commit, encodePath, isStale, useDoc, useLatest } from './docs'
 import { useLoadingStatus } from './loading'
 import { Problem } from './Problem'
 
@@ -191,8 +191,12 @@ export function History({
               const isCurrent = !!c.version && c.version === current.version
               const viewable = !!c.version && !unversioned && (kept(c) || isCurrent)
               const by = c.agent
-                ? t('knowledge.history.byWithAgent', { name: c.author.name, agent: c.agent, time: f.dateTime(c.time) })
-                : t('knowledge.history.by', { name: c.author.name, time: f.dateTime(c.time) })
+                ? t('knowledge.history.byWithAgent', {
+                    name: authorName(c.author, t),
+                    agent: c.agent,
+                    time: f.dateTime(c.time),
+                  })
+                : t('knowledge.history.by', { name: authorName(c.author, t), time: f.dateTime(c.time) })
               const removedVersion = !!c.version && !unversioned && !kept(c) && !isCurrent
               return (
                 <Row

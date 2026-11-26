@@ -124,6 +124,12 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `account_disabled` | 403 | The account is disabled ([Disabling a member](#disabling-a-member)): a login with the right password, a single sign-on (as `?sso_error=`), a password reset link and an admin whose own account was disabled meanwhile answer this. A disabled account's access token is `token_invalid`. |
 | `disable_own` | 400 | An admin can't disable or enable their own account. |
 | `disable_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `deletion_reauth_required` | 403 | Deleting an account that has no password needs a sign-in made in the last 5 minutes ([Deleting an account](#deleting-an-account)). |
+| `deletion_last_admin` | 409 | The account is the only admin in use of a workspace; `params.workspace` names it. |
+| `deletion_last_operator` | 409 | The account is the only admin in use of the workspace the server's setup made, whose admins are its operators; `params.workspace` names it. |
+| `deletion_pending` | 409 | The account is waiting to be deleted already; disabling or enabling it is refused too. |
+| `deletion_not_pending` | 404 | The account isn't waiting to be deleted. |
+| `deletion_purging` | 409 | The purge has begun: the deletion can't be cancelled any more. |
 | `session_not_found` | 404 | No such session of the caller's (another user's sessions are never found). |
 | `session_current` | 400 | The session asked to be signed out is the one making the request: log out instead. |
 | `wrong_two_factor_code` | 401 / 403 | The code from the authenticator app (or the recovery code) is wrong, was used already, or is for another time. `401` at the second step of a login, `403` for a logged-in user's own settings. |
@@ -305,11 +311,16 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_secret_required` | 400 | A secret the provider needs (`secret`) isn't given. In a check's answer: it isn't set. |
 | `integration_secret_invalid` | 400 | The value given for a secret (`secret`) isn't one the provider's credentials look like. It never quotes the value. |
 | `integration_secret_unreadable` | 200 | In a check's answer (`code`): a sealed secret (`secret`) doesn't open, usually because the server key changed since it was saved: set it again. |
+| `integration_webhook_secret_shared` | 200 | In a check's answer (`code`): another integration, in this workspace or another, has the same webhook secret (`secret` says which of this one's), so deliveries signed with it open neither and are refused. It says nothing of which. Set a different one at the provider and here: a secret found shared stays refused for every integration, the other holder's too, even after one of them has changed it. |
+| `integration_webhook_secret_reused` | 409 | The webhook secret is already used by another integration (of any workspace): each integration needs its own, so a delivery's signature opens one only. It says nothing of which. |
 | `integration_setting_invalid` | 400 | A setting (`setting`) is unknown, missing, or not a value the provider accepts. |
 | `integration_limit_invalid` | 400 | The amount ceiling must be a whole number from 1 to `max`. |
 | `integration_currency_invalid` | 400 | The currencies must be 1 to `max` distinct codes from the list the server knows. |
 | `too_many_integrations` | 409 | The workspace has `max` integrations. |
 | `integration_in_use` | 409 | Something still names the integration (an approval of an app): disable it instead. |
+| `integration_event_gave_up` | none | The last reason kept on a stored provider event whose tries ran out, or that failed in a way that may pass; it is never in a response. |
+| `webhook_rate_limited` | 429 | `POST /hooks/{public_id}`: too many requests from this client address lately, or for this id (counting verified deliveries only). `Retry-After` says when to try again. |
+| `webhook_too_large` | 413 | `POST /hooks/{public_id}`: the body is over 256 KiB. |
 | `base_url_invalid` | 400 | Not an http or https URL of up to `max` characters, without a query or fragment (provider accounts, shared CLI accounts, dictation). |
 | `base_url_credentials` | 400 | The base URL has credentials in it: the key goes in `api_key`. |
 | `base_url_insecure` | 400 | A key would be sent over plain http to another machine: use https. |
@@ -390,7 +401,13 @@ deletes the session at once. With `insecure_cookies` (local plain-http developme
 the cookie is called `taskto_session` and isn't `Secure`, since browsers refuse a
 `__Host-` cookie without it.
 
-A route that needs a login answers `401` without a valid session.
+A route that needs a login answers `401` without a valid session. That answer leaves the cookie
+as it is, whether the session is unknown, expired or revoked: a stale session's cookie is inert, and
+expiring it could wipe the cookie of a newer sign-in made in the same browser while the request was
+on its way (two tabs submitting an account's deletion, the second answered after another account
+signed in). Only logging out clears the cookie, its own. A request made for an account (the
+`X-Taskto-Expected-User` header) that is answered `401` ends the web app's session for that account
+only: a window signed in as another account stays signed in.
 
 Each session keeps what [your sessions](#your-sessions) list: when it was made, when it was last
 used (written at most once a minute) and the names of the browser and system its login was made
@@ -981,6 +998,8 @@ Any member. Members can see each other (boards need it to assign cards).
 ```
 
 `disabled` is true for an account an admin switched off ([below](#disabling-a-member)).
+`deletion_at` is when the account is purged, for one that was [deleted](#deleting-an-account) and
+waits out its grace period (it is `disabled` too); `null` for the rest.
 
 An admin's list also has `"two_factor": true` or `false` for each member, which says whether
 they have [two-factor login](#two-factor-login) on, for the clear above; nobody else sees it.
@@ -1049,6 +1068,126 @@ A request an admin sent just before being disabled changes nothing either: the w
 (inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts, the
 integrations, the decisions on apps' integration requests)
 read the admin's account again in their transaction and answer `403 account_disabled`.
+
+### Deleting an account
+
+A person can delete their own account, and only they can: not an admin, and not the operator (who
+can only cancel a deletion that is waiting). It is the one way an account goes: [removing a
+member](#delete-apiworkspacesworkspacemembersuser) only ends their access to one workspace and keeps
+their private space closed.
+
+**What happens.** The account is switched off at once, with the switch of [disabling a
+member](#disabling-a-member) (every login ended, no new one, its tokens, agents and jobs refused),
+and kept for a **grace period**, 14 days unless the operator sets `-account-deletion-days`
+(`TASKTO_ACCOUNT_DELETION_DAYS`, `account_deletion_days`, 1 to 365). An operator can cancel the
+deletion until then: the account is switched on again, as it was (an account an admin had disabled
+stays disabled). When the period ends, the scheduler runs the **purge**, once, as the server.
+
+**What the purge deletes: what the person owned alone.**
+
+- their private space in every workspace: the documents with the unversioned files and the large
+  files' bytes, their personal board, and their private apps with their records and photos, from
+  disk and from the database, and the [search](#search) index's rows for them;
+- their conversations, and the agent runtime's copies: each is retired and then purged from the
+  runtime's database, which holds what was said (see
+  [install.md](install.md#privacy-and-account-deletion));
+- their CLI logins and shared-account mappings, with everything the CLI worker kept for them
+  (sessions, working directories, the agent browser's profile), and the agent runtime's providers
+  file and key files, which hold their provider accounts;
+- their unfinished uploads of photos in shared apps, with the files (a photo already on a record
+  stays with the record);
+- their access tokens, sessions, push subscriptions, notification settings and email ledger,
+  two-factor data, single sign-on identities, reset links, and the invitations to their address;
+- the account itself, with its name and email.
+
+**What stays: what they made for others.** Everything in a shared space stays, and the audit log
+stays. The people it names lose their account, which the product shows as **"Deleted user"**, in the
+way a row whose author is `null` always has been: a card's creator, a comment's author, a record's
+creator or version's actor, a board's creator, an app's author. Where `null` would read like "no
+one", the row says so: a card whose assignee was deleted has `"assignee": {"kind": "deleted"}`
+(until it is assigned to someone), an [audit](audit.md#deleted-accounts) event has `actor_deleted`
+or `target_deleted`, and a document's [history](#get-apiworkspacesworkspacespacesspacehistorypath) lists the author as `Deleted user
+<deleted-user@deleted.invalid>`: the purge replaces their name and address, in every shared space
+of the server, in each commit they authored or committed (a [history
+rewrite](#taking-a-files-old-versions-out-of-history), so those commits get new IDs; the documents' versions don't change).
+A comment's `@[Name](user:ID)` mention becomes `@[Deleted user](user:0)`, whatever digits the ID was
+written with: user 0 is no one, and no account is ever given the number of a deleted one (user IDs
+are never reused). The photos of a shared app's records stay, even those whose files an unfinished
+move of the app had left in the person's private space (the purge finishes the move first), and so
+does what the app's [effects](#effects-of-actions) did, without who; effects that had not run yet are
+cancelled.
+
+**Who may.** The person, proving it is them (below), and no one else. The account must not be the
+only admin in use of a workspace (`409 deletion_last_admin`), and for the workspace the server's
+setup made, whose admins are its operators, not the last one (`409 deletion_last_operator`): make
+someone else an admin first. A disabled admin doesn't count as "in use". These take a session, never
+an access token (`403`). There is no route for an admin to delete a member's account: an admin can
+[remove the member](#delete-apiworkspacesworkspacemembersuser) from their workspace, which leaves
+the account and what it owns alone.
+
+**Offering the export.** The web app offers [the person's data export](#export-my-data) before it
+asks to confirm. The server doesn't require it. When the person's session ends with the deletion,
+the browser that asked removes what it kept of the account (the drafts and the offline database,
+with whatever it had not sent).
+
+#### `GET /api/me/deletion`
+
+What deleting the caller's own account takes:
+
+```json
+{"grace_days": 14, "method": "password", "two_factor": false, "fresh": false,
+ "blockers": [{"workspace_id": 1, "workspace": "Home", "operator": true}]}
+```
+
+`method` is `password` (and a code too if `two_factor` is true), or `fresh_login` for an account
+that signs in with a provider and has no password: it is proved by a login made in the last 5
+minutes (`fresh`). `blockers` lists the workspaces where the caller is the only admin in use;
+deleting is refused while there are any.
+
+#### `POST /api/me/deletion`
+
+`{"password": "…", "code": "…"}`: the current password, and a two-factor or recovery code if the
+account has two-factor login on; `{}` for an account with no password, which needs a recent login
+(`403 deletion_reauth_required` otherwise). A wrong password is `403 wrong_password` and a wrong
+code `403 wrong_two_factor_code`, both counted by the login limits like a failed login. `202` with
+`{"purge_at": "…"}`; every session of the account is ended at once. The answer doesn't touch the
+session cookie: one that arrives after another account signed in on the same browser must not sign
+that one out, and the account's own cookie opens nothing any more. `409` with the blocker's code
+above; `409 deletion_pending` if it was asked for already. Recorded in the [audit log](audit.md) as
+`account_deletion_requested`.
+
+#### `GET /api/workspaces/{workspace}/account-deletions`
+
+Operators only ([Operators](#operators)): every account waiting to be deleted, soonest first:
+
+```json
+{"deletions": [{"user": {"id": 2, "email": "…", "name": "…"}, "requested_at": "…", "purge_at": "…",
+                "purging": false}]}
+```
+
+#### `DELETE /api/workspaces/{workspace}/account-deletions/{user}`
+
+Operators only. Cancels the deletion: `204`; the account is switched on again and signs in as
+before (its logins ended with the deletion). `404 deletion_not_pending`; `409 deletion_purging`
+once the purge has begun, which can't be undone. Recorded as `account_deletion_cancelled`.
+
+**The purge is safe to repeat.** Each step finds what is left and finishes it, so a purge that was
+stopped or failed is tried again (with backoff, every ten minutes after the tries run out, and at the
+next start, whoever joins or leaves a workspace meanwhile); the account itself, with the audit events
+(`account_purged`, which holds only counts), goes last, in one transaction. The steps about files and
+other processes (the agent runtime's records of the conversations, the CLI worker's directory, the
+providers file) are recorded before they are done, and a step that has to wait for the agent runtime or
+the CLI workers to be on stays recorded after the account is gone and is done when they are: the
+event says how many are waiting (`cleanups_pending`), and the server doesn't log the purge as complete
+until none is.
+
+A purge job is only a reminder to look: what decides when an account is purged is the request in
+force, read when the purge starts, and a job that runs before that request's deadline (left over from
+a request that was cancelled and made again) is moved to the deadline and deletes nothing. Each
+purge records its own rewriting of the providers file, so one purge's finishing it never clears
+another's; the event's `cleanups_pending` counts it, since it is done after the account is gone. The
+reason a step failed is kept with the step (`last_error` of `purge_cleanups`) as a fixed word, never as
+the text of an error, and not in the log.
 
 ## Invites
 
@@ -2178,7 +2317,9 @@ A card:
 - `assignee`: `null`, `{"kind": "agent"}`, or `{"kind": "user", "id": …}`, a member of
   the workspace who can read the space (a viewer is fine), checked when assigned. In
   requests `name` is ignored. Someone who later loses access stays assigned until the
-  card is changed.
+  card is changed. A card whose assignee's account was [deleted](#deleting-an-account) has
+  `{"kind": "deleted"}`, which the server sends and never takes: it counts as unassigned for
+  the `assignee=none` filter, and assigning the card to anyone (or no one) replaces it.
 - `blocked` is true when the card has a `blocked_reason` or cards in `blocked_by`, which
   are other cards of the same board.
 - `docs` are knowledge-base paths within the board's space, like `notes/plan.md`
@@ -3207,12 +3348,19 @@ approval is
 ```json
 {"id": 4, "app_id": 9, "app_name": "Invoices", "space_id": 3, "space_name": "Team", "space_kind": "shared",
  "slot": "payments", "kind": "payments", "contract": {…}, "contract_hash": "…", "status": "requested",
- "live": false, "integration": null, "requested_by": {…}, "requested_at": "…", "decided_by": null, "decided_at": null}
+ "live": false, "integration": null, "space_grant": "none", "requested_by": {…}, "requested_at": "…", "decided_by": null, "decided_at": null}
 ```
 
-It holds what the requester submitted and the names of the app and its space: **no part of the app
-and none of its records**, so an app in a private space, which an admin can't open, is approved the
-same way. `live` says the contract is the live release's.
+It holds what the requester submitted and the names of the app and its space: the contract, which
+includes the handlers' literals and rules the definition gives it (an admin sees that the app sets
+`status` to `"paid"`), but **not the rest of the definition and none of its records**, so an app in
+a private space, which an admin can't open, is approved the same way. `live` says the contract is the live release's.
+`space_grant` says, for the approval's own space and the integration it is bound to now, whether the
+space has a grant and who made it: `"approval"` (the approval allowed the space, so it ends with the last
+approval that needs it), `"settings"` (an admin allowed it in the integration's settings, which an
+approval never takes away) or `"none"` (no integration is bound, or its space isn't allowed). It is the
+one fact the queue holds about a space an admin can't open, and it says nothing of any other space, which
+is how the admin's screen warns that revoking ends a grant it can't list.
 
 #### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/approve`
 
@@ -3240,6 +3388,16 @@ Admin only, body `{}`. Withdraws an approval (`409 app_integration_not_approved`
 the app stops using the integration at once, and can't be published or rolled back to with that
 contract until it is approved again. `200` with the approval. An approval of another workspace is
 `404 app_integration_approval_not_found` whoever asks.
+
+An approval is asked for only for the **draft's** contract. To get a revoked contract of an earlier
+release approved again, so that the app can roll back to it, the publisher reads and keeps the
+current draft, replaces the draft (`PATCH` with `definition`) with that release's definition from
+`GET …/apps/{app}/releases/{release}`, asks for the approval and has an admin approve it, rolls back
+to the release, and writes the kept draft back with `PATCH`. A rollback leaves the draft as it
+is, so without the first step the draft is lost. Every `PATCH` names the `version` the last reply
+gave, so the write-back names the one the replacement's reply gave: if it is refused with `409
+app_changed`, another builder saved an edit to the draft meanwhile, and the publisher reads the draft
+again and merges that edit into the kept one before writing it back, never over it.
 
 **The gate.** Publishing and rolling back are refused (`409 app_integration_unapproved`, `slot`) unless
 every slot of the release that would become live has an approval of its contract's hash whose
@@ -3455,8 +3613,8 @@ same checks, answered with at most 25 rows in `/items`.
 An insert or an update may declare **effects**: what the change sets going on boards and documents.
 The kinds are a fixed registry, strictly checked when the definition is saved; a key that isn't one
 of a kind's (a URL, a tool name, a command), an unknown `kind` or a hole in a template that isn't a
-field refuses the definition (`400`). A definition with effects needs `definition_version` 2, and
-its release needs the capability `effect.<kind>` of each kind it uses (`requires`).
+field refuses the definition (`400`). A definition with effects needs `definition_version` 2 or
+later (`create_payment_link` needs 3, which also reads the other effects), and its release needs the capability `effect.<kind>` of each kind it uses (`requires`).
 
 ```json
 "actions": {
@@ -3476,7 +3634,7 @@ its release needs the capability `effect.<kind>` of each kind it uses (`requires
 | `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
 | `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
 | `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
-| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
+| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, and a preview says what it would ask for, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
 
 Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
 effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
@@ -3609,9 +3767,11 @@ since the route is not one a token reaches.
 Those who may design or publish the app (`403 app_forbidden` otherwise). The same body as an action;
 it is worked out against the **draft** and **does nothing**: no record changes, no operation is
 kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
-that would apply (not a `create_payment_link`, which is declared only), with `status: "simulated"`, what they would make in `detail` (a new record's `id`
+that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
-target.
+target. A `create_payment_link` is only said: its `detail` is the `amount` the sample record has in the
+amount field (in the currency's own units, such as euros, and left out when the record has no number there)
+and its `currency`, and the preview calls no service, opens no secret and needs no approval.
 
 Like the preview below, it never reads the app's records: the action is tried on the `rows` of the
 body (the preview's own, as below) or, without them, on sample rows made from the draft's
@@ -3644,7 +3804,7 @@ draft doesn't declare, a value that doesn't fit its field, or a row the sample r
 `updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
 does), and the rows as the action left them, to send with the next step. For an insert or an update
 with effects, `effects` are the ones that would apply to the record, simulated on those rows (a
-`create_payment_link` is declared only and is never simulated; as
+`create_payment_link` as an `amount` and a `currency` in its `detail`, nothing more; as
 [`…/actions/preview`](#post-appsappactionspreview) answers; nothing is made). In a preview a
 **signature** or a **photo** is never required, since none is held, so an action whose record would
 carry one is not refused for the lack of it. The answer is the same
@@ -4078,11 +4238,12 @@ An integration looks like this:
   refused without quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
   an account, disable the integration or delete it. A replaced webhook secret keeps verifying
   events for a day (for the provider's own rotation overlap).
-- **`webhook_url`**: the address the provider's events will be sent to, `null` when the server has no
-  `-public-url`: webhooks are then unavailable. **Reserved:** no route serves it yet and events are
-  not processed, so don't register it at the provider until a later release says so; the same
-  holds for the webhook secret and its rotation. It holds a random 128-bit id and no
-  secret, and is made from the current `-public-url` each time, so it follows a change of it.
+- **`webhook_url`**: the address to register at the provider for its events
+  ([`POST /hooks/{public_id}`](#post-hookspublic_id)), `null` when the server has no
+  `-public-url`: webhooks are then unavailable. It holds a random 128-bit id and no secret, and
+  is made from the current `-public-url` each time, so it follows a change of it. The
+  integration's `webhook_secret` is what verifies what arrives there. `last_event_at` is when the
+  last verified event came.
 - **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
   manage**: their own private space and the workspace's shared spaces (archived ones too, so
   they can be taken out). Another person's private space is never in it: **`other_spaces`**
@@ -4113,8 +4274,9 @@ Admin only. `provider`, `name`, `secrets` (with the provider's required ones), `
 `display_name` is optional. Unknown fields are refused. `201` with the integration; `400` for
 an invalid field (`integration_provider_unknown`, `integration_name_invalid`,
 `integration_secret_required`, `integration_secret_invalid`, `integration_setting_invalid`,
-`integration_limit_invalid`, `integration_currency_invalid`); `409` if the name is taken or
-the workspace has 20 integrations.
+`integration_limit_invalid`, `integration_currency_invalid`); `409` if the name is taken, the
+workspace has 20 integrations or the webhook secret is one another integration uses
+(`integration_webhook_secret_reused`).
 
 ### `GET /api/workspaces/{workspace}/integrations/{integration}`
 
@@ -4150,7 +4312,10 @@ Admin only, no body. Looks at what the server holds: the provider's required sec
 open with the server's key and the settings are the provider's. It doesn't call the
 provider in this version (`remote` is `false`). `200`, always, with
 `{"ok": true, "remote": false}` or `{"ok": false, "remote": false, "code": "…", "params": {…}}`
-(`integration_secret_required`, `integration_secret_unreadable`, `integration_setting_invalid`).
+(`integration_secret_required`, `integration_secret_unreadable`, `integration_webhook_secret_shared`,
+`integration_setting_invalid`). The `shared` one says another integration has this one's webhook
+secret (an old install can: it is refused now), so deliveries signed with it open neither; it names
+neither the integration nor its workspace.
 It never carries a provider's reply or a secret. `404` for another workspace's integration.
 
 ### `DELETE /api/workspaces/{workspace}/integrations/{integration}`
@@ -4164,6 +4329,51 @@ Anyone who can read the space. What may be used in the space:
 `{"integrations": [{"id", "name", "display_name", "kind", "status"}]}`, with `status` `active`
 or `disabled`. Nothing about the account: no secret, no webhook address, no limit, no
 provider.
+
+### `POST /hooks/{public_id}`
+
+The route a provider sends its events to, **outside `/api`**: there is no session, no cookie and
+no CSRF check (the guard wraps only `/api`), and no `Content-Type` is required. The provider's
+**signature over the exact body is the authentication**. Without a valid one, a request
+changes nothing and tells nothing. The route is for providers, not for the web app, and
+nothing else under `/hooks/` exists. The reverse proxy has to forward `POST /hooks/*`
+([install](install.md#webhooks-from-payment-providers)).
+
+In order:
+
+1. The client address is counted against a limit, per minute, before anything is looked up or
+   verified: 600 requests per client address (an IPv6 client counts as its /64). Over it:
+   `429 webhook_rate_limited` with `Retry-After`.
+2. The body is read up to 256 KiB (`413 webhook_too_large` over it, for every id alike, before
+   anything is looked up).
+3. The integration is found by `public_id`. The signature is verified **over the raw bytes,
+   before the body is parsed**, in constant time, against the integration's webhook secret and,
+   for a day after an admin replaces it, the one it replaced. The provider's tolerance applies
+   to the signed timestamp, in both directions (Stripe: five minutes). The same work is done
+   for an id that can't be delivered to (one that doesn't exist, is disabled or has no secret,
+   or isn't of the shape of an id), against a secret of the server's own.
+   Only a delivery that verifies counts against the second limit, 600 per minute per id (over
+   it: `429 webhook_rate_limited`), so unsigned requests can't use up an integration's quota.
+4. Every way of not getting this far is **one answer**, byte for byte: `404 not_found`, with
+   the same headers. An id that doesn't exist, one that is disabled or has no webhook secret,
+   an id of a provider that has no webhooks yet, a secret that doesn't open, a missing,
+   malformed, wrong, tampered or too old signature, and a valid signature of *another*
+   integration. The response never says which, and nothing about the workspaces or
+   integrations that exist.
+5. The body is normalized ([integrations.md](integrations.md#webhooks-and-the-public-url)).
+   An event the server doesn't act on, one of another mode than the integration's, or one that
+   isn't of the shape it relies on is answered `200` and **not stored** (providers disable
+   endpoints that answer errors). Otherwise it is stored once, by `(integration, provider event
+   id)` with `ON CONFLICT DO NOTHING`, and answered `200` whether it was new or a replay: the
+   provider can't tell which. **The body is never stored**, only its SHA-256 and closed, typed
+   fields. The write re-checks, in its own transaction, that the integration is still enabled
+   and has the same mode and webhook secrets as when the signature was verified; if not,
+   nothing is stored and the answer is the one `404`.
+6. A failure of the server's own (the database) is a `500` with no detail, so the provider
+   retries.
+
+The answer to an accepted delivery is `200` with no body. A stored event is applied later by
+the integrations' worker, with leases and a bounded number of tries.
 
 ## Model providers
 

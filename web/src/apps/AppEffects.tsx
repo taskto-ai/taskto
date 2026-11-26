@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type AppEffect, type AppEffectList, api, codeText, errorText } from '../api'
-import { type Key, useFormat, useT } from '../i18n'
+import { type Format, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { boardItem, documentItem, Link, routePath } from '../router'
 import { Badge, type BadgeTone } from '../ui/Badge'
@@ -198,7 +198,7 @@ export function EffectItems({
       {notice && <Notice tone="success">{notice}</Notice>}
       <Rows label={label}>
         {effects.map((e) => {
-          const what = detail(e, t)
+          const what = detail(e, t, f)
           const meta = [
             e.id > 0 ? t('apps.effects.recordAction', { id: e.record, action: e.action }) : e.action,
             e.attempts > 0 ? t('apps.effects.tries', { count: e.attempts }) : '',
@@ -277,9 +277,14 @@ const STATUS_TONE: Record<string, BadgeTone> = {
 }
 
 // What an effect makes, in a line: a card's title, a document's path, where a card goes.
-function detail(e: AppEffect, t: ReturnType<typeof useT>): string {
+function detail(e: AppEffect, t: ReturnType<typeof useT>, f: Pick<Format, 'number'>): string {
   const d = e.detail
   switch (e.kind) {
+    // What a preview says it would ask for, in the currency's own format: "€120.00".
+    case 'create_payment_link':
+      return d.amount !== undefined && d.currency
+        ? f.number(d.amount, { style: 'currency', currency: d.currency })
+        : t('apps.effects.paymentLinkNoAmount')
     case 'create_card':
       return d.title ?? ''
     case 'update_card':

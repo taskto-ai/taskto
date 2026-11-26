@@ -13,6 +13,7 @@ import (
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/ratelimit"
 )
 
 // Two-factor login (docs/api.md#two-factor-login).
@@ -72,14 +73,14 @@ func (s *Service) twoFactorRoutes(mux *http.ServeMux) {
 
 // limitKey is a limiter and the key one attempt counts against.
 type limitKey struct {
-	l   *limiter
+	l   *ratelimit.Limiter
 	key string
 }
 
 // takeAll counts an attempt against every limit, or against none if one is used up.
 func takeAll(ls []limitKey) (bool, time.Duration) {
 	for i, lim := range ls {
-		if ok, wait := lim.l.take(lim.key); !ok {
+		if ok, wait := lim.l.Take(lim.key); !ok {
 			giveAll(ls[:i])
 			return false, wait
 		}
@@ -89,7 +90,7 @@ func takeAll(ls []limitKey) (bool, time.Duration) {
 
 func giveAll(ls []limitKey) {
 	for _, lim := range ls {
-		lim.l.give(lim.key)
+		lim.l.Give(lim.key)
 	}
 }
 

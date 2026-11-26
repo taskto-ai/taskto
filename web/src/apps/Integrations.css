@@ -1,0 +1,66 @@
+/* The outside services an app asks for, in the publish panel and its approval dialog: one block a
+   slot, each with what it asks in plain words. Every part is a component from web/src/ui; this
+   only places them. */
+
+@layer screens {
+  .apps-slots {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .apps-slots > p {
+    margin: 0;
+  }
+
+  .apps-slot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+    padding-block-start: var(--space-3);
+    border-block-start: var(--line-thin) solid var(--color-border);
+  }
+
+  .apps-slot > p {
+    margin: 0;
+  }
+
+  .apps-slot-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  /* The contract's words: a column whose width is the box's, so a long field name wraps. */
+  .apps-contract {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+    overflow-wrap: anywhere;
+  }
+
+  .apps-contract > p {
+    margin: 0;
+  }
+
+  /* Its own lists and note, since the contract is also read in Settings, where the Apps screens'
+     stylesheet isn't loaded. */
+  .apps-contract-list {
+    margin: 0;
+    padding-inline-start: var(--space-5);
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .apps-contract-list .apps-contract-list {
+    margin-block-start: var(--space-1);
+  }
+
+  .apps-contract-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+}

@@ -1169,3 +1169,53 @@ func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
 		t.Fatalf("users = %d, %v; want the write rolled back", n, err)
 	}
 }
+
+// An upload's row says its files are still to be removed: a purge that can't unlink a file keeps
+// the row and fails, and a retry removes the file and then the row.
+func TestPurgeUploadsKeepsTheRowUntilTheFilesAreRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a directory can't be made unwritable for root")
+	}
+	w := newWorld(t)
+	s := w.shared
+	a := w.createPhotos(w.alice, s, "Photos")
+	id := w.start(w.alice, s, a, "photos", 100)
+	w.send(w.alice, s, a, id, make([]byte, 40), 40)
+	dir := filepath.Join(s.Dir(w.e.dataDir), filesDir, fmt.Sprint(a.ID))
+	if got := w.files(s, a); len(got) != 1 || !strings.HasSuffix(got[0], ".part") {
+		t.Fatalf("files = %v", got)
+	}
+	rows := func() int {
+		var n int
+		if err := w.e.db.QueryRow(`SELECT count(*) FROM app_attachments WHERE id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	n, err := w.e.s.PurgeUploads(context.Background(), w.alice.id)
+	if err == nil || n != 0 {
+		t.Fatalf("PurgeUploads = %d, %v; want a failure", n, err)
+	}
+	if rows() != 1 {
+		t.Fatal("the row was deleted while its file stayed: nothing says it is left")
+	}
+
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n, err = w.e.s.PurgeUploads(context.Background(), w.alice.id)
+	if err != nil || n != 1 {
+		t.Fatalf("the retry: %d, %v", n, err)
+	}
+	if got := w.files(s, a); len(got) != 0 {
+		t.Errorf("files = %v", got)
+	}
+	if rows() != 0 {
+		t.Error("the row remains")
+	}
+}

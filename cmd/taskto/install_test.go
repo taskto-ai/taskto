@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -204,6 +206,114 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 		if strings.Contains(logs.String(), "setup_token") {
 			t.Fatal("the restored server logged a setup token")
 		}
+	}
+}
+
+// apiCall makes one request as a browser would, with the session cookie it holds ("" for
+// none), and returns the status and the session cookie the answer set ("" if none).
+func apiCall(t *testing.T, addr, method, path, cookie string, body any) (int, string) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, "http://"+addr+path, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if cookie != "" {
+		// #nosec G124 -- a request cookie, sent by a test to a plain-http server.
+		req.AddCookie(&http.Cookie{Name: "taskto_session", Value: cookie})
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	set := ""
+	for _, c := range resp.Cookies() {
+		if c.Name == "taskto_session" && c.MaxAge >= 0 {
+			set = c.Value
+		}
+	}
+	return resp.StatusCode, set
+}
+
+// A restore never brings a login back: a browser that kept its cookie after its session was
+// ended (a password change signed it out, and a refused session's 401 leaves the cookie)
+// is not signed in again by restoring a backup made before.
+func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Addr = "127.0.0.1:0"
+	cfg.DataDir = t.TempDir()
+	cfg.InsecureCookies = true // the test talks plain http
+	logs := captureLog(t)
+	addr, stop := startRun(t, cfg)
+	token := setupTokenLine.FindStringSubmatch(logs.String())
+	if token == nil {
+		t.Fatal("no setup token in the log")
+	}
+	if code := postSetup(t, addr, token[1]); code != http.StatusCreated {
+		t.Fatalf("setup = %d", code)
+	}
+	const oldPassword, newPassword = "fake-owner-password", "fake-owner-password-changed"
+	login := func(addr string) string {
+		code, c := apiCall(t, addr, http.MethodPost, "/api/login",
+			"", map[string]string{"email": "owner@example.com", "password": oldPassword})
+		if code != http.StatusOK || c == "" {
+			t.Fatalf("login = %d, cookie %q", code, c)
+		}
+		return c
+	}
+	first, second := login(addr), login(addr)
+
+	// The backup has both sessions active.
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "taskto.tar.gz")
+	env := func(k string) string { return map[string]string{"TASKTO_DATA_DIR": cfg.DataDir}[k] }
+	var stderr bytes.Buffer
+	if err := runBackup(ctx, []string{archive}, env, nil, &stderr); err != nil {
+		t.Fatalf("taskto backup: %v\n%s", err, &stderr)
+	}
+
+	// The password changes in the first browser: the second one's session ends.
+	if code, _ := apiCall(t, addr, http.MethodPost, "/api/me/password", first,
+		map[string]string{"current_password": oldPassword, "new_password": newPassword}); code != http.StatusNoContent {
+		t.Fatalf("change password = %d", code)
+	}
+	if code, _ := apiCall(t, addr, http.MethodGet, "/api/me", second, nil); code != http.StatusUnauthorized {
+		t.Fatalf("the signed-out session got %d, want 401", code)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restore the older backup, as an operator does, and start a server on it.
+	restored := filepath.Join(dir, "restored")
+	if err := runRestore(ctx, []string{"-data-dir", restored, archive}, env, nil, &stderr); err != nil {
+		t.Fatalf("taskto restore: %v\n%s", err, &stderr)
+	}
+	cfg.DataDir = restored
+	addr, stop = startRun(t, cfg)
+	defer func() { _ = stop() }()
+	for name, c := range map[string]string{"the ended session": second, "the session that changed the password, as the backup had it": first} {
+		if code, _ := apiCall(t, addr, http.MethodGet, "/api/me", c, nil); code != http.StatusUnauthorized {
+			t.Errorf("%s: /api/me after the restore = %d, want 401", name, code)
+		}
+	}
+	// The data is the backup's, and signing in again works with its password.
+	if c := login(addr); c == "" {
+		t.Fatal("no session after signing in again")
+	} else if code, _ := apiCall(t, addr, http.MethodGet, "/api/me", c, nil); code != http.StatusOK {
+		t.Fatalf("/api/me with the new login = %d, want 200", code)
 	}
 }
 

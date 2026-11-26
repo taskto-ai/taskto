@@ -5,7 +5,7 @@
 // sets the password, and signs in.
 
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from 'react'
-import { ACCOUNT_CHANGED_EVENT, ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
+import { ACCOUNT_CHANGED_EVENT, ApiError, api, concernsAccount, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen, StartingScreen } from './auth/AuthScreens'
 import { ServerUnreachable } from './auth/ServerUnreachable'
 import { SigningOut } from './auth/SigningOut'
@@ -163,19 +163,26 @@ export function App() {
   useLayoutEffect(() => {
     if (problem === 'account') endSession()
   }, [problem])
+  const signedInUser = session.state === 'in' ? session.me.user.id : null
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
   // lost while the login is showing.
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
   useEffect(() => {
     if (!signedIn) return
     // The session ended elsewhere (or expired): this device stops receiving the person's pushes.
-    const lost = () => {
+    const lost = (e: Event) => {
+      // An end of the session that names another account than this one's (a deleted account's
+      // answer, arriving after this one signed in) leaves this one signed in.
+      if (!concernsAccount(e, signedInUser)) return
       void leavePush()
+      // What this device kept of an account its person deleted is removed by the page that deleted
+      // it (forgetAccount), not here: a session that ends any other way leaves the queue for the
+      // next sign-in to send.
       setSession({ state: 'login' })
     }
     window.addEventListener(SESSION_LOST, lost)
     return () => window.removeEventListener(SESSION_LOST, lost)
-  }, [signedIn])
+  }, [signedIn, signedInUser])
 
   const logIn = useCallback(
     async (me: Me) => {

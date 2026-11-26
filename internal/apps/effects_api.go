@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -68,6 +69,11 @@ type EffectDetail struct {
 	Column string `json:"column,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Route  string `json:"route,omitempty"`
+	// Amount and Currency are what a simulated payment link would ask for, as the sample record
+	// has them (the amount in the currency's own units, such as euros). Only a preview has them:
+	// no entry is queued for a payment link yet.
+	Amount   *float64 `json:"amount,omitempty"`
+	Currency string   `json:"currency,omitempty"`
 }
 
 func detailOf(p payload) EffectDetail {
@@ -450,14 +456,22 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 		return out
 	}
 	for i, e := range def.Actions[ch.Name].Effects {
-		// A payment link is an integration's to simulate (the preview never calls one).
-		if e.Kind == EffectCreatePaymentLink || !e.applies(def.Collection, rec.Data) {
+		if !e.applies(def.Collection, rec.Data) {
 			continue
 		}
-		// A new record has no number yet: its details say "new".
+		// A payment link is only said, never asked for: the preview calls no network, opens no
+		// secret and needs no approval, and shows what the sample record would send.
+		// A new record has no number yet: its details, and the effect's record, say "new".
 		id := rec.ID
 		if ch.Kind == ActionInsert {
 			id = 0
+		}
+		if e.Kind == EffectCreatePaymentLink {
+			out = append(out, EffectView{
+				Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: id, Status: StateSimulated,
+				Detail: previewLink(e, rec.Data),
+			})
+			continue
 		}
 		p := e.payload(def.Collection, rec.Data, id)
 		v := EffectView{
@@ -470,6 +484,35 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 		out = append(out, v)
 	}
 	return out
+}
+
+// previewLink is what a payment link of effect e would ask for, from the sample record's fields. A
+// missing or odd amount is left out rather than guessed.
+func previewLink(e Effect, data map[string]any) EffectDetail {
+	d := EffectDetail{Currency: e.Currency}
+	if e.CurrencyField != "" {
+		if c, ok := data[e.CurrencyField].(string); ok {
+			d.Currency = c
+		}
+	}
+	switch n := data[e.AmountField].(type) {
+	case float64:
+		d.Amount = &n
+	case int64:
+		f := float64(n)
+		d.Amount = &f
+	case int:
+		f := float64(n)
+		d.Amount = &f
+	case json.Number:
+		if f, err := n.Float64(); err == nil {
+			d.Amount = &f
+		}
+	}
+	if d.Amount != nil && (math.IsNaN(*d.Amount) || math.IsInf(*d.Amount, 0)) {
+		d.Amount = nil
+	}
+	return d
 }
 
 // previewTarget is the code an effect would fail with for lack of access to its target, or "".

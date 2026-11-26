@@ -4,10 +4,16 @@
 
 import { useRef } from 'react'
 import { ApiError, api, type Doc } from '../api'
-import { has } from '../i18n'
+import { has, type T } from '../i18n'
 import { useLoad } from '../load'
 
 export type Change = { commit: string; doc?: Doc }
+
+// The address the server gives the author of a commit whose account was deleted (internal/knowledge,
+// DeletedAuthorEmail): shown translated, not as the name stored in git.
+const DELETED_AUTHOR = 'deleted-user@deleted.invalid'
+export const authorName = (a: { name: string; email: string }, t: T) =>
+  a.email === DELETED_AUTHOR ? t('common.deletedUser') : a.name
 
 export type Commit = {
   commit: string

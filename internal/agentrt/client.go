@@ -200,6 +200,15 @@ func (c *Client) RetireConversation(ctx context.Context, conversation int64) err
 	return c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/retire", nil, nil)
 }
 
+// PurgeConversation deletes a retired conversation's records from the sidecar's database: what was
+// said, its tasks and submissions, and the documents kept with it (Pi Durable can't delete a
+// conversation, so the sidecar does it in its storage). It is for the purge of a deleted account
+// (internal/accountdeletion). A conversation the sidecar doesn't have is done already (204); one
+// that wasn't retired first is a *StatusError with Code 409.
+func (c *Client) PurgeConversation(ctx context.Context, conversation int64) error {
+	return c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/purge", nil, nil)
+}
+
 // Model returns the model a conversation runs on.
 func (c *Client) Model(ctx context.Context, conversation int64) (ModelRef, error) {
 	var out ModelRef

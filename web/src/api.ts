@@ -31,6 +31,19 @@ export class ApiError extends Error {
 
 export const SESSION_LOST = 'taskto:session-lost'
 
+// The session of one account ended, as that account's own page learned from its deletion's answer:
+// a window that is signed in as another account by now (a sign-in came after the request was sent)
+// must not be taken to the sign-in screen by it. A refused request ends "the session" without
+// saying whose, with the plain event.
+export const sessionLostFor = (user: number) => new CustomEvent(SESSION_LOST, { detail: { user } })
+
+// Whether a session-lost event concerns the account signed in here: one that names another
+// account doesn't.
+export const concernsAccount = (e: Event, signedIn: number | null | undefined): boolean => {
+  const user = (e as CustomEvent<{ user?: number } | null>).detail?.user
+  return user === undefined || signedIn === null || signedIn === undefined || user === signedIn
+}
+
 // The account a request is meant for (docs/api.md): what is sent on behalf of an account that may
 // not be the one the browser's session belongs to any more (the offline queue) says whose it is,
 // and the server refuses it for anyone else, with `session_account_changed`.
@@ -89,10 +102,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   })
   if (!res.ok) {
     // A session that ended (logged out elsewhere, expired) sends the app back to the login: the one
-    // this request was sent in, and only if it is still going on.
+    // this request was sent in, and only if it is still going on. A request made for an account
+    // (forAccount) says whose session ended: a window that is signed in as another account by now,
+    // because a sign-in came after the request was sent, is left alone.
     if (res.status === 401 && same()) {
       endSession()
-      window.dispatchEvent(new Event(SESSION_LOST))
+      const expected = Number(extra[EXPECTED_USER_HEADER as keyof typeof extra])
+      window.dispatchEvent(
+        Number.isInteger(expected) && expected > 0 ? sessionLostFor(expected) : new Event(SESSION_LOST),
+      )
     }
     // The same for a refusal as another account's: only a request of the session going on says the
     // account changed. One of an earlier session (the same account may have signed in again since)
@@ -216,7 +234,8 @@ export type Card = {
   body: string
   column: 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'archived'
   archived_from: Card['column'] | null
-  assignee: { kind: 'agent' } | { kind: 'user'; id: number; name?: string } | null
+  // `deleted`: the assignee's account was deleted; sent by the server only, never to it.
+  assignee: { kind: 'agent' } | { kind: 'user'; id: number; name?: string } | { kind: 'deleted' } | null
   blocked: boolean
   blocked_reason: string | null
   blocked_by: number[]
@@ -308,6 +327,9 @@ export type AppActionKind = 'insert' | 'update' | 'delete' | 'navigate'
 export type AppDraft = DefinitionNeeds & {
   collection?: { fields: AppField[] }
   actions?: Record<string, { kind: AppActionKind; effects?: DraftEffect[] }>
+  // The slots of outside services the draft declares, by name (internal/apps/integrations.go). Only
+  // their names and kinds are read here: what each is approved for is the server's contract.
+  integrations?: Record<string, { kind: string }>
 }
 
 // An effect an action of a definition declares (internal/apps/effects.go): what a change sets going
@@ -323,6 +345,12 @@ export type DraftEffect = {
   card?: string
   path?: string
   route?: 'board' | 'card' | 'document'
+  // A payment link: the slot it asks, the amount's field and the currency (a code, or the choice
+  // field it is read from).
+  integration?: string
+  amount_field?: string
+  currency?: string
+  currency_field?: string
 }
 
 // The space, and board, an effect of the draft acts on, with the names the caller may be told (none
@@ -496,7 +524,7 @@ export type AppRecord = {
 // An effect an action of an app set going, as the server's outbox lists it: what it makes, how it is
 // getting on, why it failed, and what it made if the caller may read where. `simulated` is of a
 // preview only.
-export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route'
+export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route' | 'create_payment_link'
 export type EffectStatus = 'pending' | 'running' | 'done' | 'failed' | 'simulated'
 export type AppEffect = {
   // 0 for a simulated one.
@@ -512,7 +540,8 @@ export type AppEffect = {
   attempts: number
   next_attempt_at: string | null
   error: { code: string; params?: Params } | null
-  detail: { title?: string; column?: string; path?: string; route?: string }
+  // amount and currency: what a simulated payment link would ask for, in the currency's own units.
+  detail: { title?: string; column?: string; path?: string; route?: string; amount?: number; currency?: string }
   result?: Record<string, unknown>
   created_at?: string
   updated_at?: string
@@ -575,6 +604,8 @@ export type Member = {
   role: 'admin' | 'member'
   joined_at: string
   disabled?: boolean
+  // When the account is purged, if it was deleted and waits out its grace period (it is disabled too).
+  deletion_at?: string | null
   two_factor?: boolean
 }
 // One event of a workspace's audit log, with the names read when the log was (docs/audit.md).
@@ -583,6 +614,9 @@ export type AuditEntry = {
   at: string
   action: string
   actor_id: number | null
+  // The actor's account was deleted (actor_id is then null), or the account the event is about was.
+  actor_deleted: boolean
+  target_deleted: boolean
   // The actor and the user an event is about, while members of the workspace; null for an
   // anonymous event, a deleted user and one who has left.
   actor: { name: string; email: string } | null
@@ -594,6 +628,26 @@ export type AuditEntry = {
   client_addr: string | null
 }
 export type AuditPage = { events: AuditEntry[]; next: string }
+
+// Deleting an account (docs/api.md#deleting-an-account): what it takes (`method` is "password", with a
+// code too when `two_factor` is on, or "fresh_login" for an account with no password, `fresh` saying
+// whether the login is recent enough), the workspaces that would be left with no admin in use, and
+// how long the account is kept before it is purged.
+export type DeletionBlocker = { workspace_id: number; workspace: string; operator: boolean }
+export type DeletionStatus = {
+  grace_days: number
+  method: 'password' | 'fresh_login'
+  two_factor: boolean
+  fresh: boolean
+  blockers: DeletionBlocker[]
+}
+export type DeletionReply = { purge_at: string }
+export type PendingDeletion = {
+  user: { id: number; email: string; name: string }
+  requested_at: string
+  purge_at: string
+  purging: boolean
+}
 
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 // The reply that makes an invite or an access token: the record, with its secret, shown only now.
@@ -697,6 +751,109 @@ export type IntegrationRegistry = {
 
 // The answer of a check: `code` and `params` are for codeText().
 export type IntegrationCheck = { ok: boolean; remote: boolean; code?: string; params?: Params }
+
+// What the server works out of a draft for one slot of an outside service: what the app sends out
+// and what the service may write back, in field names and literals, never in the app's wording. An
+// admin approves its hash (docs/api.md, "Integrations of an app").
+export type ContractLink = {
+  action: string
+  // What the action does (insert, update, delete): it decides who may trigger the request.
+  action_kind: string
+  amount_field: string
+  describes: string[]
+  // Whether the description names the record's id, which sends the id out as text too.
+  describes_id: boolean
+  currency?: string
+  currency_field?: string
+  currency_options?: string[]
+  url_field: string
+  id_field: string
+  when?: Rule
+}
+export type ContractSet = { field: string; value?: unknown; from?: string }
+export type ContractHandler = { event: string; sets: ContractSet[] }
+export type ContractRule = { event: string; rule: Rule }
+export type ContractWrite = { field: string; values: unknown[]; from: string[] }
+// What one field the integration reads, writes or is gated by may hold (a requirement that reads
+// another field reaches the fields it names, and the other way round). No wording: no labels.
+export type ContractField = {
+  name: string
+  type: string
+  required?: boolean
+  required_when?: Rule
+  max_length?: number
+  min?: number
+  max?: number
+  options?: string[]
+  // The kind of code a barcode field reads.
+  format?: string
+  // Whether a stored location or signature may be replaced later.
+  editable?: boolean
+  max_files?: number
+  max_bytes?: number
+}
+export type IntegrationContract = {
+  version: number
+  kind: string
+  operations: string[]
+  sends: string[]
+  currencies: string[]
+  events: string[]
+  writes: ContractWrite[]
+  only_if: ContractRule[]
+  links: ContractLink[]
+  handlers: ContractHandler[]
+  fields: ContractField[]
+}
+
+// How an approval of a contract stands: asked for, decided, or not asked for yet.
+export type ApprovalStatus = 'none' | 'requested' | 'approved' | 'rejected' | 'revoked'
+
+// The integration an approval connects a slot to; `usable` is whether it is switched on and allowed
+// in the app's space now.
+export type BoundIntegration = { id: number; name: string; display_name: string; usable: boolean }
+
+// A slot of the draft, with where the approval of its contract stands, and the live release's.
+export type SlotStatus = {
+  slot: string
+  kind: string
+  contract: IntegrationContract
+  contract_hash: string
+  status: ApprovalStatus
+  approval_id: number | null
+  integration: BoundIntegration | null
+  live: { contract_hash: string; status: ApprovalStatus; usable: boolean } | null
+}
+export type IntegrationStatus = { slots: SlotStatus[] }
+
+// A request for the approval of one contract, as an admin's queue and the one who asked see it: what
+// the requester submitted and the names of the app and its space, nothing of the app or its records.
+export type IntegrationApproval = {
+  id: number
+  app_id: number
+  app_name: string
+  space_id: number
+  space_name: string
+  space_kind: string
+  slot: string
+  kind: string
+  contract: IntegrationContract
+  contract_hash: string
+  status: ApprovalStatus
+  // Whether the contract is the live release's: revoking it stops the app's use at once.
+  live: boolean
+  integration: BoundIntegration | null
+  // How the approval's own space is allowed the integration it is bound to: not at all, by this
+  // approval (it ends with the last approval that needs it) or by an admin in the integration's
+  // settings. The one fact the queue holds of a space the admin can't open.
+  space_grant: SpaceGrant
+  requested_by: RecordAuthor | null
+  requested_at: string
+  decided_by: RecordAuthor | null
+  decided_at: string | null
+}
+export type SpaceGrant = 'none' | 'approval' | 'settings'
+export type IntegrationApprovalList = { approvals: IntegrationApproval[]; next_cursor: string | null }
 
 // What a space's readers see of an integration allowed there.
 export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }

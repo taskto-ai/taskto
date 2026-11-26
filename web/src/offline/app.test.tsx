@@ -5,12 +5,13 @@
 // downloaded apps open.
 
 import 'fake-indexeddb/auto'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { setPreferences } from '../i18n'
+import { ApiError, api, forAccount, SESSION_LOST, sessionLostFor } from '../api'
 import { type BeforeLeave, useBeforeLeave } from '../router'
 import { sameSession, sessionUser } from '../session'
 import { fakeFetch } from '../test/fakes'
@@ -151,6 +152,91 @@ test('signing out with records not sent asks first: cancel keeps everything, dis
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
+})
+
+// The person deletes their account in the settings, with an unsent record, a draft and an offline
+// database on this device. `refusedFirst`: another request of the app, made while the server was
+// ending the session, is answered 401 before the answer to the deletion arrives, so the app is on
+// the sign-in screen, no longer listening for the session to end, when it does.
+async function deleteAccountHere(refusedFirst: boolean) {
+  sessionStorage.clear()
+  window.history.replaceState(null, '', '/w/1/settings/data')
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me/deletion': {
+      body: { grace_days: 14, method: 'password', two_factor: false, fresh: false, blockers: [] },
+    },
+    'POST /api/me/deletion': () => {
+      if (refusedFirst) window.dispatchEvent(new Event(SESSION_LOST))
+      return { status: 202, body: { purge_at: '2026-12-08T10:00:00.000Z' } }
+    },
+  })
+  render(<App />)
+  await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  window.localStorage.setItem('taskto:message:7:1', 'half a message')
+  expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete my account…' }))
+  const form = await screen.findByRole('form', { name: 'Delete your account' })
+  fireEvent.change(within(form).getByLabelText('Your password'), { target: { value: 'fake-test-password' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Delete my account' }))
+
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  await waitFor(async () => expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7'))
+  expect(window.localStorage.getItem('taskto:message:7:1')).toBeNull()
+  expect(lastUser()).toBeNull()
+  sessionStorage.clear()
+}
+
+test('deleting the account here clears what the device kept of it: the offline database with its unsent records, and the drafts', async () => {
+  await deleteAccountHere(false)
+})
+
+test('the end of another account’s session, heard after this one signed in, leaves it signed in', async () => {
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  // A deleted account's answer arriving late says its own account's session ended: not this one's.
+  act(() => {
+    window.dispatchEvent(sessionLostFor(99))
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
+  expect(screen.getByRole('banner')).toBeTruthy()
+  expect(runtimeState().runtime?.engine.status().paused).not.toBe('session')
+  // The same event for this account (7) takes it to the sign-in screen.
+  act(() => {
+    window.dispatchEvent(sessionLostFor(7))
+  })
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+})
+
+test('a request made for another account that is refused as signed out, answered after this one signed in, leaves it signed in', async () => {
+  fakeFetch({
+    ...signedIn,
+    'POST /api/me/deletion': { status: 401, body: { error: 'log in first', code: 'not_logged_in' } },
+  })
+  await signedInAs()
+  // The second tab's deletion of account 99, whose session the first tab's deletion ended, is refused.
+  await expect(api('/api/me/deletion', { method: 'POST', body: {}, headers: forAccount(99) })).rejects.toBeInstanceOf(
+    ApiError,
+  )
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
+  expect(screen.getByRole('banner')).toBeTruthy()
+  expect(runtimeState().runtime?.engine.status().paused).not.toBe('session')
+  // The same refusal for this account (7) is a real session loss.
+  await expect(api('/api/me/deletion', { method: 'POST', body: {}, headers: forAccount(7) })).rejects.toBeInstanceOf(
+    ApiError,
+  )
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+})
+
+test('the same when a request refused a moment earlier has already taken the app to the sign-in screen', async () => {
+  await deleteAccountHere(true)
 })
 
 test('an ended session leaves the queue where it is, and signing in again sends it', async () => {

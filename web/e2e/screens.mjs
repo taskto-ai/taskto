@@ -240,6 +240,7 @@ export const SETTINGS_HEADINGS = {
   audit: 'Audit log',
   providers: 'Model providers',
   integrations: 'Integrations',
+  'integration-approvals': 'Integration approvals',
   'cli-accounts': 'CLI accounts',
   search: 'Search',
   dictation: 'Dictation',

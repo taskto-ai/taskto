@@ -27,6 +27,7 @@ import (
 //	DELETE /logins/{user}/{cli}?slot=               → 204
 //	GET    /status/{user}/{cli}?slot=               → AuthStatus
 //	POST   /logout           {user, cli, slot?}     → 204
+//	POST   /forget           {user}                 → 204 (everything kept for a deleted account)
 //
 // slot is the account's (Slot); empty or left out, the first.
 //	POST   /turns            TurnSpec        → {"attached": bool}
@@ -135,6 +136,23 @@ func (w *Worker) Handler() http.Handler {
 			return
 		}
 		if err := w.Logout(r.Context(), req.User, req.CLI, req.Slot); err != nil {
+			refuse(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /forget", func(rw http.ResponseWriter, r *http.Request) {
+		var req struct {
+			User int64 `json:"user"`
+		}
+		if !decodeBody(rw, r, &req) {
+			return
+		}
+		if req.User <= 0 {
+			refuse(rw, badRequest{errors.New("invalid user")})
+			return
+		}
+		if err := w.Forget(r.Context(), req.User); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -406,6 +424,11 @@ func (c *Remote) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 // Logout signs user's cli out of the account in slot and removes what it kept.
 func (c *Remote) Logout(ctx context.Context, user int64, cli CLI, slot Slot) error {
 	return c.do(ctx, http.MethodPost, "/logout", map[string]any{"user": user, "cli": cli, "slot": slot}, nil)
+}
+
+// Forget removes everything the worker keeps for user, for an account that is deleted.
+func (c *Remote) Forget(ctx context.Context, user int64) error {
+	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
 }
 
 // StartTurn starts spec's turn on the worker, or attaches to the one with its ID.

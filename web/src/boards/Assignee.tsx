@@ -7,7 +7,8 @@ import type { Person } from './people'
 import { assigneeLabel } from './text'
 
 // Who the card is for: nobody, the agent, or someone who can read the space. A writer picks from
-// a menu. Someone assigned who has since lost access stays listed until the assignee is changed.
+// a menu. Someone assigned who has since lost access stays listed until the assignee is changed;
+// an account that was deleted is shown as "Deleted user" and can't be picked.
 export function Assignee({
   card,
   canWrite,
@@ -26,7 +27,7 @@ export function Assignee({
   const shown = a ? <Who assignee={a} /> : <span className="ui-board-muted">{t('boards.nobody')}</span>
   if (!canWrite) return shown
 
-  const value = !a ? '' : a.kind === 'agent' ? 'agent' : `user:${a.id}`
+  const value = !a ? '' : a.kind === 'deleted' ? 'deleted' : a.kind === 'agent' ? 'agent' : `user:${a.id}`
   const listed = people ?? []
   const others =
     a?.kind === 'user' && !listed.some((p) => p.id === a.id) ? [{ id: a.id, name: assigneeLabel(t, a) }] : []
