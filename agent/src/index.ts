@@ -50,7 +50,6 @@ import {
   type ConversationId,
   type Cursor,
   createRegistry,
-  defineDoc,
   type EntryId,
   Harness,
   type SubmissionId,
@@ -58,8 +57,9 @@ import {
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
+import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
-import { HARNESS_DB_OPTIONS, LIFECYCLE_KIND, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
+import { HARNESS_DB_OPTIONS, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
@@ -145,19 +145,6 @@ void harness.closed.then((end) => {
     console.error('harness failed; exiting for a restart', end.error)
     process.exit(1)
   }
-})
-
-// What the server needs to know of a conversation besides Pi Durable's record: when it was created,
-// so a sweep for orphans leaves alone one the server is still recording (0 for one created before
-// this document existed), and when it was retired.
-const Lifecycle = defineDoc<{ createdAt: number; retiredAt: number | null }>({
-  kind: LIFECYCLE_KIND, // the purge removes it last (purge.ts)
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ createdAt: 0, retiredAt: null }),
-  checkpointWhen: () => true, // it changes at most twice
 })
 
 class HttpError extends Error {

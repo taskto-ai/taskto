@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -10,9 +10,11 @@ import {
   LIFECYCLE_KIND,
   purgeOnce,
   purgeRecords,
+  purgeWorkersAtOnce,
   purgeWorkersStarted,
   runPurge,
   startCheckpointer,
+  storedKind,
   truncateWalWithin,
   WalBusyError,
 } from './purge.js'
@@ -68,7 +70,7 @@ describe('runPurge', () => {
       CREATE TABLE tasks (id INTEGER PRIMARY KEY, conversation_id INTEGER, record TEXT);
       CREATE TABLE entries (id INTEGER PRIMARY KEY, conversation_id INTEGER, text TEXT);
       CREATE TABLE submissions (id INTEGER PRIMARY KEY, conversation_id INTEGER);
-      CREATE TABLE documents (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'notes', scope_kind TEXT, owner_id INTEGER);
+      CREATE TABLE documents (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT '${storedKind('notes')}', scope_kind TEXT, owner_id INTEGER);
       CREATE TABLE document_revisions (document_id INTEGER NOT NULL, seq INTEGER NOT NULL, content TEXT,
         PRIMARY KEY (document_id, seq));
       CREATE TABLE record_ids (id INTEGER PRIMARY KEY);
@@ -84,8 +86,8 @@ describe('runPurge', () => {
       INSERT INTO documents (id, scope_kind, owner_id) VALUES (40, 'conversation', 1), (41, 'task', 20), (42, 'conversation', 2);
       INSERT INTO document_revisions (document_id, seq, content) VALUES (40, 1, 'a'), (40, 2, 'b'), (41, 1, 'c'), (42, 1, 'kept');
       -- Conversations 1 and 3 are retired, as the sidecar records it.
-      INSERT INTO documents (id, kind, scope_kind, owner_id) VALUES (43, '${LIFECYCLE_KIND}', 'conversation', 1),
-        (44, '${LIFECYCLE_KIND}', 'conversation', 3);
+      INSERT INTO documents (id, kind, scope_kind, owner_id) VALUES (43, '${storedKind(LIFECYCLE_KIND)}', 'conversation', 1),
+        (44, '${storedKind(LIFECYCLE_KIND)}', 'conversation', 3);
       INSERT INTO document_revisions (document_id, seq, content) VALUES (43, 1, 'retired'), (44, 1, 'retired');
       INSERT INTO record_ids (id) VALUES (1), (2), (3), (10), (11), (20), (30), (40), (41), (42), (43), (44);
     `)
@@ -309,7 +311,7 @@ describe('runPurge', () => {
       // The root is still retired (its lifecycle document goes last), and what is left of the tree
       // is reachable from it or marked.
       expect(
-        writer.prepare(`SELECT id FROM documents WHERE kind = '${LIFECYCLE_KIND}' AND owner_id = 1`).all(),
+        writer.prepare(`SELECT id FROM documents WHERE kind = '${storedKind(LIFECYCLE_KIND)}' AND owner_id = 1`).all(),
       ).toEqual([{ id: 43 }])
       expect(left('SELECT count(*) AS n FROM document_revisions WHERE document_id = 43')).toBe(1)
       expect(
@@ -488,6 +490,59 @@ describe('runPurge', () => {
   // found the backlog: the log is emptied (by the TRUNCATE checkpoint, which holds the write lock
   // for as long as it copies) only in a round that found it drained, after a passive checkpoint,
   // which writers go on beside, copied the backlog.
+  // A passive checkpoint that copied a large backlog took long, and what was committed meanwhile is
+  // past where it looked: the TRUNCATE doesn't follow it, but a round whose checkpoint was quick.
+  it('truncates only after a quick passive checkpoint found the log drained', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    writer.exec('BEGIN')
+    for (let i = 0; i < 300_000; i++) more.run('m'.repeat(400))
+    writer.exec('COMMIT')
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    const rounds: { backlog: number; ms: number }[] = []
+    let truncatedAfter: { backlog: number; ms: number } | undefined
+    try {
+      truncateWalWithin(db, 20_000, {
+        round: (backlog, ms) => rounds.push({ backlog, ms }),
+        truncating: () => (truncatedAfter = rounds[rounds.length - 1]),
+      })
+      expect(rounds[0].ms).toBeGreaterThan(20) // the backlog took long to copy
+      expect(truncatedAfter).toBeDefined()
+      expect(truncatedAfter?.ms).toBeLessThanOrEqual(20)
+      expect(rounds.length).toBeGreaterThan(1)
+      expect(log()).toBe('')
+    } finally {
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // The server's next try of a purge (it retires the conversation first, then purges) can write a
+  // lifecycle document for a conversation the last purge already took, when the runtime still has
+  // it in memory: the purge takes that document too.
+  it('takes a lifecycle document written again for a purged conversation', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    try {
+      await runPurge({ path, root: 1, timeoutMs: 5000 })
+      writer.exec(`
+        INSERT INTO documents (id, kind, scope_kind, owner_id) VALUES (90, '${storedKind(LIFECYCLE_KIND)}', 'conversation', 1);
+        INSERT INTO document_revisions (document_id, seq, content) VALUES (90, 1, 'retired again');
+        INSERT INTO record_ids (id) VALUES (90);
+      `)
+      await runPurge({ path, root: 1, timeoutMs: 5000 })
+      expect(writer.prepare('SELECT id FROM documents WHERE id = 90').all()).toEqual([])
+      expect(writer.prepare('SELECT count(*) AS n FROM document_revisions WHERE document_id = 90').get()).toEqual({
+        n: 0,
+      })
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  })
+
   it('empties the log only once a passive checkpoint has drained it', () => {
     const { writer, reader } = fixture() // the reader holds its snapshot from before the backlog
     const text = 'y'.repeat(400)
@@ -862,6 +917,67 @@ describe('runPurge', () => {
       reader.close()
       writer.close()
     }
+  })
+
+  // Purges of two roots asked for at once run one after the other, never side by side: two workers
+  // taking turns on the write lock would leave the harness's writes none of the pauses.
+  it('runs purges of different roots one after the other', async () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const text = 'p'.repeat(400)
+    const insert = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 1, ?)')
+    const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+    writer.exec('BEGIN')
+    for (let id = 1000; id < 21_000; id++) {
+      insert.run(id, text)
+      record.run(id)
+    }
+    writer.exec('COMMIT')
+    const before = purgeWorkersStarted()
+    purgeWorkersAtOnce()
+    try {
+      await Promise.all([purgeOnce({ path, root: 1, timeoutMs: 5000 }), purgeOnce({ path, root: 2, timeoutMs: 5000 })])
+      expect(purgeWorkersStarted() - before).toBe(2)
+      expect(purgeWorkersAtOnce()).toBe(1)
+      expect(writer.prepare('SELECT id FROM conversations').all()).toEqual([])
+    } finally {
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // The checkpointer's thread, whose checkpoints all fail (the file isn't a database), is started
+  // again after CHECKPOINT_FAILURES of them in a row; once stopped, none starts again, not even one
+  // whose restart was waiting.
+  it('starts its thread again after checkpoints keep failing, and not after it is stopped', async () => {
+    const bad = join(dir, 'not-a-database')
+    writeFileSync(bad, 'this is not a SQLite database, it only has the length of one '.repeat(100))
+    let starts = 0
+    const failures: number[] = []
+    const stop = startCheckpointer(bad, 2, { started: () => starts++, failed: (n) => failures.push(n) })
+    const until = Date.now() + 10_000
+    while (starts < 3 && Date.now() < until) await new Promise((r) => setTimeout(r, 10))
+    await stop()
+    expect(starts).toBeGreaterThanOrEqual(3)
+    expect(failures).toContain(10) // each thread counts its failures up to the bound before it restarts
+    const stopped = starts
+    await new Promise((r) => setTimeout(r, 100))
+    expect(starts).toBe(stopped)
+
+    // Stopped just as a restart was due: that restart doesn't happen.
+    let again = 0
+    let stopping: Promise<void> | undefined
+    const stop2 = startCheckpointer(bad, 20, {
+      started: () => again++,
+      restarting: () => {
+        stopping ??= stop2()
+      },
+    })
+    const until2 = Date.now() + 10_000
+    while (stopping === undefined && Date.now() < until2) await new Promise((r) => setTimeout(r, 10))
+    await stopping
+    await new Promise((r) => setTimeout(r, 200))
+    expect(again).toBe(1)
   })
 
   it('rejects with the failure of a purge that is not about the log', async () => {

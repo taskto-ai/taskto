@@ -91,10 +91,18 @@ function backlog(db: DatabaseSync): number {
   }
 }
 
+/**
+ * How long the passive checkpoint that finds the log drained may have taken for the TRUNCATE to
+ * follow it: SQLite reads how far the log goes when that checkpoint starts, so what is committed
+ * while it copies is left for the TRUNCATE, under the lock. A long one (a large backlog) is followed
+ * by another round, whose checkpoint copies that, quickly.
+ */
+const QUICK_MS = 20
+
 /** What truncateWalWithin tells a test. */
 export type TruncateHooks = {
-  /** Each round's backlog after its passive checkpoint, before the round decides what to do. */
-  round?: (backlog: number) => void
+  /** Each round's backlog after its passive checkpoint, and how long that took, before it decides. */
+  round?: (backlog: number, ms: number) => void
   /** Just before the TRUNCATE checkpoint, the backlog its round found. */
   truncating?: (backlog: number) => void
 }
@@ -106,23 +114,27 @@ export type TruncateHooks = {
  * tries the TRUNCATE at once, which holds the lock while it runs (busy_timeout 0: it doesn't wait for
  * readers or a writer either, and a round that finds one is tried again after a pause, a sleep of
  * this thread). A round whose passive checkpoint found another checkpoint at work learned nothing,
- * and is tried again too. A reader that lets go of its snapshot lets the next round copy the rest.
- * Throws WalBusyError if a reader still holds the log at the end.
+ * and is tried again too, and so is one whose checkpoint took longer than QUICK_MS. A reader that
+ * lets go of its snapshot lets the next round copy the rest. Throws WalBusyError if a reader still
+ * holds the log at the end.
  *
  * The bound: under the lock, the TRUNCATE copies what the passive checkpoint left (DRAINED_FRAMES at
- * most) and whatever was committed between the two calls, which nothing gates: normally nothing or
- * the commit that was being written, but as many commits as finish in that moment if this thread is
- * held up between them (each a turn's write, which the sidecar keeps small: a request's body is at
- * most 1 MiB). A writer that holds the lock when the TRUNCATE starts makes it busy instead.
+ * most) and whatever was committed while that checkpoint ran (QUICK_MS at most) and between the two
+ * calls, which nothing gates: normally nothing or the commit that was being written, but as many
+ * commits as finish in that moment if this thread is held up (each a turn's write, which the sidecar
+ * keeps small: a request's body is at most 1 MiB). A writer that holds the lock when the TRUNCATE
+ * starts makes it busy instead.
  */
 export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, hooks?: TruncateHooks): void {
   db.exec('PRAGMA busy_timeout = 0')
   const deadline = performance.now() + timeoutMs
   let last: unknown
   for (;;) {
+    const began = performance.now()
     const left = backlog(db)
-    hooks?.round?.(left)
-    if (left <= DRAINED_FRAMES) {
+    const took = performance.now() - began
+    hooks?.round?.(left, took)
+    if (left <= DRAINED_FRAMES && took <= QUICK_MS) {
       hooks?.truncating?.(left)
       try {
         truncateWal(db)
@@ -156,6 +168,19 @@ export function truncateWalAt(path: string, timeoutMs: number): void {
  * (index.ts, Lifecycle). The purge removes the root's last, with the root's row.
  */
 export const LIFECYCLE_KIND = 'taskto.lifecycle'
+
+/**
+ * A document's kind as Pi Durable stores it in documents.kind: as JSON (its storage writes every
+ * indexed string column with JSON.stringify, encodeIndexedString in storage/sqlite/rows.js, which the
+ * package doesn't export), so the lifecycle's is '"taskto.lifecycle"'. A test checks it against a
+ * document Pi Durable wrote.
+ */
+export function storedKind(kind: string): string {
+  return JSON.stringify(kind)
+}
+
+/** The lifecycle's stored kind as an SQL string literal. */
+const LIFECYCLE = `'${storedKind(LIFECYCLE_KIND).replaceAll("'", "''")}'`
 
 /** How many rows one statement of the purge deletes: small, so a transaction stays near SLICE_MS. */
 const CHUNK = 100
@@ -337,7 +362,7 @@ function each(db: DatabaseSync, query: string, remove: (chunk: number[]) => void
 /** The steps that delete what tree's conversations and tasks said: all but the root's lifecycle. */
 function contentSteps(db: DatabaseSync, tree: Tree): Step[] {
   const ids = list(tree.ids)
-  const docs = `SELECT id FROM documents WHERE ${ownedBy(tree)} AND kind <> '${LIFECYCLE_KIND}'`
+  const docs = `SELECT id FROM documents WHERE ${ownedBy(tree)} AND kind <> ${LIFECYCLE}`
   return [
     each(db, `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (c) =>
       removeRows(db, 'document_revisions', c, false),
@@ -369,7 +394,7 @@ function sweepStep(db: DatabaseSync, root: number): Step {
       ORDER BY kind DESC, id DESC LIMIT ${SWEEP}`,
   )
   const isRoot = (m: Mark) => m.kind === 'conversation' && Number(m.id) === root
-  const lifecycle = `NOT (scope_kind = 'conversation' AND owner_id = ${root} AND kind = '${LIFECYCLE_KIND}')`
+  const lifecycle = `NOT (scope_kind = 'conversation' AND owner_id = ${root} AND kind = ${LIFECYCLE})`
   // What was started under the batch and what is left of its records, a bounded piece: how much.
   const work = (batch: Mark[]): number => {
     const c = list(batch.filter((m) => m.kind === 'conversation').map((m) => Number(m.id)))
@@ -486,25 +511,33 @@ export function purgeWorkersStarted(): number {
  */
 export function runPurge(job: PurgeJob): Promise<void> {
   workers++
+  running++
+  mostAtOnce = Math.max(mostAtOnce, running)
   return new Promise((resolve, reject) => {
     let settled = false
+    const settle = (end: () => void) => {
+      if (settled) return
+      settled = true
+      running--
+      end()
+    }
     const worker = new Worker(new URL(import.meta.url), { workerData: { [MARK]: job } })
     worker.once('message', (out: Outcome) => {
-      settled = true
-      if (out.ok) resolve()
-      else reject(out.busy ? new WalBusyError(out.message) : new Error(out.message))
+      settle(() => (out.ok ? resolve() : reject(out.busy ? new WalBusyError(out.message) : new Error(out.message))))
     })
-    worker.once('error', (error) => {
-      if (settled) return
-      settled = true
-      reject(error)
-    })
-    worker.once('exit', (code) => {
-      if (settled) return
-      settled = true
-      reject(new Error(`the purge's worker thread exited with code ${code}`))
-    })
+    worker.once('error', (error) => settle(() => reject(error)))
+    worker.once('exit', (code) => settle(() => reject(new Error(`the purge's worker thread exited with code ${code}`))))
   })
+}
+
+let running = 0
+let mostAtOnce = 0
+
+/** The most purge workers that have run at the same time since the last call: for tests. */
+export function purgeWorkersAtOnce(): number {
+  const most = mostAtOnce
+  mostAtOnce = running
+  return most
 }
 
 // The purges asked for and not ended, by what they do; and the end of the last one queued.
@@ -549,6 +582,16 @@ const CHECKPOINTER = 'taskto.checkpointer'
 
 type CheckpointerJob = { path: string; everyMs: number; stop: Int32Array }
 
+/** What startCheckpointer tells a test. */
+export type CheckpointerHooks = {
+  /** Each time a thread of the checkpointer starts, the first time included. */
+  started?: () => void
+  /** Each failed checkpoint, with how many have failed in that thread so far. */
+  failed?: (count: number) => void
+  /** When a thread has ended and the next is due to start, before it does. */
+  restarting?: () => void
+}
+
 /**
  * Copies the log of the database at path into the database by a passive checkpoint every everyMs,
  * on a worker thread of its own (writers go on beside it, and it never waits for readers), until the
@@ -556,7 +599,11 @@ type CheckpointerJob = { path: string; everyMs: number; stop: Int32Array }
  * HARNESS_DB_OPTIONS turns off. A checkpoint that fails is logged and counted; a thread whose
  * checkpoints keep failing, or that fails, is started again, unless it was stopped.
  */
-export function startCheckpointer(path: string, everyMs = CHECKPOINT_EVERY_MS): () => Promise<void> {
+export function startCheckpointer(
+  path: string,
+  everyMs = CHECKPOINT_EVERY_MS,
+  hooks?: CheckpointerHooks,
+): () => Promise<void> {
   const stop = new Int32Array(new SharedArrayBuffer(4))
   let worker: Worker | undefined
   let again: ReturnType<typeof setTimeout> | undefined
@@ -567,11 +614,16 @@ export function startCheckpointer(path: string, everyMs = CHECKPOINT_EVERY_MS): 
     const w = new Worker(new URL(import.meta.url), { workerData: { [CHECKPOINTER]: { path, everyMs, stop } } })
     worker = w
     w.unref()
+    hooks?.started?.()
+    w.on('message', (m: { failed?: number }) => {
+      if (typeof m?.failed === 'number') hooks?.failed?.(m.failed)
+    })
     w.on('error', (error) => console.error('the checkpointer failed; it starts again', error))
     w.once('exit', () => {
       if (!stopped()) {
         again = setTimeout(start, everyMs)
         again.unref()
+        hooks?.restarting?.()
       }
     })
   }
@@ -602,6 +654,7 @@ function checkpoint(job: CheckpointerJob): void {
         failures++
         failed++
         console.error(`checkpoint failed (${failed} so far, ${failures} in a row): ${(error as Error).message}`)
+        parentPort?.postMessage({ failed })
         if (failures >= CHECKPOINT_FAILURES) throw new Error(`${failures} checkpoints in a row failed`)
       }
       Atomics.wait(job.stop, 0, 0, job.everyMs)
