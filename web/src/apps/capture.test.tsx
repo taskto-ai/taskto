@@ -660,7 +660,12 @@ test('the microphone is the same button online and offline: the library’s, nev
   const online = await screen.findByRole('button', { name: 'Dictate into Notes' })
   expect(online.className).toContain('ui-icon-button')
   // Every class it has is the library's: nothing of an old stylesheet's reaches it.
-  expect(online.className.split(/\s+/).filter(Boolean).every((c) => c.startsWith('ui-'))).toBe(true)
+  expect(
+    online.className
+      .split(/\s+/)
+      .filter(Boolean)
+      .every((c) => c.startsWith('ui-')),
+  ).toBe(true)
   unmount()
   stubNavigator('onLine', false)
   render(<FieldDictation workspace={1} field="Notes" onText={() => {}} />)
