@@ -37,10 +37,11 @@ import (
 //
 // Settle, the integrations' step that moves the reference to its new state, runs in that same
 // transaction after the checks and before the write, so the state and the record change together
-// or neither does.
+// or neither does. Done, the integrations' step that records the event's outcome, runs last in it,
+// so the outcome commits with them too.
 
 // WriteEvent writes the event to the record. Its failures are *paylink.Error, except those of
-// w.Settle, which are returned as they are.
+// w.Settle and w.Done, which are returned as they are.
 func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink.EventResult, error) {
 	var spaceID, workspaceID int64
 	err := s.db.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`, w.AppID).
@@ -111,8 +112,15 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 	var res SystemResult
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		var err error
-		res, err = s.systemWriteTx(ctx, tx, write, decide)
-		return err
+		if res, err = s.systemWriteTx(ctx, tx, write, decide); err != nil {
+			return err
+		}
+		if w.Done != nil {
+			if err := w.Done(ctx, tx, paylink.EventResult{Written: res.Changed, NoHandler: noHandler, ConditionUnmet: unmet}); err != nil {
+				return &settleError{err}
+			}
+		}
+		return nil
 	})
 	var se *settleError
 	switch {

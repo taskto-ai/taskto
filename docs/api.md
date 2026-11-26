@@ -238,7 +238,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_event_record_gone` | — | A failed payment event: the record or its app is gone, or is in another workspace. |
 | `integration_event_record_refused` | — | A failed payment event: the record, as the payment would change it, doesn't fit the app. |
 | `integration_amount_mismatch` | — | A failed payment event: the amount or currency isn't what the payment link asked (a refund: another currency, or more than was paid). Not applied. |
-| `integration_event_payment_unknown` | — | A refund of a payment no ref has been paid by yet: tried again, then failed. |
+| `integration_event_payment_unknown` | — | A full refund of a payment no ref has been paid by yet, which a ref of the integration may still be paid by: it waits for that payment (pending) for up to 72 hours, then fails. The payment's arrival tries it again, even after it failed. |
 | `integration_event_ref_unknown` | — | An ignored event: no payment link of this integration has its token or payment. |
 | `integration_event_mode_mismatch` | — | An ignored event: live money for a link made in test mode, or the other way round. |
 | `integration_event_duplicate` | — | An ignored event: the payment or end the ref already has. |

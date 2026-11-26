@@ -2810,3 +2810,50 @@ func TestACrashAfterTheCallBeforeItsAnswerIsNotedMakesOneLink(t *testing.T) {
 		}
 	}
 }
+
+// A link saved on an earlier try is given again only while a payer can use it: its state is read at
+// the provider first. An expired or paid one is not given, and nothing else is made; a read that fails
+// gives nothing and makes nothing.
+func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
+	for name, end := range map[string]func(p *pay, session string) error{
+		"expired": func(p *pay, session string) error { _, err := p.fake.Expire(session); return err },
+		"paid":    func(p *pay, session string) error { _, err := p.fake.Pay(session); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, publicURL)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-saved-0001")
+			ctx := context.Background()
+			first, err := p.svc.OpenPaymentLink(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
+			if again, err := p.svc.OpenPaymentLink(ctx, req); err != nil || again != first {
+				t.Fatalf("again = %+v, %v", again, err)
+			}
+			if n := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID)); n != reads+1 {
+				t.Fatalf("the saved link was given with %d reads of its state, want %d", n, reads+1)
+			}
+
+			// The read fails: nothing is given, and nothing made.
+			p.fake.Fail(testprovider.ServerError().On(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
+			link, err := p.svc.OpenPaymentLink(ctx, req)
+			var pe *paylink.Error
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationProviderUnreachable || !pe.Transient || link.URL != "" {
+				t.Fatalf("with the read failing: %+v, %v", link, err)
+			}
+
+			if err := end(p, first.ObjectID); err != nil {
+				t.Fatal(err)
+			}
+			link, err = p.svc.OpenPaymentLink(ctx, req)
+			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkAlreadyPaid || link.URL != "" {
+				t.Fatalf("the %s link: %+v, %v", name, link, err)
+			}
+			if n := len(p.posts()); n != 1 || len(p.fake.Sessions()) != 1 {
+				t.Fatalf("%d calls, %d sessions: something else was made", n, len(p.fake.Sessions()))
+			}
+		})
+	}
+}

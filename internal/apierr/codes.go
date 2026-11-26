@@ -493,7 +493,7 @@ const (
 	CodeIntegrationEventRecordGone         Code = "integration_event_record_gone"         // the record, or its app, is gone or is in another workspace
 	CodeIntegrationEventRecordRefused      Code = "integration_event_record_refused"      // the record, as the event would leave it, doesn't fit the app
 	CodeIntegrationAmountMismatch          Code = "integration_amount_mismatch"           // the payment isn't the amount and currency the payment link asked: not applied
-	CodeIntegrationEventPaymentUnknown     Code = "integration_event_payment_unknown"     // a refund of a payment no reference has been paid by yet: tried again, then waits for an admin
+	CodeIntegrationEventPaymentUnknown     Code = "integration_event_payment_unknown"     // a full refund of a payment no reference has been paid by yet, which one may still be: waits for that payment for up to 72 hours, then waits for an admin
 
 	CodeIntegrationEventNotFound     Code = "integration_event_not_found"     // 404: no such event in this integration
 	CodeIntegrationEventNotRetriable Code = "integration_event_not_retriable" // 409: only a failed event is retried

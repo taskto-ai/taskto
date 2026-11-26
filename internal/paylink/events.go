@@ -35,6 +35,11 @@ type EventWrite struct {
 	// state, so the state and the record change together or not at all. An error it returns ends
 	// the write with nothing changed, and is returned as it is.
 	Settle func(ctx context.Context, tx *sql.Tx) error
+	// Done runs last in that same transaction, once the record has been written (or left as it is),
+	// with what became of it: it records the event's own outcome, so the outcome and the write
+	// commit together, and a worker that stops after the commit leaves nothing to redo or lose. An
+	// error it returns ends the write with nothing changed, and is returned as it is.
+	Done func(ctx context.Context, tx *sql.Tx, res EventResult) error
 }
 
 // EventResult says what became of the record.

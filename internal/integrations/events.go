@@ -62,6 +62,10 @@ type StoredEvent struct {
 	Event
 	// Attempts counts the tries, this one included.
 	Attempts int
+	// Lease is the number of the claim this try runs under: only it may give the event its end.
+	Lease int64
+	// ReceivedAt is when the server took the event in.
+	ReceivedAt time.Time
 }
 
 // Applier applies one stored event: the next card's step. It returns nil when the event was
@@ -80,6 +84,8 @@ type EventError struct {
 	Transient bool
 	// ignored marks an outcome that is not a failure (see Ignore).
 	ignored bool
+	// wait, when set, is an event that can't be applied yet and may be later (see waitEvent).
+	wait time.Duration
 }
 
 func (e *EventError) Error() string { return string(e.Code) }
@@ -92,6 +98,13 @@ func Ignore(code apierr.Code, params ...apierr.Params) error {
 		e.Params = params[0]
 	}
 	return e
+}
+
+// waitEvent is the Applier's answer for an event that can't be applied yet and may be once another
+// event is: it is tried again after d, and the try counts against none of its attempts. The applier
+// bounds how long an event may wait, and ends it with a code the admins are told of after that.
+func waitEvent(code apierr.Code, d time.Duration) error {
+	return &EventError{Code: code, Transient: true, wait: max(d, time.Second)}
 }
 
 // accepted is what a verified delivery became.
@@ -328,8 +341,10 @@ func (s *Service) poke() {
 	}
 }
 
-// drainEvents does the events that are due, one after another.
+// drainEvents does the events that are due, one after another, and then sends the admins'
+// notifications that are owed.
 func (s *Service) drainEvents(ctx context.Context) {
+	defer s.sendEventNotices(ctx)
 	for ctx.Err() == nil {
 		a := s.currentApplier()
 		if a == nil {
@@ -357,7 +372,7 @@ func (s *Service) drainEvents(ctx context.Context) {
 func (s *Service) purgeEvents(ctx context.Context) error {
 	t := s.now()
 	_, err := s.store.db.ExecContext(ctx, `DELETE FROM integration_events
-		WHERE (state IN ('applied', 'ignored') AND received_at < ?) OR (state = 'failed' AND received_at < ?)`,
+		WHERE ((state IN ('applied', 'ignored') AND received_at < ?) OR (state = 'failed' AND received_at < ?)) AND notice_lease IS NULL`,
 		s.store.stamp(t.Add(-keepEventsDone)), s.store.stamp(t.Add(-keepEventsAll)))
 	return err
 }
@@ -381,13 +396,13 @@ func (s *Service) claimEvent(ctx context.Context) (ev StoredEvent, lease int64, 
 				return err
 			}
 			if attempts >= maxEventAttempts {
-				// Its worker died (or kept being stopped) on the last try: the bound holds.
+				// Its worker died (or kept being stopped) on the last try: the bound holds. The admins are
+				// owed a notification, which sendEventNotices writes: one that can't be written never holds
+				// this event, or the ones after it, back.
 				if _, err := tx.ExecContext(ctx, `UPDATE integration_events
-					SET state = 'failed', lease_until = NULL, error_code = ?, error_params = NULL, processed_at = ? WHERE id = ?`,
-					string(apierr.CodeIntegrationEventGaveUp), at, id); err != nil {
-					return err
-				}
-				if err := s.store.notifyEventAdmins(ctx, tx, id); err != nil {
+					SET state = 'failed', lease_until = NULL, error_code = ?, error_params = NULL, processed_at = ?,
+						notice_lease = lease, notice_at = ? WHERE id = ?`,
+					string(apierr.CodeIntegrationEventGaveUp), at, at, id); err != nil {
 					return err
 				}
 				continue
@@ -397,18 +412,21 @@ func (s *Service) claimEvent(ctx context.Context) (ev StoredEvent, lease int64, 
 				s.store.stamp(t.Add(eventLease)), id); err != nil {
 				return err
 			}
-			var occurred string
+			var occurred, received string
 			err = tx.QueryRowContext(ctx, `SELECT e.id, e.integration_id, i.workspace_id, e.provider_event_id, e.source, e.kind,
 					coalesce(e.ref_token, ''), coalesce(e.object_id, ''), coalesce(e.provider_payment_id, ''),
-					e.amount_minor, e.currency, e.livemode, e.occurred_at, e.attempts, e.lease
+					e.amount_minor, e.currency, e.livemode, e.occurred_at, e.received_at, e.attempts, e.lease
 				FROM integration_events e JOIN integrations i ON i.id = e.integration_id WHERE e.id = ?`, id).
 				Scan(&ev.ID, &ev.IntegrationID, &ev.WorkspaceID, &ev.ProviderEvent, &ev.Source, &ev.Kind,
-					&ev.RefToken, &ev.ObjectID, &ev.PaymentID, &ev.AmountMinor, &ev.Currency, &ev.Livemode, &occurred, &ev.Attempts, &lease)
+					&ev.RefToken, &ev.ObjectID, &ev.PaymentID, &ev.AmountMinor, &ev.Currency, &ev.Livemode, &occurred, &received, &ev.Attempts, &lease)
 			if err != nil {
 				return err
 			}
-			ev.Event.ID = ev.ProviderEvent
+			ev.Event.ID, ev.Lease = ev.ProviderEvent, lease
 			if ev.OccurredAt, err = time.Parse(timeFormat, occurred); err != nil {
+				return err
+			}
+			if ev.ReceivedAt, err = time.Parse(timeFormat, received); err != nil {
 				return err
 			}
 			found = true
@@ -441,9 +459,16 @@ func (s *Service) settleEvent(ctx context.Context, ev StoredEvent, lease int64, 
 	var ee *EventError
 	switch {
 	case cause == nil:
-		return s.finishEvent(ctx, ev.ID, lease, EventApplied, "", nil, at)
+		return s.finishEvent(ctx, ev, lease, EventApplied, "", nil, at)
 	case errors.As(cause, &ee) && ee.ignored:
-		return s.finishEvent(ctx, ev.ID, lease, EventIgnored, ee.Code, ee.Params, at)
+		return s.finishEvent(ctx, ev, lease, EventIgnored, ee.Code, ee.Params, at)
+	case ee != nil && ee.wait > 0:
+		// Not yet: waits, and gives back the attempt its claim counted.
+		_, err := s.store.db.ExecContext(ctx, `UPDATE integration_events
+			SET state = 'pending', attempts = max(attempts - 1, 0), next_attempt_at = ?, lease_until = NULL, error_code = ?, error_params = ?
+			WHERE id = ? AND state = 'running' AND lease = ?`,
+			s.store.stamp(t.Add(ee.wait)), string(ee.Code), paramsJSON(ee.Params), ev.ID, lease)
+		return err
 	case !errors.As(cause, &ee):
 		// Not one of the reasons the apply step was written to give: the database, a timeout. The
 		// error may quote anything, so it goes to the log by id only, and the row keeps a code.
@@ -459,28 +484,85 @@ func (s *Service) settleEvent(ctx context.Context, ev StoredEvent, lease int64, 
 			s.store.stamp(t.Add(wait)), string(ee.Code), params, ev.ID, lease)
 		return err
 	}
-	return s.finishEvent(ctx, ev.ID, lease, EventFailed, ee.Code, ee.Params, at)
+	return s.finishEvent(ctx, ev, lease, EventFailed, ee.Code, ee.Params, at)
 }
 
-func (s *Service) finishEvent(ctx context.Context, id, lease int64, state string, code apierr.Code, params apierr.Params, at string) error {
+// finishEvent gives the event its end, if the claim still owns it. An event the apply step already
+// ended, in the transaction that wrote its record (eventApplier's Done), isn't running any more and
+// keeps the end it has.
+func (s *Service) finishEvent(ctx context.Context, ev StoredEvent, lease int64, state string, code apierr.Code, params apierr.Params, at string) error {
+	_, err := s.store.endEvent(ctx, s.store.db, ev.ID, lease, ev.Kind, state, code, params, at)
+	return err
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// endEvent gives the event its end state, if the claim (lease) still owns it, and says whether it
+// did. When the end is one the admins are told of (needsAdmin), the same statement records that a
+// notification is owed for that claim: the end and the debt can't be stored apart, and the
+// notification itself is written by sendEventNotices, so one that can't be written never holds the
+// event, or the events after it, back.
+func (s *Store) endEvent(ctx context.Context, q execer, id, lease int64, kind, state string, code apierr.Code, params apierr.Params, at string) (bool, error) {
 	var c any
 	if code != "" {
 		c = string(code)
 	}
-	// The end state and the admins' notification of it are one transaction, so a failure that nobody
-	// was told of can't be the one that was stored.
-	return s.store.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE integration_events
-			SET state = ?, error_code = ?, error_params = ?, lease_until = NULL, processed_at = ?
-			WHERE id = ? AND state = 'running' AND lease = ?`, state, c, paramsJSON(params), at, id, lease)
+	notify := needsAdmin(state, code, kind)
+	res, err := q.ExecContext(ctx, `UPDATE integration_events
+		SET state = ?, error_code = ?, error_params = ?, lease_until = NULL, processed_at = ?,
+			notice_lease = CASE WHEN ? THEN lease ELSE notice_lease END,
+			notice_at = CASE WHEN ? THEN ? ELSE notice_at END
+		WHERE id = ? AND state = 'running' AND lease = ?`, state, c, paramsJSON(params), at, notify, notify, at, id, lease)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// noticeRetry is the wait before a notification that couldn't be written is tried again. It is
+// tried until it is written: it is how the admins learn of money that wasn't applied.
+const noticeRetry = time.Minute
+
+// sendEventNotices writes the admins' notifications that events owe, each in a transaction of its
+// own with the debt's settling. One that fails is logged and tried again after noticeRetry, and the
+// others go on: no notification holds back another, or an event.
+func (s *Service) sendEventNotices(ctx context.Context) {
+	for ctx.Err() == nil {
+		var id, lease int64
+		err := s.store.db.QueryRowContext(ctx, `SELECT id, notice_lease FROM integration_events
+			WHERE notice_lease IS NOT NULL AND notice_at <= ? ORDER BY notice_at, id LIMIT 1`, s.store.stamp(s.now())).Scan(&id, &lease)
+		if errors.Is(err, sql.ErrNoRows) {
+			return
+		}
 		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("integrations: reading the notifications events owe failed", "err", err)
+			}
+			return
+		}
+		err = s.store.tx(ctx, func(tx *sql.Tx) error {
+			if err := s.store.notifyEventAdmins(ctx, tx, id, lease); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `UPDATE integration_events SET notice_lease = NULL, notice_at = NULL
+				WHERE id = ? AND notice_lease = ?`, id, lease)
 			return err
+		})
+		if err == nil {
+			continue
 		}
-		if n, err := res.RowsAffected(); err != nil || n == 0 {
-			return err // the event is another worker's now
+		if ctx.Err() != nil {
+			return
 		}
-		return s.store.notifyEventAdmins(ctx, tx, id)
-	})
+		slog.Warn("integrations: the admins couldn't be notified of an event; tried again later", "event", id)
+		if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_events SET notice_at = ? WHERE id = ? AND notice_lease = ?`,
+			s.store.stamp(s.now().Add(noticeRetry)), id, lease); err != nil {
+			return
+		}
+	}
 }
 
 func paramsJSON(p apierr.Params) any {

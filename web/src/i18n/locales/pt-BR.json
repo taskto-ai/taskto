@@ -1207,7 +1207,7 @@
     "integration_event_record_gone": "Chegou um pagamento para um registro que não existe mais. Resolva o pagamento à mão.",
     "integration_event_record_refused": "Chegou um pagamento, mas o registro, como o pagamento o mudaria, não cabe no app. Corrija o app ou o registro e tente o evento de novo.",
     "integration_amount_mismatch": "Chegou um pagamento de outro valor ou moeda que o link de pagamento pedia. Ele não foi aplicado: confira no provedor.",
-    "integration_event_payment_unknown": "Chegou um reembolso de um pagamento que nenhum link de pagamento recebeu ainda. Ele é tentado de novo e depois espera por você.",
+    "integration_event_payment_unknown": "Chegou um reembolso de um pagamento que nenhum link de pagamento recebeu ainda. Ele espera até 72 horas por esse pagamento e depois espera por você.",
     "integration_event_ref_unknown": "O evento não cita nenhum link de pagamento desta integração. Nada foi alterado.",
     "integration_event_mode_mismatch": "O evento é de dinheiro real para um link feito em modo de teste, ou o contrário. Nada foi alterado.",
     "integration_event_duplicate": "O evento repete um pagamento ou um fim que o link de pagamento já tem. Nada foi alterado.",

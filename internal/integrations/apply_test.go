@@ -970,15 +970,16 @@ func TestTheSameEventAppliedTwiceWritesOnce(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR"})
-	row := p.lastEvent(EventPaymentSucceeded)
-	stored := StoredEvent{ID: row.id, IntegrationID: p.in.ID, WorkspaceID: p.ws, ProviderEvent: "x", Source: SourceWebhook, Attempts: 1,
-		Event: Event{ID: "x", Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR", OccurredAt: time.Now()}}
+	stored, _, found, err := p.svc.claimEvent(context.Background())
+	if err != nil || !found {
+		t.Fatalf("claim: %v, %v", found, err)
+	}
 	a := &eventApplier{svc: p.svc, records: p.apps}
 	if err := a.ApplyEvent(context.Background(), stored); err != nil {
 		t.Fatal(err)
 	}
 	rev, history := p.revision(record), p.historyRows(record)
-	err := a.ApplyEvent(context.Background(), stored)
+	err = a.ApplyEvent(context.Background(), stored)
 	var ee *EventError
 	if !errors.As(err, &ee) || !ee.ignored || ee.Code != apierr.CodeIntegrationEventDuplicate {
 		t.Fatalf("the second apply answered %v", err)
@@ -1522,4 +1523,244 @@ func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 	if now := p.refOf(record); now.state != "expired" {
 		t.Fatalf("ref = %+v", now)
 	}
+}
+
+// ----- events told out of order, and a worker that stops -----
+
+// Stripe tells events in no set order: a full refund can arrive before the payment it undoes. It
+// waits for that payment, using up none of its tries, and once the payment applies, the refund
+// follows: the invoice ends refunded, each written once.
+func TestAFullRefundToldBeforeItsPaymentWaitsAndTheInvoiceEndsRefunded(t *testing.T) {
+	p := newPayWith(t, publicURL, invoiceAppRefund)
+	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
+	pays, err := p.fake.Pay(ref.object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refunds, err := p.fake.Refund(ref.object, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := p.sender(p.hookID(), stripeHook)
+	p.deliver(sender, refunds)
+	p.drain()
+	waiting := p.lastEvent(EventPaymentRefunded)
+	if waiting.state != EventPending || waiting.code != string(apierr.CodeIntegrationEventPaymentUnknown) {
+		t.Fatalf("the refund told first is %s %q", waiting.state, waiting.code)
+	}
+	if n := p.count(`SELECT attempts FROM integration_events WHERE id = ?`, waiting.id); n != 0 {
+		t.Fatalf("waiting used up %d attempts", n)
+	}
+	if p.refOf(record).state != "open" || p.fields(record)["status"] != "sent" {
+		t.Fatalf("a refund with no payment moved %+v / %v", p.refOf(record), p.fields(record))
+	}
+	// A refund that no ref of the integration could be (another amount) is not ours: ignored at once.
+	p.put(Event{Kind: EventPaymentRefunded, ObjectID: "ch_" + token()[:20], PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount + 7, Currency: "EUR"})
+	p.drain()
+	p.mustEvent(p.lastEvent(EventPaymentRefunded), EventIgnored, apierr.CodeIntegrationEventRefUnknown)
+
+	// The payment arrives: it applies, and the refund that waited for it applies after it.
+	p.deliver(sender, pays)
+	p.drain()
+	if n := p.count(`SELECT count(*) FROM integration_events WHERE kind = ? AND state = 'applied'`, EventPaymentSucceeded); n != 1 {
+		t.Fatalf("%d payments applied", n)
+	}
+	p.mustEvent(p.eventByID(waiting.id), EventApplied, "")
+	if p.fields(record)["status"] != "refunded" || p.refOf(record).state != "refunded" {
+		t.Fatalf("record %v, ref %+v", p.fields(record), p.refOf(record))
+	}
+	if got := p.actions(record); fmt.Sprint(got) != fmt.Sprint([]string{EventPaymentSucceeded, EventPaymentRefunded}) {
+		t.Fatalf("history = %v", got)
+	}
+	if all, _ := p.adminNotices(); all != 0 {
+		t.Fatalf("%d notifications for events that were all applied", all)
+	}
+}
+
+// A refund whose payment never comes within refundWait fails for the admins; and if the payment comes
+// after all, the refund is tried again with it, so the invoice never stays paid though refunded.
+func TestARefundThatWaitedTooLongTellsTheAdminsAndStillFollowsItsPayment(t *testing.T) {
+	p := newPayWith(t, publicURL, invoiceAppRefund)
+	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
+	if _, err := p.fake.Pay(ref.object); err != nil {
+		t.Fatal(err)
+	}
+	refunds, err := p.fake.Refund(ref.object, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.deliver(p.sender(p.hookID(), stripeHook), refunds)
+	p.drain()
+	refund := p.lastEvent(EventPaymentRefunded)
+	p.later(refundWait + time.Minute)
+	p.drain()
+	p.mustEvent(p.eventByID(refund.id), EventFailed, apierr.CodeIntegrationEventPaymentUnknown)
+	if all, non := p.adminNotices(); all != 1 || non != 0 {
+		t.Fatalf("notifications: %d, %d to non-admins", all, non)
+	}
+	// The payment arrives after all (stored as the route would: the clock has moved on past what a
+	// signature made now would be checked against).
+	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: refund.paymentI, AmountMinor: ref.amount, Currency: "EUR"})
+	p.drain()
+	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventApplied, "")
+	p.mustEvent(p.eventByID(refund.id), EventApplied, "")
+	if p.fields(record)["status"] != "refunded" || p.refOf(record).state != "refunded" {
+		t.Fatalf("record %v, ref %+v", p.fields(record), p.refOf(record))
+	}
+}
+
+// Two payments that both name no object are not the same payment: only the same payment id is.
+func TestPaymentsWithNoObjectAreToldApartByTheirPayment(t *testing.T) {
+	p := newPay(t, publicURL)
+	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
+	first := Event{Kind: EventPaymentSucceeded, RefToken: ref.token, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR"}
+	p.put(first)
+	p.drain()
+	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventApplied, "")
+	paid, rev := p.fields(record), p.revision(record)
+
+	p.put(first) // the same payment, told again under another event id
+	p.drain()
+	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventIgnored, apierr.CodeIntegrationEventDuplicate)
+
+	for i, n := range []int{1, 2} {
+		other := Event{Kind: EventPaymentSucceeded, RefToken: ref.token, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR"}
+		p.put(other)
+		p.drain()
+		p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventIgnored, apierr.CodeIntegrationEventSecondPayment)
+		if got := p.count(`SELECT count(*) FROM integration_ref_duplicates WHERE ref_id = ? AND payment_id = ? AND object_id IS NULL`, ref.id, other.PaymentID); got != 1 {
+			t.Fatalf("payment %d: %d duplicates recorded", i, got)
+		}
+		if got := p.count(`SELECT count(*) FROM integration_ref_duplicates`); got != n {
+			t.Fatalf("%d second payments recorded, want %d", got, n)
+		}
+		if all, _ := p.adminNotices(); all != n {
+			t.Fatalf("%d notifications, want %d", all, n)
+		}
+	}
+	if fmt.Sprint(p.fields(record)) != fmt.Sprint(paid) || p.revision(record) != rev {
+		t.Fatal("a second payment was applied")
+	}
+}
+
+// A notification that can't be written never holds back the event it is about, or the ones after it:
+// it is owed, and written once it can be.
+func TestANotificationThatCannotBeWrittenNeverHoldsTheEventsBack(t *testing.T) {
+	p := newPay(t, publicURL)
+	_, refA := p.sentInvoice(100, "EUR", "op-a-0001")
+	recordB, refB := p.sentInvoice(50, "EUR", "op-b-0001")
+	p.put(Event{Kind: EventPaymentSucceeded, RefToken: refA.token, ObjectID: refA.object, PaymentID: "pi_" + token()[:20], AmountMinor: refA.amount, Currency: "EUR"})
+	evA := p.lastEvent(EventPaymentSucceeded)
+	// Its last worker died with the lease, on its last try.
+	p.exec(`UPDATE integration_events SET state = 'running', attempts = ?, lease = lease + 1, lease_until = ? WHERE id = ?`,
+		maxEventAttempts, p.svc.store.stamp(time.Now().Add(-time.Minute)), evA.id)
+	p.put(Event{Kind: EventPaymentSucceeded, RefToken: refB.token, ObjectID: refB.object, PaymentID: "pi_" + token()[:20], AmountMinor: refB.amount, Currency: "EUR"})
+	evB := p.lastEvent(EventPaymentSucceeded)
+
+	p.exec(`CREATE TRIGGER no_notices BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT, 'notifications are down'); END`)
+	p.drain()
+	p.mustEvent(p.eventByID(evA.id), EventFailed, apierr.CodeIntegrationEventGaveUp)
+	p.mustEvent(p.eventByID(evB.id), EventApplied, "")
+	if p.fields(recordB)["status"] != "paid" {
+		t.Fatalf("the later payment wasn't applied: %v", p.fields(recordB))
+	}
+	if all, _ := p.adminNotices(); all != 0 {
+		t.Fatalf("%d notifications written while they can't be", all)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_events WHERE notice_lease IS NOT NULL`); n != 1 {
+		t.Fatalf("%d notifications owed", n)
+	}
+
+	p.exec(`DROP TRIGGER no_notices`)
+	p.later(noticeRetry + time.Second)
+	p.drain()
+	if all, non := p.adminNotices(); all != 1 || non != 0 {
+		t.Fatalf("notifications: %d, %d to non-admins", all, non)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_events WHERE notice_lease IS NOT NULL`); n != 0 {
+		t.Fatalf("%d notifications still owed", n)
+	}
+}
+
+// The event's outcome commits with the write it made: a worker that stops right after leaves an
+// event that is ended, with its reason and its notification, never one a later try takes for a
+// duplicate. And a claim whose lease ran out writes nothing.
+func TestAnEventsOutcomeCommitsWithItsWrite(t *testing.T) {
+	p := newPay(t, publicURL)
+	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
+	// The invoice was taken back to a draft: the app's rule won't hold.
+	p.exec(`UPDATE app_rows SET data = json_set(data, '$.status', 'draft') WHERE id = ?`, record)
+	before, rev := p.fields(record), p.revision(record)
+	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR"})
+	ctx := context.Background()
+	a := &eventApplier{svc: p.svc, records: p.apps}
+
+	stale, _, found, err := p.svc.claimEvent(ctx)
+	if err != nil || !found {
+		t.Fatalf("claim: %v, %v", found, err)
+	}
+	// Its lease runs out, and another worker claims it: the first one's write is not made.
+	p.later(eventLease + time.Second)
+	ev, lease, found, err := p.svc.claimEvent(ctx)
+	if err != nil || !found {
+		t.Fatalf("second claim: %v, %v", found, err)
+	}
+	if err := a.ApplyEvent(ctx, stale); !errors.Is(err, errLeaseLost) {
+		t.Fatalf("the stale claim's apply = %v", err)
+	}
+	if p.refOf(record).state != "open" {
+		t.Fatalf("the stale claim moved the ref: %+v", p.refOf(record))
+	}
+
+	cause := a.ApplyEvent(ctx, ev)
+	// The worker stops here, before it notes what became of the try.
+	row := p.lastEvent(EventPaymentSucceeded)
+	p.mustEvent(row, EventIgnored, apierr.CodeIntegrationEventConditionUnmet)
+	if p.refOf(record).state != "paid" {
+		t.Fatalf("ref = %+v", p.refOf(record))
+	}
+	p.later(eventLease + time.Second)
+	p.drain()
+	p.mustEvent(p.eventByID(row.id), EventIgnored, apierr.CodeIntegrationEventConditionUnmet)
+	// The stopped worker's late note changes nothing either.
+	if err := p.svc.settleEvent(ctx, ev, lease, cause); err != nil {
+		t.Fatal(err)
+	}
+	p.mustEvent(p.eventByID(row.id), EventIgnored, apierr.CodeIntegrationEventConditionUnmet)
+	if all, non := p.adminNotices(); all != 1 || non != 0 {
+		t.Fatalf("notifications: %d, %d to non-admins", all, non)
+	}
+	if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) || p.revision(record) != rev {
+		t.Fatal("the record was written though the rule didn't hold")
+	}
+}
+
+func (p *pay) eventByID(id int64) eventRow {
+	p.t.Helper()
+	for _, e := range p.eventRows() {
+		if e.id == id {
+			return e
+		}
+	}
+	p.t.Fatalf("no event %d", id)
+	return eventRow{}
+}
+
+// actions are the record's history actions of payment events, oldest first.
+func (p *pay) actions(record int64) []string {
+	p.t.Helper()
+	rows, err := p.db.Query(`SELECT action FROM app_row_history WHERE row_id = ? AND action LIKE 'payment.%' ORDER BY revision`, record)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			p.t.Fatal(err)
+		}
+		out = append(out, a)
+	}
+	return out
 }

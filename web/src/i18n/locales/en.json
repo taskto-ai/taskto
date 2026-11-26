@@ -1200,7 +1200,7 @@
     "integration_event_record_gone": "A payment arrived for a record that no longer exists. Settle the payment by hand.",
     "integration_event_record_refused": "A payment arrived, but the record, as the payment would change it, doesn't fit the app. Fix the app or the record, then retry the event.",
     "integration_amount_mismatch": "A payment arrived for another amount or currency than the payment link asked. It was not applied: check it at the provider.",
-    "integration_event_payment_unknown": "A refund arrived for a payment that no payment link has been paid by yet. It is tried again, then waits for you.",
+    "integration_event_payment_unknown": "A refund arrived for a payment that no payment link has been paid by yet. It waits up to 72 hours for that payment, then waits for you.",
     "integration_event_ref_unknown": "The event names no payment link of this integration. Nothing was changed.",
     "integration_event_mode_mismatch": "The event is of live money for a link made in test mode, or the other way round. Nothing was changed.",
     "integration_event_duplicate": "The event repeats a payment or an end the payment link already has. Nothing was changed.",
