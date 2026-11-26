@@ -221,3 +221,38 @@ func TestRunCleanupsLogsWhatTheWaitingStepsWaitFor(t *testing.T) {
 		t.Errorf("log = %q", got)
 	}
 }
+
+// The container worker doesn't answer: its step fails and stays, but the local directory under the
+// data directory is removed all the same (each kind is a step of its own), and the account's purge
+// is tried again until the container's copy is gone too.
+func TestAnUnreachableContainerWorkerDoesNotKeepTheLocalDirectory(t *testing.T) {
+	ctx := context.Background()
+	for _, history := range [][]string{{cliLocal, cliContainer}, {cliUnknown}} {
+		t.Run(fmt.Sprint(history), func(t *testing.T) {
+			w := newWorld(t)
+			w.history(history...)
+			// An account from before the history was known, for the unknown case.
+			exec(t, w.db, `UPDATE users SET created_at = '2025-06-01T00:00:00.000Z' WHERE id = ?`, w.leaver)
+			w.makeLocalHome(w.leaver)
+			w.cli.kind = cliContainer
+			w.cli.fail = errors.New("the worker's socket doesn't answer")
+			w.deleteAccount()
+			if err := w.svc.Purge(ctx, w.leaver); err == nil {
+				t.Fatal("the purge went on over an unreachable worker")
+			}
+			if _, err := os.Stat(w.localHome(w.leaver)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("their local CLI directory remains: %v", err)
+			}
+			if got := w.cliSteps(); !slices.Equal(got, []string{fmt.Sprintf("container:%d", w.leaver)}) {
+				t.Fatalf("steps = %v, want only the container's", got)
+			}
+			w.cli.fail = nil
+			if err := w.svc.Purge(ctx, w.leaver); err != nil {
+				t.Fatal(err)
+			}
+			if got := w.cliSteps(); len(got) != 0 {
+				t.Fatalf("steps after the worker answered = %v", got)
+			}
+		})
+	}
+}
