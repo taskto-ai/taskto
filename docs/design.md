@@ -1,4 +1,10 @@
-# Look and fonts
+# The design system
+
+The web app's look, and the system that keeps it whole: the tokens and the themes, the components
+(seen together in [the gallery](#the-gallery)), [the layout rule](#the-layout-rule), [where styles
+live](#where-styles-live), and how to [add a screen](#adding-a-screen), a component or [a
+brand](#light-dark-and-the-brand). Every screen is built from these: a screen that needs something
+they don't have adds it to them, not to itself.
 
 The web app wears the identity of the taskto.ai website, "mint on paper": warm cream paper,
 near-black ink, one electric mint, headings in Bricolage Grotesque and text in Inter, objects
@@ -55,10 +61,13 @@ that needs one (a shadow, the lift) takes it from a role. **No colour literal is
 `web/src/ui/themes/`**: `web/scripts/css-check.mjs` fails on a hex colour, a colour function or a
 named colour in any other stylesheet's declarations.
 
-**The older names.** The screens' stylesheets still use `--tt-canvas`, `--tt-fg` and the rest.
-`legacy.css` keeps each as an alias of its role or scale (`--tt-canvas: var(--color-bg)`), so the
-screens look as they did; a test checks that every one still resolves, to the colour it had. New
-CSS uses the roles and scales; the aliases go when the last screen has moved.
+**The older names.** What is left of the old stylesheets (the screens outside the shell, the
+base's element rules in `ui/base.css`, Markdown outside the knowledge base, and the rules a screen
+still in the middle of its move keeps) still uses `--tt-surface`, `--tt-fg`, `--tt-radius` and a few
+others. `legacy.css` keeps each such name as an alias of its role or scale (`--tt-surface:
+var(--color-surface)`), and only those: `css-check` fails on an alias nothing reads (so a deleted one
+can't come back unread), and a test checks that every one left still resolves, to the value it had. New CSS uses the roles and scales; the file goes
+with the last old rule.
 
 ### The scales
 
@@ -66,7 +75,7 @@ CSS uses the roles and scales; the aliases go when the last screen has moved.
 |---|---|
 | Space | `--space-1` 4px, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-10` 40, `-12` 48, `-16` 64 |
 | Type sizes | `--text-xs` 12px, `-sm` 13, `-md` 14 (the interface), `-lg` 16 (reading), `-xl` 20, `-2xl` 24 |
-| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. Today's controls and cards are still 8px, through the old `--tt-radius`: each moves to `--radius-md` (10px) as it is rebuilt, and 8px lives on only as that alias until the last one has moved |
+| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for what the old stylesheets still draw (the base's fields, Markdown, the screens outside the shell) |
 | Control height | `--control-sm` 28px, `--control-md` 36, `--control-touch` 44 (the touch target) |
 | Elevation | `--shadow-lift` and `--shadow-lift-hover` (the primary button's hard lift), `--shadow-pop` (a menu, a popover), `--shadow-dialog` |
 | Motion | `--duration-fast` 120ms, `-base` 160, `-slow` 240; `--ease-out`, `--ease-in-out`; all of it stops under `prefers-reduced-motion` |
@@ -89,9 +98,9 @@ what is positioned on the page.
 | `--z-toast` | 50 | a passing message, the update banner, a guard that must stay seen |
 | `--z-skip` | 100 | the skip link, above everything when it has the focus |
 
-The stylesheet's own numbers (the skip link's 100, the banner's and the guard's 50, the phone's
-scrim at 10 under the sidebar's 20) stay as they are until their rules move onto these levels. A
-test keeps the levels in this order and `--z-skip` at or above every `z-index` in the stylesheets.
+The old stylesheets' own numbers (the update banner's and the offline guards' 50) stay as they are
+until those screens move onto these levels. A test keeps the levels in this order and `--z-skip` at
+or above every `z-index` in the stylesheets.
 
 ### The type roles
 
@@ -112,8 +121,9 @@ better at small sizes. JetBrains Mono is for code, paths, commands and ids.
 | `--type-caption` | Inter | 12 / 16 | 400 | captions, counts |
 | `--type-code` | JetBrains Mono | 13 / 20 | 400 | code, paths |
 
-Today's screens still set their text at 15px and their headings in the display face as before;
-the roles are defined for the screens to move onto.
+Every screen in the shell sets its text by these roles. The old base's 15px text and heavy
+display-face headings reach only what the old stylesheets still draw (the screens outside the shell)
+and a bare element a screen writes itself, which is why a screen's heading is `Heading`.
 
 ### The colour roles
 
@@ -126,7 +136,7 @@ The old name each replaces is in brackets.
 | `bg` (`--tt-canvas`) | cream `#faf8f4` | night `#111110` | the page |
 | `bg-sunken` (`--tt-stone`) | stone `#f1efe9` | `#181816` | the sidebar, a board's columns, quiet bands |
 | `surface` (`--tt-surface`) | white | `#1b1b19` | cards, inputs, menus |
-| `surface-own` (`--tt-user`) | stone | `#262624` | the person's own message |
+| `surface-own` | stone | `#262624` | the person's own message |
 | `paper`, `media` | white, black | the same | a QR code or a signature (dark on light to be read); the ground behind a camera's picture |
 | `hover`, `selected` | ink at 5% / 8% | cream at 7% / 12% | tints laid over a ground |
 | `scrim`, `shadow` | ink at 42% / 35% | black at 60% / 80% | under a dialog; the colour of the shadows |
@@ -174,7 +184,7 @@ sides, and nothing else: no scale, no other property. Its attribute selector out
 
 `themes/harbor.css` (cool paper, navy ink, a signal yellow) is the proof that a swap changes the
 roles and nothing else: the app doesn't import it and has no brand picker; the tests load it, and
-the gallery of components will. `THEME_COLOR` in `theme.ts`, the `theme-color` metas and the
+so does the gallery, whose brand switch shows every component in it. `THEME_COLOR` in `theme.ts`, the `theme-color` metas and the
 manifest are the default brand's ground.
 
 ### How the mint is used
@@ -248,7 +258,7 @@ Text of every kind meets 4.5:1, a placeholder (`::placeholder` is `text-muted`, 
 dark on a field) and an app's validation message (`--a2ui-textfield-color-error` is `danger`:
 6.2 / 6.6 light, 8.3 / 7.6 dark on the page / the field; the renderer's own `red` was 4.0 and 4.3).
 A field's focus is the ring, not a change of its border, so an invalid field (whose border is the
-error's) shows it too: `.tt-app .a2ui-textfield:focus-visible`, 17.8 light and 12.8 dark.
+error's) shows it too: `.ui-app .a2ui-textfield:focus-visible`, 17.8 light and 12.8 dark.
 
 When you change a colour, the test checks the pairs again; a literal that "looks close" is how a
 dark-mode badge ended up white on salmon.
@@ -258,72 +268,45 @@ dark-mode badge ended up white on salmon.
 | Where | Layer | What |
 |---|---|---|
 | `web/src/ui/index.css` | | the layers' order and the design system's files ([Tokens](#tokens)) |
-| `web/src/ui/base.css` | `base`, and two parts in none | the elements (the page, headings, links, the focus ring, form fields) and the few utilities (`tt-sr-only`, `tt-muted`, `tt-small`, `tt-error`, `tt-center-text`); in no layer, what reaches every element on purpose and the touch screen's checkbox rules (below) |
+| `web/src/ui/base.css` | `base`, and two parts in none | the elements (the page, headings, links, the focus ring, form fields) and three utilities (`tt-muted`, `tt-small`, `tt-error`); in no layer, what reaches every element on purpose and the touch screen's checkbox rules (below) |
 | `web/src/ui/<Name>.css` | `components` | a component's rules, beside `<Name>.tsx`, which imports it |
-| a new screen's own stylesheet | `screens` | beside the screen's components, imported by them |
-| `web/src/legacy-shared.css` | none | what several screens share from before the components: buttons, lists, panels and rows, notices, labels, the editor and the form pattern. Each is what a component replaces; nothing new goes in |
-| `web/src/<screen>/<screen>.legacy.css` | none | an old screen's own rules, beside its components (named so a rebuilt screen's `<Screen>.css` can sit beside it, also on a file system that ignores case): `shell`, `auth`, `conversations`, `knowledge`, `boards`, `search`, `apps`, `settings`, `browser`, `pwa`, `home`, `offline`, `notifications` |
-| `web/src/markdown.legacy.css` | none | the Markdown renderer's, beside `markdown.tsx` |
-| `web/src/styles.css` | | the list of `@import`s of the old stylesheets (the rows from `base.css` to `markdown.legacy.css`), in the order of the cascade, and nothing else |
+| `web/src/<screen>/<Name>.css` | `screens` | a screen's own layout, beside the screen's components, which import it (`boards/boards.css`, `settings/Settings.css`) |
+| `web/src/legacy-shared.css`, `web/src/<screen>/<screen>.legacy.css`, `web/src/markdown.legacy.css` | none | the old stylesheet's rules that something still uses: the screens outside the shell (sign-in, the offline guards, the update banner: `auth`, `offline`, `pwa`), Markdown outside the knowledge base, and what a screen still in the middle of its move keeps. Nothing new goes in; each goes when its last user moves onto the components |
+| `web/src/styles.css` | | the list of `@import`s of the old stylesheets, in the order of the cascade, and nothing else |
 
-`web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components import
-their own stylesheets. Nothing outside `index.css` declares a layer's place: `index.css` sets the
-order, `@layer tokens, themes, base, components, screens`, before any file uses one.
+`web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components and
+screens import their own stylesheets. Nothing outside `index.css` declares a layer's place:
+`index.css` sets the order, `@layer tokens, themes, base, components, screens`, before any file uses
+one.
 
-**Which stylesheets go in the list.** Only the old ones: the rules of the one stylesheet the app had
-before its design system, which `css-check`'s `OLD_STYLESHEETS` names in their order. A component's
-stylesheet, and a new or rebuilt screen's, is not listed: the module that needs it imports it
-(`import './Home.css'`), and it puts its rules in a layer (`components`, `screens`). `css-check`
-fails when a stylesheet under `web/src/` is loaded no way or more than one way (listed, imported by
-`ui/index.css`, imported by a module), when the list is not exactly `OLD_STYLESHEETS` in that order
-as plain `@import`s, when an old stylesheet declares a layer, and when `base.css` is not its three
-parts in order. When a screen is rebuilt, its old file leaves the list (and `OLD_STYLESHEETS`) once
-its last old rule has gone.
+**The old stylesheets only shrink.** The one stylesheet the app had before its design system was
+split into the files `styles.css` lists, which `css-check`'s `OLD_STYLESHEETS` names in their order.
+A new stylesheet is never added to the list: its module imports it, and it puts its rules in a layer
+(`components`, `screens`). `css-check` fails when a stylesheet under `web/src/` is loaded no way or
+more than one way, when the list is not exactly `OLD_STYLESHEETS` as plain `@import`s, when an old
+stylesheet declares a layer, and when a rule names an old `tt-` class that no module uses any more
+([The stylesheets](#the-stylesheets)). So when a screen stops using an old class, its rules are
+deleted in the same change, and when an old file's last rule goes, the file goes with its lines in
+`styles.css` and `OLD_STYLESHEETS`.
 
-**How the cascade is ordered.** Most of the screens' rules were once one file and are still in no
-layer, where two rules of the same specificity on one element are settled by which comes later.
-The list in `styles.css` is in the order the old file had (base, the shared rules, then the
-screens), and each file keeps its rules in their old order, so a rule placed late on purpose is
-still after what it overrides: the phone's block (the sidebar a drawer, one pane at a time), split
-into a block per screen, each at its old place among that screen's rules (not at the end of the
-file), the coarse pointer's after the rules it overrides, and reduced motion after what it stops. The old file interleaved screens, so no order keeps every pair of rules in place: the ones
-that changed order were each checked to be unable to meet on one element (the two containers
-never nest, or both set the same value).
+**Why the old rules are still in no layer.** They were one file, where two rules of the same
+specificity are settled by which comes later; the list keeps the order they had (base, the shared
+rules, then the screens), and each file keeps its rules in their old order. In no layer, an old rule
+beats every component's rule whatever the specificity, so a screen moves onto a component by taking
+the old class off the element, never by adding a component's class beside it. `ui/base.css` is
+mostly in `base`, so a component wins over an element's defaults by the layer alone; two parts stay
+in no layer:
 
-**What is in a layer, and what isn't yet.**
-- `ui/base.css` is mostly in `base`, so a component wins over an element's defaults (a field's
-  border and padding, a button's font) by the layer alone, without fighting their specificity. Its
-  element rules leave the components' elements out all the same, with the opt-out below ([The
-  old stylesheets' rules leave them alone](#components)). The layer settles only the properties
-  both rules set: a field's `min-height` from the base would still stretch a component that sets
-  its height and no `min-height`, which the opt-out prevents; and it keeps a rule off the
-  components should it ever leave the layer. It costs nothing (`:where()` adds no specificity).
-- Two parts of `ui/base.css` stay in no layer. First, what reaches every element on purpose,
-  components included (`EVERYWHERE`): border-box sizing, the selection's and the scrollbars'
-  colours, the caret, the search field's clear button, and 16px text by default in a field in a
-  narrow window, which keeps iOS from zooming in on focus (`--tt-text-no-zoom`, an alias of its own,
-  not a step of the type scale, so a change to the scale can't bring the zoom back). It is a
-  default, not a guarantee: a more specific old rule still sets its own size (`.tt-editor textarea`
-  keeps its 0.9rem, as it did before). These win over a
-  component's own rule, as they did in the one stylesheet; in the layer they would lose to it.
-  Second, on a touch screen, the rules that make a checkbox or a radio the box alone and its label
-  the target: they beat single-class rules of the screens by specificity (`.tt-checks label`,
-  `.tt-capture-check`), which a layered rule can't. They move into `base` with those screens. Being
-  in no layer, they need the opt-out absolutely: without it, they made the design system's switch a
-  20px square on a touch screen.
-- The screens' files and `legacy-shared.css` are in no layer, and a rule of theirs that can match
-  anywhere (`input[data-overdue]` in `boards/boards.legacy.css`) carries the opt-out for that reason. In no
-  layer, a screen's rule beats
-  every component's rule whatever the specificity, so while a screen's old classes are on an element
-  a component's class can't restyle it: a screen moves onto a component by taking the old class
-  off the element (and its rule out of the file), not by adding a component's class beside it. When
-  a screen is rebuilt, what stays its own goes into `@layer screens`, which comes after
-  `components` and so still wins over a component on that screen, now by layer order. All of this
-  is for normal declarations: for `!important` ones the order turns round (an earlier layer wins
-  over a later one, and a layered one over one in no layer), which is one more reason the app
-  writes none.
-- The apps renderer's styles are in no layer, so the rules that override them (`.tt-app .a2ui-…`,
-  in `apps/apps.legacy.css`) stay in no layer, even when the rest of that file moves into `screens`.
+- what reaches every element on purpose, components included (`EVERYWHERE` in `css-check`):
+  border-box sizing, the selection's and the scrollbars' colours, the caret, the search field's
+  clear button, and 16px text in a field in a narrow window, which keeps iOS from zooming in on
+  focus (`--tt-text-no-zoom`, an alias of its own, not a step of the type scale);
+- on a touch screen, the rules that make a checkbox or a radio the box alone and its label the
+  target.
+
+Both opt the design system's elements out ([The old stylesheets' rules leave them
+alone](#components)). The apps renderer's styles are in no layer too, and so are the rules in
+`ui/a2ui.css` that override them ([The apps renderer](#the-apps-renderer)).
 
 **Changing the order.** Moving a rule to another file, or into a layer, can change which rule wins
 on an element. Before such a change, list every pair of rules that could meet on one element and set
@@ -359,20 +342,35 @@ selector is declared twice at the top level, in one file or in two (inside `@lay
 the top level; a state or a screen size goes in another at-rule block; two different things get two
 names), when a `tt-` or `ui-` class a component's `className` uses has no rule, when a colour literal is
 written outside `web/src/ui/themes/`, and when a size, a space, a radius, a shadow or a duration is
-a literal under `web/src/ui/` ([above](#where-styles-live)). A class that is deliberately an unstyled hook goes in the
-script's `UNSTYLED` list, with the reason. It reads class selectors (not an attribute selector's
+a literal under `web/src/ui/` ([above](#where-styles-live)), and, the other way round, when a rule
+names an old `tt-` class that no module mentions (a rule left behind when its screen moved: it goes;
+the app's modules and the end-to-end harnesses under `web/e2e/` count; only the old classes, since a
+component's `ui-` class can be built from pieces the check can't see, and an old class a module
+builds from pieces goes in `BUILT_FROM_PIECES`, with where), and when an old `--tt-*` alias in
+`ui/legacy.css` is read by nothing.
+A class that is deliberately an unstyled hook goes in the script's `UNSTYLED` list, with the
+reason. It reads class selectors (not an attribute selector's
 value), a component's `className`, and the strings of a lookup table in capitals
 (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and the header of
 the script says what else it can't.
 
 ## Components
 
-The controls every screen uses are in `web/src/ui/`, one component per file with its stylesheet
-beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `ButtonLink`,
-`IconButton`, `Tooltip`, `Field` with `Input`, `Textarea` and `Select`, `Checkbox`, `Switch`,
-`SegmentedControl`, `Badge`, `Label` (and `labelHue`, the hue a label's name picks), `Avatar`,
-`AgentDot`, `Skeleton`, `Spinner` and `VisuallyHidden`. A screen imports each file directly
-(`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
+The components every screen uses are in `web/src/ui/`, a file per component (with the few parts
+that only make sense with it: `ButtonLink` in `Button.tsx`, `Row` in `Rows.tsx`, `MoreMenu` and the
+menu's items in `Menu.tsx`, `useConfirm` in `ConfirmDialog.tsx`), its stylesheet beside it in
+`@layer components`, and `ui-` class names.
+
+- Controls: `Icon`, `Button` and `ButtonLink`, `IconButton`, `Tooltip`, `Field` with `Input`,
+  `Textarea` and `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `Badge`, `Label` (and
+  `labelHue`, the hue a label's name picks), `Avatar`, `AgentDot`, `Skeleton`, `Spinner` and
+  `VisuallyHidden`.
+- Structure: `Page`, `PageHeader`, `Heading`, `Toolbar`, `Panel`, `Rows` and `Row`, `Table`,
+  `Tabs`, `EmptyState` and `Notice`.
+- Overlays: `Menu`, `MenuButton` and `MoreMenu`, `Dialog`, `ConfirmDialog` with `useConfirm()`,
+  `Drawer`, and `toast()` with its `Toaster`.
+
+A screen imports each file directly (`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
 `<select>` of its own.
 
 - **One height per size.** Buttons, fields, selects and segmented controls of one size are one
@@ -385,7 +383,7 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   element's name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`, the fields, a
   checkbox's or a radio's label, also under `pointer: coarse`, `fieldset`), by a state or a
   pseudo-element alone (`:focus-visible`, `::placeholder`), by an attribute alone, by `*` or by
-  `:is()`, or under what wraps every page (`#root`, `.tt-shell`, `.tt-body`, `.tt-page`). Every
+  `:is()`, or under what wraps every page (`#root`, `#tt-main`). Every
   element a component draws has a class that starts with `ui-` (a control's native element also
   has `ui-control`), and each of those rules skips such elements: its subject carries
   `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
@@ -413,7 +411,9 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   the outline, `size` `display`, `title`, `section` (the default, 16px Inter) or `subsection`), never
   a bare `<h2>`, which would get the old stylesheet's heavy display face.
 
-**The gallery.** `pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
+### The gallery
+
+`pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
 and type roles and every component's specimens, with switches for light and dark, the sample second
 brand and the direction. It collects every `<Name>.gallery.tsx` beside the components
 (`import.meta.glob`), so a new component adds its own file. It exists on the dev server only:
@@ -422,15 +422,54 @@ query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures. Its te
 `t()` like every screen's (`gallery.*` in the locale files), so the gallery can be seen in each
 language.
 
+## The layout rule
+
+Every page in the shell is a `Page` (`web/src/ui/Page.tsx`) with a width that says what it holds:
+`reading` (`--width-reading`, 760px) for forms and reading, settings and the app builder; `list`
+(`--width-list`, 1,040px) for lists, Home, the inbox, the apps; `full` for a board. The content is
+centred in what the shell leaves. A page that is a list beside a detail (conversations, the
+knowledge base, settings) is two panes, the detail a `Page` of its own.
+
+- **One header.** `PageHeader`: where the page is (`path`, above), the title in the display face,
+  a line of help, and the page's actions at the end, which wrap under the title on a phone. A list
+  pane's head (conversations, the knowledge base, settings) is the smaller `title` size: the pane is
+  beside its detail, whose own title is the display one. One `h1` per page; a section's heading is `Heading` at level 2.
+- **One primary button per screen.** The thing the screen asks you to do is `variant="primary"`;
+  everything else is a plain button, a ghost button, or, past three actions on one object, a
+  `MoreMenu`. In a dialog the actions are at its foot, the primary last; in a form on the page they
+  follow its fields, the primary first (`FormActions` in settings).
+- **States.** Loading is a `Skeleton` of what is coming, with "Loading" said to a screen reader;
+  empty is an `EmptyState` that says what to do next, with the action; an error is a `Notice` with
+  `tone="danger"` (an alert) that says what failed and what to do, from the server's code
+  (`errorText`). Something off or unavailable is `tone="neutral"`, not the success colour.
+- **Lists** are `Rows` of `Row` (a title, a line of detail, a status badge, the actions) in a
+  `Panel`; a table of many columns is `Table`.
+
+## Adding a screen
+
+1. Build it from the components and the tokens only: no `<button>`, `<input>`, `<select>` or
+   `<textarea>` of its own, no `tt-` class, no colour literal.
+2. Its own layout goes in a stylesheet beside its components (`<screen>/<Name>.css`), every rule in
+   `@layer screens`, classes prefixed with the screen's name or `ui-`, values from the tokens, and
+   logical properties (`margin-inline-start`), so right-to-left works. Its module imports it; it is
+   not added to `styles.css`.
+3. A `Page` of the right width, a `PageHeader`, and the states above. Every string through `t()`.
+4. Tests for what it does by keyboard and screen reader, by role and visible text.
+5. Add it to `SCREENS` in `web/e2e/screens.mjs` with its ready check, and look at it at 1440, 820
+   and 390px, light and dark ([Capturing the screens](#capturing-the-screens)).
+
+A component a screen needs and the library lacks goes into `web/src/ui/`: one component per file,
+its stylesheet beside it in `@layer components` with `ui-` classes and token values only, every
+state designed (hover, focus, pressed, disabled, and loading or invalid where they apply), 44px
+targets on a touch screen, and a `<Name>.gallery.tsx` of its variants, which the gallery picks up.
+
 ## The buttons
 
 Pills, as on the website. A plain button is white with a 1px control edge. **The primary button**
 (the one thing a screen asks you to press) is mint with ink on it, outlined in 1.5px ink and lifted
 on a hard 2px ink shadow that rises to 3px on hover and is pressed flat on click (in the dark, the
 outline and the lift are the mint edge). The motion stops under `prefers-reduced-motion`. Icon
-buttons, fields and cards are 8px today, through the old `--tt-radius`; as each is rebuilt on the
-components it takes `--radius-md` (10px, as in the approved prototype), and 8px lives on only as
-that alias until the last one has moved.
+buttons, fields and cards take `--radius-md` (10px).
 
 ## Fonts
 
@@ -439,7 +478,7 @@ The website's three families, each in the role the app needs:
 | Family | Role in the app | Website's role |
 |---|---|---|
 | Inter | all text, labels, the controls: a dense interface wants its plain, even forms | running text |
-| Bricolage Grotesque | headings (`h1` to `h3`, set heavy and tight), the apps' titles | headlines, and the site's default sans |
+| Bricolage Grotesque | titles of 20px and up only (a page's, a dialog's and a drawer's: `--type-display`, `--type-title`), set tight; smaller headings are Inter ([The type roles](#the-type-roles)) | headlines, and the site's default sans |
 | JetBrains Mono | paths, commands, ids and code, never labels or prose | eyebrows, paths, commands |
 
 The website sets its body in Bricolage; the app doesn't, because forms, tables and long lists in a

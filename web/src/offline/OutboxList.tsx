@@ -235,6 +235,7 @@ export function OutboxList({
                           name={name}
                           onDone={() => setNotice(null)}
                           onError={setNotice}
+                          onClosed={() => setNotice(t('offline.queue.discardClosed'))}
                         />
                       </span>
                     </>
