@@ -19,7 +19,7 @@ import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
-import { mayLeave, navigate } from './router'
+import { beforeLeaving, navigate } from './router'
 import { beginSession, endSession, sameSession } from './session'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
@@ -246,17 +246,22 @@ export function App() {
     },
     [finish],
   )
+  // Every sign-out starts here, and asks two things, each once, in this order. A draft open on the
+  // page (a document, a card, a record) first (the router's askers, as for a move to another page):
+  // it is what the person sees and was just working on, and keeping it ends there, with nothing else
+  // asked. Then the records this device hasn't sent (LogoutGuard), once they mean to go. Cancel at
+  // either leaves everything as it was: the session goes on, with the draft and any work in flight.
   const logOut = useCallback(
-    async (who: Leaving) => {
-      // A page with something not saved is asked first, as a move to another page asks it.
-      if (!(await mayLeave())) return
-      const still = sameSession()
-      // A database that can't be checked is not an empty one: the person is told, and chooses.
-      const unsent = await unsentOf(who.user)
-      if (!still()) return
-      if (unsent.count > 0 || unsent.unreadable) setLeaving({ ...who, ...unsent })
-      else await signOut(who)
-    },
+    (who: Leaving) =>
+      beforeLeaving(() => {
+        const still = sameSession()
+        // A database that can't be checked is not an empty one: the person is told, and chooses.
+        void unsentOf(who.user).then((unsent) => {
+          if (!still()) return
+          if (unsent.count > 0 || unsent.unreadable) setLeaving({ ...who, ...unsent })
+          else void signOut(who)
+        })
+      }),
     [signOut],
   )
   // The server didn't confirm the sign-out and the person goes back: still signed in, as they are.
@@ -307,7 +312,7 @@ export function App() {
         <ForeignGuard
           count={foreign.count}
           onDiscard={() => void discardForeign()}
-          onSignOut={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
+          onSignOut={() => logOut({ user: me.user.id, next: { state: 'login' } })}
         />
         {leavingGuard}
       </>
@@ -333,7 +338,7 @@ export function App() {
             token={window.location.hash.slice(1)}
             me={me}
             onDone={joined}
-            onLogout={() => me && void logOut({ user: me.user.id, next: { state: 'invite', me: null } })}
+            onLogout={() => me && logOut({ user: me.user.id, next: { state: 'invite', me: null } })}
           />
           {leavingGuard}
         </>
@@ -367,7 +372,7 @@ export function App() {
         <>
           <Shell
             me={me}
-            onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
+            onLogout={() => logOut({ user: me.user.id, next: { state: 'login' } })}
             onMe={(next) =>
               // Only the account still signed in: an answer that comes after logout must not bring the shell back.
               setSession((s) => (s.state === 'in' && s.me.user.id === next.user.id ? { state: 'in', me: next } : s))

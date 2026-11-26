@@ -1670,3 +1670,37 @@ test("a request of this account that the server refuses as another's ends the pa
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 })
+
+test('Log out over a draft asks the page first, once: kept, nobody is signed out; discarded, the sign-out goes', async () => {
+  window.history.replaceState(null, '', '/w/4/boards')
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
+    'POST /api/logout': { status: 204 },
+    'GET /api/workspaces/4/spaces': { body: { spaces: [] } },
+  })
+  // The page's question: the first answer is "keep" (go is never called), the second "discard".
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <App />
+      <Draft ask={ask} />
+    </>,
+  )
+  await screen.findByRole('heading', { name: 'Boards' })
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  expect(ask).toHaveBeenCalledTimes(1)
+  await act(async () => {})
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  expect(screen.getByRole('heading', { name: 'Boards' })).toBeTruthy()
+
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  expect(ask).toHaveBeenCalledTimes(2)
+  act(() => leave?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+  expect(calls.filter((c) => c.path === '/api/logout')).toHaveLength(1)
+  expect(ask).toHaveBeenCalledTimes(2)
+})

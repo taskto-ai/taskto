@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { setPreferences } from '../i18n'
+import { type BeforeLeave, useBeforeLeave } from '../router'
 import { sameSession, sessionUser } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { toast } from '../ui/Toast'
@@ -511,4 +512,96 @@ test('Log out, asked about unsent records, Cancel: nothing ended, and a language
   expect(checked).toContain('Português (Brasil)')
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
   await act(() => setPreferences({ user: null }))
+})
+
+// A page holding a draft: its question when the person would leave.
+function Draft({ ask }: { ask: BeforeLeave }) {
+  useBeforeLeave(ask)
+  return null
+}
+
+test('signing out over a draft and records not sent asks about the draft first, then the records, each once', async () => {
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 204 },
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <App />
+      <Draft ask={ask} />
+    </>,
+  )
+  await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
+  await screen.findByRole('banner')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  logOut()
+  // The draft's question, alone: the device's comes only once the person means to go.
+  expect(ask).toHaveBeenCalledTimes(1)
+  await act(async () => {})
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  act(() => leave?.())
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+})
+
+test('one sign-out asks about a draft and then the records, each once; Cancel at either leaves the session and the draft as they were', async () => {
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 204 },
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <App />
+      <Draft ask={ask} />
+    </>,
+  )
+  await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
+  await screen.findByRole('banner')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  const started = sameSession()
+  const records = () => screen.queryAllByRole('alertdialog').length
+
+  // Cancel at the draft's question (it never says go): nothing else is asked, nothing has ended.
+  logOut()
+  await act(async () => {})
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(records()).toBe(0)
+  expect(started()).toBe(true)
+
+  // Again, and this time the draft may go: the records' question comes, once, and the draft's
+  // question isn't asked a second time for it.
+  logOut()
+  expect(ask).toHaveBeenCalledTimes(2)
+  act(() => leave?.())
+  await screen.findByRole('alertdialog')
+  await act(async () => {})
+  expect(records()).toBe(1)
+  expect(ask).toHaveBeenCalledTimes(2)
+
+  // Cancel at the records' question: the same session, the draft's page still asks, nothing sent.
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(records()).toBe(0)
+  expect(started()).toBe(true)
+  expect(sessionUser()).toBe(7)
+  logOut()
+  expect(ask).toHaveBeenCalledTimes(3)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
 })

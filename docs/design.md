@@ -133,7 +133,7 @@ The old name each replaces is in brackets.
 | Role | Light | Dark | For |
 |---|---|---|---|
 | `bg` (`--tt-canvas`) | cream `#faf8f4` | night `#111110` | the page |
-| `bg-sunken` (`--tt-stone`) | stone `#f1efe9` | `#181816` | the sidebar, a board's columns, quiet bands |
+| `bg-sunken` | stone `#f1efe9` | `#181816` | the sidebar, a board's columns, quiet bands |
 | `surface` (`--tt-surface`) | white | `#1b1b19` | cards, inputs, menus |
 | `surface-own` | stone | `#262624` | the person's own message |
 | `paper`, `media` | white, black | the same | a QR code or a signature (dark on light to be read); the ground behind a camera's picture |
