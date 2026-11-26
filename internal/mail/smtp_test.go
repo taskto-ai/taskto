@@ -59,8 +59,10 @@ func TestSendWithSTARTTLSAndSignIn(t *testing.T) {
 	if subject != "Olá, mundo" {
 		t.Fatalf("subject = %q", subject)
 	}
-	if from := msg.Header.Get("From"); !strings.Contains(from, "taskto@example.com") || !strings.Contains(from, "taskto") {
-		t.Fatalf("From = %q", from)
+	// The display name and the address are checked apart: the name is the product's, and the
+	// address contains it too, so a substring check could not tell a missing name.
+	if from, err := netmail.ParseAddress(msg.Header.Get("From")); err != nil || from.Name != "taskto" || from.Address != "taskto@example.com" {
+		t.Fatalf("From = %q (%+v, %v)", msg.Header.Get("From"), from, err)
 	}
 	if msg.Header.Get("Message-ID") == "" || msg.Header.Get("Date") == "" || msg.Header.Get("Auto-Submitted") != "auto-generated" {
 		t.Fatalf("headers: %v", msg.Header)
