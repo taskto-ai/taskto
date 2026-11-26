@@ -323,6 +323,20 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // was changed, and the person is asked again. A database that can't be opened is not looked at
 // here: the person already chose what happens to it.
 export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  return checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false))
+}
+
+// The same question as `settle`, only asked: the unsent records of `user` that the person didn't
+// agree to as they are now, with nothing changed on the device. A sign-out asks this before it is
+// certain; what it agreed to is discarded only after the server confirmed the sign-out (deactivate).
+export async function stillAgreed(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  return checkUnsent(user, (store) => store.unapproved(approved))
+}
+
+async function checkUnsent(
+  user: number | undefined,
+  ask: (store: OfflineStore) => Promise<UnsentRef[]>,
+): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
   const runtime = state.runtime
   // Only the account signing out (`user`), never another that is open here meanwhile.
@@ -337,7 +351,7 @@ export async function settle(user: number | undefined, approved: Approval = new 
       continue
     }
     try {
-      left.push(...(await store.retireOrKeepUnsent(approved, false)))
+      left.push(...(await ask(store)))
     } catch {
       // Not read: the person's choice (they were told) decides, as it did.
     } finally {

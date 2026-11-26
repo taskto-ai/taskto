@@ -94,7 +94,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       endSession()
       window.dispatchEvent(new Event(SESSION_LOST))
     }
-    if (res.status === 409 && data?.code === ACCOUNT_CHANGED) {
+    // The same for a refusal as another account's: only a request of the session going on says the
+    // account changed. One of an earlier session (the same account may have signed in again since)
+    // is only its own caller's failure.
+    if (res.status === 409 && data?.code === ACCOUNT_CHANGED && same()) {
       const key = Object.keys(extra).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
       const expected = Number(key === undefined ? undefined : extra[key as keyof typeof extra])
       window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))

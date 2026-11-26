@@ -8,7 +8,9 @@
     "signingOut": "Signing out…",
     "signOutFailedTitle": "Couldn't sign out",
     "signOutFailedHelp": "The server didn't confirm it, so you are still signed in on this device. Check your connection and try again.",
-    "backToApp": "Back to the app"
+    "backToApp": "Back to the app",
+    "signOutNoAnswer": "The server didn't answer in time.",
+    "deviceNotCleared": "You are signed out, but this device couldn't be fully cleared of your account's copies. It will try again the next time the app starts."
   },
   "apps": {
     "intro": "Personal apps are screens the agent builds for you: ask it in a conversation for one, such as “an expense tracker in my private space”. A shared space’s apps are its members’: move an app to one to share it.",

@@ -9,7 +9,7 @@ import { ACCOUNT_CHANGED_EVENT, ApiError, api, errorText, forAccount, type Me, S
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen, StartingScreen } from './auth/AuthScreens'
 import { ServerUnreachable } from './auth/ServerUnreachable'
 import { SigningOut } from './auth/SigningOut'
-import { setPreferences } from './i18n'
+import { setPreferences, t as translate } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
 import { AccountChanged } from './offline/AccountChanged'
@@ -17,13 +17,15 @@ import { onAccountSignal, watchAccount } from './offline/account'
 import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
-import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
+import { activate, discardForeign, lastUser, stillAgreed, type Unsent, unsentOf } from './offline/runtime'
 import { approvalOf } from './offline/store'
 import { beforeLeaving, navigate } from './router'
 import { beginSession, endSession, sameSession } from './session'
 import { Shell } from './shell/Shell'
+import { cleanUpAfterSignOut, finishUnfinishedSignOuts, SIGN_OUT_WAIT_MS } from './signOut'
 import { reportTimeZone } from './timezone'
-import { claimDrafts, forgetDrafts } from './uiState'
+import { toast } from './ui/Toast'
+import { claimDrafts } from './uiState'
 
 // The renderer comes with it: loaded only where it is used, and precached, so it opens offline too.
 const OfflineShell = lazy(() => import('./offline/OfflineShell').then((m) => ({ default: m.OfflineShell })))
@@ -96,10 +98,16 @@ export function App() {
         return setSession({ state: 'invite', me })
       }
       const me = await api<Me>('/api/me')
+      // A sign-out whose cleanup didn't finish on this device is finished now, for any account but
+      // the one signed in again.
+      void finishUnfinishedSignOuts(me.user.id)
       await setPreferences({ user: me.user.locale ?? null })
       await signIn(me)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return setSession({ state: 'login' })
+      if (e instanceof ApiError && e.status === 401) {
+        void finishUnfinishedSignOuts(null)
+        return setSession({ state: 'login' })
+      }
       // No answer at all (not a server's error): offline. If someone signed in here, the apps they
       // downloaded can still be used.
       const before = !(e instanceof ApiError) ? lastUser() : null
@@ -117,7 +125,14 @@ export function App() {
   }, [load])
 
   const signedIn = session.state === 'in'
-  const account = session.state === 'in' || session.state === 'invite' ? (session.me?.user.id ?? null) : null
+  // Whose the page is: the person signed in, or the one signing out (while it finishes, another tab
+  // signing someone else in is heard too).
+  const account =
+    session.state === 'in' || session.state === 'invite'
+      ? (session.me?.user.id ?? null)
+      : session.state === 'leaving'
+        ? session.tail.user
+        : null
   // Another account signed in on this browser, or this one signed out, in another tab: this page's
   // session is over at once (session.ts), and nothing of it is shown until the page is reloaded.
   // Heard here, from the same signals the offline runtime hears, so it holds without a database too
@@ -177,20 +192,23 @@ export function App() {
   // this device's copies) is the tail, bound to this one sign-out (`tail`).
 
   // The tail, from the session's end: every step after a wait goes on only while no other session
-  // has begun here since, and touches only the account that signed out. The server not confirming
-  // it (no answer, or its own error) leaves the person signed in, as the cookie still is: they are
-  // told, and can try again or go back.
+  // has begun here since. The server first: nothing of this device's (the records agreed to lose, the
+  // offline database, the drafts, the push subscription) is touched before it has confirmed which
+  // session ended. Its answer is waited for a bounded time; no answer, or its own error, leaves the
+  // person signed in, as the cookie still is: they are told, and can try again or go back. Once it
+  // has confirmed, the cleanup (signOut.ts) acts only on what is still the departing account's, and
+  // whatever becomes of it the person reaches the login screen: a cleanup that didn't finish is said
+  // once, and tried again at the next start.
   const finish = useCallback(
     async (tail: Tail) => {
       const mine = sameSession()
       const { user, next, keep, approved } = tail
       setSession((s) => (s.state === 'leaving' ? { ...s, failed: undefined } : s))
-      // This device's push subscription goes first, while the server still knows whose it is.
-      await leavePush()
-      if (!mine()) return
       // The request says whose session it is for: a tab that is stale (another account signed in
       // since) never signs that account out; the server refuses it.
-      const outcome = await api('/api/logout', { method: 'POST', headers: forAccount(user) }).then(
+      const wait = new AbortController()
+      const timer = setTimeout(() => wait.abort(), SIGN_OUT_WAIT_MS)
+      const outcome = await api('/api/logout', { method: 'POST', headers: forAccount(user), signal: wait.signal }).then(
         () => 'out' as const,
         (e) =>
           e instanceof ApiError && e.code === 'session_account_changed'
@@ -198,8 +216,11 @@ export function App() {
             : // A session the server had already ended (elsewhere, or it expired) is signed out.
               e instanceof ApiError && e.status === 401
               ? ('out' as const)
-              : errorText(e),
+              : wait.signal.aborted
+                ? translate('app.signOutNoAnswer')
+                : errorText(e),
       )
+      clearTimeout(timer)
       if (!mine()) return
       // Refused: the browser's session is another account's now (another tab). Nothing of this one is
       // shown any more; the page is reloaded to go on as whoever that is.
@@ -208,15 +229,11 @@ export function App() {
         setSession((s) => (s.state === 'leaving' ? { ...s, failed: outcome } : s))
         return
       }
-      forgetDrafts()
-      const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
+      const cleared = await cleanUpAfterSignOut(user, keep, approved)
       if (!mine()) return
-      if (left.length > 0) {
-        setLeaving({ user, next, count: left.length, items: left, unreadable: null })
-        return
-      }
       setLeaving(null)
       setSession(next)
+      if (!cleared) toast({ message: translate('app.deviceNotCleared'), tone: 'danger' })
     },
     [accountChanged],
   )
@@ -226,11 +243,11 @@ export function App() {
     async ({ user, next, items }: Leaving & Partial<Pick<Unsent, 'items'>>, keep = false) => {
       const still = sameSession()
       const approved = approvalOf(items ?? [])
-      // What the device holds is decided first and in one step: if a record that was not shown to the
-      // person has appeared since (another tab of the account, a stale one), nothing is deleted and
-      // nobody is signed out: they are asked again about what is there now.
+      // Only asked, nothing changed: if a record that was not shown to the person has appeared since
+      // (another tab of the account, a stale one), they are asked again about what is there now.
+      // What they agreed to lose is discarded only after the server confirms the sign-out.
       if (!keep) {
-        const left = await settle(user, approved)
+        const left = await stillAgreed(user, approved)
         if (!still()) return
         if (left.length > 0) {
           setLeaving({ user, next, count: left.length, items: left, unreadable: null })
@@ -264,13 +281,23 @@ export function App() {
       }),
     [signOut],
   )
-  // The server didn't confirm the sign-out and the person goes back: still signed in, as they are.
-  const goBack = useCallback((back: Session) => {
-    if (back.state === 'in' || back.state === 'invite') {
-      if (back.me) beginSession(back.me.user.id)
-    }
-    setSession(back)
-  }, [])
+  // The server didn't confirm the sign-out and the person goes back. Who the browser is signed in as
+  // is asked first: their own shell again only if it is still them (the logout may have gone through
+  // before the connection dropped, or another tab signed someone else in meanwhile).
+  const goBack = useCallback(
+    async (back: Session, user: number) => {
+      try {
+        const me = await api<Me>('/api/me')
+        if (me.user.id !== user) return accountChanged()
+        beginSession(me.user.id)
+        setSession(back.state === 'invite' ? { state: 'invite', me } : { state: 'in', me })
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) return setSession({ state: 'login' })
+        setSession((s) => (s.state === 'leaving' ? { ...s, failed: errorText(e) } : s))
+      }
+    },
+    [accountChanged],
+  )
   // Joined: on to the workspace the invite was for, the one that is new, and the token
   // leaves the address bar and the history entry.
   const joined = useCallback(
@@ -354,7 +381,7 @@ export function App() {
           <SigningOut
             failed={session.failed}
             onRetry={() => void finish(session.tail)}
-            onBack={() => goBack(session.back)}
+            onBack={() => void goBack(session.back, session.tail.user)}
           />
           {leavingGuard}
         </>

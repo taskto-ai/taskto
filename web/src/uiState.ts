@@ -93,6 +93,20 @@ export function forgetDrafts(): void {
   }
 }
 
+// forgetDraftsOf removes the drafts kept in this browser only if they are still `user`'s: the
+// browser's storage is shared by its tabs, and another may have signed someone else in since this
+// one's sign-out began, whose drafts these are now.
+export function forgetDraftsOf(user: number): void {
+  if (claimed() !== String(user)) {
+    if (owner === user) {
+      owner = null
+      setOperationUser(null)
+    }
+    return
+  }
+  forgetDrafts()
+}
+
 // claimDrafts keeps the drafts in this browser for user, forgetting them first if they were
 // someone else's.
 export function claimDrafts(user: number): void {

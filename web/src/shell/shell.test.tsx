@@ -101,16 +101,24 @@ test('first run: the setup screen sends the token from the log and signs in', as
   fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
   expect((await screen.findByRole('alert')).textContent).toBe('wrong setup token')
 
+  // The form is ready again (the refused request has settled) before the token is corrected, and
+  // the corrected token is what the field holds before the form is sent again: otherwise the second
+  // request could carry the old one, and the shell would never come.
+  const create = screen.getByRole('button', { name: 'Create the owner' })
+  await waitFor(() => expect(create.getAttribute('aria-busy')).toBeNull())
   fill('Setup token', '  tok-123\n')
-  fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
-  await screen.findByRole('navigation', { name: 'Sections' })
-  expect(calls.filter((c) => c.path === '/api/setup' && c.method === 'POST').at(-1)?.body).toEqual({
+  await waitFor(() => expect((screen.getByLabelText('Setup token') as HTMLInputElement).value).toContain('tok-123'))
+  fireEvent.click(create)
+  const posts = () => calls.filter((c) => c.path === '/api/setup' && c.method === 'POST')
+  await waitFor(() => expect(posts()).toHaveLength(2))
+  expect(posts()[1].body).toEqual({
     setup_token: 'tok-123',
     name: 'Owner',
     email: 'owner@example.com',
     password: 'correct horse battery',
     workspace_name: 'Home',
   })
+  await screen.findByRole('navigation', { name: 'Sections' })
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/conversations'))
 })
 

@@ -823,6 +823,18 @@ export class OfflineStore {
     return (await this.listItems()).filter((i) => i.state !== 'synced')
   }
 
+  // The unsent items `approved` doesn't name as they are now (made or changed since the person was
+  // shown them): only read, nothing is changed. What a sign-out asks before it is certain;
+  // `retireOrKeepUnsent` acts on the answer once it is.
+  async unapproved(approved: Approval): Promise<UnsentRef[]> {
+    return (await this.unsynced())
+      .filter((i) => {
+        const shown = approved.get(i.id)
+        return shown === undefined || !isSeen(i, shown)
+      })
+      .map((i): UnsentRef => ({ id: i.id, ...seenOf(i) }))
+  }
+
   // The one step that decides what becomes of a database that is let go of, in a single
   // transaction, so a record committed meanwhile is never lost between a count and a deletion:
   //   - nothing unsent (or only what `approved` names: records the person was shown and agreed to

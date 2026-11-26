@@ -8,7 +8,9 @@
     "signingOut": "Saindo…",
     "signOutFailedTitle": "Não foi possível sair",
     "signOutFailedHelp": "O servidor não confirmou, então você continua conectado neste dispositivo. Verifique sua conexão e tente de novo.",
-    "backToApp": "Voltar ao app"
+    "backToApp": "Voltar ao app",
+    "signOutNoAnswer": "O servidor não respondeu a tempo.",
+    "deviceNotCleared": "Você saiu, mas não foi possível limpar todas as cópias da sua conta neste dispositivo. Ele vai tentar de novo na próxima vez que o app abrir."
   },
   "apps": {
     "intro": "Apps pessoais são telas que o agente cria para você: peça uma em uma conversa, como “um controle de despesas no meu espaço privado”. Os apps de um espaço compartilhado são de todos os membros: mova um app para lá para compartilhá-lo.",
