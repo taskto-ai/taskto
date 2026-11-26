@@ -12,8 +12,9 @@ import openNew from '../../../internal/apps/testdata/planner.open-new.json'
 import openTasks from '../../../internal/apps/testdata/planner.open-tasks.json'
 import surface from '../../../internal/apps/testdata/planner.surface.json'
 import { ApiError } from '../api'
-import { type ActionPayload, AppView } from './AppView'
+import { AppView } from './AppView'
 import { DEFINITION_VERSION } from './catalog'
+import type { ActionPayload } from './transport'
 
 afterEach(() => {
   cleanup()

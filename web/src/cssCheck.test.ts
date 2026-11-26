@@ -443,9 +443,9 @@ describe('how the app loads its stylesheets', () => {
     expect(dropped.err).toContain('src/markdown.legacy.css: nothing loads it')
     expect(dropped.err).toContain('src/styles.css: lists ')
 
-    const gone = app({ 'settings/settings.legacy.css': null })
+    const gone = app({ 'markdown.legacy.css': null })
     expect(gone.code).toBe(1)
-    expect(gone.err).toContain('src/styles.css: lists src/settings/settings.legacy.css, which is not there')
+    expect(gone.err).toContain('src/styles.css: lists src/markdown.legacy.css, which is not there')
   })
 
   test('the list counts only if the entry imports it', () => {

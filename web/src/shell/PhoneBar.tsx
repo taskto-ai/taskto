@@ -1,9 +1,9 @@
 // The slim bar a phone has instead of the sidebar: the menu button that opens the sidebar as a
-// drawer, the logo's mark, and the name of the section the person is in. Wider screens don't draw
-// it (Shell.css): the sidebar is always there, and the page owns its title.
+// drawer, and the logo's mark. The section's name is not here: the page's own title, just under the
+// bar, is the one place it appears. Wider screens don't draw the bar (Shell.css): the sidebar is
+// always there. It is a landmark with a name of its own, so a screen reader can still find it.
 //
-// It never overflows, from 320px up: the button and the mark keep their size, and the section's
-// name gives way, cut with an ellipsis.
+// It never overflows, from 320px up: the button and the mark keep their size.
 
 import type { Ref } from 'react'
 import { BrandLogo } from '../BrandLogo'
@@ -15,13 +15,15 @@ export interface PhoneBarProps {
   drawer: boolean
   onToggle: () => void
   menuButton: Ref<HTMLButtonElement>
-  section: string
   t: T
 }
 
-export function PhoneBar({ drawer, onToggle, menuButton, section, t }: PhoneBarProps) {
+export function PhoneBar({ drawer, onToggle, menuButton, t }: PhoneBarProps) {
   return (
-    <header className="ui-shell-bar">
+    // A <header> outside any section is the page's banner landmark, whose name is what a screen
+    // reader lists it by; Biome's rule takes a header for a plain element.
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: the banner landmark takes a name
+    <header className="ui-shell-bar" aria-label={t('shell.phoneBar')}>
       <IconButton
         ref={menuButton}
         icon="menu"
@@ -34,7 +36,6 @@ export function PhoneBar({ drawer, onToggle, menuButton, section, t }: PhoneBarP
       <span className="ui-shell-bar-mark">
         <BrandLogo name={BRAND} />
       </span>
-      <span className="ui-shell-bar-title">{section}</span>
     </header>
   )
 }

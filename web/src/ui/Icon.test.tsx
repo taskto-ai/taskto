@@ -2,7 +2,6 @@
 
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test } from 'vitest'
-import { Icon as ShellIcon } from '../shell/Icon'
 import { ICON_NAMES, Icon, isDirectional } from './Icon'
 
 afterEach(cleanup)
@@ -68,15 +67,5 @@ describe('Icon', () => {
     expect(isDirectional('upload')).toBe(false)
     const { container } = render(<Icon name="back" />)
     expect(container.querySelector('svg')?.classList.contains('ui-icon-directional')).toBe(true)
-  })
-
-  test('the shell path still works, with the class its screens style', () => {
-    const { container } = render(<ShellIcon name="menu" />)
-    const svg = container.querySelector('svg') as SVGElement
-    expect(svg.classList.contains('tt-icon')).toBe(true)
-    expect(svg.classList.contains('ui-icon')).toBe(true)
-    // As before: 20px, a 1.8 stroke in the grid's units.
-    expect(svg.getAttribute('width')).toBe('20')
-    expect(svg.getAttribute('stroke-width')).toBe('1.8')
   })
 })

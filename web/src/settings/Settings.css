@@ -83,6 +83,11 @@
     display: none;
   }
 
+  /* "Settings" above a tab's title, where the side list's own title is not shown. */
+  .settings-page .ui-page-header-path:has(> .settings-path) {
+    display: none;
+  }
+
   @container (max-width: 44rem) {
     .settings-frame {
       grid-template-columns: minmax(0, 1fr);
@@ -96,6 +101,10 @@
     .settings-picker {
       display: block;
       padding: var(--space-4) var(--space-4) 0;
+    }
+
+    .settings-page .ui-page-header-path:has(> .settings-path) {
+      display: block;
     }
   }
 

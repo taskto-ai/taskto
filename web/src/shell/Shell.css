@@ -454,7 +454,7 @@
       grid-template-rows: auto minmax(0, 1fr);
     }
 
-    /* It never overflows: the button and the mark keep their size, the section's name gives way. */
+    /* It never overflows: it holds only the menu button and the mark, which keep their size. */
     .ui-shell-bar {
       grid-column: 1;
       grid-row: 1;
@@ -472,15 +472,6 @@
 
     .ui-shell-menu-button {
       flex: none;
-    }
-
-    .ui-shell-bar-title {
-      flex: 1;
-      min-inline-size: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font: var(--type-ui-strong);
     }
 
     .ui-shell-main {

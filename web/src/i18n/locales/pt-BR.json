@@ -589,7 +589,8 @@
     "takeOfflineConfirm": {
       "title": "Tirar {name} do ar?",
       "body": "Ninguém poderá abri-lo até que alguém que possa publicá-lo o restaure. Os registros são mantidos."
-    }
+    },
+    "rendererFailed": "Não foi possível carregar esta tela: o código dela não chegou. Verifique sua conexão e tente de novo."
   },
   "auth": {
     "methods": {
@@ -1076,6 +1077,8 @@
     "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
     "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
+    "app_icon_path": "O ícone “{component}” não é um caminho SVG: ele deve começar com M ou m e só deve ter comandos de caminho, números, vírgulas e espaços, com no máximo {max} caracteres.",
+    "app_icon_label": "O ícone “{component}” está em um botão ou gatilho que só mostra ícones, então precisa de um nome: dê a ele um rótulo de acessibilidade.",
     "app_not_published": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
     "app_release_not_found": "Essa versão do app não existe.",
     "app_release_outdated": "Esta tela é de uma versão antiga do app (versão {release}; a no ar é a {live}). Recarregue o app para continuar.",
@@ -1851,6 +1854,8 @@
       "hostedNote": "A fala só vai para este endpoint quando o mecanismo acima é a API hospedada; definir uma chave não muda para ela. O glossário nunca vai: ele é aplicado neste servidor.",
       "removeKey": "Remover a chave de API",
       "onBadge": "Ligado",
+      "notReadyBadge": "Ainda não está pronto",
+      "unavailableBadge": "Indisponível neste servidor",
       "offBadge": "Desligado"
     },
     "search": {
@@ -2139,6 +2144,7 @@
     },
     "noWorkspace": "Você não é membro de nenhum espaço de trabalho. Peça um convite a um administrador.",
     "logOut": "Sair",
+    "phoneBar": "Barra do app",
     "openMenu": "Abrir o menu",
     "closeMenu": "Fechar o menu",
     "workspace": "Espaço de trabalho",
@@ -2304,8 +2310,8 @@
       "label": "Buscar na base de conhecimento",
       "placeholder": "Buscar…",
       "where": "Onde buscar",
-      "inSpace": "Em {space}",
-      "everywhere": "Em todos os espaços",
+      "inSpace": "Buscar em {space}",
+      "everywhere": "Buscar em todos os espaços",
       "submit": "Buscar"
     },
     "results": {
@@ -2363,7 +2369,8 @@
     "showArchivedTitle": "Mostrar as conversas arquivadas",
     "new": "Nova",
     "nothingArchived": "Nenhuma conversa arquivada.",
-    "none": "Nenhuma conversa ainda. Comece uma em Nova.",
+    "none": "Nenhuma conversa ainda.",
+    "noneHelp": "Comece uma em Nova, ou peça ao agente para criar um app.",
     "pick": "Escolha uma conversa ou comece uma nova.",
     "untitled": "Conversa de {date}",
     "conversation": "Conversa",
@@ -2904,6 +2911,7 @@
       "title": "Confirme seu endereço de e-mail",
       "working": "Confirmando seu endereço…",
       "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
+      "nothing": "Não há nada a confirmar aqui: esta página foi aberta sem o link do email. As configurações de notificações dizem para qual endereço as notificações vão e se ele está confirmado.",
       "settings": "Abrir as configurações de notificações",
       "failed": "Não foi possível confirmar seu endereço: o servidor não respondeu. Verifique sua conexão e abra de novo o link do email."
     },

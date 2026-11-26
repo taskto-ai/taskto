@@ -72,6 +72,8 @@ export function FormError({ error }: { error: string | null | undefined }) {
 }
 
 // A tab: the page at the reading width, its name and a line on what it is for, then its sections.
+// Above its name, "Settings", shown only where the side list (whose title says it) gives way to the
+// picker: on a phone the page's head is the one place the section's name appears.
 export function SettingsTab({
   title,
   help,
@@ -83,9 +85,15 @@ export function SettingsTab({
   actions?: ReactNode
   children: ReactNode
 }) {
+  const t = useT()
   return (
     <Page width="reading" className="settings-page">
-      <PageHeader title={title} help={help} actions={actions} />
+      <PageHeader
+        path={<span className="settings-path">{t('settings.title')}</span>}
+        title={title}
+        help={help}
+        actions={actions}
+      />
       {children}
     </Page>
   )

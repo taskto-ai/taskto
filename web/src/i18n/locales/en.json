@@ -584,7 +584,8 @@
     "takeOfflineConfirm": {
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
-    }
+    },
+    "rendererFailed": "This screen couldn't be loaded: its code didn't arrive. Check your connection, then try again."
   },
   "auth": {
     "methods": {
@@ -1071,6 +1072,8 @@
     "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
     "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
+    "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
+    "app_icon_label": "The icon “{component}” is in a button or a trigger that shows only icons, so it needs a name: give it an accessibility label.",
     "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",
     "app_release_not_found": "That release of the app doesn’t exist.",
     "app_release_outdated": "This screen is from an older release of the app (release {release}; the live one is {live}). Reload the app to continue.",
@@ -1838,6 +1841,8 @@
       "hostedNote": "Speech goes to this endpoint only when the engine above is the hosted API; setting a key doesn't switch to it. The glossary never does: it is applied on this server.",
       "removeKey": "Remove the API key",
       "onBadge": "On",
+      "notReadyBadge": "Not ready yet",
+      "unavailableBadge": "Not available on this server",
       "offBadge": "Off"
     },
     "search": {
@@ -2124,6 +2129,7 @@
     },
     "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
     "logOut": "Log out",
+    "phoneBar": "App bar",
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
     "workspace": "Workspace",
@@ -2287,8 +2293,8 @@
       "label": "Search the knowledge base",
       "placeholder": "Search…",
       "where": "Where to search",
-      "inSpace": "In {space}",
-      "everywhere": "In all spaces",
+      "inSpace": "Search in {space}",
+      "everywhere": "Search in all spaces",
       "submit": "Search"
     },
     "results": {
@@ -2345,7 +2351,8 @@
     "showArchivedTitle": "Show archived conversations",
     "new": "New",
     "nothingArchived": "Nothing archived.",
-    "none": "No conversations yet. Start one with New.",
+    "none": "No conversations yet.",
+    "noneHelp": "Start one with New, or ask the agent to build an app.",
     "pick": "Pick a conversation, or start a new one.",
     "untitled": "Conversation of {date}",
     "conversation": "Conversation",
@@ -2879,6 +2886,7 @@
       "title": "Confirm your email address",
       "working": "Confirming your address…",
       "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
+      "nothing": "There is nothing to confirm here: this page was opened without the email's link. Your notification settings say which address notifications go to, and whether it is confirmed.",
       "settings": "Open notification settings",
       "failed": "Your address couldn't be confirmed: the server didn't answer. Check your connection, then open the link in the email again."
     },
