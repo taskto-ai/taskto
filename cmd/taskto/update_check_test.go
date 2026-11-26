@@ -257,6 +257,7 @@ func TestRunbookCheckUnitsAreOptionalAndACopyFailureStops(t *testing.T) {
 		`taskto-update-check.*) git cat-file -e "${TASKTO_VERSION}:deploy/$f"`,
 		"  ) && vm <<'EOF'",
 		"[ ! -e /etc/systemd/system/taskto-update-check.timer ] || systemctl enable --now taskto-update-check.timer",
+		`< "$d/taskto-update.sh" || exit 1`, `< "$d/$u" || exit 1`, `> "$d/$f" || exit 1`,
 	} {
 		if !strings.Contains(runbook, want) {
 			t.Errorf("deploy/INSTALL.md doesn't have %q", want)

@@ -1106,22 +1106,23 @@ if ! git cat-file -e "${TASKTO_VERSION}:deploy/taskto-update.sh" 2>/dev/null; th
   [ "${TASKTO_UPDATE_CHANNEL:-}" = off ] || { echo "FAIL: $TASKTO_VERSION has no deploy/taskto-update.sh: update by hand to a version that has it (the Updates section below, \"By hand\"), or set TASKTO_UPDATE_CHANNEL=off"; false; }
   echo "SKIP: $TASKTO_VERSION predates the updater and updates are off"
 else
+  # On the left of && a subshell's set -e is off: every step that can fail exits on its own.
   (
   set -e
-  d=$(mktemp -d)
+  d=$(mktemp -d) || exit 1
   trap 'rm -rf "$d"' EXIT
   for f in taskto-update.sh taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path taskto-update-check.service taskto-update-check.timer; do
     case $f in
     # The check's units came later than the rest: a version without them installs without them.
     taskto-update-check.*) git cat-file -e "${TASKTO_VERSION}:deploy/$f" 2>/dev/null || { echo "NOTE: $TASKTO_VERSION has no deploy/$f: no check timer (Settings → About shows no available update)"; continue; } ;;
     esac
-    git show "${TASKTO_VERSION}:deploy/$f" > "$d/$f"
+    git show "${TASKTO_VERSION}:deploy/$f" > "$d/$f" || exit 1
     [ -s "$d/$f" ] || { echo "FAIL: deploy/$f of $TASKTO_VERSION is empty"; exit 1; }
   done
-  ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /usr/local/sbin/taskto-update.new && chmod 755 /usr/local/sbin/taskto-update.new && mv /usr/local/sbin/taskto-update.new /usr/local/sbin/taskto-update'" < "$d/taskto-update.sh"
+  ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /usr/local/sbin/taskto-update.new && chmod 755 /usr/local/sbin/taskto-update.new && mv /usr/local/sbin/taskto-update.new /usr/local/sbin/taskto-update'" < "$d/taskto-update.sh" || exit 1
   for u in taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path taskto-update-check.service taskto-update-check.timer; do
     [ -e "$d/$u" ] || continue
-    ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /etc/systemd/system/$u.new && chmod 644 /etc/systemd/system/$u.new && mv /etc/systemd/system/$u.new /etc/systemd/system/$u'" < "$d/$u"
+    ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /etc/systemd/system/$u.new && chmod 644 /etc/systemd/system/$u.new && mv /etc/systemd/system/$u.new /etc/systemd/system/$u'" < "$d/$u" || exit 1
   done
   ) && vm <<'EOF'
 . /etc/taskto/install.env
