@@ -4,11 +4,11 @@
 // the person is told so; one the server acknowledged is never removed by it. The question is the
 // library's confirmation dialog, drawn where the button is.
 
-import { useRef } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
-import { useConfirm } from '../ui/ConfirmDialog'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { discard } from './choices'
 import type { Runtime } from './runtime'
 import { type OutboxItem, type SeenAs, seenAs } from './store'
@@ -19,37 +19,69 @@ export function DiscardButton({
   name,
   onDone,
   onError,
+  onClosed,
 }: {
   runtime: Runtime
   item: OutboxItem
   name: string
   onDone: () => void
   onError: (message: string) => void
+  // The question was open when this button went away: its row stopped offering a discard because
+  // the record started sending, or because this tab is not the writer any more. Nothing was removed.
+  onClosed?: () => void
 }) {
   const t = useT()
-  const [dialog, confirm] = useConfirm()
-  // Captured when the question is opened, never from a later render.
-  const asked = useRef<SeenAs | null>(null)
-  const ask = async () => {
-    asked.current = seenAs(item)
-    // Named: the page under the question has several rows like it.
-    const yes = await confirm({
-      title: t('offline.queue.discardTitle', { name }),
-      body: t('offline.queue.discardBody'),
-      confirmLabel: t('offline.queue.discardConfirm'),
-      tone: 'danger',
-    })
-    const seen = asked.current
+  // The item as it was when the question was opened, never from a later render: set while the
+  // question is on screen, and null otherwise.
+  const [asked, setAsked] = useState<SeenAs | null>(null)
+  // What to say if the question is taken away from under the person (this button unmounts while it
+  // is open: it is not answered, it is gone). Set by the person's own presses, never from a render:
+  // an answer and a list read again can land in one render, and the answer must already count.
+  const open = useRef(false)
+  const closed = useRef(onClosed)
+  closed.current = onClosed
+  // A layout effect, because it must run before the dialog's own teardown, which cancels the
+  // question (and would make it look answered).
+  useLayoutEffect(
+    () => () => {
+      if (open.current) closed.current?.()
+    },
+    [],
+  )
+  const answer = (yes: boolean) => {
+    const seen = asked
+    open.current = false
+    setAsked(null)
     if (!yes || !seen) return
     discard(runtime, item, seen).then(onDone, (e) => onError(errorText(e)))
   }
   const label = t('offline.queue.discard')
   return (
     <>
-      <Button size="sm" variant="danger" aria-label={t('common.labelFor', { label, name })} onClick={() => void ask()}>
+      <Button
+        size="sm"
+        variant="danger"
+        aria-label={t('common.labelFor', { label, name })}
+        onClick={() => {
+          open.current = true
+          setAsked(seenAs(item))
+        }}
+      >
         {label}
       </Button>
-      {dialog}
+      {/* Named: the page under the question has several rows like it. */}
+      {asked && (
+        <ConfirmDialog
+          open
+          title={t('offline.queue.discardTitle', { name })}
+          confirmLabel={t('offline.queue.discardConfirm')}
+          tone="danger"
+          onConfirm={() => answer(true)}
+          onCancel={() => answer(false)}
+        >
+          {t('offline.queue.discardBody')}
+        </ConfirmDialog>
+      )}
     </>
   )
 }
