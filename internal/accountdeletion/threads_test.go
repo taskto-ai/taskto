@@ -2,6 +2,7 @@ package accountdeletion
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io/fs"
 	"os"
@@ -287,5 +288,74 @@ func TestForgetGoneLiftsTheRefusalOfSpacesWhoseRowIsGone(t *testing.T) {
 	}
 	if _, err := w.kb.Put(ctx, second, "late.md", []byte("x"), "", by, ""); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("a space that is still recorded was forgotten: %v", err)
+	}
+}
+
+// created reads a space's creation time, as the purge does when it loads the spaces it removes.
+func (w *world) created(sp access.Space) access.Space {
+	w.t.Helper()
+	if err := w.db.QueryRow(`SELECT created_at FROM spaces WHERE id = ?`, sp.ID).Scan(&sp.CreatedAt); err != nil {
+		w.t.Fatal(err)
+	}
+	return sp
+}
+
+// A space made after a purge deleted a space's rows may be given the purged space's ID, and its row
+// then exists. The mark of the removal is about the space that was removed, told by its creation
+// time, so it is lifted; a mark kept until a restart would refuse the new space's callers that
+// carry no creation time (the search index's sync).
+func TestForgetGoneLiftsTheRefusalWhenANewSpaceTookTheID(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	purged := w.created(w.private)
+	if err := w.kb.RemoveSpace(purged); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, w.db, `DELETE FROM spaces WHERE id = ?`, purged.ID)
+	exec(t, w.db, `INSERT INTO spaces (id, workspace_id, kind, name, created_at) VALUES (?, ?, 'shared', 'New', '2099-01-01T00:00:00.000Z')`, purged.ID, w.ws)
+
+	w.svc.forgetGone(ctx, []access.Space{purged})
+
+	// A caller that knows the space by its ID alone, as the search index's sync does.
+	byID := access.Space{ID: purged.ID, WorkspaceID: w.ws, Access: access.Write}
+	if _, err := w.kb.Put(ctx, byID, "again.md", []byte("a new space with the old ID"), "", by, ""); err != nil {
+		t.Fatalf("the new space is still refused by the purged one's mark: %v", err)
+	}
+}
+
+// droppingRowsKB takes the space's rows away once the space's files are removed, as a purge's last
+// transaction does when it commits and then fails to say so.
+type droppingRowsKB struct {
+	Knowledge
+	db *sql.DB
+}
+
+func (k *droppingRowsKB) RemoveSpace(sp access.Space) error {
+	if err := k.Knowledge.RemoveSpace(sp); err != nil {
+		return err
+	}
+	_, err := k.db.Exec(`DELETE FROM spaces WHERE id = ?`, sp.ID)
+	return err
+}
+
+// The purge lifts the refusal of its spaces whose rows are gone whatever its last step returned: a
+// step that fails after the rows are deleted must not leave the removed IDs refused until a restart.
+func TestPurgeForgetsItsSpacesWhenItsLastStepFails(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	by := knowledge.Author{Name: "Someone", Email: "someone@example.com"}
+	w.svc.o.Knowledge = &droppingRowsKB{Knowledge: w.kb, db: w.db}
+	exec(t, w.db, `CREATE TRIGGER stop_the_last_step BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'the last step fails'); END`)
+	w.deleteAccount()
+
+	if err := w.svc.Purge(ctx, w.leaver); err == nil {
+		t.Fatal("fixture: the purge's last step did not fail")
+	}
+	if n := w.count(`SELECT count(*) FROM spaces WHERE id = ?`, w.private.ID); n != 0 {
+		t.Fatalf("fixture: the space's row remains")
+	}
+	if _, err := w.kb.Put(ctx, w.private, "again.md", []byte("a new space with the old ID"), "", by, ""); err != nil {
+		t.Fatalf("a purge that failed at its last step left the removed space refused: %v", err)
 	}
 }

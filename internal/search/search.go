@@ -213,14 +213,14 @@ func (x *Index) syncLoop(ctx context.Context) {
 
 // syncAll syncs every space.
 func (x *Index) syncAll(ctx context.Context) error {
-	rows, err := x.db.QueryContext(ctx, `SELECT id, workspace_id FROM spaces ORDER BY id`)
+	rows, err := x.db.QueryContext(ctx, `SELECT id, workspace_id, created_at FROM spaces ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var spaces []access.Space
 	for rows.Next() {
 		var sp access.Space
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
 			_ = rows.Close()
 			return err
 		}

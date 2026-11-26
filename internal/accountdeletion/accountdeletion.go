@@ -463,11 +463,14 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 // forgetGone tells the knowledge base to forget the removal of each of spaces whose row is gone
 // (knowledge.Store.ForgetSpace): the refusal is kept for a space that is still recorded, since the
-// purge is then still to finish it, and a database that can't be read leaves it all as it is.
+// purge is then still to finish it, and a database that can't be read leaves it all as it is. The
+// row is the space's by its ID and its creation time: a space made since with the purged one's ID
+// is another space, and the purged one is gone.
 func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
 	for _, sp := range spaces {
 		var one int
-		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND (? = '' OR created_at = ?)`,
+			sp.ID, sp.CreatedAt, sp.CreatedAt).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			s.o.Knowledge.ForgetSpace(sp)
 		}

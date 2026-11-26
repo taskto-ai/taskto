@@ -448,3 +448,131 @@ func TestCleanupsOfARemovedSpaceHaveNothingToDo(t *testing.T) {
 		t.Fatal("the removed space's directory was made again")
 	}
 }
+
+// A relocation checks that the app is still where the move was for, then copies, then records the
+// move in a transaction of its own, which waits for the database's write lock. If the app goes
+// back to its first space in the meantime, that transaction must record nothing, and the copy made
+// in the other space must be removed again: the attachment stays where it is, with its files.
+func TestARelocationThatLosesTheAppWhileWaitingForTheDatabaseMovesNothing(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.e.s.WithSpaceHolder(knowledge.New(w.e.dataDir, knowledge.Options{}))
+	from, to := w.alicePrivate, w.shared
+	a := w.createPhotos(w.alice, from, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.upload(w.alice, from, a, "photos", picture, 4096)
+	before := w.files(from, a)
+	if len(before) == 0 {
+		t.Fatal("fixture: the upload has no files")
+	}
+	// The app's move is recorded; its files have not followed.
+	if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A writer holds the database, and moves the app back before it lets go.
+	holding, release := make(chan struct{}), make(chan struct{})
+	moved := make(chan error, 1)
+	go func() {
+		moved <- w.e.s.write(ctx, func(tx *sql.Tx) error {
+			close(holding)
+			<-release
+			_, err := tx.ExecContext(ctx, `UPDATE apps SET space_id = ? WHERE id = ?`, from.ID, a.ID)
+			return err
+		})
+	}()
+	<-holding
+	relocated := make(chan error, 1)
+	go func() {
+		relocated <- w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID))
+	}()
+	// The relocation has checked and copied, and waits for the write lock.
+	spin(t, "the relocation to wait for the database", func() bool { return goroutineWith("relocateOne", "(*Service).write") })
+	close(release)
+	if err := <-moved; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-relocated; err != nil {
+		t.Fatal(err)
+	}
+
+	var space int64
+	if err := w.e.db.QueryRow(`SELECT space_id FROM app_attachments WHERE id = ?`, id).Scan(&space); err != nil || space != from.ID {
+		t.Fatalf("the attachment is recorded in space %d (%v), the app is in %d", space, err, from.ID)
+	}
+	if got := w.files(to, a); len(got) != 0 {
+		t.Fatalf("the copy of a move that was not recorded is left in the other space: %v", got)
+	}
+	if got := w.files(from, a); !slices.Equal(got, before) {
+		t.Fatalf("the files changed: %v, were %v", got, before)
+	}
+}
+
+// Whichever of its two spaces has the lower ID, a relocation takes the files from the space they are
+// in and puts them in the app's: holding the spaces in the order of their IDs must not change which
+// directory is read and which is written.
+func TestARelocationMovesTheFilesWhicheverSpaceHasTheLowerID(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.e.s.WithSpaceHolder(knowledge.New(w.e.dataDir, knowledge.Options{}))
+	a := w.createPhotos(w.alice, w.alicePrivate, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.upload(w.alice, w.alicePrivate, a, "photos", picture, 4096)
+	want := w.files(w.alicePrivate, a)
+	if len(want) == 0 {
+		t.Fatal("fixture: the upload has no files")
+	}
+
+	// There and back: one of the two moves goes from the lower ID to the higher, the other the other way.
+	at := w.alicePrivate
+	for _, to := range []access.Space{w.shared, w.alicePrivate} {
+		from := at
+		if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID)); err != nil {
+			t.Fatal(err)
+		}
+		if got := w.files(to, a); !slices.Equal(got, want) {
+			t.Fatalf("the move from space %d to %d put %v in the new space, want %v", from.ID, to.ID, got, want)
+		}
+		if got := w.files(from, a); len(got) != 0 {
+			t.Fatalf("the move from space %d to %d left %v in the old space", from.ID, to.ID, got)
+		}
+		var space int64
+		if err := w.e.db.QueryRow(`SELECT space_id FROM app_attachments WHERE id = ?`, id).Scan(&space); err != nil || space != to.ID {
+			t.Fatalf("the attachment is recorded in space %d (%v), want %d", space, err, to.ID)
+		}
+		at = to
+	}
+}
+
+// The read that finds the space a chunk's attachment is in answers "not found" only for an
+// attachment that isn't there. A database that can't be read says nothing about the attachment:
+// its error is kept, and the chunk is not told its upload doesn't exist.
+func TestHoldingAnAttachmentsSpaceKeepsADatabaseError(t *testing.T) {
+	w := newWorld(t)
+	w.e.s.WithSpaceHolder(knowledge.New(w.e.dataDir, knowledge.Options{}))
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	id := w.start(w.alice, s, a, "photos", 10)
+
+	space, root, done, err := w.e.s.holdAttachmentSpace(context.Background(), a.ID, id)
+	if err != nil || root == nil || space != s.ID {
+		t.Fatalf("holding the space of an upload that is there: space %d, root %v, %v", space, root, err)
+	}
+	done()
+	if _, root, done, err := w.e.s.holdAttachmentSpace(context.Background(), a.ID, strings.Repeat("0", 32)); !errors.Is(err, ErrNotFound) || root != nil || done != nil {
+		t.Fatalf("an upload that isn't there: %v", err)
+	}
+
+	unreadable, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, root, done, err = w.e.s.holdAttachmentSpace(unreadable, a.ID, id)
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("a read that failed was answered as %v, want the database's error", err)
+	}
+	if !errors.Is(err, context.Canceled) || root != nil || done != nil {
+		t.Fatalf("the error was not kept: %v", err)
+	}
+}

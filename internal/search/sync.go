@@ -71,7 +71,9 @@ func (x *Index) syncForSearch(ctx context.Context, sp access.Space) (bool, error
 // sync is Sync, with the space's sync locked; with limit > 0, it does nothing and returns
 // errLargeSync if more than limit files changed.
 func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, error) {
-	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Access: access.Read}
+	// The creation time stays: it tells the space from a purged one that had its ID, which the
+	// knowledge base refuses by its mark when a call carries no creation time.
+	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, CreatedAt: sp.CreatedAt, Access: access.Read}
 
 	var since string
 	var partial bool

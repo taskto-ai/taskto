@@ -445,6 +445,25 @@ func (s *Service) uploadState(ctx context.Context, sp access.Space, a Actor, app
 	return out, err
 }
 
+// holdAttachmentSpace finds, without a transaction, the space attachment id of appID is in and holds
+// its files. When root is nil, err says why and is never nil: ErrNotFound when the attachment isn't
+// there, the database's own error when it couldn't be read (which is not an answer about the
+// attachment, and is kept as it is), or the files' error. done is nil then; otherwise the caller
+// calls it to let the space go.
+func (s *Service) holdAttachmentSpace(ctx context.Context, appID int64, id string) (space int64, root *os.Root, done func(), err error) {
+	if err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND app_id = ?`, id, appID).Scan(&space); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil, nil, ErrNotFound // the transaction finds it gone too, unless it was made meanwhile
+		}
+		return 0, nil, nil, err
+	}
+	root, done, err = s.filesRoot(ctx, space)
+	if err != nil {
+		return space, nil, nil, err
+	}
+	return space, root, done, nil
+}
+
 // putChunk writes data at offset of upload id, which must be where the server is.
 func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID int64, id string, offset int64, data []byte) (Attachment, error) {
 	if err := may(sp, access.Write); err != nil {
@@ -458,17 +477,9 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 	// lock: the order everywhere is the space, then the database. Read here, without a transaction;
 	// the transaction checks it is still where the attachment is, and what it refuses is answered as
 	// it always was (an error found here is kept for the point where the files are needed).
-	var held *os.Root
-	var heldSpace int64
-	var rootErr error
-	if err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND app_id = ?`, id, appID).Scan(&heldSpace); err == nil {
-		root, done, err := s.filesRoot(ctx, heldSpace)
-		if err != nil {
-			rootErr = err
-		} else {
-			defer done()
-			held = root
-		}
+	heldSpace, held, done, rootErr := s.holdAttachmentSpace(ctx, appID, id)
+	if done != nil {
+		defer done()
 	}
 	var out Attachment
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -496,10 +507,7 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 				apierr.Params{"max": u.Size - u.Received}}
 		}
 		if held == nil {
-			if rootErr != nil {
-				return rootErr
-			}
-			return ErrNotFound // the attachment wasn't there before the transaction
+			return rootErr // never nil here: see holdAttachmentSpace
 		}
 		if u.spaceID != heldSpace {
 			return errUploadState // its app was moved meanwhile: ask where the server is, and go on
