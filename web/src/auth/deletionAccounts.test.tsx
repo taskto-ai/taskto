@@ -223,3 +223,22 @@ test('case 4: another account whose login fails is not shown a notice that was w
   })
   expect(screen.queryByText(NOTICE)).toBeNull()
 })
+
+test('case 3: a notice dropped while the storage could not even be read is not told when it comes back', () => {
+  // A date no other test has shown, so nothing in this page's record covers it.
+  sessionStorage.setItem('taskto.accountDeleted', '2026-12-20T10:00:00.000Z')
+  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
+  ackDeletion()
+  get.mockRestore()
+  remove.mockRestore()
+  set.mockRestore()
+  expect(peekDeletion()).toBeNull()
+})
