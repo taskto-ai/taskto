@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
+import { truncateWal, truncateWalAt, WalBusyError } from './purge.js'
 
 const WORD = 'doomed-marmalade-7731'
 
