@@ -24,7 +24,8 @@ WHERE EXISTS (SELECT 1 FROM users) OR (SELECT high FROM user_ids WHERE id = 1) >
 
 -- A purge's CLI step names the worker it waits for: 'local:' or 'container:' and the user's id. A
 -- step recorded before (the user's id alone) comes from an install whose history isn't known, so
--- it becomes both.
+-- it becomes both. The browser steps (migration 0058, which runs before this one and copies each
+-- old CLI step's target as a browser step's) keep the user's id alone, which is what they read.
 INSERT INTO purge_cleanups (user_id, kind, target, created_at, attempts, last_error)
 SELECT c.user_id, c.kind, w.prefix || c.target, c.created_at, c.attempts, c.last_error
 FROM purge_cleanups c, (SELECT 'local:' AS prefix UNION ALL SELECT 'container:') w

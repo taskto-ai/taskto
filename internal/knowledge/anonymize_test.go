@@ -223,3 +223,27 @@ func TestRemoveSpaceDeletesItsFilesAndIsRepeatable(t *testing.T) {
 		t.Fatal("a document of a removed space reads")
 	}
 }
+
+// The count to rewrite is told before the rewrite is journaled: a caller that can't keep it stops
+// the rewrite, and a space with nothing of theirs tells nothing.
+func TestAnonymizeAuthorsNotingTellsTheCountFirst(t *testing.T) {
+	s, dataDir := anonymizeFixture(t)
+	sp := writable(1)
+	before := gitHistory(t, dataDir, sp)
+	refused := errors.New("can't keep the count")
+	if _, err := s.AnonymizeAuthorsNoting(ctx, sp, []string{"alice@example.com"}, func(int) error { return refused }); !errors.Is(err, refused) {
+		t.Fatalf("err = %v, want the caller's", err)
+	}
+	if after := gitHistory(t, dataDir, sp); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatal("the history changed though the count couldn't be kept")
+	}
+	var told []int
+	n, err := s.AnonymizeAuthorsNoting(ctx, sp, []string{"alice@example.com"}, func(n int) error { told = append(told, n); return nil })
+	if err != nil || n != 2 || fmt.Sprint(told) != "[2]" {
+		t.Fatalf("rewrote %d (%v), told %v; want 2, told [2]", n, err, told)
+	}
+	told = nil
+	if n, err := s.AnonymizeAuthorsNoting(ctx, sp, []string{"alice@example.com"}, func(n int) error { told = append(told, n); return nil }); err != nil || n != 0 || told != nil {
+		t.Fatalf("again: %d, %v, told %v; want 0 and nothing told", n, err, told)
+	}
+}

@@ -886,6 +886,17 @@ const (
 // rewrite is done again from the start by the next write or start, and what it leaves unreachable
 // (the old commits, which hold the address) is deleted before it ends. It is idempotent.
 func (s *Store) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error) {
+	return s.AnonymizeAuthorsNoting(ctx, sp, emails, nil)
+}
+
+// AnonymizeAuthorsNoting is AnonymizeAuthors, and calls planned (if set) with the number of commits
+// to rewrite, under the space's write lock, before the rewrite is journaled: once it returns nil,
+// the rewrite of those commits is done by this call or, if it stops, by whatever finishes the
+// journal (and a later call then finds nothing and doesn't call it). An error from planned stops
+// the call before anything changes. It isn't called when nothing names them. A caller that keeps
+// what planned says, replacing what an earlier call's said for the space, counts each commit once
+// whatever stops in between (internal/accountdeletion).
+func (s *Store) AnonymizeAuthorsNoting(ctx context.Context, sp access.Space, emails []string, planned func(n int) error) (int, error) {
 	set := map[string]bool{}
 	var plan []string
 	for _, e := range emails {
@@ -945,6 +956,11 @@ func (s *Store) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []
 		n, err := r.countAuthored(ctx, head, set)
 		if err != nil || n == 0 {
 			return err
+		}
+		if planned != nil {
+			if err := planned(n); err != nil {
+				return err
+			}
 		}
 		rewritten = n
 		if err := r.planRewrite(rewritePlan{authors: plan}); err != nil {

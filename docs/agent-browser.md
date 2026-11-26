@@ -114,6 +114,31 @@ browser page ── WebSocket /api/me/browser/live (session, Origin check) ─�
     Chromium or Chrome binary.
   - The sandbox stays on, so a server running as root can't start Chromium in this mode.
 
+## Deleting an account
+
+The purge of a deleted account ([install.md](install.md#privacy-and-account-deletion)) has a step for
+the person's browsers, `browser` in `purge_cleanups`, done before the CLI worker's directory (which
+holds the browser's directory) is removed. It calls `Manager.Forget`, in the server process in local
+mode or over the worker's socket in container mode (`POST /browser/users/{user}/forget`, only the server
+can open it), and:
+
+1. refuses every start of the user's browsers, personal and testing, from the first moment
+   (`ErrAccountClosing`, `browser_account_closing`), and keeps refusing as long as the Manager runs: an
+   account's id is never given to another account;
+2. closes the user's open live views;
+3. stops their browsers like an idle stop does (Chromium closed over DevTools, then each process group
+   SIGTERM and SIGKILL), and waits for every one, a browser still starting and one already stopping
+   included;
+4. only then removes the browser directory, the personal profile in it, through the host: in local
+   mode by the server, in container mode by the helper as the user's own Unix user
+   (`browser-purge`), since the worker never opens a path in a home.
+
+The step is done only when the processes are gone and the files removed. If the worker doesn't
+answer, a process doesn't stop in time or a file can't be removed, the step stays recorded with the
+reason `browser_failed` and is tried again every ten minutes. Other users' browsers are not touched. A
+worker that restarts forgets the refusal, and then the account being switched off is what keeps its
+browser from starting.
+
 ## The agent's tools
 
 They are in `internal/agenttools/tools.json`, run by `internal/agentbrowser`, and listed in

@@ -11,7 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
-import { DELETION_EVENT, takeDeletion } from './deleted'
+import { ackDeletion, DELETION_EVENT, peekDeletion } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -108,8 +108,13 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     }
     try {
       const me = await send()
-      if (me) onDone(me)
-      else settle()
+      if (me) {
+        // Someone has signed in (here: the login, its second step, setup, an invite, a reset): a
+        // deletion notice never shown, to a person who came by another page, is not for them or for
+        // the sign-in after theirs.
+        ackDeletion()
+        onDone(me)
+      } else settle()
     } catch (err) {
       setFailure(failureOf(err))
       settle()
@@ -391,22 +396,38 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     return reply
   }, onDone)
   const [forgot, setForgot] = useState(false)
-  // Told once, to a person who has just deleted their account.
-  const [deleted, setDeleted] = useState(takeDeletion)
+  // Told to a person who has just deleted their account, until it has been shown (below).
+  const [deleted, setDeleted] = useState(peekDeletion)
   // ...or told now, if the deletion is answered after this screen is up.
   useEffect(() => {
     const told = () => {
-      const at = takeDeletion()
+      const at = peekDeletion()
       if (at) setDeleted(at)
     }
     window.addEventListener(DELETION_EVENT, told)
     return () => window.removeEventListener(DELETION_EVENT, told)
   }, [])
+  const methods = loaded.state.kind === 'ready' ? loaded.state.methods : null
+  const forgotShown = forgot && methods?.password && methods.resetByEmail
+  // The notice is on this screen only once the methods are known and no other step has taken its
+  // place; it is used up when it is on the screen and the page can be seen, not before: a reload
+  // while the methods load, or in a background tab, still finds it.
+  const showing = methods !== null && !challenge && !forgotShown ? deleted : null
+  useEffect(() => {
+    if (!showing) return
+    const ack = () => {
+      if (document.visibilityState === 'hidden') return
+      ackDeletion(showing)
+      document.removeEventListener('visibilitychange', ack)
+    }
+    ack()
+    document.addEventListener('visibilitychange', ack)
+    return () => document.removeEventListener('visibilitychange', ack)
+  }, [showing])
   const f = useFormat()
-  if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
+  if (!methods) return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
-  const methods = loaded.state.methods
-  if (forgot && methods.password && methods.resetByEmail) {
+  if (forgotShown) {
     return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} />
   }
   const errors = placed(failure, ['email', 'password'])

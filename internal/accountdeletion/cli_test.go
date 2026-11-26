@@ -256,3 +256,31 @@ func TestAnUnreachableContainerWorkerDoesNotKeepTheLocalDirectory(t *testing.T) 
 		})
 	}
 }
+
+// The local CLI directory, like the container's copy, holds the browser's profile: its step waits
+// while the browser step is recorded.
+func TestTheLocalCLIStepWaitsForTheBrowserStep(t *testing.T) {
+	ctx := context.Background()
+	w, b, _ := browserWorld(t)
+	w.history(cliLocal)
+	w.svc.o.CLI.(*orderedCLI).kind = cliLocal
+	b.start(t, w.leaver)
+	b.fail = errors.New("not yet")
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err == nil {
+		t.Fatal("the purge went on over a browser that couldn't be stopped")
+	}
+	if _, err := os.Stat(w.localHome(w.leaver)); err != nil {
+		t.Fatalf("the local CLI directory went while the browser step was recorded: %v", err)
+	}
+	b.fail = nil
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(w.localHome(w.leaver)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("their local CLI directory remains: %v", err)
+	}
+	if got := w.cliSteps(); len(got) != 0 {
+		t.Fatalf("steps = %v", got)
+	}
+}

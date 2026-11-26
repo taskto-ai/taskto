@@ -279,6 +279,8 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       case 'End':
         return go(items.length - 1)
       case 'Escape':
+        // A tooltip that could be seen took this one (Tooltip.tsx): the next is the menu's.
+        if (e.defaultPrevented) return
         // Handled here: a drawer or a dialog under the menu stays open.
         e.preventDefault()
         e.stopPropagation()

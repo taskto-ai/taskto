@@ -4,11 +4,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
-import type { Me } from '../api'
+import { api, type Me } from '../api'
 import { setPreferences } from '../i18n'
 import { type BeforeLeave, navigate, useBeforeLeave } from '../router'
+import { beginSession } from '../session'
 import { fakeFetch } from '../test/fakes'
-import { resetToasts } from '../ui/Toast'
+import { resetToasts, Toaster, toast } from '../ui/Toast'
 import { Shell } from './Shell'
 
 const me = {
@@ -100,16 +101,24 @@ test('first run: the setup screen sends the token from the log and signs in', as
   fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
   expect((await screen.findByRole('alert')).textContent).toBe('wrong setup token')
 
+  // The form is ready again (the refused request has settled) before the token is corrected, and
+  // the corrected token is what the field holds before the form is sent again: otherwise the second
+  // request could carry the old one, and the shell would never come.
+  const create = screen.getByRole('button', { name: 'Create the owner' })
+  await waitFor(() => expect(create.getAttribute('aria-busy')).toBeNull())
   fill('Setup token', '  tok-123\n')
-  fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
-  await screen.findByRole('navigation', { name: 'Sections' })
-  expect(calls.filter((c) => c.path === '/api/setup' && c.method === 'POST').at(-1)?.body).toEqual({
+  await waitFor(() => expect((screen.getByLabelText('Setup token') as HTMLInputElement).value).toContain('tok-123'))
+  fireEvent.click(create)
+  const posts = () => calls.filter((c) => c.path === '/api/setup' && c.method === 'POST')
+  await waitFor(() => expect(posts()).toHaveLength(2))
+  expect(posts()[1].body).toEqual({
     setup_token: 'tok-123',
     name: 'Owner',
     email: 'owner@example.com',
     password: 'correct horse battery',
     workspace_name: 'Home',
   })
+  await screen.findByRole('navigation', { name: 'Sections' })
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/conversations'))
 })
 
@@ -724,6 +733,33 @@ test('with the drawer and the account menu open, Escape closes the menu first an
   expect(document.activeElement).toBe(button)
 })
 
+test('with the drawer and the workspace switcher open, Escape closes the menu first and the next one the drawer', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await screen.findByText('Pick a conversation, or start a new one.')
+  const button = screen.getByRole('button', { name: 'Open the menu' })
+  const shell = shellOf(container)
+  fireEvent.click(button)
+  const switcher = screen.getByRole('button', { name: 'Workspace: Home' })
+  fireEvent.keyDown(switcher, { key: 'Enter' })
+  fireEvent.click(switcher)
+  expect(screen.getByRole('menu')).toBeTruthy()
+
+  // The menu closes and the focus comes back to the switcher, whose tooltip stays shut: it isn't
+  // a new arrival, and the next Escape is the drawer's.
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  expect(screen.queryByRole('menu')).toBeNull()
+  expect(document.activeElement).toBe(switcher)
+  expect(shell.dataset.drawer).toBe('open')
+  expect(switcher.closest('.ui-tooltip-anchor')?.querySelector('[role="tooltip"]')?.hasAttribute('data-open')).toBe(
+    false,
+  )
+
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  expect(shell.dataset.drawer).toBe('closed')
+})
+
 test("an Escape in the new workspace's dialog, over the drawer, is the dialog's: the drawer stays", async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({
@@ -1094,6 +1130,553 @@ test('someone with no workspace is offered "New workspace" when the server lets 
   render(<App />)
   await screen.findByText(/member of any workspace/)
   expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+})
+
+// --- Nothing of a session after it ended ---------------------------------------------------
+
+const created = (id: number, name: string) => ({
+  status: 201,
+  body: {
+    workspace: { id, name, role: 'admin' },
+    user: me.user,
+    workspaces: [...me.workspaces, { id, name, role: 'admin' }],
+    can_create_workspace: true,
+  },
+})
+
+// A create held open until the test answers it.
+function heldCreate(extra: Record<string, unknown> = {}) {
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': () => new Promise((done) => held.push(done)),
+    'POST /api/logout': { status: 204 },
+    'GET /api/workspaces/9/conversations': { body: { conversations: [] } },
+    ...pages,
+    ...extra,
+  })
+  return held
+}
+
+async function submitNewWorkspace(name: string): Promise<HTMLElement> {
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  const dialog = await screen.findByRole('dialog', { name: 'New workspace' })
+  fireEvent.change(within(dialog).getByLabelText(/^Name of the new workspace/), { target: { value: name } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create workspace' }))
+  return dialog
+}
+
+test('a workspace made after Cancel and a logout is not said on the login screen, and the address stays', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const dialog = await submitNewWorkspace('Secret Project Alpha')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  const address = window.location.pathname
+
+  await act(async () => held.shift()?.(created(9, 'Secret Project Alpha')))
+  expect(screen.queryByText(/Secret Project Alpha/)).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Open it' })).toBeNull()
+  expect(window.location.pathname).toBe(address)
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+})
+
+test('a workspace made after the session was lost with the dialog open neither opens it nor says it', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate({ 'GET /api/expired': { status: 401, body: { error: 'not logged in' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  await submitNewWorkspace('Secret Project Alpha')
+  await waitFor(() => expect(held).toHaveLength(1))
+  // Any request of the session that the server answers 401: the session is gone.
+  await act(() => api('/api/expired').catch(() => {}))
+  await screen.findByRole('heading', { name: 'Log in' })
+
+  await act(async () => held.shift()?.(created(9, 'Secret Project Alpha')))
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  expect(screen.queryByText(/Secret Project Alpha/)).toBeNull()
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+})
+
+test('Cancel then reopened at once: a first save that fails leaves the new opening clean', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const first = await submitNewWorkspace('First Try')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(first).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  const second = await screen.findByRole('dialog', { name: 'New workspace' })
+  expect(within(second).getByRole('button', { name: 'Create workspace' }).getAttribute('aria-busy')).toBeNull()
+  fireEvent.change(within(second).getByLabelText(/^Name of the new workspace/), { target: { value: 'Second' } })
+
+  await act(async () => held.shift()?.({ status: 500, body: { error: 'internal error', code: 'internal' } }))
+  expect(within(second).queryByRole('alert')).toBeNull()
+  expect((within(second).getByLabelText(/^Name of the new workspace/) as HTMLInputElement).value).toBe('Second')
+  expect(within(second).getByRole('button', { name: 'Create workspace' }).getAttribute('aria-busy')).toBeNull()
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})
+
+test('a toast of the session goes when the person logs out', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const dialog = await submitNewWorkspace('Late')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await act(async () => held.shift()?.(created(9, 'Late')))
+  expect(await screen.findByText('“Late” was created.')).toBeTruthy()
+
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  expect(screen.queryByText('“Late” was created.')).toBeNull()
+})
+
+test('a language save refused after logout writes nothing and says nothing, even into the next session', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const other = { ...me, user: { id: 2, email: 'second@example.com', name: 'Second', locale: 'pt-BR' } }
+  let refuse: () => void = () => {}
+  let session: Me | null = me as Me
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': () => (session ? { body: session } : { status: 401, body: { error: 'not logged in' } }),
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+      }),
+    'POST /api/logout': () => {
+      session = null
+      return { status: 204 }
+    },
+    'POST /api/login': () => {
+      session = other as Me
+      return { body: other }
+    },
+    ...pages,
+  })
+  render(<App />)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Sair' }))
+  await screen.findByRole('heading', { name: 'Entrar' })
+
+  // The next person signs in, in their own language.
+  fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'second@example.com' } })
+  fireEvent.change(screen.getByLabelText('Senha'), { target: { value: 'their password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+  await screen.findByRole('navigation', { name: 'Seções' }, { timeout: 5000 })
+  const stored = localStorage.getItem('taskto.locale')
+
+  await act(async () => refuse())
+  expect(screen.queryByText(/^(Não foi salvo|Not saved): /)).toBeNull()
+  expect(screen.getByRole('navigation', { name: 'Seções' })).toBeTruthy()
+  expect(document.documentElement.lang).toBe('pt-BR')
+  expect(localStorage.getItem('taskto.locale')).toBe(stored)
+  expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1)
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a language save refused on the login screen writes nothing and says nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let refuse: () => void = () => {}
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+      }),
+    'POST /api/logout': { status: 204 },
+    ...pages,
+  })
+  render(<App />)
+  await pickInAccount('Português (Brasil)')
+  await screen.findByRole('navigation', { name: 'Seções' })
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Sair' }))
+  await screen.findByRole('heading', { name: 'Entrar' })
+  const stored = localStorage.getItem('taskto.locale')
+  const lang = document.documentElement.lang
+
+  await act(async () => refuse())
+  expect(screen.queryByText(/^(Não foi salvo|Not saved): /)).toBeNull()
+  expect(localStorage.getItem('taskto.locale')).toBe(stored)
+  expect(document.documentElement.lang).toBe(lang)
+  await act(() => setPreferences({ user: null }))
+})
+
+// --- The shell going while the session stays (a push's notification opened) ----------------
+
+test('a language picked while another is saved is still sent when the shell goes within the session', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: (() => void)[] = []
+  const calls = fakeFetch({
+    'PATCH /api/me': () => new Promise((done) => held.push(() => done({ status: 200, body: {} }))),
+    ...pages,
+  })
+  const { unmount } = render(<Shell me={me as Me} onLogout={() => {}} />)
+  const patches = () => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }]))
+  await pickInAccount('English')
+  unmount()
+  await act(async () => held.shift()?.())
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }, { locale: 'en' }]))
+  await act(async () => held.shift()?.())
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a workspace made while the shell is gone within the session still reaches the account, and opens nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({
+    'POST /api/workspaces': () => new Promise((done) => held.push(done)),
+    ...pages,
+  })
+  const onMe = vi.fn()
+  const { unmount } = render(<Shell me={{ ...me, can_create_workspace: true } as Me} onLogout={() => {}} onMe={onMe} />)
+  const dialog = await submitNewWorkspace('Late')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  unmount()
+  await act(async () => held.shift()?.(created(9, 'Late')))
+  expect(onMe).toHaveBeenCalledWith(
+    expect.objectContaining({ workspaces: expect.arrayContaining([expect.objectContaining({ id: 9 })]) }),
+  )
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})
+
+// --- Each way a session ends, and the next person after it -----------------------------------
+
+const second = { ...me, user: { id: 2, email: 'second@example.com', name: 'Second' } }
+
+// The browser as two people share it: the first signed in; signing in again (from the login
+// screen) makes the second the browser's. `extra` holds a route open, or answers one otherwise.
+function twoPeople(extra: Record<string, Parameters<typeof fakeFetch>[0][string]> = {}) {
+  let who: unknown = { ...me, can_create_workspace: true, session: 'login-1' }
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': () => (who ? { body: who } : { status: 401, body: { error: 'not logged in' } }),
+    'POST /api/logout': () => {
+      who = null
+      return { status: 204 }
+    },
+    'POST /api/login': () => {
+      who = second
+      return { body: second }
+    },
+    'POST /api/workspaces': () => new Promise(() => {}),
+    ...pages,
+    ...extra,
+  })
+  return { calls, signedOut: () => (who = null) }
+}
+
+async function signInSecond() {
+  await screen.findByRole('heading', { name: 'Log in' })
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'second@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'their password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await screen.findByRole('button', { name: /^Account: Second/ }, { timeout: 5000 })
+}
+
+// A toast of the first person's, said in their session, drawn by a Toaster that outlives the shell
+// (as App's own page does not, but a later one might): it must go with the session all the same.
+async function firstPersonsToast() {
+  render(
+    <>
+      <Toaster />
+      <App />
+    </>,
+  )
+  await screen.findByRole('navigation', { name: 'Sections' })
+  act(() => {
+    toast({
+      message: 'Plans of the first person',
+      action: { label: 'Open it', onClick: () => navigate('/w/1/boards') },
+    })
+  })
+  expect(await screen.findByText('Plans of the first person')).toBeTruthy()
+}
+
+for (const ending of ['logs out', 'loses the session', 'is replaced from another tab'] as const) {
+  test(`when the first person ${ending}, their toast goes and the next person never sees it`, async () => {
+    window.history.replaceState(null, '', '/w/1/conversations')
+    const people = twoPeople({ 'GET /api/expired': { status: 401, body: { error: 'not logged in' } } })
+    await firstPersonsToast()
+    if (ending === 'logs out') {
+      fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+      await screen.findByRole('heading', { name: 'Log in' })
+    } else if (ending === 'loses the session') {
+      people.signedOut()
+      await act(() => api('/api/expired').catch(() => {}))
+    } else {
+      // Another tab signs the second person in: this one's session is over, without a database too.
+      act(() => {
+        localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 2, name: 'Second' }))
+        window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+      })
+      expect(await screen.findByText('The account changed')).toBeTruthy()
+    }
+    expect(screen.queryByText('Plans of the first person')).toBeNull()
+    if (ending === 'is replaced from another tab') return
+    await signInSecond()
+    expect(screen.queryByText('Plans of the first person')).toBeNull()
+  })
+}
+
+test("once signing out is certain the shell and the toast's button are gone, while signing out still waits", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let finish: (() => void) | null = null
+  twoPeople({
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        finish = () => done({ status: 204 })
+      }),
+  })
+  await firstPersonsToast()
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  // Certain (nothing to ask about), and the logout still on its way: nothing of the shell is drawn,
+  // so nothing of it (a Save in Settings, the toast's button) can be pressed meanwhile.
+  expect(await screen.findByText('Signing out…')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Open it' })).toBeNull()
+  await waitFor(() => expect(finish).not.toBeNull())
+  await act(async () => finish?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})
+
+test("a slow request of the first person answered 401 after the next signed in doesn't sign the next out", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let answer: () => void = () => {}
+  const people = twoPeople({
+    'POST /api/workspaces/1/conversations': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 401, body: { error: 'not logged in' } })
+      }),
+  })
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'New' }))
+  await waitFor(() =>
+    expect(people.calls.some((c) => c.method === 'POST' && c.path.endsWith('/conversations'))).toBe(true),
+  )
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await signInSecond()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.getByRole('button', { name: /^Account: Second/ })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+})
+
+test('a language save the server answers 401 (the session gone) writes nothing more and says nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let refuse: () => void = () => {}
+  twoPeople({
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 401, body: { error: 'not logged in' } })
+      }),
+  })
+  render(<App />)
+  await pickInAccount('Português (Brasil)')
+  await screen.findByRole('navigation', { name: 'Seções' })
+  const stored = localStorage.getItem('taskto.locale')
+  await act(async () => refuse())
+  await screen.findByRole('heading', { name: 'Entrar' })
+  await new Promise((r) => setTimeout(r, 50))
+  expect(localStorage.getItem('taskto.locale')).toBe(stored)
+  expect(document.documentElement.lang).toBe('pt-BR')
+  expect(screen.queryByText(/^(Não foi salvo|Not saved): /)).toBeNull()
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a log out the server refuses as another account’s shows that the account changed, never a stuck shell', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  twoPeople({
+    'POST /api/logout': { status: 409, body: { error: 'another account', code: 'session_account_changed' } },
+  })
+  render(<App />)
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+})
+
+test('a workspace made while the shell went within the session, with the dialog still open, opens nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({ 'POST /api/workspaces': () => new Promise((done) => held.push(done)), ...pages })
+  beginSession(1)
+  const { unmount } = render(
+    <Shell me={{ ...me, can_create_workspace: true } as Me} onLogout={() => {}} onMe={() => {}} />,
+  )
+  await submitNewWorkspace('Late')
+  await waitFor(() => expect(held).toHaveLength(1))
+  // No Cancel: the dialog is open when the shell goes.
+  unmount()
+  await act(async () => held.shift()?.(created(9, 'Late')))
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})
+
+test("a language pick names the account it is for, so it can't change another person's if the browser's session changed", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const people = twoPeople({ 'PATCH /api/me': { body: me } })
+  render(<App />)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(people.calls.some((c) => c.method === 'PATCH')).toBe(true))
+  expect(people.calls.find((c) => c.method === 'PATCH')?.headers).toMatchObject({ 'x-taskto-expected-user': '1' })
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a menu drawn again while a pick is saved shows that pick and joins its queue, not a second one', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: (() => void)[] = []
+  const calls = fakeFetch({
+    'PATCH /api/me': () => new Promise((done) => held.push(() => done({ status: 200, body: {} }))),
+    ...pages,
+  })
+  beginSession(1)
+  const first = render(<Shell me={me as Me} onLogout={() => {}} />)
+  const patches = () => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }]))
+  // The shell goes and comes back within the session (a push's notification opened), from the
+  // account's older value.
+  first.unmount()
+  render(<Shell me={me as Me} onLogout={() => {}} />)
+  expect(checked(within(await openAccount()).getByRole('group', { name: 'Idioma' }))).toEqual(['Português (Brasil)'])
+  fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: 'English' }))
+  await screen.findByRole('navigation', { name: 'Sections' })
+  // Still one save at a time: the second pick waits for the first.
+  expect(patches()).toEqual([{ locale: 'pt-BR' }])
+  await act(async () => held.shift()?.())
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }, { locale: 'en' }]))
+  await act(async () => held.shift()?.())
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a menu drawn again with the account’s older value keeps the save the queue knows was accepted', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const answers: ((ok: boolean) => void)[] = []
+  const calls = fakeFetch({
+    'PATCH /api/me': () =>
+      new Promise((done) =>
+        answers.push((ok) =>
+          done(ok ? { status: 200, body: {} } : { status: 500, body: { error: 'internal error', code: 'internal' } }),
+        ),
+      ),
+    ...pages,
+  })
+  beginSession(1)
+  // The account has no pick ('').
+  const first = render(<Shell me={me as Me} onLogout={() => {}} />)
+  const patches = () => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }]))
+  await act(async () => answers.shift()?.(true))
+  await pickInAccount('English')
+  await waitFor(() => expect(patches()).toHaveLength(2))
+  // Automatic, while English is still being saved: it waits its turn.
+  await pickInAccount(/^Automatic/)
+  // The menu is drawn again, from the account's value as it was loaded (still '').
+  first.unmount()
+  render(<Shell me={me as Me} onLogout={() => {}} />)
+  // English is refused: the account still has Portuguese, so automatic is sent next.
+  await act(async () => answers.shift()?.(false))
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }, { locale: 'en' }, { locale: '' }]))
+  await act(async () => answers.shift()?.(true))
+  await act(() => setPreferences({ user: null }))
+})
+
+// --- The tail of a sign-out ---------------------------------------------------------------------
+
+test('a 401 while the logout is on its way never opens the login screen before the sign-out is done', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let finish: (() => void) | null = null
+  twoPeople({
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        finish = () => done({ status: 204 })
+      }),
+    'GET /api/expired': { status: 401, body: { error: 'not logged in' } },
+  })
+  render(<App />)
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await waitFor(() => expect(finish).not.toBeNull())
+  // Something else answers 401 meanwhile (the window got the focus, a count was asked again).
+  await act(() => api('/api/expired').catch(() => {}))
+  await new Promise((r) => setTimeout(r, 20))
+  // Nobody can sign in under the sign-out still running: the login isn't shown yet.
+  expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+  expect(screen.getByText('Signing out…')).toBeTruthy()
+  await act(async () => finish?.())
+  await screen.findByRole('heading', { name: 'Log in' })
+})
+
+for (const failure of ['no answer', 'a server error'] as const) {
+  test(`a logout that gets ${failure} leaves the person signed in, with Try again and Back`, async () => {
+    window.history.replaceState(null, '', '/w/1/conversations')
+    let fail = true
+    const people = twoPeople({
+      'POST /api/logout': () => {
+        if (!fail) return { status: 204 }
+        if (failure === 'no answer') throw new TypeError('Failed to fetch')
+        return { status: 500, body: { error: 'internal error', code: 'internal' } }
+      },
+    })
+    render(<App />)
+    fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+    expect(await screen.findByRole('heading', { name: "Couldn't sign out" })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+    // Back: the app, still signed in, and its requests name the account again.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the app' }))
+    await screen.findByRole('navigation', { name: 'Sections' })
+    // Log out again, and this time the server confirms it.
+    fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+    await screen.findByRole('heading', { name: "Couldn't sign out" })
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await screen.findByRole('heading', { name: 'Log in' })
+    expect(people.calls.filter((c) => c.path === '/api/logout')).toHaveLength(3)
+  })
+}
+
+test('a sign-out whose tail answers after a newer session began here touches nothing of it', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let finish: (() => void) | null = null
+  twoPeople({
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        finish = () => done({ status: 204 })
+      }),
+  })
+  render(<App />)
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await waitFor(() => expect(finish).not.toBeNull())
+  // However it came about, a newer session is this page's now, with a draft of its own.
+  act(() => beginSession(2))
+  localStorage.setItem('taskto:drafts-of', '2')
+  await act(async () => finish?.())
+  await new Promise((r) => setTimeout(r, 20))
+  // The tail stopped: no login screen over it, and its drafts are untouched.
+  expect(screen.queryByRole('heading', { name: 'Log in' })).toBeNull()
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('2')
+})
+
+test("a request of this account that the server refuses as another's ends the page's session", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  twoPeople({ 'POST /api/x': { status: 409, body: { error: 'another account', code: 'session_account_changed' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  await act(() => api('/api/x', { method: 'POST', body: {} }).catch(() => {}))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 })
 
 test('Log out over a draft asks the page first, once: kept, nobody is signed out; discarded, the sign-out goes', async () => {
