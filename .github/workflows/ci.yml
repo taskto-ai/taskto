@@ -26,14 +26,19 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the run of the older head. Every other run (main,
+# the merge queue's entries) has a group of its own, so it is never cancelled, and never
+# waits as "pending" behind an earlier run of the same branch (a pending run is cancelled
+# by the next one in its group, cancel-in-progress or not).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
     name: Lint (golangci-lint, Biome)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -64,6 +69,7 @@ jobs:
   go:
     name: Go (test, build)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -71,9 +77,11 @@ jobs:
           go-version-file: go.mod
       # The JSON is kept (below) and read back by gotest-report, so a failure that happens
       # once in a while can be read afterwards: the log has each package's result and the
-      # whole output of every failing test, a panic or a timeout included.
+      # whole output of every failing test, a panic or a timeout included. A package that
+      # hangs panics at -timeout with every running test's stack, well before the job's
+      # own limit; the slowest package takes about two minutes.
       - name: go test
-        run: go test -json ./... > go-test.json
+        run: go test -timeout 6m -json ./... > go-test.json
       - name: Test results
         if: ${{ !cancelled() }}
         run: |
@@ -95,6 +103,7 @@ jobs:
   js:
     name: Web + agent (typecheck, build, test)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -175,6 +184,7 @@ jobs:
   agent-it:
     name: Agent runtime integration
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -190,11 +200,24 @@ jobs:
       # Starts the real sidecar with the scripted offline model: no keys, no network. The
       # cmd/taskto test builds the server and kills it with SIGKILL to check the sidecar follows,
       # and adds a provider account through the API that the running sidecar must pick up.
-      - run: TASKTO_AGENT_IT=1 go test -count=1 -v ./internal/agentrt/ ./internal/providers/ ./cmd/taskto/
+      # Of cmd/taskto, only the tests of its *_it_test.go files run here: the rest of the
+      # package doesn't read TASKTO_AGENT_IT (checked first) and runs in the Go job, so running
+      # it here too would only run the same tests twice.
+      - name: Agent integration tests
+        run: |
+          if others=$(ls cmd/taskto/*_test.go | grep -v '_it_test\.go$' | xargs grep -l TASKTO_AGENT_IT); then
+            echo "::error::TASKTO_AGENT_IT is read outside cmd/taskto's *_it_test.go files: $others"
+            exit 1
+          fi
+          its=$(grep -ho '^func Test[A-Za-z0-9_]*' cmd/taskto/*_it_test.go | sed 's/^func //' | paste -sd'|' -)
+          export TASKTO_AGENT_IT=1
+          go test -timeout 8m -count=1 -v ./internal/agentrt/ ./internal/providers/
+          go test -timeout 8m -count=1 -v -run "^($its)\$" ./cmd/taskto/
 
   cli-isolation:
     name: CLI worker isolation (root, Linux)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The container mode's OS boundary (internal/cliworker/isolation_test.go): the tests make
@@ -211,6 +234,7 @@ jobs:
     name: CLI worker network (Docker in Docker, root)
     # Needs privileged Docker: GitHub-hosted runners only.
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -231,6 +255,7 @@ jobs:
   backup-it:
     name: Append-only backup and restore
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -268,6 +293,7 @@ jobs:
   gitleaks:
     name: Secret scan
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -283,8 +309,17 @@ jobs:
         # owned by the container's user, which git requires). The job
         # fails unless commits were actually scanned.
         run: |
+        #
+        # What fails the job is the whole history of the commit under test (the pull request
+        # merged onto main, the queue's entry, or main): everything this run would merge.
+        # The other branches' own commits are scanned too, and what is found there is reported
+        # as a warning: a leak on another branch fails that branch's own run, and no longer
+        # every pull request until the branch is gone.
+        run: |
           tar -c . | docker run -i --rm --entrypoint sh \
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             -c 'mkdir /tmp/repo && tar -x -C /tmp/repo && cd /tmp/repo && git config --global --add safe.directory /tmp/repo \
-              && { s=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --source . > /tmp/out 2>&1 || s=$?; cat /tmp/out; \
+              && { o=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --log-opts="--all --not HEAD" --source . > /tmp/others 2>&1 || o=$?; \
+                   if [ $o -ne 0 ]; then cat /tmp/others; echo "::warning title=Secret scan::gitleaks found leaks on other branches, outside this commit'"'"'s history (above)"; fi; \
+                   s=0; gitleaks detect --redact --no-banner --no-color --exit-code 1 --log-opts=HEAD --source . > /tmp/out 2>&1 || s=$?; cat /tmp/out; \
                    [ $s -eq 0 ] && grep -Eq "[1-9][0-9]* commits scanned" /tmp/out; }'
