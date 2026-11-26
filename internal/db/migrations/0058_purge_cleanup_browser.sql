@@ -31,3 +31,10 @@ UPDATE sqlite_sequence SET name = 'purge_cleanups_new' WHERE name = 'purge_clean
 
 DROP TABLE purge_cleanups;
 ALTER TABLE purge_cleanups_new RENAME TO purge_cleanups;
+
+-- A purge's CLI home step recorded before this migration has no browser step: the account's
+-- browser may still run in the worker, and its profile is in the directory the step removes. Each
+-- gets the step now, and it comes first.
+INSERT INTO purge_cleanups (user_id, kind, target, created_at)
+    SELECT user_id, 'browser', target, created_at FROM purge_cleanups WHERE kind = 'cli_home'
+    ON CONFLICT (kind, target) DO NOTHING;

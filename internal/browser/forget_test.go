@@ -444,3 +444,41 @@ func TestRemoteAccountClosing(t *testing.T) {
 		t.Errorf("a start after it: %v", err)
 	}
 }
+
+// A browser still stopping when a newer one gave up waiting for it (its start timed out) is still
+// waited for by Forget: the newer one, which never ran, doesn't take its place.
+func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
+	h := newProfileHost(t)
+	m := NewManager(Config{Host: h, StartTimeout: 100 * time.Millisecond})
+	t.Cleanup(m.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if err := m.Start(ctx, 1, Testing); err != nil {
+		t.Fatal(err)
+	}
+	// The fake takes 700 ms to exit after it is told to close.
+	stopped := make(chan struct{})
+	go func() { _ = m.Stop(ctx, 1, Testing); close(stopped) }()
+	for {
+		st, _ := m.Status(ctx, 1)
+		if !st[Testing].Running {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// The start waits 100 ms for the old browser, then gives up.
+	if err := m.Start(ctx, 1, Testing); err == nil {
+		t.Fatal("a start while the old browser was still stopping succeeded")
+	}
+	if h.alive(1) == 0 {
+		t.Skip("the old browser was already gone: nothing to wait for")
+	}
+	if err := m.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.alivePurge(1); n != 0 {
+		t.Errorf("the files were removed with %d processes still running", n)
+	}
+	<-stopped
+}

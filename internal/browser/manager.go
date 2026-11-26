@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"time"
 )
@@ -53,9 +54,9 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[key]*session
-	// stopping is the browser of each key still being stopped: a new one on the same profile
-	// waits for it to be gone, so the old one has written its cookies first.
-	stopping map[key]*session
+	// stopping is the browsers of each key still being stopped: a new one on the same profile
+	// waits for them to be gone, so the old ones have written their cookies first.
+	stopping map[key][]*session
 	// forgotten is the users whose accounts are deleted (Forget): no browser of theirs starts. It
 	// is kept as long as the Manager runs, since an account's id is never given to another account.
 	forgotten map[int64]struct{}
@@ -104,7 +105,7 @@ func NewManager(cfg Config) *Manager {
 	if cfg.Tick <= 0 {
 		cfg.Tick = 15 * time.Second
 	}
-	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key]*session{}, forgotten: map[int64]struct{}{}, stopTick: make(chan struct{})}
+	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[int64]struct{}{}, stopTick: make(chan struct{})}
 	m.wg.Add(1)
 	go m.idleLoop()
 	return m
@@ -218,10 +219,9 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 	var conns []*liveConn
 	for _, kind := range []Kind{Personal, Testing} {
 		k := key{user, kind}
-		// A browser already stopping is waited for too, and one whose start waited for it.
-		if prev := m.stopping[k]; prev != nil {
-			wait = append(wait, prev)
-		}
+		// Every browser already stopping is waited for too: a newer one whose start gave up waiting
+		// for them doesn't take their place.
+		wait = append(wait, m.stopping[k]...)
 		if s := m.sessions[k]; s != nil {
 			for c := range s.conns {
 				conns = append(conns, c)
@@ -387,7 +387,7 @@ func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool
 		}
 		s = &session{key: k, ready: make(chan struct{}), ended: make(chan struct{}), lastUse: time.Now()}
 		m.sessions[k] = s
-		prev := m.stopping[k]
+		prev := append([]*session(nil), m.stopping[k]...)
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
@@ -433,14 +433,15 @@ func (m *Manager) endLocked(s *session) {
 	if m.sessions[s.key] == s {
 		delete(m.sessions, s.key)
 	}
-	m.stopping[s.key] = s
+	m.stopping[s.key] = append(m.stopping[s.key], s)
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
 		<-s.ready
 		m.stop(s)
 		m.mu.Lock()
-		if m.stopping[s.key] == s {
+		m.stopping[s.key] = slices.DeleteFunc(m.stopping[s.key], func(x *session) bool { return x == s })
+		if len(m.stopping[s.key]) == 0 {
 			delete(m.stopping, s.key)
 		}
 		m.mu.Unlock()
@@ -468,18 +469,21 @@ func (m *Manager) idleLoop() {
 	}
 }
 
-// launch starts s's processes, once prev (the same user's same browser, being stopped) is
+// launch starts s's processes, once prev (the same user's same browser, the ones being stopped) are
 // gone, and closes s.ready. A browser that fails to start is taken off the map, with whatever
 // started of it stopped.
-func (m *Manager) launch(s, prev *session) {
+func (m *Manager) launch(s *session, prev []*session) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.StartTimeout)
 	defer cancel()
 	var err error
-	if prev != nil {
+	for _, p := range prev {
 		select {
-		case <-prev.ended:
+		case <-p.ended:
 		case <-ctx.Done():
 			err = errors.New("the browser before it didn't stop in time")
+		}
+		if err != nil {
+			break
 		}
 	}
 	if err == nil {

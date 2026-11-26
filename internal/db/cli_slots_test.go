@@ -83,3 +83,44 @@ func TestCLIAccountSlotsKeepTheAccounts(t *testing.T) {
 		t.Fatalf("sessions left = %d %v", n, err)
 	}
 }
+
+// A purge's CLI home step recorded before the browser's step existed gets a browser step, which
+// the purge does first; the rows and their numbers stay.
+func TestPurgeCleanupsGainTheBrowserStep(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := migrate(ctx, sqlDB, migrationsBefore(t, "_purge_cleanup_browser.sql")); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO purge_cleanups (user_id, kind, target, attempts, last_error) VALUES (7, 'cli_home', '7', 2, 'cli_worker_failed')`,
+		`INSERT INTO purge_cleanups (user_id, kind, target) VALUES (7, 'providers', 'feed:7')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	rows, err := sqlDB.QueryContext(ctx, `SELECT kind || ':' || target || ':' || attempts FROM purge_cleanups ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		kinds = append(kinds, s)
+	}
+	want := "cli_home:7:2 providers:feed:7:0 browser:7:0"
+	if got := strings.Join(kinds, " "); got != want {
+		t.Fatalf("steps = %q, want %q", got, want)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target) VALUES (8, 'browser', '8')`); err != nil {
+		t.Fatalf("a browser step can't be recorded: %v", err)
+	}
+}
