@@ -3188,7 +3188,10 @@ space the session can't open is not a `404` then): nothing is read or written as
 account, and the client pauses the queue rather than count a failure. The check is made for
 **every `/api` route** that carries the header, not only an app's (the offline client names the
 account on its downloads, on the space and app checks that revalidate them, and on the queue): the
-answer is the same `409` before the route's own checks. A request without the header
+answer is the same `409` before the route's own checks. The web app also names the signed-in
+account on every request that changes something while its session lasts (`web/src/api.ts`), so a
+page whose browser session became someone else's, in another tab, can't change that person's
+data. A request without the header
 is as it always was; a value that is no account's id is `400`. An insert that names a photo (an attachment id) is accepted only when the
 photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
 uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before
