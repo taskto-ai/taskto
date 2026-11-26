@@ -436,7 +436,9 @@ The UI shows what the command prints.
 
   The processes of a Unix user are ended through a pidfd: the uid is read while the reference is
   held, and the signal goes through it, so a pid given again to another process is never
-  signalled. Only a full look at the processes counts as "none left": one that can't be made, or a
+  signalled. The worker's start-up sweep of every CLI user's processes works the same way, and a
+  worker whose sweep couldn't look at every process doesn't start. The testing profile's cleanup
+  is a request of the user's, which a removal cancels and waits for, as a live view's dial is. Only a full look at the processes counts as "none left": one that can't be made, or a
   process whose state can't be read, fails the removal. The uid range is checked once, when the
   worker starts, and starting and ending a user's processes use the same number-to-uid rule.
 

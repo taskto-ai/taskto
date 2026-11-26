@@ -121,7 +121,7 @@ func killUID(uid int, wait time.Duration) error {
 			return nil
 		}
 		for _, pid := range pids {
-			if err := killIfUID(pid, uid); err != nil {
+			if _, err := killIf(pid, func(owner int) bool { return owner == uid }); err != nil {
 				return err
 			}
 		}
@@ -184,44 +184,47 @@ func procStatus(pid int) (uid int, zombie bool, err error) {
 	return uid, zombie, nil
 }
 
-// killIfUID kills pid only while it is a process of uid. It takes a pidfd, a reference to the
+// killIf kills pid only while it is a process whose uid mine says yes to, and reports whether it
+// sent the signal. It takes a pidfd, a reference to the
 // process that a pid given again can't take over, reads the uid, and checks through the reference
 // that the process still runs (a pid isn't given again while its process runs, so what was read is
 // that process's) before it signals it through the reference. On a kernel without pidfds (before
 // 5.3) the pid is signalled after its uid is read again.
-func killIfUID(pid, uid int) error {
+func killIf(pid int, mine func(uid int) bool) (bool, error) {
 	fd, err := unix.PidfdOpen(pid, 0)
 	switch {
 	case errors.Is(err, unix.ESRCH):
-		return nil
+		return false, nil
 	case errors.Is(err, unix.ENOSYS):
-		if owner, zombie, err := procStatus(pid); err == nil && owner == uid && !zombie {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		if owner, zombie, err := procStatus(pid); err == nil && mine(owner) && !zombie {
+			return syscall.Kill(pid, syscall.SIGKILL) == nil, nil
 		}
-		return nil
+		return false, nil
 	case err != nil:
-		return fmt.Errorf("opening process %d: %w", pid, err)
+		return false, fmt.Errorf("opening process %d: %w", pid, err)
 	}
 	defer unix.Close(fd)
 	owner, zombie, err := procStatus(pid)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("reading process %d: %w", pid, err)
+		return false, fmt.Errorf("reading process %d: %w", pid, err)
 	}
 	if err := unix.PidfdSendSignal(fd, 0, nil, 0); errors.Is(err, unix.ESRCH) {
-		return nil
+		return false, nil
 	} else if err != nil {
-		return fmt.Errorf("checking process %d: %w", pid, err)
+		return false, fmt.Errorf("checking process %d: %w", pid, err)
 	}
-	if owner != uid || zombie {
-		return nil
+	if !mine(owner) || zombie {
+		return false, nil
 	}
-	if err := unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
-		return fmt.Errorf("killing process %d: %w", pid, err)
+	if err := unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); errors.Is(err, unix.ESRCH) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("killing process %d: %w", pid, err)
 	}
-	return nil
+	return true, nil
 }
 
 // addLine appends line to the account file path unless the entry is there: one with name and
@@ -270,35 +273,38 @@ func addLine(path, name string, id int, line string) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// killUIDs kills every process whose real uid is min or more: all the CLI users'.
-func killUIDs(min int) int {
-	entries, err := os.ReadDir("/proc")
+// killUIDs kills every process whose real uid is min or more: all the CLI users'. Each through a
+// pidfd, as killUID does, so a pid given again meanwhile is never signalled. A list of the
+// processes, or a process's state, that can't be read is an error: the sweep didn't see them all.
+func killUIDs(min int) (int, error) {
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("listing the processes: %w", err)
 	}
+	self := os.Getpid()
 	killed := 0
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid <= 1 {
+		if err != nil || pid <= 1 || pid == self {
 			continue
 		}
-		b, err := os.ReadFile("/proc/" + e.Name() + "/status") //nolint:gosec // G304: a /proc path
+		uid, zombie, err := procStatus(pid)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			continue
+		}
 		if err != nil {
+			return killed, fmt.Errorf("reading process %d: %w", pid, err)
+		}
+		if uid < min || zombie {
 			continue
 		}
-		for _, line := range strings.Split(string(b), "\n") {
-			if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
-				fields := strings.Fields(rest)
-				if len(fields) > 0 {
-					if uid, err := strconv.Atoi(fields[0]); err == nil && uid >= min {
-						if syscall.Kill(pid, syscall.SIGKILL) == nil {
-							killed++
-						}
-					}
-				}
-				break
-			}
+		hit, err := killIf(pid, func(uid int) bool { return uid >= min })
+		if err != nil {
+			return killed, err
+		}
+		if hit {
+			killed++
 		}
 	}
-	return killed
+	return killed, nil
 }

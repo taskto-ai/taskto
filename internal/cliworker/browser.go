@@ -248,8 +248,15 @@ func (c *helperConn) Close() error {
 	return nil
 }
 
+// Clean removes the user's testing profile, as the user. It is a helper request of the user's
+// (admit): a removal of their directory that begins meanwhile cancels it and waits for it.
 func (h *browserHost) Clean(user int64) error {
-	return h.quickOp(user, "browser-clean", "removing the testing profile")
+	held, release, err := h.w.admit(context.Background(), user, "", "")
+	if err != nil {
+		return err
+	}
+	defer release()
+	return h.quickOpCtx(held, user, "browser-clean", "removing the testing profile")
 }
 
 // Purge removes the user's whole browser directory, as the user, for a deleted account. The
@@ -295,6 +302,11 @@ func (h *browserHost) Hold(ctx context.Context, user int64, owner string) (func(
 
 // quickOp runs one of the helper's short browser ops as the user, stopping it after 30 s.
 func (h *browserHost) quickOp(user int64, op, what string) error {
+	return h.quickOpCtx(context.Background(), user, op, what)
+}
+
+// quickOpCtx is quickOp, stopped at once when ctx ends (a removal cancelled the request).
+func (h *browserHost) quickOpCtx(ctx context.Context, user int64, op, what string) error {
 	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: op})
 	if err != nil {
 		return err
@@ -303,6 +315,9 @@ func (h *browserHost) quickOp(user int64, op, what string) error {
 	stderr := &tailBuffer{max: 2 << 10}
 	cmd.Stderr = stderr
 	done := make(chan error, 1)
+	if err := ctx.Err(); err != nil {
+		return ErrRemoving
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -313,6 +328,10 @@ func (h *browserHost) quickOp(user int64, op, what string) error {
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 		}
 		return nil
+	case <-ctx.Done():
+		_ = signalGroup(cmd.Process.Pid, sigKill)
+		<-done //nolint:errcheck // killed: its own error says nothing more
+		return ErrRemoving
 	case <-time.After(30 * time.Second):
 		_ = signalGroup(cmd.Process.Pid, sigKill)
 		return fmt.Errorf("%s took too long, and was stopped: %w", what, <-done)

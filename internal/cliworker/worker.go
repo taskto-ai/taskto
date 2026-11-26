@@ -189,7 +189,9 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return nil, err
 	}
-	w.sweep()
+	if err := w.sweep(); err != nil {
+		return nil, err
+	}
 	if err := w.listenApprovals(); err != nil {
 		return nil, err
 	}
@@ -227,10 +229,15 @@ func (w *Worker) Available(cli CLI) bool { return w.cfg.Bins[cli] != "" }
 // user. Without, the process groups its turns recorded, each only if its leader is still the
 // process recorded (same PID, same start time), so a PID reused by an unrelated process is
 // left alone. The records are removed.
-func (w *Worker) sweep() {
+func (w *Worker) sweep() error {
 	if iso := w.cfg.Isolation; iso != nil {
-		if n := killUIDs(iso.UIDBase); n > 0 {
+		n, err := killUIDs(iso.UIDBase)
+		if n > 0 {
 			slog.Warn("cliworker: stopped the CLI processes an earlier worker left running", "processes", n)
+		}
+		if err != nil {
+			// Not every process was looked at: one of an earlier history's may still run.
+			return fmt.Errorf("cliworker: stopping what an earlier worker left running: %w", err)
 		}
 	}
 	records, _ := filepath.Glob(filepath.Join(w.stateDir(), "*.pid"))
@@ -247,6 +254,7 @@ func (w *Worker) sweep() {
 		}
 		_ = os.Remove(rec)
 	}
+	return nil
 }
 
 func parseRecord(s string) (pid int, start string, ok bool) {

@@ -57,3 +57,21 @@ func TestUIDOfStaysInRange(t *testing.T) {
 		t.Errorf("uidOf(5) = %d %v", uid, err)
 	}
 }
+
+// The worker's start-up sweep of every CLI user's processes is as strict: one it can't look at
+// fails the start, rather than leave a process of an earlier history running.
+func TestTheStartUpSweepCountsOnlyAFullLook(t *testing.T) {
+	old := procRoot
+	t.Cleanup(func() { procRoot = old })
+	procRoot = filepath.Join(t.TempDir(), "gone")
+	if _, err := killUIDs(1234567); err == nil {
+		t.Error("with no list of the processes, the sweep counted as done")
+	}
+	procRoot = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(procRoot, "4242", "status"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := killUIDs(1234567); err == nil {
+		t.Error("a process whose state couldn't be read was left out of the sweep")
+	}
+}
