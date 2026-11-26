@@ -231,26 +231,42 @@ func (s *Service) agentTimeout() time.Duration {
 	return defaultAgentTimeout
 }
 
-// forgetCLI removes everything kept for user's CLI logins: the worker's directory (when CLI workers
-// are on) and, in any mode, the directory the local worker keeps under the data directory, which
-// stays when the mode is later turned off. It is waiting while the worker is off, since a
-// container worker keeps its own copy, out of reach.
+// forgetCLI removes everything kept for user's CLI logins, wherever a worker kept it:
+//
+//   - the directory the local worker keeps under the data directory, always, in any mode: the server
+//     can reach it, and it stays when the mode is later turned off;
+//   - the worker's own files, when CLI workers are on (the running worker is asked);
+//   - the container worker's copy, which only the server in container mode can reach. A container
+//     worker is asked when it is the one running; when it isn't (the mode was switched to local, or
+//     off), the step is waiting for container mode if the install ran a container worker (or may have:
+//     cliaccounts.ContainerWorkerMayHoldFiles), and is done if none ever did.
 func (s *Service) forgetCLI(ctx context.Context, user int64) error {
-	var worker error
+	mode := "off"
 	if s.o.CLI != nil {
-		worker = s.o.CLI.Forget(ctx, user)
-	} else {
-		worker = cliaccounts.ErrOff
+		mode = s.o.CLI.Mode()
 	}
-	if worker != nil && !errors.Is(worker, cliaccounts.ErrOff) {
-		return failed(failCLIWorker, worker)
+	reached := false // the container worker was asked, and answered
+	if mode != "off" && mode != "" {
+		switch err := s.o.CLI.Forget(ctx, user); {
+		case err == nil:
+			reached = mode == string(cliaccounts.Container)
+		case !errors.Is(err, cliaccounts.ErrOff):
+			return failed(failCLIWorker, err)
+		}
 	}
 	if s.o.DataDir != "" {
 		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
 			return failed(failFileRemove, err)
 		}
 	}
-	if worker != nil {
+	if reached {
+		return nil
+	}
+	may, err := cliaccounts.ContainerWorkerMayHoldFiles(ctx, s.o.DB)
+	if err != nil {
+		return failed(failOther, err)
+	}
+	if may {
 		return errWaiting
 	}
 	return nil

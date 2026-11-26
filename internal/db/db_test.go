@@ -973,3 +973,46 @@ func TestAppAttachmentsKeepTheirAppFieldAndUploader(t *testing.T) {
 		t.Fatal("an unattributed attachment was given an uploader")
 	}
 }
+
+// The record of CLI workers marks a database that had users before it as 'unknown' (a container
+// worker may have run), and one with none as clean: the purge of a deleted account closes its CLI
+// step only for the second.
+func TestCLIWorkerHistoryMigrationMarksOlderDatabasesUnknown(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		users bool
+		want  []string
+	}{{"a database with users", true, []string{"unknown"}}, {"a new database", false, nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+			if _, err := migrate(ctx, sqlDB, migrationsBefore(t, "_cli_worker_history.sql")); err != nil {
+				t.Fatal(err)
+			}
+			if tc.users {
+				if _, err := sqlDB.ExecContext(ctx, `INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Migrate(ctx, sqlDB); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := sqlDB.QueryContext(ctx, `SELECT worker FROM cli_worker_history ORDER BY worker`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var got []string
+			for rows.Next() {
+				var w string
+				if err := rows.Scan(&w); err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, w)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("history = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

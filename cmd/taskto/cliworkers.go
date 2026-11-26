@@ -42,6 +42,11 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 		svc.SetShared(cliaccounts.Shared{Key: key, Egress: egressOf(cfg).Workspace})
 		return svc, func() error { svc.Close(); return nil }, nil
 	}
+	// Before any user's CLI runs: the purge of a deleted account has to know a container worker may
+	// hold files of theirs, which it can't reach from another mode.
+	if err := cliaccounts.RecordWorkerMode(ctx, sqlDB, mode); err != nil {
+		return nil, nil, fmt.Errorf("cli workers: recording the mode: %w", err)
+	}
 	if mode == cliaccounts.Container {
 		// The worker is its own process, in its own container; the server only talks to it.
 		svc := cliaccounts.New(sqlDB, mode, cliaccounts.RemoteWorker(cliworker.NewRemote(cfg.CLIWorkerSocket)))

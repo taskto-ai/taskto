@@ -74,6 +74,16 @@ type fakeCLI struct {
 	mu    sync.Mutex
 	users []int64
 	fail  error
+	mode  string // how the workers run; "container" when empty
+}
+
+func (f *fakeCLI) Mode() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mode == "" {
+		return "container"
+	}
+	return f.mode
 }
 
 func (f *fakeCLI) Forget(_ context.Context, user int64) error {

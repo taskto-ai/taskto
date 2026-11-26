@@ -87,6 +87,8 @@ type Knowledge interface {
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
 type CLIWorkers interface {
 	Forget(ctx context.Context, user int64) error
+	// Mode is how CLI workers run now: "off", "local", "local-unsafe" or "container".
+	Mode() string
 }
 
 // Options are what a Service needs.
@@ -108,7 +110,8 @@ type Options struct {
 	// stay recorded as a step to do when it is on.
 	Agent func(ctx context.Context) (conversations.Purger, error)
 	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
-	// CLI workers are off: that step stays recorded for when they are on.
+	// CLI workers are off: the step is done if the install never ran a container worker, which keeps
+	// its own copy out of reach, and stays recorded for container mode if it may have.
 	CLI CLIWorkers
 	// Clock is the time; time.Now by default.
 	Clock func() time.Time

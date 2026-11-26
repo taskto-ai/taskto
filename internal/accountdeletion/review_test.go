@@ -348,10 +348,12 @@ func TestPurgeRefreshesTheProvidersFileAndKeys(t *testing.T) {
 }
 
 // What the CLI workers kept for the person goes even with the workers off: the local worker's
-// directory under the data directory is removed, and the worker's own is recorded for when they are on.
+// directory under the data directory is removed, and a container worker's, which the install ran
+// before, is recorded for when container mode is on.
 func TestPurgeRemovesTheLocalCLIDirectoryWithWorkersOffAndRecordsTheRest(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
+	w.ranContainerWorker()
 	home := filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver), "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
@@ -457,5 +459,101 @@ func TestMaintainSchedulesAPurgeWhoseTriesRanOut(t *testing.T) {
 			t.Fatal("the failed purge job was never scheduled again")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// ranContainerWorker records, as the server does at its start in container mode, that this install
+// has had a container worker, which keeps its own copy of a person's CLI files.
+func (w *world) ranContainerWorker() {
+	w.t.Helper()
+	if err := cliaccounts.RecordWorkerMode(context.Background(), w.db, cliaccounts.Container); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// An install that never ran a container worker has no copy to wait for: with CLI workers off, the
+// CLI step is done once the data directory's files are removed, and the purge completes.
+func TestCLIStepIsDoneWhereNoContainerWorkerEverRan(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	home := filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w.cli.fail = cliaccounts.ErrOff // CLI workers are off, and always were
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(w.dir, "cli", fmt.Sprintf("u%d", w.leaver))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("their CLI directory remains: %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ?`, cleanCLIHome); n != 0 {
+		t.Errorf("the CLI step is still recorded, waiting for a worker that never ran")
+	}
+	// Without a CLI service at all, the same.
+	w2 := newWorld(t)
+	w2.svc.o.CLI = nil
+	w2.deleteAccount()
+	if err := w2.svc.Purge(ctx, w2.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if n := w2.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ?`, cleanCLIHome); n != 0 {
+		t.Errorf("the CLI step is recorded with no CLI service")
+	}
+}
+
+// The workers were switched from container to local after the person used the container's: the
+// local worker's directory goes, and the container's copy is still there, so the step waits for
+// container mode and is done only by the container worker.
+func TestCLIStepWaitsForTheContainerWorkerAfterASwitchToLocal(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.ranContainerWorker()
+	w.cli.mode = "local"
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM users WHERE id = ?`, w.leaver); n != 0 {
+		t.Fatal("the account remains")
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ? AND target = ?`, cleanCLIHome, fmt.Sprint(w.leaver)); n != 1 {
+		t.Fatal("the local worker's answer closed a step the container worker's copy still needs")
+	}
+	// Still local: nothing changes, and it isn't an error.
+	if err := w.svc.RunCleanups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ?`, cleanCLIHome); n != 1 {
+		t.Fatal("the step went while the container worker was off")
+	}
+	// Container mode comes on: the container worker forgets the person, and the step is done.
+	before := len(w.cli.users)
+	w.cli.mode = "container"
+	if err := w.svc.RunCleanups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.cli.users) != before+1 {
+		t.Errorf("the container worker wasn't asked: %v", w.cli.users)
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups`); n != 0 {
+		t.Errorf("%d steps remain", n)
+	}
+}
+
+// A database older than the record of workers (marked 'unknown' by the migration) may have run a
+// container worker: nothing is closed on a guess.
+func TestCLIStepStaysPendingWhereTheHistoryIsUnknown(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	exec(t, w.db, `INSERT INTO cli_worker_history (worker) VALUES ('unknown')`)
+	w.cli.fail = cliaccounts.ErrOff
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ?`, cleanCLIHome); n != 1 {
+		t.Fatal("the step was closed without knowing whether a container worker held files")
 	}
 }

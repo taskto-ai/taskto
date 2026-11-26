@@ -878,7 +878,14 @@ is a decision about the workspace's records, not an account's.
   CLI worker's directory of the person (`<data>/cli/u<id>`, or the worker container's own copy). Each
   step is recorded before it is done (the `purge_cleanups` table) and removed from the record when it
   is: with the agent runtime or the CLI workers **off**, the account is deleted and the steps that
-  need them stay recorded, and are done by the next start with them on and every ten minutes. The log
+  need them stay recorded, and are done by the next start with them on and every ten minutes. The
+  CLI worker's directory under the data directory is always removed, in any mode. A **container**
+  worker keeps its own copy, which only the server in container mode can ask it to remove, so the
+  server records at each start in container mode that the install has had one (`cli_worker_history`),
+  and the CLI step waits for container mode (also after a switch to `local`) only when it has: an
+  install that never ran a container worker has no copy to wait for, and the step is done at once.
+  A database that already had users when that record was added is marked `unknown`, since it may
+  have run one, and keeps the step pending until the server has started in container mode once. The log
   says "purged an account, with steps still to do" while any is left, and the audit event's
   `cleanups_pending` says how many (the providers file's rewriting, which is done after the account
   is gone, is one). If the runtime is on and fails, the purge fails and is tried again; the runtime

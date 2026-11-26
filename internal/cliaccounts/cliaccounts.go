@@ -302,6 +302,29 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	return nil
 }
 
+// RecordWorkerMode notes, in the database, that the server runs CLI workers in mode, for the modes
+// that keep users' files outside the data directory (Container: the worker's own volume). The
+// server calls it at every start, before any user's CLI is used, so the record is there before the
+// files are. The purge of a deleted account (internal/accountdeletion) reads it to tell an install
+// whose container worker may hold a person's files from one that never ran it.
+func RecordWorkerMode(ctx context.Context, sqlDB *sql.DB, mode Mode) error {
+	if mode != Container {
+		return nil
+	}
+	_, err := sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker) VALUES ('container') ON CONFLICT (worker) DO NOTHING`)
+	return err
+}
+
+// ContainerWorkerMayHoldFiles reports whether a container worker may keep files of users: the
+// server ran in container mode (RecordWorkerMode), or the database is older than that record and
+// may have (the migration's 'unknown'). False means none ever did, so there is nothing to forget
+// in one.
+func ContainerWorkerMayHoldFiles(ctx context.Context, sqlDB *sql.DB) (bool, error) {
+	var may bool
+	err := sqlDB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM cli_worker_history)`).Scan(&may)
+	return may, err
+}
+
 // Close stops following logins.
 func (s *Service) Close() {
 	s.mu.Lock()
