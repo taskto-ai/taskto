@@ -287,8 +287,9 @@ type Result struct {
 	AccessTokens      int64
 	CLIAccounts       int64
 	PushSubscriptions int64
-	// DocumentsAnonymized counts what this attempt rewrote: after a failed try, the spaces already
-	// done are found rewritten and add nothing (docs/audit.md).
+	// DocumentsAnonymized and UploadsRemoved are done before the account's transaction, and can be
+	// done by an earlier try than the one that completes: each try adds what it did to the deletion's
+	// row (account_deletions), and these are its totals (docs/audit.md).
 	DocumentsAnonymized int64
 	MentionsAnonymized  int64
 	UploadsRemoved      int64
@@ -364,7 +365,9 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	if err != nil {
 		return err
 	}
-	res.UploadsRemoved = int64(n)
+	if err := s.addTotal(ctx, userID, "uploads_removed", n); err != nil {
+		return err
+	}
 
 	// The agent runtime's records, the CLI worker's directory: each is done now, or stays recorded
 	// when what it waits for is off. One that is on and fails fails the purge, which is tried again.
@@ -399,7 +402,9 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 			anonErrs = append(anonErrs, fmt.Errorf("replacing the account's name in space %d's history: %w", sp.ID, err))
 			continue
 		}
-		res.DocumentsAnonymized += int64(n)
+		if err := s.addTotal(ctx, userID, "documents_anonymized", n); err != nil {
+			anonErrs = append(anonErrs, err)
+		}
 	}
 	if err := errors.Join(anonErrs...); err != nil {
 		return err
@@ -525,6 +530,11 @@ func (s *Service) finish(ctx context.Context, userID int64, private []access.Spa
 		if stranded > 0 {
 			return fmt.Errorf("%d attachments of apps in other spaces are still recorded in the account's private spaces", stranded)
 		}
+		// What the steps before this transaction did, over every try.
+		if err := tx.QueryRowContext(ctx, `SELECT uploads_removed, documents_anonymized FROM account_deletions WHERE user_id = ?`,
+			userID).Scan(&res.UploadsRemoved, &res.DocumentsAnonymized); err != nil {
+			return err
+		}
 		for _, c := range []struct {
 			into  *int64
 			query string
@@ -597,6 +607,26 @@ func (s *Service) finish(ctx context.Context, userID int64, private []access.Spa
 		}
 		return nil
 	})
+	return err
+}
+
+// addTotal adds n to column, one of the totals of userID's deletion (account_deletions), for a step
+// of the purge that has just done its work. The work is done even if the purge's context ended
+// meanwhile, so its count is written regardless: a retry would find nothing left to count.
+func (s *Service) addTotal(ctx context.Context, userID int64, column string, n int) error {
+	if n <= 0 {
+		return nil
+	}
+	var query string
+	switch column {
+	case "uploads_removed":
+		query = `UPDATE account_deletions SET uploads_removed = uploads_removed + ? WHERE user_id = ?`
+	case "documents_anonymized":
+		query = `UPDATE account_deletions SET documents_anonymized = documents_anonymized + ? WHERE user_id = ?`
+	default:
+		return fmt.Errorf("no total %q", column)
+	}
+	_, err := s.o.DB.ExecContext(context.WithoutCancel(ctx), query, n, userID)
 	return err
 }
 
