@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { NoWorkspace } from '../shell/NoWorkspace'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
-import { rememberDeletion, takeDeletion } from './deleted'
+import { clearDeletion, peekDeletion, rememberDeletion } from './deleted'
 import { ServerUnreachable } from './ServerUnreachable'
 
 afterEach(async () => {
   cleanup()
+  clearDeletion()
   vi.unstubAllGlobals()
   window.history.replaceState(null, '', '/')
   await setPreferences({ user: null })
@@ -462,7 +464,7 @@ test('after an account is deleted the login says when it is erased, once', async
   const first = render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
   first.unmount()
-  // The notice is told once: a reload shows the plain login.
+  // The notice is told once, after it was drawn: a reload shows the plain login.
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
@@ -479,7 +481,7 @@ test('a sign-in screen already up when the deletion is answered still says when 
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
 })
 
-test('the deletion notice is told even when the browser’s storage refuses, once', () => {
+test('the deletion notice is told even when the browser’s storage refuses, and goes once cleared', () => {
   sessionStorage.clear()
   const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
     throw new Error('no storage')
@@ -487,11 +489,80 @@ test('the deletion notice is told even when the browser’s storage refuses, onc
   const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
     throw new Error('no storage')
   })
+  const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new Error('no storage')
+  })
   rememberDeletion('2026-12-08T10:00:00.000Z')
-  expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')
-  expect(takeDeletion()).toBeNull()
+  expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
+  clearDeletion()
+  expect(peekDeletion()).toBeNull()
   set.mockRestore()
   get.mockRestore()
+  remove.mockRestore()
+})
+
+// A sign-in screen that goes before it draws the notice (its methods still loading, a reload, an
+// error that is retried through a new screen) has not told the person anything.
+test('a sign-in screen that goes before drawing the deletion notice leaves it for the next one', async () => {
+  sessionStorage.clear()
+  clearDeletion()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  // The methods never answer: the first screen is a loading one, and is gone.
+  vi.stubGlobal('fetch', () => new Promise(() => {}))
+  const first = render(<LoginScreen onDone={() => {}} />)
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+  first.unmount()
+  vi.unstubAllGlobals()
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Your account was deleted\. It is switched off now/)
+})
+
+test('a deletion answered while the sign-in screen is still loading is told by the next screen if this one goes', async () => {
+  sessionStorage.clear()
+  clearDeletion()
+  vi.stubGlobal('fetch', () => new Promise(() => {}))
+  const first = render(<LoginScreen onDone={() => {}} />)
+  act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
+  first.unmount()
+  vi.unstubAllGlobals()
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Your account was deleted\./)
+})
+
+test('the deletion notice survives React’s double render and effects, and is told once', async () => {
+  sessionStorage.clear()
+  clearDeletion()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const first = render(
+    <StrictMode>
+      <LoginScreen onDone={() => {}} />
+    </StrictMode>,
+  )
+  await screen.findByText(/Your account was deleted\./)
+  // It stays while this screen is up (a failed attempt, another step and back)...
+  await screen.findByLabelText('Password')
+  expect(screen.getByText(/Your account was deleted\./)).toBeTruthy()
+  first.unmount()
+  // ...and a reload shows the plain form.
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+})
+
+test('the deletion notice is not used up by a step that does not show it', async () => {
+  sessionStorage.clear()
+  clearDeletion()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [], reset_by_email: true } } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Your account was deleted\./)
+  // Went to the forgotten-password step and back: it is still told, being the screen's own.
+  fireEvent.click(screen.getByRole('button', { name: 'Forgot your password?' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Back to login' }))
+  await screen.findByText(/Your account was deleted\./)
 })
 
 // --- The rework on the component library: what it adds to the screens.

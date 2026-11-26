@@ -11,7 +11,7 @@ import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
-import { DELETION_EVENT, takeDeletion } from './deleted'
+import { clearDeletion, DELETION_EVENT, peekDeletion } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
 // The shortest password the server takes (internal/auth/password.go).
@@ -391,22 +391,31 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     return reply
   }, onDone)
   const [forgot, setForgot] = useState(false)
-  // Told once, to a person who has just deleted their account.
-  const [deleted, setDeleted] = useState(takeDeletion)
+  // Told to a person who has just deleted their account: read here, and removed from storage only
+  // once it is on the screen (below), so a screen that goes before drawing it loses nothing.
+  const [deleted, setDeleted] = useState(peekDeletion)
   // ...or told now, if the deletion is answered after this screen is up.
   useEffect(() => {
     const told = () => {
-      const at = takeDeletion()
+      const at = peekDeletion()
       if (at) setDeleted(at)
     }
     window.addEventListener(DELETION_EVENT, told)
     return () => window.removeEventListener(DELETION_EVENT, told)
   }, [])
   const f = useFormat()
+  const forgetting =
+    forgot && loaded.state.kind === 'ready' && loaded.state.methods.password && loaded.state.methods.resetByEmail
+  // The notice is drawn by the login form itself: not while the methods load, not on the code step,
+  // not on the forgotten-password step. Once it is, it has been told, and a reload shows the plain form.
+  const drawn = loaded.state.kind === 'ready' && !challenge && !forgetting
+  useEffect(() => {
+    if (deleted && drawn) clearDeletion()
+  }, [deleted, drawn])
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   const methods = loaded.state.methods
-  if (forgot && methods.password && methods.resetByEmail) {
+  if (forgetting) {
     return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} />
   }
   const errors = placed(failure, ['email', 'password'])

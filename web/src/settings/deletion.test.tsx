@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { type DeletionStatus, type Me, type Member, type PendingDeletion, SESSION_LOST, type Workspace } from '../api'
-import { takeDeletion } from '../auth/deleted'
+import { clearDeletion, peekDeletion } from '../auth/deleted'
 import { type Call, fakeFetch } from '../test/fakes'
 import { answer } from '../test/ui'
 import { claimDrafts, readState, writeState } from '../uiState'
@@ -34,7 +34,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   sessionStorage.clear()
-  takeDeletion() // a date a test left in memory
+  clearDeletion() // a date a test left in memory
 })
 afterEach(() => {
   cleanup()
@@ -73,9 +73,9 @@ test('deleting your account offers the export first, asks for the password, and 
   await waitFor(() => expect(lost).toHaveBeenCalled())
   // The end of the session is the owner's (1): a window signed in as another account ignores it.
   expect((lost.mock.calls[0][0] as CustomEvent).detail).toEqual({ user: 1 })
-  // The sign-in screen is told when the account is erased, once.
-  expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')
-  expect(takeDeletion()).toBeNull()
+  // The sign-in screen is told when the account is erased: the date waits until a screen has drawn it.
+  expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
+  expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
   window.removeEventListener(SESSION_LOST, lost)
 })
 
@@ -121,7 +121,7 @@ test('an account with two-factor login sends its code too, and a wrong password 
   await screen.findByRole('alert')
   expect(sent(calls, 'POST', '/api/me/deletion')[0].body).toEqual({ password: 'wrong-password-here', code: '123456' })
   expect(lost).not.toHaveBeenCalled()
-  expect(takeDeletion()).toBeNull()
+  expect(peekDeletion()).toBeNull()
   window.removeEventListener(SESSION_LOST, lost)
 })
 
@@ -140,7 +140,7 @@ test('a deletion refused because its session ended already, in another tab, ends
   await waitFor(() => expect(lost).toHaveBeenCalled())
   // Told for the owner (1), whose form this is: a window signed in as another account ignores it.
   expect((lost.mock.calls[0][0] as CustomEvent).detail).toEqual({ user: 1 })
-  expect(takeDeletion()).toBeNull()
+  expect(peekDeletion()).toBeNull()
   window.removeEventListener(SESSION_LOST, lost)
 })
 

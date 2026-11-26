@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { ApiError, api, forAccount, SESSION_LOST, sessionLostFor } from '../api'
+import { clearDeletion, rememberDeletion } from '../auth/deleted'
 import { type BeforeLeave, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
@@ -68,6 +69,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup()
+  clearDeletion()
   vi.unstubAllGlobals()
   await deactivate({ purge: false })
 })
@@ -121,6 +123,18 @@ test('signing in claims the account’s offline database, and signing out with n
   expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
   expect(lastUser()).toBeNull()
+})
+
+test('a deleted account’s notice that no sign-in screen drew is not told to the next account to sign in here', async () => {
+  window.sessionStorage.clear()
+  // Another account's deletion was answered, but nobody saw the sign-in screen: this one signs in.
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  logOut()
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
 })
 
 test('signing out with records not sent asks first: cancel keeps everything, discard deletes it', async () => {
