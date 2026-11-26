@@ -1013,8 +1013,7 @@ func (r *repo) countAuthored(ctx context.Context, head *object.Commit, set map[s
 // the two still finds the space to finish, and the caller then calls ForgetSpace. Removing what
 // is gone already succeeds.
 func (s *Store) RemoveSpace(sp access.Space) error {
-	st := s.state(sp.ID)
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
 	st.removed, st.removedCreated = true, sp.CreatedAt
 	dir := sp.Dir(s.dataDir)
@@ -1043,8 +1042,7 @@ const removingSuffix = ".removing"
 // caller makes nothing in the directory. It holds the same lock as the Store's reads, shared with
 // them and with other holders, so a caller keeps it for the writes only.
 func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
-	st := s.state(sp.ID)
-	st.mu.RLock()
+	st := s.lockSpace(sp, false, false)
 	if err := s.admit(st, sp); err != nil {
 		st.mu.RUnlock()
 		return nil, err
@@ -1056,8 +1054,7 @@ func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
 // deleted: nothing can reach the space then, and a space made later may be given its ID. A space
 // that isn't marked removed is left alone.
 func (s *Store) ForgetSpace(sp access.Space) {
-	st := s.state(sp.ID)
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
 	if !st.removed {
 		return

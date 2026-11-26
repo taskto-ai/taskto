@@ -319,11 +319,7 @@ func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) 
 // space is refused, or after it, and takes the file with the rest. The bytes are then copied into
 // a file that may already be unlinked, which leaves nothing behind.
 func (s *Store) openStaged(sp access.Space) (*staged, *os.File, error) {
-	st := s.state(sp.ID)
-	if s.beforeLock != nil {
-		s.beforeLock(sp)
-	}
-	st.mu.RLock()
+	st := s.lockSpace(sp, false, true)
 	defer st.mu.RUnlock()
 	if err := s.admit(st, sp); err != nil {
 		return nil, nil, err
@@ -369,8 +365,7 @@ func (r *repo) adopt(sg *staged) error {
 
 // ensureRepo creates sp's repository if it has none.
 func (s *Store) ensureRepo(sp access.Space) error {
-	st := s.state(sp.ID)
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
 	if err := s.admit(st, sp); err != nil {
 		return err

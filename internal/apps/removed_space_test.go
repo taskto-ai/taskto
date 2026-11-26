@@ -2,11 +2,13 @@ package apps
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io/fs"
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,5 +112,162 @@ func TestCleanupInsideAHeldSpaceDoesNotWaitForAPendingRemoval(t *testing.T) {
 	done()
 	if err := <-removed; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func (w *world) created(s int64) string {
+	w.e.t.Helper()
+	var c string
+	if err := w.e.db.QueryRow(`SELECT created_at FROM spaces WHERE id = ?`, s).Scan(&c); err != nil {
+		w.e.t.Fatal(err)
+	}
+	return c
+}
+
+// A relocation that was found for an app and an attachment, and runs later, does only what is still
+// true when it has the spaces held: the app may have gone back to where it was, or the space it was
+// to move to may be another one that was given a purged space's ID. Neither may take a photo out
+// of the space it is in, or copy it into one that is not the app's.
+func TestAStaleRelocationMovesNothing(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	w.e.s.WithSpaceHolder(kb)
+	from, to := w.alicePrivate, w.shared
+	a := w.createPhotos(w.alice, from, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.upload(w.alice, from, a, "photos", picture, 4096)
+	before := w.files(from, a)
+
+	// The app is back in its first space: a move to the other is no longer wanted.
+	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.files(to, a); len(got) != 0 {
+		t.Fatalf("a stale relocation copied into %v", got)
+	}
+	if got := w.files(from, a); !slices.Equal(got, before) {
+		t.Fatalf("a stale relocation changed the files: %v, was %v", got, before)
+	}
+	var space int64
+	if err := w.e.db.QueryRow(`SELECT space_id FROM app_attachments WHERE id = ?`, id).Scan(&space); err != nil || space != from.ID {
+		t.Fatalf("the attachment's space is %d (%v)", space, err)
+	}
+
+	// The app's home is the other space now (its move is recorded, its files not yet): a relocation
+	// that knew the other space by a creation time it no longer has is for a space that is gone.
+	if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, "1999-01-01T00:00:00.000Z")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a relocation to a space that was replaced: %v", err)
+	}
+	if got := w.files(to, a); len(got) != 0 {
+		t.Fatalf("a relocation to a space that was replaced copied into %v", got)
+	}
+
+	// The same relocation with the spaces as they are does the move.
+	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.created(from.ID), to.ID, w.created(to.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.files(to, a); len(got) != len(before) {
+		t.Fatalf("the move put %v in the new space, want %v", got, before)
+	}
+	if got := w.files(from, a); len(got) != 0 {
+		t.Fatalf("the move left %v in the old space", got)
+	}
+}
+
+// A chunk takes the space before it takes the database's write lock, as finalize and relocation do.
+// If it took them the other way round, a removal waiting for the space would leave the chunk
+// holding the database lock while it waits for the space, and a finalize holding the space while it
+// waits for the database: neither goes on until the database gives up.
+func TestAChunkWaitsForTheSpaceWithoutHoldingTheDatabase(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
+	w.e.s.WithSpaceHolder(kb)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	picture := testPNG(t, 64, 48)
+	id := w.start(w.alice, s, a, "photos", len(picture))
+
+	// A holder of the space, and a removal that waits for it: new holders queue behind the removal.
+	release, err := kb.HoldSpace(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() { removed <- kb.RemoveSpace(s) }()
+	spin(t, "the removal to wait for the held space", removalIsWaiting)
+	chunk := make(chan int, 1)
+	go func() { chunk <- w.chunk(w.alice, s, a, id, 0, picture).Code }()
+	spin(t, "the chunk to wait for the space", func() bool { return goroutineWith("putChunk", "sync.(*RWMutex).RLock") })
+
+	// The database is free while it waits.
+	written := make(chan error, 1)
+	go func() { written <- w.e.s.write(ctx, func(*sql.Tx) error { return nil }) }()
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("a write to the database while a chunk waits for the space: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a chunk waiting for the space holds the database's write lock")
+	}
+
+	release()
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	if code := <-chunk; code != http.StatusNotFound {
+		t.Fatalf("the chunk after the removal: status %d, want 404", code)
+	}
+}
+
+// A space whose row is gone, found when its files are opened, is a 404 to the API and nothing to do
+// to the callers that clean up, not a failure of the server.
+func TestAFilesRootOfAGoneSpaceIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.e.s.WithSpaceHolder(knowledge.New(w.e.dataDir, knowledge.Options{}))
+	s := w.alicePrivate
+	if _, err := w.e.db.Exec(`DELETE FROM spaces WHERE id = ?`, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := w.e.s.filesRoot(ctx, s.ID)
+	if !errors.Is(err, ErrNotFound) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("filesRoot of a space with no row: %v", err)
+	}
+	if _, err := os.Lstat(s.Dir(w.e.dataDir)); err == nil {
+		t.Fatal("its directory was made")
+	}
+}
+
+// goroutineWith reports whether a goroutine's stack has both words: how a test sees that code is
+// blocked where it expects, with no sleep and no hook in production code.
+func goroutineWith(a, b string) bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, a) && strings.Contains(g, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// spin yields until cond holds, and fails if it doesn't in ten seconds.
+func spin(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for !cond() {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", what)
+		default:
+			runtime.Gosched()
+		}
 	}
 }

@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path"
 	"strings"
@@ -305,6 +306,51 @@ func (s *Store) admit(st *spaceState, sp access.Space) error {
 	return nil
 }
 
+// refusedIfRemoved is err, or ErrSpaceRemoved when err is a missing file and the space was removed
+// meanwhile: an upload staged its bytes, and the removal took them with the rest.
+func (s *Store) refusedIfRemoved(sp access.Space, err error) error {
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	st := s.lockSpace(sp, false, false)
+	defer st.mu.RUnlock()
+	if refused := s.admit(st, sp); refused != nil {
+		return refused
+	}
+	return err
+}
+
+// lockSpace takes the lock of sp's state, for writing or reading, and returns the state with the
+// lock held, once it is the state the Store has for the space. A state that was forgotten
+// (ForgetSpace) while its lock was waited for is left, and the current one is taken: a call must
+// never hold the lock of a state that no one else will find, or it would run beside a call that holds
+// the lock of the new one. hook is for the calls whose test pauses them before the lock
+// (Store.beforeLock).
+func (s *Store) lockSpace(sp access.Space, write, hook bool) *spaceState {
+	for {
+		st := s.state(sp.ID)
+		if hook && s.beforeLock != nil {
+			s.beforeLock(sp)
+		}
+		if write {
+			st.mu.Lock()
+		} else {
+			st.mu.RLock()
+		}
+		s.mu.Lock()
+		current := s.spaces[sp.ID] == st
+		s.mu.Unlock()
+		if current {
+			return st
+		}
+		if write {
+			st.mu.Unlock()
+		} else {
+			st.mu.RUnlock()
+		}
+	}
+}
+
 func (s *Store) state(spaceID int64) *spaceState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -508,7 +554,7 @@ func (s *Store) PutFile(ctx context.Context, sp access.Space, name string, src i
 	if !s.unversioned(name, sg.ptr.size) {
 		content, err := sg.bytes()
 		if err != nil {
-			return Result{}, err
+			return Result{}, s.refusedIfRemoved(sp, err)
 		}
 		if _, isPtr := parsePointer(content); !isPtr {
 			return s.put(sp, name, int64(len(content)), base, by, message, func(r *repo, _ *object.TreeEntry) (plumbing.Hash, error) {
@@ -954,8 +1000,7 @@ func (s *Store) read(sp access.Space, fn func(*repo) error) error {
 	if !sp.Access.Allows(access.Read) {
 		return access.ErrNotFound
 	}
-	st := s.state(sp.ID)
-	st.mu.RLock()
+	st := s.lockSpace(sp, false, false)
 	defer st.mu.RUnlock()
 	if err := s.admit(st, sp); err != nil {
 		return err
@@ -994,11 +1039,7 @@ func (s *Store) writeQ(sp access.Space, adding int64, quotaFirst, create bool, f
 }
 
 func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bool, fn func(*repo) error) error {
-	st := s.state(sp.ID)
-	if s.beforeLock != nil {
-		s.beforeLock(sp)
-	}
-	st.mu.Lock()
+	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
 	if err := s.admit(st, sp); err != nil {
 		return err

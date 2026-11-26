@@ -3,11 +3,15 @@ package knowledge
 import (
 	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/access"
 )
@@ -278,4 +282,122 @@ func TestRemovingOneSpaceLeavesTheOthersWorking(t *testing.T) {
 	if got := readText(t, s, b, "b.md", ""); got != "y" {
 		t.Fatalf("read %q", got)
 	}
+}
+
+// removalIsWaiting reports whether a goroutine is in RemoveSpace, blocked on a space's lock:
+// observed from the goroutines' stacks, so a test needs no sleep.
+func removalIsWaiting() bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "(*Store).RemoveSpace") && strings.Contains(g, "sync.(*RWMutex).Lock") {
+			return true
+		}
+	}
+	return false
+}
+
+// A removal that took the space's state, and waits for its lock while the state is forgotten, must
+// not go on with the state nobody else will find: a writer of the space's new state would then run
+// beside it, and the removal would delete what the writer is making.
+func TestARemovalThatWaitedOnAForgottenStateWaitsForTheNewOne(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	old := writable(1)
+	old.CreatedAt = "2026-01-01T00:00:00.000Z"
+	must[Result](t)(s.Put(ctx, old, "a.md", []byte("x"), "", alice, ""))
+	if err := s.RemoveSpace(old); err != nil {
+		t.Fatal(err)
+	}
+
+	// The purge's retry removes it again, and has the state when it is forgotten.
+	reached, proceed := make(chan struct{}), make(chan struct{})
+	s.beforeLock = func(access.Space) {
+		s.beforeLock = nil
+		close(reached)
+		<-proceed
+	}
+	removed := make(chan error, 1)
+	go func() { removed <- s.RemoveSpace(old) }()
+	<-reached
+	s.ForgetSpace(old)
+
+	// A space made later with the ID has a writer inside its write.
+	later := writable(1)
+	later.CreatedAt = "2026-02-01T00:00:00.000Z"
+	inside, release := make(chan struct{}), make(chan struct{})
+	written := make(chan error, 1)
+	go func() {
+		_, err := s.PutIf(ctx, later, "b.md", []byte("y"), "", alice, "", func() error {
+			close(inside)
+			<-release
+			return nil
+		})
+		written <- err
+	}()
+	<-inside
+	close(proceed)
+	for !removalIsWaiting() {
+		select {
+		case err := <-removed:
+			t.Fatalf("the removal ran beside a writer of the space (it returned %v)", err)
+		default:
+			runtime.Gosched()
+		}
+	}
+	close(release)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	gone(t, dataDir, later)
+}
+
+// A removal doesn't wait for an upload's body: the bytes are staged without the space's lock, so a
+// client that stalls half-way holds nothing the purge needs (the scheduler runs it in a worker
+// that other jobs wait behind). The upload then ends refused, with nothing left of the space.
+func TestARemovalDoesNotWaitForAStalledUpload(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	sp := writable(1)
+	stalled, unblock := make(chan struct{}), make(chan struct{})
+	body := &stallingReader{first: []byte("some bytes"), stalled: stalled, unblock: unblock}
+	put := make(chan error, 1)
+	go func() {
+		_, err := s.PutFile(ctx, sp, "big.png", body, "", alice, "")
+		put <- err
+	}()
+	<-stalled
+
+	removed := make(chan error, 1)
+	go func() { removed <- s.RemoveSpace(sp) }()
+	select {
+	case err := <-removed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the removal waits for an upload whose client has stalled")
+	}
+	close(unblock)
+	wantErr(t, <-put, access.ErrNotFound)
+	gone(t, dataDir, sp)
+}
+
+// stallingReader gives its first bytes, then blocks until unblock is closed.
+type stallingReader struct {
+	first   []byte
+	stalled chan struct{}
+	unblock chan struct{}
+	sent    bool
+}
+
+func (r *stallingReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, r.first), nil
+	}
+	close(r.stalled)
+	<-r.unblock
+	return 0, io.EOF
 }
