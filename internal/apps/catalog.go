@@ -467,6 +467,9 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 			if _, isPath := n["svgPath"]; isPath {
 				return c.iconPath(id, n)
 			}
+			// A bound name is drawn only if it holds a path, which the renderer checks then: a
+			// client that doesn't check paths must not draw one, so it needs the capability too.
+			c.used[IconPathCapability] = true
 			return binding(n)
 		default:
 			return fmt.Errorf(`must be {"svgPath": "<path data>"}, an icon's name or a data binding`)

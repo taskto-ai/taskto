@@ -192,7 +192,7 @@ const (
 
 	CodeAppDefinitionVersion   Code = "app_definition_version"   // 400: params: version, supported
 	CodeAppIconPath            Code = "app_icon_path"            // 400: an icon's svgPath isn't path data; params: component, max
-	CodeAppIconLabel           Code = "app_icon_label"           // 400: an icon alone in a button or trigger has no name; params: component
+	CodeAppIconLabel           Code = "app_icon_label"           // 400: a button or trigger shows only icons, none named; params: component
 	CodeAppNotPublished        Code = "app_not_published"        // 409: no release yet, so nothing to launch
 	CodeAppReleaseNotFound     Code = "app_release_not_found"    // 404: the app has no such release
 	CodeAppReleaseOutdated     Code = "app_release_outdated"     // 409: an action of an older release the live one can't take; params: release, live

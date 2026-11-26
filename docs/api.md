@@ -176,8 +176,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_preview_too_large` | 413 | A preview's request, with all its sample rows, is over `max_mib` MiB. |
 | `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
 | `app_definition_version` | 400 | The definition's `definition_version` is `version`, which this server doesn't read (it reads up to `supported`). |
-| `app_icon_path` | 400 | The icon `component`'s `svgPath` isn't SVG path data: it starts with `M` or `m` and holds only path commands, numbers, signs, decimal points, exponents, commas and spaces, at most `max` characters ([The definition](#the-definition), Icons). |
-| `app_icon_label` | 400 | The icon `component` is all a `Button` or a `Modal`'s trigger shows, and has no `accessibility.label` ([The definition](#the-definition), Icons). |
+| `app_icon_path` | 400 | The icon `component`'s `svgPath` isn't SVG path data: it must start with `M` or `m` and hold only path commands, numbers, signs, decimal points, exponents, commas and spaces, at most `max` characters ([The definition](#the-definition), Icons). |
+| `app_icon_label` | 400 | The icon `component` is in a `Button` or a `Modal`'s trigger that shows only icons, none with an `accessibility.label` ([The definition](#the-definition), Icons). |
 | `app_not_published` | 409 | The app has no release yet: it is a draft, so it can't be launched or have its actions run. |
 | `app_release_not_found` | 404 | The app has no such release. |
 | `app_release_outdated` | 409 | An action from release `release` that the live release `live` can't take; reload the app. |
@@ -2848,11 +2848,13 @@ saying what is wrong) unless:
   1–2000 characters (a detailed glyph is well under 1,500; the 48 KiB limit on the whole
   definition is what caps how many an app holds). Anything else (a quote, a bracket, markup, a
   URL, a newline, another letter, an empty path, another key beside `svgPath`) is refused with
-  `app_icon_path`. An icon that is the whole content of a `Button`, or a `Modal`'s trigger, needs
-  an `accessibility.label` of its own (`app_icon_label`): the web app names the drawn icon with it,
-  and so the button; anywhere else an icon is decoration, hidden from assistive technology unless
-  it has a label. A definition with a path icon requires the capability `icon.svg_path`, so a
-  client whose renderer doesn't check paths says it must be updated instead of drawing one. The
+  `app_icon_path`. A `Button`, or a `Modal`'s trigger, that shows only path icons (followed
+  through the `Row`, `Column` and `Card` that lay its content out) needs an `accessibility.label`
+  on one of them (`app_icon_label`): the web app names the drawn icon with it, and so the control;
+  beside a `Text` or anything else an icon is decoration, hidden from assistive technology unless
+  it has a label. A definition with a path icon, or an icon bound to data, requires the capability
+  `icon.svg_path`, so a client whose renderer doesn't check paths says it must be updated instead
+  of drawing one. The
   web app makes the `<svg>` and `<path>` itself and puts the string only in the path's `d`
   attribute, after checking the same grammar again; it never makes markup, a URL, a style or a
   class from it. An icon given by **name** (`"add"`, `"star"`, …, A2UI's names) is still accepted,

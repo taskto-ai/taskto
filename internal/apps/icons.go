@@ -66,29 +66,76 @@ func (c *screenCheck) iconPath(id string, o map[string]any) error {
 	return nil
 }
 
-// iconLabels checks that a path icon standing alone has a name: one that is the whole content
-// of a Button, or the trigger of a Modal, needs an accessibility label of its own, which the web
-// app gives the drawn icon and so the button it is all of (the renderer's Button puts its own
-// label on an element outside the <button>, which names nothing). Beside other content an icon is
-// decoration, hidden from assistive technology unless it has a label. Icons by name draw
-// nothing, so the rule is for paths only.
+// iconLabels checks that a control drawn only with path icons has a name. A Button's content,
+// or a Modal's trigger, followed through the containers that lay it out (Row, Column, Card), up to
+// maxIconContentDepth deep: if it holds path icons and nothing else that names it (a Text, or any
+// other component), one of its icons needs an accessibility label of its own, which the web app
+// gives the drawn icon and so the control (the renderer's Button puts its own label on an element
+// outside the <button>, which names nothing). Beside other content an icon is decoration, hidden
+// from assistive technology unless it has a label. Icons by name draw nothing, so they neither
+// name a control nor need a name.
 func (c *screenCheck) iconLabels(byID map[string]map[string]any) error {
 	for _, id := range sortedKeys(byID) {
 		obj := byID[id]
-		var icon string
+		var content string
 		switch obj["component"] {
 		case "Button":
-			icon, _ = obj["child"].(string)
+			content, _ = obj["child"].(string)
 		case "Modal":
-			icon, _ = obj["trigger"].(string)
-		}
-		if !c.pathIcons[icon] || hasLabel(byID[icon]) {
+			content, _ = obj["trigger"].(string)
+		default:
 			continue
 		}
-		return invalidAs(apierr.CodeAppIconLabel, apierr.Params{"component": icon},
-			"component %q: an icon that is all of %s %q needs a name: give the icon accessibility.label", icon, obj["component"], id)
+		var icons []string
+		if c.namedBy(byID, content, 0, &icons) || len(icons) == 0 {
+			continue
+		}
+		return invalidAs(apierr.CodeAppIconLabel, apierr.Params{"component": icons[0]},
+			"component %q: %s %q shows only icons, so one needs a name: give the icon accessibility.label", icons[0], obj["component"], id)
 	}
 	return nil
+}
+
+// maxIconContentDepth is how deep iconLabels follows containers inside a control. Deeper content
+// is taken to name it, so a rare deep layout is never refused for what wasn't looked at.
+const maxIconContentDepth = 4
+
+// namedBy reports whether the content under id names the control it is in: a labelled path icon, a
+// Text or any other component that isn't a container, an icon by name or a template of a list.
+// It adds the unlabelled path icons it passes to icons.
+func (c *screenCheck) namedBy(byID map[string]map[string]any, id string, depth int, icons *[]string) bool {
+	obj, ok := byID[id]
+	if !ok || depth > maxIconContentDepth {
+		return true
+	}
+	switch obj["component"] {
+	case "Icon":
+		if !c.pathIcons[id] {
+			return false // a name draws nothing
+		}
+		if hasLabel(obj) {
+			return true
+		}
+		*icons = append(*icons, id)
+		return false
+	case "Card":
+		child, _ := obj["child"].(string)
+		return c.namedBy(byID, child, depth+1, icons)
+	case "Row", "Column":
+		children, isList := obj["children"].([]any)
+		if !isList {
+			return true // a template draws rows of data
+		}
+		named := false
+		for _, ch := range children {
+			s, _ := ch.(string)
+			if c.namedBy(byID, s, depth+1, icons) {
+				named = true
+			}
+		}
+		return named
+	}
+	return true
 }
 
 // hasLabel is whether a component has a non-empty accessibility label: text, or a value bound

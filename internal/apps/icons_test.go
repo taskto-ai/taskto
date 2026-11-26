@@ -108,11 +108,15 @@ func TestIconPathRefusesAnythingElse(t *testing.T) {
 }
 
 // An icon given by name stays valid, so apps saved with one still save and publish, and needs no
-// new capability; so does one bound to data.
+// new capability. One bound to data stays valid too, but needs the capability: the bound value
+// could be a path, which only a client that checks paths may draw.
 func TestIconByNameStaysValid(t *testing.T) {
+	bound, err := iconScreen(`{"id":"icon","component":"Icon","name":{"path":"/icon"}}`).Check()
+	if err != nil || !slices.Contains(bound.Requires, IconPathCapability) {
+		t.Fatalf("bound: requires = %v, %v; want %s", bound.Requires, err, IconPathCapability)
+	}
 	for _, icon := range []string{
 		`{"id":"icon","component":"Icon","name":"star"}`,
-		`{"id":"icon","component":"Icon","name":{"path":"/icon"}}`,
 		`{"id":"icon","component":"Icon","name":"add"}`,
 	} {
 		got, err := iconScreen(icon).Check()
@@ -147,6 +151,10 @@ func TestIconAloneNeedsAName(t *testing.T) {
 		"a button's icon with a blank label":    {button, blank},
 		"a modal's trigger with no label":       {modal, unlabelled, body},
 		"a labelled button, an unlabelled icon": {labelledButton, unlabelled},
+		"icons only, through a row": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
+			`{"id":"row","component":"Row","children":["plus","named"]}`, unlabelled, `{"id":"named","component":"Icon","name":"star"}`},
+		"icons only, through a card and a column": {`{"id":"icon","component":"Modal","trigger":"card","content":"body"}`, body,
+			`{"id":"card","component":"Card","child":"col"}`, `{"id":"col","component":"Column","children":["plus"]}`, unlabelled},
 	} {
 		_, err := iconScreen(comps...).Check()
 		code, params := codeOf(err)
@@ -161,6 +169,11 @@ func TestIconAloneNeedsAName(t *testing.T) {
 		"beside a label": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
 			`{"id":"row","component":"Row","children":["plus","text"]}`, unlabelled, `{"id":"text","component":"Text","text":"Add"}`},
 		"standing in a column": {`{"id":"icon","component":"Column","children":["plus"]}`, unlabelled},
+		"beside text, deeper in": {`{"id":"icon","component":"Button","child":"card","action":{"event":{"name":"add"}}}`,
+			`{"id":"card","component":"Card","child":"row"}`, `{"id":"row","component":"Row","children":["plus","col"]}`, unlabelled,
+			`{"id":"col","component":"Column","children":["text"]}`, `{"id":"text","component":"Text","text":"Add"}`},
+		"a labelled icon through a row": {`{"id":"icon","component":"Button","child":"row","action":{"event":{"name":"add"}}}`,
+			`{"id":"row","component":"Row","children":["plus"]}`, labelled},
 	} {
 		if _, err := iconScreen(comps...).Check(); err != nil {
 			t.Errorf("%s: %v", name, err)
