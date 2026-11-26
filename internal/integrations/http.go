@@ -43,6 +43,10 @@ type Options struct {
 	// Egress is where calls to providers may go (-integration-egress). Nil is "public": every
 	// connection's address is checked, so a call never reaches a private or loopback address.
 	Egress *egress.Policy
+	// ClientOptions are for tests: they change how the clients of calls to providers are built
+	// (WithTestEndpoint points them at a fake). The server's command leaves them empty, and nothing
+	// in its configuration, a definition or a request can set them.
+	ClientOptions []ClientOption
 	// Now is the clock of the webhook route's signature tolerance, the limits and the event
 	// worker; nil is the real one. It is for tests, which move time without sleeping.
 	Now func() time.Time
@@ -50,10 +54,20 @@ type Options struct {
 
 // Service serves the integrations API (docs/api.md#integrations).
 type Service struct {
-	store     *Store
-	spaces    *access.Checker
-	publicURL string
-	egress    egress.Policy
+	store      *Store
+	spaces     *access.Checker
+	publicURL  string
+	egress     egress.Policy
+	clientOpts []ClientOption
+	// beforeBeginRef is for tests: it runs between reading an entry's ref and making it ready for a
+	// call, where another worker's call may finish.
+	beforeBeginRef func()
+	// afterWriteAhead is for tests: it runs after a call is written ahead and before it leaves, and an
+	// error it returns ends the try there, as a crash would.
+	afterWriteAhead func() error
+	// afterCall is for tests: it runs after a call answered with an object and before anything of the
+	// answer is noted, and an error it returns ends the try there, as a crash would.
+	afterCall func() error
 
 	now func() time.Time
 	// hookIP and hookID limit the webhook route (webhook.go); applier applies stored events and
@@ -80,7 +94,7 @@ func New(store *Store, opts Options) *Service {
 	} else {
 		store.now = now
 	}
-	s := &Service{store: store, publicURL: opts.PublicURL, egress: policy, now: now, wake: make(chan struct{}, 1), decoy: newDecoy()}
+	s := &Service{store: store, publicURL: opts.PublicURL, egress: policy, clientOpts: opts.ClientOptions, now: now, wake: make(chan struct{}, 1), decoy: newDecoy()}
 	s.hookIP, s.hookID = newHookLimits(now)
 	return s
 }
@@ -105,6 +119,8 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, spaces *access.Che
 	mux.Handle("DELETE "+base+"/{integration}", admin(s.handleDelete))
 	mux.Handle("PUT "+base+"/{integration}/spaces", admin(s.handleSpaces))
 	mux.Handle("POST "+base+"/{integration}/check", admin(s.handleCheck))
+	mux.Handle("GET "+base+"/{integration}/payment-links/unresolved", admin(s.handleUnresolved))
+	mux.Handle("POST "+base+"/{integration}/payment-links/{effect}/confirm-no-link", admin(s.handleConfirmNoLink))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/integrations",
 		s.spaces.RequireSpace(access.Read, http.HandlerFunc(s.handleForSpace)))
 }

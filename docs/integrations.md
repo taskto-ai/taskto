@@ -29,11 +29,12 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
   **approval** by an admin of that contract's hash, which a publish and a rollback need
   ([Apps and approval](#apps-and-approval)).
 
-Nothing calls a provider yet: no payment link is made, a `create_payment_link` effect that an
-app declares does nothing when an action runs, and no stored event is applied to a record.
-Those arrive as separate changes, in this order: the payment link; applying a payment to a
-record; polling the provider for payments the webhook missed. The rules below are the ones
-those changes have to keep.
+- **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe and
+  writes its address to the record ([Payment links](#payment-links)).
+
+The webhook is received and its events are stored, but no stored event is applied to a record
+yet. Those arrive as separate changes, in this order: applying a payment to a record; polling the
+provider for payments the webhook missed. The rules below are the ones those changes have to keep.
 
 ## Concepts
 
@@ -130,7 +131,7 @@ currency's smallest unit, up to a trillion) and 1 to 20 currencies from the serv
 The list has each currency's number of decimals in the provider's API, which is how a payment's
 amount is converted exactly, never rounded. That is Stripe's unit, which isn't always ISO 4217's:
 COP, HUF and IDR have two decimals, and ISK is written with two that are always `00` (5 ISK is
-500), so an ISK amount must be whole (`WholeUnitsOnly`). These limits are not in a definition and no app can raise them.
+500), so an ISK amount must be whole (`currency.WholeUnitsOnly`, which `currency.Minor` enforces: a preview refuses what the run would). These limits are not in a definition and no app can raise them.
 
 ## Gates
 
@@ -273,6 +274,195 @@ would switch the address check off. `any` is there for a trusted network, and a 
 reaches the internet only through a mandatory proxy needs it, since a restricted policy
 ignores the environment's proxy.
 
+## Payment links
+
+An app's action may declare a `create_payment_link` effect that names a slot of kind `payments`
+([Apps and approval](#apps-and-approval)). When the action runs, the effect is queued in the app's
+outbox in the same transaction as the record's change, and the outbox worker does it as the user who
+acted, with that user's access then (`docs/api.md`, [Payment links](api.md#payment-links)). It
+re-checks that the live release still asks for exactly this link and has an approved contract for it
+(the action and its kind, the amount field and its bounds, the currency and where it is read from, the
+rule the record must meet, where the link goes), that the integration is switched on and allowed in
+the app's space, and the admin's limits. These are read in one snapshot before the provider is asked
+(the app's place, the approval, and the user's access through the same read transaction, so no check
+mixes two instants), and again in the transaction that writes the link, with the user's access: what
+changes while the provider answers stops the write. An entry runs only in the space it was queued in:
+moving an app clears its approvals, and what an admin approves again in the new space is not what the
+entry asked of the old one, so the entry fails with `app_effect_space_changed` and the payment is
+started again. A record edited so that it no longer meets the action's condition (`when`) fails the
+entry with `integration_condition_changed`, which says so (nothing was created; no admin is needed). It makes
+the link at the provider with the integration's key, which is opened only for the call; and it writes
+the link and its id to the two fields the effect names through the system writer, in no way a user's
+write.
+
+- **Two shapes, by whether the server has a public URL.** Both are one line item with the exact
+  amount and the description as the product's name, made once under the reference's token.
+  - *With `-public-url`: a Checkout Session in payment mode* (`POST /v1/checkout/sessions`):
+    `client_reference_id` set to the reference's token, and the server's own `success_url` and
+    `cancel_url`. A session expires by itself after Stripe's default of 24 hours (its limit), so a
+    payer who comes later finds an expired page, and sending the invoice again makes a new link.
+  - *Without it: a Payment Link* (`POST /v1/payment_links`) with `after_completion[type]` set to
+    `hosted_confirmation`, so the payer stays on a confirmation page Stripe hosts and no URL of ours
+    is sent; `restrictions[completed_sessions][limit]` set to `1`, so an invoice's link can't be
+    paid twice; and the token in the link's `metadata` (`taskto_ref`), which Stripe copies to the
+    session of the payment. A Payment Link takes no `client_reference_id` in the API, so the token is
+    also in the link's address (`?client_reference_id=<token>`), the way Stripe documents for it,
+    which reaches `checkout.session.completed`. A link doesn't expire by itself, and the payments of
+    one are found at Stripe by listing Checkout Sessions with `payment_link=<plink id>`. The record's
+    `id_field` gets the link's `plink_…` id instead of a session's `cs_…`.
+
+  Stripe's documentation relied on (checked against the pinned version): Create a Checkout Session
+  (<https://docs.stripe.com/api/checkout/sessions/create>: `success_url` is "required conditionally",
+  and every hosted example sets one, so a session without one is not relied on), Create a payment link
+  (<https://docs.stripe.com/api/payment-link/create>: `after_completion`, `restrictions`,
+  `line_items[].price_data`, `metadata` copied to the link's sessions), the Payment Links API guide
+  (<https://docs.stripe.com/payment-links/api>), Track a payment link
+  (<https://docs.stripe.com/payment-links/url-parameters>: the `client_reference_id` URL parameter) and
+  List Checkout Sessions (<https://docs.stripe.com/api/checkout/sessions/list>: the `payment_link`
+  filter).
+
+  **Paid status without a public URL** can't come from a webhook, which Stripe can't deliver to such a
+  server. It is to come from reconciliation polling (a later change, not built yet): until then a
+  record made without a public URL is not marked paid by itself.
+
+  The API version is pinned in code (`integrations.StripeAPIVersion`, sent in the
+  `Stripe-Version` header; the version Stripe's documentation lists as current when the adapter was
+  written) and is raised by a change of code with its tests, never by configuration.
+- **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
+  than the currency has, zero or less, above the integration's ceiling, or a currency the integration
+  doesn't list are each refused, with a code that says which, before anything is made.
+- **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
+  unique by the outbox entry and keeps the provider's answer. It has **keys**
+  (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of
+  its own, which the call puts in the object (`client_reference_id`, or a Payment Link's
+  `metadata[taskto_ref]`) and Stripe's events echo back. The first key's token is the reference's;
+  a payment of a later key finds the reference by that key's token. The owner's rule is that a
+  reference never risks a second payable link, so the server never decides after the fact that a call
+  didn't reach Stripe:
+  - *Written ahead.* Before every call under a key, the call is recorded on the key (`sends`, and the
+    time the key was first sent), durably, and that record is never taken back. A crash between the
+    record and the call, or between the call and its answer being noted, leaves the key as a call
+    that may have run.
+  - *Sent once.* The HTTP client never resends the call by itself: Go's transport would resend a
+    request with an `Idempotency-Key` on a new connection when a reused one breaks, and report the
+    second copy's failed dial, though the first reached Stripe. The body is made one that can't be
+    read again, which stops that, and whether a call may have left is told by whether a connection was
+    ever handed to it, not by the error.
+  - *Resolved only by evidence.* A key is resolved by an answer (`2xx`) whose object is then read at
+    Stripe; by a lookup that finds an object carrying the key's own token (never another key's: an
+    expired session of an earlier key says nothing of a later one); or by an answer Stripe documents
+    as given before the call ran: a `429` whose code is `rate_limit` or `lock_timeout`
+    (<https://docs.stripe.com/rate-limits#object-lock-timeouts>), a `409` whose code is
+    `idempotency_key_in_use` (another request with the key is still running), and a call that never got
+    a connection. Those count as clean (`clean_sends`), and the same key is asked again later, never a
+    new one.
+  - *Everything else leaves the outcome unknown*: any other `4xx` (Stripe saves the result of a request
+    whose execution began under its key, a refusal included:
+    <https://docs.stripe.com/error-low-level#content-errors>), a `5xx` (indeterminate:
+    <https://docs.stripe.com/error-low-level#server-errors>), a `408`, a `409` or `429` of another kind,
+    a timeout, a dropped connection, an answer that can't be read, an object whose state can't be read.
+- **An unknown outcome is never answered with a second link.** Stripe says not to "retry with a new
+  idempotency key until you've resolved the original outcome". A reference whose key's outcome is
+  unknown **never gets a new key by itself**:
+  - *Each try resolves the key if it can.* An object an answer named (kept on the key before its state
+    is read) is read again; otherwise the account is listed (the Checkout Sessions of any status
+    created since the reference, matched on `client_reference_id`, or the Payment Links, active or
+    not, newest first, matched on `metadata[taskto_ref]`; neither has a filter for them and the search
+    API doesn't cover them) for an object of the key's token. An object that is open (an active link)
+    and asks the amount and the currency of the payment is adopted as if a call had answered it, after
+    its state is read. One that doesn't ask them, a completed session and an inactive link (deactivated,
+    or at its limit of payments) are never given to a payer and stop the entry
+    (`integration_link_already_paid` or the provider's refusal): nothing else is made, and a person
+    reconciles the payment.
+  - *Then the same key is asked again*, with the same parameters, while Stripe still keeps it (23 hours
+    from the key's first call; Stripe keeps keys at least 24): Stripe answers with what the first call
+    made (an object, or the failure it kept), or runs the call if it never ran. Past that window the
+    key is never called again, since Stripe may have forgotten it and would run it a second time.
+  - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
+    listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
+    and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
+    whatever the failure, the key refused (`401`) included: any page of the lookup, a Payment Link's
+    line items, the read of the account and of the state alike. An object a lookup finds is kept on its
+    key before its state is read, as an answer's is, and so is one it finds carrying the key's token and
+    can't adopt, in every case: a Payment Link whose line items can't be read (its amount can't be
+    checked), or an object that asks another amount or currency. Such an object is kept *unchecked*: it
+    is never adopted as it is, the same key isn't asked again on top of it, and it blocks a new key and an
+    admin's "none exists" as any object on record does. Only a later lookup that reads and checks it
+    adopts it (an open object asking the payment's amount and currency); until then the entry waits as
+    below, and then fails for a person, with the admins' list naming the object (`object_id`). The entry waits half
+    the time the outcome has been unknown, at least 30 seconds and at most 30 minutes (it shows
+    `integration_link_lookup_pending`; these waits don't use up its tries), for at most **6 hours**
+    from when the outcome became unknown (`outcomeWait`), and nothing ends that early.
+  - *Then a person decides.* If the 6 hours end unresolved, the entry fails with
+    `integration_outcome_unknown`, which tells an admin to check the Stripe account for an object of
+    the reference (a Payment Link's `metadata.taskto_ref`, a Checkout Session's `client_reference_id`)
+    and then either
+    - *adopt one*: if the link is there, the person who acted retries the entry; it looks again and
+      adopts the link (it fails again at once if it still sees none); or
+    - *confirm that none exists*: an admin of the workspace confirms "no link exists, create a new
+      one" (`POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`,
+      [api.md](api.md#confirm-that-no-payment-link-exists)), the only way to a new key for such a
+      reference. The key is recorded as abandoned (its record stays), **exactly one** new key is
+      allowed, the entry is queued again as it was (the person who acted, with the access they have
+      then), and the confirmation is in the audit log (`integration_new_link_allowed`). It is refused
+      (`integration_link_not_confirmable`), in the transaction that would allow the new key, when the
+      server saw anything of the reference that contradicts "none exists" (a key with an object on
+      record: an answer named one, or a lookup found one carrying its token, whether or not it could check
+      it; the admins' list names that object, `object_id`, for a person to check at Stripe) or any key of it was already resolved (seen
+      expired, or abandoned by an earlier confirmation). So it is possible once per reference, for its
+      first key: if the new key's call too has an unknown outcome, the entry fails with
+      `integration_outcome_unknown` again and a person reconciles it in the Stripe account. A key also
+      moves on by itself (from one seen expired) only while every key of the reference left nothing a
+      payer can use. The
+      admins' list of what waits for a decision is
+      `GET …/integrations/{integration}/payment-links/unresolved`. Both routes cover only the spaces the
+      admin manages (a private space's payments are not another admin's to decide).
+- **Nothing is saved as the link until its state is read.** What a call answers, and above all what
+  Stripe replays for a key it kept, is the object as it was made: a Checkout Session replayed a day
+  later still says it is open. So before an object is saved as the link, whether a call made it, a
+  replay returned it or the lookup adopted it, it is retrieved (`GET /v1/checkout/sessions/{id}`,
+  `GET /v1/payment_links/{id}`) and saved only if a payer can use it now: an `open` session, an
+  `active` Payment Link. An expired session is never given; its key is accounted for (it made that
+  session and nothing else), so the reference moves on to the next key by itself, and the call is made
+  under it. A completed session and an inactive link stop the entry with
+  `integration_link_already_paid`. If the state can't be read, the object stays on the key and the
+  outcome stays unknown (above).
+- **A reference belongs to its account and its request.** When the reference is made, the integration
+  reads the account its key belongs to (`GET /v1/account`, which with no id answers the account of the
+  key; <https://docs.stripe.com/api/accounts/retrieve>, so the key must be allowed to read it) and
+  keeps the account's id with the mode of the key (test or live: one Stripe account answers both keys
+  with the same id, and a test key doesn't see what a live one made), the integration, and the two
+  pages of the request (or none) as the first try asked them.
+  A retry sends the same parameters, which Stripe requires of a retry under a key, and looks among
+  the same kind of objects (Checkout Sessions or Payment Links), whatever the server's public URL is
+  by then. If the integration's key has been replaced by another account's, or by the same account's
+  key of the other mode, while a reference has no object, nothing is looked for or made in the new
+  account or mode, where an object the old one made could
+  not be found: the entry fails with `integration_account_changed` and the reference is left as it is.
+  Its old link is neither cancelled nor known to be unpaid, so an admin reconciles the original
+  payment in the old account first (paid: nothing is recreated; not paid: the old link is made unable
+  to take payment), and only then runs the action again (a new entry, a new reference). A
+  reference is only ever used under the integration that made it, with its link or without
+  (`integration_changed` otherwise, wherever the reference is found), so a record is never written
+  with a link of an integration that is no longer the slot's; the same reconciliation applies.
+- **The newest entry wins, and what is sent is what was approved.** Entries are done in the order they
+  were queued, but one tried again later could write its link after a newer entry for the same record
+  and fields wrote its own. An entry for which a newer one exists (same record, either of the same two fields, any
+  state, kept apart from the entries so that cleaning them up doesn't lose it) asks the provider for nothing and writes nothing, and ends done with a result that says it
+  was superseded; the check is made again in the transaction that writes the link. And an entry's
+  description names the fields it was filled from: the live contract must still name each of them (and
+  the record's id, if it was in the text), or the entry fails as no longer approved
+  (`integration_unavailable`); wording alone is not in the contract.
+- **The server's own pages, or none.** With `-public-url` the payer comes back to
+  `<public URL>/payment/done` or `/payment/cancelled`, web app pages that show a short message and
+  call nothing; without it the payer stays on Stripe's confirmation page and no URL of ours is sent.
+  A new reference takes the server's address at that moment and keeps it for its tries.
+  A definition can't name a URL, so no app can send a payer elsewhere.
+- **A preview never calls the network**: it says what the link would ask and refuses an amount the
+  currency can't hold, with no integration, key or reference.
+- **The key stays in the call.** It is not in a reply, a record, an entry's result, the reference,
+  the audit log or a log line; a failure is a code, never the provider's words.
+
 ## Webhooks and the public URL
 
 Each integration has a random 128-bit `public_id`, and its webhook address is
@@ -412,7 +602,8 @@ against, so none of them needs a network:
 
 - **A fake Stripe**, an in-process HTTP server for the endpoints the integration uses: Checkout
   Sessions (create, retrieve, list, expire), Payment Links, the events list and a harmless
-  balance call. It answers with the shapes of Stripe's API at the version the adapter pins
+  balance call. Its lists work as Stripe's do (newest first, with `limit` and the cursors, and `created`
+  and `status` on sessions, `active` on links). It answers with the shapes of Stripe's API at the version the adapter pins
   (`integrations.StripeAPIVersion`; a test checks that the two agree), refuses unknown
   parameters, wrong keys, other versions and bodies that aren't form-encoded, and keeps
   idempotency keys as Stripe documents for API v1: the same key and parameters get the saved
@@ -436,13 +627,13 @@ against, so none of them needs a network:
 
 ## Trying an integration by hand
 
-CI never calls a real provider, and nothing here does yet: **check** only looks at what the
+CI never calls a real provider: tests run against the fake. **Check** only looks at what the
 server holds (the secrets are set and open, the settings are valid) and says nothing about
-whether the provider accepts the credentials. Real-provider testing arrives with the payment
-link. Meanwhile, use the provider's **test mode**, with test keys of your own that you create at
-the provider: connect them in Settings → Integrations, allow a space, and run the local check.
-Never use live keys to try the software, and never paste a key into an issue, a chat or a
-commit.
+whether the provider accepts the credentials. To try a payment link against the real Stripe, by
+hand and never in CI, use its **test mode** with test keys of your own that you create at Stripe:
+connect them in Settings → Integrations, set a public URL, allow a space, approve an invoicing app
+and send an invoice; the link opens a hosted page that takes Stripe's test cards. Never use live
+keys to try the software, and never paste a key into an issue, a chat or a commit.
 
 ## Not here, on purpose
 

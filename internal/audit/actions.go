@@ -85,6 +85,9 @@ const (
 	IntegrationEnabled       = "integration_enabled"
 	IntegrationSpacesChanged = "integration_spaces_changed"
 	IntegrationSpacesKept    = "integration_spaces_kept"
+	// IntegrationNewLinkAllowed: an admin checked the provider, confirmed that no payment link exists
+	// for a payment whose outcome never became known, and allowed one new try (one new key).
+	IntegrationNewLinkAllowed = "integration_new_link_allowed"
 
 	// An operator asks the host's updater to update the server now (Settings → About).
 	ServerUpdateRequested = "server_update_requested"

@@ -94,7 +94,8 @@ func browserWorld(t *testing.T) (*world, *fakeBrowsers, *orderedCLI) {
 	t.Helper()
 	w := newWorld(t)
 	b := newFakeBrowsers(w.dir)
-	cli := &orderedCLI{browsers: b}
+	// The container worker runs, as the world's history says it has.
+	cli := &orderedCLI{fakeCLI: fakeCLI{kind: cliContainer}, browsers: b}
 	w.svc.o.Browsers = b
 	w.svc.o.CLI = cli
 	return w, b, cli
@@ -192,7 +193,7 @@ func TestTheCLIDirectoryWaitsForABrowserStepRecordedAfterIt(t *testing.T) {
 	b.fail = errors.New("not yet")
 	w.deleteAccount()
 	user := fmt.Sprint(w.leaver)
-	if err := w.svc.record(ctx, w.db, w.leaver, cleanCLIHome, user); err != nil {
+	if err := w.svc.record(ctx, w.db, w.leaver, cleanCLIHome, cliContainer+":"+user); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.svc.record(ctx, w.db, w.leaver, cleanBrowser, user); err != nil {

@@ -14,6 +14,7 @@ import {
   type Credit,
   type DictationStatus,
   dictationPath,
+  type UpdateAvailable,
   type UpdateRequested,
   type UpdateRun,
   type UpdateStatus,
@@ -227,6 +228,10 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
           <p className="settings-muted">{t('settings.about.updates.needs.where')}</p>
         </Panel>
       )}
+      {st?.available && <AvailableUpdate available={st.available} notesUrl={u?.notes_url} />}
+      {st && !st.available && st.looked && st.channel !== 'off' && (
+        <p className="settings-muted">{t('settings.about.updates.available.upToDate')}</p>
+      )}
       {u?.configured && st && (
         <UpdateNow
           workspace={workspace}
@@ -276,6 +281,15 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
                       }),
                     },
                     { key: 'lastRun', term: t('settings.about.updates.lastRun'), value: run(st.last_run) },
+                    ...(st.looked
+                      ? [
+                          {
+                            key: 'looked',
+                            term: t('settings.about.updates.available.looked'),
+                            value: `${f.dateTime(st.looked)} (${f.relative(st.looked)})`,
+                          },
+                        ]
+                      : []),
                     { key: 'lastChange', term: t('settings.about.updates.lastChange'), value: run(st.last_change) },
                     ...(st.checked
                       ? [
@@ -293,6 +307,47 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
         </Panel>
       )}
     </Section>
+  )
+}
+
+// The version the host's updater would install next, which it found the last time it looked (every
+// few hours, and on every run): what it is, when it was published, where its notes are (a link the
+// server built from the updater's repository and the versions), and whether a person must install
+// it. The updater only reports it; Update now installs it when no person is needed.
+function AvailableUpdate({ available: a, notesUrl }: { available: UpdateAvailable; notesUrl?: string }) {
+  const t = useT()
+  const f = useFormat()
+  // A commit of the main channel is shown short, as git does; a release by its name.
+  const commit = /^[0-9a-f]{40}$/.test(a.version)
+  const version = <code title={a.version}>{commit ? a.version.slice(0, 12) : a.version}</code>
+  return (
+    <Notice tone={a.manual_upgrade ? 'warning' : 'info'}>
+      <p className="settings-text">
+        {a.published
+          ? t.rich('settings.about.updates.available.line', { version, date: f.date(a.published) })
+          : t.rich('settings.about.updates.available.lineUndated', { version })}
+        {a.manual_upgrade && (
+          <>
+            {' '}
+            <Badge tone="warning">{t('settings.about.updates.available.needsPerson')}</Badge>
+          </>
+        )}
+      </p>
+      {notesUrl && (
+        <p className="settings-text">
+          <a href={notesUrl} target="_blank" rel="noreferrer noopener">
+            {t(commit ? 'settings.about.updates.available.compare' : 'settings.about.updates.available.notes')}
+          </a>
+        </p>
+      )}
+      {a.manual_upgrade && (
+        <p className="settings-muted">
+          {t.rich('settings.about.updates.available.manual', {
+            command: <code>{`taskto-update --to ${a.version}`}</code>,
+          })}
+        </p>
+      )}
+    </Notice>
   )
 }
 
