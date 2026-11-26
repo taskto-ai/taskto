@@ -2137,6 +2137,7 @@
     },
     "noWorkspace": "Você não é membro de nenhum espaço de trabalho. Peça um convite a um administrador.",
     "logOut": "Sair",
+    "phoneBar": "Barra do app",
     "openMenu": "Abrir o menu",
     "closeMenu": "Fechar o menu",
     "workspace": "Espaço de trabalho",
@@ -2902,6 +2903,7 @@
       "title": "Confirme seu endereço de e-mail",
       "working": "Confirmando seu endereço…",
       "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
+      "nothing": "Não há nada a confirmar aqui: esta página foi aberta sem o link do email. As configurações de notificações dizem para qual endereço as notificações vão e se ele está confirmado.",
       "settings": "Abrir as configurações de notificações",
       "failed": "Não foi possível confirmar seu endereço: o servidor não respondeu. Verifique sua conexão e abra de novo o link do email."
     },

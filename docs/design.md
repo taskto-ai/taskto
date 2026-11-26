@@ -448,6 +448,11 @@ knowledge base, settings) is two panes, the detail a `Page` of its own.
   (`errorText`). Something off or unavailable is `tone="neutral"`, not the success colour.
 - **Lists** are `Rows` of `Row` (a title, a line of detail, a status badge, the actions) in a
   `Panel`; a table of many columns is `Table`.
+- **An open card** is a `Drawer` over its board, not modal: the board stays usable beside it. On a
+  wide window the columns keep the width they have with the card closed and lie under it; the
+  board's head (Add a card, the filters) stays clear of it; the columns' sideways scroll brings the
+  last one out from under it; the open card's tile, and a tile that takes the keyboard, are scrolled
+  beside it. Up to 1,024px the drawer takes the screen.
 
 ## Adding a screen
 
@@ -516,8 +521,8 @@ sections (Home, Conversations, Knowledge base, Boards, Apps), the current one ma
 its unread count; the pinned apps, in a group of their own, each with a small avatar; then, at the
 foot, Settings and the account (avatar, name and email), whose menu has the theme, the language,
 "Install the app" while it isn't installed, and log out. The page owns its title: the shell never
-repeats the section's name over it, except in the phone's bar, where the page's own heading may be
-scrolled away.
+repeats the section's name over it, not even in the phone's bar: the page's own title is the one
+place the section's name appears.
 
 - **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
 - **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's
@@ -530,8 +535,9 @@ scrolled away.
   gives a page with its own list and detail (conversations, the knowledge base, settings) the
   room for both; the labels would take a fifth of the width. The end to end suite
   (`web/e2e/app/shell.e2e.mjs`) checks in Chromium that every link of the rail has a name.
-- **Phone** (48rem and narrower): a slim bar with the menu button, the logo's mark and the current
-  section's name. The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
+- **Phone** (48rem and narrower): a slim bar with the menu button and the logo's mark, a landmark
+  named "App bar"; the section's name is the page's own title under it (in Settings, whose title is
+  the tab's, the line above it says "Settings"). The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
   the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
   closes it, and focus goes back to the button, or to the page when a link in it was followed.
 
@@ -545,9 +551,8 @@ cream, cream on night, as the website's `logo-dark.svg`); the dot and ".ai" are 
 The rail and the phone's bar show the mark alone: a square box crops the drawing to its first 64
 units.
 
-**The shell never overflows**, from 320px up, whatever the workspace is called. In the phone's bar
-the menu button and the mark keep their size and the section's name gives way (`min-inline-size:
-0`, an ellipsis). In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
+**The shell never overflows**, from 320px up, whatever the workspace is called. The phone's bar holds
+only the menu button and the mark, which keep their size. In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
 theirs and the workspace's name gives way the same way, with the whole name as the switcher's
 tooltip and in its accessible name; a long account name or email is cut the same way. Names
 people write (a workspace's, a person's, a pin's) keep their own direction (`dir="auto"`), so a
