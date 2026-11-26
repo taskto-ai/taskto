@@ -262,11 +262,13 @@ func TestNormalizedEventsHoldNoFreeText(t *testing.T) {
 	}
 }
 
-func TestStripeIsAReceiverAndSquareIsNot(t *testing.T) {
-	if _, ok := Lookup("stripe").(Receiver); !ok {
-		t.Error("Stripe doesn't receive webhooks")
-	}
-	if _, ok := Lookup("square").(Receiver); ok {
-		t.Error("Square receives webhooks before its card adds it")
+func TestEveryProviderMakesLinksAndReceivesWebhooks(t *testing.T) {
+	for _, p := range Providers() {
+		if _, ok := p.(Receiver); !ok {
+			t.Errorf("%s doesn't receive webhooks", p.ID())
+		}
+		if _, ok := p.(PaymentProvider); !ok {
+			t.Errorf("%s doesn't make payment links", p.ID())
+		}
 	}
 }

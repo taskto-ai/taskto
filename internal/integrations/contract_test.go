@@ -21,14 +21,14 @@ import (
 //
 // A provider's adapter runs the suite by giving a fixture: its adapter, a client that reaches its fake,
 // credentials, and the few things only the fake can do (have a payer pay, expire or refund a link and
-// hand over the provider's signed deliveries for it). The Stripe fixture is contract_stripe_test.go.
-// To run the suite against another adapter:
+// hand over the provider's signed deliveries for it). The fixtures are contract_stripe_test.go and
+// contract_square_test.go:
 //
 //	func TestSquareMeetsThePaymentsContract(t *testing.T) { runPaymentsContract(t, squareFixture) }
 //
-// where squareFixture(t) builds a *paymentsFixture of the Square adapter and its fake. No case reads a
-// provider's own words or ids: a case that needs to would be one that belongs to the adapter's own
-// tests (Stripe's are paymentlink_test.go and stripe_webhook_test.go).
+// No case reads a provider's own words or ids: a case that needs to would be one that belongs to the
+// adapter's own tests (Stripe's are paymentlink_test.go and stripe_webhook_test.go, Square's
+// square_test.go).
 //
 // Each case returns an error rather than failing a test, so the suite can also be run against an adapter
 // that is broken on purpose, to show that it notices (TestTheContractSuiteNoticesABrokenAdapter).
@@ -70,8 +70,12 @@ type paymentsFixture struct {
 	Shapes []linkShape
 	// Now is the clock the fake signs and stamps with, and the one verification is told.
 	Now func() time.Time
-	// Tolerance is how far a signature's time may be from now, in either direction.
+	// Tolerance is how far in the past a signature's time may be, and Ahead how far in the future (the
+	// same as Tolerance when 0). A provider that retries for a day signs a time that old.
 	Tolerance time.Duration
+	Ahead     time.Duration
+	// URL is the webhook address the provider signs over, for a provider that does (Square).
+	URL string
 	// OtherSecret is a second webhook secret of the provider's format that isn't the integration's.
 	OtherSecret string
 	// PayerHosts are the provider's own hosts a payer's address may be on (not its API hosts).
@@ -93,8 +97,17 @@ type paymentsFixture struct {
 	// signed event of a payment that none of the server's links made (it carries no reference of ours).
 	Unacted func() signedDelivery
 	Foreign func() signedDelivery
-	// Sign signs a body as the provider does, with the secret, at the time.
-	Sign func(body []byte, secret string, at time.Time) http.Header
+	// Sign signs a body as the provider does, with the secret, at the time, and returns the delivery: a
+	// provider that signs its time inside the body (Square's created_at) has it changed to at.
+	Sign func(body []byte, secret string, at time.Time) signedDelivery
+}
+
+// ahead is how far in the future a signature's time may be.
+func (fx *paymentsFixture) ahead() time.Duration {
+	if fx.Ahead > 0 {
+		return fx.Ahead
+	}
+	return fx.Tolerance
 }
 
 // contractCase is one thing every adapter must do.
@@ -461,7 +474,12 @@ func (fx *paymentsFixture) anyDelivery(ctx context.Context) (signedDelivery, err
 }
 
 func (fx *paymentsFixture) secrets() WebhookSecrets {
-	return WebhookSecrets{Current: fx.Creds.WebhookSecret}
+	return fx.with(fx.Creds.WebhookSecret, "")
+}
+
+// with is what a delivery is verified against: the secrets, and the fixture's webhook address.
+func (fx *paymentsFixture) with(current, previous Secret) WebhookSecrets {
+	return WebhookSecrets{Current: current, Previous: previous, URL: fx.URL}
 }
 
 func (fx *paymentsFixture) verify(d signedDelivery, s WebhookSecrets, now time.Time) error {
@@ -494,7 +512,7 @@ func contractVerifyForged(ctx context.Context, fx *paymentsFixture) error {
 	}
 	now := fx.Now()
 	forged := map[string]signedDelivery{
-		"another secret": {Header: fx.Sign(d.Body, fx.OtherSecret, now), Body: d.Body},
+		"another secret": fx.Sign(d.Body, fx.OtherSecret, now),
 		"no signature":   {Header: http.Header{}, Body: d.Body},
 		"an empty one":   {Header: http.Header{"X-Nothing": {"1"}}, Body: d.Body},
 		"a tampered body": {Header: d.Header, Body: func() []byte {
@@ -512,10 +530,10 @@ func contractVerifyForged(ctx context.Context, fx *paymentsFixture) error {
 		}
 	}
 	// No secret at all verifies nothing, a delivery signed with an empty secret included.
-	if err := fx.verify(d, WebhookSecrets{}, now); err == nil {
+	if err := fx.verify(d, fx.with("", ""), now); err == nil {
 		return failf("a delivery verifies against no secret")
 	}
-	if err := fx.verify(signedDelivery{Header: fx.Sign(d.Body, "", now), Body: d.Body}, WebhookSecrets{}, now); err == nil {
+	if err := fx.verify(fx.Sign(d.Body, "", now), fx.with("", ""), now); err == nil {
 		return failf("a delivery signed with an empty secret verifies against no secret")
 	}
 	return nil
@@ -528,11 +546,11 @@ func contractVerifyTolerance(ctx context.Context, fx *paymentsFixture) error {
 	}
 	now := fx.Now()
 	at := func(delta time.Duration) signedDelivery {
-		return signedDelivery{Header: fx.Sign(d.Body, fx.Creds.WebhookSecret.Reveal(), now.Add(delta)), Body: d.Body}
+		return fx.Sign(d.Body, fx.Creds.WebhookSecret.Reveal(), now.Add(delta))
 	}
 	for name, delta := range map[string]time.Duration{
 		"just inside, in the past":   -(fx.Tolerance - time.Minute),
-		"just inside, in the future": fx.Tolerance - time.Minute,
+		"just inside, in the future": fx.ahead() - time.Minute,
 		"now":                        0,
 	} {
 		if err := fx.verify(at(delta), fx.secrets(), now); err != nil {
@@ -541,8 +559,8 @@ func contractVerifyTolerance(ctx context.Context, fx *paymentsFixture) error {
 	}
 	for name, delta := range map[string]time.Duration{
 		"just outside, in the past":   -(fx.Tolerance + time.Minute),
-		"just outside, in the future": fx.Tolerance + time.Minute,
-		"a day ago":                   -24 * time.Hour,
+		"just outside, in the future": fx.ahead() + time.Minute,
+		"a day past the window":       -(fx.Tolerance + 24*time.Hour),
 		"a year ahead":                365 * 24 * time.Hour,
 	} {
 		if err := fx.verify(at(delta), fx.secrets(), now); err == nil {
@@ -564,14 +582,14 @@ func contractVerifyRotation(ctx context.Context, fx *paymentsFixture) error {
 	now := fx.Now()
 	other := Secret(fx.OtherSecret)
 	// A new secret was set and the replaced one is kept for the overlap: deliveries signed with either verify.
-	if err := fx.verify(d, WebhookSecrets{Current: other, Previous: fx.Creds.WebhookSecret}, now); err != nil {
+	if err := fx.verify(d, fx.with(other, fx.Creds.WebhookSecret), now); err != nil {
 		return failf("a delivery signed with the previous secret doesn't verify during the overlap: %v", err)
 	}
-	if err := fx.verify(d, WebhookSecrets{Current: fx.Creds.WebhookSecret, Previous: other}, now); err != nil {
+	if err := fx.verify(d, fx.with(fx.Creds.WebhookSecret, other), now); err != nil {
 		return failf("a delivery signed with the current secret doesn't verify during the overlap: %v", err)
 	}
 	// After the overlap only the new one does.
-	if err := fx.verify(d, WebhookSecrets{Current: other}, now); err == nil {
+	if err := fx.verify(d, fx.with(other, ""), now); err == nil {
 		return failf("a delivery signed with a replaced secret verifies after the overlap")
 	}
 	return nil
@@ -588,10 +606,10 @@ func contractVerifyQuotesNothing(ctx context.Context, fx *paymentsFixture) error
 		d signedDelivery
 		s WebhookSecrets
 	}{
-		"a wrong secret": {signedDelivery{Header: fx.Sign(d.Body, fx.OtherSecret, now), Body: d.Body}, fx.secrets()},
-		"none":           {d, WebhookSecrets{}},
+		"a wrong secret": {fx.Sign(d.Body, fx.OtherSecret, now), fx.secrets()},
+		"none":           {d, fx.with("", "")},
 		"no header":      {signedDelivery{Header: http.Header{}, Body: d.Body}, fx.secrets()},
-		"a stale one":    {signedDelivery{Header: fx.Sign(d.Body, secrets[0], now.Add(-24*time.Hour)), Body: d.Body}, fx.secrets()},
+		"a stale one":    {fx.Sign(d.Body, secrets[0], now.Add(-(fx.Tolerance + 24*time.Hour))), fx.secrets()},
 	} {
 		err := fx.verify(f.d, f.s, now)
 		if err == nil {

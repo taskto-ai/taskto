@@ -721,6 +721,10 @@ export type Integration = {
   secrets: Record<string, string>
   // The address to register at the provider; null when the server has no public URL.
   webhook_url: string | null
+  // The address the webhook signing secret was saved for isn't webhook_url any more (the public URL
+  // changed): the provider still sends to the old one until the new one is registered there and the
+  // secret saved again.
+  webhook_url_changed: boolean
   disabled: boolean
   disabled_at: string | null
   // The ids of the spaces whose apps may use it that the caller manages (their own private space

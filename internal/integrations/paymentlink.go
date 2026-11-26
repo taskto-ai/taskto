@@ -42,7 +42,7 @@ import (
 // read, a crash between the write-ahead and the answer being noted) leaves the key's outcome unknown:
 // sends exceed clean_sends. A ref whose key's outcome is unknown never gets a new key by itself. Each
 // try of its entry looks for the key's object by its token and, while the provider still keeps the key
-// (keyTrusted from its first call), asks again under the same key with the same parameters, which the
+// (PaymentProvider.KeyKept from its first call), asks again under the same key with the same parameters, which the
 // provider answers with what the first call made, or runs if it never ran. A failed read or call
 // changes nothing: whatever the failure (the provider unreachable, the key refused, an answer that
 // can't be read, a list that can't be read whole), the read of whose account the key is, the lookup and
@@ -225,7 +225,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			}
 			// Nothing of the key was seen. Only the same key is asked again, and only while the provider
 			// still keeps it: it answers with what the first call made, or runs a call that never ran.
-			if !s.keyKept(a) {
+			if !s.keyKept(a, provider) {
 				return paylink.Link{}, s.stillUnknown(ctx, a)
 			}
 		}
@@ -487,9 +487,9 @@ func (s *Service) stillUnknown(ctx context.Context, a attempt) error {
 
 // keyKept says whether the provider still keeps the key's first call, so that a call under the same
 // key is answered with what that call made (or runs, if it never did) and can't make a second object.
-func (s *Service) keyKept(a attempt) bool {
+func (s *Service) keyKept(a attempt, p PaymentProvider) bool {
 	first, err := time.Parse(timeFormat, a.firstSentAt)
-	return err == nil && s.store.now().Sub(first) < keyTrusted
+	return err == nil && s.store.now().Sub(first) < p.KeyKept()
 }
 
 // madeLink is the link a ref already has. It belongs to the integration that made it: another one,
@@ -598,10 +598,10 @@ const (
 	maxKeysPerTry = 3
 )
 
-// keyTrusted is how long from its first call a key is known to be kept by the provider (Stripe keeps
-// one for at least 24 hours, and may remove it after; a margin is left). Past it, a call under the
-// key could run again and make a second object, so it is not made.
-const keyTrusted = 23 * time.Hour
+// stripeKeyKept is how long from its first call a key is known to be kept by Stripe (it keeps one for
+// at least 24 hours, and may remove it after; a margin is left). Past it, a call under the key could
+// run again and make a second object, so it is not made.
+const stripeKeyKept = 23 * time.Hour
 
 // providerDoes says whether the registry's provider id implements the kind.
 func providerDoes(id, kind string) bool {

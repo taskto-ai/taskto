@@ -605,6 +605,7 @@ export type Integration = {
   currencies: string[]
   secrets: Record<string, string>
   webhook_url: string | null
+  webhook_url_changed: boolean
   disabled: boolean
   disabled_at: string | null
   spaces: number[]

@@ -51,6 +51,10 @@ type PaymentProvider interface {
 	// it was made in, and a key replaced by another account's must not move an unfinished call there.
 	// Its failures are *CallError.
 	AccountID(ctx context.Context, creds Credentials, c *Client) (string, error)
+	// KeyKept is how long from its first call the provider is known to keep an idempotency key, so that a
+	// call under the same key is answered with what the first one made (or runs, if it never did) and
+	// can't make a second object. Past it a key whose outcome is unknown is only looked for.
+	KeyKept() time.Duration
 }
 
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
@@ -653,6 +657,9 @@ func stripeFailure(status int, body []byte) error {
 	}
 	return &CallError{Kind: CallRefused, Status: status, OutcomeUnknown: true}
 }
+
+// KeyKept: Stripe keeps a key for at least 24 hours (https://docs.stripe.com/api/idempotent_requests).
+func (stripe) KeyKept() time.Duration { return stripeKeyKept }
 
 // AccountID is the id of the account the key belongs to: Stripe's "Retrieve account" with no id
 // answers the account of the authenticating key (https://docs.stripe.com/api/accounts/retrieve).

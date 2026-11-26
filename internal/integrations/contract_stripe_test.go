@@ -25,14 +25,14 @@ func TestStripeMeetsThePaymentsContract(t *testing.T) {
 func stripeFixture(t *testing.T) *paymentsFixture {
 	t.Helper()
 	fake := testprovider.NewStripe(t)
-	sign := func(body []byte, secret string, at time.Time) http.Header {
-		return http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}
+	// Stripe signs its time in the header: the body stays as it is.
+	sign := func(body []byte, secret string, at time.Time) signedDelivery {
+		return signedDelivery{Header: http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}, Body: body}
 	}
 	deliver := func(evs []testprovider.Event) []signedDelivery {
 		out := make([]signedDelivery, len(evs))
 		for i, e := range evs {
-			body := e.Body()
-			out[i] = signedDelivery{Header: sign(body, testprovider.TestWebhookSecret, fake.Clock().Now()), Body: body}
+			out[i] = sign(e.Body(), testprovider.TestWebhookSecret, fake.Clock().Now())
 		}
 		return out
 	}

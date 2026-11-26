@@ -1251,6 +1251,11 @@ func TestWebhookAddressFollowsThePublicURL(t *testing.T) {
 	if moved.WebhookURL == nil || *moved.WebhookURL != "https://new.example.com"+HookPrefix+strings.TrimPrefix(*in.WebhookURL, "https://old.example.com"+HookPrefix) {
 		t.Fatalf("webhook url after the change = %v", moved.WebhookURL)
 	}
+	// The signing secret was saved for the old address, which the provider still sends to: the admin is
+	// told to register the new one.
+	if in.WebhookURLChanged || !moved.WebhookURLChanged {
+		t.Fatalf("webhook_url_changed before %v, after %v", in.WebhookURLChanged, moved.WebhookURLChanged)
+	}
 }
 
 // The connect form gets the server's own decimals for each currency, so what the web app shows
