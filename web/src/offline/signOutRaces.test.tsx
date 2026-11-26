@@ -100,13 +100,12 @@ function fakeLocks() {
         const work = (typeof a === 'function' ? a : b) as () => Promise<unknown>
         const signal = typeof a === 'function' ? undefined : (a as { signal?: AbortSignal } | undefined)?.signal
         names.push(name)
-        // As the browser's: a waiter whose signal aborts before its turn gives up (the turn passes on).
+        // As the browser's: a waiter whose signal aborts before its turn gives up (the turn passes on);
+        // once the lock is granted, the signal is ignored.
         let given = false
         const turn = (tails.get(name) ?? Promise.resolve()).then(() => {
-          if (signal?.aborted) {
-            given = true
-            throw new DOMException('aborted', 'AbortError')
-          }
+          given = true
+          if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
           return work()
         })
         tails.set(
@@ -509,13 +508,36 @@ test("a sign-out's deletion the browser keeps blocked gives the account's lock u
   lockTimes.wait = 50
   await activate(7, 'Pat')
   runtimeState().runtime?.engine.pause('manual')
-  // Another connection never closes: the deletion waits for good.
-  const blocked = vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(() => ({}) as IDBOpenDBRequest)
+  // Another connection to the database that never closes when asked (a frozen tab): the deletion
+  // is blocked by it.
+  const blocker = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open('taskto-offline-7')
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+  const deletions = vi.spyOn(indexedDB, 'deleteDatabase')
+  let blockedSeen = false
+  deletions.mockImplementation(function (this: IDBFactory, name: string) {
+    const request = IDBFactory.prototype.deleteDatabase.call(this, name)
+    request.addEventListener('blocked', () => {
+      blockedSeen = true
+    })
+    return request
+  })
   void cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map() })
-  await new Promise((r) => setTimeout(r, 150))
-  blocked.mockRestore()
-  // The next sign-in on this browser, the same person's or someone else's, isn't held up by it: the
-  // lock was let go, so the database opens (not only gives up waiting).
+  await waitFor(() => expect(blockedSeen).toBe(true))
+  // Past the holder's time, the account's lock is given back while the deletion is still blocked.
+  await new Promise((r) => setTimeout(r, 100))
+  expect(
+    await within(
+      navigator.locks.request('taskto-offline-db:7', async () => {}),
+      1000,
+    ),
+  ).toBe('settled')
+  // The other connection closes: the deletion finishes, and the next sign-in on this browser, the
+  // same person's or someone else's, goes on.
+  deletions.mockRestore()
+  blocker.close()
   const opened = await Promise.race([
     OfflineStore.open(7),
     new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000)),
