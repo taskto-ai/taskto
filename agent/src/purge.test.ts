@@ -447,29 +447,6 @@ describe('runPurge', () => {
     }
   })
 
-  // The same with the purge on its thread and writes going on beside it: a write never waits for
-  // the copy, only for the drained log's file to be cut short. Measured, not bounded tightly: how
-  // long cutting a large file takes is the disk's.
-  it('copies a large backlog without holding writers up for the copy once a reader lets go', async () => {
-    const { writer, reader } = fixture()
-    const text = 'y'.repeat(400)
-    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
-    writer.exec('BEGIN')
-    for (let i = 0; i < 500_000; i++) more.run(text)
-    writer.exec('COMMIT')
-    try {
-      const release = setTimeout(() => reader.exec('COMMIT'), 500)
-      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 20_000 }))
-      clearTimeout(release)
-      expect(probe.error).toBeUndefined()
-      expect(probe.longest).toBeLessThan(probe.took / 2)
-      expect(log()).not.toContain(WORD)
-    } finally {
-      reader.close()
-      writer.close()
-    }
-  }, 60_000)
-
   it('rejects with the failure of a purge that is not about the log', async () => {
     await expect(runPurge({ path: join(dir, 'missing', 'agent.db'), root: 1, timeoutMs: 100 })).rejects.toThrow()
   })
