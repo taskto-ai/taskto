@@ -66,6 +66,10 @@ type Worker struct {
 	named   chan struct{} // closed and replaced when a CLI names its session (waitTurnForHook)
 	closed  bool
 	wg      sync.WaitGroup
+	// quick counts the short helper requests running for each user, and quickEnded is closed and
+	// replaced when one ends: Forget waits for them (forget.go).
+	quick      map[int64]int
+	quickEnded chan struct{}
 
 	// The approval socket (approve.go): its listener, its path and, when it had to go
 	// elsewhere than the layout's root, the directory made for it.
@@ -79,6 +83,8 @@ var (
 	ErrUnavailable = errors.New("this CLI is not installed on the worker")
 	ErrTurnClash   = errors.New("a different turn has this ID")
 	ErrClosed      = errors.New("the worker is shutting down")
+	// ErrForgotten: the user was forgotten (Forget, for a deleted account): nothing starts for them.
+	ErrForgotten = errors.New("this user's CLI files were removed with their account")
 )
 
 // New returns a Worker. It first stops every CLI process group a previous worker on the same
@@ -158,7 +164,7 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
-	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{})}
+	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}), quick: map[int64]int{}, quickEnded: make(chan struct{})}
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return nil, err
 	}
@@ -226,6 +232,11 @@ func (w *Worker) Start(spec TurnSpec) (t *Turn, attached bool, err error) {
 	defer w.mu.Unlock()
 	if w.closed {
 		return nil, false, ErrClosed
+	}
+	// Checked under the lock Forget takes after marking the user: a turn is either refused here
+	// or among the ones Forget stops and waits for.
+	if w.isForgotten(spec.User) {
+		return nil, false, ErrForgotten
 	}
 	if old, ok := w.turns[spec.ID]; ok {
 		if old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {

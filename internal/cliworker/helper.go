@@ -259,6 +259,11 @@ func credentials(cli CLI) string {
 // CLI's stdin), unless the caller wires stdin itself (then extra is nil and it must write
 // header() first).
 func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
+	// Every op but the one that removes the user's directory makes it (and a login's files in
+	// it): none runs for a forgotten user (forget.go).
+	if req.Op != "forget" && w.isForgotten(user) {
+		return nil, nil, ErrForgotten
+	}
 	req.LayoutRoot, req.User = w.cfg.Layout.Root, user
 	if req.Path == "" {
 		req.Path = w.cfg.Path

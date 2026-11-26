@@ -144,6 +144,10 @@ func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
 		w.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if w.isForgotten(user) {
+		w.mu.Unlock()
+		return nil, ErrForgotten
+	}
 	key := loginKey{user, cli, slot}
 	if old := w.logins[key]; old != nil && !old.Info().State.Final() {
 		w.mu.Unlock()
@@ -510,26 +514,6 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 	return err
 }
 
-// Forget removes everything the worker keeps for user, for an account that is deleted: it stops
-// the logins in progress, signs the CLIs out (best effort: a login that can't be signed out is
-// still deleted with the directory) and removes the user's directory, with their logins,
-// sessions, working directories and browser profile. Idempotent.
-func (w *Worker) Forget(ctx context.Context, user int64) error {
-	if user <= 0 {
-		return errors.New("invalid user")
-	}
-	for _, cli := range []CLI{Claude, Codex, Grok} {
-		for _, slot := range allSlots {
-			w.CancelLogin(user, cli, slot)
-		}
-	}
-	_, _, err := w.runQuick(ctx, user, helperRequest{Op: "forget"})
-	return err
-}
-
-// allSlots are the slots of a user's own accounts: the first and 2 to 9.
-var allSlots = []Slot{"", "2", "3", "4", "5", "6", "7", "8", "9"}
-
 // codexLimits asks the helper, as the user, for the usage limits in thread's session file.
 func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
 	if thread == "" {
@@ -555,6 +539,13 @@ func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
 // stderr only for a CLI that answers there, or to say why. It is stopped after 30 s or when
 // ctx ends.
 func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
+	if req.Op != "forget" {
+		// Counted, so that Forget waits for it: it would make the directory again.
+		if err := w.beginQuick(user); err != nil {
+			return nil, nil, err
+		}
+		defer w.endQuick(user)
+	}
 	cmd, header, err := w.helperCommand(user, req)
 	if err != nil {
 		return nil, nil, err

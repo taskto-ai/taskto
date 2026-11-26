@@ -391,6 +391,15 @@ The UI shows what the command prints.
   (below) and never the token.
 - **Logout** runs `claude auth logout`, `codex logout` or `grok logout`, then deletes the
   account's sessions. Their files go with the config directory when the user disconnects.
+- **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account: it
+  removes the user's whole directory. It first records the user as forgotten in the worker's own
+  state directory (`.worker/forgotten-u<user>`, so it outlives a restart; user numbers are never
+  reused), which refuses every turn, sign-in, status check and helper request for them
+  (`ErrForgotten`, `410 Gone` with the code `forgotten` over the API). It then stops the user's
+  turns (the ones waiting for a place too) and sign-ins and waits for them and for the short helper
+  requests in flight, so a CLI that was using the login has ended before its files go and nothing
+  writes into them or makes them again. If something doesn't end in time it fails and the purge
+  tries again; the mark stays.
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):
