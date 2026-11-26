@@ -4759,8 +4759,12 @@ server mounts read-only; this only reads that copy, and never runs or changes th
                  "from": "v0.3.0", "code": "manual-upgrade"},
     "last_change": {"at": "2026-03-01T03:12:00Z", "finished": "2026-03-01T03:15:30Z", "result": "updated",
                     "from": "v0.2.0", "to": "v0.3.0", "backed_up": true},
-    "needs_person": {"kind": "manual-upgrade", "code": "manual-upgrade"}
-  }
+    "needs_person": {"kind": "manual-upgrade", "code": "manual-upgrade"},
+    "looked": "2026-03-10T06:20:00Z",
+    "available": {"version": "v0.4.0", "sha": "0123456789abcdef0123456789abcdef01234567",
+                  "published": "2026-03-09T15:00:00Z", "manual_upgrade": true, "repo": "taskto-ai/taskto"}
+  },
+  "notes_url": "https://github.com/taskto-ai/taskto/releases/tag/v0.4.0"
 }
 ```
 
@@ -4803,6 +4807,16 @@ the button: `supported`, and `last`, the outcome of the last requested run (`at`
 `result`, `code`), which also covers a request the updater turned away before it ran (`result`
 `ignored`, `code` `rate-limited` or `bad-request`). A run the operator asked for has
 `requested: true` in `last_run` and `last_change`.
+
+`status.available` is the version the updater would install next, which it found the last time it
+looked (`status.looked`: `taskto-update --check`, every few hours, or a run), or `null` when nothing
+is newer; both are absent from an updater that predates the check. It has the `version` (a
+release, or on the `main` channel a commit's full SHA), its commit `sha`, when it was `published`
+(when the updater could tell), `manual_upgrade` (it, or a release it passes, needs a person), and
+the `repo` the updater reads. The server checks each field again and drops an `available` that is
+the version on record. `notes_url` is the server's own link to what it brings, built from `repo`
+and the versions only: the release's page on the release channel, the comparison of the version
+on record with the commit on `main`.
 
 ### `POST /api/workspaces/{workspace}/updates/request`
 

@@ -370,6 +370,7 @@ const updaterStatus = {
     needs_person: null,
     running: null,
     requests: { supported: true, last: null },
+    available: null,
   },
 }
 CASES.push({

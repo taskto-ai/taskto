@@ -6,6 +6,7 @@
 #   taskto-update --clear-block
 #   taskto-update --publish-status
 #   taskto-update --requested
+#   taskto-update --check
 #
 # It does the safe common case and leaves the rest to a person. One run: choose a version,
 # resolve it to one commit and take every file and image from that commit, check it all before
@@ -75,6 +76,17 @@
 # the lock, so it can't loop, and a second one within $REQUEST_MIN seconds of the last is ignored.
 # The status records that the run was requested, and its outcome (Settings → About, INSTALL.md
 # step 16).
+#
+# --check looks for the next version and installs nothing: it chooses the version a run would
+# (the same channel, the same rules: on release the newest vMAJOR.MINOR.PATCH whose images are
+# published, and whether it or one it passes says manual-upgrade; on main the newest green
+# descendant whose images are published), pulls no image and touches nothing of the install, and
+# publishes it for Settings → About as `available` (version, commit, when it was published, and
+# whether it needs a person), with the repository the release notes are on. taskto-update-check.timer
+# runs it every few hours; every run refreshes it too. It doesn't wait for a run that is going (it
+# takes no lock to look, and publishes under the lock only if it is free: the run publishes it when
+# it ends), and what it publishes holds only while the install is on the version it was found
+# from. When it can't tell (GitHub's API doesn't answer), what was found before stays.
 #
 # Every outside command and place is a variable (DOCKER, CURL, FLOCK, SYSTEMCTL, the
 # TASKTO_UPDATE_* paths and base URLs below), so cmd/taskto/update_test.go runs it against fakes.
@@ -150,7 +162,7 @@ PUBLIC=$(setting TASKTO_UPDATE_PUBLIC "$STATE/public")
 REQUEST=$(setting TASKTO_UPDATE_REQUEST "$STATE/request")
 
 usage() {
-	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block | --publish-status | --requested" >&2
+	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block | --publish-status | --requested | --check" >&2
 	exit "${1:-2}"
 }
 
@@ -168,13 +180,14 @@ semver_key() {
 }
 semver_gt() { [[ "$(semver_key "$1")" > "$(semver_key "$2")" ]]; }
 
-DRY=0 TO="" CLEAR=0 PUBLISH=0 REQUESTED=0 RUN_ON="" QUIET=""
+DRY=0 TO="" CLEAR=0 PUBLISH=0 REQUESTED=0 CHECK=0 RUN_ON="" QUIET=""
 while [ $# -gt 0 ]; do
 	case $1 in
 	--dry-run) DRY=1 ;;
 	--clear-block) CLEAR=1 ;;
 	--publish-status) PUBLISH=1 ;;
 	--requested) REQUESTED=1 ;;
+	--check) CHECK=1 ;;
 	--to)
 		[ $# -ge 2 ] && [ -n "$2" ] || usage
 		TO=$2
@@ -188,14 +201,18 @@ done
 if [ "$CLEAR" = 1 ] && { [ "$DRY" = 1 ] || [ -n "$TO" ]; }; then usage; fi
 if [ "$PUBLISH" = 1 ] && { [ "$CLEAR" = 1 ] || [ "$DRY" = 1 ] || [ -n "$TO" ]; }; then usage; fi
 if [ "$REQUESTED" = 1 ] && { [ "$CLEAR" = 1 ] || [ "$DRY" = 1 ] || [ -n "$TO" ] || [ "$PUBLISH" = 1 ]; }; then usage; fi
+if [ "$CHECK" = 1 ] && { [ "$CLEAR" = 1 ] || [ "$DRY" = 1 ] || [ -n "$TO" ] || [ "$PUBLISH" = 1 ] || [ "$REQUESTED" = 1 ]; }; then usage; fi
 if [ -n "$TO" ] && ! is_semver "$TO" && ! is_sha "$TO"; then
 	echo "taskto-update: --to takes a vMAJOR.MINOR.PATCH tag or a full commit SHA" >&2
 	exit 2
 fi
 
-# Two runs never overlap: the second leaves the first's status alone.
+# Two runs never overlap: the second leaves the first's status alone. A check takes the lock only
+# to publish what it found (check_done), so it never keeps a run from starting.
 exec 9>"$LOCK"
-if [ "$REQUESTED" = 1 ]; then
+if [ "$CHECK" = 1 ]; then
+	:
+elif [ "$REQUESTED" = 1 ]; then
 	# A request that comes while the nightly run is going waits for it (the path unit would start
 	# this again at once, and again, while the request is there), then is looked at.
 	"$FLOCK" -w "$LOCK_WAIT" 9 || {
@@ -215,6 +232,9 @@ KEEP=$(setting TASKTO_UPDATE_KEEP 3)
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 result="" from="" to="" sha="" reason="" backup="" digests='{}' needs=""
 stage="" login_config=""
+# What a run or a check found to install next (record_available): the version, when it was
+# published, and whether it (or a release it passes) needs a person.
+avail_version="" avail_published="" avail_manual=false
 # The transaction: what the run changes, kept in $TX from before the first change until a
 # terminal outcome, so a run that is stopped half way is found, not mistaken for done. After a
 # failure that a person has to look at, it stays, in the phase `stopped`, `stop-failed` or
@@ -224,7 +244,7 @@ phase="" volume="" subpath="" data_mount="" data_key="" old_server_image="" old_
 # --- the status: $STATE/status.json, and a line in the journal ---------------------------
 
 write_status() {
-	[ "$DRY" = 0 ] || return 0
+	[ "$DRY" = 0 ] && [ "$CHECK" = 0 ] || return 0
 	local f=$STATE/status.json last=null change=false
 	case $result in updated | rolled-back | rollback-failed | stopped | stop-failed | interrupted) change=true ;; esac
 	if [ "$change" = false ] && [ -s "$f" ]; then last=$(jq -c '.last_change // null' "$f" 2>/dev/null) || last=null; fi
@@ -492,7 +512,7 @@ take_request() {
 # never changes the outcome.
 write_public() {
 	[ "$DRY" = 0 ] || return 0
-	local f=$PUBLIC/status.json tmp priv=null kind="" code="" hold=false reqsup=false reqlast=null running=false
+	local f=$PUBLIC/status.json tmp priv=null kind="" code="" hold=false reqsup=false reqlast=null running=false avail=null
 	# A requested run's outcome is kept apart from the last run's, so one that was turned away
 	# before it ran is answered too.
 	if [ "$REQUESTED" = 1 ] && [ -n "$result" ]; then record_request_outcome || log "can't write $STATE/request-outcome.json"; fi
@@ -506,6 +526,7 @@ write_public() {
 		return 1
 	}
 	if [ -s "$STATE/status.json" ]; then priv=$(jq -c '.' "$STATE/status.json" 2>/dev/null) || priv=null; fi
+	if [ -s "$STATE/available.json" ]; then avail=$(jq -c '.' "$STATE/available.json" 2>/dev/null) || avail=null; fi
 	if [ -e "$STATE/blocked" ] || [ -e "$TX" ]; then
 		kind=blocked code=$(blocked_code)
 	elif [ -n "$needs" ]; then
@@ -526,15 +547,25 @@ write_public() {
 	jq -n --argjson priv "$priv" --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg channel "$CHANNEL" --argjson hold "$hold" \
 		--arg recorded "$(envget "$ROOT/.env" TASKTO_VERSION)" --arg kind "$kind" --arg code "$code" \
 		--argjson reqsup "$reqsup" --argjson reqlast "$reqlast" --argjson running "$running" --arg started "$started" --arg to "$to" \
-		--argjson requested "$([ "$REQUESTED" = 1 ] && echo true || echo false)" '
+		--argjson requested "$([ "$REQUESTED" = 1 ] && echo true || echo false)" --argjson avail "$avail" '
 		def ver: if type == "string" and length <= 100 and test("^(v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)|[0-9a-f]{40})$") then . else null end;
 		def run: if . == null then null else {at, finished, result, from: (.from | ver), to: (.to | ver), code: (.code // null), backed_up: ((.backup // "") != "")}
 			+ (if .requested == true then {requested: true} else {} end) end;
+		def sha: if type == "string" and test("^[0-9a-f]{40}$") then . else null end;
+		def ptime: if type == "string" then (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | todate) catch null) else null end;
+		def repo: if type == "string" and length <= 200 and test("^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$") then . else null end;
+		# What is available next, and when the updater last looked, hold only while the install is on
+		# the version they were found from.
+		def found: type == "object" and (.from // "") == $recorded;
+		def available: if (found | not) or (.version | ver) == null then null
+			else {version: (.version | ver), sha: (.sha | sha), published: (.published | ptime), manual_upgrade: (.manual_upgrade == true), repo: (.repo | repo)} end;
+		def looked: if found then (.looked | ptime) else null end;
 		{version: 1, checked: $checked, channel: $channel, hold: $hold, recorded_version: ($recorded | ver),
 		 last_run: ($priv | run), last_change: ($priv.last_change // null | run),
 		 needs_person: (if $kind == "" then null else {kind: $kind, code: $code} end),
 		 running: (if $running then {since: $started, to: ($to | ver), requested: $requested} else null end),
-		 requests: {supported: $reqsup, last: $reqlast}}' >"$tmp" || {
+		 requests: {supported: $reqsup, last: $reqlast},
+		 looked: ($avail | looked), available: ($avail | available)}' >"$tmp" || {
 		rm -f "$tmp"
 		return 1
 	}
@@ -551,7 +582,7 @@ write_public() {
 # curl's own messages (which name the host) are dropped. The body has `result`, `from`, `to`,
 # `reason` and `backup`, and `text` (those in a sentence, for chat webhooks that want one).
 notify() {
-	[ "$DRY" = 0 ] && [ "$CLEAR" = 0 ] || return 0
+	[ "$DRY" = 0 ] && [ "$CLEAR" = 0 ] && [ "$CHECK" = 0 ] || return 0
 	case $result in updated | failed | rolled-back | rollback-failed | stopped | stop-failed | blocked | interrupted) ;; *) return 0 ;; esac
 	[ -s "$NOTIFY_FILE" ] || return 0
 	local url body
@@ -575,10 +606,83 @@ notify() {
 	return 0
 }
 
+# --- what is available next: $STATE/available.json, published as `available` ------------------
+
+# update_available: what this run or check found about the next version replaces what was found
+# before: the version it would install (with manual_upgrade when a person must do it), or nothing
+# when there is nothing newer to install, and when it looked. A run that couldn't tell (GitHub
+# didn't answer, a hold, a failure before it looked) leaves what was found before, which holds only
+# while the install is on the version it was found from (write_public).
+update_available() {
+	# Not knowing what is newer (GitHub couldn't compare, or the install isn't on a version) isn't
+	# finding that nothing is.
+	case $reason in *"can't tell whether"* | *"neither a release nor a commit"*) return 0 ;; esac
+	case $result:$(reason_code "$result" "$reason") in
+	updated:*)
+		# The install is on what this run chose, the newest there is.
+		avail_version=""
+		record_available "$to"
+		;;
+	up-to-date:* | *:off | *:not-newer | *:not-published)
+		avail_version=""
+		record_available
+		;;
+	available:*) record_available ;;
+	skipped:manual-upgrade)
+		avail_manual=true
+		record_available
+		;;
+	*) return 0 ;;
+	esac
+}
+
+# record_available [FROM]: $avail_version, with its commit, as what is available next from FROM
+# (default $from), or nothing ($avail_version empty), looked for now.
+record_available() {
+	local f=$STATE/available.json tmp sha="" base=${1:-$from}
+	if is_sha "$avail_version"; then
+		sha=$avail_version
+	elif [ -n "$avail_version" ]; then
+		sha=$(resolve_sha "$avail_version") || sha=""
+	fi
+	install -d -m 755 "$STATE" || return 1
+	tmp=$(mktemp "$STATE/.available.XXXXXXXX") || return 1
+	if ! jq -n --arg from "$base" --arg looked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg version "$avail_version" --arg sha "$sha" \
+		--arg published "$avail_published" --argjson manual "$avail_manual" --arg repo "$REPO" \
+		'{from: $from, looked: $looked, version: $version, sha: $sha, published: $published, manual_upgrade: $manual, repo: $repo}' >"$tmp" ||
+		! mv -f -T "$tmp" "$f"; then
+		rm -f "$tmp"
+		return 1
+	fi
+}
+
+# check_done EXIT: the end of --check (finish calls it): what it found replaces what was there, and
+# is published, under the lock if it is free; a run that holds it publishes it when it ends. A
+# check never writes the last run's status and never notifies.
+check_done() {
+	local code=$1
+	update_available || log "can't write $STATE/available.json"
+	if [ "$code" = 0 ]; then
+		if "$FLOCK" -n 9; then
+			write_public || log "can't write $PUBLIC/status.json"
+		else
+			log "a run is going: it publishes this when it ends"
+		fi
+	fi
+	local found=""
+	if [ -s "$STATE/available.json" ]; then found=$(jq -r 'if .version != "" then " available=" + .version + (if .manual_upgrade then " (needs a person)" else "" end) else "" end' "$STATE/available.json" 2>/dev/null) || found=""; fi
+	log "check: result=$result from=${from:-?}$found${reason:+ reason=\"$reason\"}"
+	exit "$code"
+}
+
 # finish RESULT REASON [EXIT]: records the outcome and ends the run. A status that can't be
 # written (a full disk), or a notification that can't be sent, never changes the outcome.
 finish() {
 	result=$1 reason=$2
+	if [ "$CHECK" = 1 ]; then check_done "${3:-0}"; fi
+	# A run looks for the next version too: what it found replaces what the last check did. A run
+	# by --to looked for nothing.
+	if [ "$DRY" = 0 ] && [ -z "$TO" ]; then update_available || log "can't write $STATE/available.json"; fi
 	write_status || log "can't write $STATE/status.json"
 	log "result=$result from=${from:-?} to=${to:-?}${reason:+ reason=\"$reason\"}"
 	notify || true
@@ -685,22 +789,22 @@ fetch_releases() {
 }
 
 choose_release() {
-	local rel rows sorted tag man i pick=-1
-	local -a tags=() manual=()
+	local rel rows sorted tag man pub i pick=-1
+	local -a tags=() manual=() pubs=()
 	fetch_releases
 	rows=$(jq -r '
 		.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")))
-		| [.tag_name, ((.body // "") | test("(^|\n)manual-upgrade:[ \t]*true[ \t\r]*(\n|$)"; "i"))] | @tsv' <<<"$rel") ||
+		| [.tag_name, ((.body // "") | test("(^|\n)manual-upgrade:[ \t]*true[ \t\r]*(\n|$)"; "i")), (.published_at // "")] | @tsv' <<<"$rel") ||
 		finish skipped "GitHub's release list is unreadable: nothing done"
 	# Newest first, by version.
-	sorted=$(while IFS=$'\t' read -r tag man; do
+	sorted=$(while IFS=$'\t' read -r tag man pub; do
 		is_semver "$tag" || continue
-		printf '%s\t%s\t%s\n' "$(semver_key "$tag")" "$tag" "$man"
-	done <<<"$rows" | sort -r | cut -f2,3)
-	while IFS=$'\t' read -r tag man; do
+		printf '%s\t%s\t%s\t%s\n' "$(semver_key "$tag")" "$tag" "$man" "$pub"
+	done <<<"$rows" | sort -r | cut -f2,3,4)
+	while IFS=$'\t' read -r tag man pub; do
 		[ -n "$tag" ] || continue
 		case $(relation "$tag" "$from") in
-		newer) tags+=("$tag") manual+=("$man") ;;
+		newer) tags+=("$tag") manual+=("$man") pubs+=("$pub") ;;
 		unknown) finish skipped "can't tell whether $tag is newer than $from" ;;
 		*) break ;;
 		esac
@@ -717,6 +821,7 @@ choose_release() {
 		fi
 	done
 	[ "$pick" -ge 0 ] || finish skipped "no newer release is available: ${tags[0]}'s images aren't published (or it failed here before)"
+	avail_version=${tags[pick]} avail_published=${pubs[pick]}
 	# The release itself and every one between it and this install.
 	for ((i = pick; i < ${#tags[@]}; i++)); do
 		if [ "${manual[i]}" = true ]; then
@@ -728,12 +833,12 @@ choose_release() {
 }
 
 choose_main() {
-	local runs shas c waiting=0
+	local runs shas c pub waiting=0
 	runs=$(api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=30") ||
 		finish skipped "GitHub's API didn't answer: nothing done"
-	shas=$(jq -r '.workflow_runs[] | select(.conclusion == "success" and .head_branch == "main") | .head_sha' <<<"$runs") ||
+	shas=$(jq -r '.workflow_runs[] | select(.conclusion == "success" and .head_branch == "main") | [.head_sha, (.head_commit.timestamp // "")] | @tsv' <<<"$runs") ||
 		finish skipped "GitHub's CI runs are unreadable: nothing done"
-	while read -r c; do
+	while IFS=$'\t' read -r c pub; do
 		[ -n "$c" ] || continue
 		is_sha "$c" || continue
 		case $(relation "$c" "$from") in
@@ -741,7 +846,7 @@ choose_main() {
 			if failed_before "$c"; then
 				log "$c failed on this server before: not tried again"
 			elif images_published "$c"; then
-				to=$c
+				to=$c avail_version=$c avail_published=$pub
 				return 0
 			else
 				log "$c: its images aren't published yet"
@@ -1385,6 +1490,25 @@ if [ "$PUBLISH" = 1 ]; then
 	result=published
 	log "wrote $PUBLIC/status.json"
 	exit 0
+fi
+# --check: what a run would install next, published; nothing installed, pulled or changed.
+if [ "$CHECK" = 1 ]; then
+	# An update half done has its own say (the files may be on either version): no look then.
+	if [ -e "$TX" ]; then
+		QUIET=1
+		log "an update's record is there: nothing looked for"
+		exit 0
+	fi
+	case $CHANNEL in release | main | off) ;; *) finish failed "TASKTO_UPDATE_CHANNEL is $CHANNEL, not release, main or off" 1 ;; esac
+	[[ $REPO =~ ^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$ ]] || finish failed "TASKTO_UPDATE_REPO is $REPO, not OWNER/NAME" 1
+	[ -n "$prefix" ] || finish failed "TASKTO_IMAGE_PREFIX isn't set: this install doesn't use the published images" 1
+	[[ $PER_PAGE =~ ^([1-9][0-9]?|100)$ ]] || finish failed "TASKTO_UPDATE_PER_PAGE is $PER_PAGE, not 1 to 100" 1
+	if [ "$CHANNEL" = off ]; then finish skipped "automatic updates are off (TASKTO_UPDATE_CHANNEL=off)"; fi
+	if ! is_semver "$from" && ! is_sha "$from"; then
+		finish skipped "$from is neither a release nor a commit: can't tell what is newer"
+	fi
+	case $CHANNEL in release) choose_release ;; main) choose_main ;; esac
+	finish available ""
 fi
 # An update that was stopped half way (a crash, a reboot, a kill) left its record, and one that
 # failed after the new server started, or whose way back failed, left it too: nothing runs,

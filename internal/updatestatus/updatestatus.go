@@ -70,6 +70,33 @@ var versionRE = regexp.MustCompile(`^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
 // IsVersion reports whether v is a release version or a full commit SHA.
 func IsVersion(v string) bool { return len(v) <= 100 && versionRE.MatchString(v) }
 
+var (
+	shaRE  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	repoRE = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
+)
+
+// IsSHA reports whether v is a full commit SHA, the version of the main channel.
+func IsSHA(v string) bool { return shaRE.MatchString(v) }
+
+// isRepo reports whether r is a GitHub repository, OWNER/NAME, as the updater's TASKTO_UPDATE_REPO is.
+func isRepo(r string) bool { return len(r) <= 200 && repoRE.MatchString(r) }
+
+// Available is the version the updater would install next (taskto-update --check, or a run that
+// looked): what a run of its channel chooses, with the same rules, and nothing installed.
+type Available struct {
+	// Version is a release (on the release channel) or a commit's full SHA (on main), and SHA its
+	// commit, when the updater could tell.
+	Version string `json:"version"`
+	SHA     string `json:"sha,omitempty"`
+	// Published is when the release was published, or the commit made, when the updater could tell.
+	Published time.Time `json:"published,omitzero"`
+	// ManualUpgrade says a person must install it: it, or a release it passes, says
+	// `manual-upgrade: true` in its notes (or it changes the worker's firewall).
+	ManualUpgrade bool `json:"manual_upgrade"`
+	// Repo is the GitHub repository the updater reads, OWNER/NAME, where the release notes are.
+	Repo string `json:"repo,omitempty"`
+}
+
 // Run is one run of the updater, as it recorded it.
 type Run struct {
 	// At is when the run started and Finished when it ended.
@@ -161,6 +188,11 @@ type Status struct {
 	Running *Running `json:"running"`
 	// Requests is absent from an updater that predates "Update now".
 	Requests *Requests `json:"requests"`
+	// Looked is when the updater last looked for a newer version from the version on record (a run,
+	// or taskto-update --check), and Available what it found to install next, null when nothing is
+	// newer. Both are absent from an updater that predates the check.
+	Looked    time.Time  `json:"looked,omitzero"`
+	Available *Available `json:"available"`
 }
 
 // Stale reports whether s was last written too long before now.
@@ -229,6 +261,23 @@ func (s *Status) sanitize() {
 		}
 		if q.Last.Code != "" && !codes[q.Last.Code] {
 			q.Last.Code = CodeOther
+		}
+	}
+	if a := s.Available; a != nil {
+		a.Version = version(a.Version)
+		if !IsSHA(a.SHA) {
+			a.SHA = ""
+		}
+		// A commit is its own SHA; a release's SHA is its tag's commit.
+		if IsSHA(a.Version) {
+			a.SHA = a.Version
+		}
+		if !isRepo(a.Repo) {
+			a.Repo = ""
+		}
+		// Nothing to install: no version, or the one already on record.
+		if a.Version == "" || a.Version == s.RecordedVersion {
+			s.Available = nil
 		}
 	}
 	if n := s.NeedsPerson; n != nil {

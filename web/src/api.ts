@@ -1115,8 +1115,22 @@ export type UpdateStatus = {
     running: UpdateRunning | null
     // Null from an updater that predates the button.
     requests: { supported: boolean; last: UpdateRequestRun | null } | null
+    // When the updater last looked for a newer version; absent from one that predates the check.
+    looked?: string
+    available: UpdateAvailable | null
   } | null
   request: UpdateRequestState
+  // The release's page (release channel) or the comparison with it (main), built by the server.
+  notes_url?: string
+}
+// The version the host's updater would install next, under the same rules as a run.
+export type UpdateAvailable = {
+  version: string
+  sha?: string
+  published?: string
+  // A person must install it: it, or a release it passes, says `manual-upgrade: true`.
+  manual_upgrade: boolean
+  repo?: string
 }
 // "Update now": POST with no body. The host installs what its nightly run would, under its gates.
 export type UpdateRequested = { requested_at: string }
