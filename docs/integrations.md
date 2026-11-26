@@ -765,6 +765,32 @@ against, so none of them needs a network:
   obvious fakes. Nothing in the server imports the package, and a test in `cmd/taskto` fails if
   its binary links it. The fake Square comes with the Square adapter.
 
+## The end-to-end, isolation and contract suites
+
+Three groups of tests run in CI's Go job, with no real network:
+
+- **Invoice to paid** (`internal/server/payments_e2e_test.go`): the server's whole mux, SQLite, the apps'
+  outbox worker, the integrations' event worker and a clock the test moves, with the fake Stripe on a
+  socket and its signed events sent over HTTP to the real `/hooks/` route. An admin connects the
+  integration and approves an app's contract, a member sends an invoice, one payment link is made and
+  written to the record by the integration, the payer pays, and the invoice is paid with the history
+  saying the integration did it; then a replay, the same payment under another event id, an event that
+  arrives late, a payment of another amount and a partial and a whole refund.
+- **Isolation** (`internal/server/payments_isolation_test.go`): another workspace, a private space, an
+  event of one integration or app with another's token, a revoked approval, a disabled integration, a
+  test-mode event for a live reference, a definition with a URL, header, redirect or secret, a contract
+  that wasn't approved, an amount above the admin's ceiling, and the secrets never being in an answer, a
+  log or a row. Each shows that the thing that must not cross is there to cross: the record left alone is
+  one that a payment would have changed.
+- **The adapter contract** (`internal/integrations/contract_test.go`): what every payments adapter must do,
+  written once in terms of the adapter interfaces and the normalized shapes: a link made once for a
+  token and refused for the same token with other terms, found by its token, its state read live,
+  a webhook's signature, time tolerance and rotation, and a payment, expiry and refund each read as one
+  event with the ref's token and the exact amount, nothing a payer typed in it. An adapter runs it by
+  giving a `paymentsFixture` (its adapter, a client for its fake, the fake's payer, expiry and refund);
+  `contract_stripe_test.go` is Stripe's, and `TestTheContractSuiteNoticesABrokenAdapter` runs the cases
+  against adapters broken on purpose, to show they fail.
+
 ## Trying an integration by hand
 
 CI never calls a real provider: tests run against the fake. **Check** only looks at what the
