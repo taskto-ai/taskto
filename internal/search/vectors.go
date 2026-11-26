@@ -68,6 +68,10 @@ const tooBigRetry = 10 * time.Minute
 // cachedSpace is a space's entry in the cache.
 type cachedSpace struct {
 	id, workspace int64
+	// generation is the generation of the space (access.Space.Generation) the vectors are of, under
+	// the cache's mu: a space made with the ID of a removed one has another, and what was loaded
+	// for the first is dropped, not compared with the second's queries.
+	generation int64
 	// refresh is held while the space's vectors are brought up to date: one at a time.
 	refresh sync.Mutex
 	// snap is the space's vectors, nil if not loaded; set with both refresh and the
@@ -171,26 +175,33 @@ func (c *vectorCache) dropLocked(s *cachedSpace) {
 	}
 }
 
+// spaceRef is a space as a search found it: its ID and the generation its row had then.
+type spaceRef struct{ id, generation int64 }
+
 // nearest compares qv with the vectors of model key of the cached spaces among spaces (of
 // workspace, and which the caller may read and are consented to the endpoint), and returns
-// each document's passage most like it, unordered, and the spaces that aren't cached.
-func (c *vectorCache) nearest(ctx context.Context, db *sql.DB, workspace int64, spaces []int64, key string,
+// each document's passage most like it, unordered, and the IDs of the spaces that aren't cached.
+func (c *vectorCache) nearest(ctx context.Context, db *sql.DB, workspace int64, spaces []spaceRef, key string,
 	qv []float32) (found []near, rest []int64, err error) {
 	if c == nil {
-		return nil, spaces, nil
+		ids := make([]int64, len(spaces))
+		for i, sp := range spaces {
+			ids[i] = sp.id
+		}
+		return nil, ids, nil
 	}
 	keep := make(map[int64]bool, len(spaces))
-	for _, id := range spaces {
-		keep[id] = true
+	for _, sp := range spaces {
+		keep[sp.id] = true
 	}
 	var snaps []*spaceVectors
-	for _, id := range spaces {
-		snap, err := c.snapshot(ctx, db, id, workspace, key, keep)
+	for _, sp := range spaces {
+		snap, err := c.snapshot(ctx, db, sp, workspace, key, keep)
 		if err != nil {
 			return nil, nil, err
 		}
 		if snap == nil {
-			rest = append(rest, id)
+			rest = append(rest, sp.id)
 			continue
 		}
 		snaps = append(snaps, snap)
@@ -200,12 +211,19 @@ func (c *vectorCache) nearest(ctx context.Context, db *sql.DB, workspace int64, 
 
 // snapshot returns space id's vectors of key, brought up to date, or nil if they don't
 // fit in the budget beside those of the spaces to keep (the search's).
-func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, id, workspace int64, key string, keep map[int64]bool) (*spaceVectors, error) {
+func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, sp spaceRef, workspace int64, key string, keep map[int64]bool) (*spaceVectors, error) {
+	id := sp.id
 	c.mu.Lock()
 	s := c.spaces[id]
 	if s == nil {
-		s = &cachedSpace{id: id, workspace: workspace}
+		s = &cachedSpace{id: id, workspace: workspace, generation: sp.generation}
 		c.spaces[id] = s
+	}
+	if s.generation != sp.generation {
+		// Another space has the ID (or this is the first to say which it is for): what is held is
+		// of a space that isn't the one asked about.
+		c.resetLocked(s)
+		s.generation = sp.generation
 	}
 	c.clock++
 	s.lastUse = c.clock
@@ -243,10 +261,10 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, id, workspace in
 	var next *spaceVectors
 	var err error
 	if full {
-		next, err = loadVectors(ctx, db, id, key, nil, limit)
+		next, err = loadVectors(ctx, db, id, sp.generation, key, nil, limit)
 	} else {
 		var changed *spaceVectors
-		if changed, err = loadVectors(ctx, db, id, key, docs, math.MaxInt64); err == nil {
+		if changed, err = loadVectors(ctx, db, id, sp.generation, key, docs, math.MaxInt64); err == nil {
 			next = cur.with(changed, docs)
 		}
 	}
@@ -329,10 +347,11 @@ func (e errOverBudget) Error() string { return "search: the vectors don't fit in
 // loadVectors reads the vectors of model key of space's documents (or of docs only, if not
 // nil) that nearestBrute would compare, but for consent, which the caller checks. Past
 // limit bytes, it stops and returns errOverBudget.
-func loadVectors(ctx context.Context, db *sql.DB, space int64, key string, docs map[int64]bool, limit int64) (*spaceVectors, error) {
+func loadVectors(ctx context.Context, db *sql.DB, space, generation int64, key string, docs map[int64]bool, limit int64) (*spaceVectors, error) {
 	query := `SELECT c.doc_id, c.seq, c.vector FROM search_chunks c JOIN search_docs d ON d.id = c.doc_id
+		JOIN spaces sp ON sp.id = d.space_id AND (? = 0 OR sp.generation = ?)
 		WHERE d.space_id = ? AND d.embed_key = ? AND d.embed_version = d.version`
-	args := []any{space, key}
+	args := []any{generation, generation, space, key}
 	if docs != nil {
 		ids := make([]int64, 0, len(docs))
 		for id := range docs {

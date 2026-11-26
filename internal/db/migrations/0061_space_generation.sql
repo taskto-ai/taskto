@@ -55,3 +55,47 @@ BEFORE DELETE ON space_generations
 BEGIN
     SELECT RAISE(ABORT, 'the counter of space generations is never removed');
 END;
+
+-- The index's documents are numbered the same way: search_docs.id (which is also the rowid of
+-- the document's row in search_fts, and the key of its chunks) was the table's largest plus one,
+-- so after a space was removed its documents' IDs could go to the documents of a space made
+-- with its ID, and anything that held a document's ID across a wait (a hit whose snippet is read
+-- later, an embedding job that read its pending list, the vector cache) read the new space's
+-- text under the old name. With AUTOINCREMENT an ID is never given twice.
+--
+-- The table is rebuilt, and nothing that exists is lost or renumbered: the rows keep their IDs, so
+-- the full text rows (rowid = id) and the chunks with their vectors still belong to them, and no
+-- document is embedded again. The chunks are kept aside first, because dropping the table takes
+-- the rows that refer to it with it (ON DELETE CASCADE; the implicit delete fires no trigger, so the
+-- full text rows stay), and put back after.
+CREATE TABLE search_chunks_keep AS SELECT doc_id, seq, text, vector FROM search_chunks;
+
+CREATE TABLE search_docs_new (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    space_id      INTEGER NOT NULL REFERENCES spaces (id) ON DELETE CASCADE,
+    path          TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    markdown      INTEGER NOT NULL,
+    title         TEXT NOT NULL,
+    embed_version TEXT,
+    embed_key     TEXT,
+    embed_tries   INTEGER NOT NULL DEFAULT 0,
+    embed_after   TEXT,
+    text_format   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (space_id, path)
+) STRICT;
+
+INSERT INTO search_docs_new (id, space_id, path, version, markdown, title, embed_version, embed_key, embed_tries, embed_after, text_format)
+    SELECT id, space_id, path, version, markdown, title, embed_version, embed_key, embed_tries, embed_after, text_format FROM search_docs;
+
+DROP TABLE search_docs;
+ALTER TABLE search_docs_new RENAME TO search_docs;
+
+CREATE TRIGGER search_docs_fts_delete
+AFTER DELETE ON search_docs
+BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id;
+END;
+
+INSERT INTO search_chunks (doc_id, seq, text, vector) SELECT doc_id, seq, text, vector FROM search_chunks_keep;
+DROP TABLE search_chunks_keep;

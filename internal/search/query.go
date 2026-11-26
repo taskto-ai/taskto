@@ -530,21 +530,21 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, 
 	// Only spaces consented to the endpoint the query went to: another's vectors, of an
 	// endpoint changed since, aren't compared with it. Asked of SQLite on every search,
 	// never cached.
-	rows, err := x.db.QueryContext(ctx, `SELECT sp.id FROM spaces sp
+	rows, err := x.db.QueryContext(ctx, `SELECT sp.id, sp.generation FROM spaces sp
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
 		WHERE sp.id IN (`+scopeSQL+`) AND sp.workspace_id = ? AND `+embeddableSQL+`
 		ORDER BY sp.id`, in, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	var spaces []int64
+	var spaces []spaceRef
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var sp spaceRef
+		if err := rows.Scan(&sp.id, &sp.generation); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		spaces = append(spaces, id)
+		spaces = append(spaces, sp)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err

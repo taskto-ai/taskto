@@ -117,3 +117,64 @@ func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 		t.Fatalf("spaces = %d after the refused statements", n)
 	}
 }
+
+// The index's documents are numbered so that no ID is given twice. A database that has documents,
+// their full text rows and their chunks keeps all of them, with the same IDs, and a document made
+// after the newest was deleted takes a new ID.
+func TestSearchDocumentIDsAreNeverReusedAndTheMigrationKeepsTheIndex(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := migrate(ctx, sqlDB, migrationsBefore(t, "_space_generation.sql")); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO workspaces (id, name) VALUES (1, 'One')`,
+		`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (5, 1, 'shared', 'Team'), (6, 1, 'shared', 'Other')`,
+		`INSERT INTO search_docs (id, space_id, path, version, markdown, title, embed_version, embed_key, embed_tries, text_format)
+			VALUES (11, 5, 'a.md', 'v1', 1, 'A', 'v1', 'k', 0, 3), (12, 5, 'b.md', 'v2', 1, 'B', NULL, NULL, 2, 3), (20, 6, 'c.md', 'v3', 1, 'C', 'v3', 'k', 0, 3)`,
+		`INSERT INTO search_fts (rowid, path, title, body) VALUES (11, 'a.md', 'A', 'kumquat'), (12, 'b.md', 'B', 'quince'), (20, 'c.md', 'C', 'loquat')`,
+		`INSERT INTO search_chunks (doc_id, seq, text, vector) VALUES (11, 0, 'kumquat', x'0102'), (11, 1, 'more', x'0304'), (20, 0, 'loquat', x'0506')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	str := func(q string) string {
+		t.Helper()
+		var s string
+		if err := sqlDB.QueryRowContext(ctx, q).Scan(&s); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return s
+	}
+	if got := str(`SELECT group_concat(id || ':' || space_id || ':' || path || ':' || version || ':' || coalesce(embed_version, '-') || ':' || embed_tries || ':' || text_format, ' ') FROM (SELECT * FROM search_docs ORDER BY id)`); got != "11:5:a.md:v1:v1:0:3 12:5:b.md:v2:-:2:3 20:6:c.md:v3:v3:0:3" {
+		t.Fatalf("documents after the migration: %s", got)
+	}
+	if got := str(`SELECT group_concat(rowid || body, ' ') FROM (SELECT rowid, body FROM search_fts ORDER BY rowid)`); got != "11kumquat 12quince 20loquat" {
+		t.Fatalf("full text rows after the migration: %s", got)
+	}
+	if got := str(`SELECT group_concat(doc_id || '/' || seq || ':' || text || ':' || hex(vector), ' ') FROM (SELECT * FROM search_chunks ORDER BY doc_id, seq)`); got != "11/0:kumquat:0102 11/1:more:0304 20/0:loquat:0506" {
+		t.Fatalf("chunks after the migration: %s", got)
+	}
+
+	// The newest document is deleted with its space's rows, and another is made: a new ID.
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM spaces WHERE id = 6`); err != nil {
+		t.Fatal(err)
+	}
+	if got := str(`SELECT count(*) || ':' || (SELECT count(*) FROM search_fts WHERE rowid = 20) || ':' || (SELECT count(*) FROM search_chunks WHERE doc_id = 20) FROM search_docs WHERE id = 20`); got != "0:0:0" {
+		t.Fatalf("what is left of the deleted space's document, its full text row and chunks: %s", got)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO spaces (id, workspace_id, kind, name) VALUES (6, 1, 'shared', 'Replacement')`); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := sqlDB.QueryRowContext(ctx, `INSERT INTO search_docs (space_id, path, version, markdown, title) VALUES (6, 'c.md', 'v9', 1, 'C') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id <= 20 {
+		t.Fatalf("the document made after the newest was deleted has ID %d, which an earlier document had", id)
+	}
+}

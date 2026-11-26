@@ -71,6 +71,9 @@ type Index struct {
 	// when set, hears of each batch's files and bytes of text.
 	batchFiles, batchBytes int
 	onBatch                func(files, bytes int)
+	// afterPending, when set, is called by the embeddings worker after it has read the documents
+	// waiting and before it embeds the first; tests change the world there.
+	afterPending func()
 	// afterCardSync, when set, is called by a card search after it has indexed the cards it
 	// looks in and before it finds them; tests change the world there.
 	afterCardSync func()

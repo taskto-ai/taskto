@@ -281,10 +281,12 @@ const (
 
 // pending is a document waiting for its vectors.
 type pending struct {
-	id, space, workspace int64
-	version              string
-	title                string
-	tries                int
+	// generation is the space's, as the row had it when the document was found waiting: what the
+	// job reads, sends and stores is for that space, and for no space that has the ID later.
+	id, space, workspace, generation int64
+	version                          string
+	title                            string
+	tries                            int
 }
 
 // embedPending embeds up to embedBatch waiting documents whose time has come, and returns
@@ -292,7 +294,7 @@ type pending struct {
 // longer after each failure, and never holds up the others.
 func (x *Index) embedPending(ctx context.Context) (int, error) {
 	now := x.now().UTC().Format(timeFormat)
-	rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, sp.workspace_id, d.version, d.title, d.embed_tries `+pendingSQL+`
+	rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, sp.workspace_id, sp.generation, d.version, d.title, d.embed_tries `+pendingSQL+`
 		AND (d.embed_after IS NULL OR d.embed_after <= ?) ORDER BY d.embed_tries, d.id LIMIT ?`, now, embedBatch)
 	if err != nil {
 		return 0, err
@@ -300,7 +302,7 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 	var batch []pending
 	for rows.Next() {
 		var p pending
-		if err := rows.Scan(&p.id, &p.space, &p.workspace, &p.version, &p.title, &p.tries); err != nil {
+		if err := rows.Scan(&p.id, &p.space, &p.workspace, &p.generation, &p.version, &p.title, &p.tries); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -308,6 +310,9 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return 0, err
+	}
+	if x.afterPending != nil {
+		x.afterPending()
 	}
 	for _, p := range batch {
 		if err := x.embedDoc(ctx, p); err != nil {
@@ -318,7 +323,9 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 			wait := min(retryFirst<<min(p.tries, 16), retryMax)
 			// Only for the version that failed: one changed meanwhile starts afresh.
 			if _, err := x.db.ExecContext(ctx, `UPDATE search_docs SET embed_tries = embed_tries + 1, embed_after = ?
-				WHERE id = ? AND version = ?`, x.now().Add(wait).UTC().Format(timeFormat), p.id, p.version); err != nil {
+				WHERE id = ? AND version = ?
+				AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = search_docs.space_id AND sp.workspace_id = ? AND sp.generation = ?)`,
+				x.now().Add(wait).UTC().Format(timeFormat), p.id, p.version, p.workspace, p.generation); err != nil {
 				return 0, err
 			}
 		}
@@ -335,8 +342,21 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 	if err != nil {
 		return err
 	}
+	// The text that leaves the server is read with what lets it: the document is still this
+	// version, in the space it was found in (its workspace and generation), whose consent is to
+	// this very endpoint. One read, so nothing changes between the check and the text: a space
+	// removed and made again with the ID, or consent withdrawn, finds no row, and nothing is sent.
 	var body string
-	if err := x.db.QueryRowContext(ctx, `SELECT body FROM search_fts WHERE rowid = ?`, p.id).Scan(&body); err != nil {
+	err = x.db.QueryRowContext(ctx, `SELECT f.body FROM search_docs d
+		JOIN search_fts f ON f.rowid = d.id
+		JOIN spaces sp ON sp.id = d.space_id
+		JOIN search_settings e ON e.workspace_id = sp.workspace_id
+		WHERE d.id = ? AND d.version = ? AND d.markdown AND sp.workspace_id = ? AND sp.generation = ?
+		AND `+keySQL+` = ? AND `+embeddableSQL, p.id, p.version, p.workspace, p.generation, e.key()).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // changed since the batch was read, or no longer to be sent: the next pass sees what it is now
+	}
+	if err != nil {
 		return err
 	}
 	chunks := chunk(unsegment(body))
@@ -361,7 +381,7 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 		var allowed bool
 		err := tx.QueryRowContext(ctx, `SELECT d.version, `+keySQL+`, `+embeddableSQL+` FROM search_docs d
 			JOIN spaces sp ON sp.id = d.space_id LEFT JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE d.id = ?`, p.id).Scan(&version, &key, &allowed)
+			WHERE d.id = ? AND sp.workspace_id = ? AND sp.generation = ?`, p.id, p.workspace, p.generation).Scan(&version, &key, &allowed)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && (version != p.version || key.String != e.key() || !allowed)) {
 			// Changed meanwhile, or consent withdrawn or no longer for this endpoint: keep
 			// nothing; the next pass embeds what it is now, if it may.

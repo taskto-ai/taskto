@@ -3,6 +3,7 @@ package search
 import (
 	"errors"
 	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"taskto.ai/taskto/internal/access"
@@ -25,9 +26,10 @@ func (w *world) exec(query string, args ...any) {
 }
 
 // replace removes sp as an account's purge does (its files, then its rows) and makes another
-// space with its ID, in the same workspace; the new one has the consent the old one had. It returns
-// the new space, as the access check reads it.
-func (w *world) replace(sp access.Space) access.Space {
+// space with its ID, in the same workspace; the new one has the consent the old one had if consent
+// is set (written as a row, so the vector cache hasn't heard of it). It returns the new space, as
+// the access check reads it.
+func (w *world) replace(sp access.Space, consent bool) access.Space {
 	w.e.t.Helper()
 	var account int64
 	var model, baseURL string
@@ -37,7 +39,7 @@ func (w *world) replace(sp access.Space) access.Space {
 	}
 	w.exec(`DELETE FROM spaces WHERE id = ?`, sp.ID)
 	w.exec(`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (?, ?, 'shared', 'Replacement')`, sp.ID, sp.WorkspaceID)
-	if account != 0 {
+	if account != 0 && consent {
 		w.exec(`INSERT INTO search_embedding_consent (space_id, account_id, model, base_url) VALUES (?, ?, ?, ?)`, sp.ID, account, model, baseURL)
 	}
 	fresh := w.generationOf(access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Name: "Replacement", Access: access.Write})
@@ -59,7 +61,7 @@ func TestASyncPausedAcrossARemovalAndReuseIndexesNothingInTheReplacement(t *test
 	var replacement access.Space
 	w.e.idx.onBatch = func(int, int) { // the sync has loaded both files and has not begun its transaction
 		w.e.idx.onBatch = nil
-		replacement = w.replace(old)
+		replacement = w.replace(old, true)
 	}
 	_, err := w.e.idx.Sync(ctx, old)
 	if !errors.Is(err, access.ErrNotFound) {
@@ -83,7 +85,7 @@ func TestASearchAuthorizedForAReplacedSpaceFindsNothingOfTheReplacement(t *testi
 	old := w.generationOf(w.team)
 	old.Access = access.Read // what the reader's access check found
 
-	fresh := w.replace(old)
+	fresh := w.replace(old, true)
 	w.e.idx.Knowledge().SetSpaceCheck(access.SpaceRowCheck(w.e.db))
 	if _, err := w.e.idx.Knowledge().Put(ctx, fresh, "fruit.md", []byte("a kumquat in the replacement"), "", by, ""); err != nil {
 		t.Fatal(err)
@@ -120,5 +122,152 @@ func TestASearchAuthorizedForAReplacedSpaceFindsNothingOfTheReplacement(t *testi
 	fused := must[[]hit](t)(w.e.idx.fuse(ctx, staleIn, nil, []near{{doc: docs[0]}}))
 	if len(fused) != 0 {
 		t.Fatalf("the fusion under the old authorization named %d documents of the replacement", len(fused))
+	}
+}
+
+// A hit whose snippet is read after the space was removed and another made with its ID reads
+// nothing of the new space: the document it was found as has no other text than its own, whichever
+// space has the ID now. Documents are numbered so that no number is given twice, so the text the
+// snippet statements read by that number is the text it was found with or none.
+func TestSnippetsOfAnOldHitAreNeverTheReplacementsText(t *testing.T) {
+	w := newWorld(t)
+	old := w.generationOf(w.createShared("Gone"))
+	w.put(w.owner, old, "old.md", "a kumquat of the old space")
+	if _, err := w.e.idx.Sync(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	match := matchExpr("kumquat")
+	hits := must[[]hit](t)(w.e.idx.fullText(ctx, spacesJSON(t, old), match, 10, 0, false))
+	if len(hits) != 1 {
+		t.Fatalf("fixture: %d hits", len(hits))
+	}
+	semantic := []hit{{doc: hits[0].doc, seq: 0, match: "semantic"}}
+	w.exec(`INSERT INTO search_chunks (doc_id, seq, text, vector) VALUES (?, 0, 'the old passage', ?)`, hits[0].doc, encodeVector([]float32{1}))
+
+	// The space goes, and another with its ID is indexed, with a text of its own that matches too.
+	fresh := w.replace(old, true)
+	w.e.idx.Knowledge().SetSpaceCheck(access.SpaceRowCheck(w.e.db))
+	if _, err := w.e.idx.Knowledge().Put(ctx, fresh, "new.md", []byte("a kumquat in the replacement"), "", by, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.idx.Sync(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	var newDoc int64
+	if err := w.e.db.QueryRow(`SELECT id FROM search_docs WHERE space_id = ?`, fresh.ID).Scan(&newDoc); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`INSERT INTO search_chunks (doc_id, seq, text, vector) VALUES (?, 0, 'the replacement passage', ?)`, newDoc, encodeVector([]float32{1}))
+	if newDoc == hits[0].doc {
+		t.Fatalf("the replacement's document has the number %d of a document the old space had", newDoc)
+	}
+
+	if err := w.e.idx.textSnippets(ctx, match, hits); err != nil {
+		t.Fatal(err)
+	}
+	for _, seg := range hits[0].snippet {
+		if strings.Contains(seg.Text, "replacement") {
+			t.Fatalf("the snippet of the old hit is the replacement's text: %+v", hits[0].snippet)
+		}
+	}
+	if err := w.e.idx.passages(ctx, semantic); err != nil {
+		t.Fatal(err)
+	}
+	for _, seg := range semantic[0].snippet {
+		if strings.Contains(seg.Text, "replacement") {
+			t.Fatalf("the passage of the old hit is the replacement's: %+v", semantic[0].snippet)
+		}
+	}
+}
+
+// What the embeddings job sends to the endpoint is read with the consent that lets it, in one
+// read: a space removed and made again with the ID after the job found its document waiting, whose
+// consent is off, has nothing sent, even if the document it made has the number of the old one
+// (which the numbering prevents; forced here, the identity of the read does).
+func TestAnEmbeddingJobSendsNothingOfAReplacementWithoutConsent(t *testing.T) {
+	for _, forced := range []bool{false, true} {
+		name := "numbers never reused"
+		if forced {
+			name = "the number reused anyway"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.setModel() // and consents to it for the team space
+			old := w.generationOf(w.team)
+			w.put(w.owner, old, "old.md", "an old text about a quince")
+			if _, err := w.e.idx.Sync(ctx, old); err != nil {
+				t.Fatal(err)
+			}
+			var oldDoc int64
+			if err := w.e.db.QueryRow(`SELECT id FROM search_docs WHERE space_id = ?`, old.ID).Scan(&oldDoc); err != nil {
+				t.Fatal(err)
+			}
+
+			w.e.idx.afterPending = func() { // the job has its list, and has not begun
+				w.e.idx.afterPending = nil
+				fresh := w.replace(old, false) // no consent for the new space
+				w.e.idx.Knowledge().SetSpaceCheck(access.SpaceRowCheck(w.e.db))
+				if _, err := w.e.idx.Knowledge().Put(ctx, fresh, "new.md", []byte("a secret text of the replacement"), "", by, ""); err != nil {
+					t.Error(err)
+					return
+				}
+				if _, err := w.e.idx.Sync(ctx, fresh); err != nil {
+					t.Error(err)
+					return
+				}
+				if forced {
+					w.exec(`UPDATE search_docs SET id = ? WHERE space_id = ?`, oldDoc, fresh.ID)
+					w.exec(`UPDATE search_fts SET rowid = ? WHERE path = 'new.md'`, oldDoc)
+				}
+			}
+			if _, err := w.e.idx.embedPending(ctx); err != nil {
+				t.Fatal(err)
+			}
+			w.e.embed.mu.Lock()
+			sent := append([]string(nil), w.e.embed.inputs...)
+			w.e.embed.mu.Unlock()
+			for _, in := range sent {
+				if strings.Contains(in, "secret") || strings.Contains(in, "replacement") {
+					t.Fatalf("the endpoint was sent the replacement's text: %q", in)
+				}
+			}
+		})
+	}
+}
+
+// The vector cache holds a space's vectors by its ID, and another space can have the ID: a search
+// of the new one, which the cache hasn't heard of (the consent that makes it searchable by meaning
+// is committed, and the cache told after), compares the vectors of the new space and nothing of the
+// old, as brute force does.
+func TestTheVectorCacheNeverComparesAReplacementWithTheOldSpacesVectors(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel() // and consents to it for the team space
+	key := Embeddings{Account: account, Model: fakeModel}.key()
+	old := w.generationOf(w.team)
+	w.fillVectors(old, key, 20, 2, fakeDims, 1)
+	qv := randomVector(rand.New(rand.NewPCG(7, 7)), fakeDims)
+	// The cache loads the old space's vectors.
+	for range 2 {
+		if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, spacesJSON(t, old), key, qv, 10)); len(found) == 0 {
+			t.Fatal("fixture: the old space has no vectors to find")
+		}
+	}
+
+	fresh := w.replace(old, true) // its consent is a row; the cache is not told
+	w.e.idx.Knowledge().SetSpaceCheck(access.SpaceRowCheck(w.e.db))
+	if _, err := w.e.idx.Knowledge().Put(ctx, fresh, "new.md", []byte("a document with no vectors"), "", by, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.idx.Sync(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	freshIn := spacesJSON(t, fresh)
+	want := w.e.idx.bruteNearest(t, freshIn, key, qv, 10)
+	if len(want) != 0 {
+		t.Fatalf("fixture: brute force finds %d passages in the replacement", len(want))
+	}
+	got := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, freshIn, key, qv, 10))
+	if len(got) != 0 {
+		t.Fatalf("the cached comparison finds %d passages in the replacement, which has none: the old space's vectors", len(got))
 	}
 }
