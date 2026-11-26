@@ -8,6 +8,7 @@ package agentrt
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 // The sidecar's entry points. The tests use test-entry.js: the production sidecar with the pause
@@ -537,6 +540,83 @@ func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 		t.Fatalf("a new conversation after the purge: %d, %v (it must not reuse %d)", fresh, err, doomed)
 	}
 	say(fresh, "still working")
+}
+
+// The text of a purged conversation stays in the write-ahead log until it is truncated, and a reader
+// can hold the log up without an error: the purge then says it isn't done (so the server keeps its
+// record of the step), and a retry, with the conversation's rows long gone, still empties the log.
+func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const word = "doomed-marmalade-7731"
+	sub, err := s.client.Submit(ctx, doomed, Input{Content: "remember " + word})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if _, err := s.client.Wait(waitCtx, sub); err != nil {
+		t.Fatal(err)
+	}
+	inLog := func() bool {
+		b, err := os.ReadFile(filepath.Join(s.dir, "agent.db-wal"))
+		return err == nil && bytes.Contains(b, []byte(word))
+	}
+	if !inLog() {
+		t.Skip("the database's log doesn't hold the conversation here")
+	}
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+
+	// A read transaction pinned on the database, as a watch's is.
+	reader, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	conn, err := reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+
+	var se *StatusError
+	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("purging while a reader holds the log: err = %v, want a 503", err)
+	}
+	if !inLog() {
+		t.Fatal("fixture: the reader didn't hold the log")
+	}
+	// The sidecar restarts, and no longer has the conversation at all: purging it again is still not
+	// done while the log holds what was said, and is done once it is empty.
+	s.kill()
+	s.start()
+	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("purging again, the rows gone, while a reader holds the log: err = %v, want a 503", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.PurgeConversation(ctx, doomed); err != nil {
+		t.Fatalf("the retry once the reader is gone: %v", err)
+	}
+	if inLog() {
+		t.Error("what was said is still in the write-ahead log after the purge was acknowledged")
+	}
 }
 
 func TestAbortStopsTheRunningWork(t *testing.T) {

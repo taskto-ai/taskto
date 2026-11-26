@@ -8,6 +8,7 @@ import { testHooks } from './test-hooks.js'
 const noArguments = { type: 'object', properties: {}, additionalProperties: false } as ToolSpec['input_schema']
 
 testHooks.spikeTools = true
+testHooks.walBusyMs = 300
 testHooks.extraToolSpecs = [
   // Conversation-only without a browser_ name: hidden while the agent browser is off.
   {

@@ -70,7 +70,8 @@ CREATE TABLE purge_cleanups (
     user_id    INTEGER NOT NULL,
     -- agent_conversation: target is the agent runtime's conversation id;
     -- cli_home: the user's id, for the CLI worker's directory;
-    -- providers: 'feed', for the providers file and the key files.
+    -- providers: 'feed:' and the user's id, for the providers file and the key files, one row
+    -- for each account so that no run's acknowledgement clears another account's.
     kind       TEXT NOT NULL CHECK (kind IN ('agent_conversation', 'cli_home', 'providers')),
     target     TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

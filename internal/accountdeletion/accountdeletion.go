@@ -122,6 +122,10 @@ type Service struct {
 	apps      Apps
 	agent     func(ctx context.Context) (conversations.Purger, error)
 	providers func(ctx context.Context) error
+
+	// beforeSchedule, for tests, runs in Reconcile between the list of accounts without a job and
+	// the transaction that makes each one's job.
+	beforeSchedule func(user int64)
 }
 
 // New returns the service. Attach it to the scheduler before the scheduler starts, and give it to
@@ -186,30 +190,20 @@ func (s *Service) CancelPurge(ctx context.Context, tx *sql.Tx, userID int64) err
 // workspace), or whose tries ran out. Call it at start, once Attach has run.
 func (s *Service) Reconcile(ctx context.Context) error {
 	rows, err := s.o.DB.QueryContext(ctx, `
-		SELECT d.user_id, d.purge_at,
-			coalesce((SELECT m.workspace_id FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
-				WHERE m.user_id = d.user_id ORDER BY w.is_setup DESC, w.id LIMIT 1),
-				(SELECT id FROM workspaces ORDER BY is_setup DESC, id LIMIT 1))
-		FROM account_deletions d
+		SELECT d.user_id FROM account_deletions d
 		WHERE NOT EXISTS (SELECT 1 FROM scheduled_jobs j WHERE j.user_id = d.user_id AND j.kind = ? AND j.dedupe_key = ?
 			AND j.state IN ('pending', 'running'))`, string(Kind), jobKey)
 	if err != nil {
 		return err
 	}
-	type missing struct {
-		user, workspace int64
-		at              string
-	}
-	var todo []missing
+	var todo []int64
 	for rows.Next() {
-		var m missing
-		var ws sql.NullInt64
-		if err := rows.Scan(&m.user, &m.at, &ws); err != nil {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
 			return err
 		}
-		m.workspace = ws.Int64
-		todo = append(todo, m)
+		todo = append(todo, id)
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -217,28 +211,70 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, m := range todo {
-		if m.workspace == 0 {
-			continue // no workspace exists: nothing to file the job under
+	for _, user := range todo {
+		// The request is read again where the job is written, under the write lock: it may have been
+		// cancelled and made again since the list above, and a deadline read before would put the
+		// old one on the new request, or a job on a request that is gone.
+		if s.beforeSchedule != nil {
+			s.beforeSchedule(user)
 		}
-		at, err := time.Parse("2006-01-02T15:04:05.000Z", m.at)
+		scheduled := false
+		err := s.write(ctx, func(tx *sql.Tx) error {
+			scheduled = false
+			var at string
+			err := tx.QueryRowContext(ctx, `SELECT purge_at FROM account_deletions WHERE user_id = ?`, user).Scan(&at)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			var jobs int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM scheduled_jobs WHERE user_id = ? AND kind = ? AND dedupe_key = ?
+				AND state IN ('pending', 'running')`, user, string(Kind), jobKey).Scan(&jobs); err != nil {
+				return err
+			}
+			if jobs > 0 {
+				return nil // the request was made again, with its own job
+			}
+			ws, err := s.workspaceOf(ctx, tx, user)
+			if err != nil || ws == 0 {
+				return err // no workspace exists: nothing to file the job under
+			}
+			when, err := time.Parse(stampFormat, at)
+			if err != nil {
+				return err
+			}
+			if err := s.SchedulePurge(ctx, tx, user, ws, when); err != nil {
+				return err
+			}
+			scheduled = true
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		tx, err := s.o.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return err
+		if scheduled {
+			slog.Info("account deletion: scheduled the purge of an account that had none", "user_id", user)
 		}
-		if err := s.SchedulePurge(ctx, tx, m.user, m.workspace, at); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		slog.Info("account deletion: scheduled the purge of an account that had none", "user_id", m.user)
 	}
 	return nil
+}
+
+// stampFormat is how the tables write a time.
+const stampFormat = "2006-01-02T15:04:05.000Z"
+
+// workspaceOf is the workspace a purge job of userID is filed under: the first they belong to, or
+// the first there is. 0 if no workspace exists.
+func (s *Service) workspaceOf(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, userID int64) (int64, error) {
+	var ws sql.NullInt64
+	err := q.QueryRowContext(ctx, `
+		SELECT coalesce((SELECT m.workspace_id FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
+			WHERE m.user_id = ? ORDER BY w.is_setup DESC, w.id LIMIT 1),
+			(SELECT id FROM workspaces ORDER BY is_setup DESC, id LIMIT 1))`, userID).Scan(&ws)
+	return ws.Int64, err
 }
 
 // Result is what a purge deleted, in numbers (the audit event's details).
@@ -376,22 +412,39 @@ type account struct {
 }
 
 // begin marks the purge as begun and reads who it is for. ok is false when there is nothing to
-// do: the account is gone, or its deletion was cancelled.
+// do: the account is gone, its deletion was cancelled, or the request in force isn't due yet. A
+// job is only a reminder to look: it may be one of a request that was cancelled and made again, so
+// the deadline that counts is the current request's, read here under the write lock, and a job that
+// ran too early is moved to it.
 func (s *Service) begin(ctx context.Context, userID int64) (acct account, ok bool, err error) {
 	err = s.write(ctx, func(tx *sql.Tx) error {
+		ok = false
+		var purgeAt string
 		err := tx.QueryRowContext(ctx, `
-			SELECT u.email, u.name, u.created_at
+			SELECT u.email, u.name, u.created_at, d.purge_at
 			FROM account_deletions d JOIN users u ON u.id = d.user_id WHERE d.user_id = ?`, userID).
-			Scan(&acct.email, &acct.name, &acct.created)
+			Scan(&acct.email, &acct.name, &acct.created, &purgeAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
+		due, err := time.Parse(stampFormat, purgeAt)
+		if err != nil {
+			return err
+		}
+		if s.o.Clock().Before(due) {
+			ws, err := s.workspaceOf(ctx, tx, userID)
+			if err != nil || ws == 0 {
+				return err
+			}
+			slog.Info("account deletion: a purge job ran before its request is due; it is moved to the deadline", "user_id", userID)
+			return s.SchedulePurge(ctx, tx, userID, ws, due)
+		}
 		ok = true
 		_, err = tx.ExecContext(ctx, `UPDATE account_deletions SET purge_started_at = coalesce(purge_started_at, ?) WHERE user_id = ?`,
-			s.o.Clock().UTC().Format("2006-01-02T15:04:05.000Z"), userID)
+			s.o.Clock().UTC().Format(stampFormat), userID)
 		return err
 	})
 	return acct, ok, err
@@ -491,11 +544,12 @@ func (s *Service) finish(ctx context.Context, userID int64, private []access.Spa
 			return err
 		}
 		// The providers file the agent runtime reads holds their provider accounts, which go with
-		// the account: its rewriting is recorded in the transaction that makes it necessary.
-		if err := s.record(ctx, tx, userID, cleanProviders, "feed"); err != nil {
+		// the account: its rewriting is recorded in the transaction that makes it necessary, as a
+		// step of this account alone, so another purge's acknowledgement of the file can't clear it.
+		if err := s.record(ctx, tx, userID, cleanProviders, providersTarget(userID)); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE user_id = ? AND kind <> ?`, userID, cleanProviders).
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE user_id = ?`, userID).
 			Scan(&res.CleanupsPending); err != nil {
 			return err
 		}

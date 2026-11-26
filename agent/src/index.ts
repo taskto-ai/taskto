@@ -62,6 +62,7 @@ import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
+import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
 import { SpikeTools } from './tools.js'
 
 // Everything this process logs passes redact(), so an API key never reaches its output.
@@ -170,6 +171,9 @@ class HttpError extends Error {
 
 const MAX_BODY = 1 << 20
 
+/** How long a purge waits for readers of the database before it says it isn't done. */
+const walBusyMs = testHooks.walBusyMs ?? 15_000
+
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   let size = 0
@@ -249,7 +253,7 @@ async function listConversations() {
 // is purged: its work has stopped, so nothing writes the rows that go. secure_delete zeroes the
 // deleted content in the file, and the checkpoint takes it out of the write-ahead log.
 function purgeRecords(root: number): void {
-  const db = new DatabaseSync(dbPath as string, { timeout: 15_000 })
+  const db = new DatabaseSync(dbPath as string, { timeout: walBusyMs })
   try {
     db.exec('PRAGMA secure_delete = ON')
     db.exec('BEGIN IMMEDIATE')
@@ -297,11 +301,9 @@ function purgeRecords(root: number): void {
       db.exec('ROLLBACK')
       throw error
     }
-    try {
-      db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
-    } catch {
-      // The harness is reading: the log is folded in by its own checkpoints.
-    }
+    // What was deleted is still in the log until it is truncated, and a reader (the harness's, or a
+    // watch) can hold it up: then the purge isn't done, and the server asks again.
+    truncateWal(db)
   } finally {
     db.close()
   }
@@ -484,6 +486,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         await found.abort(context) // idle, as retiring left it
         purgeRecords(num)
         console.error(`conversation ${num} purged`)
+      } else {
+        // Gone already, perhaps by an earlier purge that deleted the rows and couldn't truncate the
+        // log: what was said can still be in it, so done means the log is empty too.
+        truncateWalAt(dbPath as string, walBusyMs)
       }
       res.writeHead(204).end()
       return
@@ -537,7 +543,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
 const server = createServer((req, res) => {
   route(req, res).catch((error: unknown) => {
-    const status = error instanceof HttpError ? error.status : 500
+    // A purge that couldn't empty the log is not an error of the sidecar's: it isn't done yet.
+    const status = error instanceof HttpError ? error.status : error instanceof WalBusyError ? 503 : 500
     if (status === 500) console.error(error)
     const reason = error instanceof HttpError ? error.reason : undefined
     if (!res.headersSent)

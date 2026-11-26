@@ -699,17 +699,29 @@ func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64) 
 // removeFiles deletes an attachment's files from the space that held them. A failure is logged and
 // leaves a stray file, which Sweep removes later.
 func (s *Service) removeFiles(ctx context.Context, spaceID, appID int64, id string) {
-	root, err := s.filesRoot(ctx, spaceID)
-	if err != nil {
+	if err := s.unlinkFiles(ctx, spaceID, appID, id); err != nil {
 		slog.Warn("apps: removing attachment files", "app", appID, "err", err)
-		return
+	}
+}
+
+// unlinkFiles deletes an attachment's files from the space that held them, and reports a file that
+// couldn't be removed (all are tried). One already gone is not a failure.
+func (s *Service) unlinkFiles(ctx context.Context, spaceID, appID int64, id string) error {
+	root, err := s.filesRoot(ctx, spaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // the space is gone, and its directory with it
+	}
+	if err != nil {
+		return err
 	}
 	defer root.Close()
+	var errs []error
 	for _, suffix := range []string{"", ".part", ".thumb", ".thumb.tmp", ".tmp"} {
 		if err := root.Remove(fileName(appID, id, suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("apps: removing attachment file", "app", appID, "err", err)
+			errs = append(errs, err)
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // File is an attachment (or its thumbnail) opened for reading.
@@ -1417,21 +1429,33 @@ func (s *Service) PurgeUploads(ctx context.Context, owner int64) (int, error) {
 }
 
 // deleteUpload removes attachment id if it still is owner's and unattached (it may have been
-// attached since it was found), and then its files from the space that holds them.
+// attached since it was found): its files from the space that holds them, and then its row. The
+// row is what says a file is still to be removed, so a file that can't be removed leaves it, and
+// the error, for the purge to try again; the attachment's lock keeps it from being attached in
+// between.
 func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int64) (bool, error) {
 	defer s.lock(id)()
 	var spaceID int64
-	err := s.write(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL RETURNING space_id`,
-			id, owner).Scan(&spaceID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		return err
-	})
-	if err != nil || spaceID == 0 {
+	err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL`,
+		id, owner).Scan(&spaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
-	s.removeFiles(ctx, spaceID, appID, id)
-	return true, nil
+	if err := s.unlinkFiles(ctx, spaceID, appID, id); err != nil {
+		return false, fmt.Errorf("removing the files of upload %s: %w", id, err)
+	}
+	var gone bool
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL`, id, owner)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		gone = n > 0
+		return err
+	})
+	return gone, err
 }

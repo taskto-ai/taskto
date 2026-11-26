@@ -42,6 +42,11 @@ func (s *Service) SetProviders(sync func(ctx context.Context) error) {
 	s.providers = sync
 }
 
+// providersTarget is the target of userID's rewriting of the providers file. Every account's is its
+// own record, never one shared: a record is removed by the run that read it, which began before a
+// later purge's accounts were deleted, and a shared one would be that later purge's only retry.
+func providersTarget(userID int64) string { return "feed:" + strconv.FormatInt(userID, 10) }
+
 // record notes a step to do for userID, within q. Noting it again changes nothing.
 func (s *Service) record(ctx context.Context, q execer, userID int64, kind, target string) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at) VALUES (?, ?, ?, ?)

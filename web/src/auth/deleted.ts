@@ -22,14 +22,3 @@ export function takeDeletion(): string | null {
     return null
   }
 }
-
-// Whether this tab's person has just deleted their account, without taking the date: the app
-// forgets what the device kept of the account when the session ends for that reason, and not
-// when it ends for any other (an ended session leaves the queue for the next sign-in to send).
-export function deletionNoted(): boolean {
-  try {
-    return window.sessionStorage.getItem(KEY) !== null
-  } catch {
-    return false
-  }
-}

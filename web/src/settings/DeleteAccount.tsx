@@ -8,6 +8,7 @@
 import { type FormEvent, useState } from 'react'
 import { api, type DeletionReply, type DeletionStatus, exportPath, forAccount, SESSION_LOST } from '../api'
 import { rememberDeletion } from '../auth/deleted'
+import { forgetAccount } from '../auth/forgetAccount'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Button } from '../ui/Button'
@@ -46,8 +47,14 @@ export function DeleteAccount({ workspace, user }: { workspace: number; user: nu
       })
     })
     if (ok && reply) {
-      // The server ended this session: on to the sign-in screen, which says when the account is purged.
+      // The server accepted the deletion and ended this session. What this device kept of the
+      // account (drafts, the offline database with its downloads and queue) will never be sent or
+      // read again, and is gone now, from this answer and for the account whose form this is: a
+      // request refused a moment earlier may have taken the app to the sign-in screen already, which
+      // is no longer listening for the session to end.
       rememberDeletion(reply.purge_at)
+      await forgetAccount(user)
+      // On to the sign-in screen, which says when the account is purged.
       window.dispatchEvent(new Event(SESSION_LOST))
     }
   }
