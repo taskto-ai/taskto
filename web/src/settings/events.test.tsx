@@ -333,18 +333,44 @@ test('with the Failed filter the refusal stays after the row leaves the list, an
   await waitFor(() => expect(screen.queryByText(/Only an event that failed can be retried\./)).toBeNull())
 })
 
+test('an older page that failed to load says so until a later try loads it', async () => {
+  let fail = true
+  fakeFetch({
+    ...around,
+    [`GET ${base}/events`]: { body: { events: [event({ id: 9 }), event({ id: 8 })], next_before: 8 } },
+    [`GET ${base}/events?before=8`]: () =>
+      fail
+        ? { status: 500, body: { error: 'boom', code: 'internal' } }
+        : { body: { events: [event({ id: 7, kind: 'payment.failed' })], next_before: 0 } },
+    ...links(),
+  })
+  open()
+  await screen.findByRole('list', { name: 'Events' })
+  fireEvent.click(screen.getByRole('button', { name: 'Show older events' }))
+  const said = /Something went wrong on the server\./
+  expect(await screen.findByText(said)).toBeTruthy()
+  fail = false
+  fireEvent.click(screen.getByRole('button', { name: 'Show older events' }))
+  expect(await screen.findByText('Payment failed')).toBeTruthy()
+  expect(screen.queryByText(said)).toBeNull()
+})
+
 test('a refusal that leaves the event failed stays under it and is said in words, not as a status number', async () => {
   fakeFetch({
     ...around,
     ...events(event({ id: 2, state: 'failed', code: 'integration_event_app_offline', retriable: true })),
-    [`POST ${base}/events/2/retry`]: { status: 500, body: { error: 'boom' } },
+    [`POST ${base}/events/2/retry`]: { status: 500, body: { error: 'boom', code: 'internal' } },
     ...links(),
   })
   open()
   const button = await screen.findByRole('button', { name: /^Retry the event/ })
   fireEvent.click(button)
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toBeTruthy()
+  expect(alert.textContent).toContain(
+    "Something went wrong on the server. Try again; if it keeps happening, the server's log says why.",
+  )
+  expect(alert.textContent).not.toContain('boom')
+  expect(alert.textContent).not.toContain('500')
   // Still failed, still retriable.
   expect(screen.getByRole('button', { name: /^Retry the event/ })).toBeTruthy()
 })
@@ -364,11 +390,22 @@ test('the payment links to check say what to look for at Stripe; one still being
         can_confirm: false,
         code: 'integration_account_changed',
       }),
+      link({
+        effect_id: 34,
+        record_id: 92,
+        amount: '900.00',
+        waiting: false,
+        can_confirm: false,
+        code: 'integration_amount_above_max',
+        params: { max: '500.00', currency: 'EUR' },
+      }),
     ),
   })
   open()
   const list = await screen.findByRole('list', { name: 'Payment links to check' })
-  const [needs, looking, stopped] = within(list).getAllByRole('listitem')
+  const [needs, looking, stopped, ceiling] = within(list).getAllByRole('listitem')
+  // A stopped lookup's reason names its values: which ceiling refused the amount.
+  expect(ceiling.textContent).toContain('The amount is above the 500.00 EUR that an admin allows for one payment.')
   expect(needs.textContent).toContain('Payment link for €120.00')
   expect(needs.textContent).toContain('Record 88 of app 4 · Shop floor')
   expect(needs.textContent).toContain('Outcome unknown since Nov 26, 2026')

@@ -2107,11 +2107,22 @@ func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
 	}
 	expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusConflict)
 
+	// A code whose message names values (the ceiling that refused the amount) is listed with them, as
+	// the entry failed with them.
+	p.exec(`UPDATE app_effects SET error_code = ?, error_params = ? WHERE id = ?`,
+		string(apierr.CodeIntegrationAmountAboveMax), `{"max":"5.00","currency":"EUR"}`, e.id)
+	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	if got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks[0]; got.Code != string(apierr.CodeIntegrationAmountAboveMax) ||
+		got.Params["max"] != "5.00" || got.Params["currency"] != "EUR" {
+		t.Fatalf("link = %+v: want the code with its params", got)
+	}
+
 	// A link ready for a decision carries no code.
 	p.exec(`UPDATE app_effects SET error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), e.id)
 	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
 	expect(t, rec, http.StatusOK)
-	if got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks[0]; !got.CanConfirm || got.Code != "" {
+	if got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks[0]; !got.CanConfirm || got.Code != "" || got.Params != nil {
 		t.Fatalf("link = %+v", got)
 	}
 }

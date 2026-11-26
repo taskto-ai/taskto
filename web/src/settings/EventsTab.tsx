@@ -250,7 +250,7 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
                     {!l.can_confirm && !l.waiting && (
                       <Notice tone="warning" title={t('settings.events.links.stoppedTitle')} live={false}>
                         <p>
-                          {codeText(l.code, undefined, t('settings.events.links.stoppedFallback'))}{' '}
+                          {codeText(l.code, l.params, t('settings.events.links.stoppedFallback'))}{' '}
                           {t('settings.events.links.stoppedDo')}
                         </p>
                       </Notice>
@@ -375,6 +375,7 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
     if (!page?.next) return
     const mine = latest.current
     setMore(true)
+    setError(null)
     try {
       const r = await api<IntegrationEventList>(`${base}/events${query ? `${query}&` : '?'}before=${page.next}`)
       if (latest.current === mine) setPage({ items: [...page.items, ...r.events], next: r.next_before })

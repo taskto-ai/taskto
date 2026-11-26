@@ -901,6 +901,8 @@ export type PaymentLinkOutcome = {
   // Why the lookup stopped, when it neither waits nor may be confirmed (the code the entry failed
   // with); older servers don't send it.
   code?: string
+  // The values the code's message names (the ceiling that refused an amount), when it has any.
+  params?: Params
   // The provider's id of an object of the waiting key that the server saw and couldn't resolve, "" when none.
   object_id: string
   // Every attempt at this payment, oldest first: what an admin looks for at the provider.

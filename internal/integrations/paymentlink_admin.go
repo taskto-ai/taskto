@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -58,6 +59,9 @@ type PaymentLinkOutcome struct {
 	// the entry failed with (for example integration_account_changed), which the web app says in
 	// words. It is empty while the server waits and when the admin may confirm.
 	Code string `json:"code,omitempty"`
+	// Params are the values the code's message names (for integration_amount_above_max, the ceiling and
+	// its currency), as the entry failed with them; left out when there are none.
+	Params apierr.Params `json:"params,omitempty"`
 	// Attempts is every try at this payment (every idempotency key of the reference, oldest first, not
 	// only the current one): what an admin searches the provider's account for. Never anything sealed.
 	Attempts []PaymentLinkAttempt `json:"attempts" apitypes:"nonnull"`
@@ -113,7 +117,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 	}
 	rows, err := s.store.db.QueryContext(ctx, `
 		SELECT r.id, r.success_url, r.account_id, r.account_mode, r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
-			coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`,
+			coalesce(e.state, ''), coalesce(e.error_code, ''), e.error_params, `+confirmable+`,
 			coalesce(k.object_id, '')
 		FROM integration_refs r
 		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
@@ -133,8 +137,9 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		var v refView
 		var minor int64
 		var state, code string
+		var params sql.NullString
 		var clean bool
-		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &clean, &o.ObjectID); err != nil {
+		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID); err != nil {
 			return nil, err
 		}
 		if !spaces[o.SpaceID] || len(out) >= maxOutcomesListed {
@@ -145,6 +150,10 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		o.Waiting = state == "pending" || state == "running"
 		if !o.Waiting && !o.CanConfirm {
 			o.Code = code
+			if params.Valid && params.String != "" {
+				// Written by the outbox as JSON; params that can't be read leave the code without them.
+				_ = json.Unmarshal([]byte(params.String), &o.Params)
+			}
 		}
 		out = append(out, o)
 		refs = append(refs, v)
