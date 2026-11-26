@@ -6,7 +6,7 @@ import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { BrandLogo } from '../BrandLogo'
 import { t, useFormat, useT } from '../i18n'
 import { Notice } from '../ui/Notice'
-import { takeDeletion } from './deleted'
+import { DELETION_EVENT, takeDeletion } from './deleted'
 
 // The product's name, the same in every language.
 const BRAND = 'TaskTo.AI'
@@ -286,7 +286,16 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   }, onDone)
   const [forgot, setForgot] = useState(false)
   // Told once, to a person who has just deleted their account.
-  const [deleted] = useState(takeDeletion)
+  const [deleted, setDeleted] = useState(takeDeletion)
+  // ...or told now, if the deletion is answered after this screen is up.
+  useEffect(() => {
+    const told = () => {
+      const at = takeDeletion()
+      if (at) setDeleted(at)
+    }
+    window.addEventListener(DELETION_EVENT, told)
+    return () => window.removeEventListener(DELETION_EVENT, told)
+  }, [])
   const f = useFormat()
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />

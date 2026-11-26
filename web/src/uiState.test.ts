@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 
 import { afterEach, expect, test, vi } from 'vitest'
-import { claimDrafts, draftKey, forgetDrafts, readDraft, readState, writeDraft, writeState } from './uiState'
+import {
+  claimDrafts,
+  draftKey,
+  forgetDrafts,
+  forgetDraftsOf,
+  readDraft,
+  readState,
+  writeDraft,
+  writeState,
+} from './uiState'
 
 afterEach(() => localStorage.clear())
 
@@ -84,4 +93,38 @@ test('drafts written through the module in use are read back by it', () => {
   const key = draftKey('builder-pane', 1, 9)
   writeDraft(key, 'preview')
   expect(readDraft(key)).toBe('preview')
+})
+
+test("forgetting one account's drafts leaves the account that signed in since, in another tab, its drafts and its claim", async () => {
+  const alice = await tab()
+  alice.claimDrafts(1)
+  const aliceKey = alice.draftKey('message', 'c1')
+  alice.writeDraft(aliceKey, 'Alice’s text')
+  // Alice's deletion is under way; Bob signs in through another tab and writes a draft.
+  const bob = await tab()
+  bob.claimDrafts(2)
+  const bobKey = bob.draftKey('message', 'c1')
+  bob.writeDraft(bobKey, 'Bob’s text')
+  writeState('taskto:builder-pane:2:5', 'Bob’s preview')
+
+  // The answer to Alice's deletion arrives.
+  alice.forgetDraftsOf(1)
+
+  expect(readState(bobKey as string)).toBe('Bob’s text')
+  expect(readState('taskto:builder-pane:2:5')).toBe('Bob’s preview')
+  expect(readState('taskto:drafts-of')).toBe('2')
+  expect(bob.readDraft(bobKey)).toBe('Bob’s text')
+  // Hers are gone, and her tab writes nothing more.
+  expect(readState(aliceKey as string)).toBeNull()
+  alice.writeDraft(aliceKey, 'more')
+  expect(readState(aliceKey as string)).toBeNull()
+})
+
+test("forgetting an account's drafts when nobody else has signed in removes its claim too", () => {
+  claimDrafts(1)
+  writeDraft(draftKey('builder', 1, 'last'), '5')
+  forgetDraftsOf(1)
+  expect(readState('taskto:builder:1:1:last')).toBeNull()
+  expect(readState('taskto:drafts-of')).toBeNull()
+  expect(draftKey('message', 'x')).toBeNull()
 })

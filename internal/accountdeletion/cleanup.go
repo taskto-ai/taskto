@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/providers"
 )
 
 // The steps of a purge that are about files and other processes, not rows (purge_cleanups,
@@ -27,6 +30,65 @@ const (
 	cleanCLIHome           = "cli_home"
 	cleanProviders         = "providers"
 )
+
+// The reasons a step fails, as stored in purge_cleanups.last_error: a fixed word per kind of
+// failure, never the text of the error. What a subsystem says in an error can hold what a person
+// wrote or what a provider answered (an email in a refusal, a path with a user's id), and this
+// column is read by operators and kept with the purge, so nothing free-form reaches it. The word says
+// which part failed; the part's own logs say more.
+const (
+	failSidecarBusy        = "sidecar_busy"           // the agent runtime answered that it is busy
+	failSidecarRefused     = "sidecar_refused"        // it answered with another refusal
+	failSidecarUnreachable = "sidecar_unreachable"    // it didn't answer, or isn't ready
+	failCLIWorker          = "cli_worker_failed"      // the CLI worker couldn't remove the account's files
+	failFileRemove         = "file_remove_failed"     // a file or directory here couldn't be removed
+	failProviderReload     = "provider_reload_failed" // the runtime refused the providers file, or it couldn't be written
+	failProviderKey        = "provider_key_not_removed"
+	failBadTarget          = "invalid_target"
+	failUnknownStep        = "unknown_step"
+	failOther              = "failed"
+)
+
+// stepError is a failure of a step, as its fixed reason and, when the cause has one that names no
+// one, a number (an HTTP status). The cause itself is held for errors.Is and errors.As, and is never
+// printed or stored: Error is the reason alone.
+type stepError struct {
+	reason string
+	status int
+	cause  error
+}
+
+func (e *stepError) Error() string {
+	if e.status != 0 {
+		return e.reason + " status=" + strconv.Itoa(e.status)
+	}
+	return e.reason
+}
+func (e *stepError) Unwrap() error { return e.cause }
+
+func failed(reason string, cause error) error { return &stepError{reason: reason, cause: cause} }
+
+// reasonOf is what is stored for a failed step: a stepError's reason (and status), or "failed".
+func reasonOf(err error) string {
+	var se *stepError
+	if errors.As(err, &se) {
+		return se.Error()
+	}
+	return failOther
+}
+
+// sidecarFailure classifies an error of a call to the agent runtime.
+func sidecarFailure(err error) error {
+	var st *agentrt.StatusError
+	if errors.As(err, &st) {
+		reason := failSidecarRefused
+		if st.Code == http.StatusConflict || st.Code == http.StatusLocked || st.Code == http.StatusTooManyRequests || st.Code == http.StatusServiceUnavailable {
+			reason = failSidecarBusy
+		}
+		return &stepError{reason: reason, status: st.Code, cause: err}
+	}
+	return failed(failSidecarUnreachable, err)
+}
 
 // errWaiting is a step that can't be done until something is on again: not a failure, and not
 // done. It stays recorded.
@@ -111,12 +173,13 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (waiting int, e
 		case errors.Is(rerr, errWaiting):
 			waiting++
 		default:
-			// The cause is kept with the step (last_error), where the operator reads it, and is not in
-			// the error returned, which the server's log prints: it can name paths and files the step
-			// handled. The error says which step failed.
+			// Only the step's reason is kept (last_error: a fixed word, see failSidecarBusy), and
+			// it is not in the error returned, which the server's log prints. The error says which
+			// step failed.
+			reason := reasonOf(rerr)
 			_, _ = s.o.DB.ExecContext(ctx, `UPDATE purge_cleanups SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
-				rerr.Error(), c.id)
-			errs = append(errs, fmt.Errorf("step %d (%s) of account %d failed; its cause is in last_error of purge_cleanups", c.id, c.kind, c.user))
+				reason, c.id)
+			errs = append(errs, fmt.Errorf("step %d (%s) of account %d failed: %s", c.id, c.kind, c.user, reason))
 		}
 	}
 	return waiting, errors.Join(errs...)
@@ -127,26 +190,29 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 	case cleanAgentConversation:
 		id, err := strconv.ParseInt(c.target, 10, 64)
 		if err != nil {
-			return fmt.Errorf("a conversation id that isn't one: %w", err)
+			return failed(failBadTarget, err)
 		}
 		rt, err := s.runtime(ctx)
 		if err != nil {
-			return fmt.Errorf("the agent runtime isn't ready: %w", err)
+			return failed(failSidecarUnreachable, err)
 		}
 		if rt == nil {
 			return errWaiting
 		}
-		return conversations.PurgeConversation(ctx, rt, id)
+		if err := conversations.PurgeConversation(ctx, rt, id); err != nil {
+			return sidecarFailure(err)
+		}
+		return nil
 	case cleanCLIHome:
 		user, err := strconv.ParseInt(c.target, 10, 64)
 		if err != nil || user <= 0 {
-			return fmt.Errorf("a user id that isn't one: %v", c.target)
+			return failed(failBadTarget, nil)
 		}
 		return s.forgetCLI(ctx, user)
 	case cleanProviders:
 		return s.syncProviders(ctx)
 	}
-	return fmt.Errorf("an unknown step %q", c.kind)
+	return failed(failUnknownStep, nil)
 }
 
 // forgetCLI removes everything kept for user's CLI logins: the worker's directory (when CLI workers
@@ -161,11 +227,11 @@ func (s *Service) forgetCLI(ctx context.Context, user int64) error {
 		worker = cliaccounts.ErrOff
 	}
 	if worker != nil && !errors.Is(worker, cliaccounts.ErrOff) {
-		return worker
+		return failed(failCLIWorker, worker)
 	}
 	if s.o.DataDir != "" {
 		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
-			return fmt.Errorf("removing the account's CLI directory: %w", err)
+			return failed(failFileRemove, err)
 		}
 	}
 	if worker != nil {
@@ -182,7 +248,13 @@ func (s *Service) syncProviders(ctx context.Context) error {
 	sync := s.providers
 	s.mu.Unlock()
 	if sync != nil {
-		return sync(ctx)
+		if err := sync(ctx); err != nil {
+			if errors.Is(err, providers.ErrKeyNotRemoved) {
+				return failed(failProviderKey, err)
+			}
+			return failed(failProviderReload, err)
+		}
+		return nil
 	}
 	if s.o.DataDir == "" {
 		return nil
@@ -190,7 +262,7 @@ func (s *Service) syncProviders(ctx context.Context) error {
 	dir := filepath.Join(s.o.DataDir, "agent")
 	for _, name := range []string{"providers.json", "keys"} {
 		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
-			return fmt.Errorf("removing the agent runtime's %s: %w", name, err)
+			return failed(failFileRemove, err)
 		}
 	}
 	return nil

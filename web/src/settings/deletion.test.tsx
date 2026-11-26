@@ -6,6 +6,7 @@ import { type DeletionStatus, type Me, type Member, type PendingDeletion, SESSIO
 import { takeDeletion } from '../auth/deleted'
 import { type Call, fakeFetch } from '../test/fakes'
 import { answer } from '../test/ui'
+import { claimDrafts, readState, writeState } from '../uiState'
 import { SettingsPage } from './SettingsPage'
 
 const me = (operator: boolean): Me => ({
@@ -72,6 +73,32 @@ test('deleting your account offers the export first, asks for the password, and 
   // The sign-in screen is told when the account is erased, once.
   expect(takeDeletion()).toBe('2026-12-08T10:00:00.000Z')
   expect(takeDeletion()).toBeNull()
+  window.removeEventListener(SESSION_LOST, lost)
+})
+
+test('the answer arriving after another account signed in here, in another tab, erases only the deleted account’s drafts', async () => {
+  claimDrafts(1)
+  writeState('taskto:message:1:c1', 'the leaver’s unsent text')
+  fakeFetch({
+    'GET /api/me/deletion': { body: status() },
+    'POST /api/me/deletion': () => {
+      // Before the answer, account 2 signs in through another tab and writes a draft.
+      writeState('taskto:drafts-of', '2')
+      writeState('taskto:message:2:c1', 'the other account’s unsent text')
+      return { status: 202, body: { purge_at: '2026-12-08T10:00:00.000Z' } }
+    },
+  })
+  const lost = vi.fn()
+  window.addEventListener(SESSION_LOST, lost)
+  render(<SettingsPage me={me(false)} workspace={plain} tab="data" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete my account…' }))
+  const form = await screen.findByRole('form', { name: 'Delete your account' })
+  fireEvent.change(within(form).getByLabelText('Your password'), { target: { value: 'fake-test-password' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Delete my account' }))
+  await waitFor(() => expect(lost).toHaveBeenCalled())
+  expect(readState('taskto:message:1:c1')).toBeNull()
+  expect(readState('taskto:message:2:c1')).toBe('the other account’s unsent text')
+  expect(readState('taskto:drafts-of')).toBe('2')
   window.removeEventListener(SESSION_LOST, lost)
 })
 

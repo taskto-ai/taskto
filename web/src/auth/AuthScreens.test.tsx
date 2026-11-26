@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
@@ -453,4 +453,15 @@ test('after an account is deleted the login says when it is erased, once', async
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+})
+
+test('a sign-in screen already up when the deletion is answered still says when the account is erased', async () => {
+  sessionStorage.clear()
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
+  // A 401 had mounted it; now the deletion succeeds.
+  act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
+  await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
 })

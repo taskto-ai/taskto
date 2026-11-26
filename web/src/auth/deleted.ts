@@ -4,12 +4,18 @@
 
 const KEY = 'taskto.accountDeleted'
 
+// Told to a sign-in screen that is already showing: a request refused a moment before the deletion
+// was answered takes the app there first, and that screen took the date from storage before it was
+// there.
+export const DELETION_EVENT = 'taskto:account-deleted'
+
 export function rememberDeletion(purgeAt: string): void {
   try {
     window.sessionStorage.setItem(KEY, purgeAt)
   } catch {
     // No storage (a private window): the sign-in screen just doesn't explain.
   }
+  window.dispatchEvent(new Event(DELETION_EVENT))
 }
 
 // The purge date to tell the person, once.

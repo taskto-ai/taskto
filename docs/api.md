@@ -1158,7 +1158,8 @@ force, read when the purge starts, and a job that runs before that request's dea
 a request that was cancelled and made again) is moved to the deadline and deletes nothing. Each
 purge records its own rewriting of the providers file, so one purge's finishing it never clears
 another's; the event's `cleanups_pending` counts it, since it is done after the account is gone. The
-cause of a step that failed is kept with the step (`last_error` of `purge_cleanups`), not in the log.
+reason a step failed is kept with the step (`last_error` of `purge_cleanups`) as a fixed word, never as
+the text of an error, and not in the log.
 
 ## Invites
 

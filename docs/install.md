@@ -845,8 +845,12 @@ is a decision about the workspace's records, not an account's.
   `cleanups_pending` says how many (the providers file's rewriting, which is done after the account
   is gone, is one). If the runtime is on and fails, the purge fails and is tried again; the runtime
   answers `503` while another connection holds its database, so a purge isn't acknowledged until
-  the write-ahead log, which can still hold the transcript, is empty. The cause of a failed step is
-  in `last_error` of `purge_cleanups`, not in the log.
+  the write-ahead log, which can still hold the transcript, is empty. What failed is in `last_error`
+  of `purge_cleanups`, as a fixed word (`sidecar_busy`, `sidecar_refused`, `sidecar_unreachable`,
+  `cli_worker_failed`, `file_remove_failed`, `provider_reload_failed`, `provider_key_not_removed`),
+  with an HTTP status when the runtime answered one, and never the text of the error, which can hold
+  what a person wrote; the providers' step stays recorded while a removed account's key file is
+  still on disk.
 - **Model providers and CLI vendors.** What a conversation sent to a provider is theirs to delete.
 - **SQLite and the filesystem.** Deleted rows are overwritten as the database is reused, and
   deleted files are only unlinked; use disk encryption if remnants matter to you.
