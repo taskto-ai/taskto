@@ -121,6 +121,26 @@ export function BoardView({
     tile.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [open, cards.data])
 
+  // A card open on a wide board lies over the columns: what takes the keyboard under it (a tile, a
+  // column's button) is scrolled out beside it. The browser scrolls a focused element only when it
+  // is out of view, and one under the drawer is in view as far as it knows.
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const hasCards = cards.data !== undefined
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the columns are drawn only once the cards have come (hasCards)
+  useEffect(() => {
+    const columns = columnsRef.current
+    if (open === null || !columns) return
+    const onFocus = (e: FocusEvent) => {
+      if (!(e.target instanceof HTMLElement)) return
+      const drawer = document.querySelector('.ui-board-drawer')?.getBoundingClientRect()
+      const here = e.target.getBoundingClientRect()
+      if (drawer && here.right > drawer.left && here.left < drawer.right)
+        e.target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    }
+    columns.addEventListener('focusin', onFocus)
+    return () => columns.removeEventListener('focusin', onFocus)
+  }, [open, hasCards])
+
   // The same element around the board whatever it shows, so its head isn't drawn anew (and its
   // menu closed) when the cards arrive.
   if (cards.error && !cards.data)
@@ -167,7 +187,7 @@ export function BoardView({
       <div role="status" className="ui-board-said">
         <VisuallyHidden key={said.n}>{said.text}</VisuallyHidden>
       </div>
-      <div className="ui-board-columns" style={{ '--board-columns': COLUMNS.length } as CSSProperties}>
+      <div ref={columnsRef} className="ui-board-columns" style={{ '--board-columns': COLUMNS.length } as CSSProperties}>
         {COLUMNS.map((col) => (
           <BoardColumn
             key={col.id}
