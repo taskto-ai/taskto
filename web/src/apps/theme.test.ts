@@ -179,7 +179,8 @@ describe('rings and what could cut them', () => {
   })
 
   test('a screen on a Home widget doesn’t scroll itself and leaves room for a ring and the lift', () => {
-    const view = readFileSync(join(__dirname, 'AppView.css'), 'utf8')
+    // The frame's rules, which AppView and its lazy loader both draw (AppLoading.css).
+    const view = readFileSync(join(__dirname, 'AppLoading.css'), 'utf8')
     const bare = declarationsOf(view, '.ui-app[data-frame="bare"]')
     // 8px: more than the ring's reach (2.5px wide, 2px off) and the primary's 3px lift.
     expect(bare).toMatch(/padding: var\(--space-2\)/)

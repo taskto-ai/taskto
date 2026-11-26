@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { hueClass, labelHue } from '../ui/Label'
 import { BoardsPage } from './BoardsPage'
@@ -1460,4 +1461,108 @@ test('a slow comment leaves the focus where the person went meanwhile', async ()
   await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
   await within(view).findByText('On my way')
   expect(document.activeElement).toBe(path)
+})
+
+test('another section (the switcher, the router) asks first over a comment being written, and goes on when it is discarded', async () => {
+  server('write')
+  window.history.replaceState(null, '', '/w/1/boards')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(within(view).getByLabelText('Comment'), { target: { value: 'Half a thought' } })
+  const from = window.location.pathname
+  act(() => navigate('/w/1/settings'))
+  const question = await screen.findByRole('alertdialog', { name: 'Discard what you haven’t saved?' })
+  expect(window.location.pathname).toBe(from)
+  fireEvent.click(within(question).getByRole('button', { name: 'Discard' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/settings'))
+})
+
+// jsdom moves through the history in a task of its own, then fires popstate; an undone move then
+// fires its own.
+async function back() {
+  await act(async () => {
+    const done = new Promise((r) => window.addEventListener('popstate', () => setTimeout(r, 0), { once: true }))
+    window.history.back()
+    await done
+  })
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+}
+
+test('keeping a comment being written stays: the address, the comment and the history as they were', async () => {
+  server('write')
+  window.history.replaceState(null, '', '/w/1/boards')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(within(view).getByLabelText('Comment'), { target: { value: 'Half a thought' } })
+  const length = window.history.length
+  act(() => navigate('/w/1/settings'))
+  const question = await screen.findByRole('alertdialog', { name: 'Discard what you haven’t saved?' })
+  fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  // The answer came: nothing goes later either.
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+  expect(window.location.pathname).toBe('/w/1/boards')
+  expect(window.history.length).toBe(length)
+  expect((within(view).getByLabelText('Comment') as HTMLTextAreaElement).value).toBe('Half a thought')
+})
+
+test('Back over a comment being written asks: keeping undoes it, discarding goes back', async () => {
+  server('write')
+  act(() => navigate('/w/1/home'))
+  act(() => navigate('/w/1/boards'))
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(within(view).getByLabelText('Comment'), { target: { value: 'Half a thought' } })
+  await back()
+  fireEvent.click(
+    within(await screen.findByRole('alertdialog', { name: 'Discard what you haven’t saved?' })).getByRole('button', {
+      name: 'Cancel',
+    }),
+  )
+  await act(() => new Promise((r) => setTimeout(r, 20)))
+  expect(window.location.pathname).toBe('/w/1/boards')
+  expect((within(view).getByLabelText('Comment') as HTMLTextAreaElement).value).toBe('Half a thought')
+  await back()
+  fireEvent.click(
+    within(await screen.findByRole('alertdialog', { name: 'Discard what you haven’t saved?' })).getByRole('button', {
+      name: 'Discard',
+    }),
+  )
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/home'))
+})
+
+test('an open card with nothing unsaved lets Back go as one move of the history', async () => {
+  server('write')
+  act(() => navigate('/w/1/home'))
+  act(() => navigate('/w/1/boards'))
+  render(<BoardsPage workspace={1} />)
+  await openCard('Write the post')
+  const moves: string[] = []
+  const seen = () => moves.push(window.location.pathname)
+  window.addEventListener('popstate', seen)
+  try {
+    await back()
+    await act(() => new Promise((r) => setTimeout(r, 50)))
+  } finally {
+    window.removeEventListener('popstate', seen)
+  }
+  expect(moves).toEqual(['/w/1/home'])
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+})
+
+test('closing or reloading the tab over a comment being written gets the browser’s question, until it is gone', async () => {
+  server('write')
+  window.history.replaceState(null, '', '/w/1/boards')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const unload = () => {
+    const e = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(e)
+    return e.defaultPrevented
+  }
+  expect(unload()).toBe(false)
+  fireEvent.change(within(view).getByLabelText('Comment'), { target: { value: 'Half a thought' } })
+  await waitFor(() => expect(unload()).toBe(true))
+  fireEvent.change(within(view).getByLabelText('Comment'), { target: { value: '' } })
+  await waitFor(() => expect(unload()).toBe(false))
 })

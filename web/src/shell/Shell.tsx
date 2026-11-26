@@ -27,7 +27,7 @@ import { Toaster } from '../ui/Toast'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ErrorBoundary } from './ErrorBoundary'
 import { NoWorkspace } from './NoWorkspace'
-import { MAIN_ID, SECTION_LABEL } from './nav'
+import { MAIN_ID } from './nav'
 import { PhoneBar } from './PhoneBar'
 import { Sidebar } from './Sidebar'
 import './Shell.css'
@@ -47,6 +47,12 @@ function lastWorkspace(): number | null {
   }
 }
 
+// The workspace to show when the address names none of the person's: the one used last, else the
+// first.
+function homeWorkspace(me: Me): Workspace | undefined {
+  return me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
+}
+
 function rememberWorkspace(id: number) {
   try {
     localStorage.setItem(LAST_WORKSPACE, String(id))
@@ -55,8 +61,11 @@ function rememberWorkspace(id: number) {
   }
 }
 
-// A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
-// outside the shell, which would take that address for an unknown route.
+// Two addresses that come from outside the app are pages of the frame without being sections: a
+// push's /notification/{id} (read as the signed-in person and followed to where it leads) and an
+// email's confirmation link. They are drawn inside the frame (the sidebar, the skip link, <main>),
+// with the section they belong to marked, and the frame doesn't take their address for an unknown
+// route and rewrite it. Someone signed out never gets here: the sign-in screen comes first.
 // `onMe` takes the account's new state when the shell changed it (a workspace was created).
 //
 // The toasts' stack is drawn here, once, before anything shows one: its live regions are then on
@@ -74,23 +83,52 @@ export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; on
 function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   const opening = parseNotificationPath(path)
+  // The workspace the frame shows (the one used last, else the first): the page's own links (to
+  // the inbox, to the notification settings) go to it too.
+  const first = homeWorkspace(me)?.id ?? null
   if (path === EMAIL_CONFIRM_PATH) {
-    return <ConfirmEmail token={window.location.hash.slice(1)} workspace={me.workspaces[0]?.id ?? null} />
+    const page = <ConfirmEmail token={window.location.hash.slice(1)} workspace={first} />
+    return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'settings', workspace: first, page }} />
   }
   if (opening !== null) {
-    return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
+    const page = <OpenNotification id={opening} fallbackWorkspace={first} />
+    return (
+      <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'notifications', workspace: first, page }} />
+    )
   }
   return <Frame me={me} onLogout={onLogout} onMe={onMe} />
 }
 
-function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
+// A page of the frame that is not a section's (above): what it draws, and the section it belongs to.
+interface SpecialPage {
+  section: Route['section']
+  // The workspace resolved for the page's own links, which the frame shows too: resolved once, so a
+  // frame drawn again (another tab chose another workspace) stays with its page.
+  workspace: number | null
+  page: ReactNode
+}
+
+function Frame({
+  me,
+  onLogout,
+  onMe,
+  special,
+}: {
+  me: Me
+  onLogout: () => void
+  onMe?: (me: Me) => void
+  special?: SpecialPage
+}) {
   const path = usePath()
   usePushSync(me.user.id, me.workspaces.length > 0)
   const parsed = parseRoute(path)
   const member = (id: number) => me.workspaces.some((w) => w.id === id)
-  const fallback = me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
-  const route: Route | null =
-    parsed && member(parsed.workspace)
+  const fallback = homeWorkspace(me)
+  const route: Route | null = special
+    ? special.workspace !== null
+      ? { workspace: special.workspace, section: special.section }
+      : null
+    : parsed && member(parsed.workspace)
       ? parsed
       : fallback
         ? { workspace: fallback.id, section: parsed?.section ?? 'conversations' }
@@ -103,7 +141,8 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
   const main = useRef<HTMLElement>(null)
   const t = useT()
 
-  const target = route ? routePath(route) : null
+  // A special page keeps its own address (its link's): the frame rewrites only a section's.
+  const target = route && !special ? routePath(route) : null
   useEffect(() => {
     if (target && target !== path) navigate(target, { replace: true })
   }, [target, path])
@@ -120,25 +159,39 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
   // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
   // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
+  // The page shown when a link of the drawer was followed: the drawer closes in one draw and the new
+  // page comes in a later one, which draws a new <main> (keyed by its section). The page is focused
+  // at once (in case the move is refused, a draft kept) and again once the page has changed.
+  const followedFrom = useRef<string | null>(null)
   // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
   // click on the menu button before it would be undone. The page is the resolved route, not the
   // address: the shell rewriting an address to its canonical form (a trailing slash, a default
   // page, another workspace) isn't a navigation. A hash or a query never reaches either.
-  const drawnAt = useRef(target)
+  // A special page has no target (its address is kept): its address is what changes then (Back from
+  // one notification's link to another's).
+  const shownPage = special ? path : target
+  const drawnAt = useRef(shownPage)
   useEffect(() => {
-    if (drawnAt.current === target) return
-    drawnAt.current = target
+    if (drawnAt.current === shownPage) return
+    drawnAt.current = shownPage
     if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
-  }, [target])
+  }, [shownPage])
   useEffect(() => {
     if (drawer || !focusPage.current) return
-    focusPage.current = false
     main.current?.focus({ preventScroll: true })
-  }, [drawer])
+    // A link's move: done once the page has changed; anything else, done now.
+    if (followedFrom.current !== null && followedFrom.current === shownPage) return
+    focusPage.current = false
+    followedFrom.current = null
+  }, [drawer, shownPage])
   // An open drawer takes focus, Escape closes it and gives focus back to its button.
   useEffect(() => {
     if (!drawer) return
+    // Opened again: a page focus still waiting from a link whose move was refused (a draft kept) is
+    // forgotten, so closing it now (Escape gives the menu button the focus) isn't undone.
+    focusPage.current = false
+    followedFrom.current = null
     ;(
       sidebar.current?.querySelector<HTMLElement>('[aria-current="page"]') ??
       sidebar.current?.querySelector<HTMLElement>('a')
@@ -159,6 +212,7 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
       const link = e.target instanceof Element ? e.target.closest('a[href]') : null
       if (!link || !sidebar.current?.contains(link)) return
       focusPage.current = true
+      followedFrom.current = drawnAt.current
       setDrawer(false)
     }
     document.addEventListener('keydown', onKey)
@@ -169,7 +223,8 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
     }
   }, [drawer])
 
-  if (!route) return <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
+  // With no workspace there is no frame to draw a special page in: it is drawn alone, as before.
+  if (!route) return special ? special.page : <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
 
   const workspace = me.workspaces.find((w) => w.id === route.workspace) ?? me.workspaces[0]
   return (
@@ -177,13 +232,7 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
       <Button className="ui-shell-skip" onClick={() => main.current?.focus()}>
         {t('shell.skipToContent')}
       </Button>
-      <PhoneBar
-        drawer={drawer}
-        onToggle={() => setDrawer((d) => !d)}
-        menuButton={menuButton}
-        section={t(SECTION_LABEL[route.section])}
-        t={t}
-      />
+      <PhoneBar drawer={drawer} onToggle={() => setDrawer((d) => !d)} menuButton={menuButton} t={t} />
       <Sidebar
         me={me}
         workspace={workspace}
@@ -205,11 +254,11 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
         tabIndex={-1}
         className="ui-shell-main"
         inert={drawer || undefined}
-        key={`${workspace.id}/${route.section}`}
+        key={special ? path : `${workspace.id}/${route.section}`}
       >
         {/* A page that fails to draw leaves the shell around it (the menu, the settings) usable. */}
         <ErrorBoundary fallback={<PageFailed />} resetKey={path}>
-          <Page route={route} me={me} workspace={workspace} />
+          {special ? special.page : <Page route={route} me={me} workspace={workspace} />}
         </ErrorBoundary>
       </main>
     </div>

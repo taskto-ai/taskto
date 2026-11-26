@@ -2,15 +2,17 @@
 
 // What a contribution can't do: break the shell, Home or the other widgets, however it fails.
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { HomeItem, HomeView, Me } from '../api'
 import { Shell } from '../shell/Shell'
 import { fakeFetch } from '../test/fakes'
 
 // A widget whose renderer throws, as one with a broken definition or a bug in the renderer would.
-vi.mock('../apps/AppView', () => ({
+vi.mock('../apps/transport', () => ({
   httpTransport: () => ({ load: async () => [], act: async () => [] }),
+}))
+vi.mock('../apps/AppView', () => ({
   AppView: ({ label }: { label: string }) => {
     if (label === 'Broken') throw new Error('the renderer failed')
     return <p>{`drawn: ${label}`}</p>
@@ -71,8 +73,9 @@ test('a widget that throws is replaced by a message; the other widgets, Home and
   })
   render(<Shell me={me} onLogout={() => {}} />)
   const fine = await screen.findByRole('article', { name: 'Fine' })
-  expect(within(fine).getByText('drawn: Fine')).toBeTruthy()
-  expect(screen.getAllByText('This widget couldn’t be shown.')).toHaveLength(2)
+  // The renderer is loaded when the first widget is drawn (LazyAppView): a moment later.
+  expect(await within(fine).findByText('drawn: Fine')).toBeTruthy()
+  await waitFor(() => expect(screen.getAllByText('This widget couldn’t be shown.')).toHaveLength(2))
   // The page, and the shell around it.
   expect(screen.getByRole('heading', { name: 'Home', level: 1 })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Customize' })).toBeTruthy()
