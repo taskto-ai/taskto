@@ -429,7 +429,7 @@ func (e Effect) checkPaymentLink(c Collection) error {
 // ----- the contract -----
 
 // contractVersion is the format of Contract, in its hash, so a change of format is a new hash.
-const contractVersion = 4
+const contractVersion = 5
 
 // Contract is what the server derives from a draft for one slot: what the app may send out and
 // what the integration may write back, in field names and literals, never in the app's wording.
@@ -673,20 +673,29 @@ func (d Definition) contract(slot string) Contract {
 			named[f] = true
 		}
 	}
-	// Whether a named field may be left out, or holds what it holds, can depend on another field
-	// (required_when): follow those, transitively, so a change to the constraints of a field that
-	// only gates another one's requirement is another contract too.
-	for queue := sortedKeys(named); len(queue) > 0; {
-		name := queue[0]
-		queue = queue[1:]
-		f, ok := d.Collection.field(name)
-		if !ok || f.RequiredWhen == nil {
-			continue
-		}
-		for _, dep := range ruleFields(*f.RequiredWhen) {
-			if !named[dep] {
-				named[dep] = true
-				queue = append(queue, dep)
+	// Whether a field may be left out can depend on another field (required_when), in both
+	// directions, so follow those to a fixed point:
+	//   - outward: a named field's requirement reads another field, whose constraints decide when
+	//     the named one is required;
+	//   - inward: a field the integration never names has a requirement that reads a field it
+	//     writes or reads. A system write validates the whole resulting row, so that requirement
+	//     decides whether the integration's write succeeds (a note required once the status is
+	//     paid refuses the write that sets paid), and editing it is another contract.
+	for grew := true; grew; {
+		grew = false
+		for _, f := range d.Collection.Fields {
+			if f.RequiredWhen == nil {
+				continue
+			}
+			deps := ruleFields(*f.RequiredWhen)
+			if named[f.Name] {
+				for _, dep := range deps {
+					if !named[dep] {
+						named[dep], grew = true, true
+					}
+				}
+			} else if slices.ContainsFunc(deps, func(dep string) bool { return named[dep] }) {
+				named[f.Name], grew = true, true
 			}
 		}
 	}

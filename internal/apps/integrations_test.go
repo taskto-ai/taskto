@@ -1209,6 +1209,14 @@ var withChain = []string{
     {"name": "batch", "type": "number", "max": 100},`,
 }
 
+// withReceiptNote adds a field the integration never names, required once the invoice is paid: a
+// system write validates the whole row, so a sent invoice without a note refuses the integration's
+// move to paid.
+var withReceiptNote = []string{
+	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string"},
+    {"name": "receipt_note", "type": "string", "required_when": {"field": "status", "op": "eq", "value": "paid"}},`,
+}
+
 // Each of these edits changes what the integration may do or who can trigger it, so its approval
 // must not carry over.
 func TestAnEditThatChangesWhatTheIntegrationMayDoNeedsAFreshApproval(t *testing.T) {
@@ -1223,6 +1231,11 @@ func TestAnEditThatChangesWhatTheIntegrationMayDoNeedsAFreshApproval(t *testing.
 		"a barcode's format changed":                           {withSKU, []string{`"format": "ean_13"`, `"format": "upc_a"`}},
 		"a higher maximum of a field only a requirement reads": {withQuantity, []string{`"max": 100`, `"max": 1000`}},
 		"a requirement's field two steps away":                 {withChain, []string{`"max": 100`, `"max": 1000`}},
+		"a requirement on a field the integration writes, dropped": {withReceiptNote, []string{
+			`, "required_when": {"field": "status", "op": "eq", "value": "paid"}`, ``}},
+		"a requirement on a field the integration writes, added": {nil, []string{
+			`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string"},
+    {"name": "receipt_note", "type": "string", "required_when": {"field": "status", "op": "eq", "value": "paid"}},`}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			i := newInv(t)
