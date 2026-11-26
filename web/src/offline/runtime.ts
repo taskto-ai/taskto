@@ -322,45 +322,63 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // (a stale tab, another tab of the same account). An approval is of an item as it was shown (its
 // version and its operation), so a record that was changed since, or made after, is not agreed to.
 // Answers the unsent records that are there and were not approved, as they are now: then nothing
-// was changed, and the person is asked again. A database that can't be opened is not looked at
-// here: the person already chose what happens to it.
-export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
-  return checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false))
+// was changed, and the person is asked again. A database that can't be opened or read now is not
+// an empty one (`unreadable`): it may hold a record saved after the person was asked, so it is
+// kept, unless they were told it couldn't be read and chose to discard it (`discardUnreadable`).
+export async function settle(
+  user: number | undefined,
+  approved: Approval = new Map(),
+  discardUnreadable = false,
+): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
+  const checked = await checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false))
+  return { ...checked, unreadable: checked.unreadable && !discardUnreadable }
 }
 
 // The same question as `settle`, only asked: the unsent records of `user` that the person didn't
 // agree to as they are now, with nothing changed on the device. A sign-out asks this before it is
 // certain; what it agreed to is discarded only after the server confirmed the sign-out (deactivate).
+// A database that can't be read answers none here: the person is not asked about what can't be
+// shown (they were told when it couldn't be read before), and what happens to it is the cleanup's
+// (`settle`). `unsentState` says which it was.
 export async function stillAgreed(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  return (await unsentState(user, approved)).left
+}
+
+export async function unsentState(
+  user: number,
+  approved: Approval = new Map(),
+): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   return checkUnsent(user, (store) => store.unapproved(approved))
 }
 
 async function checkUnsent(
   user: number | undefined,
   ask: (store: OfflineStore) => Promise<UnsentRef[]>,
-): Promise<UnsentRef[]> {
+): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   if (opening) await opening.catch(() => {})
   const runtime = state.runtime
   // Only the account signing out (`user`), never another that is open here meanwhile.
   const users = user !== undefined ? [user] : runtime ? [runtime.user] : []
   const left: UnsentRef[] = []
+  let unreadable = false
   for (const id of users) {
     let store = runtime?.user === id ? runtime.store : undefined
     const own = !store
     try {
       store ??= await OfflineStore.open(id)
     } catch {
+      unreadable = true
       continue
     }
     try {
       left.push(...(await ask(store)))
     } catch {
-      // Not read: the person's choice (they were told) decides, as it did.
+      unreadable = true
     } finally {
       if (own) store.close()
     }
   }
-  return left
+  return { left, unreadable }
 }
 
 async function teardown(purge: boolean, user?: number): Promise<void> {
@@ -393,18 +411,22 @@ async function teardown(purge: boolean, user?: number): Promise<void> {
 // out does. `user` is who is signing out: their database goes even if it was never opened here.
 // With `keep`, the person chose to sign out without deleting a database whose unsent records this
 // version couldn't check: it stays (and stays listed, for its owner's next sign-in to deal with),
-// and the browser is nobody's.
+// and the browser is nobody's. With `purge`, a database that can't be read now is kept, as one
+// holding records the person wasn't shown is ('unreadable', for the caller to keep it so), unless
+// they chose to discard it when told it couldn't be read (`discardUnreadable`).
 export async function deactivate({
   purge,
   user,
   keep,
   approved,
+  discardUnreadable,
 }: {
   purge: boolean
   user?: number
   keep?: boolean
   approved?: Approval
-}): Promise<UnsentRef[]> {
+  discardUnreadable?: boolean
+}): Promise<UnsentRef[] | 'unreadable'> {
   if (opening) await opening.catch(() => {})
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])
@@ -415,8 +437,9 @@ export async function deactivate({
   // Deleting is conditional on there being nothing unsent that the person didn't approve: if some
   // appeared since they were asked, everything stays (and is the answer, for the caller to say).
   if (purge) {
-    const left = await settle(user, approved)
+    const { left, unreadable } = await settle(user, approved, discardUnreadable)
     if (left.length > 0) return left
+    if (unreadable) return 'unreadable'
   }
   await teardown(purge, user)
   return []
@@ -427,9 +450,10 @@ export async function deactivate({
 // the one in use, and which must stay as it is (`deactivate` lets go of the one in use). The same
 // condition as signing out holds: unsent records the person wasn't shown (`approved`) stop it, and
 // are the answer.
+// An account that is deleted can't send what its database holds: one that can't be read goes too.
 export async function purgeAccount(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
-  const left = await settle(user, approved)
+  const { left } = await settle(user, approved, true)
   if (left.length > 0) return left
   // Looked at again after the waits above: the one in use may have changed.
   const runtime = state.runtime

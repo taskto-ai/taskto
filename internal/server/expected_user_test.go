@@ -83,4 +83,15 @@ func TestALogoutNamingAnotherAccountLeavesTheSessionAlone(t *testing.T) {
 	if code, _ := s.browser(s.bob.cookie, http.MethodGet, "/api/me", nil); code != http.StatusUnauthorized {
 		t.Fatalf("bob's session after his logout: GET /api/me = %d, want 401", code)
 	}
+	// Again, for a login that is over now (the web app's Try again after a lost answer): naming the
+	// account, it is the header's 401, which the web app takes for a sign-out done; without the
+	// header, the plain 204, whatever the body names (docs/api.md).
+	rec = s.request(http.MethodPost, "/api/logout", map[string]string{"session": "any"}, as(s.bob.cookie, s.bob.id))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("named logout of an over login = %d %s, want 401", rec.Code, rec.Body)
+	}
+	rec = s.request(http.MethodPost, "/api/logout", map[string]string{"session": "any"}, sameOrigin(s.bob.cookie))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout of an over login without the header = %d %s, want 204", rec.Code, rec.Body)
+	}
 }

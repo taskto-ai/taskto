@@ -10,7 +10,7 @@ import type { Me } from './api'
 import { fakeFetch } from './test/fakes'
 
 // The sign-out waits a short time here, and the device's cleanup can be made to fail.
-const fail = vi.hoisted(() => ({ cleanup: false }))
+const fail = vi.hoisted(() => ({ cleanup: false, activate: false }))
 vi.mock('./signOut', async (original) => {
   const real = await original<typeof import('./signOut')>()
   return { ...real, SIGN_OUT_WAIT_MS: 100 }
@@ -21,6 +21,8 @@ vi.mock('./offline/runtime', async (original) => {
     ...real,
     deactivate: (...args: Parameters<typeof real.deactivate>) =>
       fail.cleanup ? Promise.reject(new Error('the device refused')) : real.deactivate(...args),
+    activate: (...args: Parameters<typeof real.activate>) =>
+      fail.activate ? Promise.reject(new Error('the device refused')) : real.activate(...args),
   }
 })
 
@@ -30,6 +32,7 @@ const first: Me = {
   user: { id: 1, email: 'first@example.com', name: 'First' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' }],
 } as Me
+const first_ = first
 const second: Me = { ...first, user: { id: 2, email: 'second@example.com', name: 'Second' } } as Me
 const pages = {
   'GET /api/setup': { body: { needed: false } },
@@ -39,6 +42,7 @@ const pages = {
 beforeEach(() => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fail.cleanup = false
+  fail.activate = false
 })
 afterEach(() => {
   cleanup()
@@ -210,7 +214,9 @@ test("Back's answer is not taken when another tab signed in while it was asked, 
   await waitFor(() => expect(answer).not.toBeNull())
   // Meanwhile another tab signs the same account in (its marker is written again).
   localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 1, name: 'First' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: 'taskto:offline-last', newValue: localStorage.getItem('taskto:offline-last') }),
+  )
   await act(async () => answer?.())
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
@@ -337,11 +343,16 @@ test('another tab finishing the same sign-out takes this one to the login, not t
   await waitFor(() => expect(confirm).not.toBeNull())
   // The other tab's cleanup forgets the account: nobody is signed in on this browser now.
   localStorage.removeItem('taskto:offline-last')
-  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: 'taskto:offline-last', newValue: localStorage.getItem('taskto:offline-last') }),
+  )
   await screen.findByRole('heading', { name: 'Log in' })
   expect(screen.queryByText('The account changed')).toBeNull()
   await act(async () => confirm?.())
   expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+  // This tab's own logout, confirmed after the page had moved on: its cleanup is still done.
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+  expect(localStorage.getItem('taskto:drafts-of')).toBeNull()
 })
 
 test("a tab that hears its account signed out in another tab forgets the account's pending app submissions", async () => {
@@ -352,7 +363,9 @@ test("a tab that hears its account signed out in another tab forgets the account
   sessionStorage.setItem('taskto:operations:1', JSON.stringify([['k', 'op-unanswered']]))
   // Another tab of the account signs out: its cleanup forgets the account.
   localStorage.removeItem('taskto:offline-last')
-  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: 'taskto:offline-last', newValue: localStorage.getItem('taskto:offline-last') }),
+  )
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(sessionStorage.getItem('taskto:operations:1')).toBeNull()
 })
@@ -364,12 +377,163 @@ test("a tab that heard another account sign in keeps its own account's pending s
   sessionStorage.setItem('taskto:operations:1', JSON.stringify([['k', 'op-unanswered']]))
   // Another tab signs the second person in: this one shows the account changed.
   localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 2, name: 'Second' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: 'taskto:offline-last', newValue: localStorage.getItem('taskto:offline-last') }),
+  )
   expect(await screen.findByText('The account changed')).toBeTruthy()
   // Then the second person signs out: not this tab's account.
   localStorage.removeItem('taskto:offline-last')
-  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: 'taskto:offline-last', newValue: localStorage.getItem('taskto:offline-last') }),
+  )
   await new Promise((r) => setTimeout(r, 0))
   expect(sessionStorage.getItem('taskto:operations:1')).toContain('op-unanswered')
   sessionStorage.removeItem('taskto:operations:1')
+})
+
+// Both pressed before the page redraws (a double tap, a slow device): only the first one runs.
+for (const first of ['Try again', 'Back to the app'] as const) {
+  test(`"${first}" and the other pressed in the same moment: only "${first}" runs`, async () => {
+    let logouts = 0
+    let confirm: (() => void) | null = null
+    let me: { body: Me } | Promise<{ body: Me }> = { body: { ...first_, session: 's1' } }
+    let answer: (() => void) | null = null
+    const calls = fakeFetch({
+      ...pages,
+      'GET /api/me': () => me,
+      'POST /api/logout': () => {
+        logouts++
+        if (logouts === 1) return { status: 503, body: { error: 'unavailable', code: 'internal' } }
+        return new Promise((done) => {
+          confirm = () => done({ status: 204 })
+        })
+      },
+    })
+    render(<App />)
+    await logOut()
+    await screen.findByRole('heading', { name: "Couldn't sign out" })
+    me = new Promise((done) => {
+      answer = () => done({ body: { ...first_, session: 's1' } })
+    })
+    const asked = calls.filter((c) => c.path === '/api/me').length
+    const retry = screen.getByRole('button', { name: 'Try again' })
+    const back = screen.getByRole('button', { name: /Back to the app/ })
+    act(() => {
+      if (first === 'Try again') {
+        retry.click()
+        back.click()
+      } else {
+        back.click()
+        retry.click()
+      }
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    if (first === 'Try again') {
+      // Back asked nothing, and settled nothing: the logout that is in flight decides.
+      expect(calls.filter((c) => c.path === '/api/me')).toHaveLength(asked)
+      expect(pendingOf()).toEqual(['1:s1'])
+      await waitFor(() => expect(confirm).not.toBeNull())
+      await act(async () => confirm?.())
+      await screen.findByRole('heading', { name: 'Log in' })
+      await waitFor(() => expect(pendingOf()).toEqual([]))
+    } else {
+      // Try again sent nothing: Back's question decides.
+      expect(logouts).toBe(1)
+      await act(async () => answer?.())
+      await screen.findByRole('navigation', { name: 'Sections' })
+      expect(logouts).toBe(1)
+      expect(pendingOf()).toEqual([])
+    }
+  })
+}
+
+// The step after a confirmed logout (or a 401 to Back's question) is the cleanup, whatever this tab
+// did since: a sign-in here meanwhile finishes the sign-out itself, but when the device refused it
+// then, this answer finishes it.
+for (const step of ['the logout', "Back's question"] as const) {
+  test(`${step} confirmed after this tab signed someone else in still clears the device, when that sign-in could not`, async () => {
+    let answer: (() => void) | null = null
+    const held = <T,>(value: T) =>
+      new Promise<T>((done) => {
+        answer = () => done(value)
+      })
+    let me: { body: Me } | Promise<{ status: number; body: unknown }> = { body: { ...first_, session: 's1' } }
+    fakeFetch({
+      ...pages,
+      'GET /api/me': () => me,
+      'POST /api/logout': () =>
+        step === 'the logout'
+          ? held({ status: 204 })
+          : { status: 503, body: { error: 'unavailable', code: 'internal' } },
+      'GET /api/login/methods': { body: { password: true, sso: [] } },
+      'POST /api/login': { body: { ...second, session: 't1' } },
+    })
+    render(<App />)
+    await logOut()
+    if (step === "Back's question") {
+      await screen.findByRole('heading', { name: "Couldn't sign out" })
+      me = held({ status: 401, body: { error: 'not logged in' } })
+      fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+    }
+    await waitFor(() => expect(answer).not.toBeNull())
+    // Another tab finished the same sign-out: nobody is signed in, and this page moves on.
+    localStorage.removeItem('taskto:offline-last')
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'taskto:offline-last',
+        newValue: localStorage.getItem('taskto:offline-last'),
+      }),
+    )
+    await screen.findByLabelText('Password')
+    // The second person signs in here; the device refuses the first person's cleanup at their start.
+    fail.cleanup = true
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'second@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+    await screen.findByRole('button', { name: /^Account: Second/ })
+    expect(pendingOf()).toEqual(['1:s1'])
+    fail.cleanup = false
+    await act(async () => answer?.())
+    await waitFor(() => expect(pendingOf()).toEqual([]))
+    // The second person is still signed in, and keeps their drafts' claim.
+    expect(screen.getByRole('button', { name: /^Account: Second/ })).toBeTruthy()
+    expect(localStorage.getItem('taskto:drafts-of')).toBe('2')
+  })
+}
+
+test('Back that fails while the app starts again leaves the sign-out recorded, and the person on "Couldn\'t sign out"', async () => {
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': { status: 500, body: { error: 'internal error', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // Starting the app again fails on this device (its offline database).
+  fail.activate = true
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  await waitFor(() =>
+    expect(
+      (screen.getByRole('button', { name: /Back to the app/ }) as HTMLButtonElement).getAttribute('aria-busy'),
+    ).not.toBe('true'),
+  )
+  expect(screen.getByRole('heading', { name: "Couldn't sign out" })).toBeTruthy()
+  // Still a sign-out the person chose, not settled: Try again (or the next start) finishes it.
+  expect(pendingOf()).toEqual(['1:s1'])
+})
+
+test("a tab that hears nobody signed in and then another account, both by the time it looks, forgets its account's pending submissions", async () => {
+  fakeFetch({ ...pages, 'GET /api/me': { body: { ...first_, session: 's1' } } })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  sessionStorage.setItem('taskto:operations:1', JSON.stringify([['k', 'op-unanswered']]))
+  // The tab was frozen while the first person signed out and the second signed in: both events
+  // come at once, and the browser's storage holds the second person by then.
+  const second_ = JSON.stringify({ id: 2, name: 'Second' })
+  localStorage.setItem('taskto:offline-last', second_)
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last', newValue: null }))
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last', newValue: second_ }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(sessionStorage.getItem('taskto:operations:1')).toBeNull()
 })

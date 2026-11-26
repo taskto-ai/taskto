@@ -553,7 +553,10 @@ signing in is dealt with when it signs in:
   available) the count is not taken to be zero: the person is told that unsent records may exist
   that this version can't check, and chooses *Keep them and sign out* (nothing is deleted; the
   database stays for the version or the moment that can read it) or *Discard and sign out*
-  (asks again).
+  (asks again). A database that could be read when the person was asked but can't be when the
+  sign-out deletes it is kept the same way (it may hold a record saved after they were asked), unless
+  they chose *Discard and sign out* for one they were told couldn't be read; the sign-out is then not
+  verified clear, and is finished at a later start.
 - **A sign-out once it is certain** is recorded in the browser before anything of it waits: who,
   from which login (`session`, as `GET /api/me` names it), how far it got, and what the person
   decided. The shell goes at once and only *Signing out* is shown; nothing on the device is deleted
@@ -564,10 +567,21 @@ signing in is dealt with when it signs in:
   login, and only if no tab signed in while it asked; otherwise *The account changed*. A tab that
   starts with that login takes the sign-out up again rather than signing in. The record goes once the
   device is verified clear, or when that login goes back, or when the account signs in with a newer
-  login.
+  login. A logout that got **no answer** (none in time, the connection, a proxy's page) may still reach
+  the server after *Back to the app* found the login going on: Back then keeps the record, marked as
+  gone back from (it holds neither the queue nor offline starts back, and no start takes it up), and
+  if that login ends while it is there (a `401`, a start with nobody signed in) the sign-out is
+  finished as the person decided, the records they agreed to lose included. Back lets a sign-out go
+  only once the app has started again; a step that fails leaves the person on *Couldn't sign out*.
+  A logout confirmed after the same account signed in with a **newer login** (in another tab, after
+  the request was sent) touches nothing on the device: the drafts, the database and the push
+  subscription are that login's. A tab whose own sign-out another tab finished goes to the login
+  screen, not *The account changed*.
 - **Another tab changes the account.** A tab learns that the account signed in on this browser
   changed (another tab signed in as someone else, or out: the browser's `storage` event and a
-  BroadcastChannel; or the server answered `409 session_account_changed` to one of its requests)
+  BroadcastChannel, each change heard as it was made, so a tab that was frozen across a sign-out
+  and the next sign-in hears "nobody" first; or the server answered `409 session_account_changed`
+  to one of its requests)
   and lets go at once: its engine stops, what it holds in memory is dropped (the offline view
   unmounts, with the records and photos on screen), and its connection to the database is closed
   as soon as what the engine was writing is. It shows only *The account changed*, with a button to
