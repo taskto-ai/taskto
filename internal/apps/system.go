@@ -78,6 +78,11 @@ type SystemWrite struct {
 	// record as it is, which is right for a write that sets what an event says, whatever
 	// else changed.
 	Expected *int64
+	// Guard, if given, runs in the write's own transaction before anything is changed, and a
+	// non-nil error it returns is the write's: nothing is written. It is for a write that is
+	// only good while something else holds (the writer is not superseded by a newer one), checked
+	// with the same lock the change is made under, so nothing can move in between.
+	Guard func(ctx context.Context, tx *sql.Tx) error
 }
 
 // SystemResult is the record after a system write.
@@ -109,6 +114,11 @@ func (s *Service) SystemWrite(ctx context.Context, w SystemWrite) (SystemResult,
 	}
 	var res SystemResult
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		if w.Guard != nil {
+			if err := w.Guard(ctx, tx); err != nil {
+				return err
+			}
+		}
 		ap, err := launchable(ctx, tx, w.SpaceID, w.AppID)
 		if err != nil {
 			return err

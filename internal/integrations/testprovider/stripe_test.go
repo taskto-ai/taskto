@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -549,6 +550,30 @@ func TestAFailureAfterTheWorkWasDone(t *testing.T) {
 	})
 }
 
+// A failure kept under the key before anything was made (execution began and failed) is answered
+// again to the same key, and nothing is ever made under it; a key in use and a lock timeout are refused
+// before anything ran, and keep nothing.
+func TestAFailureKeptUnderTheKeyMakesNothing(t *testing.T) {
+	f, _, a := newFake(t)
+	form := sessionForm(12000, "eur", "r")
+	f.Fail(testprovider.Refusal("amount_too_small").KeptUnderKey())
+	first := a.post("/v1/checkout/sessions", form, "key-c")
+	retry := a.post("/v1/checkout/sessions", form, "key-c")
+	if first.status != 400 || retry.status != 400 || retry.header.Get("Idempotent-Replayed") != "true" || len(f.Sessions()) != 0 {
+		t.Fatalf("first %d, retry %d replayed %q, sessions %d", first.status, retry.status, retry.header.Get("Idempotent-Replayed"), len(f.Sessions()))
+	}
+	for _, fault := range []testprovider.Fault{testprovider.KeyInUse(), testprovider.LockTimeout()} {
+		f.Fail(fault)
+		refused := a.post("/v1/checkout/sessions", form, "key-d")
+		if _, code := refused.errorCode(); code != fault.Code || refused.status != fault.Status {
+			t.Fatalf("refused: %d %q", refused.status, code)
+		}
+	}
+	if made := a.post("/v1/checkout/sessions", form, "key-d"); made.status != 200 || made.header.Get("Idempotent-Replayed") != "" || len(f.Sessions()) != 1 {
+		t.Fatalf("after the refusals: %d, sessions %d", made.status, len(f.Sessions()))
+	}
+}
+
 func TestASessionThroughItsStates(t *testing.T) {
 	f, clock, a := newFake(t)
 	retrieve := func(id string) testprovider.Session {
@@ -687,6 +712,94 @@ func TestListingSessions(t *testing.T) {
 	}
 	if ans := a.get("/v1/checkout/sessions", url.Values{"colour": {"red"}}); ans.status != 400 {
 		t.Errorf("an unknown filter: %d", ans.status)
+	}
+}
+
+func TestListingPaymentLinksAndSessionsByCreation(t *testing.T) {
+	_, clock, a := newFake(t)
+	type linkList struct {
+		Object  string
+		URL     string
+		HasMore bool `json:"has_more"`
+		Data    []testprovider.PaymentLink
+	}
+	var ids []string
+	for i := range 4 {
+		form := oneLineLink(1000+i, "eur")
+		form.Set("metadata[taskto_ref]", "tok"+strconv.Itoa(i))
+		ids = append(ids, a.newLink(form).ID)
+	}
+	a.post("/v1/payment_links/"+ids[2], url.Values{"active": {"false"}}, "")
+	var l linkList
+	a.get("/v1/payment_links", url.Values{"limit": {"2"}}).into(t, &l)
+	if l.Object != "list" || l.URL != "/v1/payment_links" || !l.HasMore || len(l.Data) != 2 || l.Data[0].ID != ids[3] || l.Data[0].Metadata["taskto_ref"] != "tok3" {
+		t.Fatalf("first page, newest first: %+v", l)
+	}
+	a.get("/v1/payment_links", url.Values{"limit": {"2"}, "starting_after": {l.Data[1].ID}}).into(t, &l)
+	if l.HasMore || len(l.Data) != 2 || l.Data[1].ID != ids[0] {
+		t.Fatalf("second page: %+v", l)
+	}
+	a.get("/v1/payment_links", url.Values{"active": {"true"}}).into(t, &l)
+	if len(l.Data) != 3 {
+		t.Errorf("active links: %+v", l)
+	}
+	a.get("/v1/payment_links", url.Values{"active": {"false"}}).into(t, &l)
+	if len(l.Data) != 1 || l.Data[0].ID != ids[2] {
+		t.Fatalf("inactive links: %+v", l)
+	}
+	var items struct {
+		Data []struct {
+			AmountTotal int64 `json:"amount_total"`
+			Currency    string
+		}
+		HasMore bool `json:"has_more"`
+	}
+	a.get("/v1/payment_links/"+ids[1]+"/line_items", nil).into(t, &items)
+	if len(items.Data) != 1 || items.Data[0].AmountTotal != 1001 || items.Data[0].Currency != "eur" || items.HasMore {
+		t.Errorf("line items: %+v", items)
+	}
+	if ans := a.get("/v1/payment_links/plink_nope/line_items", nil); ans.status != http.StatusNotFound {
+		t.Errorf("line items of an unknown link: %d", ans.status)
+	}
+	for name, q := range map[string]url.Values{"a metadata filter": {"metadata[taskto_ref]": {"tok1"}}, "a bad boolean": {"active": {"maybe"}}, "a bad cursor": {"starting_after": {"plink_nope"}}} {
+		if ans := a.get("/v1/payment_links", q); ans.status != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, ans.status)
+		}
+	}
+
+	// Sessions are listed by the time they were created.
+	var sessions []string
+	var times []int64
+	for i := range 3 {
+		clock.Advance(time.Hour)
+		s := a.newSession(500, "eur", "r"+strconv.Itoa(i))
+		sessions, times = append(sessions, s.ID), append(times, s.Created)
+	}
+	type sessionList struct{ Data []testprovider.Session }
+	var sl sessionList
+	list := func(q url.Values) []string {
+		a.get("/v1/checkout/sessions", q).into(t, &sl)
+		var out []string
+		for _, s := range sl.Data {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	ts := func(n int64) string { return strconv.FormatInt(n, 10) }
+	if got := list(url.Values{"created[gte]": {ts(times[1])}}); !slices.Equal(got, []string{sessions[2], sessions[1]}) {
+		t.Errorf("created[gte]: %v", got)
+	}
+	if got := list(url.Values{"created[gt]": {ts(times[1])}}); !slices.Equal(got, []string{sessions[2]}) {
+		t.Errorf("created[gt]: %v", got)
+	}
+	if got := list(url.Values{"created[lt]": {ts(times[1])}, "created[gte]": {ts(times[0])}}); !slices.Equal(got, []string{sessions[0]}) {
+		t.Errorf("a range: %v", got)
+	}
+	if got := list(url.Values{"created": {ts(times[2])}}); !slices.Equal(got, []string{sessions[2]}) {
+		t.Errorf("created: %v", got)
+	}
+	if ans := a.get("/v1/checkout/sessions", url.Values{"created[gte]": {"soon"}}); ans.status != http.StatusBadRequest {
+		t.Errorf("a created that isn't a number: %d", ans.status)
 	}
 }
 

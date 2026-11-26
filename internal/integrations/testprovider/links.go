@@ -103,9 +103,82 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 		Livemode: s.live, Metadata: meta, Restrictions: restrictions, SubmitType: submit, URL: host + randomID(14),
 	}}
 	s.links[id] = l
+	s.linkOrder = append(s.linkOrder, id)
 	rp2 := jsonReply(http.StatusOK, l.snapshot())
 	rp2.executed = true
 	return rp2
+}
+
+var linkListParams = compileAll([]string{`limit`, `starting_after`, `ending_before`, `active`})
+
+// listLinks lists the payment links, newest first. Like Stripe's, it has no filter on metadata:
+// a caller looking for a link's metadata reads the pages.
+func (s *Stripe) listLinks(_ *http.Request, form url.Values, _ string) reply {
+	if rp := unknownParam(form, linkListParams); rp != nil {
+		return *rp
+	}
+	active := ""
+	if v, ok := form["active"]; ok {
+		if v[len(v)-1] != "true" && v[len(v)-1] != "false" {
+			return invalid("", "Invalid boolean: "+v[len(v)-1], "active")
+		}
+		active = v[len(v)-1]
+	}
+	var ids []string
+	for i := len(s.linkOrder) - 1; i >= 0; i-- { // newest first
+		l := s.links[s.linkOrder[i]]
+		if active != "" && strconv.FormatBool(l.Active) != active {
+			continue
+		}
+		ids = append(ids, l.ID)
+	}
+	page, more, rp := paginate(ids, form, "payment link")
+	if rp != nil {
+		return *rp
+	}
+	data := make([]PaymentLink, 0, len(page))
+	for _, id := range page {
+		data = append(data, s.links[id].snapshot())
+	}
+	return jsonReply(http.StatusOK, listOf("/v1/payment_links", more, data))
+}
+
+var linkLineItemParams = compileAll([]string{`limit`, `starting_after`, `ending_before`})
+
+// linkLineItems lists what a link asks for, in the order it was made, as Stripe's line items of a
+// payment link: the amounts that are the payer's.
+func (s *Stripe) linkLineItems(_ *http.Request, form url.Values, id string) reply {
+	if rp := unknownParam(form, linkLineItemParams); rp != nil {
+		return *rp
+	}
+	l, ok := s.links[id]
+	if !ok {
+		return noSuch("payment link", id, "payment_link")
+	}
+	type item struct {
+		ID          string  `json:"id"`
+		Object      string  `json:"object"`
+		AmountTotal int64   `json:"amount_total"`
+		Currency    string  `json:"currency"`
+		Description *string `json:"description"`
+		Quantity    int64   `json:"quantity"`
+	}
+	ids := make([]string, len(l.items))
+	byID := make(map[string]item, len(l.items))
+	for i, it := range l.items {
+		ids[i] = "li_" + id + "_" + strconv.Itoa(i)
+		byID[ids[i]] = item{ID: ids[i], Object: "item", AmountTotal: it.UnitAmount * it.Quantity, Currency: l.Currency,
+			Description: optional(it.Name), Quantity: it.Quantity}
+	}
+	page, more, rp := paginate(ids, form, "line item")
+	if rp != nil {
+		return *rp
+	}
+	data := make([]item, 0, len(page))
+	for _, id := range page {
+		data = append(data, byID[id])
+	}
+	return jsonReply(http.StatusOK, listOf("/v1/payment_links/"+l.ID+"/line_items", more, data))
 }
 
 func (s *Stripe) retrieveLink(_ *http.Request, form url.Values, id string) reply {

@@ -93,6 +93,9 @@ type Knowledge interface {
 // CLIWorkers is what the purge needs of the CLI accounts: *cliaccounts.Service.
 type CLIWorkers interface {
 	Forget(ctx context.Context, user int64) error
+	// WorkerKind is where this server's worker keeps a user's files: "local", "container", or ""
+	// when CLI workers are off (cliaccounts.WorkerKind).
+	WorkerKind() string
 }
 
 // Browsers is what the purge needs of the agent browsers: browser.Browsers.
@@ -121,8 +124,8 @@ type Options struct {
 	// ready (the purge is tried again). Nil when the agent runtime is off: a conversation's records
 	// stay recorded as a step to do when it is on.
 	Agent func(ctx context.Context) (conversations.Purger, error)
-	// CLI forgets the CLI worker's files of the person. Nil, or answering cliaccounts.ErrOff, when
-	// CLI workers are off: that step stays recorded for when they are on.
+	// CLI forgets the CLI worker's files of the person. Nil when CLI workers are off: a step that
+	// needs a worker that isn't running stays recorded for when it is.
 	CLI CLIWorkers
 	// Browsers stops the account's agent browsers and removes their profile (a durable step, tried
 	// again until it is done). Nil when this server has no agent browser to stop: local mode with the
@@ -349,11 +352,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 				return err
 			}
 		}
-		// The browsers first: the CLI home holds their directory, and is left until they are gone.
+		// The browsers first: the CLI homes hold their directory, and are left until they are gone.
 		if err := s.record(ctx, tx, userID, cleanBrowser, strconv.FormatInt(userID, 10)); err != nil {
 			return err
 		}
-		return s.record(ctx, tx, userID, cleanCLIHome, strconv.FormatInt(userID, 10))
+		return s.recordCLIHomes(ctx, tx, userID)
 	})
 	if err != nil {
 		return err

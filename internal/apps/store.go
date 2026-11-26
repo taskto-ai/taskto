@@ -248,6 +248,9 @@ type outboxHooks struct {
 	// afterActionsAccess is called by Actions once it has read what the user may do, before it
 	// reads the release.
 	afterActionsAccess func()
+	// afterPaymentSnapshotRead is called by a payment link entry's pre-call authorization once it has
+	// read where the app is, inside its read transaction, before the rest of its checks.
+	afterPaymentSnapshotRead func()
 }
 
 // New returns the apps service over sqlDB, which must be migrated.
