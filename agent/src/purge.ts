@@ -17,6 +17,11 @@ export const BATCH_MIN_ROWS = 1
 /** How long the connection rests between transactions, with the write lock released, so a waiting writer gets it. */
 export const BATCH_PAUSE_MS = 5
 
+/** The kind of the document that marks a conversation retired (lifecycle.ts), which the purge's route reads. */
+export const LIFECYCLE_DOC_KIND = 'taskto.lifecycle'
+/** How the documents table stores a kind: as a JSON string, quotes included. */
+const LIFECYCLE_KIND_COLUMN = JSON.stringify(LIFECYCLE_DOC_KIND)
+
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
 // Deletes a conversation's records, and those of the conversations its tasks started, from the
@@ -31,29 +36,41 @@ const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(
 // for long: the records that hold content (document revisions, documents, submissions, entries) go
 // in batches sized to take about BATCH_TARGET_MS, each its own transaction, with the lock released
 // between them. The
-// purge is still all or nothing for the caller: the rows that name the conversation and its
-// sub-conversations (the conversations and their tasks) go last, in one more short transaction, and
-// the sidecar answers that a conversation that still has its row isn't purged. An interrupted purge
-// (the sidecar stops, a statement fails) leaves the conversation, retired and with fewer records,
-// and the server asks again, which finds the same conversation and goes on from what is left. What
-// a batch deleted from the log of record ids goes in the same transaction, so none is left behind.
-export function purgeRecords(dbPath: string, root: number, walBusyMs: number): void {
+// purge is still all or nothing for the caller: everything the sidecar's route uses to recognize
+// the conversation as retired goes last, in one more short transaction, after every other row of the
+// tree is gone: the lifecycle document with its revisions (lifecycle.ts), and the rows that name
+// the conversation and its sub-conversations (the conversations and their tasks). The sidecar
+// answers that a conversation that still has its row isn't purged. An interrupted purge (the
+// sidecar stops, a statement fails) leaves the conversation, retired and with fewer records, and
+// the server asks again, which finds the same conversation, still retired, and goes on from what is
+// left. The retry needs nothing a batch deleted: it walks the tasks and conversations that stay.
+// What a batch deleted from the log of record ids goes in the same transaction, so none is left behind.
+export function purgeRecords(
+  dbPath: string,
+  root: number,
+  walBusyMs: number,
+  /** Called after each transaction commits, with how many have: the tests stop the purge there by throwing. */
+  afterTransaction?: (committed: number) => void,
+): void {
   const db = new DatabaseSync(dbPath, { timeout: walBusyMs })
   try {
     db.exec('PRAGMA secure_delete = ON')
     const list = (set: Set<number>) => [...set].join(',') || 'NULL'
     const ids = new Set<number>([root])
     const taskIds = new Set<number>()
+    let committed = 0
     const transaction = <T>(work: () => T, begin = 'BEGIN IMMEDIATE'): T => {
       db.exec(begin)
+      let result: T
       try {
-        const result = work()
+        result = work()
         db.exec('COMMIT')
-        return result
       } catch (error) {
         db.exec('ROLLBACK')
         throw error
       }
+      afterTransaction?.(++committed)
+      return result
     }
     // The conversations the root's tasks started, and theirs in turn. They and their tasks stay
     // until the last transaction, so a retry finds them again.
@@ -77,8 +94,12 @@ export function purgeRecords(dbPath: string, root: number, walBusyMs: number): v
       // A read transaction: a consistent view of the tree takes no write lock, which the harness's
       // writes would wait for while a deep tree is walked.
     }, 'BEGIN')
-    const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
-      OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
+    const scoped = `((scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
+      OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)})))`
+    // The lifecycle documents are not in the batches: the route reads one, with its revisions, to
+    // know a conversation is retired, so they stay with the conversation and task rows to the end.
+    const docs = `SELECT id FROM documents WHERE ${scoped} AND kind <> '${LIFECYCLE_KIND_COLUMN}'`
+    const lifecycle = `SELECT id FROM documents WHERE ${scoped} AND kind = '${LIFECYCLE_KIND_COLUMN}'`
     // Runs `batch(limit)` in transactions until it finds fewer rows than the limit, resting between.
     // Rows differ a lot in size (one entry can hold a whole tool result), so the limit follows how
     // long the last transaction took, to keep each near BATCH_TARGET_MS whatever the rows hold.
@@ -117,8 +138,27 @@ export function purgeRecords(dbPath: string, root: number, walBusyMs: number): v
     byId('documents', docs)
     byId('submissions', `SELECT id FROM submissions WHERE conversation_id IN (${list(ids)})`)
     byId('entries', `SELECT id FROM entries WHERE conversation_id IN (${list(ids)})`)
-    // What names the conversations goes last, so a purge that stopped before here is asked again.
+    // What names the conversations, and shows one is retired, goes last and together, so a purge that
+    // stopped before here is asked again and finds the conversation as it was, and one that
+    // stopped after it has nothing left. Every other row is gone by now; if one is not (something
+    // wrote it meanwhile), this transaction fails and the retry deletes it first.
     transaction(() => {
+      const stray = db
+        .prepare(
+          `SELECT
+             EXISTS (SELECT 1 FROM entries WHERE conversation_id IN (${list(ids)}))
+             OR EXISTS (SELECT 1 FROM submissions WHERE conversation_id IN (${list(ids)}))
+             OR EXISTS (${docs})
+             OR EXISTS (SELECT 1 FROM document_revisions WHERE document_id IN (${docs})) AS found`,
+        )
+        .get() as { found: number | bigint }
+      if (Number(stray.found) !== 0) throw new Error('records of the conversation were written during its purge')
+      const lifecycleIds = (db.prepare(lifecycle).all() as { id: number }[]).map((r) => Number(r.id))
+      if (lifecycleIds.length > 0) {
+        db.exec(`DELETE FROM document_revisions WHERE document_id IN (${lifecycleIds.join(',')})`)
+        db.exec(`DELETE FROM documents WHERE id IN (${lifecycleIds.join(',')})`)
+        db.exec(`DELETE FROM record_ids WHERE id IN (${lifecycleIds.join(',')})`)
+      }
       db.exec(`DELETE FROM tasks WHERE conversation_id IN (${list(ids)})`)
       db.exec(`DELETE FROM conversations WHERE id IN (${list(ids)})`)
       // Deleted in chunks: a conversation tree may have more ids than a statement may name.

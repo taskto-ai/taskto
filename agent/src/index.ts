@@ -51,7 +51,6 @@ import {
   type ConversationId,
   type Cursor,
   createRegistry,
-  defineDoc,
   type EntryId,
   Harness,
   type SubmissionId,
@@ -59,6 +58,7 @@ import {
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
+import { conversationState, Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
 import { purgeOffThread } from './purge.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
@@ -144,19 +144,6 @@ void harness.closed.then((end) => {
     console.error('harness failed; exiting for a restart', end.error)
     process.exit(1)
   }
-})
-
-// What the server needs to know of a conversation besides Pi Durable's record: when it was created,
-// so a sweep for orphans leaves alone one the server is still recording (0 for one created before
-// this document existed), and when it was retired.
-const Lifecycle = defineDoc<{ createdAt: number; retiredAt: number | null }>({
-  kind: 'taskto.lifecycle',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ createdAt: 0, retiredAt: null }),
-  checkpointWhen: () => true, // it changes at most twice
 })
 
 class HttpError extends Error {
@@ -416,12 +403,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (req.method === 'POST' && action === 'purge') {
       const num = parseId(id) as ConversationId
-      const found = await harness.conversation(num, context)
-      if (found) {
-        if ((await harness.snapshot(Lifecycle, num, context))?.retiredAt == null) {
-          throw new HttpError(409, 'retire the conversation before purging it')
-        }
-        await found.abort(context) // idle, as retiring left it
+      const state = await conversationState(harness, num, context)
+      if (state !== 'unknown') {
+        if (state === 'live') throw new HttpError(409, 'retire the conversation before purging it')
+        // Idle, as retiring left it (a retire that stopped between its mark and its abort is
+        // finished here). The retry of an interrupted purge gets here too, with documents gone.
+        await (await harness.conversation(num, context))?.abort(context)
         // On a worker thread: the statements wait for the harness's writes and the log's readers,
         // and the event loop must go on serving the turns meanwhile.
         await purgeOffThread({ op: 'purge', dbPath: dbPath as string, root: num, walBusyMs })

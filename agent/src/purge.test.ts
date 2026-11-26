@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -14,7 +14,7 @@ const SCHEMA = `
   CREATE TABLE entries (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, head INTEGER, commit_seq INTEGER NOT NULL, record TEXT NOT NULL) STRICT;
   CREATE TABLE tasks (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, kind TEXT NOT NULL, record TEXT NOT NULL) STRICT;
   CREATE TABLE submissions (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, record TEXT NOT NULL) STRICT;
-  CREATE TABLE documents (id INTEGER PRIMARY KEY, scope_kind TEXT NOT NULL, owner_id INTEGER NOT NULL, record TEXT NOT NULL) STRICT;
+  CREATE TABLE documents (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, scope_kind TEXT NOT NULL, owner_id INTEGER NOT NULL, record TEXT NOT NULL) STRICT;
   CREATE TABLE document_revisions (document_id INTEGER NOT NULL, seq INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY (document_id, seq)) STRICT;
 `
 
@@ -40,8 +40,12 @@ describe('purgeRecords', () => {
     ids.run(1000, 'entry')
     entry.run(1000, 3, '{"text":"kept"}')
     ids.run(2000, 'document')
-    db.exec(`INSERT INTO documents VALUES (2000,'conversation',1,'{}')`)
+    db.exec(`INSERT INTO documents VALUES (2000,'"pi.live"','conversation',1,'{}')`)
     for (let i = 0; i < 450; i++) db.exec(`INSERT INTO document_revisions VALUES (2000,${i},'{"text":"secret"}')`)
+    // The document that marks the conversation retired, which the purge's route reads (the kind is stored as JSON).
+    ids.run(2001, 'document')
+    db.exec(`INSERT INTO documents VALUES (2001,'"taskto.lifecycle"','conversation',1,'{}')`)
+    db.exec(`INSERT INTO document_revisions VALUES (2001,1,'{"retiredAt":1}')`)
     db.close()
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
@@ -66,6 +70,31 @@ describe('purgeRecords', () => {
     expect(count('SELECT count(*) AS n FROM record_ids')).toBe(2)
   })
 
+  it('keeps the lifecycle document and its revisions until the conversation rows go, in the same transaction', () => {
+    const lifecycle = `SELECT count(*) AS n FROM documents WHERE kind = '"taskto.lifecycle"'`
+    const lifecycleRevisions = 'SELECT count(*) AS n FROM document_revisions WHERE document_id = 2001'
+    const seen: { transaction: number; lifecycle: number; revisions: number; conversations: number }[] = []
+    purgeRecords(path, 1, 1000, (transaction) =>
+      seen.push({
+        transaction,
+        lifecycle: count(lifecycle),
+        revisions: count(lifecycleRevisions),
+        conversations: count('SELECT count(*) AS n FROM conversations WHERE id IN (1, 2)'),
+      }),
+    )
+    const last = seen.pop()
+    expect(last).toMatchObject({ lifecycle: 0, revisions: 0, conversations: 0 })
+    expect(seen.length).toBeGreaterThan(3)
+    // Before the last transaction the conversation, its lifecycle document and its revisions are all there.
+    for (const state of seen)
+      expect(state, `after transaction ${state.transaction}`).toMatchObject({
+        lifecycle: 1,
+        revisions: 1,
+        conversations: 2,
+      })
+    expect(count('SELECT count(*) AS n FROM record_ids WHERE id = 2001')).toBe(0)
+  })
+
   it('keeps the conversation until the last step, so a purge that stopped is asked again and finishes', () => {
     const db = new DatabaseSync(path)
     // The deletion of one entry fails, partway through.
@@ -76,9 +105,12 @@ describe('purgeRecords', () => {
     // failure went in transactions of their own, with their ids.
     expect(count('SELECT count(*) AS n FROM conversations WHERE id IN (1, 2)')).toBe(2)
     expect(count('SELECT count(*) AS n FROM tasks')).toBe(1)
-    expect(count('SELECT count(*) AS n FROM document_revisions')).toBe(0)
-    expect(count('SELECT count(*) AS n FROM documents')).toBe(0)
+    // Every document but the lifecycle's is gone, which stays with the conversation.
+    expect(count('SELECT count(*) AS n FROM document_revisions')).toBe(1)
+    expect(count('SELECT count(*) AS n FROM documents')).toBe(1)
+    expect(count(`SELECT count(*) AS n FROM documents WHERE kind = '"taskto.lifecycle"'`)).toBe(1)
     expect(count('SELECT count(*) AS n FROM record_ids WHERE id = 2000')).toBe(0)
+    expect(count('SELECT count(*) AS n FROM record_ids WHERE id = 2001')).toBe(1)
     expect(
       count(
         "SELECT count(*) AS n FROM record_ids WHERE record_type = 'entry' AND id < 1000 AND id NOT IN (SELECT id FROM entries)",
@@ -89,6 +121,33 @@ describe('purgeRecords', () => {
     again.close()
     purgeRecords(path, 1, 1000)
     expect(count('SELECT count(*) AS n FROM conversations')).toBe(1)
+    expect(count('SELECT count(*) AS n FROM entries')).toBe(1)
+    expect(count('SELECT count(*) AS n FROM documents')).toBe(0)
+    expect(count('SELECT count(*) AS n FROM document_revisions')).toBe(0)
+    expect(count('SELECT count(*) AS n FROM record_ids')).toBe(2)
+  })
+
+  it('refuses to remove the conversation while a record of it is left, and a retry deletes it first', () => {
+    // A record written after the batches, just before the last transaction (nothing should write a
+    // retired conversation's rows). The number of transactions comes from a purge of a copy.
+    let total = 0
+    const copy = join(dir, 'copy.db')
+    copyFileSync(path, copy)
+    purgeRecords(copy, 1, 1000, (n) => {
+      total = n
+    })
+    expect(() =>
+      purgeRecords(path, 1, 1000, (n) => {
+        if (n !== total - 1) return
+        const db = new DatabaseSync(path)
+        db.exec(`INSERT INTO record_ids VALUES (3000,'entry')`)
+        db.exec(`INSERT INTO entries VALUES (3000,1,NULL,1,'{"text":"late"}')`)
+        db.close()
+      }),
+    ).toThrow('written during its purge')
+    expect(count('SELECT count(*) AS n FROM conversations WHERE id IN (1, 2)')).toBe(2)
+    expect(count(`SELECT count(*) AS n FROM documents WHERE kind = '"taskto.lifecycle"'`)).toBe(1)
+    purgeRecords(path, 1, 1000)
     expect(count('SELECT count(*) AS n FROM entries')).toBe(1)
     expect(count('SELECT count(*) AS n FROM record_ids')).toBe(2)
   })
