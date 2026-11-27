@@ -1887,6 +1887,12 @@ can't be viewed or restored; `agent` is absent when the user made the change, an
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
 (`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
 
+The web app's history view draws a Markdown document's changes from two ordinary reads of
+`GET …/docs/{path}?at=<commit>` (a commit and the one before it that this list shows, or a
+commit and the current version), comparing them in the browser, so a diff needs no route of
+its own and shows nothing the caller can't read already; a version that was taken out of history
+has no diff.
+
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
 Every commit of the space, newest first, paged the same way, without `change` and

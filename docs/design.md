@@ -157,6 +157,7 @@ The old name each replaces is in brackets.
 | `neutral`, `neutral-soft` | `#5c5a55`, `#ebe8e1` | `#aba89f`, cream at 9% | what is off or inactive |
 | `label-<hue>`, `label-<hue>-soft` | see the contrast table | | a board label, by a hue picked from its name: `green`, `blue`, `violet`, `pink`, `amber`, `teal` |
 | `column-todo`, `-doing`, `-review`, `-done` | `#2f6fde`, `#b86e00`, `#7c5ce0`, `#0e8a58` | `#7aa7ff`, `#ffb04d`, `#b9a5ff`, mint | the dot beside a board column's name |
+| `diff-add`, `diff-add-soft`, `diff-add-text`; `diff-del`, `diff-del-soft`, `diff-del-text` | `#a9e8c0`, `#e2f6e9`, `#0a3d22`; `#f6b9b2`, `#fde8e5`, `#5a0e07` | green and red at 34% and 14%, `#e1fcee`; red at 36% and 15%, `#ffe6e3` | a document history's diff: the soft role is a changed line, the plain one the words that changed inside it, the text role is the text on both (4.5:1, checked on every ground); the meaning is also in the markup (`ins`, `del` and a hidden word), never in the colour alone |
 
 Each is `--color-<role>`. Colour is spent where it says something: a status, a label, a column's
 kind, the primary action and the agent. It is not decoration.
