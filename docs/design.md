@@ -522,7 +522,38 @@ its unread count; the pinned apps, in a group of their own, each with a small av
 foot, Settings and the account (avatar, name and email), whose menu has the theme, the language,
 "Install the app" while it isn't installed, and log out. The page owns its title: the shell never
 repeats the section's name over it, not even in the phone's bar: the page's own title is the one
-place the section's name appears.
+place the section's name appears, within its place.
+
+A page is drawn in a *place* (`Place` and `PlaceContext` in `web/src/router.tsx`), the slot the
+shell, or later a pane of the desk, gives it, and never assumes it is the only page:
+
+- **Address.** A page and a `Link` move through `useNavigate()`, which is the place's own
+  `navigate`, or the router's when there is no place; `usePlacePath()` is the place's path. Only the
+  shell, `App.tsx` and the notification sync use the router's `navigate` and `usePath` directly.
+- **Leave guards.** `useBeforeLeave` registers under its place (`null` when there is none), and a
+  navigation or a Back asks the guards of the place the desk says is focused
+  (`setFocusedPlace`). `beforeLeaving` (sign-out) and `navigateWholeApp` (a workspace switch, in
+  the switcher and after "New workspace") ask every place's guard in turn, once each, and go on
+  only if all agree; `navigateWholeApp` then changes the address without asking the focused place
+  again. `askPlace(id, go)` asks one place, for example before its tab closes. The knowledge base's
+  click guard acts only on clicks outside every other place, found by the `data-place` attribute on
+  a place's root element.
+- **Title.** A section reports its place's title with `usePlaceTitle(text)` (`web/src/router.tsx`):
+  `PageHeader` at level 1 does (`titleText` when the title is not a string), and the screens that
+  draw their own level 1 heading do (the conversations list, the knowledge base, the app builder's
+  session), each withdrawing it when its page goes; the desk's tabs show it.
+- **Width.** In the shell's one place, a page's layout answers to the viewport, as it always did:
+  the page rules are media queries, and every threshold (the chat's 48rem, the board's 640px, the
+  browser's 40rem) is the one the shell's three bands were drawn with, so the layout is the same at
+  every width and root font size, which container thresholds could not be (the main column is the
+  viewport less a rail or a sidebar of different widths, and `rem` in a container query follows the
+  root font where a media query follows the browser's own). A page that must choose in script
+  uses `usePageNarrow(ref)` (`web/src/media.ts`): the viewport with no place, and the width of the
+  nearest `[data-place]` element in one. A pane of the desk is where a page's width stops being the
+  viewport's: it makes its body a size container named `page` and adds the container rules for
+  what its pages draw, and the AppExplorer's record list, which reads the viewport itself, needs
+  the same. A thing drawn outside the page, in a drawer, is sized by the viewport, which is the
+  right box for it: a rule for what a drawer holds stays a media query.
 
 - **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
 - **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's

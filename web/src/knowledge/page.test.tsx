@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { type Place, PlaceContext } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { buildTree, type Folder } from './DocList'
 import { KnowledgePage } from './KnowledgePage'
@@ -694,4 +695,99 @@ test('opening the open document while a save is in flight drops another opening 
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
   expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
+})
+
+test('the knowledge base reports its title to its place, and withdraws it with the page', async () => {
+  kb('write')
+  const titles: (string | null)[] = []
+  const at: Place = { id: 'a', path: '/w/1/knowledge', navigate: vi.fn(), setTitle: (title) => titles.push(title) }
+  const view = render(
+    <PlaceContext.Provider value={at}>
+      <KnowledgePage workspace={1} />
+    </PlaceContext.Provider>,
+  )
+  await screen.findByRole('button', { name: /^ideas\.md/ })
+  expect(titles.at(-1)).toBe('Knowledge base')
+  view.unmount()
+  expect(titles.at(-1)).toBeNull()
+})
+
+test('a dirty editor in one place intercepts its own links, and leaves another place’s clicks alone', async () => {
+  kb('write')
+  const place = (id: string): Place => ({ id, path: '/w/1/knowledge', navigate: vi.fn(), setTitle: vi.fn() })
+  const a = place('a')
+  const b = place('b')
+  const seen: boolean[] = []
+  render(
+    <>
+      <PlaceContext.Provider value={a}>
+        <div data-place="a">
+          <a href="/w/1/apps" onClick={(e) => e.preventDefault()}>
+            Apps
+          </a>
+          <KnowledgePage workspace={1} />
+        </div>
+      </PlaceContext.Provider>
+      <PlaceContext.Provider value={b}>
+        <div data-place="b">
+          <a
+            href="/w/1/boards"
+            onClick={(e) => {
+              seen.push(e.defaultPrevented)
+              e.preventDefault()
+            }}
+          >
+            Boards
+          </a>
+        </div>
+      </PlaceContext.Provider>
+    </>,
+  )
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'Unsaved words.' } })
+
+  fireEvent.click(screen.getByRole('link', { name: 'Boards' }))
+  expect(seen).toEqual([false])
+  expect(asked()).toBeNull()
+  expect(a.navigate).not.toHaveBeenCalled()
+
+  fireEvent.click(screen.getByRole('link', { name: 'Apps' }))
+  expect(asked()).toBeTruthy()
+  fireEvent.click(within(article).getByRole('button', { name: 'Discard my changes' }))
+  expect(a.navigate).toHaveBeenCalledWith('/w/1/apps')
+  expect(b.navigate).not.toHaveBeenCalled()
+  expect(window.location.pathname).toBe('/')
+})
+
+test('a link to the page of its own place is not intercepted, whatever the browser’s address is', async () => {
+  kb('write')
+  const at: Place = { id: 'a', path: '/w/1/knowledge', navigate: vi.fn(), setTitle: vi.fn() }
+  const seen: boolean[] = []
+  render(
+    <PlaceContext.Provider value={at}>
+      <div data-place="a">
+        <a
+          href="/w/1/knowledge"
+          onClick={(e) => {
+            seen.push(e.defaultPrevented)
+            e.preventDefault()
+          }}
+        >
+          Knowledge page
+        </a>
+        <KnowledgePage workspace={1} />
+      </div>
+    </PlaceContext.Provider>,
+  )
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'Unsaved words.' } })
+
+  fireEvent.click(screen.getByRole('link', { name: 'Knowledge page' }))
+  expect(seen).toEqual([false])
+  expect(asked()).toBeNull()
+  expect(at.navigate).not.toHaveBeenCalled()
 })

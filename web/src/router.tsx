@@ -1,6 +1,8 @@
 import {
   type AnchorHTMLAttributes,
+  createContext,
   type MouseEvent,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -23,8 +25,22 @@ function subscribe(listener: () => void) {
 
 export type BeforeLeave = (go: () => void, whole?: boolean) => void
 
-const askers: BeforeLeave[] = []
-const asker = (): BeforeLeave | undefined => askers.at(-1)
+export type Place = {
+  id: string
+  path: string
+  navigate: (path: string, opts?: { replace?: boolean }) => void
+  setTitle: (title: string | null) => void
+}
+
+export const PlaceContext = createContext<Place | null>(null)
+
+const askers = new Map<string | null, BeforeLeave[]>()
+let focusedPlace: string | null = null
+const asker = (place: string | null = focusedPlace): BeforeLeave | undefined => askers.get(place)?.at(-1)
+
+export function setFocusedPlace(id: string | null) {
+  focusedPlace = id
+}
 let index = 0
 let generation = 0
 let flight: number | null = null
@@ -139,6 +155,7 @@ function watchHistory() {
 }
 
 export function useBeforeLeave(ask: BeforeLeave | null) {
+  const place = useContext(PlaceContext)?.id ?? null
   const latest = useRef(ask)
   useLayoutEffect(() => {
     latest.current = ask
@@ -148,27 +165,43 @@ export function useBeforeLeave(ask: BeforeLeave | null) {
     if (!on) return
     watchHistory()
     const mine: BeforeLeave = (go, whole) => (latest.current ? latest.current(go, whole) : go())
-    askers.push(mine)
+    const stack = askers.get(place) ?? []
+    stack.push(mine)
+    askers.set(place, stack)
     return () => {
-      const i = askers.lastIndexOf(mine)
-      if (i >= 0) askers.splice(i, 1)
+      const held = askers.get(place)
+      if (!held) return
+      const i = held.lastIndexOf(mine)
+      if (i >= 0) held.splice(i, 1)
+      if (held.length === 0) askers.delete(place)
     }
-  }, [on])
+  }, [on, place])
+}
+
+function askEach(places: (string | null)[], go: () => void) {
+  if (!places.some((place) => asker(place))) return go()
+  generation += 1
+  const mine = generation
+  const next = (rest: (string | null)[]) => {
+    if (mine !== generation) return
+    const [head, ...tail] = rest
+    if (head === undefined) return go()
+    const ask = asker(head)
+    if (!ask) return next(tail)
+    ask(() => next(tail), true)
+  }
+  next(places)
 }
 
 export function beforeLeaving(go: () => void) {
-  const ask = asker()
-  if (!ask) return go()
-  generation += 1
-  const mine = generation
-  ask(() => {
-    if (mine === generation) go()
-  }, true)
+  askEach([...askers.keys()], go)
 }
 
-export function navigate(path: string, { replace = false } = {}) {
-  if (path === window.location.pathname) return
-  watchHistory()
+export function askPlace(id: string | null, go: () => void) {
+  askEach([id], go)
+}
+
+function commit(path: string, replace: boolean) {
   if (replace) {
     window.history.replaceState(unnumbered ? window.history.state : { idx: index }, '', path)
     notify()
@@ -180,21 +213,48 @@ export function navigate(path: string, { replace = false } = {}) {
     window.history.pushState({ idx: index }, '', path)
     moved()
   }
-  const go = () => {
-    if (flight !== null) after = push
-    else push()
-  }
+  if (flight !== null) after = push
+  else push()
+}
+
+export function navigate(path: string, { replace = false } = {}) {
+  if (path === window.location.pathname) return
+  watchHistory()
   const ask = asker()
-  if (!ask) return go()
+  if (replace || !ask) return commit(path, replace)
   generation += 1
   const mine = generation
   ask(() => {
-    if (mine === generation) go()
+    if (mine === generation) commit(path, replace)
   })
+}
+
+export function navigateWholeApp(path: string) {
+  if (path === window.location.pathname) return
+  watchHistory()
+  beforeLeaving(() => commit(path, false))
 }
 
 export function usePath(): string {
   return useSyncExternalStore(subscribe, snapshot)
+}
+
+export function useNavigate(): Place['navigate'] {
+  return useContext(PlaceContext)?.navigate ?? navigate
+}
+
+export function usePlaceTitle(title: string | null) {
+  const setTitle = useContext(PlaceContext)?.setTitle
+  useEffect(() => {
+    if (!setTitle || title === null) return
+    setTitle(title)
+    return () => setTitle(null)
+  }, [setTitle, title])
+}
+
+export function usePlacePath(): string {
+  const path = usePath()
+  return useContext(PlaceContext)?.path ?? path
 }
 
 export type Section = 'home' | 'conversations' | 'knowledge' | 'boards' | 'apps' | 'settings' | 'notifications'
@@ -250,11 +310,12 @@ export function routePath(r: Route): string {
 }
 
 export function Link({ href, onClick, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
+  const go = useNavigate()
   const click = (e: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(e)
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
     e.preventDefault()
-    navigate(href)
+    go(href)
   }
   return <a href={href} onClick={click} {...rest} />
 }
