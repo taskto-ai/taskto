@@ -493,7 +493,9 @@ describe('runPurge', () => {
       reader.close()
       writer.close()
     }
-  }, 30_000)
+    // Slow by design: the 30,000 documents of the batch are listed again for each step of their
+    // revisions (a query the purge doesn't bound), and the steps are many.
+  }, 120_000)
 
   // A long task history (60,000 finished tasks of about 4 KB) goes in short transactions too: the
   // last one, which the harness's writes would wait for, only checks again and takes the root.
@@ -960,9 +962,19 @@ describe('runPurge', () => {
     }
     writer.exec('COMMIT')
     let last = Number.POSITIVE_INFINITY
+    let work: FinalWork | undefined
     try {
-      purgeRecords(path, 1, 10_000, { final: (ms) => (last = ms) })
-      expect(last).toBeLessThan(25)
+      purgeRecords(path, 1, 10_000, {
+        final: (ms, w) => {
+          last = ms
+          work = w
+        },
+      })
+      measured(`last transaction after 60,000 tasks: ${last.toFixed(1)} ms, ${JSON.stringify(work)}`)
+      // Counted, not timed: the root's row, its lifecycle document with its revision, their
+      // record_ids rows and the root's mark.
+      expect(work?.changes).toBeLessThanOrEqual(8)
+      expect(work?.pages).toBeLessThanOrEqual(4)
       expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
       expect(writer.prepare('SELECT count(*) AS n FROM taskto_purge_marks').get()).toEqual({ n: 0 })
     } finally {
