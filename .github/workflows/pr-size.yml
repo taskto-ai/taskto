@@ -1,0 +1,65 @@
+# The size limit on a pull request's production code (CONTRIBUTING.md, "Sending a change").
+#
+# pull_request_target, not pull_request: GitHub runs this workflow, and the job runs the
+# counter, as they are on main, so a pull request can't change the limit or the rules it is
+# judged by. The job never checks out or runs the pull request's code: it fetches the pull
+# request's commits as git objects and reads them with git diff only. No secrets, and the
+# token can only read.
+#
+# The count is GitHub's own view of a pull request: base...head, from their merge base, so
+# what main landed on its own neither adds to it nor hides any of it.
+#
+# The merge queue waits for every required check on its own branch, so the job runs for
+# merge_group too and passes at once: the size was judged when the pull request was queued.
+name: Pull request size
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-size-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  size:
+    name: Pull request size
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Judged when the pull request was queued
+        if: ${{ github.event_name == 'merge_group' }}
+        run: echo "The size of each pull request in this group was checked before it was queued."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'pull_request_target' }}
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: ${{ github.event_name == 'pull_request_target' }}
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: The counter's tests
+        if: ${{ github.event_name == 'pull_request_target' }}
+        run: go test -count=1 ./.github/scripts/prsize
+      - name: Fetch the pull request's commits
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+      - name: Count
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_SIZE_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'size-exception') }}
+        run: go run ./.github/scripts/prsize "$BASE_SHA" "$HEAD_SHA"
