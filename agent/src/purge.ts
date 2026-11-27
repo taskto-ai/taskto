@@ -10,11 +10,14 @@
 //
 // The harness writes on the main thread, also synchronously, and waits there whenever another
 // connection holds SQLite's write lock. So the purge never holds it for long: it deletes in short
-// transactions, each a bounded amount of work, with a pause between them for the harness's writes,
-// and it empties the log by tries that don't wait (a checkpoint that waits for readers holds the
-// write lock all the while), sleeping between them on its own thread. And the harness's commits
-// don't checkpoint the log either (HARNESS_DB_OPTIONS): one would copy, on the HTTP server's
-// thread, what a purge or a reader let pile up. A thread of its own does (startCheckpointer).
+// transactions, each a bounded amount of work (CHUNK records a step, SLICE_STEPS steps and
+// SLICE_PAGES freed pages a transaction, counted, not timed), with a pause between them for the
+// harness's writes, in which what the transaction wrote is copied into the database (so the log
+// never piles up for one long copy at the end); and it empties the log by tries that don't wait (a
+// checkpoint that waits for readers holds the write lock all the while), sleeping between them on
+// its own thread. And the harness's commits don't checkpoint the log either (HARNESS_DB_OPTIONS):
+// one would copy, on the HTTP server's thread, what a purge or a reader let pile up. A thread of its
+// own does (startCheckpointer).
 //
 // This module is also the worker's entry: it imports nothing of the sidecar's, so the same file
 // runs as the worker in the built sidecar (dist/purge.js) and in the tests (src/purge.ts).
@@ -189,31 +192,48 @@ export function storedKind(kind: string): string {
 const LIFECYCLE = `'${storedKind(LIFECYCLE_KIND).replaceAll("'", "''")}'`
 
 /**
- * How many rows one statement of the purge deletes. A transaction's time is checked between its
- * steps, so a step's own length is what can go past SLICE_MS: small, so it can't by much (measured
- * with a lock probe on 60,000 tasks of 4 KB: steps of 200 held the lock up to 480 ms, of 50 about
- * 130 ms on a busy disk, about 30 ms on a quiet one).
+ * How many records one step of the purge takes at most: one statement's worth, so a step's own
+ * length, which the transaction's time limit (SLICE_MS, checked between steps) can't cut, stays
+ * short (measured with a lock probe on 60,000 tasks of 4 KB: steps of 200 held the lock up to
+ * 480 ms, of 50 about 130 ms on a busy disk, about 30 ms on a quiet one).
  */
-const CHUNK = 50
+export const CHUNK = 50
 
 /** How many marked conversations and tasks one step of the sweep takes, and marks at most. */
-const SWEEP = 50
+const SWEEP = CHUNK
+
+/** How many steps one of the purge's transactions takes at most, whatever the time. */
+export const SLICE_STEPS = 64
 
 /** How long one of the purge's transactions goes on deleting before it commits and pauses. */
 const SLICE_MS = 20
 
 /**
- * How many pages one of the purge's transactions frees at most before it commits: each is written
- * at the commit (overwritten with zeros, secure_delete), so this bounds the commit's work, as
- * SLICE_MS bounds the deleting. Large records (a task's, an entry's) free a page or more each.
+ * How many pages one of the purge's transactions frees at most: each is written at the commit
+ * (overwritten with zeros, secure_delete), so this bounds the commit's work as SLICE_STEPS and
+ * CHUNK bound the rows. A step takes only as many rows as fit in what is left of it, by the most
+ * pages a row of that table has freed so far in the purge (PageBudget).
  */
 export const SLICE_PAGES = 512
 
 /**
- * One short transaction's time, in ms: taking the write lock, the deleting, and the commit; the pages
- * it freed, and its longest step of the sweep, in ms.
+ * One short transaction's time, in ms (taking the write lock, the deleting, and the commit, and its
+ * longest step), and its work: the pages it freed, its steps, the most records one step took, and
+ * the most rows one step changed (records with their record_ids rows and the sweep's marks).
  */
-export type SliceTiming = { lock: number; work: number; commit: number; pages: number; step: number }
+export type SliceTiming = {
+  lock: number
+  work: number
+  commit: number
+  pages: number
+  step: number
+  steps: number
+  records: number
+  changes: number
+}
+
+/** The work of the purge's last transaction: the rows it changed and the pages it freed. */
+export type FinalWork = { changes: number; pages: number }
 
 /** What purgeRecords tells a test. */
 export type PurgeHooks = {
@@ -221,10 +241,79 @@ export type PurgeHooks = {
   afterSlice?: () => void
   /** Each short transaction's length, from taking the write lock to its commit, in ms, and its parts. */
   slice?: (ms: number, timing: SliceTiming) => void
-  /** The last transaction's length, from taking the write lock to its commit, in ms. */
-  final?: (ms: number) => void
+  /** The last transaction's length, from taking the write lock to its commit, in ms, and its work. */
+  final?: (ms: number, work: FinalWork) => void
   /** The TRUNCATE checkpoint's length at the end, holding the write lock, in ms. */
   truncate?: (ms: number) => void
+}
+
+/** What a step returns when the transaction has no room left for a row: commit, and go on after. */
+const NO_ROOM = -1
+
+/**
+ * The pages one transaction may still free, and how many rows of a table the next delete may take
+ * so that it stays within them: as many as fit by the most pages a row of that table has freed
+ * so far in the purge, at most CHUNK and at most twice as many as before (the first delete of a
+ * table takes one row, and only first in a transaction, to learn its size). The first delete of a
+ * transaction takes one row at least, so a row larger than SLICE_PAGES goes alone; otherwise a
+ * transaction goes past SLICE_PAGES only by a delete whose rows are larger than any of their table
+ * before them. The pages are counted by delete (what the freelist gained), so pages the sweep's
+ * marks take back from the freelist don't make room.
+ */
+class PageBudget {
+  private spent = 0
+  private deleted = false
+  private readonly seen = new Map<string, { perRow: number; rows: number }>()
+  private readonly freePages: () => number
+  constructor(freePages: () => number) {
+    this.freePages = freePages
+  }
+
+  /** A transaction begins. */
+  begin(): void {
+    this.spent = 0
+    this.deleted = false
+  }
+
+  /** The pages the transaction's deletes have freed. */
+  freed(): number {
+    return this.spent
+  }
+
+  /** How many rows of table the next delete may take: 0 when the transaction has no room for one. */
+  private rows(table: string): number {
+    const seen = this.seen.get(table)
+    if (!this.deleted) return seen ? Math.max(1, this.fit(seen)) : 1
+    return seen ? this.fit(seen) : 0
+  }
+
+  private fit(seen: { perRow: number; rows: number }): number {
+    const ramp = Math.min(CHUNK, seen.rows * 2)
+    if (seen.perRow === 0) return ramp
+    return Math.max(0, Math.min(ramp, Math.floor((SLICE_PAGES - this.spent) / seen.perRow)))
+  }
+
+  /**
+   * Deletes rows of table by remove(limit), which takes up to limit and says how many it took, and
+   * learns their size; NO_ROOM, with nothing deleted, when the transaction has no room for one of
+   * them and there is one (any(), asked only then).
+   */
+  take(table: string, remove: (limit: number) => number, any: () => boolean): number {
+    const limit = this.rows(table)
+    if (limit === 0) return any() ? NO_ROOM : 0
+    const before = this.freePages()
+    const n = remove(limit)
+    if (n > 0) {
+      const pages = Math.max(0, this.freePages() - before)
+      this.spent += pages
+      this.deleted = true
+      const seen = this.seen.get(table) ?? { perRow: 0, rows: 0 }
+      seen.perRow = Math.max(seen.perRow, Math.ceil(pages / n))
+      seen.rows = Math.max(seen.rows, n)
+      this.seen.set(table, seen)
+    }
+    return n
+  }
 }
 
 // Deletes a conversation's records, and those of the conversations its tasks started, from the
@@ -262,11 +351,14 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
       root,
       root,
     )
-    const step = sweepStep(db, root)
     const freelist = db.prepare('PRAGMA freelist_count')
     const freePages = () => Number((freelist.get() as { freelist_count: number | bigint }).freelist_count)
-    // Transactions of at most about SLICE_MS each and SLICE_PAGES freed, with a pause between them
-    // in which the harness's writes get the lock.
+    const totalChanges = db.prepare('SELECT total_changes() AS n')
+    const changes = () => Number((totalChanges.get() as { n: number | bigint }).n)
+    const budget = new PageBudget(freePages)
+    const step = sweepStep(db, root, budget)
+    // Transactions of at most SLICE_STEPS steps of CHUNK records each, SLICE_PAGES freed and about
+    // SLICE_MS, with a pause between them in which the harness's writes get the lock.
     for (let more = true; more; ) {
       const began = performance.now()
       db.exec('BEGIN IMMEDIATE')
@@ -274,18 +366,26 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
       let worked = locked
       let freed = 0
       let longestStep = 0
+      let steps = 0
+      let records = 0
+      let mostChanged = 0
       try {
-        const free = freePages()
-        while (performance.now() - locked < SLICE_MS && freed < SLICE_PAGES) {
+        budget.begin()
+        while (steps < SLICE_STEPS && performance.now() - locked < SLICE_MS) {
           const t0 = performance.now()
+          const c0 = changes()
           const n = step()
           longestStep = Math.max(longestStep, performance.now() - t0)
+          if (n === NO_ROOM) break
+          steps++
+          records = Math.max(records, n)
+          mostChanged = Math.max(mostChanged, changes() - c0)
           if (n === 0) {
             more = false
             break
           }
-          freed = freePages() - free
         }
+        freed = budget.freed()
         worked = performance.now()
         db.exec('COMMIT')
       } catch (error) {
@@ -299,13 +399,25 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
         commit: ended - worked,
         pages: freed,
         step: longestStep,
+        steps,
+        records,
+        changes: mostChanged,
       })
       hooks?.afterSlice?.()
+      // What the transaction wrote is copied into the database now, by a checkpoint that waits for
+      // no one and holds no lock the harness's writes need, and syncs what it copied: a log left to
+      // pile up was copied at the end in one go (the whole account, 250 MB for 60,000 tasks of
+      // 4 KB), and while the system wrote that out a one-row commit of the harness's took over
+      // 300 ms in its own write, holding the write lock all the while (traced on every connection).
+      backlog(db)
       sleep(PAUSE_MS)
     }
     const began = performance.now()
     db.exec('BEGIN IMMEDIATE')
+    let finalWork: FinalWork
     try {
+      const c0 = changes()
+      const f0 = freePages()
       // Found again under the write lock, from the root and the marks left: what was written during
       // the pauses goes too. The sweep has taken the rest, so this is the root and what is late.
       const tree = discover(db, root, marked(db, root))
@@ -315,12 +427,13 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
       removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE conversation_id IN (${ids})`))
       removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${ids})`))
       db.prepare('DELETE FROM taskto_purge_marks WHERE root = ?').run(root)
+      finalWork = { changes: changes() - c0, pages: freePages() - f0 }
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
       throw error
     }
-    hooks?.final?.(performance.now() - began)
+    hooks?.final?.(performance.now() - began, finalWork)
     // What was deleted is still in the log until it is emptied, and a reader (the harness's, or a
     // watch) can hold it up: then the purge isn't done, and the server asks again.
     truncateWalWithin(db, timeoutMs, hooks?.truncate ? { truncated: hooks.truncate } : undefined)
@@ -395,16 +508,29 @@ function ownedBy(tree: Tree): string {
     OR (scope_kind = 'task' AND owner_id IN (${list(tree.taskIds)})))`
 }
 
-/** A step: one bounded piece of work in the transaction that is open, saying how much (0: done). */
+/**
+ * A step: one bounded piece of work in the transaction that is open, saying how much (0: done;
+ * NO_ROOM: the transaction has no room for it, and it is done in the next).
+ */
 type Step = () => number
 
-/** A step that deletes, a chunk at a time, what query (of rowids or ids) finds. */
-function each(db: DatabaseSync, query: string, remove: (chunk: number[]) => void): Step {
-  return () => {
-    const chunk = select(db, `${query} LIMIT ${CHUNK}`)
+/**
+ * A step that deletes, a chunk at a time, what query (of rowids or ids) finds: CHUNK rows, or with
+ * a budget as many as it leaves room for (NO_ROOM when none).
+ */
+function each(
+  db: DatabaseSync,
+  query: string,
+  remove: (chunk: number[]) => void,
+  budget?: { table: string; of: PageBudget },
+): Step {
+  const take = (limit: number) => {
+    const chunk = select(db, `${query} LIMIT ${limit}`)
     remove(chunk)
     return chunk.length
   }
+  const any = () => select(db, `${query} LIMIT 1`).length > 0
+  return budget ? () => budget.of.take(budget.table, take, any) : () => take(CHUNK)
 }
 
 /** The steps that delete what tree's conversations and tasks said: all but the root's lifecycle. */
@@ -436,7 +562,7 @@ type Mark = { r: number | bigint; kind: string; id: number | bigint }
  * conversation or a task (back to the first pass), and then the marks are forgotten. Each call does
  * a bounded amount of work; 0 when there is none left.
  */
-function sweepStep(db: DatabaseSync, root: number): Step {
+function sweepStep(db: DatabaseSync, root: number, budget: PageBudget): Step {
   const batchOf = db.prepare(
     `SELECT rowid AS r, kind, id FROM taskto_purge_marks WHERE root = ? AND done = ?
       ORDER BY kind DESC, id DESC LIMIT ${SWEEP}`,
@@ -447,34 +573,45 @@ function sweepStep(db: DatabaseSync, root: number): Step {
   const work = (batch: Mark[]): number => {
     const c = list(batch.filter((m) => m.kind === 'conversation').map((m) => Number(m.id)))
     const t = list(batch.filter((m) => m.kind === 'task').map((m) => Number(m.id)))
-    // Marked before they go, so it is still found: the ones not marked yet, SWEEP at most.
+    // Marked before they go, so it is still found: the ones not marked yet, by one statement a
+    // step, so a step marks SWEEP at most.
     const started = db
       .prepare(`INSERT OR IGNORE INTO taskto_purge_marks (root, kind, id)
         SELECT ?, 'task', x.id FROM tasks x WHERE x.conversation_id IN (${c})
           AND NOT EXISTS (SELECT 1 FROM taskto_purge_marks m WHERE m.root = ? AND m.kind = 'task' AND m.id = x.id)
         LIMIT ${SWEEP}`)
       .run(root, root)
+    if (Number(started.changes) > 0) return Number(started.changes)
     const owned = db
       .prepare(`INSERT OR IGNORE INTO taskto_purge_marks (root, kind, id)
         SELECT ?, 'conversation', x.id FROM conversations x WHERE x.owner_task_id IN (${t})
           AND NOT EXISTS (SELECT 1 FROM taskto_purge_marks m WHERE m.root = ? AND m.kind = 'conversation' AND m.id = x.id)
         LIMIT ${SWEEP}`)
       .run(root, root)
-    const newly = Number(started.changes) + Number(owned.changes)
-    if (newly > 0) return newly
-    // What is left of their records, a chunk at a time (the root's lifecycle document stays).
+    if (Number(owned.changes) > 0) return Number(owned.changes)
+    // What is left of their records, a chunk at a time within the transaction's pages (the root's
+    // lifecycle document stays).
     const docs = `SELECT id FROM documents WHERE ((scope_kind = 'conversation' AND owner_id IN (${c}))
       OR (scope_kind = 'task' AND owner_id IN (${t}))) AND ${lifecycle}`
     for (const step of [
-      each(db, `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (x) =>
-        removeRows(db, 'document_revisions', x, false),
+      each(
+        db,
+        `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`,
+        (x) => removeRows(db, 'document_revisions', x, false),
+        { table: 'document_revisions', of: budget },
       ),
-      each(db, docs, (x) => removeDocuments(db, x)),
-      each(db, `SELECT id FROM submissions WHERE conversation_id IN (${c})`, (x) => removeRows(db, 'submissions', x)),
-      each(db, `SELECT id FROM entries WHERE conversation_id IN (${c})`, (x) => removeRows(db, 'entries', x)),
+      each(db, docs, (x) => removeDocuments(db, x), { table: 'documents', of: budget }),
+      each(db, `SELECT id FROM submissions WHERE conversation_id IN (${c})`, (x) => removeRows(db, 'submissions', x), {
+        table: 'submissions',
+        of: budget,
+      }),
+      each(db, `SELECT id FROM entries WHERE conversation_id IN (${c})`, (x) => removeRows(db, 'entries', x), {
+        table: 'entries',
+        of: budget,
+      }),
     ]) {
       const n = step()
-      if (n > 0) return n
+      if (n !== 0) return n
     }
     return 0
   }
@@ -482,22 +619,31 @@ function sweepStep(db: DatabaseSync, root: number): Step {
     const todo = batchOf.all(root, 0) as Mark[]
     if (todo.length > 0) {
       const n = work(todo)
-      if (n > 0) return n
+      if (n !== 0) return n
       const others = todo.filter((m) => !isRoot(m))
       if (others.length > 0) {
-        const t = list(others.filter((m) => m.kind === 'task').map((m) => Number(m.id)))
-        const c = list(others.filter((m) => m.kind === 'conversation').map((m) => Number(m.id)))
-        removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE id IN (${t})`))
-        removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${c})`))
-        db.exec(`UPDATE taskto_purge_marks SET done = 1 WHERE rowid IN (${others.map((m) => Number(m.r)).join(',')})`)
-        return others.length
+        // Nothing is left under any of the batch: their rows go, as many as the pages leave room
+        // for (tasks first, in the batch's order), and the rest with the next step.
+        return budget.take(
+          'tasks and conversations',
+          (limit) => {
+            const some = others.slice(0, limit)
+            const t = list(some.filter((m) => m.kind === 'task').map((m) => Number(m.id)))
+            const c = list(some.filter((m) => m.kind === 'conversation').map((m) => Number(m.id)))
+            removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE id IN (${t})`))
+            removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${c})`))
+            db.exec(`UPDATE taskto_purge_marks SET done = 1 WHERE rowid IN (${some.map((m) => Number(m.r)).join(',')})`)
+            return some.length
+          },
+          () => true,
+        )
       }
       // Only the root is left to do, and nothing under it: the second pass.
     }
     const done = batchOf.all(root, 1) as Mark[]
     if (done.length === 0) return 0
     const n = work(done)
-    if (n > 0) return n // a late record taken, or what was started under it marked: looked at again
+    if (n !== 0) return n // a late record taken, or what was started under it marked: looked at again
     db.exec(`DELETE FROM taskto_purge_marks WHERE rowid IN (${done.map((m) => Number(m.r)).join(',')})`)
     return done.length
   }
@@ -545,6 +691,10 @@ export type PurgeReport = {
   work: number
   commit: number
   step: number
+  /** The most pages one transaction freed, records one step took, and rows one step changed. */
+  pages: number
+  records: number
+  changes: number
   /** The last transaction's length, and the closing TRUNCATE's, each holding the write lock, in ms. */
   final?: number
   truncate?: number
@@ -562,13 +712,26 @@ function run(job: PurgeJob): Outcome {
     }
     let report: PurgeReport | undefined
     const slice = (ms: number, t: SliceTiming) => {
-      report ??= { slices: 0, longest: { ms, ...t }, lock: 0, work: 0, commit: 0, step: 0 }
+      report ??= {
+        slices: 0,
+        longest: { ms, ...t },
+        lock: 0,
+        work: 0,
+        commit: 0,
+        step: 0,
+        pages: 0,
+        records: 0,
+        changes: 0,
+      }
       report.slices++
       if (ms > report.longest.ms) report.longest = { ms, ...t }
       report.lock = Math.max(report.lock, t.lock)
       report.work = Math.max(report.work, t.work)
       report.commit = Math.max(report.commit, t.commit)
       report.step = Math.max(report.step, t.step)
+      report.pages = Math.max(report.pages, t.pages)
+      report.records = Math.max(report.records, t.records)
+      report.changes = Math.max(report.changes, t.changes)
     }
     let final = 0
     let truncate = 0
