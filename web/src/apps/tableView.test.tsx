@@ -11,7 +11,7 @@ import type { ActionPayload } from './transport'
 afterEach(async () => {
   cleanup()
   vi.unstubAllGlobals()
-  await setPreferences({})
+  await setPreferences({ user: null })
 })
 
 function app(messages: unknown[], sent: ActionPayload[] = []) {
@@ -123,4 +123,13 @@ test('it is drawn in the viewer’s language', async () => {
   expect(within(bodyRows()[0]).getAllByRole('cell')[3].textContent).toBe('Não')
   expect(within(bodyRows()[0]).getAllByRole('cell')[2].textContent).toBe('1.234,5')
   expect(screen.getByRole('button', { name: 'Abrir Pay rent' })).toBeTruthy()
+})
+
+test('a record saved offline and not yet sent is listed, without an open button until the server has it', async () => {
+  const items = [...tableItems, { id: -7, title: 'Draft the plan', category: 'work', _labels: { category: 'Work' } }]
+  render(app(tableSurface(items)))
+  await screen.findByRole('table')
+  expect(firstCells()).toEqual(['Pay rent', 'Fix the shelf', 'Call the bank', 'Draft the plan'])
+  expect(screen.queryByRole('button', { name: 'Open Draft the plan' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Open Pay rent' })).toBeTruthy()
 })

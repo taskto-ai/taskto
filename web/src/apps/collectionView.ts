@@ -13,7 +13,7 @@ export function readItems(value: unknown): Item[] {
   if (!Array.isArray(value)) return []
   return value.filter(
     (i): i is Item =>
-      typeof i === 'object' && i !== null && Number.isInteger((i as { id?: unknown }).id) && (i as Item).id >= 1,
+      typeof i === 'object' && i !== null && Number.isInteger((i as { id?: unknown }).id) && (i as Item).id !== 0,
   )
 }
 
@@ -53,6 +53,8 @@ function compare(a: Item, b: Item, field: string, type: FieldType | undefined, c
   return type === 'date' || type === 'time' ? (left < right ? -1 : left > right ? 1 : 0) : collator.compare(left, right)
 }
 
+const byId = (a: Item, b: Item) => Number(a.id < 0) - Number(b.id < 0) || a.id - b.id
+
 export function sortItems(
   items: readonly Item[],
   field: string | undefined,
@@ -60,14 +62,14 @@ export function sortItems(
   direction: 'asc' | 'desc',
   locale: string,
 ): Item[] {
-  if (field === undefined) return [...items].sort((a, b) => a.id - b.id)
+  if (field === undefined) return [...items].sort(byId)
   const collator = new Intl.Collator(locale, { numeric: true })
   const sign = direction === 'desc' ? -1 : 1
   return [...items].sort((a, b) => {
     const missingA = !present(a[field])
     const missingB = !present(b[field])
-    if (missingA || missingB) return missingA === missingB ? a.id - b.id : missingA ? 1 : -1
-    return sign * compare(a, b, field, type, collator) || a.id - b.id
+    if (missingA || missingB) return missingA === missingB ? byId(a, b) : missingA ? 1 : -1
+    return sign * compare(a, b, field, type, collator) || byId(a, b)
   })
 }
 

@@ -86,7 +86,7 @@ function TableView({
     },
     cell: (item) => {
       const shownText = text(item, c)
-      if (open === undefined || i !== 0) return shownText
+      if (open === undefined || i !== 0 || item.id < 0) return shownText
       const title = shownText || String(item.id)
       return (
         <Button
