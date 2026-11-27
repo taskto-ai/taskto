@@ -108,12 +108,16 @@ const sentToAgent = (calls: Call[]) =>
 const previews = (calls: Call[]) => calls.filter((c) => c.path === `${apps}/preview`)
 
 function narrowScreen(narrow: boolean) {
-  vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: narrow,
-    media: query,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
-  }))
+  class Sized {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe() {
+      const contentRect = { width: narrow ? 500 : 1000 } as DOMRectReadOnly
+      this.callback([{ contentRect } as ResizeObserverEntry], this as unknown as ResizeObserver)
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('ResizeObserver', Sized)
 }
 
 let streams = fakeStreams()

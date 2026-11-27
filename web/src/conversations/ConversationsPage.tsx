@@ -4,7 +4,7 @@ import { builderPath } from '../apps/route'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { useMounted } from '../mounted'
-import { navigate, routePath } from '../router'
+import { routePath, useNavigate } from '../router'
 import { steps } from '../session'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -29,6 +29,7 @@ export function ConversationsPage({
   streams?: EventSourceFactory
 }) {
   const t = useT()
+  const go = useNavigate()
   const f = useFormat()
   const [archived, setArchived] = useState(false)
   const list = useLoad(
@@ -53,7 +54,7 @@ export function ConversationsPage({
       const c = await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })
       if (!s.ok()) return
       list.reload()
-      navigate(link(c.id))
+      go(link(c.id))
     } catch (e) {
       if (s.ok()) setError(errorText(e))
     } finally {

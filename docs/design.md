@@ -522,7 +522,30 @@ its unread count; the pinned apps, in a group of their own, each with a small av
 foot, Settings and the account (avatar, name and email), whose menu has the theme, the language,
 "Install the app" while it isn't installed, and log out. The page owns its title: the shell never
 repeats the section's name over it, not even in the phone's bar: the page's own title is the one
-place the section's name appears.
+place the section's name appears, within its place.
+
+A page is drawn in a *place* (`Place` and `PlaceContext` in `web/src/router.tsx`), the slot the
+shell, or later a pane of the desk, gives it, and never assumes it is the only page:
+
+- **Address.** A page and a `Link` move through `useNavigate()`, which is the place's own
+  `navigate`, or the router's when there is no place; `usePlacePath()` is the place's path. Only the
+  shell, `App.tsx` and the notification sync use the router's `navigate` and `usePath` directly.
+- **Leave guards.** `useBeforeLeave` registers under its place (`null` when there is none), and a
+  navigation or a Back asks the guards of the place the desk says is focused
+  (`setFocusedPlace`). `beforeLeaving` (sign-out, a workspace switch) asks every place's guard in
+  turn and goes on only if all agree; `askPlace(id, go)` asks one place, for example before its
+  tab closes. The knowledge base's click guard acts only on clicks outside every other place, found
+  by the `data-place` attribute on a place's root element.
+- **Title.** `PageHeader` at level 1 reports its title (`titleText` when the title is not a
+  string) to its place with `setTitle`, and withdraws it when the page goes; the desk's tabs show it.
+- **Width.** A page's layout answers to the width of its place, never the viewport's: the element
+  a page is drawn in is a size container named `page` (`.ui-shell-main` has `container: page /
+  inline-size` and `data-page`), page rules use `@container page (…)`, and a component that must
+  choose in script uses `useContainerNarrow(ref)` (`web/src/media.ts`, which measures the nearest
+  `[data-page]`). The thresholds keep today's single-page look at 390, 820 and 1440px: the main
+  column is the viewport at the phone's width, less the rail (about 60px) on a tablet and less
+  `--width-sidebar` on a wide screen. A thing drawn outside the page, in a drawer, is sized by the
+  viewport, which is the right box for it: a rule for what a drawer holds stays a media query.
 
 - **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
 - **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's

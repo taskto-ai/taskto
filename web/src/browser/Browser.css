@@ -68,7 +68,7 @@
     outline: var(--line-focus) solid var(--color-focus);
   }
 
-  @media (max-width: 40rem) {
+  @container page (max-width: 40rem) {
     .ui-browser-screen {
       block-size: 40vh;
     }
