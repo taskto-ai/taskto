@@ -50,18 +50,18 @@ func TestEveryOriginColumnIsFixedAfterTheInsert(t *testing.T) {
 			t.Fatalf("%s: %v", query, err)
 		}
 	}
-	for _, change := range []string{
-		`origin_kind = 'routine'`,
-		`origin_space_id = 9`,
-		`origin_app_id = 9`,
-		`origin_routine_id = 9`,
-		`origin = NULL`,
-		`agent_id = 9`,
-		`owner_id = 9`,
-		`workspace_id = 9`,
+	for _, update := range []string{
+		`UPDATE conversations SET origin_kind = 'routine' WHERE id = 1`,
+		`UPDATE conversations SET origin_space_id = 9 WHERE id = 1`,
+		`UPDATE conversations SET origin_app_id = 9 WHERE id = 1`,
+		`UPDATE conversations SET origin_routine_id = 9 WHERE id = 1`,
+		`UPDATE conversations SET origin = NULL WHERE id = 1`,
+		`UPDATE conversations SET agent_id = 9 WHERE id = 1`,
+		`UPDATE conversations SET owner_id = 9 WHERE id = 1`,
+		`UPDATE conversations SET workspace_id = 9 WHERE id = 1`,
 	} {
-		if _, err := sqlDB.ExecContext(ctx, `UPDATE conversations SET `+change+` WHERE id = 1`); err == nil {
-			t.Errorf("%s was admitted", change)
+		if _, err := sqlDB.ExecContext(ctx, update); err == nil {
+			t.Errorf("%s was admitted", update)
 		}
 	}
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE conversations SET title = 'Renamed', archived_at = '2026-01-01T00:00:00.000Z' WHERE id = 1`); err != nil {
