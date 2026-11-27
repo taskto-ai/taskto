@@ -1,5 +1,6 @@
 import { type CliName, isCliName } from '../api'
 import { t } from '../i18n'
+import { type Changed, changeOf, isId } from './changes'
 
 export type ConversationView = {
   entries?: { id: number; kind: string; model?: unknown[] }[]
@@ -15,6 +16,7 @@ export type ToolUse = {
   name: string
   app?: AppRef
   cli?: CliName
+  changed?: Changed
   output?: string
   running?: boolean
   help?: { reason: string; message: string }
@@ -63,11 +65,15 @@ function callsOf(content: unknown, key: string): { part: Part; at: string }[] {
 
 type CliKept = { transcript?: string; help?: ToolUse['help']; apps?: AppRef[] }
 
-function toolsOf(content: unknown, key: string, saved: Map<string, AppRef>, done: Map<string, CliKept>): ToolUse[] {
+type Kept = { saved: Map<string, AppRef>; done: Map<string, CliKept>; changed: Map<string, Changed> }
+
+function toolsOf(content: unknown, key: string, { saved, done, changed }: Kept): ToolUse[] {
   return callsOf(content, key).map(({ part, at }) => {
     const use: ToolUse = { id: String(part.id ?? part.name), key: at, name: part.name as string }
     const app = APP_TOOLS.has(use.name) ? saved.get(at) : undefined
     if (app) use.app = app
+    const change = changed.get(at)
+    if (change) use.changed = change
     const cli = use.name === CLI_TOOL ? (part.arguments as { cli?: unknown } | undefined)?.cli : undefined
     if (isCliName(cli)) use.cli = cli
     if (use.name === HELP_TOOL) {
@@ -105,8 +111,6 @@ function cliKept(message: unknown): CliKept | undefined {
   return kept.transcript || kept.help || kept.apps ? kept : undefined
 }
 
-const isId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
-
 function savedApp(message: unknown): [string, AppRef] | null {
   const m = message as { role?: unknown; toolCallId?: unknown; toolName?: unknown; isError?: unknown }
   if (m?.role !== 'toolResult' || m.isError || typeof m.toolCallId !== 'string') return null
@@ -119,13 +123,7 @@ function savedApp(message: unknown): [string, AppRef] | null {
   }
 }
 
-function toMessage(
-  key: string,
-  message: unknown,
-  saved: Map<string, AppRef>,
-  done: Map<string, CliKept>,
-  pending = false,
-): ChatMessage | null {
+function toMessage(key: string, message: unknown, kept: Kept, pending = false): ChatMessage | null {
   if (!message || typeof message !== 'object') return null
   const m = message as { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown }
   if (m.role !== 'user' && m.role !== 'assistant') return null
@@ -137,7 +135,7 @@ function toMessage(
           ? t('conversations.replyStopped')
           : t('conversations.replyFailed')
       : undefined
-  const out: ChatMessage = { key, role: m.role, text: textOf(m.content), tools: toolsOf(m.content, key, saved, done) }
+  const out: ChatMessage = { key, role: m.role, text: textOf(m.content), tools: toolsOf(m.content, key, kept) }
   if (error) out.error = error
   if (m.role === 'assistant' && m.stopReason === 'error') out.failed = true
   if (pending) out.pending = true
@@ -146,6 +144,13 @@ function toMessage(
 }
 
 type Slot = { callId?: unknown; name?: unknown; status?: unknown; output?: unknown }
+
+type Call = { at: string; name: string; args: unknown }
+
+function changeOfResult(call: Call | undefined, message: unknown): Changed | undefined {
+  const m = message as { isError?: unknown; content?: unknown }
+  return call && !m.isError ? changeOf(call.name, call.args, textOf(m.content)) : undefined
+}
 
 function liveOutput(messages: ChatMessage[], slots: unknown) {
   if (!Array.isArray(slots)) return
@@ -163,28 +168,33 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
   const entries = (view?.entries ?? []).filter((e) => Array.isArray(e?.model))
   const saved = new Map<string, AppRef>()
   const done = new Map<string, CliKept>()
-  const open = new Map<string, string>()
+  const changed = new Map<string, Changed>()
+  const open = new Map<string, Call>()
   for (const entry of entries) {
     entry.model?.forEach((message, i) => {
       for (const { part, at } of callsOf((message as { content?: unknown })?.content, `${entry.id}.${i}`)) {
-        open.set(String(part.id ?? part.name), at)
+        open.set(String(part.id ?? part.name), { at, name: part.name as string, args: part.arguments })
       }
       const id =
         (message as { role?: unknown; toolCallId?: unknown })?.role === 'toolResult'
           ? (message as { toolCallId?: unknown }).toolCallId
           : undefined
       if (typeof id !== 'string') return
-      const at = open.get(id)
+      const call = open.get(id)
+      const at = call?.at
       open.delete(id)
       const app = savedApp(message)
       if (at && app) saved.set(at, app[1])
       const kept = cliKept(message)
       if (at && kept) done.set(at, kept)
+      const change = changeOfResult(call, message)
+      if (at && change) changed.set(at, change)
     })
   }
+  const results: Kept = { saved, done, changed }
   for (const entry of entries) {
     entry.model?.forEach((message, i) => {
-      const m = toMessage(`${entry.id}.${i}`, message, saved, done)
+      const m = toMessage(`${entry.id}.${i}`, message, results)
       if (m) messages.push(m)
     })
   }
@@ -193,7 +203,7 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
     | undefined
   const partial = live?.generation?.message
   if (partial) {
-    const m = toMessage('live', partial, saved, done, true)
+    const m = toMessage('live', partial, results, true)
     if (m) messages.push(m)
   }
   liveOutput(messages, live?.tools)

@@ -1261,6 +1261,8 @@
     "home_limit": "Você pode ter no máximo {max} destes.",
     "home_order_invalid": "Essa ordem não é feita de itens seus.",
     "home_defaults_shared": "Padrões existem só para os apps de espaços compartilhados.",
+    "desk_changed": "Alguém alterou esta mesa enquanto isso: recarregue e tente de novo.",
+    "desk_invalid": "O layout desta mesa é inválido ({reason}).",
     "app_query_cursor": "Essa página não pode mais ser encontrada. Comece de novo pela primeira página.",
     "app_query_field": "O app não tem o campo “{field}” que possa ser usado aqui.",
     "app_query_condition": "O filtro em “{field}” não combina com o campo.",
@@ -2786,6 +2788,19 @@
     "continueOn": "Continuar com…",
     "continueOption": "{provider}: {model}",
     "replyFailed": "A resposta falhou.",
+    "changes": {
+      "title": "Alterado neste turno ({count})",
+      "created": "Criado",
+      "edited": "Editado",
+      "moved": "Movido",
+      "deleted": "Excluído",
+      "restored": "Restaurado",
+      "archived": "Arquivado",
+      "commented": "Comentado",
+      "card": "Cartão {id}",
+      "record": "Registro {id} em {app}",
+      "recordBare": "Registro {id}"
+    },
     "tool": {
       "help": "Pediu para você assumir o navegador",
       "used": "Usou {name}",

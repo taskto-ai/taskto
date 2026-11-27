@@ -1254,6 +1254,8 @@
     "home_limit": "You can have at most {max} of these.",
     "home_order_invalid": "That order isn’t made of your own items.",
     "home_defaults_shared": "Defaults are only for the apps of shared spaces.",
+    "desk_changed": "Someone changed this desk meanwhile: reload and try again.",
+    "desk_invalid": "This desk layout is invalid ({reason}).",
     "app_query_cursor": "That page can no longer be found. Start again from the first page.",
     "app_query_field": "The app has no field “{field}” that can be used here.",
     "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
@@ -2765,6 +2767,19 @@
     "continueOn": "Continue on…",
     "continueOption": "{provider}: {model}",
     "replyFailed": "The reply failed.",
+    "changes": {
+      "title": "Changed in this turn ({count})",
+      "created": "Created",
+      "edited": "Edited",
+      "moved": "Moved",
+      "deleted": "Deleted",
+      "restored": "Restored",
+      "archived": "Archived",
+      "commented": "Commented",
+      "card": "Card {id}",
+      "record": "Record {id} in {app}",
+      "recordBare": "Record {id}"
+    },
     "tool": {
       "help": "Asked you to take over the browser",
       "used": "Used {name}",

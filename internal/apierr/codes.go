@@ -195,6 +195,8 @@ const (
 	CodeHomeLimit          Code = "home_limit"
 	CodeHomeOrderInvalid   Code = "home_order_invalid"
 	CodeHomeDefaultsShared Code = "home_defaults_shared"
+	CodeDeskChanged        Code = "desk_changed"
+	CodeDeskInvalid        Code = "desk_invalid"
 
 	CodeAuditTimeInvalid Code = "audit_time_invalid"
 
