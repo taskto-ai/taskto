@@ -24,6 +24,10 @@ type PaymentProvider interface {
 	KeyKept() time.Duration
 }
 
+type payableChecker interface {
+	NothingPayable(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (bool, error)
+}
+
 type PaymentPoller interface {
 	ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error)
 }
@@ -238,7 +242,16 @@ const (
 	findSkew     = 10 * time.Minute
 )
 
-func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
+func (p stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
+	return p.find(ctx, creds, c, l, since, true)
+}
+
+func (p stripe) NothingPayable(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (bool, error) {
+	_, found, _, err := p.find(ctx, creds, c, l, since, false)
+	return !found && err == nil, err
+}
+
+func (stripe) find(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time, oneExpired bool) (Link, bool, bool, error) {
 	hosted := l.SuccessURL == ""
 	sawExpired := false
 	expiredID := ""
@@ -295,7 +308,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				switch o.Status {
 				case "open":
 				case "expired":
-					if sawExpired && expiredID != seen.ObjectID {
+					if oneExpired && sawExpired && expiredID != seen.ObjectID {
 						return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 					}
 					sawExpired, expiredID = true, seen.ObjectID

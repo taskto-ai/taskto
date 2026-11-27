@@ -610,7 +610,11 @@ an entry that wrote its link and stopped before it was noted done, whose conditi
 own field (for example "no payment id yet"), finds its own link on the record and ends done. The
 link's write also checks, in its transaction, that the integration's key is of the mode the link was
 made in: one replaced by a key of the other mode while the call was out fails the entry with
-`integration_account_changed`, and the record doesn't get the old mode's link. It makes
+`integration_account_changed`, and the record doesn't get the old mode's link. The mode the call
+holds is also checked in the transaction that writes the call ahead, under the same lock as an admin's
+change of the key: a key of the other mode that was saved before it stops the call, which never
+leaves (`integration_account_changed`, nothing recorded as sent), and one saved after it finds the call
+written ahead, a payable attempt, and is refused (`integration_mode_change_refused`). It makes
 the link at the provider with the integration's key, which is opened only for the call; and it writes
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
@@ -677,7 +681,14 @@ write.
     `integration_refs.paid_link_id`): its state is read at Stripe. **Open** (a Payment Link: active),
     the same link is given again and written back, and nothing is made; if it asks other money than the
     new entry, reads the same money from other fields, or the record has a second open one, the entry
-    fails with `integration_link_still_open`. **Expired**, the reference is marked expired. **Settled**
+    fails with `integration_link_still_open`. **Expired**, the reference is marked expired, but only
+    once nothing else of it can be paid: every key of the reference is looked up again by its token (a
+    lost answer may have left a second object under the same token, which was never the saved link), and
+    if any object of any of those tokens may still be paid the entry fails with
+    `integration_link_still_open` and the reference stays as it was; run the action again once that
+    object has expired. The same lookup guards a reference already ended by an event
+    (`checkout.session.expired` for the saved link), which no longer lets a new link be made on its own.
+    A lookup that can't be finished makes nothing (the entry's failure, tried again). **Settled**
     (complete, or an inactive Payment Link), it no longer counts if the reference knows it was paid;
     otherwise `integration_link_already_paid`, for a person. A read that fails makes nothing (the
     entry's failure, tried again). A reference made under another integration, account or mode can't
