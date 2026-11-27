@@ -122,3 +122,53 @@ func TestAnExpiryEventIsNeverProvenAgainstAnotherAccount(t *testing.T) {
 		t.Fatalf("%d keys moved on by a proof read from another account", n)
 	}
 }
+
+func TestAPaidRefsSavedLinkExpiryIsNotNotedWhileAnotherObjectOfTheTokenMayBePaid(t *testing.T) {
+	ctx := context.Background()
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-event-paid-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	first := p.fake.Sessions()[0].ID
+	second := p.secondSessionOfToken(first)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err != nil {
+		t.Fatalf("the retry found no link: %v", err)
+	}
+	refs := p.refs()
+	if len(refs) != 1 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	saved, other := refs[0].object, first
+	if saved == first {
+		other = second
+	}
+	third := p.secondSessionOfToken(first)
+	p.pays(other)
+	if refs := p.refs(); len(refs) != 1 || refs[0].state != "paid" {
+		t.Fatalf("refs = %+v: the payment of %s was not applied", refs, other)
+	}
+
+	p.expires(saved)
+
+	if n := p.count(`SELECT count(*) FROM integration_refs WHERE link_expired_at IS NOT NULL`); n != 0 {
+		t.Fatalf("the saved link's expiry was noted while %s may be paid", third)
+	}
+	if may, _, err := p.svc.MayBePaid(ctx, p.db, p.app.ID, record); err != nil || !may {
+		t.Fatalf("may be paid = %v, %v: the record's money was freed while %s may be paid", may, err, third)
+	}
+
+	if _, err := p.fake.Expire(third); err != nil {
+		t.Fatal(err)
+	}
+	p.later(time.Hour)
+	p.drain()
+	if may, _, err := p.svc.MayBePaid(ctx, p.db, p.app.ID, record); err != nil || !may {
+		t.Fatalf("may be paid = %v, %v: a paid reference's money was freed without an admin", may, err)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_events WHERE state = 'failed'`); n != 0 {
+		t.Fatalf("%d events failed", n)
+	}
+}

@@ -229,6 +229,15 @@ func (s *Service) settledAlready(ctx context.Context, ev StoredEvent, r ref, tr 
 	case ev.Kind == EventPaymentRefunded:
 		return s.refundWaits(ev)
 	case ev.Kind == EventPaymentExpired && ev.ObjectID != "" && ev.ObjectID == r.objectID:
+		if !paidOnOwnLink(r) {
+			if err := s.expiryProven(ctx, ev, r); err != nil {
+				var ee *EventError
+				if errors.As(err, &ee) && ee.Code == apierr.CodeIntegrationLinkAlreadyPaid {
+					return Ignore(apierr.CodeIntegrationEventLate)
+				}
+				return err
+			}
+		}
 		if err := s.noteLinkExpired(ctx, r.id, r.objectID, s.store.stamp(s.now())); err != nil {
 			return err
 		}
