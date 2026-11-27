@@ -194,6 +194,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `desk_changed` | 409 | The desk's `version` is not the stored one; `current` holds the stored desk. |
+| `desk_invalid` | 400 | The layout breaks a rule of the format; `reason` is a closed word such as `too_many_tabs`. |
 | `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
@@ -4339,6 +4341,51 @@ reads the space may list them; they are seen only for the apps they may view.
   the app `403 app_forbidden` (`publish`), a private space `409 home_defaults_shared`.
 - `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
   default of another space.
+
+## Desks
+
+Each member has a main desk in each workspace. A desk stores only a window layout and route paths;
+the pages named by those paths load their own data and apply their usual access checks. Layouts are
+per person and workspace, so they follow the person across devices. The main desk is created on its
+first save. Reading it never writes to the database. A desk id belonging to another person or
+workspace is `404 not_found`.
+
+These routes need a browser session and workspace membership. Access tokens are refused.
+
+### `GET /api/workspaces/{workspace}/desks`
+
+Lists the main desk first, then any named desks. Before the main desk has been saved, it is returned
+as `{"id":0,"name":"","updated_at":""}`; after its first save it is listed with its own id, which
+stays. A read does not create a row.
+
+### `GET /api/workspaces/{workspace}/desks/{desk}`
+
+`{desk}` is `main` or a desk id. Before its first save, `main` returns
+`{"id":0,"name":"","layout":{"v":1,"focus":"","root":null},"version":0,"updated_at":""}`.
+
+### `PUT /api/workspaces/{workspace}/desks/{desk}/layout`
+
+Saves a layout using optimistic concurrency. The request is `{"version":0,"layout":{...}}` for a
+new main desk, and each successful save increments the version. If another save has changed the
+version, the server returns `409` with code `desk_changed` and the current desk in `current`.
+
+A version 1 layout has `v: 1`, a `focus` group id and a `root` node. A node is either a group with
+`group`, `tabs` and `active`, or a split with `split` (`row` or `column`), `sizes` and `children`.
+Groups contain 1 to 20 tabs; there are at most 6 groups and 60 tabs, and at most 3 levels of nodes.
+Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes adding to 1 within
+0.01. Group and tab ids are distinct lowercase letters and digits, 1 to 16 characters. Paths are
+at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
+`knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route, optionally followed
+by one segment that has no slash, backslash, `?`, `#` or control character as written, and is
+neither `.` nor `..`; after percent-decoding it still has no backslash or control character and is
+still neither `.` nor `..`, and (except under `knowledge`) no slash. A percent-encoded `?`, `#` or
+other character stays inside its segment, so it is allowed. Under `knowledge` the segment is what
+the web app builds for a document, `<space>:<path>` percent-encoded as a whole, so a document in a
+folder (`3%3Afolder%2Fnotes.md`) is allowed: after the `<space>:` prefix every folder or file name
+in the decoded path must be non-empty and neither `.` nor `..`, so a leading, trailing or doubled
+slash and `..` are refused. Unknown fields, other workspace paths, malformed layouts, and layouts
+larger than 32 KiB, as sent or as stored, are refused; invalid layouts return `400` with code
+`desk_invalid` and a closed `reason` code.
 
 ## Integrations
 
