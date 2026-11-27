@@ -315,6 +315,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `search_query_no_words` | 400 | The search has no words to search for. |
 | `conversation_not_found` | 404 | No such conversation of the caller's in the workspace. |
 | `conversation_archived` | 409 | The conversation is archived: unarchive it first. |
+| `conversation_note_invalid` | 400 | A note must have 1 to `max` characters. |
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
@@ -5563,6 +5564,25 @@ the message ends up as if it had been sent a moment earlier. Archiving doesn't s
 turn either, and someone removed can't read the conversation any more. Closing the window
 would mean holding the database's write lock across the call, which would stall every write
 on the server whenever the agent runtime is slow.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/notes`
+
+Adds a note: `{"content": "…", "request_id": "…"}`. A note stays in the conversation's history, in
+order, and is shown to whoever reads the conversation, but the agent never sees it: it isn't a
+message, so it is not part of the model's context, a CLI turn is not handed it, and
+`GET …/messages` and the conversation search don't contain it. It is an entry of kind
+`taskto.note` in `…/entries` and the events stream, with no `model`, and its `data` is
+`{"v": 1, "author": <user ID>, "text": "…"}`; the author is always the caller. The conversation's
+export carries notes for its owner like any other entry. A note can't be edited or removed.
+
+- `content`: 1 to 8000 characters, not only whitespace; otherwise `400 conversation_note_invalid`
+  (with `max`).
+- `request_id`: optional, up to 128 printable ASCII characters. A retry with the same ID in the
+  same conversation doesn't write the note again.
+
+`202 {"submission_id": 12}`; the note is stored at once, also while the agent is working, and
+doesn't interrupt the run. `404` for a conversation that isn't the caller's, `409` for an
+archived one. Adding a note marks the conversation updated, so the list shows the activity.
 
 ### `GET /api/workspaces/{workspace}/conversations/{conversation}/messages`
 
