@@ -49,3 +49,32 @@ func TestALimitChangedBeforeTheCallLeavesStopsIt(t *testing.T) {
 		})
 	}
 }
+
+// The final check before the call leaves fails for a reason that isn't a refusal (the try's context
+// ended, the settings couldn't be read): the call never left, so it is noted as one that never ran,
+// and the key's outcome stays known. The next try asks the same key, with no lookup first.
+func TestAFailedFinalCheckLeavesTheCallNotExecuted(t *testing.T) {
+	p := newPay(t, publicURL)
+	req := p.direct(p.invoice(10, "EUR"), "op-final-0001")
+	ctx, cancel := context.WithCancel(context.Background())
+	p.svc.afterWriteAhead = func() error {
+		p.svc.afterWriteAhead = nil
+		cancel()
+		return nil
+	}
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the ended try was no error")
+	}
+	if n := len(p.fake.RequestsTo(http.MethodPost, "/v1/checkout/sessions")); n != 0 {
+		t.Fatalf("%d calls left", n)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE sends = 1 AND clean_sends = 1 AND unknown_since IS NULL`); n != 1 {
+		t.Fatal("the call that never left was left with an unknown outcome")
+	}
+	if _, err := p.svc.OpenPaymentLink(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions")); n != 0 {
+		t.Fatalf("%d lookups: the next try took the key's outcome for unknown", n)
+	}
+}

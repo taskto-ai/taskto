@@ -317,13 +317,15 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 				return paylink.Link{}, err
 			}
 		}
-		// A change of the limits committed after the write-ahead stops the call that hasn't left: it is
-		// noted as one that never ran, so the key's outcome is as it was before it.
+		// A change of the limits committed after the write-ahead stops the call that hasn't left, and so
+		// does a check that fails (the try's context ended, the settings couldn't be read): either way the
+		// call never left, and is noted as one that never ran (with a context that outlives the try's), so
+		// the key's outcome is as it was before it.
 		if refused := s.limitsAllow(ctx, s.store.db, req); refused != nil {
+			if a, err = s.noteNotExecuted(context.WithoutCancel(ctx), a); err != nil {
+				return paylink.Link{}, err
+			}
 			if errors.As(refused, new(*paylink.Error)) {
-				if a, err = s.noteNotExecuted(ctx, a); err != nil {
-					return paylink.Link{}, err
-				}
 				return paylink.Link{}, refusedBy(refused)
 			}
 			return paylink.Link{}, refused
