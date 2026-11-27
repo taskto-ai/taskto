@@ -133,3 +133,44 @@ test('a record saved offline and not yet sent is listed, without an open button 
   expect(screen.queryByRole('button', { name: 'Open Draft the plan' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Open Pay rent' })).toBeTruthy()
 })
+
+test('only a table with an open action has a row header, and only the numbers are set to align as numbers', async () => {
+  render(app(tableSurface(tableItems, { open: undefined })))
+  await screen.findByRole('table')
+  expect(screen.queryAllByRole('rowheader')).toHaveLength(0)
+  cleanup()
+  render(app(tableSurface()))
+  await screen.findByRole('table')
+  expect(screen.getAllByRole('rowheader')).toHaveLength(3)
+  const [first] = bodyRows()
+  const numeric = within(first)
+    .getAllByRole('cell')
+    .map((c) => c.getAttribute('data-numeric'))
+  expect(numeric).toEqual([null, null, 'true', null])
+})
+
+test('a row with no text in its first column is opened by its number', async () => {
+  const items = [{ id: 9, _revision: 1, title: '', category: 'home', _labels: { category: 'Home' } }]
+  render(app(tableSurface(items)))
+  await screen.findByRole('table')
+  expect(screen.getByRole('button', { name: 'Open 9' })).toBeTruthy()
+})
+
+test('a click on a choice column sorts by the labels people read, not the stored values', async () => {
+  const items = [
+    { id: 1, _revision: 1, title: 'One', category: 'a', _labels: { category: 'Zed' } },
+    { id: 2, _revision: 1, title: 'Two', category: 'b', _labels: { category: 'Amy' } },
+    { id: 3, _revision: 1, title: 'Three', category: 'c', _labels: { category: 'Bob' } },
+  ]
+  render(app(tableSurface(items)))
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('button', { name: 'Category' }))
+  expect(firstCells()).toEqual(['Two', 'Three', 'One'])
+})
+
+test('a column with a key the table does not know is refused, so nothing is drawn', async () => {
+  const columns = [{ field: 'title', label: 'Title', type: 'string', width: 3 }]
+  render(app(tableSurface(tableItems, { columns })))
+  await waitFor(() => expect(screen.queryByRole('table')).toBeNull())
+  expect(screen.queryByText('Pay rent')).toBeNull()
+})

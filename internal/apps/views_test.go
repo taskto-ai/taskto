@@ -84,6 +84,10 @@ func TestCheckRefusesBadTables(t *testing.T) {
 		"no caption":            {strings.Replace(table(one, ""), `"label":"Tasks",`, "", 1), nil, `Table needs "label"`},
 		"no items":              {strings.Replace(table(one, ""), `"items":{"path":"/items"},`, "", 1), nil, `Table needs "items"`},
 		"a prop of its own":     {table(one, `,"pageSize":10`), nil, `Table has no prop "pageSize"`},
+		"items with another key": {strings.Replace(table(one, ""), `{"path":"/items"}`, `{"path":"/items","limit":5}`, 1), nil,
+			`must be a data binding`},
+		"no columns key":       {strings.Replace(table(one, ""), `"columns":`+one+`}`, `"dir":"asc"}`, 1), nil, `Table needs "columns"`},
+		"sort that isn't text": {table(one, `,"sort":3`), nil, "name of a field of the collection"},
 	}
 	for name, tt := range bad {
 		t.Run(name, func(t *testing.T) {
@@ -184,5 +188,40 @@ func TestTheSurfaceTellsEachColumnItsFieldTypeAndTheDefinitionStaysAsAuthored(t 
 		if c.Type != want[c.Field] {
 			t.Errorf("column %s has type %q, want %q", c.Field, c.Type, want[c.Field])
 		}
+	}
+}
+
+func TestAScreenlessAppTellsEachColumnItsFieldTypeToo(t *testing.T) {
+	table := `{"id":"root","component":"Table","items":{"path":"/items"},"label":"Tasks","columns":[{"field":"title","label":"T"},{"field":"done","label":"D"}]}`
+	checked, err := Definition{
+		Components: []json.RawMessage{json.RawMessage(table)},
+		Collection: Collection{Fields: []Field{{Name: "title", Type: TypeString}, {Name: "done", Type: TypeBoolean}}},
+		Actions:    map[string]Action{"add": {Kind: ActionInsert}},
+	}.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.hasScreens() {
+		t.Fatal("the definition has screens")
+	}
+	got := checked.surfaceComponents()
+	if len(got) != 1 {
+		t.Fatalf("surface has %d components", len(got))
+	}
+	var surface struct {
+		Columns []struct {
+			Field string `json:"field"`
+			Type  string `json:"type"`
+		} `json:"columns"`
+	}
+	if err := json.Unmarshal(got[0], &surface); err != nil {
+		t.Fatal(err)
+	}
+	if len(surface.Columns) != 2 || surface.Columns[0].Type != TypeString || surface.Columns[1].Type != TypeBoolean {
+		t.Fatalf("columns = %+v", surface.Columns)
+	}
+	stored, _ := json.Marshal(checked.Components)
+	if strings.Contains(string(stored), `"type"`) {
+		t.Fatalf("the stored definition holds a column type: %s", stored)
 	}
 }
