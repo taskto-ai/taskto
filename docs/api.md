@@ -320,6 +320,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `search_query_no_words` | 400 | The search has no words to search for. |
 | `conversation_not_found` | 404 | No such conversation of the caller's in the workspace. |
 | `conversation_archived` | 409 | The conversation is archived: unarchive it first. |
+| `conversation_note_invalid` | 400 | A note must have 1 to `max` characters. |
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
@@ -3102,7 +3103,7 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Markdown` (formatted text from a literal or a
+  address), plus `Stat` (a labelled value), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
   binding, drawn by the web app's own renderer, which never makes HTML: links show as text
   and are never followed, and images show as links, so an app opens nothing outside),
   `Show` (draws its child while a rule holds,
@@ -3116,6 +3117,22 @@ saying what is wrong) unless:
   component may contain itself, and every button's event must be one of the app's
   actions. The web app's renderer runs with A2UI's strict validation too, against the
   same catalog.
+- **Table** lists the records as a table: `{"id", "component": "Table", "items": {"path": "/items"}, "columns": [{"field", "label"}], "label", "open"?, "sort"?, "dir"?}`.
+  `items` is exactly the data binding `/items` (the records the viewer may read, so a table shows no
+  one else's). `columns` are 1–12 entries, each a `field` (a string, number, boolean, date, time,
+  choice or barcode field of the collection, never a photo, signature or location) and its
+  `label`, a dynamic string. `label` is the table's caption, which screen readers read. `open`
+  names a `navigate` action to a screen with `"record": true`: the first column then holds a button
+  that runs the action with the row's `id`, as a `Button`'s event does (the same path: an update's
+  `expectedRevision` is added, a conflict is reloaded, an error is shown), so the app needs no
+  event of its own for it. `sort` is a field of the same types and `dir` is `asc` (the default) or
+  `desc`: how the table starts; people click a column's header to sort by it. Choice fields show
+  their labels, dates the viewer's format, numbers their locale's, booleans a translated yes or no,
+  and a row with no value comes last whichever way it sorts. The table draws the first 200 rows
+  (after sorting) and says how many there are; a filter or paging is not part of it. Each column
+  that the server sends to a client carries its field's `type`, added to the surface only, never
+  stored in the definition. `app_catalog` describes `Table` and the two kinds of prop it
+  introduces: a field's name of given types and an action's name of given kinds.
 - **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
   the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
   filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app
@@ -5677,6 +5694,25 @@ the message ends up as if it had been sent a moment earlier. Archiving doesn't s
 turn either, and someone removed can't read the conversation any more. Closing the window
 would mean holding the database's write lock across the call, which would stall every write
 on the server whenever the agent runtime is slow.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/notes`
+
+Adds a note: `{"content": "…", "request_id": "…"}`. A note stays in the conversation's history, in
+order, and is shown to whoever reads the conversation, but the agent never sees it: it isn't a
+message, so it is not part of the model's context, a CLI turn is not handed it, and
+`GET …/messages` and the conversation search don't contain it. It is an entry of kind
+`taskto.note` in `…/entries` and the events stream, with no `model`, and its `data` is
+`{"v": 1, "author": <user ID>, "text": "…"}`; the author is always the caller. The conversation's
+export carries notes for its owner like any other entry. A note can't be edited or removed.
+
+- `content`: 1 to 8000 characters, not only whitespace; otherwise `400 conversation_note_invalid`
+  (with `max`).
+- `request_id`: optional, up to 128 printable ASCII characters. A retry with the same ID in the
+  same conversation doesn't write the note again.
+
+`202 {"submission_id": 12}`; the note is stored at once, also while the agent is working, and
+doesn't interrupt the run. `404` for a conversation that isn't the caller's, `409` for an
+archived one. Adding a note marks the conversation updated, so the list shows the activity.
 
 ### `GET /api/workspaces/{workspace}/conversations/{conversation}/messages`
 
