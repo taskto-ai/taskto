@@ -111,10 +111,19 @@ func TestARollbackStopsWhenTheBackupCommandWritesNothing(t *testing.T) {
 }
 
 func TestARollbackStopsWhenTheRenameIntoPlaceDidNothing(t *testing.T) {
-	r := runRollback(t, "echo newer-data | gzip -c; echo appeared-meanwhile > after-v0.2.0.tar.gz", map[string]string{})
+	r := runRollback(t, "echo newer-data | gzip -c; echo older-data | gzip -c > after-v0.2.0.tar.gz", map[string]string{})
 	r.mustStopBeforeTeardown(t)
-	if got, _ := os.ReadFile(filepath.Join(r.dir, "after-v0.2.0.tar.gz")); string(got) != "appeared-meanwhile\n" {
-		t.Errorf("the file that appeared meanwhile changed: %q", got)
+	got, err := exec.Command("gzip", "-dc", filepath.Join(r.dir, "after-v0.2.0.tar.gz")).Output()
+	if err != nil || string(got) != "older-data\n" {
+		t.Errorf("the valid backup that appeared meanwhile changed: %q, %v", got, err)
+	}
+}
+
+func TestARollbackStopsWhenADirectoryAppearsWhereTheBackupGoes(t *testing.T) {
+	r := runRollback(t, "echo newer-data | gzip -c; mkdir after-v0.2.0.tar.gz", map[string]string{})
+	r.mustStopBeforeTeardown(t)
+	if info, err := os.Stat(filepath.Join(r.dir, "after-v0.2.0.tar.gz")); err != nil || !info.IsDir() {
+		t.Errorf("the directory that appeared meanwhile changed: %v", err)
 	}
 }
 

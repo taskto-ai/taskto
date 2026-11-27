@@ -1530,8 +1530,9 @@ number and must never see the homes. Set `HOMES=1` for that (in container mode o
 then takes a backup of the upgraded server (`after-v0.2.0.tar.gz`) while it still runs. If that
 file already exists, the script stops before it changes anything and tells you: it never writes
 over a backup, and never picks a second name, so move the old one away first. Otherwise it writes
-`after-v0.2.0.tar.gz.partial`, checks it (`test -s`, `gzip -t`: the script stops if it is empty or
-damaged), and renames it into place, stopping if the rename did nothing. It then stops the whole
+`after-v0.2.0.tar.gz.partial`, checks it (`gzip -t`: the script stops if it is empty or
+damaged), and renames it into place, stopping if the rename did nothing or the
+backup in place doesn't pass the same check (a directory there does not). It then stops the whole
 deployment, the CLI
 worker container too (`--profile cli`, whether or not `COMPOSE_PROFILES` names it), with the
 upgraded version's own `compose.yaml`, and only then checks out the old one. It keeps the
@@ -1548,10 +1549,10 @@ if [ "$1" = 1 ]; then
   AFTER=after-v0.2.0.tar.gz
   if [ -e "$AFTER" ]; then echo "$AFTER already exists: move it away first" >&2; exit 1; fi
   docker compose exec -T taskto taskto backup - > "$AFTER.partial" </dev/null
-  test -s "$AFTER.partial"
   gzip -t "$AFTER.partial"
   mv -n "$AFTER.partial" "$AFTER"
   test ! -e "$AFTER.partial"
+  gzip -t "$AFTER"
 fi
 docker compose $PROFILE down </dev/null
 git checkout v0.1.0
