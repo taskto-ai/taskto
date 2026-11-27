@@ -65,6 +65,17 @@ const COMPACTED = 'secure_delete_vacuum'
  */
 export function compactOnce(path: string, maxBytes = COMPACT_MAX_BYTES): Compaction {
   if (!existsSync(path)) return 'fresh'
+  // The look and the disk's room are part of the compaction too: a failure of either defers it,
+  // logged, as one of the rewrite does, and the sidecar starts all the same.
+  try {
+    return compactIfDue(path, maxBytes)
+  } catch (error) {
+    console.error(`compacting agent.db is deferred to the next start: ${(error as Error).message}`)
+    return 'deferred'
+  }
+}
+
+function compactIfDue(path: string, maxBytes: number): Compaction {
   let size: number
   const look = new DatabaseSync(path, { readOnly: true })
   try {

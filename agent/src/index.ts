@@ -49,6 +49,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import {
   type ConversationId,
   type Cursor,
+  configure,
   createRegistry,
   type EntryId,
   Harness,
@@ -58,7 +59,7 @@ import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
-import { purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
+import { purgeInFlight, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
 import { compactOnce, openHarnessStorage, recordFresh } from './storage.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
@@ -413,6 +414,15 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (req.method === 'POST' && action === 'purge') {
       const num = parseId(id) as ConversationId
+      // A purge of it is running (the server's call gave up and asked again): this one waits for
+      // its outcome. It isn't looked at again, as the purge may have taken its lifecycle document
+      // already, which would read as a conversation that was never retired.
+      const running = purgeInFlight(dbPath as string, num)
+      if (running) {
+        await running
+        res.writeHead(204).end()
+        return
+      }
       const found = await harness.conversation(num, context)
       if (found) {
         if ((await harness.snapshot(Lifecycle, num, context))?.retiredAt == null) {
@@ -453,8 +463,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (req.method === 'PUT' && action === 'model') {
       const model = modelRef(await readJson(req))
-      // Takes effect from the conversation's next model request, also mid-run.
-      await (await conversation(id)).configure({ model }, context)
+      const conv = await conversation(id)
+      await testHooks.beforeModelWrite?.()
+      // Takes effect from the conversation's next model request, also mid-run. One commit, as the
+      // submit's: the conversation is checked again as retired in it, so a retire that committed
+      // after the look above refuses the change, and nothing is written to a retired conversation
+      // (which a purge may be taking apart).
+      await conv.commit(async (tx) => {
+        if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        await configure(tx, conv.id, { model })
+      }, context)
       return send(res, 200, model)
     }
     if (req.method === 'GET' && action === 'messages') {

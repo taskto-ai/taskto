@@ -626,6 +626,82 @@ func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 	}
 }
 
+// A purge asked for again while the first still runs (the server's call gave up and retried) waits
+// for the first and has its outcome, even once the first has taken the conversation's lifecycle
+// document, which a fresh look would read as a conversation that was never retired (409).
+func TestPurgeAskedAgainWhileItRunsHasItsOutcome(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+	// A reader pinned on the database keeps the first purge in its last step, emptying the log,
+	// for the test entry's wait (300 ms), with every row of the conversation gone already.
+	reader, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	conn, err := reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	first := make(chan error, 1)
+	go func() { first <- s.client.PurgeConversation(ctx, doomed) }()
+	time.Sleep(150 * time.Millisecond)
+	var se *StatusError
+	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("the purge asked again while the first waits for the reader: err = %v, want the first's 503", err)
+	}
+	if err := <-first; !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("the first purge: err = %v, want a 503", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.PurgeConversation(ctx, doomed); err != nil {
+		t.Fatalf("the retry once the reader is gone: %v", err)
+	}
+}
+
+// Nothing is written to a retired conversation: a model change that looked at the conversation
+// before a retire committed, and writes after it, is refused (in the write's own commit), as input
+// is, so a purge never finds a record written to a tree it is taking apart.
+func TestSetModelOvertakenByARetireIsRefused(t *testing.T) {
+	s := startSidecar(t, "TASKTO_AGENT_TEST_MODEL_PAUSE_MS=600")
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := s.client.Models(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := make(chan error, 1)
+	go func() { set <- s.client.SetModel(ctx, conv, catalog.Default) }()
+	time.Sleep(200 * time.Millisecond) // it has looked, and waits before its write
+	if err := s.client.RetireConversation(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-set; !notFound(err) {
+		t.Fatalf("a model change the retire overtook: err = %v, want a 404", err)
+	}
+}
+
 func TestAbortStopsTheRunningWork(t *testing.T) {
 	s := startSidecar(t)
 	ctx := ctxFor(t)

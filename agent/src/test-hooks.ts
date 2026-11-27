@@ -11,4 +11,9 @@ export const testHooks = {
   spikeTools: false,
   /** Tools added to the server's list, to test how the sidecar picks among them. */
   extraToolSpecs: [] as ToolSpec[],
+  /**
+   * Awaited by PUT /model between its look at the conversation and its write, so a test can
+   * retire the conversation in between.
+   */
+  beforeModelWrite: undefined as (() => Promise<void>) | undefined,
 }

@@ -22,4 +22,9 @@ testHooks.extraToolSpecs = [
   { name: 'browser_unflagged', description: 'A fixture', read_only: true, input_schema: noArguments },
 ]
 
+// A pause in PUT /model between its look at the conversation and its write, for the test that
+// retires the conversation meanwhile: read here only, by the tests' entry.
+const modelPauseMs = Number(process.env.TASKTO_AGENT_TEST_MODEL_PAUSE_MS ?? 0)
+if (modelPauseMs > 0) testHooks.beforeModelWrite = () => new Promise((resolve) => setTimeout(resolve, modelPauseMs))
+
 await import('./index.js')

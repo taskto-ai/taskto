@@ -1,8 +1,8 @@
 // The purge against a database Pi Durable wrote itself: what the unit tests' fixture stands in for
 // (purge.test.ts) is checked here against the real thing, so the two can't drift apart.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -224,5 +224,13 @@ describe('the purge on a database Pi Durable wrote', () => {
       for (const f of files()) chmodSync(f, 0o644)
     }
     expect(compactOnce(path)).toBe('compacted')
+  })
+
+  // The look at whether a compaction is due fails too (a file SQLite can't read as a database):
+  // that is a deferral, logged, and the sidecar starts all the same.
+  it('defers the compaction when the look before it fails', () => {
+    const broken = join(dirname(path), 'broken.db')
+    writeFileSync(broken, Buffer.alloc(8192, 7))
+    expect(compactOnce(broken)).toBe('deferred')
   })
 })

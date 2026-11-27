@@ -34,7 +34,20 @@ import { isMainThread, parentPort, Worker, workerData } from 'node:worker_thread
 /** The log couldn't be truncated: a reader still holds it. The purge isn't done, and is asked again. */
 export class WalBusyError extends Error {}
 
-/** Folds the write-ahead log into the database file and empties it, or throws WalBusyError. */
+/**
+ * Whether error is SQLite's lock contention (SQLITE_BUSY or SQLITE_LOCKED, with any extended code):
+ * something to try again later, unlike any other failure (an I/O error, a full disk), which is the
+ * purge's failure and is reported as such, never as a reader holding the log.
+ */
+export function isContention(error: unknown): boolean {
+  const code = (error as { errcode?: unknown } | null)?.errcode
+  return typeof code === 'number' && ((code & 0xff) === 5 || (code & 0xff) === 6)
+}
+
+/**
+ * Copies the write-ahead log into the database file and empties it, or throws WalBusyError when a
+ * reader or a lock held it up. Any other failure is thrown as SQLite threw it.
+ */
 export function truncateWal(db: DatabaseSync): void {
   // SQLite reports a checkpoint that a reader held up as a result row (busy = 1) rather than an
   // error, so the result is read.
@@ -43,6 +56,7 @@ export function truncateWal(db: DatabaseSync): void {
     const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number | bigint } | undefined
     busy = Number(row?.busy ?? 1)
   } catch (error) {
+    if (!isContention(error)) throw error
     throw new WalBusyError(`the write-ahead log couldn't be checkpointed: ${(error as Error).message}`)
   }
   if (busy !== 0) throw new WalBusyError('a reader holds the write-ahead log, so it could not be truncated')
@@ -91,12 +105,16 @@ function passive(db: DatabaseSync): number {
   return framesLeft(row)
 }
 
-/** passive, with Infinity when it couldn't run (a writer or another checkpoint was at it). */
+/**
+ * passive, with Infinity when lock contention kept it from running (a writer or another checkpoint
+ * was at it). Any other failure is thrown.
+ */
 function backlog(db: DatabaseSync): number {
   try {
     return passive(db)
-  } catch {
-    return Number.POSITIVE_INFINITY
+  } catch (error) {
+    if (isContention(error)) return Number.POSITIVE_INFINITY
+    throw error
   }
 }
 
@@ -129,9 +147,9 @@ export type TruncateHooks = {
  * lets go of its snapshot lets the next round copy the rest. Throws WalBusyError if a reader still
  * holds the log at the end.
  *
- * The bound: under the lock, the TRUNCATE copies what the passive checkpoint left (DRAINED_FRAMES at
- * most) and whatever was committed while that checkpoint ran (QUICK_MS at most) and between the two
- * calls, which nothing gates: normally nothing or the commit that was being written, but as many
+ * The bound: under the lock, the TRUNCATE copies what the second passive checkpoint left
+ * (DRAINED_FRAMES at most) and whatever was committed while that checkpoint ran (QUICK_MS at most,
+ * as for the first) and between it and the TRUNCATE, which nothing gates: normally nothing or the commit that was being written, but as many
  * commits as finish in that moment if this thread is held up (each a turn's write, which the sidecar
  * keeps small: a request's body is at most 1 MiB). A writer that holds the lock when the TRUNCATE
  * starts makes it busy instead.
@@ -147,7 +165,12 @@ export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, hooks?: T
     hooks?.round?.(left, took)
     // Looked at once more just before the TRUNCATE (a second passive checkpoint, which copies what
     // landed since the first): what the TRUNCATE copies is then only what lands after that look.
-    if (left <= DRAINED_FRAMES && took <= QUICK_MS && backlog(db) <= DRAINED_FRAMES) {
+    // It is held to QUICK_MS too, since what lands while it copies is left for the TRUNCATE.
+    const quickAgain = () => {
+      const again = performance.now()
+      return backlog(db) <= DRAINED_FRAMES && performance.now() - again <= QUICK_MS
+    }
+    if (left <= DRAINED_FRAMES && took <= QUICK_MS && quickAgain()) {
       hooks?.truncating?.(left)
       try {
         const t0 = performance.now()
@@ -861,6 +884,17 @@ export function purgeWorkersAtOnce(): number {
 const asked = new Map<string, Promise<void>>()
 let queue: Promise<unknown> = Promise.resolve()
 
+const purgeKey = (job: { path: string; root?: number }) => `${job.path}\u0000${job.root ?? 'log'}`
+
+/**
+ * The purge of root in the database at path that is queued or running, if there is one: a request
+ * for it waits for its outcome instead of looking at the conversation again, which the purge may be
+ * taking apart meanwhile (its lifecycle document goes in the purge's last transaction).
+ */
+export function purgeInFlight(path: string, root: number): Promise<void> | undefined {
+  return asked.get(purgeKey({ path, root }))
+}
+
 /**
  * runPurge, one at a time in this process, and once for a root (or for the log alone) at a time: a
  * request for one that is queued or running waits for it and has its outcome, and starts no worker
@@ -869,7 +903,7 @@ let queue: Promise<unknown> = Promise.resolve()
  * take turns on the write lock and leave the harness's writes none of the pauses.
  */
 export function purgeOnce(job: PurgeJob): Promise<void> {
-  const key = `${job.path}\u0000${job.root ?? 'log'}`
+  const key = purgeKey(job)
   const running = asked.get(key)
   if (running) return running
   const result = queue.then(() => runPurge(job)).then(() => undefined)

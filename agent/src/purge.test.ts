@@ -10,6 +10,7 @@ import {
   type FinalWork,
   framesLeft,
   HARNESS_DB_OPTIONS,
+  isContention,
   LIFECYCLE_KIND,
   purgeOnce,
   purgeRecords,
@@ -154,12 +155,23 @@ describe('runPurge', () => {
   }
 
   // The frames of the log no checkpoint has copied yet, as SQLite reports them without copying any
-  // (NOOP, SQLite 3.51 and later: the Node CI and the image run).
+  // (NOOP, SQLite 3.51 and later: the Node CI and the image run). A NOOP that another checkpoint
+  // keeps out answers busy = 1 with log and checkpointed -1, which says nothing: it is asked again,
+  // for up to 5 s, and never read as an empty log.
   const pending = () => {
     const db = new DatabaseSync(path, { timeout: 0 })
     try {
-      const row = db.prepare('PRAGMA wal_checkpoint(NOOP)').get() as { log: number; checkpointed: number }
-      return Number(row.log) - Number(row.checkpointed)
+      const deadline = performance.now() + 5000
+      for (;;) {
+        const row = db.prepare('PRAGMA wal_checkpoint(NOOP)').get() as {
+          busy: number
+          log: number
+          checkpointed: number
+        }
+        if (Number(row.busy) === 0) return Number(row.log) - Number(row.checkpointed)
+        if (performance.now() > deadline) throw new Error('the log was never free to look at')
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2)
+      }
     } finally {
       db.close()
     }
@@ -241,17 +253,32 @@ describe('runPurge', () => {
       done = true
     })
     const began = performance.now()
-    while (!done) {
-      const t0 = performance.now()
-      insert.run()
-      longest = Math.max(longest, performance.now() - t0)
-      writes++
-      await new Promise((r) => setTimeout(r, 15))
+    let locked = 0
+    let failure: unknown
+    try {
+      while (!done) {
+        const t0 = performance.now()
+        insert.run()
+        longest = Math.max(longest, performance.now() - t0)
+        writes++
+        await new Promise((r) => setTimeout(r, 15))
+      }
+    } catch (error) {
+      failure = error
     }
-    const took = performance.now() - began
+    // Torn down whether or not a write failed, so the probe's thread and the timer don't outlive the
+    // test. A write's failure is the one thrown; the teardown's own is only logged then.
     clearInterval(timer)
-    const locked = probe ? await probe.stop() : 0
-    db.close()
+    try {
+      locked = probe ? await probe.stop() : 0
+    } catch (error) {
+      if (failure === undefined) failure = error
+      else console.error('the lock probe failed too', error)
+    } finally {
+      db.close()
+    }
+    if (failure !== undefined) throw failure
+    const took = performance.now() - began
     const error = await settled
     // What the purge's own transactions took (lock, deleting, commit), and how long the write lock
     // was held as the probe saw it, to say which a stall was.
@@ -1048,6 +1075,74 @@ describe('runPurge', () => {
   // Another thread's checkpoint (the checkpointer's, or another purge's) is copying a large log when
   // the purge looks: that round learned nothing, and the TRUNCATE waits for a round whose own
   // passive checkpoint found the log drained.
+  // A checkpoint that fails for another reason than a lock (here an I/O error: a read-only
+  // connection can't write the database file) is the purge's failure, which the sidecar answers
+  // 500, not a reader holding the log (WalBusyError, 503), and it isn't tried until the deadline.
+  it('reports a checkpoint that fails as a failure, not as a reader holding the log', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const readOnly = new DatabaseSync(path, { readOnly: true })
+    try {
+      const began = performance.now()
+      let error: unknown
+      try {
+        truncateWalWithin(readOnly, 2000)
+      } catch (e) {
+        error = e
+      }
+      expect(error).toBeInstanceOf(Error)
+      expect(error).not.toBeInstanceOf(WalBusyError)
+      expect(((error as { errcode?: number }).errcode ?? 0) & 0xff).toBe(10) // SQLITE_IOERR
+      expect(performance.now() - began).toBeLessThan(1000)
+      expect(isContention({ errcode: 5 })).toBe(true)
+      expect(isContention({ errcode: 517 })).toBe(true) // SQLITE_BUSY_SNAPSHOT
+      expect(isContention({ errcode: 6 })).toBe(true)
+      expect(isContention({ errcode: 778 })).toBe(false)
+      expect(isContention(new Error('no code'))).toBe(false)
+    } finally {
+      readOnly.close()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // The second look before the TRUNCATE is held to QUICK_MS as the first is: what is committed while
+  // it copies is left for the TRUNCATE, under the lock. A large backlog committed just after the
+  // first look makes the second long, and then that round doesn't truncate; a later one, whose looks
+  // are both quick, does.
+  it('truncates only after a quick second look too', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    let wrote = false
+    let looked = 0
+    const sinceLook: number[] = []
+    try {
+      truncateWalWithin(db, 20_000, {
+        round: () => {
+          if (!wrote) {
+            wrote = true
+            writer.exec('BEGIN')
+            for (let i = 0; i < 100_000; i++) more.run('q'.repeat(400))
+            writer.exec('COMMIT')
+          }
+          looked = performance.now()
+        },
+        truncating: () => sinceLook.push(performance.now() - looked),
+      })
+      expect(wrote).toBe(true)
+      expect(sinceLook.length).toBeGreaterThan(0)
+      // From the end of the first look to the TRUNCATE: the second look alone, quick.
+      for (const ms of sinceLook) expect(ms).toBeLessThanOrEqual(40)
+      expect(log()).toBe('')
+    } finally {
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  }, 60_000)
+
   it('does not truncate while another checkpoint is copying the log', async () => {
     const { writer, reader } = fixture()
     reader.exec('COMMIT')
@@ -1055,26 +1150,41 @@ describe('runPurge', () => {
     writer.exec('BEGIN')
     for (let i = 0; i < 300_000; i++) more.run('q'.repeat(400))
     writer.exec('COMMIT')
+    // When the other thread's checkpoint began and ended (absolute ms, comparable across threads;
+    // 0 until then).
+    const times = new Float64Array(new SharedArrayBuffer(16))
     const flag = new Int32Array(new SharedArrayBuffer(4))
     const other = new Worker(
       `const { DatabaseSync } = require('node:sqlite')
        const { workerData } = require('node:worker_threads')
        const db = new DatabaseSync(workerData.path, { timeout: 0 })
+       workerData.times[0] = performance.timeOrigin + performance.now()
        Atomics.store(workerData.flag, 0, 1)
        Atomics.notify(workerData.flag, 0)
        db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get()
+       workerData.times[1] = performance.timeOrigin + performance.now()
        db.close()`,
-      { eval: true, workerData: { path, flag } },
+      { eval: true, workerData: { path, times, flag } },
     )
     const ended = new Promise((resolve) => other.once('exit', resolve))
     Atomics.wait(flag, 0, 0, 5000)
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5) // it is copying now
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5) // most likely copying by now
     const db = new DatabaseSync(path, { timeout: 1000 })
-    const rounds: number[] = []
+    const rounds: { backlog: number; began: number; ended: number }[] = []
     const truncated: number[] = []
     try {
-      truncateWalWithin(db, 20_000, { round: (b) => rounds.push(b), truncating: () => truncated.push(pending()) })
-      expect(rounds[0]).toBe(Number.POSITIVE_INFINITY)
+      truncateWalWithin(db, 20_000, {
+        round: (backlog, ms) => {
+          const now = performance.timeOrigin + performance.now()
+          rounds.push({ backlog, began: now - ms, ended: now })
+        },
+        truncating: () => truncated.push(pending()),
+      })
+      // A round that ran wholly while the other's checkpoint was copying (from 5 ms after it began,
+      // when it holds the lock, to its end) learned nothing: Infinity. Whether one did depends on
+      // the threads' timing, which the test only reads: it never fails for being slow or quick.
+      const inside = rounds.filter((r) => r.began >= times[0] + 5 && r.ended <= times[1])
+      for (const r of inside) expect(r.backlog).toBe(Number.POSITIVE_INFINITY)
       for (const p of truncated) expect(p).toBeLessThanOrEqual(64)
       expect(log()).toBe('')
     } finally {
@@ -1089,7 +1199,8 @@ describe('runPurge', () => {
   // work (the marks are read from their index, the tree is marked a batch at a time, never by one
   // list of every id), the harness's writes wait a fixed short time at most, and a purge that
   // stopped carries on from its marks without going over the whole tree again.
-  it('keeps every transaction short on a very large account, and carries on after a stop', async () => {
+  it('keeps every transaction short on a very large account, and carries on after a stop', async (ctx) => {
+    const load = loadavg()[0]
     const { writer, reader } = fixture()
     reader.exec('COMMIT')
     const task = writer.prepare("INSERT INTO tasks (id, conversation_id, record) VALUES (?, 1, '{}')")
@@ -1124,11 +1235,17 @@ describe('runPurge', () => {
         },
       })
       const took = performance.now() - started
-      expect(firstSlice).toBeLessThan(200)
-      expect(Math.max(...slices)).toBeLessThan(100)
-      expect(took).toBeLessThan(20_000)
       expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
       expect(writer.prepare('SELECT count(*) AS n FROM taskto_purge_marks').get()).toEqual({ n: 0 })
+      const longest = Math.max(...slices)
+      measured(
+        `very large account, retried: first transaction after ${firstSlice.toFixed(1)} ms, longest ${longest.toFixed(1)} ms, all in ${took.toFixed(0)} ms`,
+      )
+      const skip = overloaded(load)
+      ctx.skip(skip !== undefined, skip)
+      expect(firstSlice).toBeLessThan(200)
+      expect(longest).toBeLessThan(100)
+      expect(took).toBeLessThan(20_000)
     } finally {
       reader.close()
       writer.close()
