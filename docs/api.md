@@ -227,7 +227,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
 | `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing under another key is made (a second link could be paid twice), and for 6 hours the entry looked for the call's object by its own token and asked again under the same key without learning it. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
 | `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): a call may have run at the provider and nothing said what it made, so only the call's object is looked for and the call asked again under the same key, for at most 6 hours, and nothing under another key is made meanwhile. Failed reads and calls in that time don't end it early or use up the entry's tries. |
-| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link, before the link was asked for. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `integration_condition_changed_link_kept` | — | A failed `create_payment_link` entry: the record was changed while the provider was making the link, so that it no longer meets the `when` condition of the action's link. The link exists at the provider and stays with the entry (a payment on it is still recorded, and the admins are told when the app's rule leaves the record unchanged), but it isn't written to the record. Retry the entry once the record meets the condition again to write that same link; running the action again would ask for another. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
 | `integration_link_attempt_changed` | 409 | An admin's confirmation that no payment link exists, refused because it names another attempt than the one that waits now, or another call went out under that attempt since the list showed it (the entry was retried): what the admin checked at the provider may not be all there is. They read the list again and check the provider again. |
@@ -3818,7 +3819,11 @@ or taking the space away stops entries that are waiting. Those reads, and the us
 one snapshot. An entry runs only in the space it was queued in: an app that was moved since (which
 clears its approvals) fails the entry with `app_effect_space_changed`, and the payment is started
 again. A record edited so that it no longer meets the `when` of the action's link fails it with
-`integration_condition_changed`: nothing was created.
+`integration_condition_changed`: nothing was created. One edited so while the provider was making the
+link fails it with `integration_condition_changed_link_kept`: the link exists, stays with the entry
+(a payment on it is still recorded) and is written once the entry is retried with the record meeting
+the condition again. A key replaced by one of the other mode while the link was made fails it with
+`integration_account_changed`, and the link is not written.
 
 **Money is exact.** The amount is the number field's value written as the shortest decimal text that
 reads back as the same number, read digit by digit into the currency's smallest unit (2 decimals for

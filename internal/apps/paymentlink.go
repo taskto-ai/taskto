@@ -114,13 +114,15 @@ func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, sp
 	}
 	// The link is still approved as it was asked; what has changed is the record, which an ordinary
 	// edit may have made fail the rule (`when`) of every link that asks for exactly this. That is no
-	// matter for an admin: the record no longer meets the action's condition, and nothing was made.
+	// matter for an admin: the record no longer meets the action's condition. The grant is returned with
+	// the refusal: whether anything was made by then is the caller's to say (paymentConditionUnmet).
+	g := paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}
 	if !slices.ContainsFunc(b.Contract.Links, func(l ContractLink) bool {
 		return asks(l) && (l.When == nil || ap.liveDef.Collection.holds(*l.When, data))
 	}) {
-		return paymentGrant{}, refuse(apierr.CodeIntegrationConditionChanged)
+		return g, refuse(apierr.CodeIntegrationConditionChanged)
 	}
-	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
+	return g, nil
 }
 
 // amountWithinBounds reports whether the amount (decimal text) is within the bounds the live
@@ -182,6 +184,9 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	p := e.payload
 	g, err := s.paymentSnapshot(ctx, e)
+	if isCode(err, apierr.CodeIntegrationConditionChanged) {
+		return s.paymentConditionUnmet(ctx, e, g)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +246,11 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 		},
 	})
 	switch {
+	case isCode(err, apierr.CodeIntegrationConditionChanged):
+		// The record stopped meeting the condition while the provider made the link: it exists, and
+		// stays with the entry's reference (a payment on it is still recorded); a retry once the record
+		// qualifies again writes it. Never "nothing was created".
+		return nil, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
 	case errors.Is(err, errSuperseded):
 		return superseded, nil
 	case errors.Is(err, ErrNotFound):
@@ -259,6 +269,30 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 		"workspace_id": workspaceID, "space_id": spaceID,
 		"amount": currency.Format(link.AmountMinor, link.Currency), "currency": link.Currency,
 	}, nil
+}
+
+// paymentConditionUnmet is the entry's end when the record doesn't meet the action's condition before
+// the provider is asked (g is the grant as of then, all else approved). Whether anything was made is
+// read from the integration's side, never assumed:
+//
+//   - The entry made a link the record doesn't hold (the record stopped meeting the condition while the
+//     provider made it): it is kept with the entry, and the entry says so.
+//   - Otherwise nothing was made: integration_condition_changed.
+func (s *Service) paymentConditionUnmet(ctx context.Context, e effectRow, _ paymentGrant) (map[string]any, error) {
+	_, ok, err := s.platform.Payments.EntryLink(ctx, s.db, e.id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, refuse(apierr.CodeIntegrationConditionChanged)
+	}
+	return nil, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
+}
+
+// isCode says whether err is an entry's refusal with code.
+func isCode(err error, code apierr.Code) bool {
+	var ee *effectError
+	return errors.As(err, &ee) && ee.code == code
 }
 
 // previewPaymentLink is what a preview says of a payment link effect: the amount and the currency

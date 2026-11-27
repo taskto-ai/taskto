@@ -315,8 +315,18 @@ mixes two instants), and again in the transaction that writes the link, with the
 changes while the provider answers stops the write. An entry runs only in the space it was queued in:
 moving an app clears its approvals, and what an admin approves again in the new space is not what the
 entry asked of the old one, so the entry fails with `app_effect_space_changed` and the payment is
-started again. A record edited so that it no longer meets the action's condition (`when`) fails the
-entry with `integration_condition_changed`, which says so (nothing was created; no admin is needed). It makes
+started again. A record edited so that it no longer meets the action's condition (`when`) before the
+link is asked for fails the entry with `integration_condition_changed`, which says so (nothing was
+created; no admin is needed). One edited so while the provider makes the link fails it with
+`integration_condition_changed_link_kept`: the link exists at the provider and is not written to the
+record, and it stays with the entry's reference, so a payment on it is still recorded (and, since the
+app's rule then leaves the record as it is, the admins are told). Retrying the entry once the record
+meets the condition again writes that same link; running the action again would ask for another. And
+an entry that wrote its link and stopped before it was noted done, whose condition reads the link's
+own field (for example "no payment id yet"), finds its own link on the record and ends done. The
+link's write also checks, in its transaction, that the integration's key is of the mode the link was
+made in: one replaced by a key of the other mode while the call was out fails the entry with
+`integration_account_changed`, and the record doesn't get the old mode's link. It makes
 the link at the provider with the integration's key, which is opened only for the call; and it writes
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
