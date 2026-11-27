@@ -1,0 +1,80 @@
+//go:build unix
+
+package cliworker
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"testing"
+)
+
+// The UID base is the volume's: pinned the first time, and a worker with another is refused, as it
+// is on a volume whose records say their uids were given under another base, so no home's uid is
+// ever another home's.
+func TestTheUIDBaseIsPinnedToTheVolume(t *testing.T) {
+	newVolume := func(t *testing.T) *Worker {
+		w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, accounts: map[string]accountRecord{}}
+		if err := mkdirDurable(w.accountsDir()); err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	w := newVolume(t)
+	if err := w.pinUIDBase(100000); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.pinUIDBase(100000); err != nil {
+		t.Errorf("the same base again: %v", err)
+	}
+	if err := w.pinUIDBase(200000); err == nil {
+		t.Error("another base was accepted on a pinned volume")
+	}
+
+	// Not pinned, but an account says its uid.
+	w = newVolume(t)
+	w.accountsMu.Lock()
+	err := w.putRecord(IdentityForTest(1), accountRecord{Home: firstHome, User: 1, UID: 100000 + firstHome})
+	w.accountsMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.pinUIDBase(200000); err == nil {
+		t.Error("a base its accounts' uids weren't given under was accepted")
+	}
+	if err := w.pinUIDBase(100000); err != nil {
+		t.Errorf("the accounts' own base: %v", err)
+	}
+	if b, err := os.ReadFile(w.uidBaseFile()); err != nil || string(b) != strconv.Itoa(100000)+"\n" {
+		t.Errorf("the pin = %q %v", b, err)
+	}
+}
+
+// The worker's metadata directories are made with each one's parent synced, before an account is
+// recorded in them, so a crash can't keep a counter or a home and lose the record that owns it.
+func TestTheWorkersDirectoriesAreDurableBeforeUse(t *testing.T) {
+	var synced []string
+	syncedForTest = func(p string) { synced = append(synced, filepath.Clean(p)) }
+	t.Cleanup(func() { syncedForTest = nil })
+	root := filepath.Join(t.TempDir(), "cli")
+	w, err := New(Config{Layout: Layout{Root: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, parent := range []string{root, w.stateDir()} {
+		if !slices.Contains(synced, filepath.Clean(parent)) {
+			t.Errorf("%s wasn't synced after a directory was made in it (synced %v)", parent, synced)
+		}
+	}
+	synced = nil
+	if _, err := w.resolve(AccountForTest(1), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{w.stateDir(), w.accountsDir()} {
+		if !slices.Contains(synced, filepath.Clean(dir)) {
+			t.Errorf("%s wasn't synced after the first account was recorded (synced %v)", dir, synced)
+		}
+	}
+}

@@ -284,6 +284,7 @@ func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 	bg := backgroundPID(t, cfg)
 	cli := clitest.Calls(t, cfg)[0].PID
 
+	h.w.CrashForTest() // the first worker's process is gone, and its lock with it
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -534,4 +535,26 @@ func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
 	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Errorf("forgetting again: %v", err)
 	}
+}
+
+// A worker started on a volume with another UID base than the one its accounts were given their
+// uids under doesn't start: every home's uid would be another's.
+func TestIsolationRefusesAChangedUIDBase(t *testing.T) {
+	h := newIsolated(t)
+	h.introduce(t, 1)
+	h.w.Close()
+	cfg := h.cfg
+	cfg.Isolation = &cliworker.Isolation{UIDBase: h.cfg.Isolation.UIDBase + 1000, UserFile: h.cfg.Isolation.UserFile, Group: h.cfg.Isolation.Group}
+	if w, err := cliworker.New(cfg); err == nil {
+		w.Close()
+		t.Fatal("a worker started with another UID base on a volume with accounts")
+	} else if !strings.Contains(err.Error(), "-uid-base") {
+		t.Errorf("the refusal: %v", err)
+	}
+	cfg.Isolation = &cliworker.Isolation{UIDBase: h.cfg.Isolation.UIDBase, UserFile: h.cfg.Isolation.UserFile, Group: h.cfg.Isolation.Group}
+	w, err := cliworker.New(cfg)
+	if err != nil {
+		t.Fatalf("the volume's own base: %v", err)
+	}
+	w.Close()
 }

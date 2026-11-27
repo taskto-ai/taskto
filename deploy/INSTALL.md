@@ -1397,8 +1397,31 @@ the one that failed (a failed release isn't tried again by itself, but a newer o
    you are sure. (`docker compose down` removes the containers the updater left stopped, and
    step 9's `docker compose up -d` makes them again with the Compose file's restart policies,
    which the updater turned off on the stopped ones.)
-3. Run step 9, then 12, 13, 14 and 15.
-4. Clear the stop, once the old version runs and the data is right. This removes the record
+3. If the version you go back to is from before account homes (the version that keeps each CLI
+   account's files in a home of its own, [docs/install.md](../docs/install.md#upgrading-to-account-homes))
+   and the CLI workers run in container mode, give the older worker a new, empty `cli-homes`
+   volume, and keep the upgraded one aside, mounted by nothing: an older worker reads directories
+   by user number and must never see the homes. Before step 9:
+
+   ```sh
+   . ~/.config/taskto-install.env
+   vm <<'EOF'
+   cd /srv/taskto
+   worker=$(docker compose ps -aq cli-worker)
+   HOMES=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/homes"}}{{.Name}}{{end}}{{end}}' "$worker")
+   [ -n "$HOMES" ] || { echo "FAIL: no cli-homes volume: set HOMES to the worker's /homes"; exit 1; }
+   docker compose down
+   docker run --rm </dev/null -v "$HOMES":/from -v "${HOMES}_kept_$(date +%Y%m%d%H%M%S)":/to alpine cp -a /from/. /to/
+   docker run --rm </dev/null -v "$HOMES":/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+   EOF
+   ```
+
+   The worker's volume is then empty (it is kept, emptied, as the data's is); people sign in to
+   their CLIs again on the older version. When you upgrade again, empty it the same way and copy
+   the kept volume back into it before the new version starts, so their homes are as they were
+   left.
+4. Run step 9, then 12, 13, 14 and 15.
+5. Clear the stop, once the old version runs and the data is right. This removes the record
    and the marker, if the server is healthy and answers as the version in `/srv/taskto/.env`
    (it refuses otherwise, and says why); the release that failed is then not tried again by
    itself. Or, if you would rather, remove `/var/lib/taskto-update/transaction` and

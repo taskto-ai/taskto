@@ -45,7 +45,7 @@ browser page ── WebSocket /api/me/browser/live (session, Origin check) ─�
                                                                          worker (Go)
               helper as the user (taskto cli-helper), one per process ──────┤
                                                                             ▼
-   Xvfb :N ◀── Chromium (CDP on fds 3/4: a pipe the worker holds) ── x11vnc ── <home>/browser/run/vnc.sock
+   Xvfb :N ◀── Chromium (CDP on fds 3/4: a pipe the worker holds) ── x11vnc ── <home>/r/vnc.sock
 ```
 
 - **Everything runs as the user's Unix user.** The worker starts Xvfb, Chromium and x11vnc
@@ -54,7 +54,9 @@ browser page ── WebSocket /api/me/browser/live (session, Origin check) ─�
   home, so a user's symlinks can't steer it. There is no sudo and no setuid program, and a
   browser process has no capabilities.
 - **Per-user directories** are in the user's own directory (mode 700). `browser/profile/` is
-  the personal profile. `browser/run/` holds the X cookie and the VNC socket. `browser/testing-*/`
+  the personal profile. `r/`, beside `browser/` in the home, holds the X cookie, the VNC socket and the browser's
+  `$TMPDIR` (Chromium's singleton socket): a short path, since a Unix socket's is at most 104
+  bytes on macOS and 108 on Linux. `browser/testing-*/`
   is the testing browser's throwaway profile.
 - **Driving the browser.** Go speaks the Chrome DevTools Protocol to Chromium over
   `--remote-debugging-pipe`, a pipe the worker holds. Chromium has no debugging port, so no
@@ -64,11 +66,11 @@ browser page ── WebSocket /api/me/browser/live (session, Origin check) ─�
     user.
   - The CDP client is small: commands, replies and the few events we wait for.
 - **The display** is Xvfb with `-displayfd` to choose a free display. `-auth` takes a random
-  cookie in `browser/run/` (mode 600). `-nolisten tcp -nolisten local` leaves no TCP socket
+  cookie in `r/` (mode 600). `-nolisten tcp -nolisten local` leaves no TCP socket
   and no abstract socket, and an abstract socket has no permissions. The socket in
   `/tmp/.X11-unix` is world-reachable, as on any system, but it refuses a client without the
   cookie (checked: another user's X setup is refused).
-- **VNC.** x11vnc serves the display on `browser/run/vnc.sock` only: `-unixsock`,
+- **VNC.** x11vnc serves the display on `r/vnc.sock` only: `-unixsock`,
   `-rfbport 0` and `-rfbportv6 -1`. With `-rfbport 0` alone, and even with `-noipv6`, x11vnc
   0.9.17 still listens on TCP 5900 over IPv6, where any user could connect (checked). The
   isolation tests check that the browser's processes listen on no TCP port. There is no VNC

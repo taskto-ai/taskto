@@ -25,9 +25,10 @@ import (
 // home: even the live view's connection to the user's VNC socket is made by the helper, as
 // the user, and bridged over its stdin and stdout.
 
-// BrowserPaths is the browser directory of the account with home number home: <its home>/browser.
+// BrowserPaths is the browser directory of the account with home number home: <its home>/browser,
+// and <its home>/r for its sockets (browser.HomePaths).
 func (l Layout) BrowserPaths(home int64) browser.Paths {
-	return browser.Paths{Root: filepath.Join(l.Home(home).Root, "browser")}
+	return browser.HomePaths(l.Home(home).Root)
 }
 
 // BrowserHost returns the browser.Host that runs the browsers' programs (bins) through the

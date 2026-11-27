@@ -35,11 +35,10 @@ func realHost(t *testing.T, needDisplay bool) *LocalHost {
 	if bins[Chromium] == "" || (needDisplay && (bins[Xvfb] == "" || bins[X11vnc] == "")) {
 		t.Fatalf("TASKTO_BROWSER_IT=1 but the programs aren't all installed: %v", bins)
 	}
-	// Homes named as the CLI worker names them, short: Chromium's singleton socket, under the
-	// browser directory, must fit a Unix socket's path.
+	// Homes named as the CLI worker names them, with a home number as long as its are.
 	root := t.TempDir()
 	home := func(a cliowner.Account) (string, error) {
-		return filepath.Join(root, "h"+strconv.FormatInt(a.User, 10)), nil
+		return filepath.Join(root, "h"+strconv.FormatInt(1<<30+a.User, 10)), nil
 	}
 	return &LocalHost{Root: root, Home: home, Bins: bins, Path: os.Getenv("PATH")}
 }

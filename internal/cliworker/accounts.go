@@ -27,21 +27,25 @@ import (
 // Removing a retired account's files and processes is tidying up, not what keeps accounts apart: it
 // is bounded, and tried again at the next start when it doesn't finish.
 
-// firstHome is the first home number: above every user number the worker used before homes, so
-// no home's uid is a uid an older worker gave a user (their temporary files may still be there).
-const firstHome = 1 << 29
+// firstHome is the first home number: above every user number a worker before homes accepted
+// (below 2^30), so no home's uid is a uid an older worker gave a user (their temporary files may
+// still be there).
+const firstHome = 1 << 30
 
 // ErrUnknownAccount: the worker has no record of the account the request names, and the request
 // isn't one that makes it (a lookup of a sign-in or a turn).
 var ErrUnknownAccount = errors.New("the CLI worker doesn't know this account")
 
-// ErrFull: every home number is taken (an install that made over 500 million accounts on one
+// ErrFull: every home number is taken (an install that made over a billion accounts on one
 // worker volume). Accounts the worker has go on; a new one is refused.
 var ErrFull = errors.New("the CLI worker has given out every home number: see docs/cli-workers.md")
 
 // accountRecord is what the worker keeps of an account, in .worker/accounts/<identity>.json.
 type accountRecord struct {
 	Home int64 `json:"home"`
+	// UID is the account's Unix user with isolation (the UID base it was given under plus Home),
+	// so a worker started with another base is refused (pinUIDBase).
+	UID int64 `json:"uid,omitempty"`
 	// User is the number the account had when the worker first saw it, for logs and adoption.
 	User int64 `json:"user"`
 	// Boot is the server boot whose request made the record (Reconcile keeps an account made since
@@ -116,7 +120,7 @@ func (w *Worker) putRecord(identity string, r accountRecord) error {
 // writeDurably replaces path, in dir, with b: a new file synced, renamed in place, and the
 // directory synced, so the new content is on disk before anything relies on it.
 func writeDurably(dir, path string, b []byte) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirDurable(dir); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
@@ -147,7 +151,13 @@ func syncDir(path string) error {
 		return err
 	}
 	defer d.Close()
-	return d.Sync()
+	if err := d.Sync(); err != nil {
+		return err
+	}
+	if f := syncedForTest; f != nil {
+		f(path)
+	}
+	return nil
 }
 
 // nextHome takes the next home number: the counter is moved on, on disk, before the number is
@@ -163,6 +173,12 @@ func (w *Worker) nextHome() (int64, error) {
 		}
 	case !errors.Is(err, fs.ErrNotExist):
 		return 0, err
+	}
+	// A home whose directory is there is someone's, whatever the counter says: never given again.
+	for ; home < maxHome; home++ {
+		if _, err := os.Lstat(w.cfg.Layout.Home(home).Root); errors.Is(err, fs.ErrNotExist) {
+			break
+		}
 	}
 	if home >= maxHome {
 		return 0, ErrFull
@@ -185,6 +201,9 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 	if !a.Valid() {
 		return account{}, badRequest{errors.New("invalid account")}
 	}
+	if _, err := w.seeBoot(a.Boot); err != nil {
+		return account{}, err
+	}
 	w.accountsMu.Lock()
 	defer w.accountsMu.Unlock()
 	r, ok, err := w.record(a.Identity)
@@ -200,6 +219,9 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 			return account{}, err
 		}
 		r = accountRecord{Home: home, User: a.User, Boot: a.Boot}
+		if iso := w.cfg.Isolation; iso != nil {
+			r.UID = int64(iso.UIDBase) + home
+		}
 		if w.cfg.AdoptLegacy {
 			if _, err := os.Lstat(w.cfg.Layout.legacy(a.User)); err == nil {
 				r.Adopting = a.User
@@ -211,6 +233,9 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 	}
 	if r.Retired {
 		return account{}, ErrForgotten
+	}
+	if iso := w.cfg.Isolation; iso != nil && r.UID != 0 && r.UID != int64(iso.UIDBase)+r.Home {
+		return account{}, errors.New("the account's uid isn't its home's under this UID base")
 	}
 	if r.Adopting > 0 {
 		if err := w.adopt(a.Identity, r); err != nil {
@@ -302,8 +327,8 @@ func (w *Worker) records() (map[string]accountRecord, error) {
 }
 
 // maxHome bounds the home numbers, so that UIDBase plus any of them stays a valid uid below the
-// 32-bit nobody (New checks UIDBase against it): 2^29 accounts from firstHome.
-const maxHome = 1 << 30
+// 32-bit nobody (New checks UIDBase against it): 2^30 accounts from firstHome.
+const maxHome = 1 << 31
 
 // public is the account as the browsers and the server name it.
 func (a account) public() cliowner.Account { return cliowner.Account{User: a.user, Identity: a.id} }
@@ -348,6 +373,16 @@ func (w *Worker) AccountDirs(a cliowner.Account, cli CLI, slot Slot) (Dirs, erro
 		return Dirs{}, err
 	}
 	return w.cfg.Layout.EnsureSlot(acct.home, cli, slot)
+}
+
+// HomeDir is the directory of identity's home, retired or not, if the worker gave it one: for
+// removing what is left of a retired account (a purge), never made.
+func (w *Worker) HomeDir(identity string) (string, bool) {
+	home, ok := w.HomeOf(identity)
+	if !ok {
+		return "", false
+	}
+	return w.cfg.Layout.Home(home).Root, true
 }
 
 // HomeOf is the home number of identity's account, retired or not, if the worker has one.

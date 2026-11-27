@@ -260,12 +260,16 @@ func (s *Service) start(ctx context.Context, p conversations.Principal, req turn
 		spec.Model = req.Model
 	}
 	// taskto's own tools, with this turn's token for them (docs/cli-tools.md).
-	if spec.Tools, err = s.toolsFor(id, p); err != nil {
+	if spec.Tools, err = s.toolsFor(ctx, id, p); err != nil {
 		return nil, err
 	}
 	if c.shared != nil {
 		// The workspace's account: the CLI goes through the proxy with this turn's token.
-		token, err := s.mintToken(proxyClaims{Account: c.shared.ID, User: p.User, Conversation: p.Conversation, Turn: id})
+		a, err := s.Account(ctx, p.User)
+		if err != nil {
+			return nil, err
+		}
+		token, err := s.mintToken(proxyClaims{Account: c.shared.ID, User: p.User, Identity: a.Identity, Conversation: p.Conversation, Turn: id})
 		if err != nil {
 			return nil, err
 		}

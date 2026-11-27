@@ -188,6 +188,10 @@ func (w *Worker) StartLogin(a cliowner.Account, cli CLI, slot Slot) (*Login, err
 // Login returns a's login for cli's account in slot, in progress or finished: one of another
 // account's, the number's earlier owner's too, is none.
 func (w *Worker) Login(a cliowner.Account, cli CLI, slot Slot) (*Login, bool) {
+	// A retired account reaches none of what it had, even while its removal hasn't dropped it.
+	if w.retired(a.Identity) {
+		return nil, false
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	l := w.logins[loginKey{a.Identity, cli, slot}]

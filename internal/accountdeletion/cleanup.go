@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/cliowner"
+	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -389,7 +390,10 @@ func (s *Service) forgetCLI(ctx context.Context, kind string, user int64) error 
 		return errWaiting
 	}
 	if kind == cliLocal && s.o.DataDir != "" {
-		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
+		// The account's home, by the identity the step keeps, and the number's directory from
+		// before homes: what local mode's worker kept, whether or not it runs now.
+		identity, _ := cliowner.From(ctx)
+		if err := cliworker.ForgetLocal(cliworker.Layout{Root: filepath.Join(s.o.DataDir, "cli")}, identity, user); err != nil {
 			return failed(failFileRemove, err)
 		}
 	}

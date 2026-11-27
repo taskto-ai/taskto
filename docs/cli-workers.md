@@ -426,19 +426,42 @@ The UI shows what the command prints.
     their refusals) is keyed by identity too, and a turn is found, read and stopped only for the
     account that started it: the worker's API answers none of another account's, the number's
     earlier owner's included.
-  - Home numbers start at 2^29, above every user number a worker gave out before homes, so no
-    home's uid is one an older worker used. There are 2^29 of them (about 537 million accounts
-    per worker volume). When they run out the worker refuses new accounts (`ErrFull`, `507`,
-    `full` over the worker's API) and every existing one goes on. An operator near that point
-    (the counter in `.worker/next-home` near 1073741824) starts a fresh worker volume: everyone
-    then signs in to their CLIs once more. `-uid-base` must leave room for every home below the
-    32-bit `nobody`: the worker refuses to start with one below 65536 or above 3221225470.
+  - Home numbers start at 2^30: a worker from before homes accepted user numbers below 2^30 only,
+    so under the same `-uid-base` no home's uid is one an older worker used. There are 2^30 of
+    them (about a billion accounts per worker volume). When they run out the worker refuses new
+    accounts (`ErrFull`, `503` with the code `full` over the worker's API, an internal error in the
+    server's) and every existing one goes on. An operator near that point (the counter in
+    `.worker/next-home` near 2147483648) starts a fresh worker volume: everyone then signs in to
+    their CLIs once more. `-uid-base` must leave room for every home below the 32-bit `nobody`:
+    the worker refuses to start with one below 65536 or above 2147483646.
+- **The volume.** A home number, and so a uid, is never given twice on a volume:
+  - one worker per volume: the worker takes an exclusive lock on it (`.worker/lock`, a `flock`
+    held while it runs) before it sweeps processes, writes anything or opens a socket. A second
+    worker on the same volume doesn't start, and leaves the first's sockets alone;
+  - at every start the counter is checked against everything on the volume that names a home:
+    the records, the homes' directories and the trash. A counter that is missing, damaged or
+    behind (a partial restore of the volume, say) is moved past the highest home, with a warning;
+    two records with the same home stop the worker, which says to start it on a new volume. A
+    home whose directory is there is never given, whatever the counter says;
+  - with isolation, the UID base is the volume's: pinned the first time (`.worker/uid-base`), and
+    each record keeps its uid. A worker started with another `-uid-base` doesn't start (it would
+    give a home's uid to another home); changing it means a new volume;
+  - the worker's own directories are made with each new one's parent synced, before anything is
+    recorded in them.
+- **Server boots.** The worker keeps the server boots it has heard from, in the order it first
+  heard them (`.worker/boots.json`, the last 64). A census or a deletion (`Forget`) from a boot
+  older than the latest is ignored (`ErrStaleBoot`, `409`, `stale_boot`): it comes from a server
+  that started earlier (one a restore replaced, still running, or a delayed request), which would
+  retire the accounts the later server made. The server stops trying a census the worker calls
+  stale, and logs it. Censuses and deletions run one at a time, and one whose caller has given up
+  retires nothing more.
 - **Retired accounts.** An account that is gone (`Forget`, `Reconcile`) is **retired**: its record
   says so, durably, and keeps its home number, so the number is never given again. Every request
   for a retired identity is refused (`ErrForgotten`, `410 Gone` with the code `forgotten` over the
   worker's API, `cli_account_forgotten` in the server's): turns, sign-ins, status checks, helper
-  requests and every agent-browser operation, an open browser's state and tabs too. None makes its
-  home again. A retirement is taken back only by a census that names the identity as live (a
+  requests and every agent-browser operation, an open browser's state and tabs too. What the worker
+  still holds of it (a removal that failed before it dropped it) is refused too: its turns' state
+  and events, its sign-ins, its permission questions. None makes its home again. A retirement is taken back only by a census that names the identity as live (a
   restore brought the account back) and was read after it; the account then finds its home as it
   was left, which a removal has usually emptied.
 - **Before the first census.** A request that comes before this server's first census reaches the

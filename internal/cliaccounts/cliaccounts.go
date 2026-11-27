@@ -428,8 +428,17 @@ func (s *Service) StartReconcile() {
 		<-a.done
 		return a.err
 	}
+	// A later start of the server has spoken to the worker since: this one's census is ignored,
+	// and trying again changes nothing.
+	stale := func(err error) bool {
+		if errors.Is(err, cliworker.ErrStaleBoot) {
+			slog.Error("cliaccounts: the CLI worker has heard from a later start of the server: this server's census is ignored; is an older server still running?")
+			return true
+		}
+		return false
+	}
 	err := try()
-	if err == nil {
+	if err == nil || stale(err) {
 		return
 	}
 	warn := func(tries int, err error) {
@@ -457,6 +466,9 @@ func (s *Service) StartReconcile() {
 			err := try()
 			if err == nil {
 				slog.Info("cliaccounts: the CLI worker was told which users exist", "tries", tries)
+				return
+			}
+			if stale(err) {
 				return
 			}
 			if tries%reconcileWarnEvery == 0 {

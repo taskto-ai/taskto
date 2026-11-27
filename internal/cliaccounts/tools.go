@@ -1,6 +1,7 @@
 package cliaccounts
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 )
@@ -42,12 +44,16 @@ func (s *Service) ToolsReachable() bool { return s.shared != nil && s.shared.Pro
 
 // toolsFor returns the tools of a turn the server starts: nil while they are off or there is no
 // proxy address for the CLIs to reach them at.
-func (s *Service) toolsFor(id string, p conversations.Principal) (*cliworker.Tools, error) {
+func (s *Service) toolsFor(ctx context.Context, id string, p conversations.Principal) (*cliworker.Tools, error) {
 	t := s.tools.Load()
 	if t == nil || !s.ToolsReachable() {
 		return nil, nil
 	}
-	token, err := s.mintToolsToken(toolsClaims{User: p.User, Conversation: p.Conversation, Turn: id})
+	a, err := s.Account(ctx, p.User)
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.mintToolsToken(toolsClaims{User: p.User, Identity: a.Identity, Conversation: p.Conversation, Turn: id})
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +68,10 @@ const toolsTokenLife = proxyTokenLife
 type toolsClaims struct {
 	// Nonce tells the tokens of one turn apart: a replay of a turn gets a new token, and the
 	// one before stops working.
-	Nonce        string `json:"n"`
-	User         int64  `json:"u"`
+	Nonce string `json:"n"`
+	User  int64  `json:"u"`
+	// Identity is the user's account's, as the proxy's (proxyClaims.Identity).
+	Identity     string `json:"i"`
 	Conversation int64  `json:"c"`
 	Turn         string `json:"t"`
 	Expires      int64  `json:"e"`
@@ -130,7 +138,21 @@ func (s *Service) ToolsCaller(r *http.Request) (agenttools.Caller, error) {
 		return agenttools.Caller{}, errToolsToken
 	}
 	c, ok := s.readToolsToken(strings.TrimSpace(raw))
-	if !ok || !s.turnRunning(c) {
+	if !ok {
+		return agenttools.Caller{}, errToolsToken
+	}
+	if same, err := s.sameAccount(r.Context(), c.User, c.Identity); err != nil {
+		return agenttools.Caller{}, fmt.Errorf("checking a tools token: %w", err)
+	} else if !same {
+		return agenttools.Caller{}, errToolsToken
+	}
+	running, err := s.turnRunning(c)
+	if err != nil {
+		// The worker can't be asked: not a bad token, and no tool runs while it is unknown.
+		return agenttools.Caller{}, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady,
+			Message: "the CLI worker isn't ready yet: try again in a moment"}
+	}
+	if !running {
 		return agenttools.Caller{}, errToolsToken
 	}
 	p, err := conversations.PrincipalOf(r.Context(), s.db, c.Conversation)
@@ -146,14 +168,37 @@ func (s *Service) ToolsCaller(r *http.Request) (agenttools.Caller, error) {
 // turnRunning reports whether the worker is running c's turn, for c's user and conversation.
 // The worker outlives a restart of the server, and a restart of the worker stops every CLI, so
 // this holds where the server's own list of ended turns, in memory, doesn't.
-func (s *Service) turnRunning(c toolsClaims) bool {
+// An error is the worker's: it couldn't be asked.
+func (s *Service) turnRunning(c toolsClaims) (bool, error) {
 	if s.worker == nil {
-		return false
+		return false, nil
 	}
 	t, ok, err := s.worker.FindTurn(c.User, c.Turn)
-	if err != nil || !ok || t.Over() {
-		return false
+	if err != nil {
+		if outage(err) {
+			return false, err
+		}
+		return false, nil
+	}
+	if !ok || t.Over() {
+		return false, nil
 	}
 	spec := t.Spec()
-	return spec.User == c.User && spec.Conversation == c.Conversation
+	return spec.User == c.User && spec.Conversation == c.Conversation, nil
+}
+
+// sameAccount reports whether user's account is the one with identity: a token minted before a
+// restore of the server's data names a number the restore may have given to another account.
+func (s *Service) sameAccount(ctx context.Context, user int64, identity string) (bool, error) {
+	if identity == "" {
+		return false, nil
+	}
+	a, err := s.Account(ctx, user)
+	if errors.Is(err, cliworker.ErrForgotten) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return a.Identity == identity, nil
 }

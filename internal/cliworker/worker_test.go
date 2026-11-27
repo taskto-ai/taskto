@@ -533,7 +533,9 @@ func TestNewWorkerStopsOrphans(t *testing.T) {
 	cliPID := clitest.Calls(t, dirs.Config(cliworker.Claude))[0].PID
 	bg := backgroundPID(t, dirs.Config(cliworker.Claude))
 
-	// As if the first worker had crashed: a second one starts on the same directories.
+	// As if the first worker had crashed: its lock goes with its process, and a second one starts
+	// on the same directories.
+	h.w.CrashForTest()
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)

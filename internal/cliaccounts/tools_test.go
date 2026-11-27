@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/cliworker"
@@ -210,26 +212,34 @@ func TestToolsTokenRefusals(t *testing.T) {
 		}
 		return token
 	}
-	claims := toolsClaims{User: e.owner.id, Conversation: conv, Turn: id}
+	claims := toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id}
 
 	good := mint(claims)
 	if c, status := caller(good); status != http.StatusOK || c != (agenttools.Caller{Workspace: e.ws, User: e.owner.id, Conversation: conv}) {
 		t.Fatalf("a running turn's token: %d %+v", status, c)
 	}
 
+	// A token of the number's earlier account, from before a restore: the same key, another
+	// identity.
+	before := claims
+	before.Identity = strings.Repeat("ab", 16)
+	if _, status := caller(mint(before)); status == http.StatusOK {
+		t.Error("a token of the number's earlier account was accepted")
+	}
+
 	// Forged, signed for something else, expired, malformed or missing.
 	forged := good[:len(good)-4] + "AAAA"
-	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Conversation: conv, Turn: id})
+	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id})
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(toolsClaims{Nonce: "old", User: e.owner.id, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
+	payload, _ := json.Marshal(toolsClaims{Nonce: "old", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
 	expired := toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(e.svc.shared.Key.MAC(toolsTokenPurpose, payload))
 	otherKey, err := serverkey.Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ = json.Marshal(toolsClaims{Nonce: "x", User: e.owner.id, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
+	payload, _ = json.Marshal(toolsClaims{Nonce: "x", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
 	otherServer := toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(otherKey.MAC(toolsTokenPurpose, payload))
 	for name, token := range map[string]string{
 		"forged": forged, "a proxy token": proxyToken, "expired": expired, "another server's": otherServer,
@@ -243,9 +253,9 @@ func TestToolsTokenRefusals(t *testing.T) {
 	// Another conversation's turn, or one the worker doesn't run, or claims about another
 	// user's conversation.
 	for name, c := range map[string]toolsClaims{
-		"a turn the worker doesn't know":     {User: e.owner.id, Conversation: conv, Turn: "c1-unknown"},
-		"the turn, for another user":         {User: e.other.id, Conversation: conv, Turn: id},
-		"the turn, for another conversation": {User: e.owner.id, Conversation: e.conversation(e.owner), Turn: id},
+		"a turn the worker doesn't know":     {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: "c1-unknown"},
+		"the turn, for another user":         {User: e.other.id, Identity: e.acct(e.other.id).Identity, Conversation: conv, Turn: id},
+		"the turn, for another conversation": {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: e.conversation(e.owner), Turn: id},
 	} {
 		if _, status := caller(mint(c)); status == http.StatusOK {
 			t.Errorf("%s: accepted", name)
@@ -334,5 +344,29 @@ func TestTurnsWithoutTaskToTools(t *testing.T) {
 	}
 	if status, _ := e.listSpaces("ttm1.anything.at-all"); status != http.StatusNotFound {
 		t.Errorf("the endpoint while the tools are off: %d", status)
+	}
+}
+
+// A worker that can't be asked whether a token's turn runs is an outage, said with its code, not a
+// bad token: the CLI's model tries again. No tool runs meanwhile.
+func TestAToolsTokenCheckDuringAnOutageIsNotReady(t *testing.T) {
+	e := newTurnEnv(t)
+	conv := e.conversation(e.owner)
+	token, err := e.svc.mintToolsToken(toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: fmt.Sprintf("c%d-t1", conv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("", "gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	e.svc.worker = accountWorker{w: RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))), s: e.svc}
+	r := httptest.NewRequest(http.MethodPost, ToolsPath, nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	_, err = e.svc.ToolsCaller(r)
+	var refused *agenttools.Refusal
+	if !errors.As(err, &refused) || refused.Status != http.StatusServiceUnavailable || refused.Code != apierr.CodeCLIWorkerNotReady {
+		t.Errorf("the check during an outage: %v, want a 503 refusal with %s", err, apierr.CodeCLIWorkerNotReady)
 	}
 }

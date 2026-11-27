@@ -75,7 +75,7 @@ func ForTurns(version string, authorize Authorize, tools *agenttools.Service, br
 				if refused.Status == http.StatusUnauthorized {
 					w.Header().Set("WWW-Authenticate", `Bearer realm="taskto", error="invalid_token"`)
 				}
-				writeError(w, refused.Status, refused.Message)
+				writeRefusal(w, refused)
 				return
 			case err != nil:
 				if r.Context().Err() == nil {
@@ -181,6 +181,18 @@ func handler(tools *agenttools.Service) mcp.ToolHandler {
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(out)}}}, nil
 	}
+}
+
+// writeRefusal answers a refusal of the request itself, with its code when it has one.
+func writeRefusal(w http.ResponseWriter, r *agenttools.Refusal) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(r.Status)
+	body := map[string]string{"error": r.Message}
+	if r.Code != "" {
+		body["code"] = string(r.Code)
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

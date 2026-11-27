@@ -35,9 +35,13 @@ const proxyTokenLife = 2 * time.Hour
 type proxyClaims struct {
 	// Nonce tells the tokens of one turn apart: a replay of a turn gets a new token, and the
 	// one before stops working.
-	Nonce        string `json:"n"`
-	Account      int64  `json:"a"`
-	User         int64  `json:"u"`
+	Nonce   string `json:"n"`
+	Account int64  `json:"a"`
+	User    int64  `json:"u"`
+	// Identity is the user's account's (users.cli_identity): numbers are given again after a
+	// restore of the server's data, the identity never, so a token of a turn from before a restore
+	// reaches nothing of an account given its number since.
+	Identity     string `json:"i"`
 	Conversation int64  `json:"c"`
 	Turn         string `json:"t"`
 	Expires      int64  `json:"e"`
@@ -236,6 +240,9 @@ func (s *Service) handleProxy(w http.ResponseWriter, r *http.Request) {
 // the account exists, the conversation is still its owner's and active in the account's
 // workspace, and the owner's mode there allows shared accounts. A refusal says why.
 func (s *Service) proxyAccount(ctx context.Context, c proxyClaims) (sharedRow, string, error) {
+	if ok, err := s.sameAccount(ctx, c.User, c.Identity); err != nil || !ok {
+		return sharedRow{}, "this token's account is gone", err
+	}
 	p, err := conversations.PrincipalOf(ctx, s.db, c.Conversation)
 	if errors.Is(err, conversations.ErrInactive) || (err == nil && p.User != c.User) {
 		return sharedRow{}, "this conversation can't use the workspace's accounts: it is archived, or its owner left the workspace or was disabled", nil

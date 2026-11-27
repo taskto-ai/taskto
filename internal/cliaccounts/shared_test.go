@@ -265,7 +265,7 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	}
 
 	// A token for a running turn works, and the provider sees the key, not the token.
-	claims := proxyClaims{Account: a.ID, User: e.other.id, Conversation: conv, Turn: "c1-live"}
+	claims := proxyClaims{Account: a.ID, User: e.other.id, Identity: e.acct(e.other.id).Identity, Conversation: conv, Turn: "c1-live"}
 	live, err := e.svc.mintToken(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -286,10 +286,19 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	if res := proxyCall(t, e, live+"x", "/cli-proxy/v1/messages"); res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("forged token: %d", res.StatusCode)
 	}
+	// A token of a turn from before a restore of the server's data: signed with the same key,
+	// for the same number, but another account's, which had the number in the lost history.
+	before := claims
+	before.Identity, before.Turn = strings.Repeat("ab", 16), "c1-before"
+	if earlier, err := e.svc.mintToken(before); err != nil {
+		t.Fatal(err)
+	} else if res := proxyCall(t, e, earlier, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("a token of the number's earlier account: %d", res.StatusCode)
+	}
 	if res := proxyCall(t, e, live, "/cli-proxy/admin"); res.StatusCode != http.StatusNotFound {
 		t.Errorf("outside /v1: %d", res.StatusCode)
 	}
-	foreign, _ := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Conversation: conv, Turn: "c1-foreign"})
+	foreign, _ := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: "c1-foreign"})
 	if res := proxyCall(t, e, foreign, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusForbidden {
 		t.Errorf("another user's conversation: %d", res.StatusCode)
 	}
@@ -313,7 +322,7 @@ func TestProxyRecordsALimit(t *testing.T) {
 	p.status = http.StatusTooManyRequests
 	a := e.owner.addShared(e.ws, cliworker.Codex, p.URL)
 	conv := e.conversation(e.owner)
-	token, err := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Conversation: conv, Turn: "c1-t"})
+	token, err := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: "c1-t"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +443,7 @@ func TestReplayRetiresTheEarlierToken(t *testing.T) {
 	p := newProvider(t)
 	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
 	conv := e.conversation(e.owner)
-	claims := proxyClaims{Account: a.ID, User: e.owner.id, Conversation: conv, Turn: "c1-replayed"}
+	claims := proxyClaims{Account: a.ID, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: "c1-replayed"}
 	first, err := e.svc.mintToken(claims)
 	if err != nil {
 		t.Fatal(err)

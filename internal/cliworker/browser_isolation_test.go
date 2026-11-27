@@ -230,7 +230,9 @@ func TestIsolationBrowser(t *testing.T) {
 		}
 	}
 
-	// A new worker stops every browser process, as it does every CLI's.
+	// A new worker stops every browser process, as it does every CLI's (the first one's process
+	// gone, and its lock with it).
+	h.w.CrashForTest()
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)

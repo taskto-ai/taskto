@@ -1281,12 +1281,13 @@ invitations (they expire, and accepting one needs the address's own account), an
 and two-factor codes, which are as the backup had them (a person who changed them since changes
 them again).
 
-**The CLI worker's directories are brought in line at the next start.** The `cli-homes` volume
-isn't in the backup, so it may hold the CLI logins, files and browser profiles of people who had
-user numbers after the backup, which the restored server gives again. At its next start the server
-tells the worker which accounts exist, and the worker keeps only the directories of the live
-accounts whose identity it recorded. Everything else is removed before anyone is given the number
-([cli-workers.md](cli-workers.md)).
+**The CLI worker's homes are tidied at the next start.** The `cli-homes` volume isn't in the
+backup, so it may hold the CLI logins, files and browser profiles of people who had user numbers
+after the backup, which the restored server gives again. None of it is ever handed to someone else:
+the worker keeps each account's files in a home of its own, by the account's identity, so a person
+given one of those numbers gets a new, empty home from their first request, before anything is
+tidied. At its next start the server tells the worker which accounts exist, and the worker removes
+the homes of the others ([cli-workers.md](cli-workers.md#accounts-and-their-homes)).
 
 From an archive file:
 
@@ -1408,11 +1409,14 @@ installed with [deploy/INSTALL.md](../deploy/INSTALL.md) upgrades itself every n
 ([Automatic updates](#automatic-updates)); when an upgrade fails after the new server has
 started, it stops and tells you, and the way back is the by-hand one that follows.
 
-**CLI sign-ins after the upgrade that records owners.** From the version in which the CLI worker
-records which account each user directory belongs to, a container worker no longer hands over a
-directory it made before: nothing can tell an upgrade from a restore made by an older version. So
-after that upgrade each person signs in to their CLIs once more (Settings → CLI accounts); their
-conversations go on, with new CLI sessions. In local mode the directories are kept.
+**CLI sign-ins after the upgrade to account homes.** From the version in which the CLI worker keeps
+each account's files in a home of its own ([Upgrading to account homes](#upgrading-to-account-homes)),
+a container worker no longer hands over a directory it made before: nothing can tell an upgrade
+from a restore made by an older version. So after that upgrade each person signs in to their CLIs
+once more (Settings → CLI accounts), and loses the CLIs' working files and the agent browser's
+personal profile; their conversations go on, with new CLI sessions. In local mode everything is
+kept. **Going back** from that version to an older one, in container mode, the older worker must
+start on a new, empty `cli-homes` volume: the roll back below says how.
 
 **Upgrade**, say from v0.1.0 to v0.2.0:
 
@@ -1443,6 +1447,20 @@ docker compose build
 docker compose run --rm -T taskto restore - < before-v0.2.0.tar.gz
 docker compose up -d
 ```
+
+If the version you go back to is from before [account homes](#upgrading-to-account-homes) and the
+CLI workers run in container mode, give the older worker a new, empty `cli-homes` volume before
+`docker compose up -d`, and keep the upgraded one aside, mounted by nothing (an older worker reads
+directories by user number and must never see the homes):
+
+```sh
+docker run --rm -v taskto_cli-homes:/from -v taskto_cli-homes_kept:/to alpine cp -a /from/. /to/
+docker run --rm -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+```
+
+When you upgrade again, put it back the same way (empty `taskto_cli-homes` and copy
+`taskto_cli-homes_kept` into it) before the new version starts. In local mode, move `<data>/cli` aside instead,
+and put it back before upgrading again.
 
 The base images are pinned by digest in the `Dockerfile`, so rebuilding a version uses the
 same bases; their security updates come with new versions.

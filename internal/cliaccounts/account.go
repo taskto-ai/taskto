@@ -289,3 +289,15 @@ func (s *Service) LocalHome(a cliowner.Account) (string, error) {
 	}
 	return "", errors.New("no CLI worker runs in this process")
 }
+
+// LocalHomeFound is a's home directory on the CLI worker running in this process, retired or not,
+// never made: false when the worker never gave it one. A purge removes the browser's files there.
+func (s *Service) LocalHomeFound(a cliowner.Account) (string, bool, error) {
+	if aw, ok := s.worker.(accountWorker); ok {
+		if l, ok := aw.w.(localWorker); ok {
+			dir, found := l.HomeDir(a.Identity)
+			return dir, found, nil
+		}
+	}
+	return "", false, errors.New("no CLI worker runs in this process")
+}

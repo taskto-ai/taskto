@@ -574,3 +574,20 @@ func TestForTurnsKeepsARefusalsCode(t *testing.T) {
 		t.Errorf("browser_tabs = %v %q, want an error with the code %s", isError, text, apierr.CodeCLIWorkerNotReady)
 	}
 }
+
+// A refusal of the turn's token itself keeps its code too: an outage while the token's turn is
+// checked is cli_worker_not_ready, which the CLI tries again after.
+func TestForTurnsKeepsATokenRefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	h := f.forTurns(false, func(*http.Request) (agenttools.Caller, error) {
+		return agenttools.Caller{}, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady, Message: "not ready"}
+	})
+	rec := rpc(t, h, "any-turn-token", "tools/list", map[string]any{})
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable || body.Code != string(apierr.CodeCLIWorkerNotReady) {
+		t.Errorf("a refused token = %d %s, want 503 with %s", rec.Code, rec.Body, apierr.CodeCLIWorkerNotReady)
+	}
+}

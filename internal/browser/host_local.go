@@ -16,12 +16,15 @@ import (
 
 // LocalHost runs the browsers' processes as this process's own OS user: local mode, where
 // there is no OS boundary between users (the CLI workers' one-user rule applies). Each account's
-// browser directory is <its CLI home>/browser, Home saying where its home is (the local CLI
-// worker's, cliworker.Worker.HomeDir); without Home, Root/<identity>/browser (tests).
+// browser directory is <its CLI home>/browser (HomePaths), Home saying where its home is (the
+// local CLI worker's, made if it has none); without Home, Root/<identity> (tests). Found is the
+// home of an account the purge removes the browser of, retired or not, never made: false when it
+// has none; without it, Home is asked.
 type LocalHost struct {
-	Root string
-	Home func(a cliowner.Account) (string, error)
-	Bins map[Program]string
+	Root  string
+	Home  func(a cliowner.Account) (string, error)
+	Found func(a cliowner.Account) (string, bool, error)
+	Bins  map[Program]string
 	// Path is $PATH for the browser's processes.
 	Path string
 }
@@ -56,13 +59,13 @@ func (h *LocalHost) Paths(a cliowner.Account) (Paths, error) {
 		return Paths{}, errors.New("invalid account")
 	}
 	if h.Home == nil {
-		return Paths{Root: filepath.Join(h.Root, a.Identity, "browser")}, nil
+		return HomePaths(filepath.Join(h.Root, a.Identity)), nil
 	}
 	home, err := h.Home(a)
 	if err != nil {
 		return Paths{}, err
 	}
-	return Paths{Root: filepath.Join(home, "browser")}, nil
+	return HomePaths(home), nil
 }
 
 // Bin implements Host.
@@ -145,6 +148,14 @@ func (h *LocalHost) Clean(a cliowner.Account) error {
 func (h *LocalHost) Purge(a cliowner.Account) error {
 	if a.Identity == "" {
 		return nil
+	}
+	if h.Found != nil {
+		// The account is retired by now (its purge began): its home is found, never made.
+		home, ok, err := h.Found(a)
+		if err != nil || !ok {
+			return err
+		}
+		return Purge(HomePaths(home))
 	}
 	p, err := h.Paths(a)
 	if err != nil {

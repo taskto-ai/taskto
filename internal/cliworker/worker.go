@@ -96,6 +96,12 @@ type Worker struct {
 	// accountsMu guards the account records (accounts.go) and accounts holds those read; it is
 	// never taken before mu.
 	accountsMu sync.Mutex
+	// volumeLock is the volume's lock, held while the worker runs (volume.go); boots is the server
+	// boots seen, oldest first, under bootsMu; censusMu runs censuses and deletions one at a time.
+	volumeLock *os.File
+	bootsMu    sync.Mutex
+	boots      []string
+	censusMu   sync.Mutex
 	accounts   map[string]accountRecord
 	// allocateHookForTest, in tests, runs once a home number is taken, before it is recorded, and
 	// adoptHookForTest once a directory from before homes is moved, before its record says so.
@@ -199,13 +205,17 @@ func New(cfg Config) (*Worker, error) {
 		return nil, err
 	}
 	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[string]int{}, accounts: map[string]accountRecord{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
-	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
+	// The volume first: its lock before anything of a worker's is swept, listened on or written.
+	if err := w.openVolume(); err != nil {
+		w.closeVolume()
 		return nil, err
 	}
 	if err := w.sweep(); err != nil {
+		w.closeVolume()
 		return nil, err
 	}
 	if err := w.listenApprovals(); err != nil {
+		w.closeVolume()
 		return nil, err
 	}
 	return w, nil
@@ -340,6 +350,10 @@ func (w *Worker) Turn(id string) (*Turn, bool) {
 // TurnOf returns a's turn id: a turn of another account's, the number's earlier owner's too, is
 // none.
 func (w *Worker) TurnOf(a cliowner.Account, id string) (*Turn, bool) {
+	// A retired account reaches none of what it had, even while its removal hasn't dropped it.
+	if w.retired(a.Identity) {
+		return nil, false
+	}
 	t, ok := w.Turn(id)
 	if !ok || t.acct.id != a.Identity || t.spec.User != a.User {
 		return nil, false
@@ -379,6 +393,15 @@ func (w *Worker) Close() {
 	}
 	w.closeApprovals()
 	w.wg.Wait()
+	w.closeVolume()
+}
+
+// closeVolume lets the volume go: another worker may use it.
+func (w *Worker) closeVolume() {
+	if w.volumeLock != nil {
+		_ = w.volumeLock.Close()
+		w.volumeLock = nil
+	}
 }
 
 // acquire waits for a place for user's turn, or for ctx to end.

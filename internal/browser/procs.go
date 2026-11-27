@@ -14,13 +14,33 @@ import (
 
 // Paths is one user's browser directory and what is in it. Only that user's processes (in
 // container mode, their Unix user) create or open anything here.
-type Paths struct{ Root string }
+//
+// Short, when set, holds what must have a short path: the VNC socket and $TMPDIR, where Chromium
+// makes its singleton socket. A Unix socket's path is at most 104 bytes on macOS and 108 on Linux,
+// so these are not under Root (HomePaths).
+type Paths struct {
+	Root  string
+	Short string
+}
+
+// HomePaths is the browser directory of the CLI home at home: home/browser, with the short
+// directory home/r beside it, so the VNC socket's path (home/r/vnc.sock) and Chromium's are no
+// longer than they were under a home from before account homes (u<n>/browser/run/vnc.sock).
+func HomePaths(home string) Paths {
+	return Paths{Root: filepath.Join(home, "browser"), Short: filepath.Join(home, "r")}
+}
 
 // Home is $HOME for the browser's processes: Chromium keeps its NSS database and caches there.
 func (p Paths) Home() string { return filepath.Join(p.Root, "home") }
 
-// Tmp is $TMPDIR.
-func (p Paths) Tmp() string { return filepath.Join(p.Root, "tmp") }
+// Tmp is $TMPDIR: Short itself, when there is one, so Chromium's singleton socket under it stays
+// as short as it can be.
+func (p Paths) Tmp() string {
+	if p.Short != "" {
+		return p.Short
+	}
+	return filepath.Join(p.Root, "tmp")
+}
 
 // Profile is the personal browser's profile, kept between runs.
 func (p Paths) Profile() string { return filepath.Join(p.Root, "profile") }
@@ -29,7 +49,12 @@ func (p Paths) Profile() string { return filepath.Join(p.Root, "profile") }
 func (p Paths) Testing() string { return filepath.Join(p.Root, "testing") }
 
 // Run holds the display's cookie and the VNC socket.
-func (p Paths) Run() string { return filepath.Join(p.Root, "run") }
+func (p Paths) Run() string {
+	if p.Short != "" {
+		return p.Short
+	}
+	return filepath.Join(p.Root, "run")
+}
 
 // Xauthority is the display's cookie file: the X server refuses a client without it.
 func (p Paths) Xauthority() string { return filepath.Join(p.Run(), "xauthority") }
@@ -90,7 +115,7 @@ func Prepare(p Paths, spec ProcSpec) error {
 	if err := spec.check(); err != nil {
 		return err
 	}
-	for _, dir := range []string{p.Root, p.Home(), p.Tmp(), p.Run()} {
+	for _, dir := range []string{p.Root, p.Home(), p.Run(), p.Tmp()} {
 		if err := ownerOnlyDir(dir); err != nil {
 			return err
 		}
@@ -123,7 +148,14 @@ func Clean(p Paths) error { return removeAll(p.Testing()) }
 // history) and the rest of the browser directory. It is for a deleted account, once no process of
 // its is left; a file a process still wrote meanwhile makes it fail, and it is tried again. It runs
 // as the directory's owner, so a read-only part (a page's, a tool's) is no obstacle (removeAll).
-func Purge(p Paths) error { return removeAll(p.Root) }
+func Purge(p Paths) error {
+	if p.Short != "" {
+		if err := removeAll(p.Short); err != nil {
+			return err
+		}
+	}
+	return removeAll(p.Root)
+}
 
 // removeAll deletes path and everything under it, as their owner: each directory is opened up to
 // its owner (0700) before it is read, so a read-only one doesn't stop it, and a link is removed,

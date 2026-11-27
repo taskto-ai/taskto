@@ -126,12 +126,14 @@ server instead of the provider:
 
 These are the same settings the CLI workers' gateway tests use, with the server in the gateway's place.
 
-- **The token** is minted for one turn: the shared account, the user, the conversation and an
-  expiry, signed with the server key (`serverkey.MAC`). The expiry is a fixed two hours: the
+- **The token** is minted for one turn: the shared account, the user and their account's identity
+  (`users.cli_identity`), the conversation and an expiry, signed with the server key (`serverkey.MAC`). The expiry is a fixed two hours: the
   worker's longest turn (30 minutes) and a wait for a free place, with room to spare. It is
   stateless, so a server restart in the middle of a turn doesn't break it.
 - **Each request** is checked again, so a change takes effect at once: the signature and expiry,
-  the account still exists, the user is still a member of its workspace, the conversation is
+  the user's number is still the account with the token's identity (a restore of the server's data
+  gives numbers again, never an identity, so a token from before it reaches no one given the number
+  since), the shared account still exists, the user is still a member of its workspace, the conversation is
   still theirs and not archived, and their mode still allows shared accounts.
 - **A token stops with its turn.** The server remembers the turns that ended (in memory) and
   refuses their tokens from then on. A restart forgets that list; the expiry then bounds what

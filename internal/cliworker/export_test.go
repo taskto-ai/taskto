@@ -134,3 +134,14 @@ func (c *Remote) TurnForTest(spec TurnSpec) *RemoteTurn { return &RemoteTurn{c: 
 // SetHandOffHookForTest has f run in a live view's dial once its helper is connected, before the
 // connection's watch for a removal is set.
 func (w *Worker) SetHandOffHookForTest(f func()) { w.handOffHookForTest = f }
+
+// CrashForTest lets the worker's volume go as a crashed worker's process would: its lock is
+// released, and nothing else is stopped.
+func (w *Worker) CrashForTest() { w.closeVolume() }
+
+// RetireOnlyForTest records identity as retired and does nothing else: as a removal that failed
+// before it dropped what the worker holds of the account.
+func (w *Worker) RetireOnlyForTest(identity string) error { return w.retire(identity, 0) }
+
+// MaxHomeForTest is the first home number there is none above.
+const MaxHomeForTest = maxHome

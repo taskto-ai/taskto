@@ -42,10 +42,11 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 	}
 	bins := browser.FindBins(cfg.BrowserChromium)
 	m := browser.NewManager(browser.Config{Host: &browser.LocalHost{
-		Root: filepath.Join(cfg.DataDir, "cli"),
-		Home: cli.LocalHome,
-		Bins: bins,
-		Path: os.Getenv("PATH"),
+		Root:  filepath.Join(cfg.DataDir, "cli"),
+		Home:  cli.LocalHome,
+		Found: cli.LocalHomeFound,
+		Bins:  bins,
+		Path:  os.Getenv("PATH"),
 	}})
 	slog.Info("agent browser on, in this process", "personal", m.Available(browser.Personal), "testing", m.Available(browser.Testing))
 	if !m.Available(browser.Testing) {

@@ -173,6 +173,10 @@ func (w *Worker) Answer(a cliowner.Account, conversation int64, id string, allow
 // turnsOf returns a's turns in conversation: never another account's, the number's earlier
 // owner's included.
 func (w *Worker) turnsOf(a cliowner.Account, conversation int64) []*Turn {
+	// A retired account reaches none of what it had, even while its removal hasn't dropped it.
+	if w.retired(a.Identity) {
+		return nil
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var out []*Turn

@@ -43,6 +43,15 @@ func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 	if !cliowner.IsIdentity(a.Identity) {
 		return badRequest{errors.New("invalid account")}
 	}
+	// One at a time with the censuses, and only for the latest server boot: a deletion an earlier
+	// server sent, delayed past a restore that brought the account back, retires nothing.
+	w.censusMu.Lock()
+	defer w.censusMu.Unlock()
+	if latest, err := w.seeBoot(a.Boot); err != nil {
+		return err
+	} else if !latest {
+		return ErrStaleBoot
+	}
 	end, err := w.beginGate(ctx, scope{id: a.Identity, all: true})
 	if err != nil {
 		return err
@@ -106,6 +115,15 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	if err := c.check(); err != nil {
 		return badRequest{err}
 	}
+	// One at a time, and only the latest server boot's: a census an earlier server sent (one a
+	// restore replaced, still running or delayed) would retire the accounts the later one made.
+	w.censusMu.Lock()
+	defer w.censusMu.Unlock()
+	if latest, err := w.seeBoot(c.Boot); err != nil {
+		return err
+	} else if !latest {
+		return ErrStaleBoot
+	}
 	live := make(map[string]bool, len(c.Owners))
 	for _, id := range c.Owners {
 		live[id] = true
@@ -123,6 +141,10 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			}
 		case r.Boot == c.Boot && !r.Retired:
 		default:
+			// A caller that has given up retires nothing more.
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
 			if err := w.retire(id, r.User); err != nil {
 				return err
 			}
@@ -176,5 +198,41 @@ func (w *Worker) tidy(ctx context.Context, acct account) error {
 		return err
 	}
 	slog.Info("cliworker: removed a retired account's directory", "user", acct.user)
+	return nil
+}
+
+// ForgetLocal removes what local mode's worker keeps of a deleted account under layout, when no
+// local worker runs to do it (the CLI workers are off, or in container mode now): identity's
+// home, found through its record, which is retired first so a local worker started later refuses
+// it; and the number's directory from before homes. A record that isn't there means no home.
+// The local worker's own Forget does the same and more (it stops what runs): when it runs, it
+// is asked first, and this then finds nothing left.
+func ForgetLocal(layout Layout, identity string, user int64) error {
+	if identity != "" {
+		if !cliowner.IsIdentity(identity) {
+			return badRequest{errors.New("invalid account")}
+		}
+		w := &Worker{cfg: Config{Layout: layout}, accounts: map[string]accountRecord{}}
+		r, ok, err := w.find(identity)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := w.retire(identity, r.User); err != nil {
+				return err
+			}
+			if r.Home != 0 {
+				if err := removeTree(layout.Home(r.Home).Root, false); err != nil {
+					return err
+				}
+				if err := syncDir(layout.Root); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	}
+	if user > 0 {
+		return removeTree(layout.legacy(user), false)
+	}
 	return nil
 }
