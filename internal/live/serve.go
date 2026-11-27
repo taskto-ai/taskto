@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -28,7 +29,10 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 	ctx, cancel := context.WithCancel(sessionCtx)
 	defer cancel()
 
-	events, revoked, unsubscribe, err := h.Subscribe(ctx, topic, user)
+	rc := http.NewResponseController(w)
+	out := &eventWriter{w: w, rc: rc, timeout: h.cfg.WriteTimeout, ctx: ctx}
+	defer out.close()
+	sub, err := h.subscribe(topic, user, func() { cancel(); out.end() })
 	switch {
 	case errors.Is(err, ErrTooManyStreams):
 		apierr.Write(w, http.StatusTooManyRequests, apierr.CodeTooManyStreams,
@@ -42,7 +46,8 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 		apierr.Internal(w)
 		return
 	}
-	defer unsubscribe()
+	defer h.unsubscribe(sub)
+	events := sub.ch
 
 	if err := recheck(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -63,9 +68,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	out := &eventWriter{w: w, rc: http.NewResponseController(w), timeout: h.cfg.WriteTimeout, ctx: ctx, revoked: revoked}
-	defer func() { _ = out.rc.SetWriteDeadline(time.Time{}) }()
-	if out.write([]byte("retry: 2000\n\n")) != nil {
+	if out.deliver([]byte("retry: 2000\n\n"), nil) != nil {
 		return
 	}
 
@@ -79,14 +82,15 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 			if !ok {
 				return
 			}
-			if ev.carriesData() && !stillAllowed(ctx, topic, recheck) {
-				return
+			var allowed func() bool
+			if ev.carriesData() {
+				allowed = func() bool { return stillAllowed(ctx, topic, recheck) }
 			}
-			if out.event(ev) != nil {
+			if out.event(ev, allowed) != nil {
 				return
 			}
 		case <-heartbeat:
-			if out.write([]byte(": heartbeat\n\n")) != nil {
+			if out.deliver([]byte(": heartbeat\n\n"), nil) != nil {
 				return
 			}
 		case <-rechecks:
@@ -118,31 +122,56 @@ type eventWriter struct {
 	rc      *http.ResponseController
 	timeout time.Duration
 	ctx     context.Context
-	revoked <-chan struct{}
+
+	mu       sync.Mutex
+	ended    bool
+	abortMu  sync.Mutex
+	finished bool
 }
 
-func (e *eventWriter) event(ev Event) error {
+func (e *eventWriter) event(ev Event, allowed func() bool) error {
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return err
 	}
-	return e.write(append(append([]byte("data: "), data...), '\n', '\n'))
+	return e.deliver(append(append([]byte("data: "), data...), '\n', '\n'), allowed)
 }
 
-func (e *eventWriter) write(p []byte) error {
-	select {
-	case <-e.revoked:
-		return errStreamEnded
-	default:
-	}
-	if e.ctx.Err() != nil {
+func (e *eventWriter) deliver(p []byte, allowed func() bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ended || e.ctx.Err() != nil {
 		return errStreamEnded
 	}
 	if err := e.rc.SetWriteDeadline(time.Now().Add(e.timeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return err
 	}
+	if allowed != nil && !allowed() {
+		return errStreamEnded
+	}
+	if e.ended || e.ctx.Err() != nil {
+		return errStreamEnded
+	}
 	if _, err := e.w.Write(p); err != nil {
 		return err
 	}
 	return e.rc.Flush()
+}
+
+func (e *eventWriter) end() {
+	e.abortMu.Lock()
+	if !e.finished {
+		_ = e.rc.SetWriteDeadline(time.Now())
+	}
+	e.abortMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ended = true
+}
+
+func (e *eventWriter) close() {
+	e.abortMu.Lock()
+	defer e.abortMu.Unlock()
+	e.finished = true
+	_ = e.rc.SetWriteDeadline(time.Time{})
 }

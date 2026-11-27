@@ -419,3 +419,32 @@ func TestPublishKeepsItsOwnCopyOfTheValidatedBytes(t *testing.T) {
 		t.Fatalf("data = %q, the publisher's later write reached the queue", ev.Data)
 	}
 }
+
+func TestAOneEventBufferStillOverflowsWithoutBlockingAndKeepsBothControlFrames(t *testing.T) {
+	h := New(Config{Buffer: 1})
+	ch, _, _, err := h.Subscribe(context.Background(), room, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := make(chan struct{})
+	go func() {
+		defer close(published)
+		for range 3 {
+			if _, err := h.Publish(room, "stroke", json.RawMessage(`1`)); err != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publishing blocked on a subscriber whose buffer was requested as one event")
+	}
+	if ev := take(t, ch); ev.Type != TypeReady {
+		t.Fatalf("first = %+v, want ready", ev)
+	}
+	if ev := take(t, ch); ev.Type != TypeResync {
+		t.Fatalf("second = %+v, want resync", ev)
+	}
+	closed(t, ch)
+}

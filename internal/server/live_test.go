@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,11 +30,34 @@ type liveStack struct {
 
 	mu       sync.Mutex
 	rechecks []chan time.Time
+
+	letGo  func()
+	armed  atomic.Bool
+	paused chan struct{}
+	resume chan struct{}
+}
+
+type pausingResponse struct {
+	http.ResponseWriter
+	l *liveStack
+}
+
+func (w pausingResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w pausingResponse) SetWriteDeadline(t time.Time) error {
+	if !t.IsZero() && time.Until(t) > time.Second && w.l.armed.CompareAndSwap(true, false) {
+		close(w.l.paused)
+		<-w.l.resume
+	}
+	return http.NewResponseController(w.ResponseWriter).SetWriteDeadline(t)
 }
 
 func newLiveStack(t *testing.T) *liveStack {
 	t.Helper()
-	l := &liveStack{}
+	l := &liveStack{paused: make(chan struct{}), resume: make(chan struct{})}
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(l.resume) }) })
+	l.letGo = func() { release.Do(func() { close(l.resume) }) }
 	var accounts *auth.Service
 	var sqlDB *sql.DB
 	l.hub = live.New(live.Config{
@@ -62,7 +86,7 @@ func newLiveStack(t *testing.T) *liveStack {
 			if r.URL.Query().Get("lenient") != "" {
 				recheck = func(context.Context) error { return nil }
 			}
-			l.hub.Serve(w, r, live.Topic{Kind: "room", SpaceID: sp.ID, Generation: sp.Generation, ResourceID: n}, u.ID, recheck)
+			l.hub.Serve(pausingResponse{w, l}, r, live.Topic{Kind: "room", SpaceID: sp.ID, Generation: sp.Generation, ResourceID: n}, u.ID, recheck)
 		})))
 		mux.Handle("POST "+room+"/events", auth.CSRF(checker.RequireSpace(access.Write, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sp, _ := access.SpaceFrom(r.Context())
@@ -383,6 +407,25 @@ func TestARemovedWorkspaceMemberGetsNoEventBeforeTheNextCheck(t *testing.T) {
 	if ev := stays.next(); ev.Seq != 1 {
 		t.Fatalf("the member who stayed got %+v", ev)
 	}
+	removed.endedWithoutData()
+}
+
+func TestAWriteWaitingToStartIsRefusedWhenARemovalCommitsBeforeIt(t *testing.T) {
+	l := newLiveStack(t)
+	removed := l.connect(l.bob.cookie, l.team)
+	l.armed.Store(true)
+	if got := l.post(l.alice.cookie, l.team); got != http.StatusNoContent {
+		t.Fatalf("post = %d", got)
+	}
+	select {
+	case <-l.paused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the event never reached the writer")
+	}
+	if code, body := l.browser(l.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", l.one, l.bob.id), nil); code != http.StatusNoContent {
+		t.Fatalf("remove from the workspace = %d %v", code, body)
+	}
+	l.letGo()
 	removed.endedWithoutData()
 }
 

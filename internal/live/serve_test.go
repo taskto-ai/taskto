@@ -491,6 +491,17 @@ func (w *gatedWriter) Write(p []byte) (int, error) {
 	return w.body.Write(p)
 }
 
+func (w *gatedWriter) waitFor(t *testing.T, text string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(w.written(), text) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q was never written", text)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func (w *gatedWriter) written() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -523,9 +534,15 @@ func TestARevokedStreamWritesNoQueuedEvent(t *testing.T) {
 	done := serveGated(g, w, "a", func(context.Context) error { return nil })
 	<-w.first
 	g.publish(`{"queued":1}`)
-	g.hub.EndUserIn(room.SpaceID, 1)
+	hook := make(chan struct{})
+	go func() {
+		defer close(hook)
+		g.hub.EndUserIn(room.SpaceID, 1)
+	}()
+	g.waitRevoked(1)
 	close(w.gate)
 	finished(t, done)
+	finished(t, hook)
 	if got := w.written(); strings.Contains(got, "data:") {
 		t.Fatalf("wrote %q after the revocation", got)
 	}
@@ -537,10 +554,13 @@ func TestARevocationAfterAnEventWasTakenStopsItsWrite(t *testing.T) {
 	close(w.gate)
 	checking, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	done := serveGated(g, w, "a", func(context.Context) error {
+	done := serveGated(g, w, "a", func(ctx context.Context) error {
 		if w.written() != "" {
 			once.Do(func() { close(checking) })
-			<-release
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
 		}
 		return nil
 	})
@@ -551,8 +571,13 @@ func TestARevocationAfterAnEventWasTakenStopsItsWrite(t *testing.T) {
 	}
 	g.publish(`{"taken":1}`)
 	<-checking
-	g.hub.EndUserIn(room.SpaceID, 1)
-	close(release)
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		g.hub.EndUserIn(room.SpaceID, 1)
+	}()
+	t.Cleanup(func() { close(release) })
+	finished(t, returned)
 	finished(t, done)
 	if got := w.written(); strings.Contains(got, "taken") {
 		t.Fatalf("wrote %q after the revocation", got)
@@ -630,5 +655,204 @@ func TestAClientThatOverflowsBeforeItsFirstEventStillGetsReadyThenResync(t *test
 	}
 	if strings.Join(types, ",") != "ready,resync" {
 		t.Fatalf("the client saw %v, want ready then resync", types)
+	}
+}
+
+func (h *Hub) revokedStreams() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for s := range h.all {
+		if s.detached {
+			n++
+		}
+	}
+	return n
+}
+
+func (g *rig) waitRevoked(n int) {
+	g.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for g.hub.revokedStreams() != n {
+		if time.Now().After(deadline) {
+			g.t.Fatalf("%d revoked streams, want %d", g.hub.revokedStreams(), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+type pausingWriter struct {
+	*gatedWriter
+	armed      atomic.Bool
+	armedWrite atomic.Bool
+	paused     chan struct{}
+	resume     chan struct{}
+	release    sync.Once
+}
+
+func newPausingWriter(t *testing.T) *pausingWriter {
+	w := &pausingWriter{gatedWriter: newGatedWriter(), paused: make(chan struct{}), resume: make(chan struct{})}
+	close(w.gate)
+	t.Cleanup(w.letGo)
+	return w
+}
+
+func (w *pausingWriter) letGo() { w.release.Do(func() { close(w.resume) }) }
+
+func (w *pausingWriter) Write(p []byte) (int, error) {
+	if w.armedWrite.CompareAndSwap(true, false) {
+		close(w.paused)
+		<-w.resume
+	}
+	return w.gatedWriter.Write(p)
+}
+
+func (w *pausingWriter) SetWriteDeadline(t time.Time) error {
+	if !t.IsZero() && time.Until(t) > time.Second && w.armed.CompareAndSwap(true, false) {
+		close(w.paused)
+		<-w.resume
+	}
+	return nil
+}
+
+func TestNothingIsWrittenOnceARevocationHasReturnedEvenForAWriteThatWasWaitingToStart(t *testing.T) {
+	hooks := map[string]func(*rig){
+		"a member removed from the space": func(g *rig) { g.hub.EndUserIn(room.SpaceID, 1) },
+		"the space ended":                 func(g *rig) { g.hub.EndSpace(room.SpaceID) },
+		"shutdown":                        func(g *rig) { g.hub.EndStreams() },
+	}
+	for name, hook := range hooks {
+		t.Run(name, func(t *testing.T) {
+			g := newRig(t, Config{})
+			w := newPausingWriter(t)
+			var seen atomic.Pointer[context.Context]
+			done := serveGated(g, w, "a", func(ctx context.Context) error {
+				seen.Store(&ctx)
+				return nil
+			})
+			<-w.first
+			w.waitFor(t, "ready")
+			w.armed.Store(true)
+			g.publish(`{"waiting":1}`)
+			<-w.paused
+			returned := make(chan struct{})
+			go func() {
+				defer close(returned)
+				hook(g)
+			}()
+			select {
+			case <-returned:
+			case <-(*seen.Load()).Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("the revocation neither returned nor reached the stream")
+			}
+			w.letGo()
+			finished(t, returned)
+			finished(t, done)
+			if got := w.written(); strings.Contains(got, "waiting") {
+				t.Fatalf("wrote %q after the revocation returned", got)
+			}
+		})
+	}
+}
+
+func TestARevocationEndsAResourceCheckThatIsRunning(t *testing.T) {
+	hooks := map[string]func(*rig){
+		"a member removed from the space": func(g *rig) { g.hub.EndUserIn(room.SpaceID, 1) },
+		"shutdown":                        func(g *rig) { g.hub.EndStreams() },
+	}
+	for name, hook := range hooks {
+		t.Run(name, func(t *testing.T) {
+			g := newRig(t, Config{})
+			w := newGatedWriter()
+			close(w.gate)
+			checking := make(chan struct{})
+			var once sync.Once
+			done := serveGated(g, w, "a", func(ctx context.Context) error {
+				if w.written() == "" {
+					return nil
+				}
+				once.Do(func() { close(checking) })
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(10 * time.Second):
+					return nil
+				}
+			})
+			<-w.first
+			w.waitFor(t, "ready")
+			g.publish(`{"checking":1}`)
+			<-checking
+			returned := make(chan struct{})
+			go func() {
+				defer close(returned)
+				hook(g)
+			}()
+			finished(t, done)
+			finished(t, returned)
+			if got := w.written(); strings.Contains(got, "checking") {
+				t.Fatalf("wrote %q after the revocation", got)
+			}
+		})
+	}
+}
+
+func TestACancelledSessionKeepsTheSlotUntilTheHandlerReturns(t *testing.T) {
+	g := newRig(t, Config{MaxStreams: 1})
+	w := newGatedWriter()
+	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	<-w.first
+	g.endSession("a")
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for g.hub.openStreams() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	second := g.open("b", "")
+	defer func() { _ = second.Body.Close() }()
+	if second.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("a second stream while the first handler is still open = %d, want 429", second.StatusCode)
+	}
+	if code, _ := errorBody(t, second); code != apierr.CodeTooManyStreams {
+		t.Fatalf("code = %q", code)
+	}
+	close(w.gate)
+	finished(t, done)
+	g.waitSubscribers(0)
+}
+
+func TestARevocationWaitsForAWriteThatIsAlreadyInFlight(t *testing.T) {
+	g := newRig(t, Config{})
+	w := newPausingWriter(t)
+	var seen atomic.Pointer[context.Context]
+	done := serveGated(g, w, "a", func(ctx context.Context) error {
+		seen.Store(&ctx)
+		return nil
+	})
+	<-w.first
+	w.waitFor(t, "ready")
+	w.armedWrite.Store(true)
+	g.publish(`{"inflight":1}`)
+	<-w.paused
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		g.hub.EndUserIn(room.SpaceID, 1)
+	}()
+	select {
+	case <-(*seen.Load()).Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the revocation never reached the stream")
+	}
+	select {
+	case <-returned:
+		t.Fatal("the revocation returned while a write was still in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	w.letGo()
+	finished(t, returned)
+	finished(t, done)
+	if got := w.written(); !strings.Contains(got, "inflight") {
+		t.Fatalf("the write that had started was lost: %q", got)
 	}
 }

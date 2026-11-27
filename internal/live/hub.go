@@ -79,6 +79,7 @@ type subscriber struct {
 	revoked  chan struct{}
 	detached bool
 	released bool
+	onRevoke func()
 }
 
 func New(cfg Config) *Hub {
@@ -111,31 +112,40 @@ func (h *Hub) UseSessions(watch func(r *http.Request, every time.Duration) (cont
 func (h *Hub) MaxStreams() int { return h.cfg.MaxStreams }
 
 func (h *Hub) Subscribe(ctx context.Context, topic Topic, user int64) (<-chan Event, <-chan struct{}, func(), error) {
+	s, err := h.subscribe(topic, user, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { h.unsubscribe(s) })
+	return s.ch, s.revoked, func() { stop(); h.unsubscribe(s) }, nil
+}
+
+func (h *Hub) subscribe(topic Topic, user int64, onRevoke func()) (*subscriber, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closing.Err() != nil {
-		return nil, nil, nil, ErrClosed
+		return nil, ErrClosed
 	}
 	if h.perUser[user] >= h.cfg.MaxStreams {
-		return nil, nil, nil, ErrTooManyStreams
+		return nil, ErrTooManyStreams
 	}
 	ts := h.topics[topic]
 	if ts == nil {
 		ts = &topicState{subs: map[*subscriber]struct{}{}}
 		h.topics[topic] = ts
 	}
-	s := &subscriber{user: user, topic: topic, ch: make(chan Event, h.cfg.Buffer), revoked: make(chan struct{})}
+	s := &subscriber{user: user, topic: topic, ch: make(chan Event, h.cfg.Buffer), revoked: make(chan struct{}), onRevoke: onRevoke}
 	ts.subs[s] = struct{}{}
 	h.all[s] = struct{}{}
 	h.perUser[user]++
 	s.ch <- Event{Seq: ts.seq, Type: TypeReady}
-	unsubscribe := func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.release(s)
-	}
-	stop := context.AfterFunc(ctx, unsubscribe)
-	return s.ch, s.revoked, func() { stop(); unsubscribe() }, nil
+	return s, nil
+}
+
+func (h *Hub) unsubscribe(s *subscriber) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.release(s)
 }
 
 func (h *Hub) Publish(topic Topic, typ string, data json.RawMessage) (int64, error) {
@@ -164,10 +174,17 @@ func (h *Hub) Publish(topic Topic, typ string, data json.RawMessage) (int64, err
 
 func (h *Hub) Revoke(match func(topic Topic, user int64) bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	var ended []*subscriber
 	for s := range h.all {
 		if match(s.topic, s.user) {
 			h.revoke(s)
+			ended = append(ended, s)
+		}
+	}
+	h.mu.Unlock()
+	for _, s := range ended {
+		if s.onRevoke != nil {
+			s.onRevoke()
 		}
 	}
 }
