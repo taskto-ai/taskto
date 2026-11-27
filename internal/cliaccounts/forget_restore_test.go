@@ -262,8 +262,10 @@ func TestADeletionCompletesAfterTheWorkerAloneStartsAgain(t *testing.T) {
 	}
 	dirs := e.dirs(user)
 	e.worker.Close()
-	if err := os.Remove(filepath.Join(e.layout.Root, ".worker", "boots.json")); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"boots.json", "latest-boot"} {
+		if err := os.Remove(filepath.Join(e.layout.Root, ".worker", f)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	again, err := cliworker.New(cliworker.Config{Layout: e.layout, UnsafePrivileged: os.Geteuid() == 0})
 	if err != nil {

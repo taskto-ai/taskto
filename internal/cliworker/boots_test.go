@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,8 +51,8 @@ func TestBootsAreOrderedWithoutAClock(t *testing.T) {
 }
 
 // What a census retires doesn't depend on the list of boots: with it lost (or past its bound),
-// an account made under an earlier server is still one a later census retires, never one of a
-// server still to come. Meanwhile deletions wait for that census, which sets the order again.
+// and the latest boot lost with it, an account made under an earlier server is still one a later
+// census retires, never one of a server still to come. Meanwhile deletions ask for a census.
 func TestALostListOfBootsLeavesNoAccountUnretired(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -60,8 +61,10 @@ func TestALostListOfBootsLeavesNoAccountUnretired(t *testing.T) {
 	}
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
 	h.w.Close()
-	if err := os.Remove(filepath.Join(h.layout.Root, ".worker", "boots.json")); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"boots.json", "latest-boot"} {
+		if err := os.Remove(filepath.Join(h.layout.Root, ".worker", f)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	h.reopen(t)
 	later := strings.Repeat("c", 32)
@@ -81,29 +84,43 @@ func TestALostListOfBootsLeavesNoAccountUnretired(t *testing.T) {
 }
 
 // slowHelper is a helper that waits before it does anything (a slow start), so a turn's home is
-// made only after the worker admitted the turn.
-func slowHelper(t *testing.T) string {
+// made only after the worker admitted the turn. It touches the marker it returns as it starts.
+func slowHelper(t *testing.T) (script, started string) { return slowHelperFor(t, 1) }
+
+// slowHelperFor is slowHelper, waiting seconds.
+func slowHelperFor(t *testing.T, seconds int) (script, started string) {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(t.TempDir(), "helper")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 1\nexec '"+exe+"' \"$@\"\n"), 0o700); err != nil { //nolint:gosec // G306: the test's own script
+	dir := t.TempDir()
+	script, started = filepath.Join(dir, "helper"), filepath.Join(dir, "started")
+	body := "#!/bin/sh\ntouch '" + started + "'\nsleep " + strconv.Itoa(seconds) + "\nexec '" + exe + "' \"$@\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil { //nolint:gosec // G306: the test's own script
 		t.Fatal(err)
 	}
-	return script
+	return script, started
+}
+
+// helperStarted waits until the slow helper of a turn runs: the worker admitted the turn and
+// started its helper, which hasn't made the home yet.
+func helperStarted(t *testing.T, started string) {
+	t.Helper()
+	eventually(t, "the turn's helper didn't start", func() bool { _, err := os.Stat(started); return err == nil })
 }
 
 // A census that retires an account whose first turn was admitted, but whose helper hasn't made
 // its home yet, stops that turn and leaves no home: nothing makes a retired account's home.
 func TestACensusStopsAFirstTurnBeforeItsHomeIsMade(t *testing.T) {
-	h := newHarness(t, func(c *cliworker.Config) { c.Helper = slowHelper(t) })
+	script, started := slowHelper(t)
+	h := newHarness(t, func(c *cliworker.Config) { c.Helper = script })
 	ctx := context.Background()
 	turn, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "hi"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	helperStarted(t, started)
 	home := h.layout.Home(h.w.HomeForTest(acct(1))).Root
 	if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fixture: the home is there before the helper ran: %v", err)
@@ -209,12 +226,14 @@ func TestTheCensusThatArrivesFirstHasTheEarlierNumber(t *testing.T) {
 // for the account: retired and stopped are one step. Then the census is tried again, and succeeds,
 // and the account's first turn, admitted before and slow to make its home, makes none.
 func TestACensusCancelledAfterARetirementStillStopsTheWork(t *testing.T) {
-	h := newHarness(t, func(c *cliworker.Config) { c.Helper = slowHelper(t) })
+	script, started := slowHelperFor(t, 4)
+	h := newHarness(t, func(c *cliworker.Config) { c.Helper = script })
 	ctx := context.Background()
 	turn, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "hi"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	helperStarted(t, started)
 	home := h.layout.Home(h.w.HomeForTest(acct(1))).Root
 	cctx, cancel := context.WithCancel(ctx)
 	h.w.SetRetiredHookForTest(func(id string) {
@@ -225,8 +244,54 @@ func TestACensusCancelledAfterARetirementStillStopsTheWork(t *testing.T) {
 	later := bootCensus(strings.Repeat("a", 32), time.Now(), nil)
 	_ = h.w.Reconcile(cctx, later) // canceled part way: whatever it answers
 	h.w.SetRetiredHookForTest(nil)
+	// Stopped by that census itself, before any retry.
+	select {
+	case <-turnOver(turn):
+	case <-time.After(2 * time.Second): // well before the helper would go on by itself
+		t.Fatal("the census whose caller went after the retirement left the turn running")
+	}
+	if d := last(waitDone(t, turn, 20*time.Second)); d.Status == cliworker.StatusOK {
+		t.Errorf("the retired account's turn finished: %+v", d)
+	}
 	if err := h.w.Reconcile(ctx, later); err != nil {
 		t.Fatalf("the census tried again: %v", err)
+	}
+	time.Sleep(4500 * time.Millisecond) // past the helper's wait
+	if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a retired account's home was made after its census: %v", err)
+	}
+}
+
+// A retirement alone isn't a completed removal: a browsers' purge records one without stopping
+// the account's CLI work. A census then still stops an admitted first turn whose home isn't made
+// yet, and no home appears afterwards.
+func TestARetirementWithoutItsRemovalStillGetsStopped(t *testing.T) {
+	script, started := slowHelper(t)
+	h := newHarness(t, func(c *cliworker.Config) { c.Helper = script })
+	ctx := context.Background()
+	c := bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})
+	if err := h.w.Reconcile(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	turn, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperStarted(t, started)
+	home := h.layout.Home(h.w.HomeForTest(acct(1))).Root
+	// The browsers' purge: retires the account, stops no CLI work.
+	if err := h.w.FenceDeletion(ctx, acct(1), func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fixture: the home is there before the helper ran: %v", err)
+	}
+	if st, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Fatalf("fixture: the purge didn't retire the account: %+v %v", st, err)
+	}
+	// The census, tried again, no longer naming it.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
 	}
 	if d := last(waitDone(t, turn, 20*time.Second)); d.Status == cliworker.StatusOK {
 		t.Errorf("the retired account's turn finished: %+v", d)
@@ -234,5 +299,98 @@ func TestACensusCancelledAfterARetirementStillStopsTheWork(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond) // past the helper's wait
 	if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a retired account's home was made after its census: %v", err)
+	}
+	// Once removed, a census again leaves it alone, and it stays removed.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// turnOver is closed once turn has ended.
+func turnOver(turn *cliworker.Turn) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for !turn.Over() {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	return done
+}
+
+// A lost list of boots changes nothing: the latest boot is kept on its own, so an earlier server's
+// deletion is still refused as stale (it is never asked for a census, which could make it the
+// latest), and the latest server's deletions go on.
+func TestALostListKeepsTheLatestBoot(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	earlier, later := cliworker.TestBoot, strings.Repeat("c", 32)
+	if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	h.w.Close()
+	if err := os.Remove(filepath.Join(h.layout.Root, ".worker", "boots.json")); err != nil {
+		t.Fatal(err)
+	}
+	h.reopen(t)
+	if err := h.w.Forget(ctx, cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: earlier}); !errors.Is(err, cliworker.ErrStaleBoot) {
+		t.Errorf("the earlier server's deletion after the list was lost: %v, want ErrStaleBoot", err)
+	}
+	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); err != nil {
+		t.Errorf("the latest server's deletion after the list was lost: %v", err)
+	}
+}
+
+// With the latest boot lost too, the worker can't tell which server is the latest: deletions ask
+// for a census, and the recovery census a server then sends sets the latest boot and retires
+// nothing, so an earlier server's, taken first, can't retire what the latest server keeps; once
+// the latest boot is set, another server's recovery census is refused.
+func TestARecoveryCensusRetiresNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	earlier, later := cliworker.TestBoot, strings.Repeat("c", 32)
+	if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	// An account the later server made: the earlier server's database doesn't have it.
+	kept := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: later}
+	dirs, err := h.w.AccountDirs(kept, cliworker.Claude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
+	h.w.Close()
+	for _, f := range []string{"boots.json", "latest-boot"} {
+		if err := os.Remove(filepath.Join(h.layout.Root, ".worker", f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.reopen(t)
+	if err := h.w.Forget(ctx, cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: earlier}); !errors.Is(err, cliowner.ErrCensusNeeded) {
+		t.Fatalf("a deletion with the latest boot lost: %v, want ErrCensusNeeded", err)
+	}
+	// The earlier server answers first, with its database's census.
+	recovery := bootCensus(earlier, time.Now(), nil)
+	recovery.Recovery = true
+	if err := h.w.Reconcile(ctx, recovery); err != nil {
+		t.Fatalf("the recovery census: %v", err)
+	}
+	if st, err := h.w.Status(ctx, kept, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Errorf("the later server's account after the earlier server's recovery census: %+v %v", st, err)
+	}
+	// Now the latest boot is set: another recovery census is refused, and retires nothing either.
+	other := bootCensus(later, time.Now(), nil)
+	other.Recovery = true
+	if err := h.w.Reconcile(ctx, other); !errors.Is(err, cliworker.ErrStaleBoot) {
+		t.Errorf("a second server's recovery census: %v, want ErrStaleBoot", err)
+	}
+	if st, err := h.w.Status(ctx, kept, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Errorf("the later server's account at the end: %+v %v", st, err)
 	}
 }

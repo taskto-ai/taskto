@@ -61,6 +61,9 @@ type accountRecord struct {
 	// back only a retirement made before it was registered (a deletion since is one it can't know
 	// of). RetiredAt is for people to read; nothing is decided by it.
 	RetiredGen int64 `json:"retired_gen,omitempty"`
+	// Cleaned says the removal of the retired account completed once (its work stopped and waited
+	// for, its home removed): written after it, so a census may leave an account alone only then.
+	Cleaned bool `json:"cleaned,omitempty"`
 	// Adopting is the number of a directory from before homes (Root/u<n>) being moved to this home
 	// (Config.AdoptLegacy): set before the move, cleared after it, so a stop in between is finished
 	// by the next use.
@@ -313,6 +316,18 @@ func (w *Worker) retireNow(identity string, user int64) (already bool, err error
 	return false, w.putRecord(identity, r)
 }
 
+// markCleaned records that the removal of identity's retired account completed (tidy, Forget).
+func (w *Worker) markCleaned(identity string) error {
+	w.accountsMu.Lock()
+	defer w.accountsMu.Unlock()
+	r, ok, err := w.record(identity)
+	if err != nil || !ok || !r.Retired || r.Cleaned {
+		return err
+	}
+	r.Cleaned = true
+	return w.putRecord(identity, r)
+}
+
 // retired reports whether identity is retired. A record that can't be read counts as retired: only
 // its absence or its saying so tells.
 func (w *Worker) retired(identity string) bool {
@@ -374,7 +389,7 @@ func (w *Worker) unretire(identity string, seq int64) error {
 	if err != nil || !ok || !r.Retired || r.RetiredGen >= seq {
 		return err
 	}
-	r.Retired, r.RetiredAt, r.RetiredGen = false, time.Time{}, 0
+	r.Retired, r.RetiredAt, r.RetiredGen, r.Cleaned = false, time.Time{}, 0, false
 	if r.Home == 0 {
 		// Retired before the worker gave it a home: it gets one now, as any account does.
 		if err := w.giveHome(&r); err != nil {

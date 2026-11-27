@@ -41,6 +41,9 @@ func TestALostOrRolledBackCounterGivesNoHomeAgain(t *testing.T) {
 			return os.WriteFile(p, []byte(strconv.Itoa(cliworker.FirstHomeForTest)+"\n"), 0o600)
 		},
 		"damaged": func(p string) error { return os.WriteFile(p, []byte("x"), 0o600) },
+		"past the last number": func(p string) error {
+			return os.WriteFile(p, []byte(strconv.FormatInt(cliworker.MaxHomeForTest+5, 10)+"\n"), 0o600)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, nil)

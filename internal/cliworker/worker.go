@@ -111,6 +111,9 @@ type Worker struct {
 	bootsMu    sync.Mutex
 	boots      []bootEntry
 	bootSeq    int64
+	// latest is the latest registered boot, when latestKnown (volume.go).
+	latest      bootEntry
+	latestKnown bool
 	// reserved is the numbers the censuses waiting for the census lock took as they arrived, by
 	// boot, and reservedTop the highest given (volume.go), under bootsMu.
 	reserved    map[string]reservation

@@ -70,7 +70,10 @@ func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 	if err != nil || !ok || r.Home == 0 {
 		return err // nothing of the account is here
 	}
-	return w.removeAccount(ctx, account{id: a.Identity, user: r.User, home: r.Home})
+	if err := w.removeAccount(ctx, account{id: a.Identity, user: r.User, home: r.Home}); err != nil {
+		return err
+	}
+	return w.markCleaned(a.Identity)
 }
 
 // Census is what the server's database says when it reads it, for Reconcile.
@@ -84,6 +87,10 @@ type Census struct {
 	// Before is when the server read its database, for the logs: nothing is decided by it (the
 	// worker orders boots by when it registered them, volume.go).
 	Before time.Time `json:"before"`
+	// Recovery marks a census a server sends because a deletion was answered
+	// cliowner.ErrCensusNeeded: it registers the server's boot only if the worker lost which is the
+	// latest, and retires and takes back nothing (registerRecovery).
+	Recovery bool `json:"recovery,omitempty"`
 }
 
 func (c Census) check() error {
@@ -134,6 +141,11 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if c.Recovery {
+		// Only the latest boot is set: what the census says of the accounts is left to the next
+		// one, so an earlier server's census, taken while the worker can't tell, retires nothing.
+		return w.registerRecovery(c, n)
+	}
 	seq, err := w.registerCensus(c, n)
 	if err != nil {
 		return err
@@ -161,7 +173,7 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(errs, err)...)
 			}
-			already, err := w.retireNow(id, r.User)
+			_, err := w.retireNow(id, r.User)
 			if err != nil {
 				return err
 			}
@@ -174,7 +186,7 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			// Retired and stopped are one step: once the retirement is recorded, what runs for the
 			// account is stopped even if the caller has gone meanwhile. A retry that finds it
 			// retired would otherwise not stop it (tidy).
-			if err := w.tidy(context.WithoutCancel(ctx), account{id: id, user: r.User, home: r.Home}, already); err != nil {
+			if err := w.tidy(context.WithoutCancel(ctx), account{id: id, user: r.User, home: r.Home}, r.Retired && r.Cleaned); err != nil {
 				if ctx.Err() != nil {
 					return errors.Join(append(errs, err)...)
 				}
@@ -211,13 +223,15 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	return nil
 }
 
-// tidy removes a retired account's processes and home. An account retired just now may have work
-// admitted before (a first turn, a sign-in, a browser) whose helper hasn't made its home yet: the
+// tidy removes a retired account's processes and home. An account may have work admitted before
+// its retirement (a first turn, a sign-in, a browser) whose helper hasn't made its home yet: the
 // gate is closed and that work stopped and waited for whether or not the home is there, so nothing
-// makes it afterwards. One retired already, at an earlier census or deletion, had that done then,
-// and nothing was admitted since: with no home left there is nothing to do.
-func (w *Worker) tidy(ctx context.Context, acct account, already bool) error {
-	if _, err := os.Lstat(w.cfg.Layout.Home(acct.home).Root); already && errors.Is(err, fs.ErrNotExist) {
+// makes it afterwards. Only an account whose removal completed once since its retirement (cleaned,
+// recorded durably after the stop and the removal) and whose home is gone is left alone: nothing
+// was admitted for it since. A retirement alone (a browsers' purge records one, and stops no CLI
+// work) never counts as that.
+func (w *Worker) tidy(ctx context.Context, acct account, cleaned bool) error {
+	if _, err := os.Lstat(w.cfg.Layout.Home(acct.home).Root); cleaned && errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	end, err := w.beginGate(ctx, scope{id: acct.id, all: true})
@@ -229,7 +243,7 @@ func (w *Worker) tidy(ctx context.Context, acct account, already bool) error {
 		return err
 	}
 	slog.Info("cliworker: removed a retired account's directory", "user", acct.user)
-	return nil
+	return w.markCleaned(acct.id)
 }
 
 // ForgetLocal removes what local mode's worker keeps of a deleted account under layout, when no

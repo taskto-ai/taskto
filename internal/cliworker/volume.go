@@ -179,7 +179,9 @@ func (w *Worker) readCounter() (int64, bool) {
 		return 0, false
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-	return n, err == nil && n >= firstHome
+	// The next home number is firstHome up to maxHome (every number given): anything else is a
+	// damaged counter, rebuilt from the records and the homes.
+	return n, err == nil && n >= firstHome && n <= maxHome
 }
 
 func (w *Worker) uidBaseFile() string { return filepath.Join(w.stateDir(), "uid-base") }
@@ -279,10 +281,22 @@ func (w *Worker) loadBoots() error {
 			w.boots = l.Boots
 		}
 	}
+	// The latest boot is kept on its own, apart from the list: losing the list changes nothing.
+	if b, err := os.ReadFile(w.latestBootFile()); err == nil {
+		var e bootEntry
+		if json.Unmarshal(b, &e) == nil && cliowner.IsIdentity(e.Boot) && e.Seq > 0 {
+			w.latest, w.latestKnown = e, true
+		} else {
+			slog.Warn("cliworker: the latest server boot (.worker/latest-boot) is damaged: deletions wait for a recovery census")
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	seq, _ := w.readSeq(w.bootSeqFile())
 	for _, e := range w.boots {
 		seq = max(seq, e.Seq)
 	}
+	seq = max(seq, w.latest.Seq)
 	recs, err := w.records()
 	if err != nil {
 		return err
@@ -291,6 +305,11 @@ func (w *Worker) loadBoots() error {
 		seq = max(seq, r.Gen, r.RetiredGen)
 	}
 	w.bootSeq = seq
+	// The latest boot lost, but the list's last entry has the counter's number: that is the latest
+	// (the list is written after it, in the same registration).
+	if n := len(w.boots); !w.latestKnown && n > 0 && w.boots[n-1].Seq == seq {
+		w.latest, w.latestKnown = w.boots[n-1], true
+	}
 	if n, _ := w.readSeq(w.bootSeqFile()); n < seq {
 		return writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n"))
 	}
@@ -313,13 +332,17 @@ func (w *Worker) latestSeq() int64 {
 	return w.bootSeq
 }
 
-// latestBoot is the boot whose number is the counter's, "" when none is (no census yet, or the
-// list lost it).
+// latestBootFile is the latest registered boot, with its number: what deletions are fenced by,
+// kept on its own and written durably at every registration.
+func (w *Worker) latestBootFile() string { return filepath.Join(w.stateDir(), "latest-boot") }
+
+// latestBoot is the latest registered boot, "" when the worker has none (no census yet, or its
+// record of the latest was lost: recovering).
 func (w *Worker) latestBoot() string {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
-	if n := len(w.boots); n > 0 && w.boots[n-1].Seq == w.bootSeq {
-		return w.boots[n-1].Boot
+	if w.latestKnown {
+		return w.latest.Boot
 	}
 	return ""
 }
@@ -375,44 +398,75 @@ type reservation struct {
 func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
-	for i, b := range w.boots {
+	if w.latestKnown && c.Boot == w.latest.Boot {
+		return w.latest.Seq, nil
+	}
+	for _, b := range w.boots {
 		if b.Boot == c.Boot {
-			if i == len(w.boots)-1 && b.Seq == w.bootSeq {
-				return b.Seq, nil
-			}
 			return 0, ErrStaleBoot
 		}
 	}
 	if n <= w.bootSeq {
 		return 0, ErrStaleBoot // a census that arrived after this one was registered first
 	}
-	seq := n
-	// The counter first: a number is never given twice, a stop in between only skipping one.
+	return n, w.register(c.Boot, n)
+}
+
+// registerRecovery registers the boot of a recovery census (Census.Recovery: one a server sends
+// because a deletion was answered cliowner.ErrCensusNeeded): only while the worker has lost which
+// boot is the latest, and then as the latest, whatever its number. Otherwise it is the latest's
+// own (nothing to do) or refused: a recovery census never takes the place of a boot the worker
+// knows is the latest, so an earlier server's can't. The caller holds w.censusMu.
+func (w *Worker) registerRecovery(c Census, n int64) error {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	if w.latestKnown {
+		if c.Boot == w.latest.Boot {
+			return nil
+		}
+		return ErrStaleBoot
+	}
+	return w.register(c.Boot, max(n, w.bootSeq+1))
+}
+
+// register makes boot, with number seq, the latest: the counter first (a number is never given
+// twice, a stop in between only skipping one), then the latest boot, then the list. The caller
+// holds w.bootsMu.
+func (w *Worker) register(boot string, seq int64) error {
 	if err := writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n")); err != nil {
-		return 0, err
+		return err
 	}
 	w.bootSeq = seq
-	boots := append(append([]bootEntry(nil), w.boots...), bootEntry{Boot: c.Boot, Seq: seq})
+	latest := bootEntry{Boot: boot, Seq: seq}
+	lb, err := json.Marshal(latest)
+	if err != nil {
+		return err
+	}
+	if err := writeDurably(w.stateDir(), w.latestBootFile(), lb); err != nil {
+		return err
+	}
+	w.latest, w.latestKnown = latest, true
+	boots := append(append([]bootEntry(nil), w.boots...), latest)
 	if len(boots) > maxBoots {
 		boots = boots[len(boots)-maxBoots:]
 	}
 	b, err := json.Marshal(bootLog{Boots: boots})
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if err := writeDurably(w.stateDir(), w.bootsFile(), b); err != nil {
-		return 0, err
+		return err
 	}
 	w.boots = boots
-	return seq, nil
+	return nil
 }
 
 // deletionFence admits a deletion (Forget, a browser purge) only from the latest registered boot:
 // one an earlier server sent, delayed past a restore that brought the account back, retires and
 // removes nothing (ErrStaleBoot). On a volume that never had a census there is nothing to fence
-// against. One whose list of boots was lost can't tell which boot is the latest: it asks for a
-// census (cliowner.ErrCensusNeeded), which the live server sends before it tries again, and which
-// sets the latest boot. The caller holds w.censusMu.
+// against. One that lost which boot is the latest (.worker/latest-boot, and the list with it)
+// asks for a census (cliowner.ErrCensusNeeded): the live server sends a recovery census, which
+// sets the latest boot and retires nothing, and tries again. The caller holds w.censusMu.
 func (w *Worker) deletionFence(boot string) error {
 	if w.latestSeq() == 0 {
 		return nil

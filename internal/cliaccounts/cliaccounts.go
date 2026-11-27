@@ -350,8 +350,8 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	}
 	err := s.worker.Forget(ctx, user)
 	if errors.Is(err, cliowner.ErrCensusNeeded) {
-		// The worker started again without its list of boots: this server's census sets it.
-		if err = s.ReconcileForgotten(ctx); err == nil || errors.Is(err, cliworker.ErrIncomplete) {
+		// The worker lost which boot is the latest: this server's recovery census sets it.
+		if err = s.RecoveryCensus(ctx); err == nil {
 			err = s.worker.Forget(ctx, user)
 		}
 	}
@@ -386,12 +386,23 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 // It returns cliworker.ErrIncomplete when the worker couldn't remove everything yet: those
 // accounts are refused all the same, and the call is made again.
 func (s *Service) ReconcileForgotten(ctx context.Context) error {
+	return s.census(ctx, false)
+}
+
+// RecoveryCensus is the census a deletion sends when the worker answered it
+// cliowner.ErrCensusNeeded: the worker lost which server boot is the latest. It registers this
+// server's boot only while the worker can't tell, and retires nothing (cliworker.Census.Recovery).
+func (s *Service) RecoveryCensus(ctx context.Context) error {
+	return s.census(ctx, true)
+}
+
+func (s *Service) census(ctx context.Context, recovery bool) error {
 	if s.worker == nil {
 		return nil
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot}
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot, Recovery: recovery}
 	// Not the accounts whose purge has begun: it retires them in the worker before it deletes
 	// them, and one that stopped between the two is made again from its start.
 	rows, err := s.db.QueryContext(ctx, `SELECT id, cli_identity FROM users

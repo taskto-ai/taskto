@@ -440,8 +440,8 @@ The UI shows what the command prints.
     record, sweeps processes, writes anything else or opens a socket. A second worker on the same
     volume doesn't start, and leaves the first's sockets alone;
   - at every start the counter is checked against everything on the volume that names a home:
-    the records, the homes' directories and the trash. A counter that is missing, damaged or
-    behind (a partial restore of the volume, say) is moved past the highest home, with a warning;
+    the records, the homes' directories and the trash. A counter that is missing, damaged, out of
+    its range (below 2^30 or above 2^31) or behind (a partial restore of the volume, say) is moved past the highest home, with a warning;
     two records with the same home stop the worker, which says to start it on a new volume. The
     worker then keeps the highest number it has given in memory, with every home the volume has
     (a record, retired or not, or a directory): a counter file lost or put back while it runs
@@ -475,14 +475,19 @@ The UI shows what the command prints.
     running now) stays;
   - a deletion (`Forget`, and the agent browsers' purge in the worker, `FenceDeletion`) is taken
     only from the latest registered boot, and retires the account before it stops or removes
-    anything. The server sends its boot with every deletion, the purge's too. A worker started
-    again without its list of boots can't tell which boot is the latest: it answers a deletion
-    with `census_needed` (`409`), and the live server sends its census, which sets it, and tries
-    the deletion again, the browsers' purge too;
+    anything. The server sends its boot with every deletion, the purge's too;
+  - the latest boot is kept on its own (`.worker/latest-boot`, written durably at each
+    registration), apart from the list. A worker that lost it (and the list's last entry with it)
+    can't tell which boot is the latest: it answers a deletion with `census_needed` (`409`), and
+    the live server sends a recovery census and tries the deletion again, the browsers' purge too.
+    A recovery census registers its boot only while the worker can't tell, and retires and takes
+    back nothing: what the census says of the accounts waits for the next one, so an earlier
+    server's, taken first, can't retire what the latest keeps. Once the latest boot is set, a
+    recovery census of another boot is refused (`stale_boot`);
   - the list of boots (`.worker/boots.json`, the last 4096) only names the latest one, for
     deletions: what a census retires is decided by the records' numbers, never by the list. With
-    the list lost, damaged or past its bound, no account is taken for a later server's; a deletion
-    asks for a census first (`census_needed`, above), which sets the latest boot again;
+    the list lost, damaged or past its bound, no account is taken for a later server's, and the
+    latest boot, kept on its own, still fences deletions;
   - one server runs on a data directory (its lock), and a restore takes that lock too, so an
     earlier server's census can come after a later one's only if it was in flight when its server
     stopped. A census, a deletion or a browser purge whose caller has gone (its connection closed)
@@ -566,10 +571,12 @@ The UI shows what the command prints.
   - deletes what an earlier removal left in its trash, and takes back the agent browsers' refusals
     of the live accounts.
 
-  An account a census retires now may have work the worker admitted just before (a first turn, a
-  sign-in, a browser) whose helper hasn't made its home yet: the census closes its gate and stops
-  that work whether or not the home is there, so nothing makes the home afterwards. One retired
-  already, whose home is gone, has nothing left to do.
+  An account a census retires may have work the worker admitted before (a first turn, a sign-in,
+  a browser) whose helper hasn't made its home yet: the census closes its gate and stops that work
+  whether or not the home is there, so nothing makes the home afterwards. Only an account whose
+  removal completed once since its retirement (`cleaned` in its record, written after the stop and
+  the removal) and whose home is gone is left alone. A retirement alone never counts: a browsers'
+  purge records one without stopping the CLIs' work.
 
   A home that can't be removed yet (a process of it doesn't end in time) is kept, its account
   retired, and the answer is `ErrIncomplete` (`409`, `incomplete`): the server tries again later.

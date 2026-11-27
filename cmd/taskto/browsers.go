@@ -78,8 +78,8 @@ func (p purgeBrowsers) Forget(ctx context.Context, user int64) error {
 	}
 	err := p.b.Forget(ctx, a)
 	if errors.Is(err, cliowner.ErrCensusNeeded) {
-		// The CLI worker started again without its list of boots: this server's census sets it.
-		if err = p.cli.ReconcileForgotten(ctx); err == nil || errors.Is(err, cliworker.ErrIncomplete) {
+		// The CLI worker lost which boot is the latest: this server's recovery census sets it.
+		if err = p.cli.RecoveryCensus(ctx); err == nil {
 			err = p.b.Forget(ctx, a)
 		}
 	}
