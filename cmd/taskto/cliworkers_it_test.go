@@ -205,7 +205,14 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		})
 		return got[len(got)-1]
 	}
-	claudeCalls := func(user int64) int { return len(clitest.Calls(t, homeOf(t, layout, user).Config(cliworker.Claude))) }
+	// The calls of user's Claude Code: none for an account the worker never gave a home.
+	claudeCalls := func(user int64) int {
+		home, ok := homeIfAny(t, layout, user)
+		if !ok {
+			return 0
+		}
+		return len(clitest.Calls(t, home.Config(cliworker.Claude)))
+	}
 
 	// A conversation on Claude Code: the answer is the CLI's, and the next turn resumes the
 	// same CLI session.

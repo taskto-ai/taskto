@@ -66,7 +66,12 @@ type account struct {
 
 func (w *Worker) accountsDir() string { return filepath.Join(w.stateDir(), "accounts") }
 
+// accountFile is identity's record. Every caller has checked the identity (cliowner.IsIdentity:
+// 32 lowercase hex digits); one that isn't names no file of an account.
 func (w *Worker) accountFile(identity string) string {
+	if !cliowner.IsIdentity(identity) || strings.Contains(identity, "..") || strings.ContainsRune(identity, filepath.Separator) {
+		identity = "invalid"
+	}
 	return filepath.Join(w.accountsDir(), identity+".json")
 }
 

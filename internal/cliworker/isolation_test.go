@@ -410,7 +410,7 @@ func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	h.signIn(t, 5, cliworker.Claude)
 	detached := exec.Command("sleep", "60")
 	detached.Dir = "/"
-	detached.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: uint32(h.uid(5)), Gid: uint32(h.uid(5))}}
+	detached.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: uint32(h.uid(5)), Gid: uint32(h.uid(5))}} //nolint:gosec // G115: uidOf keeps a uid below the 32-bit nobody
 	if err := detached.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestIsolationRemovesAReadOnlyDirectoryOfTheUser(t *testing.T) {
 	work := h.home(6).Work
 	mk := exec.Command("sh", "-c", `set -e; mkdir -p "$1/ro/inner"; echo x > "$1/ro/inner/file"; ln -s "$2" "$1/ro/inner/link"; chmod 400 "$1/ro/inner/file"; chmod 500 "$1/ro/inner" "$1/ro"`, "sh", work, outside)
 	mk.Dir = "/"
-	mk.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(h.uid(6)), Gid: uint32(h.uid(6))}}
+	mk.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(h.uid(6)), Gid: uint32(h.uid(6))}} //nolint:gosec // G115: uidOf keeps a uid below the 32-bit nobody
 	if out, err := mk.CombinedOutput(); err != nil {
 		t.Fatalf("making the read-only directory as the user: %v %s", err, out)
 	}

@@ -11,8 +11,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -334,8 +336,22 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 // give the account of that number (the worker keeps an account under its identity).
 func homeOf(t *testing.T, layout cliworker.Layout, user int64) cliworker.Dirs {
 	t.Helper()
+	d, ok := homeIfAny(t, layout, user)
+	if !ok {
+		t.Fatalf("the CLI worker has no account of user %d", user)
+	}
+	return d
+}
+
+// homeIfAny is homeOf, false when the worker never gave user's account a home (nothing of the
+// account's ever ran on it).
+func homeIfAny(t *testing.T, layout cliworker.Layout, user int64) (cliworker.Dirs, bool) {
+	t.Helper()
 	dir := filepath.Join(layout.Root, ".worker", "accounts")
 	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cliworker.Dirs{}, false
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,9 +369,8 @@ func homeOf(t *testing.T, layout cliworker.Layout, user int64) cliworker.Dirs {
 			t.Fatal(err)
 		}
 		if r.User == user && !r.Retired {
-			return layout.Home(r.Home)
+			return layout.Home(r.Home), true
 		}
 	}
-	t.Fatalf("the CLI worker has no account of user %d", user)
-	return cliworker.Dirs{}
+	return cliworker.Dirs{}, false
 }
