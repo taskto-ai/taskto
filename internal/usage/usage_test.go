@@ -98,6 +98,33 @@ func TestRecordPrunesOlderThan400DaysAndAccountDeletionCascades(t *testing.T) {
 	}
 }
 
+func TestATurnWhoseTotalsFailedIsStillCountedWhenItIsRecordedAgain(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	res, err := d.Exec(`INSERT INTO workspaces (name) VALUES ('Home')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, _ := res.LastInsertId()
+	one := user(t, d, "one@example.test")
+	entry := Entry{User: one, Workspace: workspace + 1000, Source: "cli", Engine: "codex", Input: 5, Output: 2, Turns: 1, At: time.Now(), Turn: "c1-t1"}
+	if err := Record(ctx, d, entry); err == nil {
+		t.Fatal("recording for a workspace that does not exist succeeded")
+	}
+	var claimed int
+	if err := d.QueryRow(`SELECT count(*) FROM agent_usage_turns WHERE user_id = ?`, one).Scan(&claimed); err != nil || claimed != 0 {
+		t.Fatalf("claimed turns after a failed record = %d, %v", claimed, err)
+	}
+	entry.Workspace = workspace
+	if err := Record(ctx, d, entry); err != nil {
+		t.Fatal(err)
+	}
+	var input, turns int64
+	if err := d.QueryRow(`SELECT input_tokens, turns FROM agent_usage_daily WHERE user_id = ?`, one).Scan(&input, &turns); err != nil || input != 5 || turns != 1 {
+		t.Fatalf("usage after the retry = %d input, %d turns, %v", input, turns, err)
+	}
+}
+
 func TestRecordCountsATurnOnce(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()

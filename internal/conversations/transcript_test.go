@@ -93,6 +93,29 @@ func TestAgentUsageIsCountedOnceWhenCollectorsOverlap(t *testing.T) {
 	}
 }
 
+func TestTheMarkStaysWhereItWasWhenTheTotalsCannotBeWritten(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, 4)}
+	broken := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws + 1000, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, broken, "script"); err == nil {
+		t.Fatal("recording for a workspace that does not exist succeeded")
+	}
+	var mark sql.NullInt64
+	if err := e.db.QueryRow(`SELECT usage_mark FROM conversations WHERE id = ?`, c.ID).Scan(&mark); err != nil || !mark.Valid || mark.Int64 != 0 {
+		t.Fatalf("mark after a failed record = %+v, %v", mark, err)
+	}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, output, _ := agentUsage(t, e, owner.id); input != 12 || output != 8 {
+		t.Fatalf("usage after the retry = %d input, %d output", input, output)
+	}
+}
+
 func TestAgentUsageReadsEveryEntryAcrossPages(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -121,9 +144,10 @@ func TestAgentUsageCountsOneTurnPerUserMessage(t *testing.T) {
 	e.rt.rawEntries = map[int64][]json.RawMessage{agent: {
 		json.RawMessage(`{"id":1,"model":[{"role":"user","content":"a"}]}`),
 		json.RawMessage(`{"id":2,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
-		json.RawMessage(`{"id":3,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
-		json.RawMessage(`{"id":4,"model":[{"role":"user","content":"b"}]}`),
-		json.RawMessage(`{"id":5,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
+		json.RawMessage(`{"id":3,"model":[{"role":"toolResult","toolName":"search"}]}`),
+		json.RawMessage(`{"id":4,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
+		json.RawMessage(`{"id":5,"model":[{"role":"user","content":"b"}]}`),
+		json.RawMessage(`{"id":6,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
 	}}
 	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
 	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
