@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
+import { PinnedNav } from '../home/PinnedNav'
 import { parseRoute, usePath } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { AppsPage } from './AppsPage'
@@ -830,6 +831,11 @@ test('an icon is picked from the list or typed, saved with the version the perso
   fireEvent.change(typed, { target: { value: '🧾🧾' } })
   expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.change(typed, { target: { value: ' 🦄 ' } })
+  expect(within(dialog).getByText('Use a single emoji.')).toBeTruthy()
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '🧾\u200b' } })
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '🦄' } })
   expect(within(dialog).queryByText('Use a single emoji.')).toBeNull()
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
   await within(mine).findByText('🦄')
@@ -871,4 +877,50 @@ test('the icon is changed only by someone who may design the app in a space they
   expect(within(mine).getByText('🧾')).toBeTruthy()
   expect(await menuItems(mine, 'Expenses')).not.toContain('Change icon')
   expect(await menuItems(mine, 'Mine')).toContain('Change icon')
+})
+
+test('a pin in the sidebar shows the new icon as soon as the icon is saved, with no reload', async () => {
+  let expenses = app({})
+  const pin = (icon: string) => ({
+    id: 11,
+    source: 'personal',
+    kind: 'pin',
+    space_id: 2,
+    app_id: 1,
+    app_name: 'Expenses',
+    app_icon: icon,
+    label: 'Expenses',
+    state: 'ready',
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': () => ({ body: { apps: [expenses] } }),
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/home': () => ({
+      body: { widgets: [], pins: [pin(expenses.icon)], hidden: [], limits: { widgets: 24, pins: 20 } },
+    }),
+    'PATCH /api/workspaces/1/spaces/2/apps/1': (call) => {
+      expenses = app({ ...expenses, version: expenses.version + 1, icon: (call.body as { icon: string }).icon })
+      return { body: expenses }
+    },
+  })
+  render(
+    <>
+      <PinnedNav workspace={1} path="/w/1/apps" />
+      <Routed />
+    </>,
+  )
+  const pinned = await screen.findByRole('region', { name: 'Pinned apps' })
+  const link = within(pinned).getByRole('link', { name: 'Expenses' })
+  expect(within(link).getByText('EX')).toBeTruthy()
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await choose(mine, 'Expenses', 'Change icon')
+  const dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  fireEvent.click(within(dialog).getByRole('radio', { name: '🧾' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(mine).findByText('🧾')
+  await waitFor(() =>
+    expect(within(within(pinned).getByRole('link', { name: 'Expenses' })).getByText('🧾')).toBeTruthy(),
+  )
+  expect(calls.filter((c) => c.path === '/api/workspaces/1/home')).toHaveLength(2)
 })

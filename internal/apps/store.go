@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/access"
@@ -1289,7 +1288,6 @@ func appName(s string) (string, error) {
 }
 
 func appIcon(s string) (string, error) {
-	s = strings.TrimSpace(s)
 	if s == "" {
 		return "", nil
 	}
@@ -1297,17 +1295,4 @@ func appIcon(s string) (string, error) {
 		return "", invalidAs(apierr.CodeAppIconInvalid, nil, "an app's icon is one emoji, or empty to show its initials")
 	}
 	return s, nil
-}
-
-func isEmoji(s string) bool {
-	symbol := false
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) || unicode.IsControl(r) || unicode.IsPunct(r) {
-			return false
-		}
-		if unicode.Is(unicode.So, r) || (r >= 0x1F1E6 && r <= 0x1F1FF) {
-			symbol = true
-		}
-	}
-	return symbol
 }

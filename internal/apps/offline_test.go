@@ -43,6 +43,18 @@ func TestDownloadHoldsTheLiveReleaseAndWhatTheCallerReads(t *testing.T) {
 	}
 }
 
+func TestDownloadCarriesTheAppsIcon(t *testing.T) {
+	w := newWorld(t)
+	if got := decode[OfflineApp](t, w.download(w.alice, w.alicePrivate, w.aliceApp)); got.Icon != "" {
+		t.Fatalf("an app with no icon downloads with %q", got.Icon)
+	}
+	expect(t, w.alice.do(http.MethodPatch, appPath(w.alicePrivate, w.aliceApp.ID, ""),
+		map[string]any{"version": w.aliceApp.Version, "icon": "🧾"}), http.StatusOK)
+	if got := decode[OfflineApp](t, w.download(w.alice, w.alicePrivate, w.aliceApp)); got.Icon != "🧾" {
+		t.Fatalf("download's icon = %q", got.Icon)
+	}
+}
+
 func TestDownloadHoldsOnlyWhatTheCallerMayRead(t *testing.T) {
 	w := newWorld(t)
 	got := decode[OfflineApp](t, w.download(w.bob, w.shared, w.sharedApp))

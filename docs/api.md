@@ -3264,9 +3264,15 @@ the rows, unseen, and come back if declared again. `200` with the app.
 #### App icons
 
 An app's `icon` is one emoji, or `""` to show the initials of its name (the colour still comes
-from the name). The server keeps it trimmed, at most 32 bytes and 8 characters, with nothing in
-it that is a letter, a digit, a space or punctuation and at least one symbol or flag; anything
-else is `400 app_icon_invalid`. Changing it needs the design capability, bumps the app's
+from the name). The server keeps it exactly as sent, never trimmed, at most 32 bytes and 8
+characters, and it is one emoji sequence and nothing else: a pictograph (Unicode's
+`Extended_Pictographic`) with an optional emoji variation selector or skin tone, such pictographs
+joined by U+200D (a family, a person with a profession), a pair of regional indicators (a flag), a
+keycap (`1️⃣`, `#️⃣`, `*️⃣`) or a flag in tag characters (England, Scotland, Wales). A space,
+a control or invisible character anywhere (U+200B, U+202E, a byte order mark, a lone U+200D),
+several emoji, or a letter is `400 app_icon_invalid`, as is anything else. The web app's picker
+holds the same rule, and `internal/apps/testdata/app_icons.json` is the list of values that both
+test. Changing it needs the design capability, bumps the app's
 `version` and records no audit event. The agent's `create_app` and `update_app` take it too, a
 copy of an app keeps it, and Home's items (`app_icon`, left out when empty) and its available
 apps (`icon`) carry it.
@@ -3527,9 +3533,11 @@ app to keep on the device for [offline use](offline.md). Nothing is stored by th
 snapshot, and the writes made against it come back as ordinary
 [actions](#post-appsappactions) under their `operation` keys.
 
+The app's `icon` (`""` for none) comes with it, so the offline list and the app's header on the device draw it; a copy downloaded before icons existed has none and shows the initials.
+
 ```json
 {
-  "app_id": 9, "space_id": 4, "name": "Expenses", "release": 3,
+  "app_id": 9, "space_id": 4, "name": "Expenses", "icon": "🧾", "release": 3,
   "definition": {
     "definition_version": 2, "requires": ["component.Column", …],
     "collection": {"fields": [ … ]}, "entry": "…", "screens": [{"name": "…", "record": true}],

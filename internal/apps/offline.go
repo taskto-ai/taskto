@@ -35,6 +35,7 @@ type OfflineApp struct {
 	AppID      int64             `json:"app_id"`
 	SpaceID    int64             `json:"space_id"`
 	Name       string            `json:"name"`
+	Icon       string            `json:"icon"`
 	Release    int64             `json:"release"`
 	Definition OfflineDefinition `json:"definition"`
 	Messages   []Message         `json:"messages" apitypes:"json,nonnull"`
@@ -84,7 +85,7 @@ func (s *Service) offlineApp(ctx context.Context, sp access.Space, actor Actor, 
 		scope = "all"
 	}
 	out := OfflineApp{
-		AppID: a.ID, SpaceID: sp.ID, Name: a.Name,
+		AppID: a.ID, SpaceID: sp.ID, Name: a.Name, Icon: a.Icon,
 		Release:    a.Live.Number,
 		Definition: offlineDefinition(def),
 		Messages:   Surface(SurfaceID(a.ID), def, rows),

@@ -54,6 +54,16 @@
     pointer-events: none;
   }
 
+  @media (pointer: coarse) {
+    .apps-icon-grid {
+      grid-template-columns: repeat(auto-fill, minmax(var(--control-touch), 1fr));
+    }
+
+    .apps-icon-face {
+      min-block-size: var(--control-touch);
+    }
+  }
+
   .apps-icon-face-text {
     padding-inline: var(--space-3);
     font: var(--type-small);

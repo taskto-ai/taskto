@@ -586,3 +586,21 @@ test('a Home change answered after its session ended tells nothing to whatever s
   await new Promise((r) => setTimeout(r, 20))
   expect(loads()).toBe(before)
 })
+
+test('Customize Home shows an app’s icon beside its pin and in its list of what can be added', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: home({ pins: [pinItem({ app_icon: '🧾' })] }) },
+    'GET /api/workspaces/1/home/available': { body: { apps: [{ ...offered, icon: '🧾' }] } },
+    'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
+  const pins = await screen.findByRole('heading', { name: 'Pinned in the menu', level: 2 })
+  const pinSection = pins.closest('section') as HTMLElement
+  expect(within(pinSection).getByText('🧾')).toBeTruthy()
+  const add = (await screen.findByRole('heading', { name: 'Add from your apps', level: 2 })).closest(
+    'section',
+  ) as HTMLElement
+  expect(within(add).getByText('🧾')).toBeTruthy()
+  expect(within(add).queryByText('EX')).toBeNull()
+})

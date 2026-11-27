@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ApiError, type App, api, errorText, type Space, ws } from '../api'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
+import { homeChanged } from '../home/store'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { spaceLabel } from '../spaces'
@@ -123,6 +124,7 @@ function SpaceApps({
     try {
       await api<App>(`${base}/${app.id}`, { method: 'PATCH', body: { version: app.version, ...body } })
       setError(null)
+      homeChanged()
     } catch (e) {
       failed = e instanceof ApiError && e.status === 409 ? t('apps.changed', { name: app.name }) : errorText(e)
     }

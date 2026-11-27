@@ -28,7 +28,7 @@ export function IconDialog({
   const [typed, setTyped] = useState(listed(app.icon) ? '' : app.icon)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const custom = typed.trim()
+  const custom = typed
   const icon = custom === '' ? picked : custom
   const invalid = custom !== '' && !isAppIcon(custom)
   const unchanged = icon === app.icon

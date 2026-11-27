@@ -311,6 +311,7 @@ export type OfflineApp = {
   app_id: number
   space_id: number
   name: string
+  icon: string
   release: number
   definition: {
     definition_version: number
