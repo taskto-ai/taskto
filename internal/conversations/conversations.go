@@ -147,8 +147,8 @@ func (s *Service) list(ctx context.Context, workspace, user int64, archived bool
 }
 
 func (s *Service) insert(ctx context.Context, workspace, user, agentID int64, title string) (Conversation, error) {
-	return scan(s.db.QueryRowContext(ctx, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title)
-		VALUES (?, ?, ?, ?) RETURNING `+columns, workspace, user, agentID, title))
+	return scan(s.db.QueryRowContext(ctx, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title, usage_mark)
+		VALUES (?, ?, ?, ?, 0) RETURNING `+columns, workspace, user, agentID, title))
 }
 
 func (s *Service) update(ctx context.Context, workspace, user, id int64, title *string, archived *bool, cliPermissions *string) (Conversation, error) {
