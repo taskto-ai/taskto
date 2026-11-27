@@ -743,3 +743,131 @@ func TestAVolumeThatLostItsAuthorityTakesNoNewAccount(t *testing.T) {
 		t.Error("a handover without the installation was taken after a new account's request")
 	}
 }
+
+func TestAnEarlierBootWhoseRegistrationFailedStaysEarlier(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	earlier, later := strings.Repeat("a", 32), strings.Repeat("c", 32)
+	history := filepath.Join(h.layout.Root, ".worker", "boots.json")
+	kept := history + ".kept"
+	if err := os.Rename(history, kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(history, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)); err == nil {
+		t.Fatal("a census whose history couldn't be written was accepted")
+	}
+	if err := os.Remove(history); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(kept, history); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
+		t.Fatalf("the later server's census: %v", err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
+		t.Errorf("the earlier server's retry after the later one registered: %v, want ErrStaleBoot", err)
+	}
+	if got := h.w.LatestBootForTest(); got != later {
+		t.Errorf("the latest boot = %q, want the later server's", got)
+	}
+}
+
+func TestAFailedRegistrationDoesNotShutTheBootOutForGood(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	next := strings.Repeat("a", 32)
+	history := filepath.Join(h.layout.Root, ".worker", "boots.json")
+	kept := history + ".kept"
+	if err := os.Rename(history, kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(history, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(next, time.Now(), nil)); err == nil {
+		t.Fatal("a census whose history couldn't be written was accepted")
+	}
+	if err := os.Remove(history); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(kept, history); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(next, time.Now(), nil)); err != nil {
+		t.Errorf("the retry with nothing registered since: %v", err)
+	}
+	if got := h.w.LatestBootForTest(); got != next {
+		t.Errorf("the latest boot = %q, want the retried one", got)
+	}
+}
+
+func TestAHistoryRolledBackBehindItsCounterIsAuthorityLost(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	earlier, later := cliworker.TestBoot, strings.Repeat("c", 32)
+	for _, boot := range []string{earlier, later} {
+		if err := h.w.Reconcile(ctx, bootCensus(boot, time.Now(), nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.w.Close()
+	type entry struct {
+		Boot string `json:"boot"`
+		Seq  int64  `json:"seq"`
+	}
+	only := []entry{{Boot: earlier, Seq: 1}}
+	raw, _ := json.Marshal(only)
+	sum := sha256.Sum256(raw)
+	whole, _ := json.Marshal(struct {
+		Boots []entry `json:"boots"`
+		Count int     `json:"count"`
+		Sum   string  `json:"sum"`
+	}{only, len(only), hex.EncodeToString(sum[:])})
+	latest, _ := json.Marshal(only[0])
+	state := filepath.Join(h.layout.Root, ".worker")
+	if err := os.WriteFile(filepath.Join(state, "boots.json"), whole, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "latest-boot"), latest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.reopen(t)
+	if h.w.AuthorityLost() == "" {
+		t.Fatal("a history rolled back behind its boot counter was trusted")
+	}
+	gone := cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: earlier, Installation: cliworker.TestInstallation}
+	if err := h.w.Forget(ctx, gone); !errors.Is(err, cliworker.ErrAuthorityLost) {
+		t.Errorf("the rolled back boot's deletion: %v, want ErrAuthorityLost", err)
+	}
+}
+
+func TestABootCounterThatCannotBeReadIsAnErrorNotAMissingFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file")
+	}
+	h := newHarness(t, nil)
+	if err := h.w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	h.w.Close()
+	counter := filepath.Join(h.layout.Root, ".worker", "boot-seq")
+	if err := os.Chmod(counter, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(counter, 0o600) })
+	w, err := cliworker.New(h.cfg)
+	if err == nil {
+		w.Close()
+		t.Error("a boot counter that couldn't be read started the worker as if it were missing")
+	}
+}

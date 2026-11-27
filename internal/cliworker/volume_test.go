@@ -288,3 +288,26 @@ func TestARetiredAccountReachesNothingItHad(t *testing.T) {
 	h.w.Stop(s.ID)
 	waitDone(t, turn, 20*time.Second)
 }
+
+func TestAPurgeStoppedAfterTheMoveIsFinishedBeforeTheNextOneSucceeds(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	private := filepath.Join(dirs.Work, "private")
+	if err := os.WriteFile(private, []byte("theirs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.w.SetDetachHookForTest(func() error { return errors.New("the worker stopped here") })
+	if err := h.w.Forget(ctx, acct(1)); err == nil || !strings.Contains(err.Error(), "the worker stopped here") {
+		t.Fatalf("fixture: the purge didn't stop where the test stops it: %v", err)
+	}
+	h.w.SetDetachHookForTest(nil)
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
+		t.Fatalf("the purge's retry: %v", err)
+	}
+	left, _ := filepath.Glob(filepath.Join(h.layout.Root, ".detached-*"))
+	kept, _ := filepath.Glob(filepath.Join(h.layout.Root, ".worker", "trash", "*"))
+	if len(left)+len(kept) > 0 {
+		t.Errorf("the retry reported the purge done with the account's files still in %v %v", left, kept)
+	}
+}

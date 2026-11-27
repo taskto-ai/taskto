@@ -465,8 +465,10 @@ The UI shows what the command prints.
 - **Server boots.** The worker orders the servers' boots by itself, never by a clock: a boot's
   census takes the next number of a counter that only goes up as it arrives, before it waits for
   the lock censuses and deletions share, and the boot is registered with it when that census is
-  applied (`.worker/boot-seq`, moved on durably first). A boot with a higher number is a later
-  server: of two censuses, the one that arrived first is the earlier, whichever runs first.
+  applied (`.worker/boot-seq`, moved on durably after the history has it). A boot with a higher number is a later
+  server: of two censuses, the one that arrived first is the earlier, whichever runs first. A
+  census whose registration failed keeps its number, so its retry, after a later boot registered,
+  is still the earlier one (`ErrStaleBoot`).
   The order is on the worker's volume, so a restore of the server's data can't take it back, and a
   clock stepped back changes nothing. Only a census registers a boot: no other request does, so a
   delayed request of an earlier server can't make its boot the latest. Every account record keeps
@@ -495,7 +497,8 @@ The UI shows what the command prints.
     writes) is written again from the history;
   - the history carries its count and the sha256 of its entries, and each entry must be a boot,
     once, with numbers in increasing order; the counter must be a number in range. If the history
-    is lost, damaged or not whole, the counter is damaged, the history doesn't reach as far as its
+    is lost, damaged or not whole, the counter is damaged, the counter is ahead of the
+    history (a restore of the history to an earlier time), the history doesn't reach as far as its
     accounts' records, or its copy of the latest isn't one of it, the worker can't tell the current
     server from an earlier one still trying: it enters the **authority-lost** state below;
   - one server runs on a data directory (its lock), and a restore takes that lock too, so an

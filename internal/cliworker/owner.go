@@ -40,7 +40,8 @@ func (w *Worker) removeAccount(ctx context.Context, acct account) error {
 		return err
 	}
 	w.dropUnixUser(acct.home)
-	trash, err := w.detach(w.cfg.Layout.Home(acct.home).Root, "h"+strconv.FormatInt(acct.home, 10))
+	name := "h" + strconv.FormatInt(acct.home, 10)
+	trash, err := w.detach(w.cfg.Layout.Home(acct.home).Root, name)
 	if err != nil {
 		return fmt.Errorf("taking the account's directory away: %w", err)
 	}
@@ -48,6 +49,24 @@ func (w *Worker) removeAccount(ctx context.Context, acct account) error {
 	if trash != "" {
 		if err := removeTree(trash, w.cfg.Isolation != nil); err != nil {
 			return fmt.Errorf("removing the account's old directory: %w", err)
+		}
+	}
+	return w.removeLeft(name)
+}
+
+func (w *Worker) removeLeft(name string) error {
+	for _, pattern := range []string{
+		filepath.Join(w.cfg.Layout.Root, detachedPrefix+name+"-*"),
+		filepath.Join(w.trashDir(), name+"-*"),
+	} {
+		left, err := filepath.Glob(pattern)
+		if err != nil {
+			return err
+		}
+		for _, p := range left {
+			if err := removeTree(p, w.cfg.Isolation != nil); err != nil {
+				return fmt.Errorf("removing what an earlier removal left: %w", err)
+			}
 		}
 	}
 	return nil
@@ -182,10 +201,15 @@ func (w *Worker) sweepTrash() error {
 func (w *Worker) removeLegacy(user int64) error {
 	name := "u" + strconv.FormatInt(user, 10)
 	trash, err := w.detach(w.cfg.Layout.legacy(user), name)
-	if err != nil || trash == "" {
+	if err != nil {
 		return err
 	}
-	return removeTree(trash, w.cfg.Isolation != nil)
+	if trash != "" {
+		if err := removeTree(trash, w.cfg.Isolation != nil); err != nil {
+			return err
+		}
+	}
+	return w.removeLeft(name)
 }
 
 func (w *Worker) checkLegacyOwners(base int) error {

@@ -29,13 +29,15 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 		return agentbrowser.New(remote, browserUsable(cli), cli.Account), purgeBrowsers{remote, cli}, func() {}
 	}
 	bins := browser.FindBins(cfg.BrowserChromium)
-	m := browser.NewManager(browser.Config{Host: &browser.LocalHost{
-		Root:  filepath.Join(cfg.DataDir, "cli"),
-		Home:  cli.LocalHome,
-		Found: cli.LocalHomeFound,
-		Bins:  bins,
-		Path:  os.Getenv("PATH"),
-	}})
+	host := &browser.LocalHost{
+		Root: filepath.Join(cfg.DataDir, "cli"),
+		Bins: bins,
+		Path: os.Getenv("PATH"),
+	}
+	if cli.Mode() != "off" {
+		host.Home, host.Found = cli.LocalHome, cli.LocalHomeFound
+	}
+	m := browser.NewManager(browser.Config{Host: host})
 	slog.Info("agent browser on, in this process", "personal", m.Available(browser.Personal), "testing", m.Available(browser.Testing))
 	if !m.Available(browser.Testing) {
 		slog.Warn("agent browser: no Chromium found (chromium on the PATH, or -browser-chromium)")

@@ -309,7 +309,10 @@ func readBootState(w *Worker) (bootState, error) {
 	if err != nil {
 		return st, err
 	}
-	seq, seqThere, seqValid := w.readSeq(w.bootSeqFile())
+	seq, seqThere, seqValid, err := w.readSeq(w.bootSeqFile())
+	if err != nil {
+		return st, err
+	}
 	if seqThere && !seqValid {
 		st.lost = cmp.Or(st.lost, "its boot counter (.worker/boot-seq) is damaged")
 		seq = 0
@@ -344,6 +347,9 @@ func readBootState(w *Worker) (bootState, error) {
 	st.boots = l.Boots
 	last := l.Boots[len(l.Boots)-1]
 	st.seq = max(st.seq, last.Seq)
+	if seqValid && seq > last.Seq {
+		st.lost = cmp.Or(st.lost, "its boot counter (.worker/boot-seq) is ahead of its history of boots")
+	}
 	if gen > last.Seq {
 		st.lost = cmp.Or(st.lost, "its history of boots is behind its accounts' records")
 	}
@@ -428,7 +434,11 @@ func (w *Worker) loadBoots() error {
 			return err
 		}
 	}
-	if n, there, valid := w.readSeq(w.bootSeqFile()); there && !valid || n < w.bootSeq {
+	n, there, valid, err := w.readSeq(w.bootSeqFile())
+	if err != nil {
+		return err
+	}
+	if there && !valid || n < w.bootSeq {
 		return writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(w.bootSeq, 10)+"\n"))
 	}
 	return nil
@@ -446,13 +456,13 @@ const maxBootSeq = 1 << 40
 
 func validSeq(n int64) bool { return n >= 0 && n <= maxBootSeq }
 
-func (w *Worker) readSeq(path string) (n int64, there, valid bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false, false
+func (w *Worker) readSeq(path string) (n int64, there, valid bool, err error) {
+	b, found, err := readIfThere(path)
+	if err != nil || !found {
+		return 0, false, false, err
 	}
 	n, err = strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-	return n, true, err == nil && validSeq(n)
+	return n, true, err == nil && validSeq(n), nil
 }
 
 func (w *Worker) AuthorityLost() string {
@@ -501,7 +511,7 @@ func (w *Worker) unreserveBoot(boot string) {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
 	if r, ok := w.reserved[boot]; ok {
-		if r.waiting--; r.waiting <= 0 {
+		if r.waiting--; r.waiting <= 0 && (!r.failed || w.registered(boot)) {
 			delete(w.reserved, boot)
 		} else {
 			w.reserved[boot] = r
@@ -512,6 +522,7 @@ func (w *Worker) unreserveBoot(boot string) {
 type reservation struct {
 	seq     int64
 	waiting int
+	failed  bool
 }
 
 func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
@@ -537,14 +548,21 @@ func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	if !validSeq(n) {
 		return 0, errors.New("cliworker: no boot number is left")
 	}
-	return n, w.register(c.Boot, n)
+	if err := w.register(c.Boot, n); err != nil {
+		if r, ok := w.reserved[c.Boot]; ok {
+			r.failed = true
+			w.reserved[c.Boot] = r
+		}
+		return 0, err
+	}
+	return n, nil
+}
+
+func (w *Worker) registered(boot string) bool {
+	return slices.ContainsFunc(w.boots, func(e bootEntry) bool { return e.Boot == boot })
 }
 
 func (w *Worker) register(boot string, seq int64) error {
-	if err := writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n")); err != nil {
-		return err
-	}
-	w.bootSeq = seq
 	latest := bootEntry{Boot: boot, Seq: seq}
 	boots := append(append([]bootEntry(nil), w.boots...), latest)
 	b, err := json.Marshal(bootLog{Boots: boots, Count: len(boots), Sum: historySum(boots)})
@@ -554,7 +572,10 @@ func (w *Worker) register(boot string, seq int64) error {
 	if err := writeDurably(w.stateDir(), w.bootsFile(), b); err != nil {
 		return err
 	}
-	w.boots = boots
+	w.boots, w.bootSeq = boots, seq
+	if err := writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n")); err != nil {
+		return err
+	}
 	return w.writeLatest(latest)
 }
 

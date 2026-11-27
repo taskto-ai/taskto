@@ -1526,33 +1526,45 @@ the first one that fails (`bash -euo pipefail`): nothing after a failed step run
 never emptied after its copy failed. If v0.1.0 is from before
 [account homes](#upgrading-to-account-homes) and the CLI workers run in container mode, the older
 worker must start on a new, empty `cli-homes` volume: an older worker reads directories by user
-number and must never see the homes. Set `HOMES=1` for that (in container mode only): the script then keeps the upgraded
-volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`, mounted by
-nothing), and empties the one the worker mounts only once the copy has succeeded, before anything
-starts:
+number and must never see the homes. Set `HOMES=1` for that (in container mode only): the script
+then takes a backup of the upgraded server (`after-v0.2.0.tar.gz`, checked with `gzip -t`: the
+script stops if it is empty or damaged) while it still runs, stops the whole deployment, the CLI
+worker container too (`--profile cli`, whether or not `COMPOSE_PROFILES` names it), with the
+upgraded version's own `compose.yaml`, and only then checks out the old one. It keeps the
+upgraded volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`,
+mounted by nothing), and empties the one the worker mounts only once the copy has succeeded,
+before anything starts. That backup is the only one that matches the kept volume: keep the two
+together.
 
 ```sh
 HOMES=0   # 1: back to a version from before account homes, in container mode
 bash -euo pipefail -s "$HOMES" <<'EOF'
+if [ "$1" = 1 ]; then PROFILE="--profile cli"; else PROFILE=""; fi
+if [ "$1" = 1 ]; then
+  docker compose exec -T taskto taskto backup - > after-v0.2.0.tar.gz </dev/null
+  test -s after-v0.2.0.tar.gz
+  gzip -t after-v0.2.0.tar.gz
+fi
+docker compose $PROFILE down </dev/null
 git checkout v0.1.0
-docker compose down </dev/null
 docker volume rm taskto_data </dev/null
-docker compose build </dev/null
+docker compose $PROFILE build </dev/null
 docker compose run --rm -T taskto restore - < before-v0.2.0.tar.gz
 if [ "$1" = 1 ]; then
   KEPT="taskto_cli-homes_kept_$(date +%Y%m%d%H%M%S)"
   docker run --rm </dev/null -v taskto_cli-homes:/from -v "$KEPT":/to alpine cp -a /from/. /to/
   docker run --rm </dev/null -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  echo "the upgraded worker's volume is kept in $KEPT"
+  echo "the upgraded worker's volume is kept in $KEPT; its server's backup is after-v0.2.0.tar.gz"
 fi
-docker compose up -d </dev/null
+docker compose $PROFILE up -d </dev/null
 EOF
 ```
 
 `HOMES=1` is for container mode only. Upgrading the rolled-back data again doesn't bring the kept
 volume back: that data gets new account identities and a new installation, which the kept homes
 don't have ([Upgrading to account homes](#upgrading-to-account-homes)). The kept volume goes back
-only with the upgraded server's own backup, the one from right before the rollback. In local mode,
+only with the upgraded server's own backup, `after-v0.2.0.tar.gz`, which the script took right
+before the rollback. In local mode,
 leave the restored `<data>/cli` as it is, with `HOMES=0`: the backup from before the upgrade
 holds it as the older version left it, matched to its database, so people keep their CLI
 sign-ins and files from then.

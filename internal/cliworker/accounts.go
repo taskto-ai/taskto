@@ -109,7 +109,26 @@ func writeDurably(dir, path string, b []byte) error {
 	return syncDir(dir)
 }
 
+var faultForTest func(op, path string) error
+
+func fault(op, path string) error {
+	if f := faultForTest; f != nil {
+		return f(op, path)
+	}
+	return nil
+}
+
+func lstat(path string) (fs.FileInfo, error) {
+	if err := fault("lstat", path); err != nil {
+		return nil, err
+	}
+	return os.Lstat(path)
+}
+
 func syncDir(path string) error {
+	if err := fault("sync", path); err != nil {
+		return err
+	}
 	d, err := os.Open(path)
 	if err != nil {
 		return err
@@ -133,8 +152,12 @@ func (w *Worker) nextHome() (int64, error) {
 		if w.usedHomes[home] {
 			continue
 		}
-		if _, err := os.Lstat(w.cfg.Layout.Home(home).Root); errors.Is(err, fs.ErrNotExist) {
+		_, err := lstat(w.cfg.Layout.Home(home).Root)
+		if errors.Is(err, fs.ErrNotExist) {
 			break
+		}
+		if err != nil {
+			return 0, err
 		}
 	}
 	if home >= maxHome {
@@ -196,8 +219,11 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 			return account{}, err
 		}
 		if w.cfg.AdoptLegacy {
-			if _, err := os.Lstat(w.cfg.Layout.legacy(a.User)); err == nil {
+			switch _, err := lstat(w.cfg.Layout.legacy(a.User)); {
+			case err == nil:
 				r.Adopting = a.User
+			case !errors.Is(err, fs.ErrNotExist):
+				return account{}, err
 			}
 		}
 		if err := w.putRecord(a.Identity, r); err != nil {
@@ -220,15 +246,21 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 
 func (w *Worker) adopt(identity string, r accountRecord) error {
 	from, to := w.cfg.Layout.legacy(r.Adopting), w.cfg.Layout.Home(r.Home).Root
-	if _, err := os.Lstat(from); err == nil {
-		if _, err := os.Lstat(to); errors.Is(err, fs.ErrNotExist) {
+	switch _, err := lstat(from); {
+	case err == nil:
+		switch _, err := lstat(to); {
+		case errors.Is(err, fs.ErrNotExist):
 			if err := os.Rename(from, to); err != nil {
 				return err
 			}
-			if err := syncDir(w.cfg.Layout.Root); err != nil {
-				return err
-			}
+		case err != nil:
+			return err
 		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return err
+	}
+	if err := syncDir(w.cfg.Layout.Root); err != nil {
+		return err
 	}
 	if hook := w.adoptHookForTest; hook != nil {
 		if err := hook(); err != nil {

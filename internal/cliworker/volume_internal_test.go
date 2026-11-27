@@ -173,3 +173,124 @@ func TestAVolumeThatLostItsAuthorityIsPinnedByNoRequest(t *testing.T) {
 		t.Errorf("the refused request wrote the installation: %v", err)
 	}
 }
+
+func newLegacyWorker(t *testing.T) *Worker {
+	t.Helper()
+	w, err := New(Config{Layout: Layout{Root: filepath.Join(t.TempDir(), "cli")}, AdoptLegacy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	return w
+}
+
+func failOn(t *testing.T, op, path string, err error) {
+	t.Helper()
+	faultForTest = func(o, p string) error {
+		if o == op && filepath.Clean(p) == filepath.Clean(path) {
+			return err
+		}
+		return nil
+	}
+	t.Cleanup(func() { faultForTest = nil })
+}
+
+func TestAHomeScanThatCannotLookReturnsTheErrorInsteadOfGivingEveryNumberAway(t *testing.T) {
+	w := newLegacyWorker(t)
+	w.nextFree = maxHome - 3
+	broken := errors.New("input/output error")
+	faultForTest = func(op, _ string) error {
+		if op == "lstat" {
+			return broken
+		}
+		return nil
+	}
+	t.Cleanup(func() { faultForTest = nil })
+	if _, err := w.nextHome(); !errors.Is(err, broken) {
+		t.Errorf("a scan whose lookups failed: %v, want the lookup's error", err)
+	}
+}
+
+func TestALegacyDirectoryThatCannotBeLookedUpIsStillAdoptedOnceItCan(t *testing.T) {
+	w := newLegacyWorker(t)
+	a := AccountForTest(1)
+	legacy := w.cfg.Layout.legacy(1)
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failOn(t, "lstat", legacy, errors.New("input/output error"))
+	if _, err := w.resolve(a, true); err == nil {
+		t.Fatal("an account was made while its legacy directory couldn't be looked up")
+	}
+	faultForTest = nil
+	acct, err := w.resolve(a, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(w.cfg.Layout.Home(acct.home).Root, "keep")); err != nil {
+		t.Errorf("the legacy directory's file after the lookup recovered: %v", err)
+	}
+}
+
+func TestAnAdoptionWhoseLookupFailedKeepsItsMarker(t *testing.T) {
+	w := newLegacyWorker(t)
+	a := AccountForTest(1)
+	legacy := w.cfg.Layout.legacy(1)
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.adoptHookForTest = func() error { return errors.New("stopped before the marker was cleared") }
+	if _, err := w.resolve(a, true); err == nil {
+		t.Fatal("fixture: the adoption didn't stop")
+	}
+	w.adoptHookForTest = nil
+	r, _, _ := w.find(a.Identity)
+	if r.Adopting != 1 {
+		t.Fatalf("fixture: the marker = %d", r.Adopting)
+	}
+	if err := os.Rename(w.cfg.Layout.Home(r.Home).Root, legacy+"-aside"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(legacy+"-aside", legacy); err != nil {
+		t.Fatal(err)
+	}
+	failOn(t, "lstat", legacy, errors.New("input/output error"))
+	if _, err := w.resolve(a, true); err == nil {
+		t.Fatal("the adoption went on with a legacy directory it couldn't look up")
+	}
+	if r, _, _ := w.find(a.Identity); r.Adopting != 1 {
+		t.Errorf("the marker after a failed lookup = %d, want 1", r.Adopting)
+	}
+}
+
+func TestAnAdoptionSyncsTheMoveBeforeItClearsItsMarkerEvenWhenItWasVisibleAlready(t *testing.T) {
+	w := newLegacyWorker(t)
+	a := AccountForTest(1)
+	legacy := w.cfg.Layout.legacy(1)
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	failOn(t, "sync", w.cfg.Layout.Root, errors.New("input/output error"))
+	if _, err := w.resolve(a, true); err == nil {
+		t.Fatal("fixture: the sync of the move didn't fail")
+	}
+	faultForTest = nil
+	var synced []string
+	syncedForTest = func(p string) { synced = append(synced, filepath.Clean(p)) }
+	t.Cleanup(func() { syncedForTest = nil })
+	if _, err := w.resolve(a, true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(synced, filepath.Clean(w.cfg.Layout.Root)) {
+		t.Errorf("the retry cleared the marker without syncing %s (synced %v)", w.cfg.Layout.Root, synced)
+	}
+	if r, _, _ := w.find(a.Identity); r.Adopting != 0 {
+		t.Errorf("the marker after the retry = %d", r.Adopting)
+	}
+}
