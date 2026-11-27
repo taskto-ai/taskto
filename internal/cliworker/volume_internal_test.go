@@ -3,6 +3,8 @@
 package cliworker
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -153,5 +155,18 @@ func TestAUIDBaseIsNeverOneALegacyHomesOwnerWouldGetAgain(t *testing.T) {
 	}
 	if err := w.pinUIDBase(owner + 1); err != nil {
 		t.Errorf("a UID base apart from the legacy home's owner: %v", err)
+	}
+}
+
+func TestAVolumeThatLostItsAuthorityIsPinnedByNoRequest(t *testing.T) {
+	w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, authorityLost: "its installation is gone"}
+	if err := mkdirDurable(w.stateDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.sameInstallation(TestInstallation, true); !errors.Is(err, ErrAuthorityLost) {
+		t.Errorf("a request to pin the volume: %v, want ErrAuthorityLost", err)
+	}
+	if _, err := os.Stat(w.installationFile()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the refused request wrote the installation: %v", err)
 	}
 }

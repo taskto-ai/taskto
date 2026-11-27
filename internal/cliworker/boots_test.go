@@ -728,6 +728,10 @@ func TestAVolumeThatLostItsAuthorityTakesNoNewAccount(t *testing.T) {
 	if _, err := h.w.StartLogin(other, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrAuthorityLost) {
 		t.Errorf("a new account while authority is lost: %v, want ErrAuthorityLost", err)
 	}
+	unnamed := cliowner.Account{User: 3, Identity: cliworker.IdentityForTest(3), Boot: cliworker.TestBoot}
+	if _, err := h.w.StartLogin(unnamed, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrAuthorityLost) {
+		t.Errorf("a new account naming no installation while authority is lost: %v, want ErrAuthorityLost", err)
+	}
 	if _, err := os.Stat(filepath.Join(h.layout.Root, ".worker", "installation")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a new account's request wrote the volume's installation: %v", err)
 	}
