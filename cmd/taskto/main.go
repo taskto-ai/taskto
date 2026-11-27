@@ -286,12 +286,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			}
 			return c, nil
 		})
-		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
+		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, provider, modelID string) error {
 			c, err := agent.ready(ctx)
 			if err != nil {
 				return err
 			}
-			return c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
+			return c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: provider, ModelID: modelID})
 		})
 		convAgent = func(ctx context.Context) (conversations.Runtime, error) {
 			c, err := agent.ready(ctx)

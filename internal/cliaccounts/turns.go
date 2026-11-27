@@ -307,11 +307,10 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 		next, found := s.worker.FindTurn(nextID)
 		notice := s.switchNotice(nextID)
 		if !found && n < maxSwitches {
-			next, notice = s.switchAfter(ctx, out, p, req, t, res, id, nextID, tried)
+			next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried)
 		}
 		if next == nil {
-			res.done.Seq += offset
-			out.write(res.done)
+			s.finish(out, res, offset)
 			return
 		}
 		offset += res.last + 1
@@ -325,6 +324,23 @@ type passed struct {
 	last    int
 	limited bool
 	text    string
+	hop     *modelHop
+}
+
+type modelHop struct {
+	notice, note string
+}
+
+func (s *Service) finish(out *eventWriter, res passed, offset int) {
+	if res.hop == nil {
+		res.done.Seq += offset
+		out.write(res.done)
+		return
+	}
+	res.done.Seq = offset + res.last + 1
+	res.done.Continue, res.done.Note = true, res.hop.note
+	out.write(cliworker.Event{Seq: offset + res.last, Type: cliworker.EventNotice, Text: res.hop.notice})
+	out.write(res.done)
 }
 
 func (s *Service) pass(ctx context.Context, out *eventWriter, p conversations.Principal, t Turn, offset int) (passed, bool) {
@@ -411,19 +427,12 @@ func (s *Service) stopped(ctx context.Context, p conversations.Principal, t Turn
 	return ""
 }
 
-func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res passed, id, nextID string, tried map[string]bool) (Turn, string) {
-	why := s.stopped(ctx, p, t, res)
+func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res *passed, id, nextID string, tried map[string]bool) (Turn, string) {
+	why := s.stopped(ctx, p, t, *res)
 	if why == "" || s.isStopped(id) {
 		return nil, ""
 	}
 	if on, err := s.switchingOn(ctx, p.User); err != nil || !on {
-		return nil, ""
-	}
-	next, ok, err := s.nextChoice(ctx, p, tried)
-	if err != nil || !ok {
-		if err != nil {
-			slog.ErrorContext(ctx, "cli turn: choosing the next account", "conversation", p.Conversation, "err", err)
-		}
 		return nil, ""
 	}
 	from := t.Spec().CLI.Name()
@@ -435,6 +444,15 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 		"check before you redo anything, then carry on with the request."
 	if strings.TrimSpace(res.text) != "" {
 		note += "\n\nWhat it had said so far:\n\n" + strings.TrimSpace(res.text)
+	}
+	next, ok, err := s.nextChoice(ctx, p, tried)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli turn: choosing the next account", "conversation", p.Conversation, "err", err)
+		return nil, ""
+	}
+	if !ok {
+		res.hop = s.hopToModel(ctx, p, from+" "+why, note)
+		return nil, ""
 	}
 	note += "\n\n"
 	tn, err := s.start(ctx, p, req, nextID, next, note)
@@ -453,6 +471,25 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 	return tn, notice
 }
 
+func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) *modelHop {
+	models, err := s.modelsAfter(ctx, p)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli turn: choosing the next model", "conversation", p.Conversation, "err", err)
+		return nil
+	}
+	for _, m := range models {
+		if s.setModel == nil {
+			return nil
+		}
+		if err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, m.provider, m.model); err != nil {
+			slog.WarnContext(ctx, "cli turn: setting the conversation's model after a limit", "conversation", p.Conversation, "err", err)
+			continue
+		}
+		return &modelHop{notice: fmt.Sprintf("%s: continuing on %s", stopped, m.model), note: note}
+	}
+	return nil
+}
+
 func (s *Service) switchNotice(nextID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -466,7 +503,7 @@ func (s *Service) switchModel(ctx context.Context, p conversations.Principal, fr
 	if from == to || s.setModel == nil {
 		return
 	}
-	if err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, to); err != nil {
+	if err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, cliProviderPrefix+string(to), "default"); err != nil {
 		slog.WarnContext(ctx, "cli turn: setting the conversation's model after a switch", "conversation", p.Conversation, "err", err)
 	}
 }

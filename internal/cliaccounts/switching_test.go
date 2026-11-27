@@ -102,14 +102,22 @@ func TestLimitedUntil(t *testing.T) {
 }
 
 type modelCalls struct {
-	mu   sync.Mutex
-	clis []cliworker.CLI
+	mu     sync.Mutex
+	clis   []cliworker.CLI
+	refs   []string
+	refuse map[string]bool
 }
 
-func (m *modelCalls) set(_ context.Context, _ int64, cli cliworker.CLI) error {
+func (m *modelCalls) set(_ context.Context, _ int64, provider, model string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.clis = append(m.clis, cli)
+	if m.refuse[provider] {
+		return fmt.Errorf("unknown model")
+	}
+	m.refs = append(m.refs, provider+"/"+model)
+	if cli, ok := strings.CutPrefix(provider, cliProviderPrefix); ok {
+		m.clis = append(m.clis, cliworker.CLI(cli))
+	}
 	return nil
 }
 

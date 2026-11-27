@@ -69,7 +69,7 @@ export function CliAccountsTab({ workspace, admin = false }: { workspace?: numbe
             </div>
           ))}
       </Section>
-      {list.data?.enabled && <SwitchingPanel />}
+      {list.data?.enabled && <SwitchingPanel workspace={workspace} />}
       {workspace !== undefined && <SharedCliAccountsPanel workspace={workspace} admin={admin} />}
     </SettingsTab>
   )

@@ -1979,7 +1979,7 @@
     },
     "switching": {
       "title": "Automatic switching",
-      "intro": "When the account a turn runs on stops (it reaches a usage limit, or needs you to sign in again), the turn goes on with the next account below that can run, starting with the conversation so far. The queue also orders your accounts while switching is off.",
+      "intro": "When the account a turn runs on stops (it reaches a usage limit, or needs you to sign in again), the turn goes on with the next account below that can run, starting with the conversation so far. When none can, a model of yours or your workspace's in the queue takes over and the conversation carries on there. The queue also orders your accounts while switching is off.",
       "toggle": "Switch automatically when an account stops",
       "warning": "Each account must be your own login, or your workspace's. Providers' plans assume individual use: switching between extra subscriptions to get around a plan's limits may break its terms.",
       "termsLabel": "The providers' terms",
@@ -1996,6 +1996,7 @@
       "ownLabelled": "{name} ({label})",
       "ownNumbered": "{name} (account {number})",
       "shared": "{name} ({label}, {workspace})",
+      "model": "Model: {name}",
       "limitedBadge": "At its limit"
     },
     "dictation": {

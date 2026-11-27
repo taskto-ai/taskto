@@ -169,10 +169,11 @@ These are the same settings the CLI workers' gateway tests use, with the server 
 The user's queue (Settings → CLI accounts): an ordered list of accounts, their own and the
 shared accounts of their workspaces, with a switch that is **off by default**.
 
-- Table `cli_switching` (user, enabled) and `cli_switch_queue` (user, position, own account or
-  shared account).
-- The queue can only hold the user's own accounts and shared accounts of workspaces they are a
-  member of. At a turn, entries the conversation's workspace doesn't allow are skipped: a shared
+- Table `cli_switching` (user, enabled) and `cli_switch_queue` (user, position, and exactly one
+  of an own account, a shared account, or a model: a provider and a model id).
+- The queue can only hold the user's own accounts, shared accounts of workspaces they are a
+  member of, and models of providers the user may use: the instance's, their own, and those of a
+  workspace they are in. A CLI's own provider (`cli-…`) is refused: those are accounts. At a turn, entries the conversation's workspace doesn't allow are skipped: a shared
   account of another workspace, or what the member's mode rules out.
 
 **When switching is off**, a turn runs on the account the mode picks, as above: the first own
@@ -204,6 +205,18 @@ turns on. The turn ends with the limit's message, as before.
 - **One worker turn per account.** Each run is a worker turn of its own (`c<conversation>-<turn>`,
   then `…-s1`, `…-s2`). The server numbers their events in one sequence, so a sidecar that
   re-attaches reads the whole chain once.
+- **A model at the end**: when no account can run, the first model of the queue (in queue
+  order, so accounts always come before models) that the conversation's workspace allows takes
+  over. A model of another workspace's provider is skipped, and so is one the agent runtime
+  refuses (a provider that was removed). The server sets the conversation's model to it, then
+  ends the CLI turn with a notice ("Claude Code reached its usage limit: continuing on Big
+  model") and a final event with `continue: true` and the same hand-off note the next account
+  would get. The sidecar (`agent/src/cli.ts`) hands that note to the agent as the turn's result
+  instead of the failure. The agent runtime reads the conversation's model for each request, so
+  the next request of the same run goes to the model, with the whole conversation so far (the
+  CLI's answers are already in its context) and the note, and the model's tools are the
+  conversation's usual ones. A submission to continue is not used: the runtime refuses one while
+  the conversation is running, which it is during the CLI's turn.
 - **Nothing left**: if no other entry can run, the turn ends as it would without switching (the
   limit's message, or the Reconnect wait).
 - `/cli/wait` answers once the account the conversation would use is connected, so the
@@ -262,8 +275,10 @@ Defaults taken, still open to change:
    or chosen by members, are possible later.
 3. **A shared account is shared with every member** of the workspace. Choosing which members can
    use one (a list per account) can come later.
-4. **Switching covers CLI accounts only.** Falling back to a model provider (the agent runtime's
-   own API models) changes how the conversation runs and is left out.
+4. **A model can end the queue**, after the accounts. Each model the user queues is one they
+   chose to continue on, with the conversation's history, and it bills the provider account it
+   belongs to. A model that is not at the end of the queue is still tried only when no account
+   can run.
 5. **The conversation stays on the account it switched to** until that one stops, rather than
    going back once the first one's limit resets, to save hand-offs.
 6. **The proxy's token can't be revoked before it expires**, by design (stateless). Removing the

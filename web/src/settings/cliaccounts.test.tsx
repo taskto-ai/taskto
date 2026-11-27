@@ -541,3 +541,75 @@ test('automatic switching: off until turned on, with the warning and terms; the 
     queue: [{ account: 'claude' }, { shared: 4 }, { account: 'claude-2' }],
   })
 })
+
+test('automatic switching: a model of the workspace can end the queue, and a CLI provider is never offered', async () => {
+  const calls = fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          { provider: 'cli-claude', name: 'Claude Code', scope: 'cli', models: [{ id: 'default', name: 'default' }] },
+          { provider: 'ws1-team', name: 'Team', scope: 'workspace', models: [{ id: 'big', name: 'Big model' }] },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [
+          { kind: 'own', id: 'claude', cli: 'claude', title: 'Claude Code', limited: false },
+          { kind: 'model', id: 'ws1-team', model_id: 'big', cli: '', title: 'big', limited: false },
+        ],
+        available: [{ kind: 'own', id: 'claude', cli: 'claude', title: 'Claude Code', limited: false }],
+      },
+    },
+    'PUT /api/me/cli-switching': { body: { enabled: true, queue: [], available: [] } },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  expect(await within(panel).findByText('2. Model: Big model')).toBeTruthy()
+  expect(within(panel).queryByRole('option', { name: /Model: default/ })).toBeNull()
+  fireEvent.click(within(panel).getByRole('button', { name: 'Move Model: Big model up' }))
+  await waitFor(() => expect(count(calls, 'PUT', '/api/me/cli-switching')).toBe(1))
+  expect(calls.filter((c) => c.method === 'PUT')[0].body).toEqual({
+    queue: [{ provider: 'ws1-team', model_id: 'big' }, { account: 'claude' }],
+  })
+})
+
+test('automatic switching: a model can be added from the workspace models', async () => {
+  const calls = fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          { provider: 'cli-claude', name: 'Claude Code', scope: 'cli', models: [{ id: 'default', name: 'default' }] },
+          { provider: 'u2-mine', name: 'Mine', scope: 'user', models: [{ id: 'small', name: 'Small model' }] },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [{ kind: 'own', id: 'claude', cli: 'claude', title: 'Claude Code', limited: false }],
+        available: [{ kind: 'own', id: 'claude', cli: 'claude', title: 'Claude Code', limited: false }],
+      },
+    },
+    'PUT /api/me/cli-switching': { body: { enabled: true, queue: [], available: [] } },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  const add = await within(panel).findByLabelText('Add to the queue')
+  await within(panel).findByRole('option', { name: 'Model: Small model' })
+  expect(within(panel).queryByRole('option', { name: /Model: default/ })).toBeNull()
+  fireEvent.change(add, { target: { value: 'model:u2-mine:small' } })
+  await waitFor(() => expect(count(calls, 'PUT', '/api/me/cli-switching')).toBe(1))
+  expect(calls.filter((c) => c.method === 'PUT')[0].body).toEqual({
+    queue: [{ account: 'claude' }, { provider: 'u2-mine', model_id: 'small' }],
+  })
+})

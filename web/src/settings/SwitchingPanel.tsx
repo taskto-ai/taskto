@@ -1,4 +1,14 @@
-import { api, CLI_PRODUCTS, CLI_SWITCHING, type CliName, type CliSwitching, type QueueAccount } from '../api'
+import {
+  api,
+  CLI_PRODUCTS,
+  CLI_SWITCHING,
+  type CliName,
+  type CliSwitching,
+  type QueueAccount,
+  type QueueModel,
+  ws,
+} from '../api'
+import type { ModelProvider } from '../conversations/ModelPicker'
 import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
@@ -13,10 +23,31 @@ import { CLI_TERMS } from './CliAccountsTab'
 import { Alert, Loading, Section, useAction } from './parts'
 import { SHARED_TERMS } from './SharedCliAccounts'
 
-const entry = (a: QueueAccount) => (a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) })
-const key = (a: QueueAccount) => `${a.kind}:${a.id}`
+const entry = (a: QueueAccount) => {
+  if (a.kind === 'model') return { provider: a.id, model_id: a.model_id }
+  return a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) }
+}
+const key = (a: QueueAccount) => (a.kind === 'model' ? `model:${a.id}:${a.model_id}` : `${a.kind}:${a.id}`)
 
-function queueTitle(t: T, a: QueueAccount): string {
+function modelEntries(providers: ModelProvider[]): QueueModel[] {
+  return providers
+    .filter((p) => p.scope !== 'cli')
+    .flatMap((p) =>
+      p.models.map((m) => ({
+        kind: 'model' as const,
+        id: p.provider,
+        model_id: m.id,
+        title: m.name || m.id,
+        limited: false,
+      })),
+    )
+}
+
+function queueTitle(t: T, a: QueueAccount, models: QueueModel[] = []): string {
+  if (a.kind === 'model') {
+    const known = models.find((m) => key(m) === key(a))
+    return t('settings.switching.model', { name: known?.title ?? a.model_id })
+  }
   const name = CLI_PRODUCTS[a.cli] ?? a.cli
   if (a.kind === 'shared') {
     return a.label && a.workspace_name
@@ -28,8 +59,15 @@ function queueTitle(t: T, a: QueueAccount): string {
   return a.number > 1 ? t('settings.switching.ownNumbered', { name, number: a.number }) : name
 }
 
-export function SwitchingPanel() {
+export function SwitchingPanel({ workspace }: { workspace?: number }) {
   const state = useLoad(() => api<CliSwitching>(CLI_SWITCHING), [])
+  const providers = useLoad(
+    () =>
+      workspace === undefined
+        ? Promise.resolve<ModelProvider[]>([])
+        : api<{ providers: ModelProvider[] }>(`${ws(workspace)}/models`).then((r) => r.providers),
+    [workspace],
+  )
   const action = useAction()
   const t = useT()
   const f = useFormat()
@@ -52,7 +90,8 @@ export function SwitchingPanel() {
   }
   const { enabled, queue, available } = state.data
   const queued = new Set(queue.map(key))
-  const rest = available.filter((a) => !queued.has(key(a)))
+  const models = modelEntries(providers.data ?? [])
+  const rest: QueueAccount[] = [...available, ...models].filter((a) => !queued.has(key(a)))
   const move = (i: number, by: number) => {
     const next = [...queue]
     const [a] = next.splice(i, 1)
@@ -100,7 +139,7 @@ export function SwitchingPanel() {
         <Panel>
           <ol className="settings-queue" aria-label={t('settings.switching.queue')}>
             {queue.map((a, i) => {
-              const title = queueTitle(t, a)
+              const title = queueTitle(t, a, models)
               return (
                 <li key={key(a)} className="settings-queue-item" aria-label={title}>
                   <span className="settings-person-text">
@@ -160,7 +199,7 @@ export function SwitchingPanel() {
             <option value="">{t('settings.switching.choose')}</option>
             {rest.map((a) => (
               <option key={key(a)} value={key(a)}>
-                {queueTitle(t, a)}
+                {queueTitle(t, a, models)}
               </option>
             ))}
           </Select>

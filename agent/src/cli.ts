@@ -64,11 +64,13 @@ type CliEvent = {
   type: string
   text?: string
   status?: string
+  continue?: boolean
+  note?: string
   tool?: { id?: string; name: string; input?: string; status: string; output?: string; saved?: SavedApp }
   permission?: { id: string; tool: string; input?: string; status: string; reason?: string }
 }
 
-type Done = { status: string; text: string }
+type Done = { status: string; text: string; continueWith?: string }
 
 export type SavedApp = { space: number; app: number }
 
@@ -330,7 +332,11 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
               seen = e.seq
             }
             if (e.type === 'done') {
-              done = { status: e.status ?? 'failed', text: e.text ?? '' }
+              done = {
+                status: e.status ?? 'failed',
+                text: e.text ?? '',
+                ...(e.continue && e.note ? { continueWith: e.note } : {}),
+              }
               return
             }
             show(api, cli, e, helps)
@@ -455,6 +461,9 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           continue
         }
         if (done.status === 'ok') return result(done.text, rec.text(), false, helps.latest(), helps.savedApps())
+        if (done.continueWith) {
+          return result(done.continueWith, rec.text(), false, helps.latest(), helps.savedApps())
+        }
         return result(
           done.text || `the ${PRODUCT[cli]} turn failed`,
           rec.text(),
