@@ -147,7 +147,13 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	cur := strings.ToUpper(strings.TrimSpace(req.Currency))
 	minor, err := s.checkMoney(rec, req.Amount, cur)
 	if err != nil {
-		return paylink.Link{}, err
+		if pending == nil {
+			return paylink.Link{}, err
+		}
+		// A key whose outcome is unknown is still looked for, whatever the limits say now: they refuse a
+		// new call (read again before each one leaves, limitsAllow), never the lookup of what an earlier
+		// call may have made. The ref asks what it was made for.
+		minor, cur = ref.amountMinor, ref.currency
 	}
 	creds, err := s.store.credentials(ctx, req.WorkspaceID, req.IntegrationID)
 	if err != nil || creds.APIKey == "" {
@@ -230,6 +236,15 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			}
 		}
 
+		// The admin's limits as they are now, read again right before the call leaves: a try that moved on
+		// from an expired key asks for a new link, and a ceiling lowered since the try began refuses it.
+		// A key whose outcome is unknown is not asked again past them; it is only looked for.
+		if err := s.limitsAllow(ctx, req); err != nil {
+			if a.unknown() {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+			return paylink.Link{}, err
+		}
 		// The call is written ahead before it leaves, and that record is never taken back.
 		if ok, err := s.writeAhead(ctx, ref, a); err != nil {
 			return paylink.Link{}, err
@@ -624,6 +639,26 @@ func (s *Service) pageURLs() (success, cancel string) {
 		return "", ""
 	}
 	return base + PaymentDonePath, base + PaymentCancelledPath
+}
+
+// limitsAllow says whether the integration may make the request's link now: it is still there, on and
+// allowed in the app's space, and the amount and currency are within the admin's limits as they are now.
+func (s *Service) limitsAllow(ctx context.Context, req paylink.Request) error {
+	rec, err := s.store.getSnapshot(ctx, req.WorkspaceID, req.IntegrationID)
+	if errors.Is(err, errNotFound) {
+		return unavailable()
+	} else if err != nil {
+		return err
+	}
+	usable, err := s.store.usable(ctx, req.WorkspaceID, req.IntegrationID, req.SpaceID)
+	if err != nil {
+		return err
+	}
+	if !usable {
+		return unavailable()
+	}
+	_, err = s.checkMoney(rec, req.Amount, strings.ToUpper(strings.TrimSpace(req.Currency)))
+	return err
 }
 
 // checkMoney converts the amount of the request to the currency's smallest unit, exactly, and

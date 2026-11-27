@@ -356,7 +356,12 @@ write.
   written) and is raised by a change of code with its tests, never by configuration.
 - **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
   than the currency has, zero or less, above the integration's ceiling, or a currency the integration
-  doesn't list are each refused, with a code that says which, before anything is made.
+  doesn't list are each refused, with a code that says which, before anything is made. The limits
+  (and that the integration is on and allowed in the space) are read again right before every call
+  leaves, so a try that moves on from an expired key to a new one is refused by a ceiling lowered
+  meanwhile. They never stop the lookup of a key whose outcome is unknown: its object, if it turns up,
+  is the link, and the key is not asked again past them (the entry waits on the lookup, then fails with
+  `integration_outcome_unknown` for an admin).
 - **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
   unique by the outbox entry and keeps the provider's answer. It has **keys**
   (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of
