@@ -3105,6 +3105,7 @@
       "body_other": "This browser holds {count} unsent records of another account. Sign in as that account to send them, or discard them.",
       "signOut": "Sign out to sign in as that account",
       "discard": "Discard them",
+      "failed": "Some of them couldn’t be discarded. Try again.",
       "discardQuestion_one": "Discard {count} record that was never sent? It can’t be recovered.",
       "discardQuestion_other": "Discard {count} records that were never sent? They can’t be recovered."
     },

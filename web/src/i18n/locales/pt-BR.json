@@ -3129,6 +3129,7 @@
       "body_other": "Este navegador guarda {count} registros não enviados de outra conta. Entre nessa conta para enviá-los ou descarte-os.",
       "signOut": "Sair para entrar nessa conta",
       "discard": "Descartá-los",
+      "failed": "Não foi possível descartar alguns deles. Tente de novo.",
       "discardQuestion_one": "Descartar {count} registro que nunca foi enviado? Não é possível recuperá-lo.",
       "discardQuestion_many": "Descartar {count} de registros que nunca foram enviados? Não é possível recuperá-los.",
       "discardQuestion_other": "Descartar {count} registros que nunca foram enviados? Não é possível recuperá-los."

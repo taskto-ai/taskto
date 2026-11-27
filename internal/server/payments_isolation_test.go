@@ -298,6 +298,9 @@ func TestARevokedApprovalAppliesNoPaymentAndMakesNoLink(t *testing.T) {
 	if after := s.record(s.bob, s.app, record); after.Revision != before.Revision || after.Data["status"] != "sent" {
 		t.Fatalf("a revoked approval's payment changed the record: %+v", after)
 	}
+	s.eventually("the admin's notice of the failed event is sent", func() bool {
+		return s.scalar(`SELECT count(*) FROM integration_event_notices`) == 0
+	})
 	if n := s.scalar(`SELECT count(*) FROM notifications WHERE kind = 'integration_event' AND user_id = ?`, s.alice.id); n != 1 {
 		t.Fatalf("the admin has %d notices", n)
 	}

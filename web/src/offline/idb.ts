@@ -19,7 +19,7 @@ export function isQuotaError(e: unknown): boolean {
   return name === 'QuotaExceededError' || code === 22 || /quota/i.test(String((e as Error).message))
 }
 
-export type Migration = (db: IDBDatabase, tx: IDBTransaction) => void
+export type Migration = (db: IDBDatabase, tx: IDBTransaction) => undefined | 'stop'
 
 export function openDatabase(
   name: string,
@@ -38,7 +38,9 @@ export function openDatabase(
     request.onupgradeneeded = (event) => {
       const db = request.result
       const tx = request.transaction as IDBTransaction
-      for (let v = event.oldVersion + 1; v <= (event.newVersion ?? version); v++) migrations[v]?.(db, tx)
+      for (let v = event.oldVersion + 1; v <= (event.newVersion ?? version); v++) {
+        if (migrations[v]?.(db, tx) === 'stop') break
+      }
     }
     request.onsuccess = () => {
       const db = request.result
