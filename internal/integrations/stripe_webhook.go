@@ -78,11 +78,20 @@ const (
 	EventPaymentRefunded  = "payment.refunded"
 )
 
-// WebhookSecrets are the secrets a delivery may be signed with: the current one and, for the
-// overlap of a rotation, the one it replaced. Empty ones are not used.
+// WebhookSecrets are what a delivery is verified against: the secrets it may be signed with, the
+// current one and, for the overlap of a rotation, the one it replaced (empty ones are not used),
+// and the address a provider that signs over its notification URL (Square) signed over.
 type WebhookSecrets struct {
 	Current  Secret
 	Previous Secret
+	// URL is the integration's webhook address that the provider signs over, as the server made it from
+	// its public URL, never from the request: the one the signing secret was saved for (what the admin
+	// registered), or the current one when none was recorded. A provider that doesn't sign the address
+	// (Stripe) ignores it.
+	URL string
+	// PreviousURL is the address the previous secret was saved for (the current address when none was
+	// recorded): a provider that signs the address verifies the previous secret over this one only.
+	PreviousURL string
 }
 
 // Event is a provider event reduced to closed, typed fields: what the server keeps of a webhook
@@ -101,6 +110,9 @@ type Event struct {
 	// PaymentID is the provider's id of the payment the object belongs to (a payment intent),
 	// "" when there is none yet.
 	PaymentID string
+	// LinkID is the provider's link the object was opened from, when it was (a Checkout Session of a
+	// Stripe Payment Link names the link): "" otherwise.
+	LinkID string
 	// AmountMinor is in the currency's smallest unit; for a refund, what has been refunded so far.
 	AmountMinor int64
 	// Currency is the ISO 4217 code, upper case.
@@ -115,14 +127,23 @@ type Event struct {
 type Receiver interface {
 	Provider
 	// VerifyWebhook checks that the delivery was signed with one of the secrets, over the exact
-	// body and in constant time, and that its timestamp is within the provider's tolerance of
-	// now. It reads nothing of the body but the bytes, so it runs before any parsing. Its errors
-	// say nothing a caller may show: the route answers every one the same.
+	// body (and, for a provider that signs it, the address) and in constant time, and that its
+	// timestamp is within the provider's tolerance of now. It reads nothing of the body but the bytes
+	// before the signature matched, so it runs before any parsing: a provider that signs its time
+	// inside the body (Square) reads that one field of a body whose signature it has checked. Its
+	// errors say nothing a caller may show: the route answers every one the same.
 	VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, now time.Time) error
 	// Normalize reads a verified body. It reports false for an event the integration doesn't act
 	// on, or whose shape isn't the one it relies on: that is answered 200 and not stored, since
 	// a provider disables an endpoint that answers errors.
 	Normalize(body []byte) (Event, bool)
+}
+
+// modeOfAccount is a Receiver whose events don't say whether they are of live money (Square's carry
+// no livemode): the environment is the integration's, which has a signing secret of its own for each
+// environment, so a delivery that verified is of the integration's mode.
+type modeOfAccount interface {
+	EventsCarryNoMode() bool
 }
 
 var (
@@ -294,6 +315,7 @@ type stripeObject struct {
 	PaymentStatus     string  `json:"payment_status"`
 	ClientReferenceID *string `json:"client_reference_id"`
 	PaymentIntent     *string `json:"payment_intent"`
+	PaymentLink       *string `json:"payment_link"`
 	AmountTotal       int64   `json:"amount_total"`
 	AmountRefunded    int64   `json:"amount_refunded"`
 	Currency          string  `json:"currency"`
@@ -347,6 +369,12 @@ func (stripe) Normalize(body []byte) (Event, bool) {
 			return Event{}, false
 		}
 		out.PaymentID = *obj.PaymentIntent
+	}
+	if obj.PaymentLink != nil {
+		if !stripeLinkID.MatchString(*obj.PaymentLink) {
+			return Event{}, false
+		}
+		out.LinkID = *obj.PaymentLink
 	}
 	return out, true
 }

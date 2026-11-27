@@ -187,8 +187,8 @@ func (stripe) Mode(_ map[string]string, apiKey string) string {
 	return ""
 }
 
-// square is Square. Its access tokens don't say whether they are for the sandbox, so the
-// environment is a setting, and so is the location payments are made at.
+// square is Square (square.go, square_webhook.go). Its access tokens don't say whether they are for
+// the sandbox, so the environment is a setting, and so is the location payments are made at.
 type square struct{}
 
 var (
@@ -215,10 +215,6 @@ func (square) Hosts(settings map[string]string) []string {
 	}
 	return []string{"connect.squareupsandbox.com"}
 }
-
-// APIVersion: Square's adapter is written, and its version pinned in the Square-Version header,
-// by the card that adds its calls.
-func (square) APIVersion() string { return "" }
 
 func (square) CheckSecret(name, value string) error {
 	switch {

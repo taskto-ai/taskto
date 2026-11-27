@@ -59,8 +59,13 @@ type Integration struct {
 	// WebhookURL is the address to register at the provider, null when the server has no public
 	// URL (payments are then found by polling).
 	WebhookURL *string `json:"webhook_url"`
-	Disabled   bool    `json:"disabled"`
-	DisabledAt *string `json:"disabled_at"`
+	// WebhookURLChanged says that the address the webhook signing secret was saved for is not
+	// webhook_url any more: the server's public URL changed since. The provider still sends to,
+	// and Square signs over, the old address, so the admin registers the new one and saves the
+	// signing secret again.
+	WebhookURLChanged bool    `json:"webhook_url_changed"`
+	Disabled          bool    `json:"disabled"`
+	DisabledAt        *string `json:"disabled_at"`
 	// Spaces are the spaces whose apps may use the integration, by id: only the ones the caller
 	// may manage (their own private space and the workspace's shared ones), never another
 	// person's private space. OtherSpaces counts the rest, which the caller can neither see nor
@@ -87,6 +92,8 @@ const (
 type record struct {
 	Integration
 	publicID string
+	// registeredURL is the webhook address the signing secret was saved for, "" for none.
+	registeredURL string
 }
 
 // Store keeps integrations in the database, their secrets sealed with the server key. Every
@@ -132,7 +139,7 @@ type querier interface {
 }
 
 const columns = `i.id, i.public_id, i.provider, i.name, i.display_name, i.mode, i.settings, i.max_amount_minor,
-	i.currencies, i.disabled_at, i.created_at, i.updated_at, i.last_event_at`
+	i.currencies, i.disabled_at, i.created_at, i.updated_at, i.last_event_at, coalesce(i.webhook_registered_url, '')`
 
 // load reads the workspace's integrations (all of them, or the one with id), oldest first, with
 // which secrets are set and which spaces are allowed.
@@ -147,7 +154,7 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 		var r record
 		var settings, currencies string
 		if err := rows.Scan(&r.ID, &r.publicID, &r.Provider, &r.Name, &r.DisplayName, &r.Mode, &settings, &r.MaxAmountMinor,
-			&currencies, &r.DisabledAt, &r.CreatedAt, &r.UpdatedAt, &r.LastEventAt); err != nil {
+			&currencies, &r.DisabledAt, &r.CreatedAt, &r.UpdatedAt, &r.LastEventAt, &r.registeredURL); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -300,6 +307,9 @@ type draft struct {
 	maxAmount   int64
 	currencies  []string
 	mode        string
+	// publicURL is the server's public URL, which the webhook address a signing secret is saved for
+	// is made of.
+	publicURL string
 }
 
 func newPublicID() (string, error) {
@@ -480,10 +490,14 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 			return err
 		}
 		now := s.stamp(s.now())
+		var registered any
+		if _, ok := d.secrets[SecretWebhookSecret]; ok {
+			registered = nullString(hookURL(d.publicURL, publicID))
+		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO integrations (workspace_id, public_id, provider, name, display_name, mode, settings,
-			max_amount_minor, currencies, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			max_amount_minor, currencies, created_by, created_at, updated_at, webhook_registered_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			workspace, publicID, d.provider.ID(), d.name, d.displayName, d.mode, string(settings), d.maxAmount, string(currencies),
-			user, now, now)
+			user, now, now, registered)
 		if err != nil {
 			return err
 		}
@@ -518,6 +532,9 @@ type change struct {
 	maxAmount   *int64
 	currencies  []string
 	disabled    *bool
+	// publicURL is the server's public URL: a webhook secret in secrets is saved for the address
+	// made of it.
+	publicURL string
 }
 
 // update applies c to the workspace's integration id. Everything is validated against the
@@ -601,6 +618,15 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 				return err
 			}
 			if err := s.seal(ctx, tx, ref, SecretWebhookSecret, webhook, nil); err != nil {
+				return err
+			}
+		}
+		if _, ok := c.secrets[SecretWebhookSecret]; ok {
+			// Saving the signing secret, the same one included, says the provider sends to the address
+			// shown now: an admin who registered the new address after the public URL changed saves the
+			// secret again, which is what clears the warning.
+			if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_registered_url = ? WHERE id = ? AND workspace_id = ?`,
+				nullString(hookURL(c.publicURL, old.publicID)), id, workspace); err != nil {
 				return err
 			}
 		}
@@ -727,7 +753,7 @@ func (s *Store) holds(ctx context.Context, tx *sql.Tx, ref sealRef, name, value 
 }
 
 // keepPrevious moves the integration's current webhook secret to the previous one, valid for
-// previousOverlap, and drops a previous one that has expired. With no current secret, or one that
+// previousOverlap, with the address it was saved for, and drops a previous one that has expired. With no current secret, or one that
 // doesn't open (the server key changed) or that another integration holds too, there is nothing
 // to keep.
 func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now time.Time) error {
@@ -757,6 +783,11 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 	if held {
 		_, err = tx.ExecContext(ctx, `DELETE FROM integration_secrets WHERE integration_id = ? AND name = ?`,
 			ref.id, SecretWebhookSecretPrevious)
+		return err
+	}
+	// The secret goes with the address it was saved for: Square signed with it over that address.
+	if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_previous_registered_url = webhook_registered_url WHERE id = ?`,
+		ref.id); err != nil {
 		return err
 	}
 	expires := now.Add(previousOverlap)

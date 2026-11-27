@@ -181,11 +181,11 @@ func (s *Store) recordGuarded(ctx context.Context, integration int64, guard *hoo
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO integration_events
-			(integration_id, provider_event_id, source, kind, ref_token, object_id, provider_payment_id, amount_minor, currency, livemode,
+			(integration_id, provider_event_id, source, kind, ref_token, object_id, provider_payment_id, link_id, amount_minor, currency, livemode,
 			 body_sha256, occurred_at, received_at, state, next_attempt_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
 			ON CONFLICT (integration_id, provider_event_id) DO NOTHING`,
-			integration, ev.ID, source, ev.Kind, nullString(ev.RefToken), nullString(ev.ObjectID), nullString(ev.PaymentID),
+			integration, ev.ID, source, ev.Kind, nullString(ev.RefToken), nullString(ev.ObjectID), nullString(ev.PaymentID), nullString(ev.LinkID),
 			ev.AmountMinor, ev.Currency, ev.Livemode, hex.EncodeToString(sum[:]), s.stamp(ev.OccurredAt), s.stamp(at), s.stamp(at))
 		if err != nil {
 			return err
@@ -283,14 +283,18 @@ type hookTarget struct {
 	provider  string
 	mode      string
 	disabled  bool
+	// registeredURL is the webhook address its signing secret was saved for, and
+	// previousRegisteredURL the one its previous secret was saved for, "" for none.
+	registeredURL, previousRegisteredURL string
 }
 
 // byPublicID finds the integration with the public id, disabled or not: the route does the same
 // work for a disabled one as for an enabled one, and refuses it afterwards.
 func (s *Store) byPublicID(ctx context.Context, publicID string) (hookTarget, error) {
 	var t hookTarget
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, provider, mode, disabled_at IS NOT NULL FROM integrations
-		WHERE public_id = ?`, publicID).Scan(&t.id, &t.workspace, &t.provider, &t.mode, &t.disabled)
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, provider, mode, disabled_at IS NOT NULL, coalesce(webhook_registered_url, ''),
+		coalesce(webhook_previous_registered_url, '') FROM integrations WHERE public_id = ?`, publicID).Scan(&t.id, &t.workspace, &t.provider,
+		&t.mode, &t.disabled, &t.registeredURL, &t.previousRegisteredURL)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hookTarget{}, errNotFound
 	}
@@ -431,11 +435,11 @@ func (s *Service) claimEvent(ctx context.Context) (ev StoredEvent, lease int64, 
 			}
 			var occurred, received string
 			err = tx.QueryRowContext(ctx, `SELECT e.id, e.integration_id, i.workspace_id, e.provider_event_id, e.source, e.kind,
-					coalesce(e.ref_token, ''), coalesce(e.object_id, ''), coalesce(e.provider_payment_id, ''),
+					coalesce(e.ref_token, ''), coalesce(e.object_id, ''), coalesce(e.provider_payment_id, ''), coalesce(e.link_id, ''),
 					e.amount_minor, e.currency, e.livemode, e.occurred_at, e.received_at, e.attempts, e.lease
 				FROM integration_events e JOIN integrations i ON i.id = e.integration_id WHERE e.id = ?`, id).
 				Scan(&ev.ID, &ev.IntegrationID, &ev.WorkspaceID, &ev.ProviderEvent, &ev.Source, &ev.Kind,
-					&ev.RefToken, &ev.ObjectID, &ev.PaymentID, &ev.AmountMinor, &ev.Currency, &ev.Livemode, &occurred, &received, &ev.Attempts, &lease)
+					&ev.RefToken, &ev.ObjectID, &ev.PaymentID, &ev.LinkID, &ev.AmountMinor, &ev.Currency, &ev.Livemode, &occurred, &received, &ev.Attempts, &lease)
 			if err != nil {
 				return err
 			}

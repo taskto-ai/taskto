@@ -66,6 +66,9 @@ type Service struct {
 	// afterWriteAhead is for tests: it runs after a call is written ahead and before it leaves, and an
 	// error it returns ends the try there, as a crash would.
 	afterWriteAhead func() error
+	// beforeCall is for tests: it runs after the key's window is read and before the call's deadline is
+	// made from it, as the call is about to leave.
+	beforeCall func()
 	// afterCall is for tests: it runs after a call answered with an object and before anything of the
 	// answer is noted, and an error it returns ends the try there, as a crash would.
 	afterCall func() error
@@ -149,9 +152,11 @@ func (s *Service) view(rec record, visible map[int64]bool) Integration {
 			out.OtherSpaces++
 		}
 	}
-	if u := hookURL(s.publicURL, rec.publicID); u != "" {
+	u := hookURL(s.publicURL, rec.publicID)
+	if u != "" {
 		out.WebhookURL = &u
 	}
+	out.WebhookURLChanged = rec.registeredURL != "" && rec.registeredURL != u
 	return out
 }
 
@@ -291,6 +296,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	d.publicURL = s.publicURL
 	ids, ok := s.manageable(w, r)
 	if !ok {
 		return
@@ -331,7 +337,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	rec, err := s.store.update(r.Context(), workspaceOf(r), actorOf(r), id, change{
 		displayName: req.DisplayName, settings: req.Settings, secrets: req.Secrets,
-		maxAmount: req.MaxAmountMinor, currencies: req.Currencies, disabled: req.Disabled,
+		maxAmount: req.MaxAmountMinor, currencies: req.Currencies, disabled: req.Disabled, publicURL: s.publicURL,
 	})
 	if err != nil {
 		fail(w, r, err)

@@ -232,6 +232,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
+| `integration_link_still_open` | — | A failed `create_payment_link` entry: the record's earlier payment link may still take payment (it is open, still being made, or its outcome is unknown) and isn't one this entry can give again: it asks another amount or currency, it reads the same money from other fields of the record than this entry, or the record has more than one such link (left by an older server). No second link is made: a record has one payable link at a time, whatever field it is written to. Once that link has expired at the provider, run the action again. |
+| `integration_amount_changed` | — | A failed `create_payment_link` entry: the record's amount or currency is no longer what the entry was queued with (it failed before it made anything, and was retried after the record changed). Nothing was made; run the action again to ask for the record's money as it is now. |
 | `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
 | `integration_event_integration_changed` | — | A failed payment event: the app's slot is bound to another integration than the one whose payment this is. |
 | `integration_event_app_offline` | — | A failed payment event: the app is offline or not published, or its space is archived. |
@@ -281,6 +283,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_field_not_signature` | 422 | The value of `field`, a signature field, isn't the id of one attachment. |
 | `app_field_not_barcode` | 422 | The value of `field`, a barcode field, isn't the text of a code (no control characters, within `max_length`), or isn't valid for the `format` the field reads. |
 | `app_field_locked` | 422 | `field` holds a captured location or a signature, which no later change may alter or clear unless the field says `editable`. |
+| `app_payment_link_open` | 422 | `field` is the amount or the currency a `create_payment_link` effect of the app reads, and the record's payment link may still be paid: an entry of the effect waits to run, or the link is open, still being made or of unknown outcome. Refused for every write of the record (a person's, an action's, the agent's `run_app_action`, which answers 422 with this code too, and an integration event's handler), and for a publish or a rollback whose release would read that field's money otherwise (another type, other currencies). The change is refused whole; it can be made once the link has expired ([integrations.md](integrations.md#payment-links)). |
 | `app_signature_type` | 400 | The picture uploaded for a signature field isn't a PNG; the upload is removed. |
 | `offline_downloads_disabled` | 403 | An admin turned off downloading this space's apps for offline use. |
 | `session_account_changed` | 409 | The request names (`X-Taskto-Expected-User`) another account than the session's: a queue made by one account is being sent with another's session. Nothing was done. |
@@ -3857,7 +3860,7 @@ an unfinished reference's entry fails with `integration_account_changed` (so doe
 account's other mode, test or live), and a reference made under another integration than the slot's,
 finished or not, is not used (`integration_changed`). An object of a key that was paid fails the entry
 with `integration_link_already_paid`. A newer entry for the same record and fields
-supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. The link and its
+supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. A record has one payable link at a time, whatever field, slot or integration it was made for: an entry with no reference of its own first reads every earlier reference of the record that may still be paid, gives the open one again if the provider says it can still be paid (and fails with `integration_link_still_open` if it asks other money, reads it from other fields, or there is more than one), takes over a reference still being made or of unknown outcome, and makes a new link only once each earlier one expired or was paid ([integrations.md](integrations.md#payment-links)). The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
 again changes nothing. A Checkout Session expires by itself within the provider's default of 24
@@ -4351,6 +4354,7 @@ An integration looks like this:
   "currencies": ["EUR", "USD"],
   "secrets": {"api_key": "set", "webhook_secret": "not set"},
   "webhook_url": "https://taskto.example.com/hooks/0123456789abcdef0123456789abcdef",
+  "webhook_url_changed": false,
   "disabled": false,
   "disabled_at": null,
   "spaces": [12],
@@ -4389,6 +4393,12 @@ An integration looks like this:
   is made from the current `-public-url` each time, so it follows a change of it. The
   integration's `webhook_secret` is what verifies what arrives there. `last_event_at` is when the
   last verified event came.
+- **`webhook_url_changed`**: `true` when the address the `webhook_secret` was last saved for (the
+  `webhook_url` of that moment) isn't `webhook_url` any more: the public URL changed, or is gone.
+  The provider still sends to the old address, and Square signs each delivery over it, so its
+  deliveries are verified against that address until the admin registers the new one at the
+  provider and saves the `webhook_secret` again (the same value is fine), which records the new
+  address and makes this `false`. `false` when no address was recorded.
 - **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
   manage**: their own private space and the workspace's shared spaces (archived ones too, so
   they can be taken out). Another person's private space is never in it: **`other_spaces`**
@@ -4566,15 +4576,20 @@ In order:
    anything is looked up).
 3. The integration is found by `public_id`. The signature is verified **over the raw bytes,
    before the body is parsed**, in constant time, against the integration's webhook secret and,
-   for a day after an admin replaces it, the one it replaced. The provider's tolerance applies
-   to the signed timestamp, in both directions (Stripe: five minutes). The same work is done
+   for a day after an admin replaces it, the one it replaced. Square's signature also covers the
+   notification URL: each secret's own, the one it was saved for (`webhook_url_changed`; the
+   replaced secret keeps the address it was saved for), made from the public URL, never from the
+   request's `Host`. The provider's tolerance applies to the signed
+   time (Stripe: its `t`, five minutes either way; Square: the event's `created_at`, inside the
+   signed body, up to a day and five minutes back, since Square retries for a day, and five minutes
+   ahead). The same work is done
    for an id that can't be delivered to (one that doesn't exist, is disabled or has no secret,
    or isn't of the shape of an id), against a secret of the server's own.
    Only a delivery that verifies counts against the second limit, 600 per minute per id (over
    it: `429 webhook_rate_limited`), so unsigned requests can't use up an integration's quota.
 4. Every way of not getting this far is **one answer**, byte for byte: `404 not_found`, with
    the same headers. An id that doesn't exist, one that is disabled or has no webhook secret,
-   an id of a provider that has no webhooks yet, a secret that doesn't open, a missing,
+   a secret that doesn't open, a delivery signed over another address (Square), a missing,
    malformed, wrong, tampered or too old signature, and a valid signature of *another*
    integration. The response never says which, and nothing about the workspaces or
    integrations that exist.

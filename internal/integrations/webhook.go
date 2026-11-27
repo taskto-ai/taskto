@@ -141,6 +141,9 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 	// writes check again that the integration is the one that was verified against.
 	guard := &hookGuard{mode: sub.target.mode, revision: sub.revision}
 	ev, ok := sub.provider.Normalize(body)
+	if m, modeless := sub.provider.(modeOfAccount); ok && modeless && m.EventsCarryNoMode() {
+		ev.Livemode = sub.target.mode == ModeLive
+	}
 	if !ok || ev.Livemode != (sub.target.mode == ModeLive) {
 		// A type the server doesn't act on, or an event of the other mode than the integration's
 		// (which a secret of one mode can't sign: a refusal worth nothing more than ignoring).
@@ -213,9 +216,25 @@ func (s *Service) hookSubject(ctx context.Context, publicID string) (hookSubject
 	}
 	return hookSubject{
 		target: target, provider: provider, revision: revision,
-		secrets: WebhookSecrets{Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious},
-		live:    !target.disabled,
+		secrets: WebhookSecrets{
+			Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious,
+			URL:         signedURL(hookURL(s.publicURL, publicID), target.registeredURL),
+			PreviousURL: signedURL(hookURL(s.publicURL, publicID), target.previousRegisteredURL),
+		},
+		live: !target.disabled,
 	}, nil
+}
+
+// signedURL is the address a delivery was signed over: the one the signing secret was saved for,
+// which is the one registered at the provider, or the current one when none was recorded. Both are
+// the server's own, never the request's Host. When they differ the admin is told
+// (Integration.WebhookURLChanged): the provider keeps signing over the old address until the new one
+// is registered there and the secret saved again.
+func signedURL(current, registered string) string {
+	if registered != "" {
+		return registered
+	}
+	return current
 }
 
 // decoyReceiver runs the verification of a delivery that has no integration behind it.

@@ -1,7 +1,7 @@
-// Package testprovider is a fake Stripe and a sender of signed webhook events, for tests. It is
-// a normal package that only tests import (like internal/cliworker/clitest): a test in
-// cmd/taskto checks that the server's binary doesn't link it. It must not import the
-// integrations package, whose own tests import it.
+// Package testprovider is a fake Stripe, a fake Square (square.go) and a sender of signed webhook
+// events, for tests. It is a normal package that only tests import (like
+// internal/cliworker/clitest): a test in cmd/taskto checks that the server's binary doesn't link
+// it. It must not import the integrations package, whose own tests import it.
 //
 // The fake is an httptest server for the few endpoints the integration uses, written against
 // Stripe's public API reference at the pinned version (DefaultAPIVersion; a test checks that it

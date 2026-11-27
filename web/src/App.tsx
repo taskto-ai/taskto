@@ -239,7 +239,10 @@ export function App() {
   // Where a sign-out this page is finishing leads, read when a signal comes.
   const leavingTo = useRef<Session | null>(null)
   leavingTo.current = session.state === 'leaving' ? session.tail.next : null
-  useEffect(() => {
+  // Heard from the commit that draws the account's screen (a layout effect, as for SESSION_LOST
+  // below): a signal in the moment after it, before a passive effect would run, would be lost, and
+  // a private window has no offline runtime to hear it instead.
+  useLayoutEffect(() => {
     if (account === null) return
     const over = accountChanged
     watchAccount()
@@ -266,6 +269,13 @@ export function App() {
       if ((e as CustomEvent<{ expected?: number }>).detail?.expected === account) over()
     }
     window.addEventListener(ACCOUNT_CHANGED_EVENT, refused)
+    // A signal from before this listened (another account signed in while this one's sign-in was
+    // on its way, or as the screen was drawn) is not heard again: the browser's marker says it.
+    // Only another account named there is a change; no account named is not proof of one (storage
+    // refused, a marker that couldn't be written). A sign-out this page is finishing already leads
+    // elsewhere, and its marker may still name whoever was before.
+    const now = lastUser()
+    if (leavingTo.current === null && now !== null && now.id !== account) over()
     return () => {
       off()
       window.removeEventListener(ACCOUNT_CHANGED_EVENT, refused)
@@ -280,7 +290,10 @@ export function App() {
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
   // lost while the login is showing.
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
-  useEffect(() => {
+  // Heard from the commit that draws the shell (a layout effect, not a passive one, which runs a
+  // moment after the shell is on the screen): an end of the session said in between would be lost,
+  // and the shell would stay for a session that is over.
+  useLayoutEffect(() => {
     if (!signedIn) return
     // The session ended elsewhere (or expired): this device stops receiving the person's pushes.
     const lost = (e: Event) => {

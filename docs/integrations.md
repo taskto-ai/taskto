@@ -1,13 +1,287 @@
 # Integrations
 
-Design note: let a workspace connect an account at an outside service, so a personal app can
-one day ask for a payment link and be told the payment happened. An **integration** is the
-admin's connection to one provider account: its credentials, its limits and the spaces that
-may use it. The first kind of integration is **payments**; Stripe and Square are the first
-providers.
+A workspace can connect an account at an outside service, so a personal app can ask for a
+payment link and be told the payment happened. An **integration** is the admin's connection to
+one provider account: its credentials, its limits and the spaces that may use it. The first kind
+of integration is **payments**.
 
-This page describes what the server does today, the rules every later part keeps, and, marked
-as such, what is still to come. The routes are in [api.md](api.md#integrations).
+The page has two parts. [Taking payments: a guide](#taking-payments-a-guide) is for the admin who
+connects the account and the person who builds or uses the app, in plain words and in the order you
+do things. Everything after it is the reference: what the server does and the rules it keeps, for
+whoever changes the code or needs to know exactly. The routes are in [api.md](api.md#integrations).
+
+## Taking payments: a guide
+
+By the end of this guide an invoice in your own app has a **Send invoice** button. Pressing it makes
+a payment page at Stripe and puts its address on the invoice; the customer pays there, with a card
+number that only Stripe ever sees; and the invoice then shows **Paid**, with the date, by itself.
+
+Who does what:
+
+- **An admin** of the workspace connects the Stripe account, sets its limits, says which spaces may
+  use it and approves each app that wants to.
+- **Whoever builds the app** (you, or the agent for you) starts from the **Invoicing** template or
+  describes a payments app, tries it and asks for the approval.
+- **Everyone with access to the app** just uses it.
+
+On a one-person install you are all three, and the steps below are short.
+
+**What works today.** Payments work with **Stripe**. Square can be connected and its settings
+checked, but it can't make payment links or send TaskTo events yet, so don't connect it to take
+payments. Refunds are made in Stripe, not in TaskTo (see [Refunds](#refunds)). Two things need the
+server to have a public address: customers coming back to a page of yours (optional), and the
+invoice marking itself paid (see [step 2](#2-tell-stripe-where-to-send-events)).
+
+### 1. Connect your Stripe account
+
+Do this first in Stripe's **test mode** ([step 3](#3-test-mode-and-live-mode) says why).
+
+1. In Stripe's dashboard (its menus move now and then, and its own documentation is the reference
+   for where things are), create a **secret key** (a restricted key works too, if it may create and
+   read Checkout Sessions and Payment Links and read the account). It starts with `sk_test_` or
+   `rk_test_`. A key that starts with `pk_` is a *publishable* key, which can't do this: TaskTo
+   refuses it.
+2. In TaskTo, **Settings → Integrations → Connect an account**. Choose Stripe, give the account a
+   name, and paste the key. The server seals it with its own key the moment it arrives. From then on
+   nobody can see it again, not you, not another admin, not an app, not the agent: the screen only
+   says the key is **set**. To change it you enter a new one.
+3. Set the **limits**: the largest amount one payment may ask for (in the currency's smallest unit:
+   cents for euros) and the currencies it may ask in. An app can't raise them; a payment above the
+   limit, or in another currency, is refused before Stripe is asked. Allow every currency your
+   invoices use (the template offers EUR, USD, GBP and BRL).
+4. Press **Check**. It tells you that the saved credentials open and the settings are right. It does
+   **not** call Stripe, so it can't tell you the key is valid at Stripe: the first payment link does.
+5. In **Spaces**, tick the spaces whose apps may use the account. A new account has none, so no app
+   can use it yet. (Approving an app, in [step 4](#4-install-the-invoicing-app-and-approve-it), can
+   also allow that app's space.)
+
+### 2. Tell Stripe where to send events
+
+Stripe tells TaskTo about a payment by calling an address of this integration's own. You set that up
+once per integration, in Stripe.
+
+1. The server needs a **public address** (`-public-url`) and its reverse proxy has to forward
+   `POST /hooks/*` ([the install guide](install.md#webhooks-from-payment-providers) has the
+   details, including a tunnel for a server at home). Once it is set, the integration's card in
+   TaskTo shows **Register this address at the provider**, followed by an address ending in a long
+   random id.
+2. In Stripe, **Developers → Webhooks → Add endpoint**. Paste the address. Choose **these** events,
+   which are all TaskTo reads, and the **snapshot** payload style:
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`.
+   Others are harmless: TaskTo answers them and drops them.
+3. Stripe shows the endpoint's **signing secret**, which starts with `whsec_`. Paste it into the
+   integration's **Webhook signing secret** in TaskTo. Without it every delivery is refused: that is
+   how TaskTo knows a message really came from Stripe and wasn't made up by someone who found the
+   address.
+
+Each integration has its own address and so its own signing secret, and no two integrations may use
+the same one (TaskTo refuses it). When you roll the secret at Stripe, enter the new one here: the old
+one keeps working for a day, so deliveries Stripe signed before the change aren't lost.
+
+**Without a public address** the payment links are still made: the customer pays, and stays on a
+confirmation page Stripe hosts. But Stripe can't reach your server, so the invoice **doesn't mark
+itself paid** yet. Asking Stripe about open payments from the server's side is a later change and
+isn't built. Until then you see the payment in Stripe and change the invoice yourself, or you use a
+tunnel that forwards `POST /hooks/*` to the server and give `-public-url` its address.
+
+### 3. Test mode and live mode
+
+A Stripe key is for **test mode** (fake money, Stripe's test cards) or **live mode** (real money),
+and TaskTo reads which from the key. The integration's card says **Test mode** or **Live mode: real
+money**.
+
+- **Try everything in test mode first**, end to end, with the invoicing app: a test key, a test
+  webhook endpoint and Stripe's test cards. Test and live are separate worlds at Stripe, each with
+  its own endpoints and signing secrets: register the address in each one you use.
+- **Make live a second integration**, with its own live key and its own endpoint. To move an app
+  from one to the other, revoke its approval, ask again and approve it with the live integration.
+  Don't swap a test key for a live one in the same integration: an invoice whose link was still
+  being made stops with an error, because the link can't be followed into the other mode, and a
+  payment event of the other mode is ignored on purpose (money of one mode never marks a record of
+  the other).
+- Never paste a live key anywhere but here, and never use one to try the software out.
+
+### 4. Install the invoicing app and approve it
+
+1. **Apps → Start from a template → Invoicing.** Choose a space (your private one, unless the
+   invoices are a team's). It installs as a **draft**: no records, no roles and no account. It is
+   a template, so it is only a definition, and it works with whichever payments account the admin
+   connects.
+2. The draft has the screens of an invoice: a number, a customer, an amount, a currency and a
+   status (*Draft*, *Sent*, *Paid*, *Refunded*), the paid date and the address of the payment page.
+   **Send invoice** makes the payment link. Editing an invoice (in its records view, or by the
+   agent through the edit action) never asks Stripe for anything: only **Send invoice** and
+   **Replace an expired link** do, and only for a *Sent* invoice. When the customer pays, the status becomes *Paid* and
+   the date is filled in; when the payment is refunded in full, it becomes *Refunded*. The
+   builder's preview shows what a link would ask ("Create a payment link of 120.00 EUR") and never
+   calls Stripe or needs an account.
+3. An app that asks for a payment link can't be published until an admin approves **exactly what it
+   asks for**. In the publish panel, under **Outside services**, you read it in plain words (the
+   fields it sends to Stripe, which of its records a payment may change and how, the currencies it
+   asks in) and press the button to ask for approval.
+4. The admin opens **Settings → Integration approvals**. The request shows the app's and the space's
+   names, who asked and what it asks, and nothing of the app's records: that is why an app in
+   somebody's private space can be approved at all. The admin **approves** it by choosing the
+   integration (and, if the space isn't allowed yet, allowing it there) or **turns it down**.
+5. Publish. If you are the admin, **Approve and publish** does the three steps in one with the same
+   words on screen.
+
+What an approval is, and isn't:
+
+- It is for a version of what the app asks, identified by a hash of it. Reworded text doesn't need a
+  new one; sending another field, writing another field or value, asking in another currency or
+  from another action does. The live version stays approved while the next draft waits.
+- **A copy has none.** Installing the template again, or duplicating an app, gives an app that asks
+  again. So the template can't send anyone's money anywhere by being copied.
+- An admin can **revoke** an approval, switch the integration off or take a space away, and the app
+  stops making links and having payments written to its records at once. It stays online. What it
+  doesn't stop is a payment page already open at Stripe: a customer who has the address can still
+  pay there, because the page is Stripe's. That payment is real money and is never dropped:
+  - **Approval revoked, or the space taken away**: Stripe's message arrives, and the payment is kept
+    as a *failed* event with a reason, the admins are notified, and the invoice is left as it is.
+    Once the app is approved again (or the money refunded at Stripe), an admin retries the event
+    ([When an event can't be applied](#when-an-event-cant-be-applied)).
+  - **Integration switched off**: its webhook address answers every delivery with `404`, as if it
+    didn't exist, and nothing is stored. Stripe treats that as a failed delivery and tries again for
+    up to three days (in live mode; less in test mode). Switch it back on within that and the payment
+    arrives; after that, resend the event from Stripe's dashboard.
+
+  If no more payments should be taken, also expire the open Checkout Sessions (or deactivate the
+  Payment Links) in Stripe.
+
+### 5. Send an invoice
+
+1. Open an invoice and press **Send invoice**. The invoice becomes *Sent* and, a moment later, the
+   server writes the payment page's address on it. The open invoice doesn't refresh by itself:
+   close it and open it again (or reload the page) to see the address. You send that address to
+   your customer yourself, however you like: TaskTo doesn't email it.
+2. The customer pays on Stripe's page. TaskTo never sees the card.
+3. Stripe tells the server. TaskTo checks the signature, checks the amount and the currency are
+   exactly what the link asked, and then marks the invoice **Paid** with the date. The record's
+   history shows who did it: the integration, not a person. Here too an invoice that is open on
+   your screen shows the change once you open it again.
+
+If a link isn't made, the person who pressed the button sees why, in words ("The amount is above the
+…", "The payment provider didn't accept this integration's key"), and retries it from the app's
+**Effects** panel once it is fixed. Amounts are exact: more decimals than the currency has, zero, or negative amounts are refused,
+and never rounded.
+
+**One payable link per invoice.** An invoice never has two pages that could both be paid. Whenever
+an invoice asks for its link again (it was sent again after going back to *Draft*, or its link is
+replaced), the server first looks at every link the invoice already has, whatever release, field
+or account it was made for: if one can still be paid, is still being made, or its outcome is
+unknown, the same link is used again and nothing new is made (a link for another amount fails with a
+message instead, until the old one expires). Only when each link is one that Stripe says has expired,
+or one that was paid, is a new one made. A payment that arrives is always written to the invoice,
+whatever its status was edited to meanwhile: an invoice put back to *Draft* and then paid shows
+*Paid*.
+
+**The amount stays while the link may be paid.** While an invoice's link is open, still being made or
+its outcome is unknown, its amount and its currency can't change, from the invoice's screen, the
+records explorer, the agent, an event's rule or any other action, and no release of the app may
+read them otherwise (a field's type changed, say): the customer would pay the old amount for an
+invoice that says another. Everything else on the invoice can change. Once Stripe says the link expired (it
+tells TaskTo, which needs the public address), change the amount and use **Replace an expired link**:
+the new link asks the new amount. A send that failed before it made anything, and is retried after
+the amount changed, makes nothing for the old amount: send the invoice again.
+
+**An expired link.** With a public address the payment page is a Stripe Checkout Session, which
+Stripe closes after 24 hours. A customer who comes later finds a closed page, and the invoice stays
+*Sent*. The invoice offers **Replace an expired link**: it clears the address on the invoice and asks
+for the link again. If Stripe says the old page has expired, exactly one new page is made and its
+address is written on the invoice; if the old page can still be paid, the same address is put back
+and nothing is made. (Reopen the invoice to see the result.) Without a public address the link is a
+Stripe Payment Link, which takes one payment and doesn't expire by itself, so it is never replaced
+this way.
+
+**A declined card** is not a failure: the customer can try another card on the same page.
+
+### Refunds
+
+TaskTo doesn't refund. You refund in Stripe's dashboard, and Stripe tells TaskTo. A refund of the
+**whole** payment marks the invoice *Refunded*. A **partial** refund changes nothing in TaskTo,
+because the invoice isn't refunded yet; the refund that completes it does. (The status is the only
+thing TaskTo changes; the money moves in Stripe.) Stripe may tell a full refund before the payment
+it undoes: the refund then waits, shown as *waiting* in the events panel, for up to 72 hours, and
+is applied right after the payment is; if the payment hasn't arrived by then, the refund fails and
+the admins are told (see [Applying events](#applying-events) for the exact rule).
+
+### When a payment's outcome is unknown
+
+Sometimes TaskTo asks Stripe for a payment link and doesn't learn whether Stripe made one: the
+connection dropped, or Stripe answered with an error after starting the work. Making another link
+could leave **two payable links for one invoice**, so TaskTo never does that by guessing. In order:
+
+1. **It looks for the link by itself**, for up to six hours: it asks Stripe whether a link carrying
+   its reference exists, and if one does and can still be paid, uses it. Nobody needs to do anything.
+   The person who pressed the button sees that the server is still looking.
+2. **If six hours pass without an answer**, the action fails with a message that says the outcome is
+   unknown, and the admins have a decision to make.
+3. **The admin checks Stripe, by the attempt's reference.** The admin list of unresolved payment
+   links gives, for each attempt, the reference TaskTo sent with it (the API's list returns it, and
+   the integration's settings screen shows it). In Stripe's dashboard, find the object carrying
+   **exactly** that reference: a Checkout Session's `client_reference_id` (a server with a public
+   address), or a Payment Link's metadata `taskto_ref` (a server without one). Never decide from the
+   amount, the time or the product name alone: another invoice, or another attempt of this one, can
+   look the same, and a wrong "none" makes a second payable link.
+   - **One carries the reference.** Tell the person who pressed the button to retry that payment
+     (it is listed, failed, in the app's **Effects** panel). A retry only looks and adopts: if the
+     object can still be paid it becomes the invoice's link and its address is written on the
+     invoice; if it is a completed Checkout Session or an inactive Payment Link, the retry stops
+     with a message that the link was paid or can't be used, and makes nothing (a person reconciles
+     it in Stripe).
+   - **None carries it, after searching both lists in the integration's account and mode.** The
+     admin confirms that no link exists. A confirmation queues **exactly one** new attempt under a
+     new reference, and runs the entry again as the person who first pressed the button, with the
+     access they have now (if they lost access to the app, it fails and makes nothing). If that
+     attempt's outcome is unknown too, the admin decides again. The server refuses the confirmation
+     when it saw anything of the attempt at Stripe.
+   - **Anything ambiguous** (an object you can't match to the reference, a list you couldn't read
+     whole, a mode you aren't sure of): don't confirm. Leave it unresolved; nothing more is made
+     while it is.
+4. **If the customer paid anyway** while it was undecided, the payment is real money and is applied
+   as usual: the invoice becomes *Paid*, and the stuck action ends without making a link.
+
+The list of payments waiting for an admin's decision, and the confirmation, are routes of the API
+(the integration's settings screen shows the list and its references too): [the list](api.md#get-apiworkspacesworkspaceintegrationsintegrationpayment-linksunresolved) and
+[the confirmation](api.md#confirm-that-no-payment-link-exists). Only an admin can use them, only for
+spaces the admin manages (somebody's private space is theirs), and the confirmation is written to the
+audit log. The agent has no tool for either.
+
+### When an event can't be applied
+
+Money that arrives is never dropped quietly. An event that can't be applied (the app is offline, its
+approval was revoked, the record was deleted, the amount isn't what the link asked) is kept with a
+reason, every admin of the workspace gets a notification that says an integration's payment needs an
+admin, and nothing is changed in the app. After fixing the cause, an admin retries the event through
+[the API](api.md#post-apiworkspacesworkspaceintegrationsintegrationeventseventretry). Only an event in
+the *failed* state can be retried; one that was applied or ignored stays as it is. A second payment
+of an invoice that is already paid is never applied: it is recorded and shown to the admin, who
+refunds it at Stripe.
+
+### What TaskTo never does with your keys
+
+- It never shows a key again, to anyone, after you enter it: not in the screen, the API, a log or an
+  error message.
+- It never gives a key to an app, a record, a template, the agent, a tool, an MCP client or an agent's
+  environment. A person's own agent can read nothing about an account.
+- It never lets an app or a model choose where a call goes. Providers are a fixed list in the server,
+  each with fixed addresses, and a definition has no place for an address, a header or a key: an app
+  only says *what it wants* (a link for this amount) and the server asks the account an admin chose.
+- From Stripe's messages it never stores a card number, the payer's email or name, or the body: it
+  reads only typed fields (ids, the reference, the amount, when it happened) and keeps a link, the
+  provider's id and the amount it asked for. What you type into a record is your own data and is
+  stored like any record: the template's *Customer* is free text and can hold an email, and the
+  payment page's text sends the invoice's number and customer to Stripe (what an admin approves
+  says so).
+- It never calls Stripe from a test or from CI: tests run against a fake. You are the one who tries
+  it for real, in test mode ([trying it by hand](#trying-an-integration-by-hand)).
+- **Backups.** A backup holds the server's key (`server.key`) next to the sealed keys, so a backup
+  is as sensitive as the keys themselves: keep it private and encrypted
+  ([install.md](install.md#backups)). **After restoring a backup on another machine, rotate your
+  keys:** create new ones at Stripe, enter them here, and delete the old. If the server's key isn't
+  the one that sealed a key, **Check** says so and you enter it again.
 
 ## What exists today
 
@@ -29,8 +303,9 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
   **approval** by an admin of that contract's hash, which a publish and a rollback need
   ([Apps and approval](#apps-and-approval)).
 
-- **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe and
-  writes its address to the record ([Payment links](#payment-links)).
+- **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe or
+  Square and writes its address to the record ([Payment links](#payment-links); Square's adapter
+  is described in [Square](#square)).
 
 - **Applying events**: a verified payment event marks the record of its payment link paid (or
   refunded) as the integration, and only as the app's approved contract allows
@@ -74,8 +349,11 @@ The registry is the list in `internal/integrations/registry.go`. Each provider s
   environment, not a proof that the stored token belongs to it (nothing asks Square until its
   first call), so replace the token when the environment changes;
 - its **API hosts**, constants of the adapter (`api.stripe.com`; Square's production host or
-  its sandbox host, by `environment`), and the **API version** it is written against, which
-  Stripe's adapter pins (`Stripe-Version`) and Square's adapter pins when it makes its first call.
+  its sandbox host, by `environment`), and the **API version** it is written against and sends
+  with every call (`Stripe-Version`, `Square-Version`);
+- how long it **keeps an idempotency key** (`KeyKept`): Stripe documents at least 24 hours, which
+  the server relies on for 23; Square publishes no period, so its keys are never relied on: a
+  call whose outcome is unknown is never sent again under its key ([Square](#square)).
 
 A new provider is a change of code and tests, never a migration: the `provider` column is
 validated in Go.
@@ -358,6 +636,78 @@ write.
 - **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
   than the currency has, zero or less, above the integration's ceiling, or a currency the integration
   doesn't list are each refused, with a code that says which, before anything is made.
+- **One payable link per record.** An outbox entry has one reference, and a record asks for its link
+  again with a new entry (an action that runs the effect after an edit, an invoice sent again, an
+  expired link replaced). So an entry that has no reference of its own first reads **every** earlier
+  reference of the record, whatever field the link was written to, whatever slot, integration or
+  release it was made under (a release may write the link to another field, a slot may be bound to
+  another integration since, and a server before migration 0063 could leave several references of one
+  record), and makes a new one only when nothing of any of them can be paid:
+  - *It has a link that isn't finished* (finished: confirmed expired, or paid on that very link, which
+    for a Stripe Payment Link is a payment through a Checkout Session opened from it, kept as
+    `integration_refs.paid_link_id`): its state is read at Stripe. **Open** (a Payment Link: active),
+    the same link is given again and written back, and nothing is made; if it asks other money than the
+    new entry, reads the same money from other fields, or the record has a second open one, the entry
+    fails with `integration_link_still_open`. **Expired**, the reference is marked expired. **Settled**
+    (complete, or an inactive Payment Link), it no longer counts if the reference knows it was paid;
+    otherwise `integration_link_already_paid`, for a person. A read that fails makes nothing (the
+    entry's failure, tried again). A reference made under another integration, account or mode can't
+    be read with the key now: the entry fails with `integration_changed` or
+    `integration_account_changed` for an admin. A reference paid on another key's object (one an admin
+    confirmed away, paid after all) still has its own link on record, which may be open, so it isn't
+    finished; such a link, read open, stops the entry with `integration_link_already_paid`; read
+    expired, that is kept on the reference (`link_expired_at`, as is Stripe's
+    `checkout.session.expired` for it) while its payment stays as it was settled. A link given again
+    takes the slot of the entry that gives it (the live release's, bound to the same integration); only
+    a newer entry than the one that last moved it does (`slot_effect_id`), so one a release behind that
+    resumes late never moves it back. A payment of a link whose slot a release renamed, before any
+    entry gave it again, is written through the one slot of the live release bound to the link's
+    integration (and fails for the admins if there are none, or several).
+  - *It is still being made, or its outcome is unknown*: the new entry **takes it** (the reference's
+    `effect_id` becomes the new entry's) and goes on resolving it as its own, under every rule below:
+    it waits on the reconciliation, adopts what the earlier call made, or fails with
+    `integration_outcome_unknown` for an admin, whose confirmation then names the new entry. A reference
+    under which no call ever ran (every call refused before it ran, or none sent) holds nothing at
+    Stripe: it is removed, in the transaction that makes the new one, which also stops a call another
+    try was about to write ahead under it (the write-ahead needs the reference). A reference whose
+    every key is confirmed to have left nothing payable (its object seen expired, or an admin's
+    confirmation that it made none), though the try that learned it stopped before it moved on, holds
+    nothing either: it is retired (marked expired, its keys kept) and a new reference is made for the
+    money the entry asks now; a retired reference takes no key again, from its own entry or a try still
+    running: its next key's row is made only while the reference can still note a link, in the same
+    statement. A reference held by an entry newer than the one asking is left to it: the older entry
+    waits and is then superseded. A reference taken over moves to the slot of the entry that takes it.
+    Two such references of one record can't both be taken: the entry fails with
+    `integration_outcome_unknown` for an admin.
+  - *It was paid before it learned its link, or was retired*: it no longer counts.
+
+  The reads at Stripe happen before the transaction (which holds the write lock from its start), and
+  the transaction reads the record's references again: if one that may be paid wasn't checked, the
+  entry reads them again. So two entries of one record never both make a link.
+- **The money stays while a link may be paid.** A change of a record's amount or currency (the fields
+  an app's `create_payment_link` effects read) is refused with `422 app_payment_link_open`, in the
+  change's own transaction, while an entry of the effect waits to run or a reference of the record may
+  still be paid: one with a link that isn't known expired and wasn't paid on that very link, or one with
+  none yet that has a key whose outcome is unknown or that made something. Every write of a record is
+  checked: a person's, an action's, the agent's, and a system write (an event's rule that sets a field).
+  The fields are those the live release's effects read and those each waiting entry and each such
+  reference was read from (`integration_refs.amount_field` and `currency_field`), so a release that
+  stops asking for links doesn't free them; a reference made before migration 0063 whose entry was
+  cleaned up doesn't say its fields, and locks every field any release of the app read money from. A
+  publish or a rollback is refused the same way when its release would read the money of such a
+  record otherwise than the live release does (a field retyped, a currency no longer offered).
+  A verified `checkout.session.expired` of a session that carries the token of a key whose outcome is
+  unknown (its create answer was lost) resolves that key as expired, and only that key: the reference
+  is left to its entry, and the money is free once no key of it may have made something. What a field holds is compared as well as the money read from it, so a field
+  whose type a release changed stays locked too. An open link is given again only to an entry that
+  reads its money from the fields the link's was read from; another gets `integration_link_still_open`.
+  So a link is never paid at an amount the record no longer says, and the payment
+  is always written to a record that asks it, with one exception the server can't see: an admin who
+  confirms that no link exists when one does (see [When a payment's outcome is unknown](#when-a-payments-outcome-is-unknown)).
+  The confirmation counts as the admin's word, as it does for the new key it allows, so the amount
+  may change after it; if that link is paid after all, the payment settles the reference for the amount it
+  was made with, and the admin reconciles it. An entry retried after the money changed (it failed
+  before it made anything) fails with `integration_amount_changed` and makes nothing.
 - **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
   unique by the outbox entry and keeps the provider's answer. It has **keys**
   (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of
@@ -404,7 +754,11 @@ write.
   - *Then the same key is asked again*, with the same parameters, while Stripe still keeps it (23 hours
     from the key's first call; Stripe keeps keys at least 24): Stripe answers with what the first call
     made (an object, or the failure it kept), or runs the call if it never ran. Past that window the
-    key is never called again, since Stripe may have forgotten it and would run it a second time.
+    key is never called again, since Stripe may have forgotten it and would run it a second time; the
+    window is checked again just before the call leaves, after it is written ahead, and bounds the
+    call: one that hasn't left when the window closes never does. A clock that reads earlier than the
+    key's first call relies on no window. A provider that documents no window (Square) is never asked
+    again under a key whose outcome is unknown.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
     and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
@@ -511,6 +865,21 @@ signature is the authentication. The reverse proxy must forward `POST /hooks/*` 
 more has to be exposed for payments; [install](install.md#webhooks-from-payment-providers)).
 The route is in [api.md](api.md#post-hookspublic_id).
 
+**Square signs over the address.** Square's signature covers the notification URL as well as the
+body, so a delivery verifies only against the exact address registered at Square. The server keeps
+the address it showed when the admin saved the webhook signing secret (`webhook_registered_url`),
+and verifies Square's deliveries against that one (or the current one, when none was recorded),
+made from the public URL and never from the request's `Host`. When the server's public URL changes
+afterwards, the integration's `webhook_url_changed` is `true` and the settings page says so: the
+provider still sends to, and Square still signs over, the old address. The admin registers the new
+address at the provider and saves the signing secret again (the same one is fine), which records
+the new address and clears the warning. The same warning shows for Stripe, whose deliveries also
+keep going to the old address. Each secret is verified over the address it was saved for: when a
+new secret replaces one, the replaced secret keeps the address it was saved for
+(`webhook_previous_registered_url`), so during the day it keeps verifying, Square's deliveries
+signed with it over the old address are accepted, and it never verifies over the new address,
+nor the new secret over the old one.
+
 What a delivery goes through, in this order, each step cheaper than the next:
 
 1. **Limits and size.** A limit per client address, counted before anything is looked up (so a
@@ -522,7 +891,8 @@ What a delivery goes through, in this order, each step cheaper than the next:
    anyway.
 3. **The signature, over the raw bytes, before any parsing**: constant-time comparison against
    the current webhook secret and, for a day after an admin replaces it, the previous one; the
-   provider's timestamp tolerance applies. A delivery for an integration is only ever checked
+   provider's timestamp tolerance applies (Stripe: five minutes; Square: the event's
+   `created_at`, a day back and five minutes ahead, [below](#square)). A delivery for an integration is only ever checked
    against that integration's own secrets, so a valid signature of one integration opens no
    other, in this workspace or another. For this to hold, **no two integrations share a webhook
    secret**: setting or replacing one that another integration (in any workspace) uses as its
@@ -697,6 +1067,9 @@ a worker of its own (`StartPolling`, in the server process, always on, whether o
 URL) reads the objects of the refs that are still open and feeds what it finds through the same path a
 webhook's event takes. It never reads an event feed: it retrieves the objects the server made.
 
+- **Only an adapter that polls.** A provider is polled only when its adapter implements
+  `PaymentPoller`. Square's doesn't: the worker holds a Square integration's refs and reads nothing of
+  them, so a Square payment is learnt only from its webhook, which needs a public URL.
 - **Same path, so once.** A finding is stored in `integration_events` as an event of the source `poll`
   with the id `poll:<object>:<state>` (`poll:cs_…:paid`, `poll:cs_…:expired`): once per integration, by
   the table's unique key. The event worker then applies it with [the same step](#applying-events) as a
@@ -785,6 +1158,77 @@ code and of this section; the real-provider check is manual and never in CI.
   An event of live money for an integration in test mode, or the other way round, is ignored
   the same way.
 
+### Square
+
+The adapter is `internal/integrations/square.go` and `square_webhook.go`, written against Square's
+published API specification (`github.com/square/connect-api-specification`, release `2026-11-18`,
+the source of [Square's API reference](https://developer.squareup.com/reference/square)) and its
+guides, as read on the day it was written. The code comments cite each page; a change of any of it
+is a change of code and of this section.
+
+- **Version and hosts.** Every call sends `Square-Version: 2026-11-18`
+  (`integrations.SquareAPIVersion`). The host is `connect.squareupsandbox.com` or
+  `connect.squareup.com`, by the integration's `environment`, a choice and never a URL.
+- **Payment links** ([CreatePaymentLink](https://developer.squareup.com/reference/square/checkout-api/create-payment-link)):
+  one order of one ad hoc line (the app's description, quantity 1, the exact amount) at the
+  integration's `location_id`. The link asks exactly that amount: every checkout option that would
+  let a buyer pay another is sent and false (`allow_tipping`, `enable_coupon`, `enable_loyalty`;
+  Square shows a seller's coupons and loyalty rewards unless they are turned off), and
+  `shipping_fee` and `app_fee_money` are never sent. The fake Square refuses a link without them. The key's token is the `idempotency_key`, the
+  order's `reference_id` and the link's `payment_note`, which Square copies to the payment
+  ("After processing the payment, Square adds this note to the resulting Payment as well as the
+  post payment confirmation email"): the note is how a payment's events carry the token back, and
+  the payer sees it, a 32-digit reference, in their confirmation email. With a public URL the payer
+  is sent back to the server's done page (`checkout_options.redirect_url`; Square has no cancel
+  page); without one they stay on Square's confirmation. A link is paid once ("The buyer can use
+  the payment link only once"), its order going from `DRAFT` to `OPEN` with a tender, and never
+  expires ([Quick Pay Checkout](https://developer.squareup.com/docs/checkout-api/quick-pay-checkout)).
+  Its address must be on `sandbox.square.link` or `square.link`, by environment.
+- **Its state** is read through the link's order (`GET /v2/orders/{id}`): `DRAFT` or `OPEN` with no
+  tender is open; a tender, `COMPLETED` or `CANCELED` (a deleted link,
+  [Manage checkout](https://developer.squareup.com/docs/checkout-api/manage-checkout)) is settled,
+  for a person to reconcile.
+- **Lookup by token.** Square's list of payment links has no filter, so a lookup reads every page
+  (up to 20 of up to 1000 links) for the link whose `payment_note` is the key's token, and adopts it
+  only if its order asks the same amount and currency with the same `reference_id`. More pages than
+  that is `CallLookupIncomplete`, which tells nothing: the key stays unknown.
+- **Idempotency** ([Idempotency](https://developer.squareup.com/docs/build-basics/common-api-patterns/idempotency)):
+  the same key and request return the first successful answer, the same key with another request
+  is `IDEMPOTENCY_KEY_REUSED`. Square publishes no period for which a key is kept, so a key whose
+  outcome is unknown is never asked again: it is only looked for by its token, and never replaced
+  by a new one without an admin ([Payment links](#payment-links)). A call that certainly never left is
+  not unknown, and is sent again under the same key.
+- **Errors** ([Handling errors](https://developer.squareup.com/docs/build-basics/handling-errors)):
+  Square documents no answer as given before the request ran (not even `429`, after which "Square
+  might temporarily stop processing your requests"), so every answer to a creation that isn't a
+  success leaves its outcome unknown: `401` and `403` are the credentials, `408`, `429` and `5xx`
+  may pass, any other `4xx` is a refusal. Only a request that never left is not executed.
+- **Signature** ([Validate notifications](https://developer.squareup.com/docs/webhooks/step3validate)):
+  `x-square-hmacsha256-signature` is the Base64 HMAC-SHA256, keyed with the subscription's
+  signature key, of the notification URL followed by the exact body (Square's SDKs, whose
+  known answers a test checks, do the same). It is compared in constant time, against two keys
+  as Stripe's is.
+- **Time.** No header carries a signed time; the event's `created_at`, inside the signed body, is
+  read once the signature matched. Square retries a failed delivery "for up to 24 hours after the
+  originating event" with the same `event_id`, in no guaranteed order
+  ([Webhooks overview](https://developer.squareup.com/docs/webhooks/overview)), so a delivery is
+  accepted up to 24 hours and 5 minutes after its event and 5 minutes ahead of it. A replay inside
+  that window is stopped by the event's id, stored once, and by the ref's state, which only moves
+  forward.
+- **Mode.** Square's events don't say whether they are of the sandbox; each environment has its own
+  subscriptions and signature keys, so a delivery that verified is of the integration's mode.
+- **Events.** Square has no event per outcome, only a payment's creation and its updates, so the
+  payment's own fields decide:
+
+  | Normalized | Square's event | Notes |
+  |---|---|---|
+  | `payment.succeeded` | `payment.created` or `payment.updated` of a `COMPLETED` payment that has refunded nothing and whose `note` is a token the server issues | Square may tell one payment more than once; the ref's state change applies it once. The amount is the payment's `total_money`. |
+  | `payment.refunded` | `payment.updated` of a `COMPLETED` payment with `refunded_money` above zero | What has been refunded so far, mapped to the ref through the payment's id. `refund.created` and `refund.updated` carry one refund's own amount, not the total, and are ignored. |
+
+  `APPROVED` and `PENDING` payments aren't paid yet, and a `FAILED` or `CANCELED` one leaves the link
+  open for the payer to try again, so none is an event; a Square link never expires. The buyer's
+  email, address and card are never decoded.
+
 ## The fakes tests use
 
 `internal/integrations/testprovider` is what the tests of the cards that call a provider run
@@ -813,7 +1257,13 @@ against, so none of them needs a network:
   host reaches the adapter only through the request builder's test option
   (`integrations.WithTestEndpoint`), never through configuration. The keys and secrets in it are
   obvious fakes. Nothing in the server imports the package, and a test in `cmd/taskto` fails if
-  its binary links it. The fake Square comes with the Square adapter.
+  its binary links it.
+- **A fake Square** (`testprovider/square.go`): payment links (create, list with a cursor and a page
+  size a test sets, retrieve), orders and the merchant, at `Square-Version` `2026-11-18`, refusing
+  another version, a wrong token, unknown fields and another location. It keeps idempotency keys as
+  Square documents (the same request gets the first answer, another is `IDEMPOTENCY_KEY_REUSED`),
+  fails on demand before or after doing the work, and plays the payer (pay once, refund in parts,
+  delete a link) with the events Square sends for each, signed over the notification URL.
 
 ## The end-to-end, isolation and contract suites
 
@@ -840,18 +1290,57 @@ Three groups of tests run in CI's Go job, with no real network:
   polls (`PaymentPoller`), a payment read back dated by the provider's time of it, the time its webhook
   event carries, not the time of the read. An adapter runs it by giving a `paymentsFixture` (its
   adapter, a client for its fake, the fake's payer, expiry and refund, and a clock it can move);
-  `contract_stripe_test.go` is Stripe's, and `TestTheContractSuiteNoticesABrokenAdapter` runs the cases
-  against adapters broken on purpose, to show they fail.
+  `contract_stripe_test.go` is Stripe's and `contract_square_test.go` Square's, and
+  `TestTheContractSuiteNoticesABrokenAdapter` runs the cases against adapters broken on purpose, to show
+  they fail. A provider that signs its time inside the body (Square) re-signs a body with its time
+  moved, and one that retries for a day gives its own window (`Tolerance`, `Ahead`).
 
 ## Trying an integration by hand
 
 CI never calls a real provider: tests run against the fake. **Check** only looks at what the
 server holds (the secrets are set and open, the settings are valid) and says nothing about
-whether the provider accepts the credentials. To try a payment link against the real Stripe, by
-hand and never in CI, use its **test mode** with test keys of your own that you create at Stripe:
-connect them in Settings → Integrations, set a public URL, allow a space, approve an invoicing app
-and send an invoice; the link opens a hosted page that takes Stripe's test cards. Never use live
-keys to try the software, and never paste a key into an issue, a chat or a commit.
+whether the provider accepts the credentials. The fake can't know if Stripe changed, so before a
+release that touches the adapter, and whenever the pinned API version is raised, somebody tries it
+against the real Stripe, **by hand and never in CI** (as `make dictation-e2e` is never in CI), in
+its **test mode**, with test keys of their own created at Stripe (Square: its **sandbox**, with a
+sandbox access token, the sandbox location's id and a webhook subscription's signature key, as
+[Square](#square) says). Never use live keys to try the software, and never paste a key into an
+issue, a chat, a log or a commit.
+
+The smoke test, on a server with a public address that forwards `POST /hooks/*` (or a tunnel to it),
+and takes about twenty minutes:
+
+1. **Connect.** Settings → Integrations → Connect an account: Stripe, a test secret key, a ceiling
+   and the currency you will use, and your own private space allowed. **Check** says the credentials
+   open (and, in the API, that `remote` is `false`: Stripe wasn't asked).
+2. **Webhook.** In Stripe's test mode add an endpoint at the address the card shows, with the five
+   events of [step 2](#2-tell-stripe-where-to-send-events), and paste its `whsec_` signing secret.
+3. **Install and approve.** Install the Invoicing template in your private space, request the
+   approval, approve it with the integration and publish (or **Approve and publish**).
+4. **Pay.** Add an invoice of a small amount in an allowed currency, press **Send invoice**, and see
+   the address appear. Open it and pay with Stripe's test card `4242 4242 4242 4242`: the invoice
+   becomes *Paid* with today's date, and its history says the integration did it. In Stripe, the
+   webhook endpoint shows the deliveries answered `200`.
+5. **Replay.** Resend the same event from Stripe's dashboard: nothing changes.
+6. **Refund.** Refund the whole payment in Stripe: the invoice becomes *Refunded*. Try a partial
+   refund on another invoice: it stays *Paid*.
+7. **Expiry.** Make a payment page and press **Replace an expired link** while it is still open:
+   the same address comes back (reopen the invoice) and Stripe has no new session. Then expire it
+   (Stripe's API has an "expire a Checkout Session" call, or wait a day): the invoice stays *Sent*;
+   **Replace an expired link** now gives one new address that can be paid, and Stripe has exactly
+   one new session. Edit the invoice's customer in the records view: nothing is asked of Stripe.
+8. **Without the public address.** Stop forwarding `/hooks/*` and clear `-public-url`, restart, send
+   an invoice: a link is made on a confirmation page Stripe hosts, the payment is taken, and the
+   invoice stays *Sent* (polling isn't built yet). Then set `-public-url` again, forward
+   `POST /hooks/*` again and restart: the next step needs Stripe's deliveries.
+9. **Revoke.** Send an invoice and keep its address, then revoke the approval: **Send invoice** now
+   fails with a message that says an admin must approve it. Pay the address you kept: Stripe still
+   takes the payment, and it waits as a failed event for an admin, with the invoice still *Sent*.
+   Approve the app again and retry the event: the invoice becomes *Paid*.
+10. **Clean up.** Switch the integration off or delete it, and delete the test keys and endpoint at
+    Stripe.
+
+Record what you saw and any Stripe screen or event that differed from this page.
 
 ## Not here, on purpose
 

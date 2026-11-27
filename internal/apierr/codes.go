@@ -233,6 +233,7 @@ const (
 	CodeAppFieldNotSignature   Code = "app_field_not_signature"   // 400: a signature field holds one attachment id; params: field
 	CodeAppFieldNotBarcode     Code = "app_field_not_barcode"     // 400: not a barcode's text, or not valid for the field's format; params: field, format
 	CodeAppFieldLocked         Code = "app_field_locked"          // 400: a captured location or a signature can't be changed once stored; params: field
+	CodeAppPaymentLinkOpen     Code = "app_payment_link_open"     // 422: the amount or currency of a record whose payment link may still be paid (or is still being made) can't change, and no release may read it otherwise (publish, roll back), until it has expired; params: field
 	CodeAppSignatureType       Code = "app_signature_type"        // 400: a signature is a PNG picture
 
 	// Offline use of apps (internal/apps/offline.go).
@@ -481,6 +482,8 @@ const (
 	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
 	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
 	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
+	CodeIntegrationLinkStillOpen       Code = "integration_link_still_open"      // the record's earlier payment link may still take payment (or is still being made) and can't be given again (it asks another amount or currency, reads them from other fields, or the record has more than one): no second link is made until it has expired
+	CodeIntegrationAmountChanged       Code = "integration_amount_changed"       // the record's amount or currency changed since the action queued its payment link: nothing was made for the old money
 
 	// What became of a verified provider event the integrations' worker applies to a record
 	// (internal/integrations apply.go). The first group are an event's failures: it waits for an

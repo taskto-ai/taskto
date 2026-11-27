@@ -140,6 +140,35 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   ([agent-browser.md](agent-browser.md)).
 - **Install:** `docker compose up` (Go binary + agent sidecar + optional Ollama); see [install.md](install.md).
 
+## Integrations with outside services
+
+An app can't call an outside service, hold a secret or receive a webhook by itself, and the
+server never lets it: a workspace's admin connects an account at a provider, and an app asks for
+a **slot** of a kind (today `payments`) that the admin binds to that account. Everything that
+touches the provider is Go code in `internal/integrations`, a closed registry (Stripe, with Square
+connectable but not yet able to make links) with fixed hosts and a fixed set of operations. A
+definition has no place for a URL, a header or a key. The guide for admins and app builders is
+[integrations.md](integrations.md); this is the shape of it.
+
+- **The account** is a row of the workspace with its secrets sealed by `server.key`, write-only
+  through the API. Its limits (the largest payment, the currencies) and the spaces that may use
+  it are the admin's. Calls leave through an egress policy of their own (`-integration-egress`,
+  `public` by default) and the adapter's host pinning.
+- **The approval** ties an app to an account. The server works out a **contract** from the app's
+  draft (what it sends out, which fields a payment may write, and with what), an admin approves
+  its hash through a queue that shows nothing of the app's records, and publish, rollback and
+  every run check it again. A copy of an app, or an installed template, has no approval.
+- **Out:** the `create_payment_link` effect runs in the app's outbox as the user who acted and
+  keeps a reference per payment link, written ahead of the call, so a crash or a timeout can
+  never lead to a second payable link; an unknown outcome waits for an admin.
+- **In:** `POST /hooks/<public id>` verifies the provider's signature over the raw bytes, stores
+  the normalized event once and answers; a worker applies it later through the **system writer**
+  (`internal/apps/system.go`), the one path that changes a record without a user, bounded by the
+  approved contract and checked at the moment of the write. Its history entry names the
+  integration, not a person.
+- **Not here:** card data (hosted checkout only), raw webhook bodies, refunds made from TaskTo,
+  and any call a model composes.
+
 ## Scheduled work
 
 Timed work for people (a card's due-date reminder, an app's scheduled
