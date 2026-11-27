@@ -1601,3 +1601,24 @@ test("turning push off over another account's stale flag never ends that account
   expect(sub.unsubscribe).not.toHaveBeenCalled()
   expect(localStorage.getItem('taskto.push')).toBe('2')
 })
+
+test("turning push off over another account's stale flag, with no subscription here, leaves that account's flag", async () => {
+  pushBrowser({ permission: 'granted', subscription: null })
+  // The second person's flag, left from a session that ended with no tab to clean up.
+  localStorage.setItem('taskto.push', '2')
+  const registration = await navigator.serviceWorker.getRegistration()
+  let answer: ((sub: null) => void) | undefined
+  vi.mocked(registration?.pushManager.getSubscription as () => Promise<unknown>).mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        answer = done
+      }),
+  )
+  const off = disablePush()
+  await vi.waitFor(() => expect(answer).toBeDefined())
+  // The second person signs in again in another tab and turns push on meanwhile.
+  localStorage.setItem('taskto.push', '2')
+  answer?.(null)
+  await off
+  expect(localStorage.getItem('taskto.push')).toBe('2')
+})

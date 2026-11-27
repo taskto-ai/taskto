@@ -629,3 +629,75 @@ test("Back in another tab never drops a sign-out while this tab's logout of the 
   await screen.findByRole('heading', { name: 'Log in' })
   await waitFor(() => expect(pendingOf()).toEqual([]))
 })
+
+// Two tabs of the same login on "Couldn't sign out"; another tab went back (its own logout was
+// refused, so its Back let the sign-out go). This one's Try again is still the person signing out.
+async function tryAgainAfterBackElsewhere(logout: () => { status: number; body?: unknown } | Promise<never>) {
+  let answer: () => { status: number; body?: unknown } | Promise<never> = () => ({
+    status: 503,
+    body: { error: 'unavailable', code: 'internal' },
+  })
+  fakeFetch({ ...pages, 'GET /api/me': { body: { ...first_, session: 's1' } }, 'POST /api/logout': () => answer() })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  backFromSignOut(1, 's1')
+  expect(pendingOf()).toEqual([])
+  answer = logout
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+}
+
+test('Try again after another tab went back records the sign-out again: a logout with no answer is kept for when it lands', async () => {
+  deadline.logout = 0
+  await tryAgainAfterBackElsewhere(() => new Promise<never>(() => {}))
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ unanswered: true })
+})
+
+test("Try again after another tab went back keeps the sign-out when the device can't be cleared, for the next start", async () => {
+  await tryAgainAfterBackElsewhere(() => {
+    fail.cleanup = true
+    return { status: 204 }
+  })
+  await screen.findByRole('heading', { name: 'Log in' })
+  await waitFor(() => expect(pendingOf()).toEqual(['1:s1']))
+})
+
+test("Back from an older login's sign-out, the browser on a newer login of the same person, lets that older sign-out go", async () => {
+  let session = 's1'
+  fakeFetch({
+    ...pages,
+    'GET /api/me': () => ({ body: { ...first_, session } }),
+    'POST /api/logout': { status: 503, body: { error: 'unavailable', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // The same person signed in again in another tab: the browser's login is a newer one.
+  session = 's2'
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  // The older login's sign-out holds nothing of the device: it doesn't hold the newer login's queue.
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+})
+
+test("Back answered 401 after another tab let the sign-out go keeps it when the device can't be cleared", async () => {
+  let session: { body: Me } | { status: number; body: unknown } = { body: { ...first_, session: 's1' } }
+  fakeFetch({
+    ...pages,
+    'GET /api/me': () => session,
+    'POST /api/logout': { status: 503, body: { error: 'unavailable', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // Another tab of the same login went back (its own logout refused): the sign-out was let go.
+  backFromSignOut(1, 's1')
+  expect(pendingOf()).toEqual([])
+  // This tab's Back finds the login over, and the device refuses its cleanup.
+  session = { status: 401, body: { error: 'not logged in' } }
+  fail.cleanup = true
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  await waitFor(() => expect(pendingOf()).toEqual(['1:s1']))
+})

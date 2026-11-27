@@ -2,7 +2,7 @@
 // server times for them (card reminders, the daily email summary) follows it. This browser's is the
 // first guess, sent once for an account that has none.
 
-import { api, type Me } from './api'
+import { api, forAccount, type Me } from './api'
 
 // The IANA name of this browser's time zone, or "" if it won't say.
 export const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || ''
@@ -25,7 +25,12 @@ export async function reportTimeZone(me: Me): Promise<Me> {
   const zone = browserTimeZone()
   if (me.user.time_zone !== '' || !zone) return me
   try {
-    return await api<Me>('/api/me', { method: 'PATCH', body: { browser_time_zone: zone } })
+    // Named for its account: a start whose cookie is someone else's by now changes nothing of theirs.
+    return await api<Me>('/api/me', {
+      method: 'PATCH',
+      body: { browser_time_zone: zone },
+      headers: forAccount(me.user.id),
+    })
   } catch {
     return me
   }

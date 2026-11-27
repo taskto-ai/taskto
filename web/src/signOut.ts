@@ -69,10 +69,12 @@ async function verifiedClear(user: number, { keep, approved, discardUnreadable }
 // Whether the browser started with a newer login of `user`'s than `session` since, which isn't known
 // to be over (`forgetLogin` lets go of one that ended): the device is that login's then.
 // A login learned before this sign-out was recorded is not newer than it, whatever its session.
-function newerLogin(user: number, session: string): boolean {
+// `since`: when this sign-out became certain, as the page signing out recorded it; without it, the
+// record's own time (which a later sign-out of the same login, in another tab, may have moved on).
+function newerLogin(user: number, session: string, since?: number): boolean {
   const now = browserLogin()
   if (!session || now?.user !== user || now.session === session) return false
-  const recorded = pendingSignOuts().find((p) => p.user === user && p.session === session)?.at ?? 0
+  const recorded = since ?? pendingSignOuts().find((p) => p.user === user && p.session === session)?.at ?? 0
   return now.at >= recorded
 }
 
@@ -84,6 +86,9 @@ export type Decision = {
   approved: Approval
   // They were told their database couldn't be read, and chose to discard it.
   discardUnreadable?: boolean
+  // When the sign-out became certain (its record's time then): what counts as a newer login is
+  // learned after it, whatever another tab's later record of the same login says.
+  at?: number
 }
 
 // Clears the device for `user` once their login `session` is over, as they decided. Resolves true
@@ -93,13 +98,13 @@ export type Decision = {
 export async function cleanUpAfterSignOut(
   user: number,
   session: string,
-  { keep, approved, discardUnreadable = false }: Decision,
+  { keep, approved, discardUnreadable = false, at }: Decision,
 ): Promise<boolean> {
   // A newer login of the account started here since: nothing on the device is this sign-out's.
   // Asked before every step, and again after every wait inside one (`still`): the push subscription,
   // the drafts, the database (whose deletion is one at a time with opening it, and removes only the
   // database it retired: store.ts), the marker. Only this login's record is ever settled.
-  const still = () => !newerLogin(user, session)
+  const still = () => !newerLogin(user, session, at)
   const superseded = () => {
     if (still()) return false
     settleSignOut(user, session)
@@ -186,4 +191,5 @@ export const decisionOf = (p: PendingSignOut): Decision => ({
   keep: p.keep,
   approved: new Map(p.approved),
   discardUnreadable: p.discardUnreadable ?? false,
+  at: p.at,
 })

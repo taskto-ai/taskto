@@ -182,9 +182,14 @@ function watch() {
 
 // Makes user's database the one in use, and starts sending their queue. `name` says who signed in
 // (online); without it this is an offline start, for the account the browser's marker names.
-export async function activate(user: number, name?: string): Promise<RuntimeState> {
+// `still`: whether the sign-in this is for is still the browser's (its login wasn't replaced or ended
+// in another tab), asked once the earlier activation is over, before anything of this one is done:
+// the marker isn't written, nor anything opened, for a login that isn't the browser's any more. A
+// change later, while this one waits, is the account epoch's (`current`) or its caller's to undo.
+export async function activate(user: number, name?: string, still: () => boolean = () => true): Promise<RuntimeState> {
   watch()
   if (opening) await opening.catch(() => {})
+  if (!still()) return state
   if (state.runtime?.user === user) {
     if (name) rememberUser({ id: user, name })
     // Not while a sign-out of the account is unresolved (Back starting the app again): the queue goes

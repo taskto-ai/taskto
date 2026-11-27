@@ -131,7 +131,8 @@ export function recordSignOut(
   keep: boolean,
   approved: Approval,
   discardUnreadable = false,
-): void {
+  at = Date.now(),
+): number {
   // One record per login, never per account: a stale tab signing out an older login of the account
   // never takes away the decision of a newer one (recorded in another tab, perhaps gone back from and
   // still waiting on a logout that got no answer). A logout of this same login that got no answer
@@ -146,7 +147,32 @@ export function recordSignOut(
     approved: [...approved],
     ...(discardUnreadable ? { discardUnreadable } : {}),
     ...(unanswered ? { unanswered } : {}),
-    at: Date.now(),
+    at,
+  })
+  return at
+}
+
+// What a page signing out keeps of the sign-out, to put it back from.
+export type SignOutDecision = { keep: boolean; approved: Approval; discardUnreadable?: boolean; at?: number }
+
+// The record of this login's sign-out, put back from the page's own decision when there is none any
+// more (another tab went back from it, which let it go): this page is still signing out, and its
+// logout may end the login, so the decision is kept for that.
+export function ensureSignOut(
+  user: number,
+  session: string,
+  d: SignOutDecision,
+  phase: SignOutPhase = 'requested',
+): void {
+  if (read().some((p) => p.user === user && p.session === session)) return
+  put(user, session, {
+    user,
+    session,
+    phase,
+    keep: d.keep,
+    approved: [...d.approved],
+    ...(d.discardUnreadable ? { discardUnreadable: true } : {}),
+    at: d.at ?? Date.now(),
   })
 }
 
@@ -231,7 +257,10 @@ export function backedSignOut(user: number, session: string | undefined): Pendin
 // The server confirmed that `user`'s login `session` is over: what is left of its sign-out is the
 // device's cleanup. A record of another login of the account (a newer one's, which the person went
 // back from) stays as it is.
-export function confirmSignOut(user: number, session: string): void {
+// With `d`, a record that is gone (another tab went back from it) is put back first, so a cleanup that
+// fails after this is still known, and finished at a later start.
+export function confirmSignOut(user: number, session: string, d?: SignOutDecision): void {
+  if (d) ensureSignOut(user, session, d, 'confirmed')
   change(user, session, (p) => ({ ...p, phase: 'confirmed' }))
 }
 

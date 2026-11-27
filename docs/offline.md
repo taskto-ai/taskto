@@ -583,7 +583,14 @@ signing in is dealt with when it signs in:
   that has ended shields nothing. It keeps what it learned of last, by when the server was asked or
   the login was seen to end: a start answered late, for this account or another, or for a login that
   has signed out since, is older than that, so it claims nothing (no drafts, no offline data, no
-  marker) and the page says *The account changed*. Only a login learned after a sign-out was
+  marker) and the page says *The account changed*. A start asks again whether its login is still
+  the browser's once the earlier activation is over, before it writes the marker or opens anything,
+  and after taking the account up, reporting its time zone and setting its language: when it isn't
+  any more, what it took is let go (no database left open, no queue, no writer's lock), and the
+  language and time zone of another account are never set. A Try again in a tab whose sign-out
+  another tab went back from records it again before sending, and a confirmed logout puts its
+  record back before its cleanup, so a cleanup that fails is still finished later. Back from an
+  older login, the browser on a newer login of the same person, lets that older sign-out go. Only a login learned after a sign-out was
   recorded counts as newer than it. A sign-out's record and decision are kept **per login**: a stale
   tab signing out an older login never replaces or removes a newer login's (one gone back from and
   still waiting on a logout that got no answer keeps the person's decision for when it ends). Every step of the cleanup asks again, after each wait, whether a

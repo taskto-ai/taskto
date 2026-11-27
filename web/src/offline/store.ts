@@ -401,10 +401,13 @@ export class OfflineStore {
   // Opening is one at a time with a sign-out's deletion of the same account's database (`withLock`):
   // a retired database made again here is never the one that deletion then removes.
   static open(user: number): Promise<OfflineStore> {
-    return withLock(user, () => OfflineStore.openNow(user))
+    return withLock(user, (expired) => OfflineStore.openNow(user, expired))
   }
 
-  private static async openNow(user: number): Promise<OfflineStore> {
+  // `expired`: the account's lock was let go (its holder's time ran out) while this waited: what it
+  // would do after that, another tab may be doing too, so it stops (a retired database it would
+  // delete may be one made again since, with records saved in it).
+  private static async openNow(user: number, expired: () => boolean = () => false): Promise<OfflineStore> {
     const name = OfflineStore.databaseName(user)
     const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
     // A database whose purge began (it was found empty, and marked) but did not finish: it is empty
@@ -414,6 +417,11 @@ export class OfflineStore {
       retired = (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
     } catch {
       // Not read: used as it is.
+    }
+    // Asked before what it decides on: the lock may have been let go while it read.
+    if (expired()) {
+      db.close()
+      throw new StorageUnavailable('the offline database took too long')
     }
     if (!retired) return new OfflineStore(user, db)
     db.close()
@@ -968,13 +976,15 @@ export class OfflineStore {
     user: number,
     { force = false, still = () => true }: { force?: boolean; still?: () => boolean } = {},
   ): Promise<'removed' | 'newer' | 'stopped'> {
-    return withLock(user, async () => {
+    return withLock(user, async (expired) => {
       if (!still()) return 'stopped'
       // A browser with no IndexedDB holds no database to remove.
       if (typeof indexedDB === 'undefined') return 'removed'
       const name = OfflineStore.databaseName(user)
       if (!force && !(await retiredOrNew(name))) return 'newer'
       if (!still()) return 'stopped'
+      // The lock was let go while this waited: the database may be another tab's again by now.
+      if (expired()) throw new StorageUnavailable('the offline database took too long')
       await deleteDatabase(name)
       return 'removed'
     })
@@ -1058,14 +1068,22 @@ export class Superseded extends Error {
 // go when its own time is up, whatever its work is still waiting on (a deletion the browser keeps
 // blocked by another connection). What comes after it then meets the browser as it is, as it would
 // without the lock.
-function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
+// `work` is told whether the lock was let go while it went on (`expired`): it does nothing more then.
+function withLock<T>(user: number, work: (expired: () => boolean) => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  if (!locks?.request) return work()
+  if (!locks?.request) return work(() => false)
   let granted = false
   const signal = lockTimes.waitOver(lockTimes.wait)
   const held = () => {
     granted = true
-    return withinTime(work(), lockTimes.hold)
+    let over = false
+    return withinTime(
+      work(() => over),
+      lockTimes.hold,
+      () => {
+        over = true
+      },
+    )
   }
   return (locks.request(`taskto-offline-db:${user}`, signal ? { signal } : {}, held) as Promise<T>).catch((e) => {
     if (!granted && signal?.aborted) throw new StorageUnavailable('the offline database is busy in another tab')
@@ -1073,9 +1091,12 @@ function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
   })
 }
 
-function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
+function withinTime<T>(work: Promise<T>, ms: number, timedOut: () => void = () => {}): Promise<T> {
   return new Promise((resolve, reject) => {
-    const cancel = lockTimes.holdOver(ms, () => reject(new StorageUnavailable('the offline database took too long')))
+    const cancel = lockTimes.holdOver(ms, () => {
+      timedOut()
+      reject(new StorageUnavailable('the offline database took too long'))
+    })
     work.then(
       (v) => {
         cancel()
