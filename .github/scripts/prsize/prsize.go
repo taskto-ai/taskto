@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const limit = 800
+const limit = 5000
 
 const exceptionLabel = "size-exception"
 
