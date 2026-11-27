@@ -130,7 +130,17 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions?: 'ask' | 'allow_all'
+  role: 'owner' | 'viewer' | 'participant'
+  owner: { id: number; name: string }
 }
+
+export type ConversationMember = {
+  user: { id: number; name: string }
+  role: 'viewer' | 'participant'
+  added_at: string
+}
+
+export type ConversationMembers = { members: ConversationMember[] | null }
 
 export type CliQuestion = { id: string; turn: string; cli: string; tool: string; input?: string; asked_at: string }
 

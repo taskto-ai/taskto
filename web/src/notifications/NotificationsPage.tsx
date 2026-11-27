@@ -48,9 +48,16 @@ function When({ at, now }: { at: string; now: number }) {
   )
 }
 
-function shownParams(params: NotificationItem['params'], calendarDate: (ymd: string) => string) {
-  if (!params?.due) return params
-  return { ...params, due: calendarDate(params.due) }
+function shownParams(
+  params: NotificationItem['params'],
+  calendarDate: (ymd: string) => string,
+  untitled: string,
+): NotificationItem['params'] {
+  if (!params) return params
+  const shown = { ...params }
+  if (shown.due) shown.due = calendarDate(shown.due)
+  if (shown.title === '') shown.title = untitled
+  return shown
 }
 
 export function NotificationsPage({ workspace }: { workspace: number }) {
@@ -147,7 +154,10 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
                 title={
                   <span className="ui-inbox-title" data-unread={item.read ? undefined : true}>
                     {!item.read && <VisuallyHidden>{`${t('notifications.unread')} `}</VisuallyHidden>}
-                    {t(`notifications.kind.${item.kind}`, shownParams(item.params, f.calendarDate))}
+                    {t(
+                      `notifications.kind.${item.kind}`,
+                      shownParams(item.params, f.calendarDate, t('conversations.untitledShort')),
+                    )}
                   </span>
                 }
                 detail={

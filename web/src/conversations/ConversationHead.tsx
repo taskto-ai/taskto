@@ -9,6 +9,7 @@ import { Input } from '../ui/Input'
 import { MenuItem, MenuLink, MoreMenu } from '../ui/Menu'
 import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
+import { ShareDialog } from './ShareDialog'
 import { conversationTitle } from './title'
 import type { StreamStatus } from './useConversationStream'
 
@@ -27,6 +28,7 @@ const STATUS_TONE = {
 } as const satisfies Record<StreamStatus, BadgeTone>
 
 export function ConversationHead({
+  workspace,
   backHref,
   conversation,
   failed,
@@ -38,6 +40,7 @@ export function ConversationHead({
   onToggleBrowser,
   status,
 }: {
+  workspace: number
   backHref: string
   conversation: Conversation | undefined
   failed: boolean
@@ -51,6 +54,8 @@ export function ConversationHead({
 }) {
   const t = useT()
   const archived = Boolean(conversation?.archived_at)
+  const reader = Boolean(conversation) && conversation?.role !== 'owner'
+  const [sharing, setSharing] = useState(false)
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
@@ -79,7 +84,8 @@ export function ConversationHead({
     patch({ title })
   }
 
-  const showBuild = Boolean(buildHref) && !archived
+  const showBuild = Boolean(buildHref) && !archived && !reader
+  const showBrowser = browserEnabled && !reader
   return (
     <div className="ui-chat-head-wrap">
       <div className="ui-chat-head">
@@ -90,7 +96,7 @@ export function ConversationHead({
           className="ui-chat-back"
           aria-label={t('conversations.allConversations')}
         />
-        {conversation && editing ? (
+        {conversation && editing && !reader ? (
           <form className="ui-chat-rename" onSubmit={save}>
             <Input
               aria-label={t('conversations.titleField')}
@@ -127,8 +133,11 @@ export function ConversationHead({
         <Badge tone={STATUS_TONE[status]} dot className="ui-chat-status">
           {t(STATUS_LABEL[status])}
         </Badge>
-        {conversation && (
+        {conversation && !reader && (
           <span className="ui-chat-actions">
+            <Button variant="ghost" size="sm" onClick={() => setSharing(true)}>
+              {t('conversations.share.button')}
+            </Button>
             {!editing && (
               <IconButton
                 ref={renameButton}
@@ -150,14 +159,14 @@ export function ConversationHead({
             />
           </span>
         )}
-        {(showBuild || browserEnabled) && (
+        {(showBuild || showBrowser) && (
           <MoreMenu>
             {showBuild && buildHref && (
               <MenuLink icon="apps" href={buildHref}>
                 {t('apps.builder.buildHere')}
               </MenuLink>
             )}
-            {browserEnabled && (
+            {showBrowser && (
               <MenuItem icon="browser" onSelect={onToggleBrowser}>
                 {browserOpen ? t('conversations.hideBrowser') : t('conversations.showBrowser')}
               </MenuItem>
@@ -166,6 +175,15 @@ export function ConversationHead({
         )}
       </div>
       {error && <Notice tone="danger">{error}</Notice>}
+      {conversation && !reader && (
+        <ShareDialog
+          workspace={workspace}
+          url={url}
+          owner={conversation.owner.id}
+          open={sharing}
+          onClose={() => setSharing(false)}
+        />
+      )}
     </div>
   )
 }

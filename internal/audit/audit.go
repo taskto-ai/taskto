@@ -77,6 +77,7 @@ var targetTables = map[string]string{
 	TargetIntegration:   "integrations",
 
 	TargetAppIntegration: "app_integration_approvals",
+	TargetConversation:   "conversations",
 }
 
 func Record(ctx context.Context, x Execer, e Event) error {

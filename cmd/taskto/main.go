@@ -305,6 +305,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		index.SetConversations(convs)
 	}
 	convs.SetCLIQuestions(cliAccounts)
+	notifier.SetConversations(convs)
 
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")

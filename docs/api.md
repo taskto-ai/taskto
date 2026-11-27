@@ -313,11 +313,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `search_query_required` | 400 | A search needs something to search for. |
 | `search_query_too_long` | 400 | A search is at most `max` bytes of text. |
 | `search_query_no_words` | 400 | The search has no words to search for. |
-| `conversation_not_found` | 404 | No such conversation of the caller's in the workspace. |
+| `conversation_not_found` | 404 | No such conversation of the caller's, or shared with them, in the workspace. |
 | `conversation_archived` | 409 | The conversation is archived: unarchive it first. |
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
+| `conversation_read_only` | 403 | The conversation is shared with the caller to read: only its owner can send to it, stop it, rename or archive it, change its model, answer its permission questions or share it, and a reader can only remove themself. |
+| `conversation_members_limit` | 409 | A conversation is shared with at most `max` people. |
+| `conversation_member_not_found` | 404 | That person doesn't have the conversation shared with them. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
@@ -2536,6 +2539,9 @@ workspace's home as its target, and a push for it says the same. Notifications a
 - `card_mention`: someone else mentioned you in a comment on a card ([mentions](#mentions);
   `params.title`; target: the card). One per comment: a person who is both the assignee and
   mentioned in a comment is told of the mention only. No notification holds the comment's text;
+- `conversation_shared`: someone shared a conversation with you to read ([sharing](#sharing-a-conversation);
+  `params.title`, `params.owner`; target: the conversation). Shown as `changed` once you can't
+  read it any more. It can't be mailed;
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
   it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one;
 - `integration_event`: for the admins of a workspace only: a payment event of an integration wasn't
@@ -5439,11 +5445,12 @@ its display over RFB (VNC) both ways, for noVNC in the page.
 ## Conversations
 
 A conversation with the agent belongs to one user in one workspace and is **private to
-them**: nobody else sees it, admins included. Every route below answers `404` unless the
-caller owns the conversation and is a member of its workspace now, the same as for one that
-doesn't exist; a member who leaves the workspace loses access to their conversations there,
-and gets them back on rejoining. (Conversations aren't in spaces yet; sharing one is a later
-step.)
+them** until they share it: nobody else sees it, admins included. Every route below answers
+`404` unless the caller owns the conversation, or its owner has [shared it](#sharing-a-conversation)
+with them, and the caller is a member of its workspace now, the same as for one that doesn't
+exist; a member who leaves the workspace loses access to their conversations there, and gets
+them back on rejoining. (Conversations aren't in spaces.) The same goes for a conversation
+shared with the caller while its owner has left the workspace or is disabled.
 
 The agent runtime (`-agent`) keeps the conversations' content; the server keeps who owns
 which. Routes that reach the agent runtime answer `503` while it is off (`the agent runtime
@@ -5459,8 +5466,12 @@ conversation's content`) on those routes. The server logs it, and an operator ca
 A conversation as the API shows it:
 
 ```json
-{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask"}
+{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask",
+ "role": "owner", "owner": {"id": 3, "name": "Ana"}}
 ```
+
+- `role`: the caller's: `owner`, or `viewer` for one shared with them to read. `owner` is the
+  person whose conversation it is.
 
 - `title`: up to 200 printable characters, trimmed; may be empty.
 - `archived_at`: when the owner archived it, or `null`. An archived conversation can be read
@@ -5495,6 +5506,9 @@ questions](#permission-questions)).
 
 The caller's conversations in the workspace, most recently updated first:
 `{"conversations": [ … ]}`. Archived ones are left out; `?archived=true` lists only those.
+`?shared=true` lists instead the conversations other people have [shared](#sharing-a-conversation)
+with the caller (their `role` is `viewer`; archived ones are left out the same way), leaving out
+those whose owner has left the workspace or is disabled.
 
 ### `POST /api/workspaces/{workspace}/conversations`
 
@@ -5513,6 +5527,45 @@ Renames, archives or unarchives: `{"title": "New title"}`, `{"archived": true}`,
 without asking in this conversation, from its next turn, and `"ask"` turns the questions
 back on. Archiving an archived conversation keeps its first `archived_at`. `200` with the
 conversation; `400` for an empty body, a bad title or a bad `cli_permissions`.
+
+### Sharing a conversation
+
+An owner can let chosen members of the workspace **read** a conversation, live: a viewer sees its
+messages and the agent's work as they stream, on the same routes as the owner (`GET` the
+conversation, `…/entries`, `…/events`, `…/messages` and `…/model`), and can change nothing. Every
+other route is the owner's: for a viewer `PATCH`, `POST …/messages`, `PUT …/model`, `POST …/stop`,
+`GET` and `POST …/cli-permissions…` and the writes below answer `403 conversation_read_only`
+(a person who can't read the conversation at all gets `404 conversation_not_found` from all of
+them, so the answer never says whether it exists). The agent's tools still act for the owner only,
+and the owner's export holds only the owner's own conversations.
+
+A share counts only while the viewer is a member of the workspace and not disabled **and** the
+owner still is: a viewer who leaves the workspace loses every share there for good (rejoining
+doesn't bring them back), and a stream that is open ends with `interrupted` at its next heartbeat
+once the caller can no longer read it. A viewer's streams count against their own limit
+(`too_many_streams`). Sharing, changing and ending a share are in the [audit log](audit.md) as
+`conversation_shared`, `conversation_share_changed` and `conversation_unshared`.
+
+A conversation is shared with at most 50 people.
+
+#### `GET /api/workspaces/{workspace}/conversations/{conversation}/members`
+
+For the owner and any viewer: `{"members": [{"user": {"id": 5, "name": "Bo"}, "role": "viewer", "added_at": "…"}]}`,
+oldest first. The owner isn't listed (it is the conversation's `owner`).
+
+#### `PUT /api/workspaces/{workspace}/conversations/{conversation}/members/{user}`
+
+The owner shares the conversation with a member of the workspace: `{"role": "viewer"}`. `200` with
+the member; sharing again with the same role changes and records nothing. A `user` who isn't a
+member of the workspace (or isn't a number) is `404 member_not_found`; the owner can't be added
+(`400`); any role but `viewer` is `400` for now; a 51st person is `409 conversation_members_limit`.
+The person is told by a `conversation_shared` [notification](#notifications) (`params.title`,
+`params.owner`; target: the conversation), shown only while they can still read it.
+
+#### `DELETE /api/workspaces/{workspace}/conversations/{conversation}/members/{user}`
+
+The owner stops sharing with `user`, or a viewer removes themself (`user` is their own ID): `204`.
+A person it isn't shared with is `404 conversation_member_not_found`.
 
 ### Permission questions
 

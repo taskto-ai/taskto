@@ -103,7 +103,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		case <-heartbeat:
-			switch _, err := s.find(ctx, workspace, user, c.ID); {
+			switch _, err := s.reach(ctx, workspace, user, c.ID); {
 			case errors.Is(err, errNotFound):
 				_ = out.event(interrupted)
 				return

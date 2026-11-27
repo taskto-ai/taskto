@@ -39,6 +39,9 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base+"/{conversation}/events", member(s.handleEvents))
 	mux.Handle("GET "+base+"/{conversation}/cli-permissions", member(s.handleQuestions))
 	mux.Handle("POST "+base+"/{conversation}/cli-permissions/{id}", member(s.handleAnswer))
+	mux.Handle("GET "+base+"/{conversation}/members", member(s.handleMembers))
+	mux.Handle("PUT "+base+"/{conversation}/members/{user}", member(s.handleShare))
+	mux.Handle("DELETE "+base+"/{conversation}/members/{user}", member(s.handleUnshare))
 }
 
 const (
@@ -64,7 +67,7 @@ func (s *Service) conversationInPath(w http.ResponseWriter, r *http.Request) (Co
 		return Conversation{}, false
 	}
 	user, workspace := caller(r)
-	c, err := s.find(r.Context(), workspace, user, id)
+	c, err := s.reach(r.Context(), workspace, user, id)
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, apierr.CodeConversationNotFound, errNotFound.Error())
 		return Conversation{}, false
@@ -76,8 +79,17 @@ func (s *Service) conversationInPath(w http.ResponseWriter, r *http.Request) (Co
 	return c, true
 }
 
-func (s *Service) writable(w http.ResponseWriter, r *http.Request) (Conversation, bool) {
+func (s *Service) ownedInPath(w http.ResponseWriter, r *http.Request) (Conversation, bool) {
 	c, ok := s.conversationInPath(w, r)
+	if ok && c.Role != RoleOwner {
+		writeError(w, http.StatusForbidden, apierr.CodeConversationReadOnly, "this conversation is shared with you to read: only its owner can change it")
+		return Conversation{}, false
+	}
+	return c, ok
+}
+
+func (s *Service) writable(w http.ResponseWriter, r *http.Request) (Conversation, bool) {
+	c, ok := s.ownedInPath(w, r)
 	if ok && c.ArchivedAt != nil {
 		writeError(w, http.StatusConflict, apierr.CodeConversationArchived, "the conversation is archived: unarchive it first")
 		return Conversation{}, false
@@ -158,8 +170,17 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `archived must be "true" or "false"`)
 		return
 	}
+	shared := false
+	switch r.URL.Query().Get("shared") {
+	case "", "false":
+	case "true":
+		shared = true
+	default:
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `shared must be "true" or "false"`)
+		return
+	}
 	user, workspace := caller(r)
-	list, err := s.list(r.Context(), workspace, user, archived)
+	list, err := s.list(r.Context(), workspace, user, archived, shared)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -231,7 +252,7 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.conversationInPath(w, r)
+	c, ok := s.ownedInPath(w, r)
 	if !ok {
 		return
 	}
@@ -351,7 +372,7 @@ func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleStop(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.conversationInPath(w, r)
+	c, ok := s.ownedInPath(w, r)
 	if !ok {
 		return
 	}

@@ -86,6 +86,7 @@ export function ConversationView({
     view && older.history ? { ...view, entries: older.history.entries, before: older.history.before } : view,
   )
   const archived = Boolean(meta.data?.archived_at)
+  const readOnly = Boolean(meta.data) && meta.data?.role !== 'owner'
   const apps = embedApps ? liveApps(messages) : new Set<ToolUse>()
   const saved = lastSavedApp(messages, savedAfter)
   const savedKey = saved?.save
@@ -103,10 +104,10 @@ export function ConversationView({
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const model = picked ?? loadedModel.data
-  const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
+  const usesCli = !readOnly && Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
   const asks = messages.reduce((n, m) => n + m.tools.filter((t) => t.cli && t.output?.includes('⚠')).length, 0)
-  const cliName = cliOfProvider(model?.provider)
+  const cliName = readOnly ? undefined : cliOfProvider(model?.provider)
   const cliTurnChanged = useChanged(`${asks}:${running}`)
   if (cliTurnChanged && cliName) cli.reload()
   const reconnect = reconnectAccount(model, cli.data)
@@ -118,7 +119,7 @@ export function ConversationView({
   const browser = useLoad(() => api<BrowserStatus>(BROWSER), [])
   const [browserOpen, setBrowserOpen] = useState(false)
   const [takeOver, setTakeOver] = useState(false)
-  const help = pendingHelp(messages)
+  const help = readOnly ? null : pendingHelp(messages)
   const helpChanged = useChanged(JSON.stringify([help?.message ?? null, running]))
   if (helpChanged && help) browser.reload()
   const changed = () => {
@@ -131,13 +132,14 @@ export function ConversationView({
   return (
     <section className="ui-chat" aria-label={t('conversations.conversation')}>
       <ConversationHead
+        workspace={workspace}
         backHref={backHref}
         conversation={meta.data}
         failed={Boolean(meta.error) && !meta.data}
         url={base}
         onChanged={changed}
         buildHref={buildHref}
-        browserEnabled={Boolean(browser.data?.enabled)}
+        browserEnabled={Boolean(browser.data?.enabled) && !readOnly}
         browserOpen={browserOpen}
         onToggleBrowser={() => {
           setBrowserOpen(!browserOpen)
@@ -161,7 +163,8 @@ export function ConversationView({
             {meta.error}
           </Notice>
         )}
-        {reconnect && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
+        {readOnly && meta.data && <Notice>{t('conversations.sharedReadOnly', { owner: meta.data.owner.name })}</Notice>}
+        {reconnect && !readOnly && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
         {cliName && <CliQuestions url={base} cli={cliName} trigger={`${questionLines}-${running}`} running={running} />}
         {cliName && meta.data && !archived && (
           <CliPermissionsSwitch conversation={meta.data} url={base} cli={cliName} onChanged={meta.reload} />
@@ -182,7 +185,7 @@ export function ConversationView({
             }}
           />
         )}
-        {browserOpen && (
+        {browserOpen && !readOnly && (
           <BrowserPanel
             status={browser}
             interactive={takeOver}
@@ -214,26 +217,28 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
       />
-      <Composer
-        workspace={workspace}
-        base={base}
-        archived={archived}
-        unreadable={unreadable}
-        running={running}
-        onSent={onChanged}
-      >
-        {providers.data && model && (
-          <ModelPicker
-            workspace={workspace}
-            url={`${base}/model`}
-            providers={providers.data}
-            current={model}
-            cli={cli.data}
-            onChosen={setPicked}
-            disabled={archived || unreadable}
-          />
-        )}
-      </Composer>
+      {!readOnly && (
+        <Composer
+          workspace={workspace}
+          base={base}
+          archived={archived}
+          unreadable={unreadable}
+          running={running}
+          onSent={onChanged}
+        >
+          {providers.data && model && (
+            <ModelPicker
+              workspace={workspace}
+              url={`${base}/model`}
+              providers={providers.data}
+              current={model}
+              cli={cli.data}
+              onChosen={setPicked}
+              disabled={archived || unreadable}
+            />
+          )}
+        </Composer>
+      )}
     </section>
   )
 }

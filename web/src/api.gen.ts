@@ -527,6 +527,23 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+  role: string
+  owner: ConversationsPerson
+}
+
+export type ConversationMember = {
+  user: ConversationsPerson
+  role: string
+  added_at: string
+}
+
+export type ConversationMembers = {
+  members: ConversationMember[] | null
+}
+
+export type ConversationsPerson = {
+  id: number
+  name: string
 }
 
 export type DeletionReply = {

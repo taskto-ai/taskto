@@ -31,13 +31,21 @@ export function ConversationsPage({
   const t = useT()
   const f = useFormat()
   const [archived, setArchived] = useState(false)
-  const list = useLoad(
-    () =>
-      api<{ conversations: Conversation[] }>(`${ws(workspace)}/conversations${archived ? '?archived=true' : ''}`).then(
-        (r) => r.conversations,
-      ),
-    [workspace, archived],
-  )
+  const [shared, setShared] = useState(false)
+  const list = useLoad(() => {
+    const query = new URLSearchParams()
+    if (archived) query.set('archived', 'true')
+    if (shared) query.set('shared', 'true')
+    const q = query.toString()
+    return api<{ conversations: Conversation[] }>(`${ws(workspace)}/conversations${q ? `?${q}` : ''}`).then(
+      (r) => r.conversations,
+    )
+  }, [workspace, archived, shared])
+  const heading = shared
+    ? t('conversations.sharedWithMe')
+    : archived
+      ? t('conversations.archived')
+      : t('shell.sections.conversations')
   const [creating, setCreating] = useState(false)
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
@@ -66,8 +74,11 @@ export function ConversationsPage({
       <section className="ui-chat-list" aria-label={t('shell.sections.conversations')}>
         <div className="ui-chat-list-head">
           <Heading level={1} size="title" className="ui-chat-list-title">
-            {archived ? t('conversations.archived') : t('shell.sections.conversations')}
+            {heading}
           </Heading>
+          <Button variant="ghost" size="sm" aria-pressed={shared} onClick={() => setShared((s) => !s)}>
+            {t('conversations.sharedWithMe')}
+          </Button>
           <IconButton
             icon="archive"
             label={t('conversations.showArchivedTitle')}
@@ -90,7 +101,9 @@ export function ConversationsPage({
           </div>
         )}
         {list.data?.length === 0 &&
-          (archived ? (
+          (shared ? (
+            <EmptyState title={t('conversations.nothingShared')} />
+          ) : archived ? (
             <EmptyState title={t('conversations.nothingArchived')} />
           ) : (
             <EmptyState
@@ -106,7 +119,7 @@ export function ConversationsPage({
           ))}
         {list.data && list.data.length > 0 && (
           <div className="ui-chat-rows">
-            <Rows label={archived ? t('conversations.archived') : t('shell.sections.conversations')}>
+            <Rows label={heading}>
               {list.data.map((c) => (
                 <Row
                   key={c.id}
@@ -114,16 +127,19 @@ export function ConversationsPage({
                   current={c.id === openId}
                   title={conversationTitle(c)}
                   detail={
-                    <time dateTime={c.updated_at} title={f.dateTime(c.updated_at)}>
-                      {f.relative(c.updated_at)}
-                    </time>
+                    <>
+                      {c.role !== 'owner' && <span>{t('conversations.sharedBy', { owner: c.owner.name })} </span>}
+                      <time dateTime={c.updated_at} title={f.dateTime(c.updated_at)}>
+                        {f.relative(c.updated_at)}
+                      </time>
+                    </>
                   }
                 />
               ))}
             </Rows>
           </div>
         )}
-        {list.data && list.data.length > 0 && !archived && (
+        {list.data && list.data.length > 0 && !archived && !shared && (
           <div className="ui-chat-list-foot">
             <ButtonLink href={buildHref} icon="apps" variant="ghost" size="sm">
               {t('apps.builder.build')}

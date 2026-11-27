@@ -9,6 +9,7 @@ export type NotificationKind =
   | 'card_overdue'
   | 'app_effect_failed'
   | 'integration_event'
+  | 'conversation_shared'
   | 'changed'
 
 export type NotificationItem = {
