@@ -624,8 +624,9 @@ A pull request that changes how the app looks attaches its captures from before 
 free loopback port, seeds sample data through the HTTP API (invented names and `example.com`
 addresses only: documents, cards with labels and due dates, comments, a shared space with boards,
 a second person who joins and assigns the owner a card and mentions them, so the inbox has
-notifications, a pending invite, an access token, apps installed from the templates and published, Home widgets and
-pins, conversations), and visits each screen in Playwright's Chromium (`web/e2e/screens.mjs`). It
+notifications, a pending invite, an access token, apps installed from the templates and published
+(a template whose draft declares an integration slot stays a draft, since publishing it needs an
+admin's approval of an integration the seed doesn't make), Home widgets and pins, conversations), and visits each screen in Playwright's Chromium (`web/e2e/screens.mjs`). It
 stops the server and removes the data directory when it ends, also when a step failed or it was
 interrupted (Ctrl-C, `SIGTERM` and `SIGHUP` stop and reap the server, close the browser, remove the
 directory and exit with 130, 143 or 129). CI never runs it. The seeding uses the script's own HTTP
