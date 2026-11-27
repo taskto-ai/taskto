@@ -25,6 +25,34 @@ ${readFileSync(join(dir, 'LICENSE'), 'utf8').trim()}
 `
 }
 
+function jszipNotice(root: string): string {
+  const dir = join(root, 'node_modules', 'jszip')
+  const { version } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string }
+  const licence = readFileSync(join(dir, 'LICENSE.markdown'), 'utf8')
+  const mit = licence.slice(licence.indexOf('The MIT License'), licence.indexOf('GPL version 3')).trim()
+  return `${rule}
+jszip ${version} (MIT, chosen from MIT OR GPL-3.0-or-later), https://www.npmjs.com/package/jszip
+${rule}
+
+${mit}
+`
+}
+
+function docxPreviewNotice(root: string): string {
+  const dir = join(root, 'node_modules', 'docx-preview')
+  const { version } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string }
+  const copyright = /^\s*Copyright \(c\).*$/m.exec(readFileSync(join(dir, 'LICENSE'), 'utf8'))?.[0].trim() ?? ''
+  return `${rule}
+docx-preview ${version} (Apache-2.0), https://www.npmjs.com/package/docx-preview
+${rule}
+
+${copyright}
+
+The Word preview's renderer is licensed under the Apache License, Version 2.0, reproduced above
+with the notice of ZXing-C++. It is used unmodified, and it loads the first time a Word file is opened.
+`
+}
+
 export function thirdPartyNotices(root: string): string {
   const parts = [
     `Third-party code and fonts in taskto.ai's web app
@@ -53,6 +81,12 @@ the project's own notices are in its source repository, named above. It is used 
 
 ${readFileSync(join(root, 'licenses/Apache-2.0.txt'), 'utf8').trim()}
 `)
+  parts.push(`
+The Word preview in the knowledge base is drawn by docx-preview, which reads the file with JSZip. Both
+are in the one file loaded the first time a Word file is opened (docx-preview-*.js).
+`)
+  parts.push(docxPreviewNotice(root))
+  parts.push(jszipNotice(root))
   return parts.join('\n')
 }
 

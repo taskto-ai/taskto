@@ -21,7 +21,9 @@ export function Content({ url, doc, onLink }: { url: string; doc: Doc; onLink: L
     <div className="kb-file">
       {isVideo(doc.path) && <video className="kb-media" controls preload="metadata" src={raw} aria-label={doc.path} />}
       {isAudio(doc.path) && <audio className="kb-media" controls preload="metadata" src={raw} aria-label={doc.path} />}
-      {isWord(doc.path) && <FilePreview src={raw} name={doc.path.split('/').pop() ?? doc.path} size={doc.size} />}
+      {isWord(doc.path) && (
+        <FilePreview key={doc.version} src={raw} name={doc.path.split('/').pop() ?? doc.path} size={doc.size} />
+      )}
       <div className="kb-file-download">
         <ButtonLink plain href={raw} download icon="down">
           {t('knowledge.doc.download')}

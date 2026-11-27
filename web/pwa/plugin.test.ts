@@ -18,6 +18,7 @@ const build = [
   'assets/index-abc123.js.map',
   'assets/zxing_reader-jkl012.wasm',
   'assets/zxing_writer-mno345.wasm',
+  'assets/docx-preview-pqr678.js',
   'vendor/novnc/core/rfb.js',
   'assets/THIRD_PARTY_NOTICES.txt',
   'sw.js',
@@ -36,6 +37,12 @@ test('precaches the page, public files and every chunk, lazy ones included', () 
 
 test("leaves out the QR writer's .wasm: drawing the two-factor secret needs the server anyway", () => {
   expect(precacheEntries(build).some((e) => e.includes('zxing_writer'))).toBe(false)
+})
+
+test("leaves out the Word preview's chunk: it is fetched the first time a Word file is opened", () => {
+  const entries = precacheEntries(build)
+  expect(entries.some((e) => e.includes('docx-preview'))).toBe(false)
+  expect(entries).toContain('/assets/AppsPage-def456.js')
 })
 
 test('leaves out the worker itself, source maps, the vendored live view and the licence notices', () => {

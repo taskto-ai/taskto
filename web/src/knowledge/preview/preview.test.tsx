@@ -2,6 +2,8 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { EXPECTED_USER_HEADER } from '../../api'
+import { beginSession, endSession, resetSession } from '../../session'
 import { fakeFetch } from '../../test/fakes'
 import { Content } from '../Content'
 import { isWord } from '../docs'
@@ -47,6 +49,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetSession()
   watcher?.disconnect()
   cleanup()
   vi.unstubAllGlobals()
@@ -210,11 +213,13 @@ test('only http and https addresses are web addresses', () => {
 function heldFetch(urls: string[]) {
   const answers = new Map<string, (res: Response) => void>()
   const requested: string[] = []
+  const headers: Record<string, string>[] = []
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       requested.push(url)
+      headers.push(Object.fromEntries(new Headers(init?.headers).entries()))
       if (!urls.includes(url)) return new Response('{}', { status: 404 })
       return new Promise<Response>((resolve) => answers.set(url, resolve))
     }),
@@ -222,6 +227,7 @@ function heldFetch(urls: string[]) {
   const bytes = (...values: number[]) => new Response(new Uint8Array(values))
   return {
     requested,
+    headers,
     answer: (url: string, ...values: number[]) => answers.get(url)?.(bytes(...values)),
     answerWith: (url: string, res: Response) => answers.get(url)?.(res),
   }
@@ -366,13 +372,33 @@ test('the frame stays hidden behind the loading skeleton until the document is d
   expect(container.querySelector('.kb-preview')?.getAttribute('aria-busy')).toBe('false')
 })
 
-test('a load of the frame before its document exists draws nothing', async () => {
+test('a load of the frame before its document exists draws nothing and throws nothing', async () => {
   watcher?.disconnect()
   const draw = vi.fn(async () => {})
+  const thrown = vi.fn()
+  window.addEventListener('error', thrown)
   render(<PreviewFrame title="t" render={draw} onRendered={() => {}} onFailed={() => {}} />)
   const el = screen.getByTitle('t') as HTMLIFrameElement
+  Object.defineProperty(el, 'contentDocument', { value: null, configurable: true })
   el.dispatchEvent(new Event('load'))
+  window.removeEventListener('error', thrown)
   expect(draw).not.toHaveBeenCalled()
+  expect(thrown).not.toHaveBeenCalled()
+})
+
+test('a load of the frame whose document has no body yet draws nothing and throws nothing', async () => {
+  watcher?.disconnect()
+  const draw = vi.fn(async () => {})
+  const thrown = vi.fn()
+  window.addEventListener('error', thrown)
+  render(<PreviewFrame title="t" render={draw} onRendered={() => {}} onFailed={() => {}} />)
+  const el = screen.getByTitle('t') as HTMLIFrameElement
+  const doc = el.contentDocument as Document
+  Object.defineProperty(doc, 'body', { value: null, configurable: true })
+  el.dispatchEvent(new Event('load'))
+  window.removeEventListener('error', thrown)
+  expect(draw).not.toHaveBeenCalled()
+  expect(thrown).not.toHaveBeenCalled()
 })
 
 test('the frame follows its content with a size observer that ends with it', async () => {
@@ -411,4 +437,75 @@ test('a version in History is previewed from its own commit through Content', as
   await waitFor(() => expect(rendered).toHaveBeenCalledOnce())
   expect(calls.map((c) => c.path)).toEqual([at])
   expect(screen.getByTitle('Preview of contract.docx')).toBeTruthy()
+})
+
+test('a new version of the same file is fetched and drawn again, and the old request is ended', async () => {
+  rendered.mockImplementation(async (bytes, into) => {
+    into.innerHTML = `<h1>${new TextDecoder().decode(bytes)}</h1>`
+  })
+  let served = 0
+  const calls = fakeFetch({
+    [`GET ${RAW}`]: () => {
+      served += 1
+      return { body: { v: served } }
+    },
+  })
+  const url = '/api/workspaces/1/spaces/3/docs/contract.docx'
+  const first = { path: 'contract.docx', version: 'a'.repeat(40), size: 7, versioned: true }
+  const { rerender } = render(<Content url={url} doc={first} onLink={() => null} />)
+  await waitFor(() => expect(frame().contentDocument?.querySelector('h1')?.textContent).toBe('{"v":1}'))
+  rerender(<Content url={url} doc={{ ...first, version: 'b'.repeat(40) }} onLink={() => null} />)
+  await waitFor(() => expect(frame().contentDocument?.querySelector('h1')?.textContent).toBe('{"v":2}'))
+  expect(calls.map((c) => c.path)).toEqual([RAW, RAW])
+  expect(calls[0].signal?.aborted).toBe(true)
+})
+
+test('a version that is restored while the first is still downloading shows only the restored one', async () => {
+  const net = heldFetch([RAW])
+  const url = '/api/workspaces/1/spaces/3/docs/contract.docx'
+  const first = { path: 'contract.docx', version: 'a'.repeat(40), size: 1, versioned: true }
+  const { rerender } = render(<Content url={url} doc={first} onLink={() => null} />)
+  await waitFor(() => expect(net.requested).toEqual([RAW]))
+  rerender(<Content url={url} doc={{ ...first, version: 'b'.repeat(40) }} onLink={() => null} />)
+  await waitFor(() => expect(net.requested).toEqual([RAW, RAW]))
+  await act(async () => net.answer(RAW, 2, 2))
+  await waitFor(() => expect(rendered).toHaveBeenCalledOnce())
+  expect([...new Uint8Array(rendered.mock.calls[0][0])]).toEqual([2, 2])
+})
+
+const SIGN_INS: [string, () => void][] = [
+  ['signs out', () => endSession()],
+  ['signs in as another account in another tab', () => beginSession(8)],
+  ['signs in again as the same account', () => beginSession(7)],
+]
+
+test.each(SIGN_INS)('bytes that arrive after the person %s draw nothing and show no notice', async (_, change) => {
+  beginSession(7)
+  const net = heldFetch([RAW])
+  render(<FilePreview src={RAW} name="contract.docx" size={1} />)
+  await waitFor(() => expect(net.requested).toEqual([RAW]))
+  change()
+  await act(async () => net.answer(RAW, 1, 2))
+  expect(rendered).not.toHaveBeenCalled()
+  expect(document.querySelector('iframe')).toBeNull()
+  expect(screen.queryByText("This file can't be previewed; download it to open it.")).toBeNull()
+})
+
+test.each(SIGN_INS)('a failure that arrives after the person %s shows no notice', async (_, change) => {
+  beginSession(7)
+  const net = heldFetch([RAW])
+  render(<FilePreview src={RAW} name="contract.docx" size={1} />)
+  await waitFor(() => expect(net.requested).toEqual([RAW]))
+  change()
+  await act(async () => net.answerWith(RAW, new Response('{}', { status: 500 })))
+  expect(screen.queryByText("This file can't be previewed; download it to open it.")).toBeNull()
+  expect(rendered).not.toHaveBeenCalled()
+})
+
+test('the download is asked for on behalf of the signed-in account, so another account gets a refusal', async () => {
+  beginSession(7)
+  const net = heldFetch([RAW])
+  render(<FilePreview src={RAW} name="contract.docx" size={1} />)
+  await waitFor(() => expect(net.requested).toEqual([RAW]))
+  expect(net.headers[0][EXPECTED_USER_HEADER.toLowerCase()]).toBe('7')
 })

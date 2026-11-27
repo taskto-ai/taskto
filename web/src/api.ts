@@ -99,7 +99,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T
 }
 
-export async function apiBytes(path: string, init: Pick<RequestInit, 'signal'> = {}): Promise<ArrayBuffer> {
+export async function apiBytes(path: string, init: Pick<RequestInit, 'signal' | 'headers'> = {}): Promise<ArrayBuffer> {
   const sent = await send(path, init)
   if (!sent.res.ok) {
     const data = await sent.res.json().catch((e) => {

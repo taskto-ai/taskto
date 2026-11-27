@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { apiBytes } from '../../api'
+import { apiBytes, forAccount } from '../../api'
 import { useFormat, useT } from '../../i18n'
+import { sameSession, sessionUser } from '../../session'
 import { Notice } from '../../ui/Notice'
 import { Skeleton } from '../../ui/Skeleton'
 import { renderDocx } from './docx'
@@ -32,13 +33,15 @@ export function FilePreview({ src, name, size }: FilePreviewProps) {
     }
     setState({ phase: 'loading' })
     const controller = new AbortController()
-    apiBytes(src, { signal: controller.signal })
+    const same = sameSession()
+    const account = sessionUser()
+    apiBytes(src, { signal: controller.signal, ...(account === null ? {} : { headers: forAccount(account) }) })
       .then((bytes) => {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted || !same()) return
         setState(bytes.byteLength > MAX_PREVIEW_BYTES ? { phase: 'tooLarge' } : { phase: 'ready', bytes })
       })
       .catch(() => {
-        if (!controller.signal.aborted) setState({ phase: 'failed' })
+        if (!controller.signal.aborted && same()) setState({ phase: 'failed' })
       })
     return () => controller.abort()
   }, [src, tooLarge])
