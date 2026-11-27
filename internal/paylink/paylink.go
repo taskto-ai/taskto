@@ -7,6 +7,7 @@ package paylink
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -18,6 +19,20 @@ type Opener interface {
 	// OpenPaymentLink returns the link to pay what the request asks, making it at the provider only
 	// if the request's entry has not made one already. Its failures are *Error.
 	OpenPaymentLink(ctx context.Context, req Request) (Link, error)
+	// EntryLink is the link the entry's reference saved (the entry's number is effectID), read through
+	// q with no call to anyone: ok is false while it has none.
+	EntryLink(ctx context.Context, q Querier, effectID int64) (link Link, ok bool, err error)
+	// LinkCurrent says whether a link the integration made may be written to a record now, read
+	// through q (the write's own transaction, under its lock): it is refused (an *Error with
+	// integration_account_changed) when the integration's key is of another mode now than the one the
+	// link was made in, so a test link never lands on a live integration's record, nor a live one on a
+	// test integration's.
+	LinkCurrent(ctx context.Context, q Querier, integrationID int64, objectID string) error
+}
+
+// Querier is what the Opener reads with: a transaction or the database.
+type Querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // Request is a payment link as the integration is asked for it. The integration of the

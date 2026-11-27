@@ -228,6 +228,15 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 			if now.binding.IntegrationID != b.IntegrationID {
 				return refuse(apierr.CodeIntegrationChanged)
 			}
+			// And of the mode the integration's key has now: an admin who replaced the key while the
+			// call was out leaves a link of the old mode, which is not this record's to hold.
+			if err := s.platform.Payments.LinkCurrent(ctx, tx, b.IntegrationID, link.ObjectID); err != nil {
+				var pe *paylink.Error
+				if errors.As(err, &pe) {
+					return &effectError{code: pe.Code, params: pe.Params, transient: pe.Transient}
+				}
+				return err
+			}
 			return nil
 		},
 	})

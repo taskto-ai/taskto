@@ -27,6 +27,8 @@ type stubLinks struct {
 	fail  error
 	// onOpen, if set, runs while the integration's side is asked (the entry is mid-call).
 	onOpen func(req paylink.Request)
+	// otherMode says the integration's key is of another mode now than the links' (LinkCurrent).
+	otherMode bool
 }
 
 func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (paylink.Link, error) {
@@ -52,6 +54,22 @@ func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (pay
 	l := paylink.Link{URL: fmt.Sprintf("https://pay.example.test/c/%d", n), ObjectID: fmt.Sprintf("cs_test_%d", n), AmountMinor: 12010, Currency: "EUR"}
 	s.made[req.EffectID] = l
 	return l, nil
+}
+
+func (s *stubLinks) EntryLink(_ context.Context, _ paylink.Querier, effectID int64) (paylink.Link, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.made[effectID]
+	return l, ok, nil
+}
+
+func (s *stubLinks) LinkCurrent(context.Context, paylink.Querier, int64, string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.otherMode {
+		return &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+	}
+	return nil
 }
 
 func (s *stubLinks) count() int {
