@@ -1,11 +1,3 @@
-// What the app shows when the server can't be reached and someone signed in here before: the apps
-// they downloaded, usable without it, and the records made on this device waiting to be sent.
-//
-// This is a different place from the signed-in app on purpose. It has no session to speak of (the
-// browser's cookie can't be checked offline), so it shows only this user's own downloads, from the
-// database of their id, and does nothing the server decides: records are queued, and the server
-// is asked again, with the session the browser holds then, before any is accepted.
-
 import { useEffect, useRef, useState } from 'react'
 import { AppView } from '../apps/AppView'
 import type { AppTransport } from '../apps/transport'
@@ -33,7 +25,6 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
   const [open, setOpen] = useState<string | null>(null)
   const download = data.downloads.find((d) => d.key === open)
 
-  // Back online: the page asks the server who is signed in, and the signed-in app takes over.
   useEffect(() => {
     window.addEventListener('online', onReconnect)
     return () => window.removeEventListener('online', onReconnect)
@@ -126,7 +117,6 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
   )
 }
 
-// One downloaded app, drawn from the device. Above it, what its numbers are.
 export function OfflineApp({
   runtime,
   download,
@@ -140,7 +130,6 @@ export function OfflineApp({
   const f = useFormat()
   const [saved, setSaved] = useState(false)
   const [reload, setReload] = useState(0)
-  // A new transport only for a different copy: the photos staged in the form live in it.
   const made = useRef<{ key: string; transport: OfflineTransport } | null>(null)
   const key = `${download.key}@${download.capturedAt}`
   if (made.current?.key !== key) {
@@ -150,14 +139,8 @@ export function OfflineApp({
   const transport: AppTransport = made.current.transport
   useEffect(() => () => made.current?.transport.photos.release(), [])
   const queued = items.length
-  // Changes to downloaded records that the server doesn't have yet: shown on the screen as the
-  // person left them, and said to be waiting.
   const changes = items.filter((i) => kindOf(i) !== 'insert' && i.state !== 'synced').length
 
-  // A record that left the queue behind this screen's back (discarded, cleared), or a change to a
-  // record whose revision moved on (settled by the person, acknowledged by the server), is drawn
-  // again, so the next change is based on the revision now. A record added by this screen's own
-  // button is already in the answer, and the form being typed in is not drawn over.
   const signature = items
     .map(
       (i) =>
@@ -186,9 +169,6 @@ export function OfflineApp({
       {changes > 0 && <p className="ui-offline-app-note">{t('offline.pendingChanges', { count: changes })}</p>}
       {saved && <Notice tone="success">{t('offline.saved')}</Notice>}
       <AppView
-        // A screen is drawn from one release of the app, and a button on it is resolved in that one: a
-        // download that brought another release is drawn again, a fresh screen with its own buttons,
-        // never the old one's pressed under the new definition.
         key={`${scopeKey(download)}@${download.release}`}
         surfaceId={`app-${download.app}`}
         label={download.name}

@@ -1,7 +1,3 @@
-// Package agentbrowser is the server's side of the agent browser (docs/agent-browser.md): the
-// API under /api/me/browser, the live view's WebSocket, and the agent's browser tools. The
-// browsers themselves run in the CLI worker (internal/browser): this package only ever acts
-// on the signed-in user's own, or on the conversation owner's for the agent.
 package agentbrowser
 
 import (
@@ -26,26 +22,18 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// ErrOff is Usable's answer when the browser is off on this server.
 var ErrOff = errors.New("the agent browser is off on this server (-browser)")
 
-// Service serves the agent browser to users and to the agent.
 type Service struct {
 	b       browser.Browsers
 	usable  func(ctx context.Context, user int64) error
 	account func(ctx context.Context, user int64) (cliowner.Account, error)
 }
 
-// New returns the service over b, usable for a user when usable says so (the CLI workers' rule:
-// the browser runs in their worker, under the same OS boundary, and the user's profile is in
-// their CLI directory). account names a user's account to the browsers, by its identity
-// (cliaccounts.Service.Account): they keep everything under it, never under the number, which a
-// restore of the server's data may give to someone else. A nil b means the browser is off.
 func New(b browser.Browsers, usable func(ctx context.Context, user int64) error, account func(ctx context.Context, user int64) (cliowner.Account, error)) *Service {
 	return &Service{b: b, usable: usable, account: account}
 }
 
-// acct is user's account, for the browsers.
 func (s *Service) acct(ctx context.Context, user int64) (cliowner.Account, error) {
 	if s.account == nil {
 		return cliowner.Account{}, errors.New("agent browser: no account resolver")
@@ -53,8 +41,6 @@ func (s *Service) acct(ctx context.Context, user int64) (cliowner.Account, error
 	return s.account(ctx, user)
 }
 
-// Usable reports whether user's browser can be used now: nil, ErrOff, or the CLI workers'
-// reason. An *apierr.Error reason carries its own status and code.
 func (s *Service) Usable(ctx context.Context, user int64) error {
 	if s == nil || s.b == nil {
 		return ErrOff
@@ -65,13 +51,6 @@ func (s *Service) Usable(ctx context.Context, user int64) error {
 	return nil
 }
 
-// Routes mounts /api/me/browser on mux. Every route is the signed-in user's own: the paths
-// name no user, so no one can reach another's browser.
-//
-//	GET  /api/me/browser        → Status
-//	POST /api/me/browser/start  {"browser": "personal"} → Status
-//	POST /api/me/browser/stop   {"browser": "personal"} → 204
-//	GET  /api/me/browser/live   the personal browser's live view: a WebSocket of RFB
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	me := func(h http.HandlerFunc) http.Handler { return a.RequireUser(h) }
 	const base = "/api/me/browser"
@@ -86,17 +65,13 @@ func caller(r *http.Request) int64 {
 	return u.ID
 }
 
-// Status is GET /api/me/browser.
 type Status struct {
-	// Enabled says whether the browser can be used now; Reason says why not, in English, and
-	// ReasonCode as an error code (internal/apierr), which the web app shows translated.
 	Enabled    bool                           `json:"enabled"`
 	Reason     string                         `json:"reason,omitempty"`
 	ReasonCode apierr.Code                    `json:"reason_code,omitempty"`
 	Browsers   map[browser.Kind]browser.State `json:"browsers"`
 }
 
-// unusable is the code for why the browser can't be used now (Usable's answer).
 func unusable(err error) apierr.Code {
 	var e *apierr.Error
 	switch {
@@ -116,15 +91,13 @@ func unusable(err error) apierr.Code {
 func (s *Service) status(ctx context.Context, user int64) (Status, error) {
 	out := Status{Browsers: map[browser.Kind]browser.State{}}
 	why := s.Usable(ctx, user)
-	// A passing state (the CLI worker isn't ready yet) is the request's answer, with its code.
 	var e *apierr.Error
 	if errors.As(why, &e) && e.Status >= http.StatusInternalServerError {
 		return out, why
 	}
-	// Not usable is an answer, not a failure: the status says why.
 	if why != nil {
 		out.Reason, out.ReasonCode = why.Error(), unusable(why)
-		return out, nil //nolint:nilerr // the reason is in the answer
+		return out, nil
 	}
 	acct, err := s.acct(ctx, user)
 	if err != nil {
@@ -155,8 +128,6 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// usableOr409 answers with the reason when the caller's browser can't be used now: 409, or the
-// reason's own status and code when it carries them (the CLI worker isn't ready yet: 503).
 func (s *Service) usableOr409(w http.ResponseWriter, r *http.Request) bool {
 	err := s.Usable(r.Context(), caller(r))
 	if err == nil {
@@ -233,23 +204,12 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleLive is the live view: a WebSocket that carries the personal browser's RFB stream
-// both ways, for noVNC in the page. The upgrade is a GET, which the CSRF guard leaves alone,
-// and a browser sends cookies with a cross-site WebSocket: so the request must come from this
-// server's own pages (sameOrigin) before anything is opened.
-//
-// The session is checked when the view opens, and the view lasts as long as the login does: it
-// ends when the account is disabled or the login is signed out, revoked or replaced by a password
-// change, at once by the auth service's signal and at the latest at its next look every
-// liveRecheck (auth.Service.WatchSession), so a display someone can type into is never left
-// open to a person who no longer has access.
 func (s *Service) handleLive(a *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.live(a, w, r)
 	}
 }
 
-// liveRecheck is how often an open live view looks its login up again.
 var liveRecheck = 5 * time.Second
 
 func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) {
@@ -279,7 +239,6 @@ func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) 
 	}
 	defer live.Close()
 	srv := websocket.Server{
-		// noVNC asks for the "binary" subprotocol, or none.
 		Handshake: func(cfg *websocket.Config, _ *http.Request) error {
 			for _, p := range cfg.Protocol {
 				if p == "binary" {
@@ -295,7 +254,6 @@ func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) 
 			ws.MaxPayloadBytes = 4 << 20
 			slog.InfoContext(r.Context(), "browser live view opened", "user", user)
 			start := time.Now()
-			// Closing both ends makes the bridge's copies return, so the view ends with its login.
 			go func() {
 				<-ctx.Done()
 				_ = live.Close()
@@ -309,17 +267,11 @@ func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) 
 	srv.ServeHTTP(w, r)
 }
 
-// closeWS closes ws, giving the close frame a second to be written: a client that has stopped
-// reading would otherwise hold the handler, and with it the session watch and the socket, for
-// as long as it likes.
 func closeWS(ws *websocket.Conn) {
 	_ = ws.SetWriteDeadline(time.Now().Add(time.Second))
 	_ = ws.Close()
 }
 
-// sameOrigin reports whether r comes from this server's own pages. A browser says where a
-// request comes from in Sec-Fetch-Site, and older ones in Origin, which must then name this
-// host. A request with neither is refused: every browser sends Origin with a WebSocket.
 func sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
 		return site == "same-origin"
@@ -332,7 +284,6 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	// A default port may be written or not: https://h and Host h:443 are the same origin.
 	defaultPort := map[string]string{"https": "443", "http": "80"}[u.Scheme]
 	strip := func(host string) string {
 		if h, port, err := net.SplitHostPort(host); err == nil && port == defaultPort {
@@ -343,7 +294,6 @@ func sameOrigin(r *http.Request) bool {
 	return strings.EqualFold(strip(u.Host), strip(r.Host))
 }
 
-// browserError answers for an error of the browsers.
 func browserError(w http.ResponseWriter, r *http.Request, err error) {
 	var bad *browser.BadAction
 	switch {

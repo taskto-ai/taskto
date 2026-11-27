@@ -1,9 +1,7 @@
-// The screens before the app: first-run setup, logging in, invites and password reset links.
-// Each answers with the GET /api/me body, which the caller takes as the session.
-
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { t, useFormat, useT } from '../i18n'
+import { useLoad } from '../load'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { Input } from '../ui/Input'
@@ -14,13 +12,8 @@ import { AuthDivider, AuthForm, AuthLayout } from './AuthLayout'
 import { ackDeletion, DELETION_EVENT, peekDeletion, signInSubmitted } from './deleted'
 import { PasswordInput } from './PasswordInput'
 
-// The shortest password the server takes (internal/auth/password.go).
 const MIN_PASSWORD = 12
 
-// Where the provider's hosted payment page sends the payer back to: the server's own pages, which
-// never come from an app's definition. The payer is a customer of whoever sent the link, often with
-// no account here, so these pages call nothing and show nothing of the payment: the provider told
-// them already, and what happened to the record is the business's to say.
 export function PaymentReturnScreen({ outcome }: { outcome: 'done' | 'cancelled' }) {
   const t = useT()
   return (
@@ -31,8 +24,6 @@ export function PaymentReturnScreen({ outcome }: { outcome: 'done' | 'cancelled'
   )
 }
 
-// What is shown before the app knows what to show: the logo and the shape of a form, still. A
-// screen reader hears that it is loading.
 export function StartingScreen() {
   const t = useT()
   return (
@@ -48,16 +39,11 @@ export function StartingScreen() {
   )
 }
 
-// What a password step (a login, a reset link) answers for an account with two-factor login on:
-// no session, a challenge for POST /api/login/two-factor.
 type Challenged = { two_factor_required: true; challenge: string }
 const needsCode = (reply: Me | Challenged): reply is Challenged => 'two_factor_required' in reply
 
-// Why a step failed: the words to show, and the server's code, which says which field it is about.
 type Failure = { text: string; code?: string }
 
-// The field each of the server's codes is about. A failure whose field is on the form shows under
-// that field; any other shows above the button.
 const FIELD_OF: Record<string, string> = {
   setup_token: 'setup_token',
   email_invalid: 'email',
@@ -68,13 +54,11 @@ const FIELD_OF: Record<string, string> = {
   wrong_two_factor_code: 'code',
 }
 
-// Where a failure shows on a form with these fields: under one of them, or for the whole form.
 function placed(failure: Failure | null, fields: readonly string[]) {
   const field = failure?.code ? FIELD_OF[failure.code] : undefined
   const onField = field !== undefined && fields.includes(field)
   return {
     field: (name: string) => (failure && onField && field === name ? failure.text : undefined),
-    // It takes the focus after a failed submit (AuthForm), so it can be focused, but isn't a tab stop.
     form:
       failure && !onField ? (
         <div className="ui-auth-error" tabIndex={-1}>
@@ -89,23 +73,16 @@ const failureOf = (err: unknown): Failure => ({
   code: err instanceof ApiError ? err.code : undefined,
 })
 
-// A failure about one field goes once that field is edited: the value it was about isn't there any
-// more. The form reports which field changed by its name (AuthForm's onEdit), and the names are the
-// ones FIELD_OF gives.
 function useEdited(failure: Failure | null, setFailure: (f: Failure | null) => void) {
   return (name: string) => {
     if (failure?.code && FIELD_OF[failure.code] === name) setFailure(null)
   }
 }
 
-// send may answer null: the step is done but nobody is logged in yet (a login that asks for a code).
 function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const edited = useEdited(failure, setFailure)
-  // One request at a time, whatever submits the form: the button ignores a press while it works,
-  // but a form can be submitted another way (requestSubmit, a browser or an extension). A ref, not
-  // `busy`: the state this function closed over is the one from before the first submit.
   const inFlight = useRef(false)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -113,12 +90,7 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     inFlight.current = true
     setBusy(true)
     setFailure(null)
-    // Someone is signing in here: a deletion notice still waiting is not for them, whoever they are,
-    // and a deletion answered from now on is not told to them either.
     signInSubmitted()
-    // The mark goes where `busy` goes, never earlier: after a success the screen is on its way out
-    // (onDone may still be opening the account's offline data), and a submit meanwhile would make
-    // a second session or be refused.
     const settle = () => {
       inFlight.current = false
       setBusy(false)
@@ -126,9 +98,6 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     try {
       const me = await send()
       if (me) {
-        // Someone has signed in (here: the login, its second step, setup, an invite, a reset): a
-        // deletion notice never shown, to a person who came by another page, is not for them or for
-        // the sign-in after theirs.
         ackDeletion()
         onDone(me)
       } else settle()
@@ -140,10 +109,6 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   return { busy, failure, submit, edited }
 }
 
-// How people can sign in on this server (GET /api/login/methods). A server that doesn't know the
-// route (404) is an older one: passwords only. Any other failure, or an answer that isn't the
-// shape the route promises, is an error to retry: guessing "passwords only" would show a form
-// that a passwords-off server refuses, or hide the providers.
 type LoginMethods = { password: boolean; sso: { id: string; name: string }[]; resetByEmail: boolean }
 type MethodsAnswer = { password: boolean; sso: LoginMethods['sso']; reset_by_email?: boolean }
 
@@ -154,7 +119,6 @@ function validMethods(v: unknown): v is MethodsAnswer {
   const m = v as { password?: unknown; sso?: unknown; reset_by_email?: unknown }
   return (
     typeof m.password === 'boolean' &&
-    // Absent on a server from before the emailed reset link: it has none.
     (m.reset_by_email === undefined || typeof m.reset_by_email === 'boolean') &&
     Array.isArray(m.sso) &&
     m.sso.every(
@@ -167,44 +131,30 @@ function validMethods(v: unknown): v is MethodsAnswer {
   )
 }
 
-function useLoginMethods(): { state: MethodsState; retry: () => void } {
-  const [state, setState] = useState<MethodsState>({ kind: 'loading' })
-  const [attempt, setAttempt] = useState(0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt makes a Retry fetch again
-  useEffect(() => {
-    let live = true
-    api<unknown>('/api/login/methods').then(
-      (m) => {
-        if (!live) return
-        setState(
-          validMethods(m)
-            ? { kind: 'ready', methods: { ...m, resetByEmail: m.reset_by_email === true } }
-            : { kind: 'error' },
-        )
-      },
-      (err) => {
-        if (!live) return
-        setState(
-          err instanceof ApiError && err.status === 404
-            ? { kind: 'ready', methods: { password: true, sso: [], resetByEmail: false } }
-            : { kind: 'error' },
-        )
-      },
-    )
-    return () => {
-      live = false
-    }
-  }, [attempt])
-  const retry = () => {
-    setState({ kind: 'loading' })
-    setAttempt((n) => n + 1)
-  }
-  return { state, retry }
+class InvalidMethods extends Error {}
+
+function readMethods(m: unknown): LoginMethods {
+  if (!validMethods(m)) throw new InvalidMethods()
+  return { ...m, resetByEmail: m.reset_by_email === true }
 }
 
-// What a screen shows until the login methods are known, or when they couldn't be had. Until the
-// server says how people sign in, nothing is shown that it might take back: no heading or form
-// yet, so a screen is never drawn twice.
+function passwordsOnlyWhenUnknown(err: unknown): LoginMethods {
+  if (err instanceof ApiError && err.status === 404) return { password: true, sso: [], resetByEmail: false }
+  throw err
+}
+
+const loadMethods = () => api<unknown>('/api/login/methods').then(readMethods, passwordsOnlyWhenUnknown)
+
+function useLoginMethods(): { state: MethodsState; retry: () => void } {
+  const loaded = useLoad(loadMethods, [])
+  const state: MethodsState = loaded.loading
+    ? { kind: 'loading' }
+    : loaded.data
+      ? { kind: 'ready', methods: loaded.data }
+      : { kind: 'error' }
+  return { state, retry: loaded.reload }
+}
+
 function MethodsPending({ state, retry }: { state: MethodsState; retry: () => void }) {
   const t = useT()
   if (state.kind !== 'error') return <StartingScreen />
@@ -220,13 +170,10 @@ function MethodsPending({ state, retry }: { state: MethodsState; retry: () => vo
   )
 }
 
-// One button per single sign-on provider. `next` is where the provider's sign-in brings the
-// person back to, a path on this server.
 function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next: string }) {
   const t = useT()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // One start at a time, whatever presses: the state this function closed over can be stale.
   const inFlight = useRef(false)
   if (providers.length === 0) return null
   const go = async (id: string) => {
@@ -239,7 +186,6 @@ function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next:
         method: 'POST',
         body: { next },
       })
-      // The page is leaving for the provider: it stays started.
       window.location.assign(url)
     } catch (err) {
       setError(errorText(err))
@@ -264,8 +210,6 @@ function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next:
   )
 }
 
-// Why a sign-in with a provider failed: the server's redirect to /?sso_error=<code>. It is read
-// once and taken out of the address, so a reload doesn't show it again.
 function useSsoError(): string | null {
   const [error] = useState(() => {
     const code = new URLSearchParams(window.location.search).get('sso_error')
@@ -281,11 +225,8 @@ function useSsoError(): string | null {
   return error
 }
 
-// The page's path and fragment: where a provider's sign-in comes back to.
 const here = () => window.location.pathname + window.location.hash
 
-// An email address field, the same on every form: the keyboard for addresses, no capital letter
-// or correction, and filled in by a password manager as the account's name.
 function EmailField({
   value,
   onChange,
@@ -398,11 +339,8 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const ssoError = useSsoError()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  // The challenge of a login whose password was right and that now asks for a code.
   const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, failure, submit, edited } = useSubmit(async () => {
-    // Someone is signing in: the notice is not for them, and not for the form they come back to
-    // after a failure or from the code step, whenever the page is seen.
     setDeleted(null)
     const reply = await api<Me | Challenged>('/api/login', {
       method: 'POST',
@@ -416,9 +354,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     return reply
   }, onDone)
   const [forgot, setForgot] = useState(false)
-  // Told to a person who has just deleted their account, until it has been shown (below).
   const [deleted, setDeleted] = useState(peekDeletion)
-  // ...or told now, if the deletion is answered after this screen is up.
   useEffect(() => {
     const told = () => {
       const at = peekDeletion()
@@ -429,9 +365,6 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   }, [])
   const methods = loaded.state.kind === 'ready' ? loaded.state.methods : null
   const forgotShown = forgot && methods?.password && methods.resetByEmail
-  // The notice is on this screen only once the methods are known and no other step has taken its
-  // place; it is used up when it is on the screen and the page can be seen, not before: a reload
-  // while the methods load, or in a background tab, still finds it.
   const showing = methods !== null && !challenge && !forgotShown ? deleted : null
   useEffect(() => {
     if (!showing) return
@@ -491,12 +424,6 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   )
 }
 
-// The second step of a login for someone with two-factor login on: a code from the authenticator
-// app, or a recovery code. A challenge that ran out or was used up goes back to the password.
-// It is the step of a password login, of an invite taken with an account and of a reset link
-// (`reset`: the password is set, and going back means the login). `finish` is what is left to do
-// with the session the code made (accepting an invite); if it fails the code isn't asked for again,
-// since the challenge is used up and the person is signed in.
 function TwoFactorStep({
   challenge,
   onDone,
@@ -546,8 +473,6 @@ function TwoFactorStep({
             onChange={(e) => setCode(e.target.value)}
             required
             disabled={expired || verified !== null}
-            // The authenticator's six digits, which a phone offers from a message; a recovery code
-            // has letters, so the keyboard stays the full one.
             autoComplete="one-time-code"
             autoCapitalize="none"
             autoCorrect="off"
@@ -563,8 +488,6 @@ function TwoFactorStep({
   )
 }
 
-// Asking for a reset link by email, from the login page. The server answers the same whether or
-// not an account has the address, and so does this: it never says which.
 function ForgotPasswordScreen({
   initialEmail,
   onBack,
@@ -580,7 +503,6 @@ function ForgotPasswordScreen({
   const [failure, setFailure] = useState<Failure | null>(null)
   const edited = useEdited(failure, setFailure)
   const [sentTo, setSentTo] = useState<string | null>(null)
-  // One request at a time, as useSubmit.
   const inFlight = useRef(false)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -588,8 +510,6 @@ function ForgotPasswordScreen({
     inFlight.current = true
     setBusy(true)
     setFailure(null)
-    // Someone is at this screen with their own address: as a login, it ends a notice still waiting,
-    // here and on the login they come back to.
     signInSubmitted()
     onAsk()
     try {
@@ -632,16 +552,12 @@ function ForgotPasswordScreen({
   )
 }
 
-// A password reset link, /reset-password#<token>, which an admin made: the token is in the
-// fragment, so it never reaches a server log or a Referer. Setting the password signs the
-// account out everywhere, and in here.
 export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: (me: Me) => void }) {
   const t = useT()
   const loaded = useLoginMethods()
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
   const mismatch = again !== '' && password !== again
-  // With two-factor login on the link sets the password and asks for a code: no session before.
   const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, failure, submit, edited } = useSubmit(async () => {
     const reply = await api<Me | Challenged>('/api/password-reset', { method: 'POST', body: { token, password } })
@@ -653,7 +569,6 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
     }
     return reply
   }, onDone)
-  // The link is used up, so there is no form to go back to: back is the login, with the new password.
   if (challenge) {
     return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => window.location.assign('/')} reset />
   }
@@ -666,7 +581,6 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   }
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (!loaded.state.methods.password) {
-    // The server refuses the reset when passwords are off: don't offer a form that can't work.
     return (
       <AuthLayout title={t('auth.reset.title')}>
         <Notice tone="danger">{t('auth.reset.off')}</Notice>
@@ -710,10 +624,6 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   )
 }
 
-// An invite link, /invite#<token>: the token is in the fragment, so it never reaches a
-// server log or a Referer. A new person creates their account with it. Someone signed in
-// joins with it, as the invited address only. An existing account that isn't signed in
-// logs in first, then joins.
 export function InviteScreen({
   token,
   me,
@@ -728,14 +638,11 @@ export function InviteScreen({
   const t = useT()
   const loaded = useLoginMethods()
   const [mode, setMode] = useState<'new' | 'login'>('new')
-  // Who the person was before joining, to tell the workspace they joined.
   const before = useRef(me)
   const [form, setForm] = useState({ name: '', password: '', email: '' })
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }))
   const accept = (body: object) => api<Me>('/api/invites/accept', { method: 'POST', body: { token, ...body } })
-  // An existing account with two-factor login on gets a challenge from the login, not a session:
-  // the code comes first, and the invite is accepted after it.
   const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, failure, submit, edited } = useSubmit(
     async () => {
@@ -756,7 +663,6 @@ export function InviteScreen({
       try {
         return await accept({ name: form.name, password: form.password })
       } catch (e) {
-        // The address has an account: log in to it, then accept.
         if (e instanceof ApiError && e.status === 409) {
           setMode('login')
           setForm((f) => ({ ...f, password: '' }))
@@ -810,7 +716,6 @@ export function InviteScreen({
   }
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   const methods = loaded.state.methods
-  // Signing in with a provider comes back to this invite, signed in.
   const sso = <SsoButtons providers={methods.sso} next={`/invite#${token}`} />
   const or = methods.password && methods.sso.length > 0 && <AuthDivider>{t('auth.sso.or')}</AuthDivider>
   if (!methods.password) {

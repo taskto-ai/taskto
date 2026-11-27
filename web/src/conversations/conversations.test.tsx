@@ -22,10 +22,6 @@ const conversation = (id: number, title: string) => ({
   updated_at: '2026-11-18T10:00:00.000Z',
 })
 
-// A saved app's screen is a lazily loaded component, which the first test that shows one loads
-// (and vite compiles) on the spot: on a machine with more work than cores that took longer than
-// any wait for what the page shows. Load it once here, where the hook has a time of its own, so
-// the tests wait only for the page to draw it.
 beforeAll(async () => {
   await import('../apps/AppPreview')
 }, 60_000)
@@ -37,7 +33,6 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-// The page as the shell mounts it, following the URL.
 function Page({ streams }: { streams: ReturnType<typeof fakeStreams>['factory'] }) {
   const route = parseRoute(usePath())
   return <ConversationsPage workspace={1} open={route?.item} streams={streams} />
@@ -91,7 +86,6 @@ test('a conversation made after the session ended, the page still showing, is no
   beginSession(1)
   render(<Page streams={factory} />)
   fireEvent.click(await screen.findByRole('button', { name: 'New' }))
-  // Signing out has begun; the shell isn't gone yet.
   endSession()
   await act(async () => answer())
   expect(window.location.pathname).toBe('/w/1/conversations')
@@ -137,7 +131,6 @@ test('text typed while a message is sending stays', async () => {
     'GET /api/workspaces/1/conversations/7': { body: conversation(7, 'Hello') },
     'POST /api/workspaces/1/conversations/7/messages': { status: 202, body: { submission_id: 12 } },
   })
-  // The POST answers only when the test says so.
   const answered = globalThis.fetch
   let release = () => {}
   const held = new Promise<void>((resolve) => {
@@ -163,7 +156,6 @@ test('text typed while a message is sending stays', async () => {
     release()
     await done
   })
-  // The send has finished, and its answer has been handled.
   await act(async () => {})
   expect(box.value).toBe('Second, typed meanwhile')
 })
@@ -191,7 +183,6 @@ test('with no conversation, the words say what each button does', async () => {
   expect(screen.getByRole('link', { name: 'Build an app' })).toBeTruthy()
 })
 
-// Lets the probe's promise settle under fake timers.
 const settle = () => act(async () => {})
 
 test('the stream starts again after a refusal or ops that do not fit', async () => {
@@ -199,21 +190,18 @@ test('the stream starts again after a refusal or ops that do not fit', async () 
   const { sources, factory } = fakeStreams()
   const { result, unmount } = renderHook(() => useConversationStream('/events', factory, async () => false))
 
-  // Ops before any view are ignored.
   act(() => sources[0].send({ type: 'ops', ops: [['s', ['x'], 1]] }))
   expect(result.current.view).toBeNull()
 
   act(() => sources[0].send({ type: 'value', value: { entries: [] } }))
   expect(result.current.view).toEqual({ entries: [] })
 
-  // An op on a path that isn't there: the view can't be trusted, so start over.
   act(() => sources[0].send({ type: 'ops', ops: [['s', ['entries', 5, 'text'], 'x']] }))
   expect(sources[0].closed).toBe(true)
   expect(result.current.status).toBe('reconnecting')
   act(() => vi.advanceTimersByTime(RETRY_MS))
   expect(sources).toHaveLength(2)
 
-  // A dropped connection EventSource retries by itself; a refused one (closed) is ours.
   act(() => sources[1].fail(false))
   act(() => vi.advanceTimersByTime(RETRY_MS))
   expect(sources).toHaveLength(2)
@@ -237,7 +225,6 @@ test('refusals in a row wait longer each time, and a gone conversation stops it'
   }
   const { result } = renderHook(() => useConversationStream('/api/workspaces/1/conversations/7/events', factory, probe))
 
-  // 3 s, then 6 s, then 12 s, ... up to RETRY_MAX_MS.
   let wait = RETRY_MS
   for (let i = 0; i < 6; i++) {
     act(() => sources[i].fail(true))
@@ -250,14 +237,12 @@ test('refusals in a row wait longer each time, and a gone conversation stops it'
   }
   expect(probed[0]).toBe('/api/workspaces/1/conversations/7')
 
-  // A working stream starts the count again.
   act(() => sources[6].send({ type: 'value', value: { entries: [] } }))
   act(() => sources[6].fail(true))
   await settle()
   act(() => vi.advanceTimersByTime(RETRY_MS))
   expect(sources).toHaveLength(8)
 
-  // The conversation is gone: no more connections.
   gone = true
   act(() => sources[7].fail(true))
   await settle()
@@ -292,7 +277,6 @@ test('the transcript follows new text only while the reader is at the bottom', a
   render(<Page streams={factory} />)
   await waitFor(() => expect(sources).toHaveLength(1))
   const el = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLDivElement
-  // jsdom has no layout: a transcript 1000 px tall in a 200 px window.
   Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1000 })
   Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
   act(() => {
@@ -300,13 +284,11 @@ test('the transcript follows new text only while the reader is at the bottom', a
   })
   expect(el.scrollTop).toBe(1000)
 
-  // Scrolled up to re-read: new text doesn't pull the reader down.
   el.scrollTop = 100
   fireEvent.scroll(el)
   act(() => sources[0].send(stream[5]))
   expect(el.scrollTop).toBe(100)
 
-  // Back at the bottom: it follows again.
   el.scrollTop = 800
   fireEvent.scroll(el)
   act(() => sources[0].send(stream[6]))
@@ -340,7 +322,6 @@ test('a refused connection is handled once, however many errors it fires', async
   })
   await settle()
   expect(probe).toHaveBeenCalledTimes(1)
-  // The wait is still the first one, not doubled.
   act(() => vi.advanceTimersByTime(RETRY_MS))
   expect(sources).toHaveLength(2)
 })
@@ -362,7 +343,6 @@ test('screen readers hear the agent start and reply, not each streamed word', as
   expect(screen.getByRole('status').textContent).toBe('The agent replied.')
 })
 
-// An entry of a view or a page: one message.
 const entry = (id: number, role: 'user' | 'assistant', text: string) => ({
   id,
   kind: role === 'user' ? 'pi.user' : 'pi.assistant',
@@ -373,7 +353,6 @@ const viewOf = (entries: ReturnType<typeof entry>[], extra: Record<string, unkno
   value: { entries, docs: { 'pi.live': {} }, ...extra },
 })
 
-// Opens conversation 7, live, showing the view given.
 async function openWith(routes: Parameters<typeof fakeFetch>[0], view = viewOf([])) {
   window.history.replaceState(null, '', '/w/1/conversations/7')
   const calls = fakeFetch({
@@ -439,14 +418,11 @@ test('renames and archives the conversation', async () => {
   await waitFor(() => expect(pane.querySelector('h2')?.textContent).toBe('Launch plan'))
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ title: 'Launch plan' }])
 
-  // Escape leaves the title as it was. While the title is edited, the other actions stay, and
-  // when the edit ends the focus goes back to Rename.
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
   expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy()
   fireEvent.keyDown(screen.getByLabelText('Title'), { key: 'Escape' })
   expect(screen.queryByLabelText('Title')).toBeNull()
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename' })))
-  // And so does Cancel.
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
   screen.getByRole('button', { name: 'Archive' }).focus()
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -544,7 +520,6 @@ test('while the agent works, a message steers it and Stop stops it', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
   await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/stop'))).toBe(true))
 
-  // Once the work has ended, there is nothing to stop, and a message starts new work.
   act(() => es.send(viewOf([entry(1, 'user', 'Write a long essay')])))
   expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   fireEvent.change(box, { target: { value: 'Next' } })
@@ -563,17 +538,14 @@ test('earlier messages go in above what the reader is looking at, which stays wh
     viewOf([entry(8, 'user', 'Newer question'), entry(9, 'assistant', 'Newer answer')], { before: 7 }),
   )
   const el = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLDivElement
-  // jsdom has no layout: 1000 px of messages, the reader 150 px from the top of them.
   let height = 1000
   Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => height })
   Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
   el.scrollTop = 150
   fireEvent.scroll(el)
   fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
-  // The earlier messages add 600 px above.
   height = 1600
   await screen.findByText('Older question')
-  // What the reader was looking at is 600 px further down, and so is the view.
   expect(el.scrollTop).toBe(750)
 })
 
@@ -595,13 +567,11 @@ test('earlier messages load from before the stream, and stay as the stream moves
   fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
   await waitFor(() => expect(texts()).toEqual(['Older question', 'Older answer', 'Newer question', 'Newer answer']))
 
-  // The window drops its oldest entry: what was loaded, and that entry, stay.
   act(() => es.send(viewOf([entry(9, 'assistant', 'Newer answer'), entry(10, 'user', 'Newest')], { before: 8 })))
   expect(texts()).toEqual(['Older question', 'Older answer', 'Newer question', 'Newer answer', 'Newest'])
 
   fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
   await waitFor(() => expect(texts()[0]).toBe('The first question'))
-  // The conversation's start is shown: nothing more to load.
   expect(screen.queryByRole('button', { name: 'Load earlier messages' })).toBeNull()
   expect(calls.filter((c) => c.path.includes('/entries')).map((c) => c.path)).toEqual([
     '/api/workspaces/1/conversations/7/entries?before=8',
@@ -620,12 +590,9 @@ test('a page that fails to load says so, and can be tried again', async () => {
     viewOf([entry(8, 'user', 'Newer question')], { before: 7 }),
   )
   fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
-  // Said at once, as an alert.
   expect((await screen.findByRole('alert')).textContent).toContain('the agent runtime is off')
   expect((screen.getByRole('button', { name: 'Load earlier messages' }) as HTMLButtonElement).disabled).toBe(false)
 })
-
-// Apps the agent saved, shown in the conversation.
 
 const everything = {
   roles: ['builder', 'publisher', 'user', 'data_manager', 'reader'],
@@ -659,7 +626,6 @@ const savedApp = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-// An entry where the agent called tool name, and the entry of its result: text, or a refusal.
 function toolEntries(id: number, name: string, result: { text: string; isError?: boolean }, args: unknown = {}) {
   return [
     {
@@ -683,7 +649,6 @@ function toolEntries(id: number, name: string, result: { text: string; isError?:
   ]
 }
 
-// Opens conversation 7 and shows it with these entries.
 async function showEntries(entries: unknown[], routes: Record<string, Parameters<typeof fakeFetch>[0][string]>) {
   window.history.replaceState(null, '', '/w/1/conversations/7')
   const calls = fakeFetch({
@@ -704,7 +669,6 @@ async function showEntries(entries: unknown[], routes: Record<string, Parameters
 const appCalls = (calls: Call[]) => calls.filter((c) => c.path.includes('/apps'))
 
 test("a saved app's screen shows in the conversation, as the server has it", async () => {
-  // What the model sent: never drawn.
   const args = {
     space_id: 2,
     name: 'Expenses',
@@ -715,14 +679,10 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
 
-  // The preview is a lazily loaded component that fetches the app and then its screen: wait for
-  // each thing it shows (findBy… waits as long as src/test/setup.ts says), never for a time.
-  // The app's frame is drawn at once with its loading shape, and drawn anew once the renderer is in.
   await screen.findByText('Expense tracker')
   const app = screen.getByRole('region', { name: 'Expenses' })
   await within(app).findByText('Expense tracker')
   await within(app).findByText('Coffee')
-  // What it shows is labelled: the live release, which everyone uses.
   await screen.findByText('Live · release 1')
   expect(screen.getByText(wholeText('Used create_app'))).toBeTruthy()
   expect(screen.queryByText('From the arguments')).toBeNull()
@@ -743,7 +703,6 @@ test("a live embed stays labelled Live and its buttons still act on the app's re
   fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
   await waitFor(() => expect(appCalls(calls).some((c) => c.method === 'POST')).toBe(true))
   const posted = appCalls(calls).filter((c) => c.method === 'POST')
-  // The live app's own actions, naming the release the screen was drawn from; never a preview.
   expect(posted.map((c) => c.path)).toEqual(['/api/workspaces/1/spaces/2/apps/1/actions'])
   expect(posted[0].body).toMatchObject({ name: 'delete_expense', release: 1 })
 })
@@ -765,7 +724,6 @@ test('the agent changed the app: the conversation shows the live release, and th
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
     'POST /api/workspaces/1/spaces/2/apps/1/preview': { body: { messages: surface, rows: [] } },
   })
-  // The live release is what people use, and it is said so; the agent's changes aren't in it.
   await screen.findByText('Live · release 1')
   await screen.findByText(/It has changes that aren’t published yet/)
   expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(false)
@@ -799,7 +757,6 @@ test('a refused or failed app tool call shows no app', async () => {
         text: 'the server is unreachable right now: try again shortly',
         isError: true,
       }),
-      // Successful in shape, but flagged as an error: still nothing.
       ...toolEntries(5, 'create_app', { text: JSON.stringify(savedApp()), isError: true }),
     ],
     {},
@@ -818,7 +775,6 @@ test('an app the user cannot read, or that was taken offline, is a note', async 
       ...toolEntries(3, 'create_app', { text: JSON.stringify(savedApp({ id: 5, space_id: 2, name: 'Old' })) }),
     ],
     {
-      // Gone, moved, or in a space the user was removed from: the server says 404 for each.
       'GET /api/workspaces/1/spaces/2/apps/1': { status: 404, body: { error: 'not found' } },
       'GET /api/workspaces/1/spaces/2/apps/5': {
         body: savedApp({ id: 5, name: 'Old', archived_at: '2026-11-18T12:00:00.000Z' }),
@@ -827,7 +783,6 @@ test('an app the user cannot read, or that was taken offline, is a note', async 
   )
   expect(await screen.findByText(/This app isn’t available/)).toBeTruthy()
   expect(await screen.findByText('Old is offline: it can’t be launched.')).toBeTruthy()
-  // Nothing is launched; the offline app can still be opened, to be restored there.
   expect(await screen.findByRole('link', { name: 'Open Old in Apps' })).toBeTruthy()
   expect(appCalls(calls).filter((c) => c.path.includes('/surface'))).toEqual([])
   expect(screen.queryByRole('link', { name: 'Open the app in Apps' })).toBeNull()
@@ -837,7 +792,6 @@ test('each app shows once, at its latest save, and older apps only link', async 
   const entries = [1, 2, 3, 4].flatMap((id) =>
     toolEntries(id * 10, 'create_app', { text: JSON.stringify(savedApp({ id, name: `App ${id}` })) }),
   )
-  // App 4 again, changed: shown here, not at its first save.
   entries.push(
     ...toolEntries(50, 'update_app', { text: JSON.stringify(savedApp({ id: 4, name: 'App 4', version: 2 })) }),
   )
@@ -851,7 +805,6 @@ test('each app shows once, at its latest save, and older apps only link', async 
   await screen.findByRole('link', { name: 'Open App 2 in Apps' })
   await screen.findByRole('link', { name: 'Open App 3 in Apps' })
   await screen.findByRole('link', { name: 'Open App 4 in Apps' })
-  // Only the latest three apps load, each once; the first and app 4's first save link.
   expect(screen.getAllByRole('link', { name: 'Open the app' }).map((a) => a.getAttribute('href'))).toEqual([
     '/w/1/apps/2-1',
     '/w/1/apps/2-4',

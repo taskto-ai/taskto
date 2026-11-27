@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The three guards as dialogs: what is at stake said, the safe answer focused, the destructive one
-// asked again, and Escape doing only what Cancel does (or nothing, where there is no Cancel).
-
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { beginSession, endSession } from '../session'
@@ -33,7 +30,6 @@ test('another account’s records: no way past but an answer, signing out focuse
   expect(pressEscape(dialog).defaultPrevented).toBe(true)
   expect(screen.getByRole('alertdialog', { name: 'Records of another account' })).toBe(dialog)
 
-  // Discarding asks first; Cancel there keeps them.
   fireEvent.click(screen.getByRole('button', { name: 'Discard them' }))
   const question = screen.getByRole('alertdialog', { name: 'Discard them' })
   expect(question.textContent).toMatch(/Discard 2 records that were never sent/)
@@ -61,9 +57,7 @@ test('signing out with no database open here: Sync is off, Cancel is focused, Es
   render(<LogoutGuard runtime={null} count={3} onSignOut={onSignOut} onCancel={onCancel} />)
   const dialog = screen.getByRole('alertdialog', { name: 'Records not sent yet' })
   expect(dialog.textContent).toMatch(/3 records on this device haven’t reached the server/)
-  // With no database open here there is nothing to sync, and it says so by being unavailable.
   expect((screen.getByRole('button', { name: 'Sync now' }) as HTMLButtonElement).disabled).toBe(true)
-  // The safe answer has the focus, never the destructive one.
   expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
   pressEscape(dialog)
   expect(onCancel).toHaveBeenCalledOnce()
@@ -111,7 +105,6 @@ test('signing out with unsent records and the database open: Sync now is the foc
   expect(retry).toHaveBeenCalledOnce()
 })
 
-// A sync whose end the test decides: the engine's retry waits until `finish` is called.
 function pendingSync() {
   let finish: () => void = () => {}
   const retry = vi.fn(
@@ -141,12 +134,10 @@ test('while a sync runs the guard can’t be closed: no close button, and Escape
   expect(within(dialog).queryByRole('button', { name: 'Close' })).toBeNull()
   pressEscape(dialog)
   expect(onCancel).not.toHaveBeenCalled()
-  // A second press while it runs starts nothing more.
   fireEvent.click(screen.getByRole('button', { name: /Sync now/ }))
   expect(sync.retry).toHaveBeenCalledOnce()
   await act(async () => sync.finish())
   await vi.waitFor(() => expect(onSignOut).toHaveBeenCalledOnce())
-  // Once it ended, Escape is Cancel again.
   pressEscape(dialog)
   expect(onCancel).toHaveBeenCalledOnce()
 })
@@ -157,8 +148,6 @@ test('a guard that goes away while its sync runs signs nobody out when the sync 
   const { unmount } = render(<LogoutGuard runtime={sync.runtime} count={1} onSignOut={onSignOut} onCancel={() => {}} />)
   fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
   await vi.waitFor(() => expect(sync.retry).toHaveBeenCalledOnce())
-  // The app took the guard away (it was cancelled, or the page moved on), and then the sync ends
-  // with nothing left unsent.
   unmount()
   await act(async () => {
     sync.finish()
@@ -210,4 +199,10 @@ test('a guard that goes away while this tab asks for the right to send sends not
     await new Promise((r) => setTimeout(r))
   })
   expect(retry).not.toHaveBeenCalled()
+})
+
+test('another account’s records: a discard that failed is said, and discarding stays on offer', () => {
+  render(<ForeignGuard count={1} failed onDiscard={() => undefined} onSignOut={() => undefined} />)
+  expect(screen.getByRole('alert').textContent).toMatch(/couldn’t be discarded/)
+  expect(screen.getByRole('button', { name: 'Discard them' })).toBeTruthy()
 })

@@ -11,8 +11,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// route is one board endpoint, with a body an editor's request would succeed with, so
-// a refusal comes from access and not from validation.
 type route struct {
 	name   string
 	method string
@@ -44,9 +42,6 @@ var routes = []route{
 		func(Card) any { return map[string]string{"body": "x"} }, true},
 }
 
-// TestEveryRouteRefusesOutsiders is the cross-user and cross-space matrix: for every
-// route, everyone who can't read the board gets 404, and everyone who can only read it
-// gets 403 for a write.
 func TestEveryRouteRefusesOutsiders(t *testing.T) {
 	w := newWorld(t)
 	cases := []struct {
@@ -84,14 +79,12 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 		}
 	}
 
-	// Boards and cards addressed through a space or board they aren't in, by someone who
-	// can read both: 404 for every route that names them.
 	misplaced := []struct {
 		name     string
 		space    access.Space
 		board    int64
 		card     Card
-		cardOnly bool // only the routes that name a card get it wrong
+		cardOnly bool
 	}{
 		{"a team board through the editor's private space", w.alicePrivate, w.team.ID, w.teamCard, false},
 		{"a personal board through a shared space", w.shared, w.alicePersonal.ID, w.aliceCard, false},
@@ -115,12 +108,10 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			})
 		}
 	}
-	// IDs that aren't numbers.
 	for _, rest := range []string{"/boards/x", "/boards/x/cards", fmt.Sprintf("/boards/%d/cards/y", w.team.ID)} {
 		expect(t, w.alice.do(http.MethodGet, spacePath(w.shared, rest), nil), http.StatusNotFound)
 	}
 
-	// Without a session, 401.
 	anon := &user{e: w.e}
 	for _, rt := range routes {
 		var body any
@@ -130,7 +121,6 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 		expect(t, anon.do(rt.method, rt.path(w.shared, w.team.ID, w.teamCard.ID), body), http.StatusUnauthorized)
 	}
 
-	// Nothing above changed anything.
 	for _, c := range []struct {
 		u    *user
 		s    access.Space
@@ -148,20 +138,17 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM boards`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if want := 3 + 8; n != want { // three team boards, a personal board per private space
+	if want := 3 + 8; n != want {
 		t.Errorf("%d boards after the refused calls, want %d", n, want)
 	}
 }
 
-// TestAgentToolsActForTheirUser checks the methods the agent's tools call: they have the
-// access of the user the agent works for, no more.
 func TestAgentToolsActForTheirUser(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	s := w.e.s
 	agentFor := func(u *user) Actor { return Actor{UserID: u.id, Agent: true} }
 
-	// An editor's agent works the team board; its changes are marked as the agent's.
 	c, err := s.CreateCard(ctx, agentFor(w.alice), w.shared.ID, w.team.ID, NewCard{Title: "From the agent", Column: Todo})
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +191,6 @@ func TestAgentToolsActForTheirUser(t *testing.T) {
 		t.Errorf("ListCards for a viewer: %d cards, %v", len(cards), err)
 	}
 
-	// Refused: the same answers as the HTTP routes.
 	refused := []struct {
 		name string
 		call func() error

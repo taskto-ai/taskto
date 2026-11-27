@@ -11,14 +11,9 @@ import (
 	"taskto.ai/taskto/internal/browser"
 )
 
-// In local mode the browsers' files are in the account's CLI home. A deleted account's purge of
-// them finds that home retired or not, and never makes one: it removes the browser's files and
-// leaves the CLIs' to their own step; once a census or the worker's Forget retired the account and
-// removed its home, the purge has nothing left to do, and says so.
 func TestALocalBrowserPurgeFindsARetiredAccountsHome(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, LocalUnsafe, nil)
-	// The server's census at its start: deletions are taken after it.
 	if err := e.svc.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +42,6 @@ func TestALocalBrowserPurgeFindsARetiredAccountsHome(t *testing.T) {
 		t.Errorf("the CLIs' files went with the browser's: %v", err)
 	}
 
-	// The worker retires the account and removes its home; the purge's step, tried again, is done.
 	if err := e.worker.Forget(ctx, a); err != nil {
 		t.Fatal(err)
 	}

@@ -1,8 +1,5 @@
 package agentrt
 
-// The sidecar's knowledge-base and board tools against a stand-in for the server's tools
-// socket: what they send, and what they make of the answers. Gated by TASKTO_AGENT_IT=1.
-
 import (
 	"context"
 	"fmt"
@@ -18,8 +15,6 @@ import (
 	"time"
 )
 
-// toolsServer stands in for the server's tools socket: it records each call's tool,
-// capability and arguments, and answers with reply.
 type toolsServer struct {
 	mu    sync.Mutex
 	calls []string
@@ -52,7 +47,6 @@ func TestServerTools(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	// A short directory: Unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "taskto-tools-")
 	if err != nil {
 		t.Fatal(err)
@@ -94,11 +88,9 @@ func TestServerTools(t *testing.T) {
 		return lastAssistant(t, s.client, conv)
 	}
 
-	// Without a capability the tool says so, and calls nothing.
 	if got := run(Input{Content: "tool:list_spaces {}"}); !strings.Contains(got, "not available in this conversation yet") {
 		t.Fatalf("without a capability: %q", got)
 	}
-	// With one, the call carries it; a new one replaces it.
 	run(Input{Content: "tool:list_spaces {}", Capability: "ttc1.7.first"})
 	if got := fake.last(t); got != "list_spaces ttc1.7.first {}" {
 		t.Fatalf("call = %q", got)
@@ -106,14 +98,12 @@ func TestServerTools(t *testing.T) {
 	if got := run(Input{Content: "tool:list_spaces {}", Capability: "ttc1.7.second"}); got != `finished list_spaces: {"spaces":[{"id":1}]}` {
 		t.Fatalf("answer = %q", got)
 	}
-	// A refusal is an error result with the server's message.
 	if got := run(Input{Content: `tool:read_doc {"space_id":2,"path":"a.md"}`}); got != "finished read_doc: error: not found" {
 		t.Fatalf("refusal = %q", got)
 	}
 	if got := fake.last(t); got != `read_doc ttc1.7.second {"space_id":2,"path":"a.md"}` {
 		t.Fatalf("call = %q", got)
 	}
-	// Arguments outside a tool's schema never reach the server.
 	fake.mu.Lock()
 	n := len(fake.calls)
 	fake.mu.Unlock()
@@ -125,7 +115,6 @@ func TestServerTools(t *testing.T) {
 		t.Fatalf("a call with an unknown argument reached the server: %q", fake.last(t))
 	}
 
-	// The capability is kept across a restart.
 	s.kill()
 	s.start()
 	run(Input{Content: "tool:list_spaces {}"})
@@ -133,15 +122,11 @@ func TestServerTools(t *testing.T) {
 		t.Fatalf("after a restart: %q", got)
 	}
 
-	// A capability that isn't printable ASCII is refused.
 	if _, err := s.client.Submit(ctx, conv, Input{Content: "x", Capability: "two words"}); err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("a bad capability: %v", err)
 	}
 }
 
-// fixtureTools starts a fake tools server for a sidecar to call, and returns its socket path,
-// a function that runs a scripted turn and returns the reply, and the count of calls that
-// reached the server.
 func fixtureTools(t *testing.T) (path string, fake *toolsServer) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "taskto-tools-")
@@ -167,7 +152,6 @@ func (f *toolsServer) callCount() int {
 	return len(f.calls)
 }
 
-// runTurn sends one scripted message and returns the agent's last reply.
 func runTurn(t *testing.T, c *Client, content string) string {
 	t.Helper()
 	ctx := ctxFor(t)
@@ -185,12 +169,6 @@ func runTurn(t *testing.T, c *Client, content string) string {
 	return lastAssistant(t, c, conv)
 }
 
-// The model is offered a conversation-only tool (tools.json's conversation_only flag: the agent
-// browser's) only when the server has the browser on, whatever the tool's name, and a tool
-// without the flag whatever its name. A tool it isn't offered is an error result that never
-// reaches the server. The fixtures (agent/src/test-entry.ts) are fixture_flagged, flagged and
-// not named browser_*, and browser_unflagged, named browser_* and not flagged: a filter by
-// name prefix gets both wrong.
 func TestSidecarOffersConversationOnlyToolsByTheirFlag(t *testing.T) {
 	path, fake := fixtureTools(t)
 
@@ -217,8 +195,6 @@ func TestSidecarOffersConversationOnlyToolsByTheirFlag(t *testing.T) {
 	}
 }
 
-// The pause tools are the tests' alone: the sidecar the server runs (index.js) doesn't install
-// them, however its environment is set.
 func TestProductionSidecarRefusesThePauseTools(t *testing.T) {
 	path, fake := fixtureTools(t)
 	s := startSidecarAt(t, productionEntry, ToolsEnv+"="+path, spikeToolsEnv+"=1")
@@ -235,8 +211,6 @@ func TestProductionSidecarRefusesThePauseTools(t *testing.T) {
 	}
 }
 
-// The server's own environment can't turn the pause tools on either: with the variable set in it,
-// the sidecar its supervisor launches still refuses them.
 func TestSupervisedSidecarRefusesThePauseToolsWhateverTheServersEnvironment(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")

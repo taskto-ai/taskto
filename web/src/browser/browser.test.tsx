@@ -36,7 +36,6 @@ const ON: BrowserStatus = {
   },
 }
 
-// A conversation where the agent asked the user to sign in, and ended its turn.
 const helpEntries = (message: string) => [
   { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'Download my bank statements' }] },
   {
@@ -97,7 +96,6 @@ test("the agent's request to take over waits for the user's answer", () => {
   const t = transcript({ entries: helpEntries('Sign in, then press Done.'), docs: { 'pi.live': {} } })
   expect(t.messages[1].tools[0].help).toEqual({ reason: 'login', message: 'Sign in, then press Done.' })
   expect(pendingHelp(t.messages)).toEqual({ reason: 'login', message: 'Sign in, then press Done.' })
-  // Once the user has said something, it is answered.
   const answered = transcript({
     entries: [...helpEntries('x'), { id: 5, kind: 'pi.user', model: [{ role: 'user', content: 'Done' }] }],
     docs: { 'pi.live': {} },
@@ -116,7 +114,6 @@ test('the help card shows the request as plain text, and Done answers the agent'
   expect(card.querySelector('img')).toBeNull()
   expect(screen.getByText('Asked you to take over the browser')).toBeTruthy()
 
-  // Take over opens the browser, under the user's control.
   fireEvent.click(screen.getByRole('button', { name: 'Take over' }))
   const panel = await screen.findByRole('region', { name: 'Your browser' })
   expect(panel.textContent).toContain('You have the browser')
@@ -144,7 +141,6 @@ test("with the browser off, there is no browser button, and the card can't take 
   })
   const takeOver = await screen.findByRole('button', { name: 'Take over' })
   expect((takeOver as HTMLButtonElement).disabled).toBe(true)
-  // The conversation's menu has no browser switch.
   fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
   expect(await screen.findByRole('menuitem', { name: 'Build an app in this conversation' })).toBeTruthy()
   expect(screen.queryByRole('menuitem', { name: 'Show your browser' })).toBeNull()
@@ -167,7 +163,6 @@ test('the panel says why the browser is off, and starts it on request', async ()
   expect(screen.getByText('no OS boundary between users')).toBeTruthy()
   unmount()
 
-  // With its code, the reason shows in the user's language.
   await act(() => setPreferences({ user: 'pt-BR' }))
   const coded = loaded({ enabled: false, reason: 'the agent browser is off', reason_code: 'browser_off', browsers: {} })
   const second = render(<BrowserPanel status={coded} interactive={false} onInteractive={vi.fn()} onClose={vi.fn()} />)
@@ -183,7 +178,6 @@ test('the panel says why the browser is off, and starts it on request', async ()
   expect(calls[0]).toMatchObject({ method: 'POST', path: '/api/me/browser/start', body: { browser: 'personal' } })
 })
 
-// A stand-in for noVNC's RFB client.
 function fakeRFB() {
   const made: { url: string; options: unknown; client: RFB & { disconnected: boolean } }[] = []
   class Fake extends EventTarget {
@@ -229,7 +223,6 @@ test('a view the server closed can reconnect; our own teardown reports no close'
   const onClosed = vi.fn()
   const { unmount } = render(<LiveView interactive={false} load={load} onClosed={onClosed} />)
   await waitFor(() => expect(made).toHaveLength(1))
-  // The server closes it (the browser stopped).
   act(() => {
     made[0].client.dispatchEvent(new Event('disconnect'))
   })
@@ -237,7 +230,6 @@ test('a view the server closed can reconnect; our own teardown reports no close'
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
   await waitFor(() => expect(made).toHaveLength(2))
   expect(made[0].client.disconnected).toBe(true)
-  // Unmounting disconnects, and a disconnect event then isn't a close to report.
   unmount()
   act(() => {
     made[1].client.dispatchEvent(new Event('disconnect'))

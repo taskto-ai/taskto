@@ -12,13 +12,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// The invoicing template declares a slot of payments and no integration: it works with whichever
-// one an admin binds to the copy, and a copy carries no binding, record, role or secret.
-
-// invoicingContractHash is the SHA-256 an admin approves for the template's `payments` slot. It
-// changes when the template sends another field out, writes another field or value, asks in
-// another currency or changes what its action does: that makes every installed copy ask for a new
-// approval, so change it on purpose, in the same commit as the template and its version.
 const invoicingContractHash = "ae2432762ccb930adf45117acd1b6c9475de2b0e1eb68c6f29dd79c2343398a7"
 
 func invoicingTemplate(t *testing.T) Template {
@@ -42,7 +35,6 @@ func TestTheInvoicingTemplateDeclaresAPaymentsSlotAndNothingElse(t *testing.T) {
 	if def.DefinitionVersion != 3 || !slices.Contains(def.Requires, "effect.create_payment_link") {
 		t.Fatalf("version %d, requires %v", def.DefinitionVersion, def.Requires)
 	}
-	// One slot, of the payments kind, named by its kind: no provider and no integration anywhere.
 	if len(def.Integrations) != 1 || def.Integrations["payments"].Kind != KindPayments {
 		t.Fatalf("integrations = %+v", def.Integrations)
 	}
@@ -66,7 +58,6 @@ func TestTheInvoicingTemplateDeclaresAPaymentsSlotAndNothingElse(t *testing.T) {
 	for _, w := range contract.Writes {
 		writes = append(writes, w.Field)
 	}
-	// What a payment may write is the status and the date, and the link goes to its two fields.
 	if want := []string{"paid_at", "pay_url", "payment_id", "status"}; !slices.Equal(writes, want) {
 		t.Fatalf("writes = %v, want %v", writes, want)
 	}
@@ -75,10 +66,6 @@ func TestTheInvoicingTemplateDeclaresAPaymentsSlotAndNothingElse(t *testing.T) {
 	}
 }
 
-// An ordinary edit of an invoice never asks for a payment link: the record editor takes an update
-// action without effects (web/src/apps/explorer.ts), and the template has one. Only sending a draft
-// and replacing an expired link run the effect, and only for a sent invoice; the record's earlier link
-// decides whether a new one is made at all (internal/integrations paymentlink.go).
 func TestTheInvoicingTemplateEditsWithoutAPaymentLink(t *testing.T) {
 	def := invoicingTemplate(t).Definition
 	edit, ok := def.Actions["edit_invoice"]
@@ -102,8 +89,6 @@ func TestTheInvoicingTemplateEditsWithoutAPaymentLink(t *testing.T) {
 	if slices.Sort(links); !slices.Equal(links, []string{"replace_link", "send_invoice"}) {
 		t.Fatalf("the contract's links are of %v", links)
 	}
-	// The screen's buttons: sending sets the status only, and replacing clears the expired link, which
-	// is the change that queues the effect again.
 	buttons := map[string]map[string]any{}
 	for _, sc := range def.Screens {
 		for _, c := range sc.Components {
@@ -144,7 +129,6 @@ func mustJSON(t *testing.T, v any) string {
 
 func TestAnInvoicingInstallBindsNoIntegration(t *testing.T) {
 	i := newInv(t)
-	// An integration exists and is allowed in the space: the install still binds none.
 	i.allow(i.stripe, i.alicePrivate)
 
 	a := i.mustInstall(i.alice, i.alicePrivate, "invoicing", nil)
@@ -165,14 +149,12 @@ func TestAnInvoicingInstallBindsNoIntegration(t *testing.T) {
 		t.Fatalf("the installed copy's hash = %s", st.Slots[0].ContractHash)
 	}
 
-	// Until an admin binds one, it can't be published.
 	rec := i.tryPublish(i.alice, i.alicePrivate, i.view(i.alice, i.alicePrivate, a))
 	expect(t, rec, http.StatusConflict)
 	if code(t, rec) != string(apierr.CodeAppIntegrationUnapproved) {
 		t.Fatalf("publishing an unbound copy: %s", rec.Body.String())
 	}
 
-	// A second install is as unbound as the first, and approving one leaves the other as it was.
 	b := i.mustInstall(i.alice, i.alicePrivate, "invoicing", map[string]any{"name": "Second"})
 	req := i.mustRequest(i.alice, i.alicePrivate, a)
 	expect(t, i.approve(i.owner, req.ID, i.stripe), http.StatusOK)
@@ -182,7 +164,6 @@ func TestAnInvoicingInstallBindsNoIntegration(t *testing.T) {
 	expect(t, i.tryPublish(i.alice, i.alicePrivate, i.view(i.alice, i.alicePrivate, a)), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.alicePrivate, i.view(i.alice, i.alicePrivate, b)), http.StatusConflict)
 
-	// Someone who can't see the space can't install it there.
 	expect(t, i.bob.do(http.MethodPost, installPath(i.alicePrivate, "invoicing"), map[string]any{}), http.StatusNotFound)
 }
 
@@ -214,7 +195,6 @@ func TestThePaymentEventsMarkAnInvoicePaidAndThenRefunded(t *testing.T) {
 	if d := i.rowData(a, sent); d["status"] != "paid" || d["paid_at"] != "2026-11-26" {
 		t.Fatalf("a paid invoice: %v", d)
 	}
-	// The history says the integration did it.
 	h := decode[History](t, i.history(i.alice, i.alicePrivate, a, sent))
 	if latest := h.History[0]; latest.By == nil || latest.By.System == nil || latest.Action != "payment.succeeded" {
 		t.Fatalf("the payment's history entry: %+v", latest)
@@ -223,9 +203,6 @@ func TestThePaymentEventsMarkAnInvoicePaidAndThenRefunded(t *testing.T) {
 		t.Fatalf("a refund: %+v, %v, status %v", res, err, status(sent))
 	}
 
-	// A payment is recorded whatever the invoice's status was edited to: an invoice put back to Draft
-	// while its link could be paid, and paid, shows Paid with the date, since the money arrived. (A
-	// refund reaches the app only for a ref that was paid: the integrations' step holds it otherwise.)
 	draft := invoice("INV-2", "draft")
 	if res, err := event(draft, "payment.succeeded"); err != nil || !res.Written || res.ConditionUnmet {
 		t.Fatalf("a payment for a draft: %+v, %v", res, err)
@@ -234,7 +211,6 @@ func TestThePaymentEventsMarkAnInvoicePaidAndThenRefunded(t *testing.T) {
 		t.Fatalf("a paid draft: %v", d)
 	}
 	open := invoice("INV-3", "sent")
-	// An expiry is not handled: the invoice stays as it is, and the next send makes a new link.
 	if res, err := event(open, "payment.expired"); err != nil || res.Written || !res.NoHandler || status(open) != "sent" {
 		t.Fatalf("an expiry: %+v, %v, status %v", res, err, status(open))
 	}

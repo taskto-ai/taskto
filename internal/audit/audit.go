@@ -1,17 +1,3 @@
-// Package audit is the audit log of security and admin actions: who did what to which thing,
-// when and from where (docs/audit.md).
-//
-// The code that makes a change records it in the same transaction (Record), so the event and
-// the change commit together or not at all. An event that has no change to commit with, such as
-// a failed login, is recorded on its own (Log), and a failure to write it is logged, never
-// returned: it must not turn a refusal into a server error.
-//
-// The log never holds a secret, and never free text. An event carries ids, a stable action code
-// and the few details its action is declared to have (schema.go), each of a fixed type: a
-// boolean, a number, a value from a fixed list, a host, an address. Record refuses any other
-// detail or a value of another type, so a careless call fails its test rather than leaking.
-// This package stores, removes and reads events (ListWorkspace); who may read them is the
-// admin route's to decide (internal/server).
 package audit
 
 import (
@@ -28,41 +14,23 @@ import (
 	"time"
 )
 
-// Event is one thing that happened. The zero value of an ID field means none.
 type Event struct {
-	// Workspace is the workspace the event belongs to, or 0 for one that belongs to no
-	// workspace: a login, a password change.
-	Workspace int64
-	// Actor is the user who did it, or 0 to take the one the request is authenticated as
-	// (WithActor), which is none for an anonymous attempt.
-	Actor int64
-	// Action is a stable snake_case code (actions.go): what the event is.
-	Action string
-	// TargetType and Target say what the action was done to: "user", "invite", "space"…
-	TargetType string
-	Target     int64
-	// TargetCreated is when the target was created, as the target's own created_at holds it: with
-	// the type and the id, it says which object the event is about, since SQLite hands a deleted
-	// row's id to a later one. Record looks it up when it is empty and the target still exists; code
-	// that deletes the target passes it from the delete's RETURNING.
+	Workspace     int64
+	Actor         int64
+	Action        string
+	TargetType    string
+	Target        int64
 	TargetCreated string
-	// Details are non-secret facts about the event, of the types schemas gives its action.
-	Details Details
+	Details       Details
 }
 
-// Details are an event's small set of non-secret facts: the ones its action declares (schema.go),
-// of the declared types.
 type Details map[string]any
 
-// Limits of an event's details.
 const (
 	maxDetailList   = 16
 	maxDetailsBytes = 2048
 )
 
-// secretName matches the names of things that are secrets. A detail with such a name may only be
-// a boolean ("api_key_changed": true says that a key changed, not what it is); schemas is
-// checked against it too.
 var secretName = regexp.MustCompile(`(?i)pass(word|wd|phrase)|secret|token|key|credential|hash|link|cookie|session|body|signature`)
 
 var validAction = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
@@ -74,26 +42,19 @@ const (
 	clientKey
 )
 
-// WithActor returns ctx with the user the request is authenticated as, the actor of the events
-// recorded with it (the auth middleware does this).
 func WithActor(ctx context.Context, user int64) context.Context {
 	return context.WithValue(ctx, actorKey, user)
 }
 
-// WithClient returns ctx with the address the request came from, which the events recorded with it
-// carry (the server does this for every request).
 func WithClient(ctx context.Context, addr string) context.Context {
 	return context.WithValue(ctx, clientKey, addr)
 }
 
-// ActorFrom returns the user WithActor put on ctx, or 0.
 func ActorFrom(ctx context.Context) int64 {
 	id, _ := ctx.Value(actorKey).(int64)
 	return id
 }
 
-// ClientFrom returns the address WithClient put on ctx, or "". It is the client as the login
-// limits find it: the direct peer, or behind a trusted proxy the address that proxy forwarded.
 func ClientFrom(ctx context.Context) string { return clientFrom(ctx) }
 
 func clientFrom(ctx context.Context) string {
@@ -101,12 +62,10 @@ func clientFrom(ctx context.Context) string {
 	return addr
 }
 
-// Execer is a database or a transaction.
 type Execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// targetTables are the tables of the targets whose creation time an event records.
 var targetTables = map[string]string{
 	TargetUser:          "users",
 	TargetWorkspace:     "workspaces",
@@ -120,10 +79,6 @@ var targetTables = map[string]string{
 	TargetAppIntegration: "app_integration_approvals",
 }
 
-// Record adds e to the log through x, which should be the transaction of the change it
-// describes. The actor and the client address default to the ones on ctx. It fails for an event
-// without a valid action or with details its action doesn't declare; the caller then rolls the
-// change back, which is the point: such an event is a bug to fix, not to hide.
 func Record(ctx context.Context, x Execer, e Event) error {
 	if !validAction.MatchString(e.Action) {
 		return fmt.Errorf("audit: %q is not a snake_case action", e.Action)
@@ -135,8 +90,6 @@ func Record(ctx context.Context, x Execer, e Event) error {
 	if e.Actor == 0 {
 		e.Actor = ActorFrom(ctx)
 	}
-	// The target's creation time: given, or read from the target if it still exists. The table
-	// name comes from the fixed list above, never from the event.
 	args := []any{nullID(e.Workspace), nullID(e.Actor), e.Action, e.TargetType, nullID(e.Target), details, nullString(clientFrom(ctx))}
 	lookup := `NULL`
 	table, known := targetTables[e.TargetType]
@@ -154,10 +107,7 @@ func Record(ctx context.Context, x Execer, e Event) error {
 	return err
 }
 
-// Log is Record for an event with no transaction to commit with. A failure is logged and
-// swallowed: the request it is about has its own answer.
 func Log(ctx context.Context, x Execer, e Event) {
-	// Not the request's context: a client that leaves mustn't lose the event.
 	ctx = context.WithoutCancel(ctx)
 	if err := Record(ctx, x, e); err != nil {
 		slog.ErrorContext(ctx, "audit: recording an event", "action", e.Action, "err", err)
@@ -178,7 +128,6 @@ func nullString(s string) any {
 	return s
 }
 
-// encode checks details against the schema of action and returns them as JSON.
 func encode(action string, d Details) (string, error) {
 	schema, ok := schemas[action]
 	if !ok {
@@ -212,7 +161,6 @@ func encode(action string, d Details) (string, error) {
 	return string(raw), nil
 }
 
-// Changed lists the names of the fields that are set, sorted, for an event's "fields" detail.
 func Changed(fields map[string]bool) []string {
 	var names []string
 	for name, set := range fields {
@@ -224,40 +172,27 @@ func Changed(fields map[string]bool) []string {
 	return names
 }
 
-// Row is a stored event.
 type Row struct {
-	ID          int64  `json:"id"`
-	At          string `json:"at"`
-	WorkspaceID *int64 `json:"workspace_id"`
-	ActorID     *int64 `json:"actor_id"`
-	// ActorDeleted says the actor's account was deleted: ActorID is then null, as for an anonymous
-	// event, and this says which it was.
-	ActorDeleted bool   `json:"actor_deleted"`
-	Action       string `json:"action"`
-	TargetType   string `json:"target_type"`
-	TargetID     *int64 `json:"target_id"`
-	// TargetDeleted says the account the event is about (a user target) was deleted.
-	TargetDeleted bool `json:"target_deleted"`
-	// TargetCreatedAt is when the target was created: the object an event is about is the one
-	// with its type, id and creation time (docs/audit.md).
+	ID              int64          `json:"id"`
+	At              string         `json:"at"`
+	WorkspaceID     *int64         `json:"workspace_id"`
+	ActorID         *int64         `json:"actor_id"`
+	ActorDeleted    bool           `json:"actor_deleted"`
+	Action          string         `json:"action"`
+	TargetType      string         `json:"target_type"`
+	TargetID        *int64         `json:"target_id"`
+	TargetDeleted   bool           `json:"target_deleted"`
 	TargetCreatedAt *string        `json:"target_created_at"`
 	Details         map[string]any `json:"details"`
 	ClientAddr      *string        `json:"client_addr"`
 }
 
-// Filter selects events for List. The zero value selects them all.
 type Filter struct {
-	// Workspace limits the list to one workspace's events; 0 is every event.
 	Workspace int64
-	// Action limits it to one action code.
-	Action string
-	// Limit is how many to return, newest first; 0 is 100.
-	Limit int
+	Action    string
+	Limit     int
 }
 
-// List returns events, newest first, for tests. A zero Workspace is every workspace's events and
-// those of none, so nothing that answers a request uses it: the admin view's ListWorkspace
-// (view.go) refuses a missing workspace. It checks no access.
 func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
@@ -289,7 +224,6 @@ func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	return all, rows.Err()
 }
 
-// scan reads one event from a query of the columns List and ListWorkspace select.
 func scan(rows *sql.Rows) (Row, error) {
 	var r Row
 	var details string
@@ -302,13 +236,10 @@ func scan(rows *sql.Rows) (Row, error) {
 	return r, nil
 }
 
-// DefaultRetention is how long events are kept unless the operator says otherwise.
 const DefaultRetention = 365 * 24 * time.Hour
 
-// pruneBatch bounds one delete, so a large backlog doesn't hold the write lock for long.
 const pruneBatch = 5000
 
-// Prune deletes the events older than cutoff and returns how many.
 func Prune(ctx context.Context, db *sql.DB, cutoff time.Time) (int64, error) {
 	at := cutoff.UTC().Format("2006-01-02T15:04:05.000Z")
 	var total int64
@@ -329,8 +260,6 @@ func Prune(ctx context.Context, db *sql.DB, cutoff time.Time) (int64, error) {
 	}
 }
 
-// Retain removes events older than keep every interval until ctx is done, once at the start. A
-// keep of zero or less keeps them all, and Retain returns at once.
 func Retain(ctx context.Context, db *sql.DB, keep, every time.Duration) {
 	if keep <= 0 {
 		return
@@ -352,8 +281,6 @@ func Retain(ctx context.Context, db *sql.DB, keep, every time.Duration) {
 	}
 }
 
-// Host is the host of a URL, for a detail that says where a provider points without carrying a
-// path or credentials that might be in the URL. It is "" for a value that isn't a URL.
 func Host(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme == "" {

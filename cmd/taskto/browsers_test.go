@@ -10,8 +10,6 @@ import (
 	"taskto.ai/taskto/internal/cliowner"
 )
 
-// namedBrowsers is the browsers as a purge reaches them: it records the account each Forget named,
-// and answers the first ones with refuse.
 type namedBrowsers struct {
 	browser.Browsers
 	named  []cliowner.Account
@@ -28,8 +26,6 @@ func (n *namedBrowsers) Forget(_ context.Context, a cliowner.Account) error {
 	return nil
 }
 
-// A deleted account's browser purge names the account by the identity its step keeps and carries
-// this server's boot, which the CLI worker's fence for deletions checks.
 func TestABrowserPurgeCarriesTheServersBoot(t *testing.T) {
 	cli := cliaccounts.New(nil, cliaccounts.Container, nil)
 	t.Cleanup(cli.Close)

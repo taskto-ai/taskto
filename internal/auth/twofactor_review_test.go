@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// A reset link is not a second factor: for an account with two-factor login on, using one
-// sets the password and ends every session, and then asks for a code like a login does.
 func TestResetLinkAsksForACodeWhenTwoFactorIsOn(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -33,13 +31,10 @@ func TestResetLinkAsksForACodeWhenTwoFactorIsOn(t *testing.T) {
 	}
 	expect(t, browser.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 	expect(t, member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	// No session means no access tokens either.
 	expect(t, browser.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]string{"name": "cli"}), http.StatusUnauthorized)
-	// The half-done login from before the reset is gone; the link is used up.
 	expect(t, e.client().second(pending, e.codeNow(two.secret)), http.StatusUnauthorized)
 	expect(t, e.client().do(http.MethodPost, "/api/password-reset", map[string]string{"token": link, "password": "fake-third-password"}), http.StatusNotFound)
 
-	// The second step is the login's: a wrong code leaves it for another try, a right one signs in.
 	expect(t, browser.second(got.Challenge, wrongCode), http.StatusUnauthorized)
 	if browser.cookie != nil {
 		t.Fatal("a wrong code made a session")
@@ -47,14 +42,12 @@ func TestResetLinkAsksForACodeWhenTwoFactorIsOn(t *testing.T) {
 	expect(t, browser.second(got.Challenge, e.codeNow(two.secret)), http.StatusOK)
 	expect(t, browser.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	expect(t, browser.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]string{"name": "cli"}), http.StatusCreated)
-	// The new password is the one that works, and it asks for the code too.
 	if _, code := e.login("member@example.com", otherPassword); code != http.StatusUnauthorized {
 		t.Fatalf("the old password: %d", code)
 	}
 	_ = e.client().challenge("member@example.com", newPassword)
 }
 
-// A recovery code finishes a reset's second step too, once.
 func TestResetLinkSecondStepTakesARecoveryCode(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -70,7 +63,6 @@ func TestResetLinkSecondStepTakesARecoveryCode(t *testing.T) {
 	}
 }
 
-// Without two-factor login a reset link still signs in, as before.
 func TestResetLinkSignsInWithoutTwoFactor(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -84,8 +76,6 @@ func TestResetLinkSignsInWithoutTwoFactor(t *testing.T) {
 	expect(t, c.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 }
 
-// Enrolling while the password is being checked: the login reads the two-factor state where it
-// issues what the password earns, so it can't hand out a session that never asked for the code.
 func TestLoginDuringEnrolmentGetsAChallenge(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -107,8 +97,6 @@ func TestLoginDuringEnrolmentGetsAChallenge(t *testing.T) {
 	}
 }
 
-// A password changed (or reset) while a login is checking the old one: the login fails, it
-// makes neither a session nor a challenge the change should have ended.
 func TestLoginDuringPasswordChangeFails(t *testing.T) {
 	for _, withTwoFactor := range []bool{true, false} {
 		t.Run(fmt.Sprintf("two-factor=%v", withTwoFactor), func(t *testing.T) {
@@ -137,7 +125,6 @@ func TestLoginDuringPasswordChangeFails(t *testing.T) {
 			if n := e.count(`SELECT count(*) FROM login_challenges`); n != 0 {
 				t.Fatalf("%d challenges survived the password change", n)
 			}
-			// Only the session the change itself made is there (the sweep of expired ones aside).
 			if n := e.count(`SELECT count(*) FROM sessions`); n != 1 {
 				t.Fatalf("sessions = %d", n)
 			}
@@ -145,8 +132,6 @@ func TestLoginDuringPasswordChangeFails(t *testing.T) {
 	}
 }
 
-// The second step consumes its challenge by token hash and user, never by a row id: a
-// replacement row that took the id of the one that was used meanwhile is left alone.
 func TestSecondStepDoesNotConsumeAReplacementRow(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -159,7 +144,6 @@ func TestSecondStepDoesNotConsumeAReplacementRow(t *testing.T) {
 			return
 		}
 		e.svc.hook = nil
-		// Another request used this challenge up, and a new login took its row id.
 		if _, err := e.db.Exec(`DELETE FROM login_challenges`); err != nil {
 			t.Error(err)
 		}
@@ -181,15 +165,12 @@ func TestSecondStepDoesNotConsumeAReplacementRow(t *testing.T) {
 	}
 }
 
-// A challenge that has used its attempts takes no more, not even a right code, whatever else
-// happened to it: the count is read in the transaction that checks the code.
 func TestSecondStepChecksAttemptsWhereItChecksTheCode(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
 	two := e.turnOn(owner, ownerPassword)
 	c := e.client()
 	ch := c.challenge("owner@example.com", ownerPassword)
-	// Counted by a request that hasn't dropped the challenge yet.
 	if _, err := e.db.Exec(`UPDATE login_challenges SET attempts = ?`, challengeAttempts); err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +184,6 @@ func TestSecondStepChecksAttemptsWhereItChecksTheCode(t *testing.T) {
 	}
 }
 
-// Wrong codes sent at once count against one challenge's attempts, no more than
-// challengeAttempts of them are tried, and the wrong ones are counted even though they fail.
 func TestSecondStepConcurrentWrongCodesAreCappedAtTheAttempts(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -219,7 +198,6 @@ func TestSecondStepConcurrentWrongCodesAreCappedAtTheAttempts(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Each from an address of its own, so the code limits don't decide it.
 			c := e.client()
 			c.ip = fmt.Sprintf("192.0.2.%d:1234", 10+i)
 			rec := c.second(ch, wrongCode)
@@ -246,11 +224,8 @@ func TestSecondStepConcurrentWrongCodesAreCappedAtTheAttempts(t *testing.T) {
 	expect(t, c.second(ch, e.codeNow(two.secret)), http.StatusUnauthorized)
 }
 
-// wrongCode is neither a six-digit code nor a recovery code, so it can't match whatever the
-// random secret of a test makes: it is the wrong code in every test that needs one.
 const wrongCode = "abcdef"
 
-// expectSession logs in with a password alone, which must give a session and no code step.
 func expectSession(t *testing.T, c *client, email, password string) {
 	t.Helper()
 	rec := c.login(email, password)
@@ -290,8 +265,6 @@ func (e *env) confirmStatus(c *client, enrolment, code string) (int, string) {
 	return rec.Code, errCode(e.t, rec)
 }
 
-// A code confirms the enrolment that showed its secret: a second enrolment (another tab's)
-// makes a new id along with the new secret, and the first can no longer be confirmed.
 func TestConfirmIsBoundToItsEnrolment(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -301,7 +274,6 @@ func TestConfirmIsBoundToItsEnrolment(t *testing.T) {
 		t.Fatalf("enrolment ids %q, %q", first.Enrolment, second.Enrolment)
 	}
 
-	// The first tab's id with its own code, with the new secret's code, or with none.
 	for _, c := range []struct{ enrolment, code string }{
 		{first.Enrolment, e.codeNow(firstSecret)},
 		{first.Enrolment, e.codeNow(secondSecret)},
@@ -318,7 +290,6 @@ func TestConfirmIsBoundToItsEnrolment(t *testing.T) {
 	if status, code := e.confirmStatus(owner, second.Enrolment, e.codeNow(secondSecret)); status != http.StatusOK {
 		t.Fatalf("confirm of the current enrolment = %d %s", status, code)
 	}
-	// Confirmed, the id is gone.
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE enrolment_id IS NOT NULL`); n != 0 {
 		t.Fatal("the enrolment id outlived the enrolment")
 	}
@@ -332,14 +303,12 @@ func TestEnrolmentExpires(t *testing.T) {
 	if status, code := e.confirmStatus(owner, got.Enrolment, e.codeNow(secret)); status != http.StatusConflict || code != "two_factor_not_started" {
 		t.Fatalf("confirm after the enrolment expired = %d %s", status, code)
 	}
-	// Asking again makes a new one that works.
 	again, secret := e.enrol(owner, ownerPassword)
 	if status, code := e.confirmStatus(owner, again.Enrolment, e.codeNow(secret)); status != http.StatusOK {
 		t.Fatalf("confirm of a new enrolment = %d %s", status, code)
 	}
 }
 
-// An enrolment that wasn't confirmed doesn't outlive a change of the password, or a reset.
 func TestPasswordChangeAndResetDropAPendingEnrolment(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -362,7 +331,6 @@ func TestPasswordChangeAndResetDropAPendingEnrolment(t *testing.T) {
 	if status, code := e.confirmStatus(c, got.Enrolment, e.codeNow(secret)); status != http.StatusConflict || code != "two_factor_not_started" {
 		t.Fatalf("confirm after a reset = %d %s", status, code)
 	}
-	// Two-factor login that was on stays on through a change of the password.
 	e.turnOn(c, newPassword)
 	expect(t, c.do(http.MethodPost, "/api/me/password",
 		map[string]string{"current_password": newPassword, "new_password": renewedPassword}), http.StatusNoContent)
@@ -371,7 +339,6 @@ func TestPasswordChangeAndResetDropAPendingEnrolment(t *testing.T) {
 	}
 }
 
-// A challenge made before the operator turned passwords off finishes no login.
 func TestSecondStepRefusedWhenPasswordLoginIsOff(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -389,8 +356,6 @@ func TestSecondStepRefusedWhenPasswordLoginIsOff(t *testing.T) {
 	}
 }
 
-// A second step the account's limit refuses tried no code: it isn't charged to the address,
-// whose budget others behind it share.
 func TestSecondStepAccountLimitDoesNotChargeTheAddress(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -407,8 +372,6 @@ func TestSecondStepAccountLimitDoesNotChargeTheAddress(t *testing.T) {
 	}
 }
 
-// Enrolling is checked against the password that was verified: one changed meanwhile makes no
-// enrolment, whose secret the old password's holder would otherwise have.
 func TestEnrolDuringPasswordChangeFails(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -430,8 +393,6 @@ func TestEnrolDuringPasswordChangeFails(t *testing.T) {
 	}
 }
 
-// Turning it off, or making new recovery codes, with a password that was changed meanwhile: the
-// request doesn't outlive the session the change ended.
 func TestFactorActionDuringPasswordChangeFails(t *testing.T) {
 	for _, path := range []string{"/api/me/two-factor/disable", "/api/me/two-factor/recovery-codes"} {
 		t.Run(path, func(t *testing.T) {
@@ -462,14 +423,12 @@ func TestFactorActionDuringPasswordChangeFails(t *testing.T) {
 	}
 }
 
-// A reset link that earns a challenge leaves the browser's own session alone until the code.
 func TestResetChallengeKeepsTheBrowsersSession(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
 	member, memberMe := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 	e.turnOn(member, otherPassword)
 	link := e.reset(owner, ws, memberMe.User.ID)
-	// The owner's browser redeems the member's link.
 	rec := owner.do(http.MethodPost, "/api/password-reset", map[string]string{"token": link, "password": newPassword})
 	expect(t, rec, http.StatusOK)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)

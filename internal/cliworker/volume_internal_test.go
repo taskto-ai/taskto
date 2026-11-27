@@ -10,9 +10,6 @@ import (
 	"testing"
 )
 
-// The UID base is the volume's: pinned the first time, and a worker with another is refused, as it
-// is on a volume whose records say their uids were given under another base, so no home's uid is
-// ever another home's.
 func TestTheUIDBaseIsPinnedToTheVolume(t *testing.T) {
 	newVolume := func(t *testing.T) *Worker {
 		w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, accounts: map[string]accountRecord{}}
@@ -32,7 +29,6 @@ func TestTheUIDBaseIsPinnedToTheVolume(t *testing.T) {
 		t.Error("another base was accepted on a pinned volume")
 	}
 
-	// Not pinned, but an account says its uid.
 	w = newVolume(t)
 	w.accountsMu.Lock()
 	err := w.putRecord(IdentityForTest(1), accountRecord{Home: firstHome, User: 1, UID: 100000 + firstHome})
@@ -51,8 +47,6 @@ func TestTheUIDBaseIsPinnedToTheVolume(t *testing.T) {
 	}
 }
 
-// The worker's metadata directories are made with each one's parent synced, before an account is
-// recorded in them, so a crash can't keep a counter or a home and lose the record that owns it.
 func TestTheWorkersDirectoriesAreDurableBeforeUse(t *testing.T) {
 	var synced []string
 	syncedForTest = func(p string) { synced = append(synced, filepath.Clean(p)) }
@@ -79,19 +73,16 @@ func TestTheWorkersDirectoriesAreDurableBeforeUse(t *testing.T) {
 	}
 }
 
-// Every account that gets a home gets its uid with it, one a census brings back that never had a
-// home too; and an isolated volume with homes whose base nothing can rebuild doesn't start.
 func TestEveryHomeComesWithItsUID(t *testing.T) {
 	w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}, Isolation: &Isolation{UIDBase: 100000}}, accounts: map[string]accountRecord{}}
 	if err := mkdirDurable(w.accountsDir()); err != nil {
 		t.Fatal(err)
 	}
 	id := IdentityForTest(1)
-	// Deleted before the worker gave it a home, then brought back by a restore.
 	if err := w.retire(id, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.unretire(id, 1); err != nil { // a census registered after the retirement
+	if err := w.unretire(id, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, ok, err := w.find(id)
@@ -99,7 +90,6 @@ func TestEveryHomeComesWithItsUID(t *testing.T) {
 		t.Fatalf("the account a census brought back: %+v %v %v, want a home and its uid", r, ok, err)
 	}
 
-	// The same volume with no uid in its records and no pin: its base can't be rebuilt.
 	w.accountsMu.Lock()
 	r.UID = 0
 	err = w.putRecord(id, r)
@@ -112,8 +102,6 @@ func TestEveryHomeComesWithItsUID(t *testing.T) {
 	}
 }
 
-// A home's directory whose record was lost, with the pin, is a home given under some base: the
-// volume's base can't be rebuilt, and a worker doesn't start on it with isolation.
 func TestAnOrphanHomeKeepsTheUIDBaseFromBeingGuessed(t *testing.T) {
 	w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, accounts: map[string]accountRecord{}}
 	if err := mkdirDurable(w.accountsDir()); err != nil {
@@ -130,8 +118,6 @@ func TestAnOrphanHomeKeepsTheUIDBaseFromBeingGuessed(t *testing.T) {
 	}
 }
 
-// A handover says it worked only if a starting worker would trust what it wrote: here what it
-// wrote is damaged before it reads it back, and it says so.
 func TestAHandoverChecksWhatItWrote(t *testing.T) {
 	layout := Layout{Root: t.TempDir()}
 	trustHookForTest = func(l Layout) {
@@ -147,9 +133,6 @@ func TestAHandoverChecksWhatItWrote(t *testing.T) {
 	}
 }
 
-// A directory from before homes (Root/u<n>) stays on the volume until a census removes it, owned by
-// its old Unix user. A UID base that would give that uid to a new account's home is refused at
-// start, so the new account can't reach the old one's files; one that gives it to none is taken.
 func TestAUIDBaseIsNeverOneALegacyHomesOwnerWouldGetAgain(t *testing.T) {
 	w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, accounts: map[string]accountRecord{}}
 	if err := mkdirDurable(w.accountsDir()); err != nil {
@@ -158,19 +141,16 @@ func TestAUIDBaseIsNeverOneALegacyHomesOwnerWouldGetAgain(t *testing.T) {
 	if err := os.Mkdir(w.cfg.Layout.legacy(7), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	owner := os.Getuid() // the directory's owner here: the test's own uid
-	// A base under which the owner's uid is a home's (the tenth): refused, and nothing is pinned.
+	owner := os.Getuid()
 	if err := w.pinUIDBase(owner - firstHome - 10); err == nil {
 		t.Error("a UID base that gives a legacy home's owner to a new account was accepted")
 	}
 	if _, err := os.Stat(w.uidBaseFile()); err == nil {
 		t.Error("the refused base was pinned")
 	}
-	// The last home's uid is its owner: refused too.
 	if err := w.pinUIDBase(owner - (maxHome - 1)); err == nil {
 		t.Error("a UID base whose last home is a legacy home's owner was accepted")
 	}
-	// A base whose homes all lie above the owner: taken.
 	if err := w.pinUIDBase(owner + 1); err != nil {
 		t.Errorf("a UID base apart from the legacy home's owner: %v", err)
 	}

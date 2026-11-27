@@ -13,16 +13,12 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// fakeFiles measures spaces from a map; hook runs inside each measurement, for a test to hold
-// or fail it at a chosen point.
 type fakeFiles struct {
 	mu   sync.Mutex
 	size map[int64]int64
 	hook func(spaceID int64) error
 }
 
-// Usage reads the size first and runs the hook after, so a hook that holds the measurement
-// leaves it with the figure it read before.
 func (f *fakeFiles) Usage(sp access.Space) (int64, int64, error) {
 	f.mu.Lock()
 	n := f.size[sp.ID]
@@ -41,7 +37,6 @@ func (f *fakeFiles) set(id, n int64) {
 	f.size[id] = n
 }
 
-// twoSpaces makes a workspace with two shared spaces, 1 and 2, and returns them.
 func twoSpaces(t *testing.T) (*sql.DB, access.Space, access.Space) {
 	t.Helper()
 	ctx := context.Background()
@@ -64,8 +59,6 @@ func twoSpaces(t *testing.T) (*sql.DB, access.Space, access.Space) {
 	return sqlDB, access.Space{ID: 1, WorkspaceID: 1}, access.Space{ID: 2, WorkspaceID: 1}
 }
 
-// rendezvous makes the first n callers wait for each other (or for the timeout), so a test
-// can have several checks all measure before any of them decides.
 type rendezvous struct {
 	mu      sync.Mutex
 	arrived int
@@ -91,15 +84,13 @@ func (r *rendezvous) wait() {
 	}
 }
 
-// Two writers in different spaces, each measuring before the other has stored anything, can't
-// both take the last of the workspace's bytes.
 func TestConcurrentWritesInDifferentSpacesCannotBothFit(t *testing.T) {
 	sqlDB, a, b := twoSpaces(t)
 	files := &fakeFiles{size: map[int64]int64{}}
 	meet := newRendezvous(2)
 	files.hook = func(id int64) error {
 		if id == 1 {
-			meet.wait() // both checks have measured the workspace before either decides
+			meet.wait()
 		}
 		return nil
 	}
@@ -128,7 +119,6 @@ func TestConcurrentWritesInDifferentSpacesCannotBothFit(t *testing.T) {
 		t.Fatalf("%d of two 60-byte writes refused in a 100-byte workspace, want exactly 1 (%v)", refused, results)
 	}
 
-	// Once the winner's bytes are stored and its reservation released, they still count: not twice, not zero.
 	for _, r := range held {
 		if r != nil {
 			files.set(1, 60)
@@ -143,8 +133,6 @@ func TestConcurrentWritesInDifferentSpacesCannotBothFit(t *testing.T) {
 	}
 }
 
-// A write that stores its bytes and releases between another check's measuring and deciding
-// must not leave that check with the old figures.
 func TestCheckMeasuresAgainWhenAWriteFinishedMeanwhile(t *testing.T) {
 	sqlDB, a, b := twoSpaces(t)
 	files := &fakeFiles{size: map[int64]int64{}}
@@ -159,7 +147,7 @@ func TestCheckMeasuresAgainWhenAWriteFinishedMeanwhile(t *testing.T) {
 	files.hook = func(int64) error {
 		once.Do(func() {
 			close(measured)
-			<-proceed // the first measurement of the check below holds here, with a's size still 0
+			<-proceed
 		})
 		return nil
 	}
@@ -169,7 +157,6 @@ func TestCheckMeasuresAgainWhenAWriteFinishedMeanwhile(t *testing.T) {
 		done <- err
 	}()
 	<-measured
-	// The writer stores its bytes, publishes them and gives its reservation back.
 	files.set(1, 60)
 	first.Release()
 	close(proceed)
@@ -178,7 +165,6 @@ func TestCheckMeasuresAgainWhenAWriteFinishedMeanwhile(t *testing.T) {
 	}
 }
 
-// A space that can't be measured is not an empty one: the write is refused, retryably.
 func TestAnUnmeasurableSpaceRefusesTheWrite(t *testing.T) {
 	sqlDB, a, b := twoSpaces(t)
 	files := &fakeFiles{size: map[int64]int64{}}
@@ -197,7 +183,6 @@ func TestAnUnmeasurableSpaceRefusesTheWrite(t *testing.T) {
 	if api, ok := AsAPI(err); !ok || api.Status != 503 || api.Code != "quota_unavailable" {
 		t.Fatalf("AsAPI = %+v, %v", api, ok)
 	}
-	// Nothing was reserved by the refused write.
 	files.hook = nil
 	if err := s.CheckDB(context.Background(), a, 100); err != nil {
 		t.Fatalf("a refused write left a reservation: %v", err)

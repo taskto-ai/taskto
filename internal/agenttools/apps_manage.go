@@ -9,11 +9,6 @@ import (
 	"taskto.ai/taskto/internal/apps"
 )
 
-// The tools for templates, copies and diagnosis of apps. Installing and duplicating make a
-// new app whose DRAFT is a copy of a definition, as the API's routes do: nothing is published,
-// no row, release, role assignment or secret is copied. The read tools show what the user's own
-// roles in the app let them see; none of them writes, and there is no tool to set roles.
-
 func (s *Service) listAppTemplates(_ context.Context, _ *call, args json.RawMessage) (any, error) {
 	if err := decode(args, &struct{}{}); err != nil {
 		return nil, err
@@ -44,8 +39,7 @@ func (s *Service) installAppTemplate(ctx context.Context, c *call, args json.Raw
 func (s *Service) duplicateApp(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		appRef
-		Name string `json:"name"`
-		// DestinationSpaceID is the space of the copy: the source's if left out.
+		Name               string `json:"name"`
 		DestinationSpaceID int64  `json:"destination_space_id"`
 		Source             string `json:"source"`
 	}
@@ -55,8 +49,6 @@ func (s *Service) duplicateApp(ctx context.Context, c *call, args json.RawMessag
 	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	// The destination is checked, in the call's workspace, as the source is: a space of
-	// another workspace is as unseen as one that doesn't exist.
 	if a.DestinationSpaceID != 0 {
 		if err := s.appSpace(ctx, c, a.DestinationSpaceID); err != nil {
 			return nil, err
@@ -86,8 +78,6 @@ func (s *Service) listAppEffects(ctx context.Context, c *call, args json.RawMess
 	if err != nil {
 		return nil, err
 	}
-	// The newest that fit; More says there are older ones, and the last ID shown is the
-	// next call's before.
 	_, res, err := fitting(len(list.Effects), func(n int) any {
 		shown := list
 		shown.Effects = list.Effects[:n]
@@ -100,7 +90,6 @@ func (s *Service) listAppEffects(ctx context.Context, c *call, args json.RawMess
 func (s *Service) listAppReleases(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		appRef
-		// Before is the release number to page from: the releases older than it.
 		Before int64 `json:"before"`
 	}
 	if err := decode(args, &a); err != nil {
@@ -116,12 +105,9 @@ func (s *Service) listAppReleases(ctx context.Context, c *call, args json.RawMes
 	if err != nil {
 		return nil, err
 	}
-	// Newest first, so the older ones are the tail from the first number below before.
 	if a.Before > 0 {
 		list = list[sort.Search(len(list), func(i int) bool { return list[i].Number < a.Before }):]
 	}
-	// The size measured is that of the reply sent, the keys that say it is cut short
-	// included; next is the last number shown, the next call's before.
 	_, res, err := fitting(len(list), func(n int) any {
 		if n < len(list) {
 			return map[string]any{"releases": list[:n], "truncated": true, "next": list[max(n-1, 0)].Number}

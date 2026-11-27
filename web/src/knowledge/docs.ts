@@ -1,7 +1,3 @@
-// The knowledge base's data and the rules every part shares: the API's shapes, a document's
-// path in a URL, what a refusal means, what kind of file a path names, and the loading of the
-// list and of one document.
-
 import { useRef } from 'react'
 import { ApiError, api, type Doc } from '../api'
 import { has, type T } from '../i18n'
@@ -9,8 +5,6 @@ import { useLoad } from '../load'
 
 export type Change = { commit: string; doc?: Doc }
 
-// The address the server gives the author of a commit whose account was deleted (internal/knowledge,
-// DeletedAuthorEmail): shown translated, not as the name stored in git.
 const DELETED_AUTHOR = 'deleted-user@deleted.invalid'
 export const authorName = (a: { name: string; email: string }, t: T) =>
   a.email === DELETED_AUTHOR ? t('common.deletedUser') : a.name
@@ -23,26 +17,19 @@ export type Commit = {
   message: string
   change?: 'create' | 'update' | 'delete'
   version?: string
-  // false for a version whose bytes aren't kept: an unversioned file's, or one removed
-  // from history.
   versioned?: boolean
 }
 
 export const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/')
 
 export const isConflict = (e: unknown) => e instanceof ApiError && e.status === 409
-// What a request asked for is gone or changed: a conflict, or (for a history page that starts
-// after a commit the history no longer has) the server's 404.
 export const isStale = (e: unknown) => e instanceof ApiError && (e.status === 409 || e.status === 404)
-// A conflict the server named (doc_changed, doc_exists…): its message says what happened.
 export const isNamedConflict = (e: unknown) =>
   e instanceof ApiError && e.status === 409 && !!e.code && e.code !== 'doc_conflict' && has(`errors.${e.code}`)
 export const isMarkdown = (path: string) => /\.md$/i.test(path)
-// Audio and video the browser can play, by extension (the server sends their media type).
 export const isVideo = (path: string) => /\.(mp4|m4v|mov|webm|ogv)$/i.test(path)
 export const isAudio = (path: string) => /\.(mp3|m4a|aac|wav|flac|ogg|oga|opus|weba)$/i.test(path)
 
-// Every page of the list: a space has at most a few thousand documents.
 async function listDocs(base: string): Promise<Doc[]> {
   const docs: Doc[] = []
   let after = ''
@@ -56,8 +43,6 @@ async function listDocs(base: string): Promise<Doc[]> {
   return docs
 }
 
-// A link in a document to another one (relative to its folder) opens it here; null for a
-// link that isn't one, or leaves the space.
 export function resolveDocLink(from: string, href: string): string | null {
   if (/^([a-z][a-z0-9+.-]*:|\/|#|\?)/i.test(href)) return null
   let target: string
@@ -76,27 +61,15 @@ export function resolveDocLink(from: string, href: string): string | null {
   return parts.length > 0 ? parts.join('/') : null
 }
 
-// What is shown now, which a callback made earlier can read: an answer is applied only if what
-// it was asked for (the space, the document, the list's generation) is still what is shown.
-//
-//   const now = useLatest(base)
-//   ...
-//   const made = base
-//   api(...).then((res) => now.current === made && apply(res))
 export function useLatest<T>(value: T) {
   const ref = useRef(value)
   ref.current = value
   return ref
 }
 
-// Whether the part that made a request is still on the screen when its answer comes: an action
-// the person asked for is finished either way (the list reloads), but what it would open is
-// opened only for someone who is still there.
 export { useMounted } from '../mounted'
 
-// The space's documents, every page of them; nothing while there is no space.
 export const useDocs = (base: string | null) =>
   useLoad(() => (base ? listDocs(base) : Promise.resolve(undefined)), [base])
 
-// One document (or a version of it, with `?at=` in the URL), with its content.
 export const useDoc = (url: string) => useLoad(() => api<Doc>(url), [url])

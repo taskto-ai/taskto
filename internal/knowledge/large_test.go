@@ -26,7 +26,6 @@ func pointerText(b []byte) string {
 	return string(pointer{oid: oidOf(b), size: int64(len(b))}.encode())
 }
 
-// objectsOnDisk lists the oids under the space's .git/lfs/objects.
 func objectsOnDisk(t *testing.T, dataDir string, sp access.Space) []string {
 	t.Helper()
 	var oids []string
@@ -66,7 +65,7 @@ func TestUnversionedFiles(t *testing.T) {
 		t.Fatalf("big.bin = %+v, want unversioned, 200 bytes", r.Doc)
 	}
 	clip := []byte("tiny video")
-	must[Result](t)(s.Put(ctx, sp, "media/clip.MP4", clip, "", alice, "")) // audio and video, whatever their size and case
+	must[Result](t)(s.Put(ctx, sp, "media/clip.MP4", clip, "", alice, ""))
 	if code := must[Result](t)(s.Put(ctx, sp, "src/app.ts", []byte("export {}"), "", alice, "")); !code.Doc.Versioned {
 		t.Fatal("a TypeScript file was taken for video")
 	}
@@ -76,9 +75,8 @@ func TestUnversionedFiles(t *testing.T) {
 		t.Fatal("a file at the limit isn't versioned")
 	}
 	_, err := s.Put(ctx, sp, "long.md", bytesOf(151, 'm'), "", alice, "")
-	wantErr(t, err, ErrTooLarge) // Markdown is always versioned, so at most the limit
+	wantErr(t, err, ErrTooLarge)
 
-	// Git holds pointers, the bytes are beside it, and the checkout is clean.
 	if got, want := objectsOnDisk(t, dataDir, sp), sortedOIDs(big, clip); !slices.Equal(got, want) {
 		t.Fatalf("objects = %v, want %v", got, want)
 	}
@@ -108,7 +106,6 @@ func TestUnversionedFiles(t *testing.T) {
 		t.Fatalf("open = %q", got)
 	}
 
-	// Replacing it frees the old bytes at once: that version can't be read or restored.
 	first := r.Commit
 	bigger := bytesOf(300, 'B')
 	r = must[Result](t)(s.Put(ctx, sp, "big.bin", bigger, r.Doc.Version, alice, ""))
@@ -122,12 +119,10 @@ func TestUnversionedFiles(t *testing.T) {
 	if h := must[History](t)(s.History(ctx, sp, "big.bin", "", 0)); len(h.Commits) != 2 {
 		t.Fatalf("history = %+v, want the two changes", h.Commits)
 	}
-	// The old version as listed is still there, without its bytes.
 	if old := must[Doc](t)(s.Read(ctx, sp, "big.bin", first)); old.Size != 200 || old.Versioned {
 		t.Fatalf("old version = %+v", old.Entry)
 	}
 
-	// Moves keep the bytes; nothing unversioned becomes Markdown, nor the other way round.
 	r = must[Result](t)(s.Move(ctx, sp, "big.bin", "media/big.bin", "", alice, ""))
 	if r.Doc.Versioned || r.Doc.Size != 300 {
 		t.Fatalf("moved = %+v", r.Doc)
@@ -138,21 +133,18 @@ func TestUnversionedFiles(t *testing.T) {
 	_, err = s.Move(ctx, sp, "media/big.bin", "big.md", "", alice, "")
 	wantErr(t, err, ErrInvalid)
 	_, err = s.Put(ctx, sp, "pointer.md", []byte(pointerText(clip)), "", alice, "")
-	wantErr(t, err, ErrInvalid) // Markdown that would read as a version taken out of history
+	wantErr(t, err, ErrInvalid)
 	must[Result](t)(s.Move(ctx, sp, "media", "videos", "", alice, ""))
 	if got := must[[]byte](t)(openBytes(t, s, sp, "videos/clip.MP4", "")); !bytes.Equal(got, clip) {
 		t.Fatal("the folder's move lost the bytes")
 	}
 
-	// Deleting frees them too.
 	must[Result](t)(s.Delete(ctx, sp, "videos/big.bin", "", alice, ""))
 	if got, want := objectsOnDisk(t, dataDir, sp), sortedOIDs(clip); !slices.Equal(got, want) {
 		t.Fatalf("objects after the delete = %v, want %v", got, want)
 	}
 }
 
-// Heavy binaries are unversioned at any size, by their extension in any case; Markdown
-// never is, and kinds that are often small stay versioned under the limit.
 func TestAlwaysUnversionedTypes(t *testing.T) {
 	for _, name := range []string{
 		"a.zip", "b.ZIP", "c.7z", "d.rar", "e.tar", "f.tar.gz", "g.TGZ", "h.xz", "i.bz2", "j.zst",
@@ -189,7 +181,7 @@ func TestAlwaysUnversionedTypes(t *testing.T) {
 	if !r.Doc.Versioned {
 		t.Error("a Markdown document was kept out of git")
 	}
-	if got := objectsOnDisk(t, dataDir, sp); len(got) != 2 { // "a few bytes" once, and "seven"
+	if got := objectsOnDisk(t, dataDir, sp); len(got) != 2 {
 		t.Errorf("objects = %v, want 2", got)
 	}
 }
@@ -206,8 +198,6 @@ func isExtension(s string) bool {
 	return true
 }
 
-// Audio and video, and the heavy binaries, are separate lists: an extension in both
-// would have two answers to what it is.
 func TestUnversionedListsAreDisjoint(t *testing.T) {
 	for ext := range heavyTypes {
 		if mediaTypes[ext] != "" {
@@ -224,7 +214,6 @@ func TestUnversionedListsAreDisjoint(t *testing.T) {
 	}
 }
 
-// docs/api.md lists every extension that is always unversioned, and none that isn't.
 func TestUnversionedTypesAreDocumented(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "api.md"))
 	if err != nil {
@@ -236,7 +225,6 @@ func TestUnversionedTypesAreDocumented(t *testing.T) {
 	if start < 0 || end < start {
 		t.Fatal("docs/api.md has no unversioned-types block")
 	}
-	// Every code span in the block that is an extension; one listed twice is a mistake.
 	var listed []string
 	for i, field := range strings.Split(doc[start:end], "`") {
 		if i%2 == 1 && isExtension(field) {
@@ -258,8 +246,6 @@ func sortedOIDs(contents ...[]byte) []string {
 	return oids
 }
 
-// Bytes that read as a pointer are kept as an unversioned file's, so they read back as
-// they were, and gc never takes the bytes they would point to for its own.
 func TestPointerShapedContent(t *testing.T) {
 	s, _ := newStore(t, Options{})
 	sp := writable(1)
@@ -271,8 +257,6 @@ func TestPointerShapedContent(t *testing.T) {
 	if got := must[[]byte](t)(openBytes(t, s, sp, "fake.txt", "")); !bytes.Equal(got, fake) {
 		t.Fatalf("read back %q", got)
 	}
-	// As Markdown it is refused: it would read as an older version taken out of history.
-	// Anything else, even one byte more, is text like any other.
 	_, err := s.Put(ctx, sp, "fake.md", fake, "", alice, "")
 	wantErr(t, err, ErrInvalid)
 	md := must[Result](t)(s.Put(ctx, sp, "fake.md", append(fake, '\n'), "", alice, ""))
@@ -311,7 +295,6 @@ func TestPutFileStreams(t *testing.T) {
 	wantErr(t, err, ErrTooLarge)
 	_, err = s.PutFile(ctx, sp, "a.bin", bytes.NewReader(bytesOf(600, 'x')), "", alice, "")
 	wantErr(t, err, ErrConflict)
-	// Nothing staged is left behind.
 	entries, err := os.ReadDir(filepath.Join(sp.Dir(dataDir), filepath.FromSlash(tmpDir)))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("staged files left: %v, %v", entries, err)
@@ -327,14 +310,11 @@ func TestUnversionedLimit(t *testing.T) {
 	r := must[Result](t)(s.Put(ctx, sp, "a.bin", bytesOf(300, 'a'), "", alice, ""))
 	_, err := s.Put(ctx, sp, "b.bin", bytesOf(300, 'b'), "", alice, "")
 	wantErr(t, err, ErrRepoFull)
-	// Replacing a file counts only the new bytes: the old ones go with the change.
 	r = must[Result](t)(s.Put(ctx, sp, "a.bin", bytesOf(400, 'A'), r.Doc.Version, alice, ""))
 	must[Result](t)(s.Delete(ctx, sp, "a.bin", r.Doc.Version, alice, ""))
 	must[Result](t)(s.Put(ctx, sp, "b.bin", bytesOf(300, 'b'), "", alice, ""))
 }
 
-// What a process that stopped mid-change or mid-upload leaves, bytes nothing points to and
-// old staged uploads, goes at the next change that collects.
 func TestLeftoversAreCollected(t *testing.T) {
 	s, dataDir := newStore(t, Options{})
 	sp := writable(1)
@@ -370,7 +350,6 @@ func TestLeftoversAreCollected(t *testing.T) {
 	}
 }
 
-// .git's own limit doesn't count the unversioned files' bytes, which have theirs.
 func TestRepoLimitLeavesOutUnversionedBytes(t *testing.T) {
 	s, _ := newStore(t, Options{LargeFileSize: 10, MaxRepoSize: 16 << 10})
 	sp := writable(1)

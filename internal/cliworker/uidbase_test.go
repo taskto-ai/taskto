@@ -2,8 +2,6 @@ package cliworker
 
 import "testing"
 
-// The first uid is checked against both ends: above every system uid, and low enough that every
-// home's uid is a valid one below the 32-bit nobody, so no addition overflows or wraps to another.
 func TestTheUIDBaseKeepsEveryHomesUIDValid(t *testing.T) {
 	for _, base := range []int{-1, 0, 1000, minUIDBase - 1, maxUIDBase + 1, maxUID, 1 << 62} {
 		if checkUIDBase(base) == nil {

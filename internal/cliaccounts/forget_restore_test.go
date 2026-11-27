@@ -24,7 +24,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// openData opens (and migrates) the database of data directory dir.
 func openData(t *testing.T, dir string) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -39,8 +38,6 @@ func openData(t *testing.T, dir string) *sql.DB {
 	return sqlDB
 }
 
-// newUser adds a user the way the server does: with a number above every number there has been
-// (auth's insertUser), so a purged account's number is not given again by this database.
 func newUser(t *testing.T, sqlDB *sql.DB, email string) int64 {
 	t.Helper()
 	var id int64
@@ -54,7 +51,6 @@ func newUser(t *testing.T, sqlDB *sql.DB, email string) int64 {
 	return id
 }
 
-// purge deletes user from the database and has the worker forget them, as the account purge does.
 func purge(t *testing.T, svc *Service, sqlDB *sql.DB, user int64) {
 	t.Helper()
 	if _, err := sqlDB.Exec(`DELETE FROM users WHERE id = ?`, user); err != nil {
@@ -65,7 +61,6 @@ func purge(t *testing.T, svc *Service, sqlDB *sql.DB, user int64) {
 	}
 }
 
-// accountIn is user's account as svc names it.
 func accountIn(t *testing.T, svc *Service, user int64) cliowner.Account {
 	t.Helper()
 	a, err := svc.Account(context.Background(), user)
@@ -75,20 +70,13 @@ func accountIn(t *testing.T, svc *Service, user int64) cliowner.Account {
 	return a
 }
 
-// A restore of the server's data goes back in the database's history, while the CLI worker's own
-// directory (a volume of its own in container mode) is not part of the backup. An account a purge
-// retired is refused until a census says it is live again (the restore brought it back); an account
-// gone for good stays refused; and a new account given a number the lost history used is served at
-// once, before any census, in a home of its own.
 func TestARetiredAccountComesBackOnlyWithACensus(t *testing.T) {
 	ctx := context.Background()
 	dataA := t.TempDir()
 	dbA := openData(t, dataA)
-	// The worker is on a root of its own, as the container worker is: no backup covers it.
 	e := newEnv(t, Container, nil)
 	svcA := New(dbA, Container, LocalWorker(e.worker))
 	t.Cleanup(svcA.Close)
-	// The server's census at its start: deletions are taken after it.
 	if err := svcA.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -97,18 +85,16 @@ func TestARetiredAccountComesBackOnlyWithACensus(t *testing.T) {
 	gone := newUser(t, dbA, "gone@example.com")
 	back := newUser(t, dbA, "back@example.com")
 	goneAcct, backAcct := accountIn(t, svcA, gone), accountIn(t, svcA, back)
-	purge(t, svcA, dbA, gone) // purged before the backup: gone for good
+	purge(t, svcA, dbA, gone)
 
 	var archive bytes.Buffer
 	if _, err := backup.Create(ctx, dataA, "test", &archive, backup.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	// After the backup: a person is added and deleted, and the account that is in the backup is
-	// purged.
 	later := newUser(t, dbA, "later@example.com")
 	purge(t, svcA, dbA, later)
 	purge(t, svcA, dbA, back)
-	time.Sleep(20 * time.Millisecond) // the retirements are older than the next server's read
+	time.Sleep(20 * time.Millisecond)
 
 	dataB := filepath.Join(t.TempDir(), "restored")
 	if _, err := backup.Restore(ctx, bytes.NewReader(archive.Bytes()), dataB); err != nil {
@@ -122,7 +108,6 @@ func TestARetiredAccountComesBackOnlyWithACensus(t *testing.T) {
 		t.Fatalf("fixture: the restored database gave %d, want %d (the number the lost history used)", fresh, later)
 	}
 
-	// Before any census: the restored account is still refused, and the new person is served.
 	if _, err := svcB.worker.StartLogin(back, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("a retired account before the census said it is live: %v", err)
 	}
@@ -140,11 +125,9 @@ func TestARetiredAccountComesBackOnlyWithACensus(t *testing.T) {
 		}
 		_ = svcB.worker.CancelLogin(user, cliworker.Claude, "")
 	}
-	// The account gone before the backup stays refused, by the worker itself.
 	if _, err := e.worker.StartLogin(goneAcct, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("an account that is gone for good was let back: %v", err)
 	}
-	// And a turn runs on the restored person's own login.
 	dirs, err := e.worker.AccountDirs(backAcct, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +160,6 @@ func waitTurn(t *testing.T, turn *cliworker.Turn) {
 	}
 }
 
-// flakyWorker is a worker that can't be reached for its first few Reconcile calls.
 type flakyWorker struct {
 	Worker
 	fails atomic.Int32
@@ -193,13 +175,9 @@ func (f *flakyWorker) Reconcile(ctx context.Context, c cliworker.Census) error {
 	return err
 }
 
-// A worker that can't be reached when the server starts (in container mode it starts beside it)
-// is told as soon as it can be, and its refusal of a forgotten user is an answer the API gives
-// with a code the web app translates.
 func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	ctx := context.Background()
-	// The server's census at its start: deletions are taken after it.
 	if err := e.svc.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -228,16 +206,11 @@ func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	}
 }
 
-// An account whose purge began keeps its mark across a start of the server, until the purge has
-// deleted it: the purge forgets the worker's files before it deletes the account, and one that
-// failed in between is made again from its start. A person whose deletion is only requested is
-// not forgotten yet, and nothing marks them.
 func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	ctx := context.Background()
 	begun := newUser(t, e.db, "begun@example.com")
 	other := newUser(t, e.db, "other@example.com")
-	// The server's census at its start: deletions are taken after it.
 	if err := e.svc.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -249,8 +222,7 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	if _, err := e.db.Exec(`INSERT INTO account_deletions (user_id, requested_at, purge_at, purge_started_at) VALUES (?, 'x', 'x', 'x')`, begun); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond) // the marks are older than the read
-	// The server starts again (a boot of its own) and sends its census.
+	time.Sleep(20 * time.Millisecond)
 	again := New(e.db, Container, LocalWorker(e.worker))
 	t.Cleanup(again.Close)
 	if err := again.ReconcileForgotten(ctx); err != nil {
@@ -265,10 +237,6 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	_ = again.worker.CancelLogin(other, cliworker.Claude, "")
 }
 
-// A CLI worker started again on its own, having lost its history of server boots, can't tell this
-// server from an earlier one: it refuses the deletion, again and again, without retiring anything.
-// Once an operator hands it over to this server (by its boot), the deletion completes, with no
-// start of the server.
 func TestADeletionWaitsForTheOperatorAfterTheWorkerLostItsHistory(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, Container, nil)
@@ -316,11 +284,6 @@ func TestADeletionWaitsForTheOperatorAfterTheWorkerLostItsHistory(t *testing.T) 
 	}
 }
 
-// Two servers of separate data directories (a move to a new host while the old one still runs)
-// can't both act on one worker: the first one's census pins the worker's volume to its
-// installation, and the second's census and deletions are refused, nothing removed; its operators
-// see it. A restore of the same installation (TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory)
-// is the same installation, and goes on.
 func TestAServerOfAnotherDataDirectoryCannotActOnTheWorker(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, Container, nil)
@@ -340,7 +303,6 @@ func TestAServerOfAnotherDataDirectoryCannotActOnTheWorker(t *testing.T) {
 	if err := svcB.ReconcileForgotten(ctx); !errors.Is(err, cliowner.ErrOtherInstallation) {
 		t.Errorf("the other data directory's census: %v, want ErrOtherInstallation", err)
 	}
-	// Its purge of the number, with the identity its step kept.
 	if err := svcB.Forget(cliowner.With(ctx, accountIn(t, e.svc, user).Identity), user); !errors.Is(err, cliowner.ErrOtherInstallation) {
 		t.Errorf("the other data directory's deletion: %v, want ErrOtherInstallation", err)
 	}

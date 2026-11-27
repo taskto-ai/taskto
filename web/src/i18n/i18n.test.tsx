@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   browserLocale,
   direction,
+  type Key,
   LOCALES,
   localeName,
   match,
@@ -64,7 +65,6 @@ describe('locales', () => {
     const serbian = ['en', 'sr-Cyrl', 'sr-Latn']
     expect(match(['sr-Latn-RS'], serbian)).toBe('sr-Latn')
     expect(match(['sr'], serbian)).toBe('sr-Cyrl')
-    // With only the other script, the same language still beats none.
     expect(match(['sr-Latn'], ['en', 'sr-Cyrl'])).toBe('sr-Cyrl')
   })
 
@@ -74,7 +74,6 @@ describe('locales', () => {
     expect(resolve({ user: null, browser: ['fr-FR', 'pt-BR'], workspace: 'de' }, available)).toBe('pt-BR')
     expect(resolve({ user: null, browser: ['fr-FR'], workspace: 'de' }, available)).toBe('de')
     expect(resolve({ user: null, browser: ['fr-FR'], workspace: null }, available)).toBe('en')
-    // A pick the app no longer has falls through to the rest.
     expect(resolve({ user: 'ja', browser: ['fr-FR'], workspace: 'de' }, available)).toBe('de')
   })
 })
@@ -119,7 +118,6 @@ describe('messages', () => {
     expect(screen.getByText('Alice').tagName).toBe('B')
     expect(screen.getByRole('paragraph').textContent).toBe('Read the docs, Alice.')
     cleanup()
-    // A placeholder inside a tag's text is filled in before the tag wraps it.
     render(
       <p>
         {rich('licence', {
@@ -140,8 +138,11 @@ describe('messages', () => {
   })
 
   it('checks keys when it compiles', () => {
-    // @ts-expect-error: not a key in en.json
-    expect(t('shell.noSuchKey')).toBe('shell.noSuchKey')
+    const unknownKeyRefused: 'shell.noSuchKey' extends Key ? false : true = true
+    const knownKeyAccepted: 'shell.logOut' extends Key ? true : false = true
+    expect(unknownKeyRefused).toBe(true)
+    expect(knownKeyAccepted).toBe(true)
+    expect((t as (key: string) => string)('shell.noSuchKey')).toBe('shell.noSuchKey')
     expect(t('shell.logOut')).toBe('Log out')
   })
 })
@@ -170,7 +171,6 @@ describe('switching', () => {
 
   it("follows the workspace's default without a pick", async () => {
     await act(() => setPreferences({ user: null, workspace: 'pt-BR' }))
-    // jsdom's navigator.languages is en-US: English, which the app has, wins.
     expect(t('shell.logOut')).toBe('Log out')
     expect(localStorage.getItem('taskto.locale')).toBeNull()
   })
@@ -206,9 +206,7 @@ describe('calendar dates', () => {
 
   it('shows the day that was written, in any year and time zone', () => {
     const { result } = renderHook(() => useFormat())
-    // Years under 100 aren't 19xx.
     expect(result.current.calendarDate('0099-01-02')).toBe('Jan 2, 99')
-    // Apia skipped 2011-12-30: a local-time date for it lands on the 31st.
     process.env.TZ = 'Pacific/Apia'
     expect(result.current.calendarDate('2011-12-30')).toBe('Dec 30, 2011')
     process.env.TZ = 'America/Los_Angeles'
@@ -222,7 +220,6 @@ describe('sizes', () => {
       await setPreferences({ user: tag, workspace: null })
       const { result } = renderHook(() => useFormat())
       const bytes = result.current.bytes
-      // Not "41 byte" or "41 bytes": the unit is a symbol, like kB and MB.
       expect(bytes(41), tag).toMatch(/^41\s?B$/)
       expect(bytes(1), tag).toMatch(/^1\s?B$/)
       expect(bytes(0), tag).toMatch(/^0\s?B$/)

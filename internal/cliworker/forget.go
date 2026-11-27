@@ -12,33 +12,14 @@ import (
 	"taskto.ai/taskto/internal/cliowner"
 )
 
-// ErrForgotten: the account is retired (a deleted account, or one of a history a restore of the
-// server's data went back from): nothing starts for it.
 var ErrForgotten = errors.New("this account's CLI files were removed with it")
 
-// ErrIncomplete is Reconcile's answer when it couldn't remove everything of the accounts it
-// retired yet (a process that didn't end in time, say). They are refused anyway; the server tries
-// again.
 var ErrIncomplete = errors.New("some retired accounts' files could not be removed yet; they are refused, and it is tried again")
 
-// Forget retires the account a names, for an account that is deleted, and removes what the worker
-// keeps of it: its turns (the ones waiting for a place too), sign-ins, helper requests, browsers
-// and processes are stopped and waited for, then its home goes, with its logins, sessions, working
-// directories and browser profile. The retirement is durable and comes first: nothing starts for
-// the account from then on, even if the removal fails (ErrBusy, say) and is tried again. Only that
-// account's home is ever touched: another account given the number since has a home of its own.
-//
-// A purge step from before identities were kept names none: then only the number's directory from
-// before homes (Root/u<n>), if any, goes.
 func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 	if a.User <= 0 || (a.Identity != "" && !cliowner.IsIdentity(a.Identity)) {
 		return badRequest{errors.New("invalid account")}
 	}
-	// One at a time with the censuses, and only for the latest server boot of the volume's
-	// installation, the worker holding its authority: a deletion an earlier server sent, delayed
-	// past a restore that brought the account back, or another installation's, retires nothing.
-	// One whose caller has gone while it waited (its server stopped) does nothing. A purge step
-	// from before identities were kept is a deletion too, and is fenced the same.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -58,13 +39,12 @@ func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Retired first, and also when the worker has nothing of it: nothing is made for it later.
 	if err := w.retire(a.Identity, a.User); err != nil {
 		return fmt.Errorf("recording that the account is gone: %w", err)
 	}
 	r, ok, err := w.find(a.Identity)
 	if err != nil || !ok || r.Home == 0 {
-		return err // nothing of the account is here
+		return err
 	}
 	if err := w.removeAccount(ctx, account{id: a.Identity, user: r.User, home: r.Home}); err != nil {
 		return err
@@ -72,20 +52,11 @@ func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 	return w.markCleaned(a.Identity)
 }
 
-// Census is what the server's database says when it reads it, for Reconcile.
 type Census struct {
-	// Owners is each live user's identity (users.cli_identity), by number; an account whose purge
-	// has begun is not live.
-	Owners map[int64]string `json:"owners"`
-	// Boot is the server's own: a random value it takes when it starts, and sends with every
-	// request (cliowner.Account).
-	Boot string `json:"boot"`
-	// Installation is the server's (cliowner.Account.Installation): the first census pins the
-	// volume to it, and another installation's census is refused.
-	Installation string `json:"installation"`
-	// Before is when the server read its database, for the logs: nothing is decided by it (the
-	// worker orders boots by when it registered them, volume.go).
-	Before time.Time `json:"before"`
+	Owners       map[int64]string `json:"owners"`
+	Boot         string           `json:"boot"`
+	Installation string           `json:"installation"`
+	Before       time.Time        `json:"before"`
 }
 
 func (c Census) check() error {
@@ -100,39 +71,17 @@ func (c Census) check() error {
 	return nil
 }
 
-// Reconcile brings the worker in line with the server's database, which a restore of the server's
-// data may have taken back in its history (the server calls it at every start, and again until it
-// succeeds). For each account the worker has a record of:
-//
-//   - live in the census: a retirement made before the census was registered is taken back (a
-//     restore brought the account back);
-//   - not live, but made by a request of this server's boot, or made since the census was
-//     registered: kept;
-//   - otherwise: retired, and its files and processes removed (tidying up: its home and uid are
-//     never another account's).
-//
-// The directories from before homes (Root/u<n>) are removed too, unless the worker adopts them
-// (Config.AdoptLegacy, local mode), and what an earlier removal left in the trash is deleted. The
-// agent browsers' own refusals of live accounts are taken back. What couldn't be removed yet makes
-// the answer ErrIncomplete; the accounts are refused all the same.
 func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	if err := c.check(); err != nil {
 		return badRequest{err}
 	}
-	// The boot's number is given as the census arrives, before it waits for the lock: of two
-	// censuses, the one that arrived first has the lower number, whichever runs first.
 	n := w.reserveBoot(c.Boot)
 	defer w.unreserveBoot(c.Boot)
 	if hook := w.arrivedHookForTest; hook != nil {
 		hook(c.Boot)
 	}
-	// One at a time, and only the latest server boot's: a census an earlier server sent (one a
-	// restore replaced, still running or delayed) would retire the accounts the later one made.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
-	// A census whose caller has gone while it waited (its server stopped: one server runs on a
-	// data directory, so an earlier server's census is late only if it was in flight then) does
-	// nothing, and registers nothing.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -156,12 +105,8 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 				return err
 			}
 		case r.Installation != "" && r.Installation != c.Installation:
-			// Another installation's (the volume's pin refuses its censuses; this keeps it so).
 		case !r.Retired && (r.Boot == c.Boot || r.Gen >= seq):
-			// Made by this census's server since it read its database, or made since the census was
-			// registered (by a later server, whose census is still to come). Kept.
 		default:
-			// A caller that has given up retires nothing more.
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(errs, err)...)
 			}
@@ -175,9 +120,6 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			if r.Home == 0 {
 				continue
 			}
-			// Retired and stopped are one step: once the retirement is recorded, what runs for the
-			// account is stopped even if the caller has gone meanwhile. A retry that finds it
-			// retired would otherwise not stop it (tidy).
 			if err := w.tidy(context.WithoutCancel(ctx), account{id: id, user: r.User, home: r.Home}, r.Retired && r.Cleaned); err != nil {
 				if ctx.Err() != nil {
 					return errors.Join(append(errs, err)...)
@@ -203,10 +145,6 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 		errs = append(errs, err)
 	}
 	if b := w.browserStopper(); b != nil {
-		// The records decide, not a clock: the browsers' refusals of the accounts this census
-		// brought back go, and those of accounts retired since it was registered (a deletion
-		// running now) stay. Deletions wait for the census lock, so every refusal there is now
-		// was made before this point of the worker's own time.
 		b.Unforget(func(id string) bool { return live[id] && !w.retired(id) }, time.Now())
 	}
 	if len(errs) > 0 {
@@ -215,13 +153,6 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	return nil
 }
 
-// tidy removes a retired account's processes and home. An account may have work admitted before
-// its retirement (a first turn, a sign-in, a browser) whose helper hasn't made its home yet: the
-// gate is closed and that work stopped and waited for whether or not the home is there, so nothing
-// makes it afterwards. Only an account whose removal completed once since its retirement (cleaned,
-// recorded durably after the stop and the removal) and whose home is gone is left alone: nothing
-// was admitted for it since. A retirement alone (a browsers' purge records one, and stops no CLI
-// work) never counts as that.
 func (w *Worker) tidy(ctx context.Context, acct account, cleaned bool) error {
 	if _, err := os.Lstat(w.cfg.Layout.Home(acct.home).Root); cleaned && errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -238,12 +169,6 @@ func (w *Worker) tidy(ctx context.Context, acct account, cleaned bool) error {
 	return w.markCleaned(acct.id)
 }
 
-// ForgetLocal removes what local mode's worker keeps of a deleted account under layout, when no
-// local worker runs to do it (the CLI workers are off, or in container mode now): identity's
-// home, found through its record, which is retired first so a local worker started later refuses
-// it; and the number's directory from before homes. A record that isn't there means no home.
-// The local worker's own Forget does the same and more (it stops what runs): when it runs, it
-// is asked first, and this then finds nothing left.
 func ForgetLocal(layout Layout, identity string, user int64) error {
 	if identity != "" {
 		if !cliowner.IsIdentity(identity) {

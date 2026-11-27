@@ -1,6 +1,3 @@
-// Deleting a document, after a question, and the notice after it, with the way to bring it
-// back from its history.
-
 import { useState } from 'react'
 import { api, type Doc, errorText } from '../api'
 import { useT } from '../i18n'
@@ -68,7 +65,6 @@ export function ConfirmDelete({
   )
 }
 
-// After a delete: the document can come back as it was, from its history.
 export function Deleted({
   base,
   path,
@@ -81,25 +77,18 @@ export function Deleted({
   path: string
   versioned: boolean
   canWrite: boolean
-  // The document is back: it opens, if the notice is still there.
   onRestored: (path: string) => void
-  // The space's list of documents changed, whatever became of the notice.
   onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
-  // A restore the person asked for is finished even if they have moved on (opened another
-  // document, say); only opening the document afterwards is for someone still here. Its steps go
-  // on only in the session that asked (session.ts): after a sign-out, or someone else's sign-in,
-  // nothing more is read, restored or said.
   const mounted = useMounted()
   const restore = async () => {
     setBusy(true)
     setError(null)
     const s = steps()
     try {
-      // The newest version still kept, however far back the history goes: a page at a time.
       const history = `${base}/history/${encodePath(path)}`
       let before: Commit | undefined
       for (let page = '', first = true; !before; first = false) {
@@ -108,7 +97,6 @@ export function Deleted({
             page ? `${history}?before=${encodeURIComponent(page)}` : history,
           ),
         )
-        // Someone made it again since: nothing to bring back, it is there.
         if (first && res.commits[0] && res.commits[0].change !== 'delete') {
           onChanged()
           if (mounted.current) onRestored(path)
@@ -130,7 +118,6 @@ export function Deleted({
     }
   }
   if (!versioned) {
-    // Neutral (it can't come back, and that is not an error), and said when it appears.
     return (
       <div role="status">
         <Notice tone="neutral">{t('knowledge.deleted.unversioned', { path })}</Notice>

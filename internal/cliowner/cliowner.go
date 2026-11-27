@@ -1,8 +1,3 @@
-// Package cliowner carries, with a request's context, the identity of the account a destructive
-// call to the CLI worker is meant for (users.cli_identity): a deleted account's purge says whose
-// files it removes, and the worker acts only while the number's directory is still that account's.
-// A restore of the server's data gives numbers again, and a call that comes late must not reach the
-// account given the number since (docs/cli-workers.md).
 package cliowner
 
 import (
@@ -10,24 +5,14 @@ import (
 	"errors"
 )
 
-// ErrOtherInstallation is the CLI worker's answer to a census, a deletion or a new account from a
-// server of another installation than the one its volume belongs to: an operator hands the volume
-// over (`taskto cli-worker trust-server -installation`, docs/cli-workers.md).
 var ErrOtherInstallation = errors.New("the CLI worker's volume belongs to another taskto installation: see docs/cli-workers.md")
 
-// ErrAuthorityLost is the CLI worker's answer to a census, a deletion or a new account while it
-// can't tell the current server from an earlier one (it lost its history of server boots, or its
-// installation): it refuses them until an operator hands it over (`taskto cli-worker
-// trust-server`, docs/cli-workers.md).
 var ErrAuthorityLost = errors.New("the CLI worker lost its history of server boots and refuses every deletion until an operator hands it over: see docs/cli-workers.md")
 
-// ErrCensusNeeded is the CLI worker's answer to a deletion before its volume's first census: it
-// does nothing, and the server tries again once its census has been taken.
 var ErrCensusNeeded = errors.New("the CLI worker takes deletions only after the server's first census: it is tried again")
 
 type key struct{}
 
-// With returns ctx carrying identity; an empty identity carries none.
 func With(ctx context.Context, identity string) context.Context {
 	if identity == "" {
 		return ctx
@@ -35,31 +20,20 @@ func With(ctx context.Context, identity string) context.Context {
 	return context.WithValue(ctx, key{}, identity)
 }
 
-// From is the identity ctx carries, if any.
 func From(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(key{}).(string)
 	return id, ok && id != ""
 }
 
-// Account names an account to the CLI worker: its number on this server, which a restore of the
-// server's data may give to another account, its identity, which is its own for good and never
-// another's (users.cli_identity), and the boot of the server that sends the request (a random value
-// each server process takes when it starts). The worker keeps everything of an account under its
-// identity, never under its number.
 type Account struct {
-	User     int64  `json:"user"`
-	Identity string `json:"identity"`
-	Boot     string `json:"boot,omitempty"`
-	// Installation is the sending server's installation (its database's, kept across a restore,
-	// never shared by another data directory): the worker's volume belongs to one, and takes no
-	// census, deletion or new account from another (cliworker.ErrOtherInstallation).
+	User         int64  `json:"user"`
+	Identity     string `json:"identity"`
+	Boot         string `json:"boot,omitempty"`
 	Installation string `json:"installation,omitempty"`
 }
 
-// Valid reports whether a names an account: a number and a well-formed identity.
 func (a Account) Valid() bool { return a.User > 0 && IsIdentity(a.Identity) }
 
-// IsIdentity reports whether s is a well-formed identity, or boot: 32 lowercase hex digits.
 func IsIdentity(s string) bool {
 	if len(s) != 32 {
 		return false

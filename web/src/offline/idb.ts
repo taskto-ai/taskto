@@ -1,10 +1,3 @@
-// IndexedDB without a library: just enough of it, as promises.
-//
-// A write is done when its transaction has completed (`oncomplete`), never when its request
-// succeeded: a request that succeeds in a transaction that is later aborted (the quota, a closed
-// tab) was not kept. Whatever the offline code tells the person was saved is told after
-// `writeTx` resolves, and a rejection (QuotaExceededError included) is the failure to show.
-
 export class StorageUnavailable extends Error {
   constructor(message = 'IndexedDB is not available') {
     super(message)
@@ -12,8 +5,6 @@ export class StorageUnavailable extends Error {
   }
 }
 
-// The database on disk is of a newer schema than this code knows: another tab or an installed
-// version newer than this page wrote it. It is left alone, and the page asks to be updated.
 export class SchemaTooNew extends Error {
   constructor() {
     super('the offline database is of a newer version')
@@ -21,7 +12,6 @@ export class SchemaTooNew extends Error {
   }
 }
 
-// Whether e is the browser saying the storage is full.
 export function isQuotaError(e: unknown): boolean {
   if (!(e instanceof Error) && !(typeof DOMException !== 'undefined' && e instanceof DOMException)) return false
   const name = (e as { name?: string }).name
@@ -29,10 +19,8 @@ export function isQuotaError(e: unknown): boolean {
   return name === 'QuotaExceededError' || code === 22 || /quota/i.test(String((e as Error).message))
 }
 
-export type Migration = (db: IDBDatabase, tx: IDBTransaction) => void
+export type Migration = (db: IDBDatabase, tx: IDBTransaction) => undefined | 'stop'
 
-// Opens name at version, running the migrations (keyed by the version they upgrade *to*) of every
-// version between the one on disk and version, in order, in the upgrade's own transaction.
 export function openDatabase(
   name: string,
   version: number,
@@ -50,11 +38,12 @@ export function openDatabase(
     request.onupgradeneeded = (event) => {
       const db = request.result
       const tx = request.transaction as IDBTransaction
-      for (let v = event.oldVersion + 1; v <= (event.newVersion ?? version); v++) migrations[v]?.(db, tx)
+      for (let v = event.oldVersion + 1; v <= (event.newVersion ?? version); v++) {
+        if (migrations[v]?.(db, tx) === 'stop') break
+      }
     }
     request.onsuccess = () => {
       const db = request.result
-      // Another tab upgrading it, or deleting it (a sign-out there), needs this connection closed.
       db.onversionchange = () => db.close()
       resolve(db)
     }
@@ -72,7 +61,6 @@ export function deleteDatabase(name: string): Promise<void> {
     const request = indexedDB.deleteDatabase(name)
     request.onsuccess = () => resolve()
     request.onerror = () => reject(request.error)
-    // Blocked: other connections are closing (onversionchange); the deletion goes on once they have.
     request.onblocked = () => {}
   })
 }
@@ -105,10 +93,6 @@ function wrap<T>(os: IDBObjectStore): Store<T> {
   }
 }
 
-// Runs fn in one transaction over stores and resolves with its result once the transaction has
-// completed. A write that is refused (quota) or a transaction that is aborted rejects, and none of
-// its writes is kept. `strict` durability asks the browser to flush to disk before completing,
-// where it can.
 export function runTx<R>(
   db: IDBDatabase,
   stores: string[],
@@ -130,9 +114,7 @@ export function runTx<R>(
       failed = true
       try {
         tx.abort()
-      } catch {
-        // Already finished or aborted.
-      }
+      } catch {}
       reject(e)
     }
     tx.oncomplete = () => {

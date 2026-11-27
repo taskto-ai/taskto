@@ -23,13 +23,6 @@ import (
 	"taskto.ai/taskto/internal/providers"
 )
 
-// The steps of a purge that are about files and other processes, not rows (purge_cleanups,
-// migration 0050): the agent runtime's records of the account's conversations, the account's agent
-// browsers (stopped, then their profile removed), the CLI worker's directory of the account, and the
-// providers file and key files, which hold the account's provider accounts. Each is recorded before it is tried and removed when it is done, so one that can't be
-// done now (the agent runtime or the CLI worker is off, or doesn't answer) is tried again by the
-// next purge attempt, by the next start and while the server runs (Maintain), and the purge is not
-// reported complete while one is left.
 const (
 	cleanAgentConversation = "agent_conversation"
 	cleanBrowser           = "browser"
@@ -37,28 +30,20 @@ const (
 	cleanProviders         = "providers"
 )
 
-// The reasons a step fails, as stored in purge_cleanups.last_error: a fixed word per kind of
-// failure, never the text of the error. What a subsystem says in an error can hold what a person
-// wrote or what a provider answered (an email in a refusal, a path with a user's id), and this
-// column is read by operators and kept with the purge, so nothing free-form reaches it. The word says
-// which part failed; the part's own logs say more.
 const (
-	failSidecarBusy        = "sidecar_busy"           // the agent runtime answered that it is busy
-	failSidecarRefused     = "sidecar_refused"        // it answered with another refusal
-	failSidecarUnreachable = "sidecar_unreachable"    // it didn't answer, or isn't ready
-	failCLIWorker          = "cli_worker_failed"      // the CLI worker couldn't remove the account's files
-	failFileRemove         = "file_remove_failed"     // a file or directory here couldn't be removed
-	failBrowser            = "browser_failed"         // the browsers couldn't be stopped, or their files removed
-	failProviderReload     = "provider_reload_failed" // the runtime refused the providers file, or it couldn't be written
+	failSidecarBusy        = "sidecar_busy"
+	failSidecarRefused     = "sidecar_refused"
+	failSidecarUnreachable = "sidecar_unreachable"
+	failCLIWorker          = "cli_worker_failed"
+	failFileRemove         = "file_remove_failed"
+	failBrowser            = "browser_failed"
+	failProviderReload     = "provider_reload_failed"
 	failProviderKey        = "provider_key_not_removed"
 	failBadTarget          = "invalid_target"
 	failUnknownStep        = "unknown_step"
 	failOther              = "failed"
 )
 
-// stepError is a failure of a step, as its fixed reason and, when the cause has one that names no
-// one, a number (an HTTP status). The cause itself is held for errors.Is and errors.As, and is never
-// printed or stored: Error is the reason alone.
 type stepError struct {
 	reason string
 	status int
@@ -75,7 +60,6 @@ func (e *stepError) Unwrap() error { return e.cause }
 
 func failed(reason string, cause error) error { return &stepError{reason: reason, cause: cause} }
 
-// reasonOf is what is stored for a failed step: a stepError's reason (and status), or "failed".
 func reasonOf(err error) string {
 	var se *stepError
 	if errors.As(err, &se) {
@@ -84,7 +68,6 @@ func reasonOf(err error) string {
 	return failOther
 }
 
-// sidecarFailure classifies an error of a call to the agent runtime.
 func sidecarFailure(err error) error {
 	var st *agentrt.StatusError
 	if errors.As(err, &st) {
@@ -97,28 +80,16 @@ func sidecarFailure(err error) error {
 	return failed(failSidecarUnreachable, err)
 }
 
-// errWaiting is a step that can't be done until something is on again: not a failure, and not
-// done. It stays recorded.
 var errWaiting = errors.New("waiting for the agent runtime or the CLI workers to be on")
 
-// SetProviders sets what rewrites the agent runtime's providers file and key files from the
-// database and has the runtime reload them (providers.Feed.Sync), for a server that starts the
-// agent runtime after the scheduler has the purge's handler. Without one (the agent runtime is
-// off) the files are deleted: the next start writes them again from the database.
 func (s *Service) SetProviders(sync func(ctx context.Context) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.providers = sync
 }
 
-// providersTarget is the target of userID's rewriting of the providers file. Every account's is its
-// own record, never one shared: a record is removed by the run that read it, which began before a
-// later purge's accounts were deleted, and a shared one would be that later purge's only retry.
 func providersTarget(userID int64) string { return "feed:" + strconv.FormatInt(userID, 10) }
 
-// record notes a step to do for userID, within q. Noting it again changes nothing. A step on the
-// CLI worker's files (the browsers', the CLI home) keeps the account's identity: the worker removes
-// only what is still that account's (internal/cliowner).
 func (s *Service) record(ctx context.Context, q execer, userID int64, kind, target string) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at, cli_identity)
 		VALUES (?, ?, ?, ?, CASE WHEN ? IN ('browser', 'cli_home') THEN (SELECT cli_identity FROM users WHERE id = ?) END)
@@ -134,14 +105,9 @@ type cleanup struct {
 	id           int64
 	user         int64
 	kind, target string
-	// identity is the account's, for a step on the CLI worker's files ("" for one recorded before
-	// identities were kept).
-	identity string
+	identity     string
 }
 
-// pending lists the recorded steps, of userID's purge, or of every account's if userID is 0. The
-// browsers' steps come first: the CLI home, which holds their directory, is removed after them even
-// when it was recorded before them.
 func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) {
 	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target, coalesce(cli_identity, '') FROM purge_cleanups
 		WHERE ? = 0 OR user_id = ? ORDER BY kind <> ?, id`, userID, userID, cleanBrowser)
@@ -160,18 +126,14 @@ func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) 
 	return out, rows.Err()
 }
 
-// Pending counts the steps still recorded for userID's purge (all accounts' if userID is 0).
 func (s *Service) Pending(ctx context.Context, userID int64) (int, error) {
 	var n int
 	err := s.o.DB.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE ? = 0 OR user_id = ?`, userID, userID).Scan(&n)
 	return n, err
 }
 
-// waiting is the steps that wait for something to be on, by what they wait for (waitsFor) and
-// account: how many steps each.
 type waiting map[string]map[int64]int
 
-// waitsFor names what a step that is waiting waits for, for the log.
 func waitsFor(c cleanup) string {
 	switch {
 	case c.kind == cleanAgentConversation:
@@ -184,9 +146,6 @@ func waitsFor(c cleanup) string {
 	return c.kind
 }
 
-// runCleanups does the recorded steps of userID's purge (every account's if userID is 0), and
-// removes each that is done. It returns the steps that were tried and failed; a step that is
-// waiting for a subsystem to be on is neither (it is counted in waiting).
 func (s *Service) runCleanups(ctx context.Context, userID int64) (wait waiting, err error) {
 	wait = waiting{}
 	todo, err := s.pending(ctx, userID)
@@ -210,9 +169,6 @@ func (s *Service) runCleanups(ctx context.Context, userID int64) (wait waiting, 
 			}
 			wait[on][c.user]++
 		default:
-			// Only the step's reason is kept (last_error: a fixed word, see failSidecarBusy), and
-			// it is not in the error returned, which the server's log prints. The error says which
-			// step failed.
 			reason := reasonOf(rerr)
 			_, _ = s.o.DB.ExecContext(ctx, `UPDATE purge_cleanups SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
 				reason, c.id)
@@ -229,9 +185,6 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if err != nil {
 			return failed(failBadTarget, err)
 		}
-		// Bounded from before the runtime is looked up: waiting for a sidecar that keeps
-		// restarting, or one that accepts the call and never answers, must not stop the
-		// maintenance loop's other steps.
 		actx, cancel := context.WithTimeout(ctx, s.agentTimeout())
 		defer cancel()
 		rt, err := s.runtime(actx)
@@ -257,8 +210,6 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if err != nil || user <= 0 || (kind != cliLocal && kind != cliContainer) {
 			return failed(failBadTarget, nil)
 		}
-		// Bounded, so one attempt's time is known: the worker stops the user's turns (a grace
-		// period) and waits for the requests in flight; a cut call is made again.
 		cctx, cancel := context.WithTimeout(ctx, cliForgetTimeout)
 		defer cancel()
 		return s.forgetCLI(cliowner.With(cctx, c.identity), kind, user)
@@ -268,12 +219,8 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 	return failed(failUnknownStep, nil)
 }
 
-// cliForgetTimeout bounds one attempt at the CLI worker's step: the worker's own waits add up to
-// about 70 seconds.
 const cliForgetTimeout = 2 * time.Minute
 
-// defaultAgentTimeout bounds one attempt at an agent runtime step: longer than the runtime's own wait
-// for a pinned log, so its busy answer arrives first.
 const defaultAgentTimeout = time.Minute
 
 func (s *Service) agentTimeout() time.Duration {
@@ -283,19 +230,12 @@ func (s *Service) agentTimeout() time.Duration {
 	return defaultAgentTimeout
 }
 
-// The kinds of CLI worker, as cli_worker_history names them (migration 0059): where a worker keeps
-// a user's files.
 const (
-	cliLocal     = "local"     // under the data directory, <data>/cli/h<home>
-	cliContainer = "container" // in the container worker's own volume
-	cliUnknown   = "unknown"   // either may have run, before the record was kept
+	cliLocal     = "local"
+	cliContainer = "container"
+	cliUnknown   = "unknown"
 )
 
-// recordCLIHomes records, within tx, a step for each kind of CLI worker that may hold userID's files:
-// each kind that has run on this data directory, and both if one of unknown kind may have run while
-// the account existed. None when no worker could have run for them, so an install that never had CLI
-// workers has nothing waiting. A kind that runs later, before the account is gone, is added by the
-// purge's next try.
 func (s *Service) recordCLIHomes(ctx context.Context, tx *sql.Tx, userID int64) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT h.worker FROM cli_worker_history h
@@ -317,7 +257,7 @@ func (s *Service) recordCLIHomes(ctx context.Context, tx *sql.Tx, userID int64) 
 		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err // a partial list would leave out a worker that holds their files
+		return err
 	}
 	for _, k := range []string{cliLocal, cliContainer} {
 		if !kinds[k] {
@@ -330,15 +270,8 @@ func (s *Service) recordCLIHomes(ctx context.Context, tx *sql.Tx, userID int64) 
 	return nil
 }
 
-// defaultBrowserTimeout bounds one attempt at stopping an account's browsers and removing their
-// files: a browser takes a few seconds to close, and the worker's own limits are shorter than this.
 const defaultBrowserTimeout = 2 * time.Minute
 
-// forgetBrowser stops user's agent browsers and removes their profile and the rest of their browser
-// directory (Browsers.Forget): no browser of theirs starts meanwhile, their live views are closed, and
-// the step is done only once their processes are gone and the files removed. Without agent browsers
-// in this server (Options.Browsers is nil: no worker has any) there is nothing to stop, and the
-// CLI home step removes the files.
 func (s *Service) forgetBrowser(ctx context.Context, user int64) error {
 	if s.o.Browsers == nil {
 		return nil
@@ -355,21 +288,13 @@ func (s *Service) forgetBrowser(ctx context.Context, user int64) error {
 	return nil
 }
 
-// browserPending reports whether user's browser step is still recorded: the CLI home, which holds
-// the browser's directory, is not removed under a browser that may still run.
 func (s *Service) browserPending(ctx context.Context, user int64) (bool, error) {
 	var n int
 	err := s.o.DB.QueryRowContext(ctx, `SELECT count(*) FROM purge_cleanups WHERE user_id = ? AND kind = ?`, user, cleanBrowser).Scan(&n)
 	return n > 0, err
 }
 
-// forgetCLI removes what a CLI worker of kind kept for user's CLI logins (sessions, working
-// directories and the browser's profile). Only that kind of worker can say its copy is gone: the
-// local one's directory is under the data directory, and is removed from here whatever the mode (by
-// the local worker first when it runs, so its logins in progress stop); the container worker's is in
-// its own volume, and the step waits until this server runs that worker, which removes it.
 func (s *Service) forgetCLI(ctx context.Context, kind string, user int64) error {
-	// Its directory holds the browser's profile: not before the browsers are stopped and gone.
 	if pending, err := s.browserPending(ctx, user); err != nil {
 		return err
 	} else if pending {
@@ -390,8 +315,6 @@ func (s *Service) forgetCLI(ctx context.Context, kind string, user int64) error 
 		return errWaiting
 	}
 	if kind == cliLocal && s.o.DataDir != "" {
-		// The account's home, by the identity the step keeps, and the number's directory from
-		// before homes: what local mode's worker kept, whether or not it runs now.
 		identity, _ := cliowner.From(ctx)
 		if err := cliworker.ForgetLocal(cliworker.Layout{Root: filepath.Join(s.o.DataDir, "cli")}, identity, user); err != nil {
 			return failed(failFileRemove, err)
@@ -400,9 +323,6 @@ func (s *Service) forgetCLI(ctx context.Context, kind string, user int64) error 
 	return nil
 }
 
-// syncProviders makes the agent runtime's providers file and key files match the database, which
-// no longer has the account's provider accounts. Without the runtime's feed the files are removed:
-// the runtime isn't running, and the next start writes them again.
 func (s *Service) syncProviders(ctx context.Context) error {
 	s.mu.Lock()
 	sync := s.providers
@@ -428,9 +348,6 @@ func (s *Service) syncProviders(ctx context.Context) error {
 	return nil
 }
 
-// RunCleanups does every recorded step of every account's purge that isn't done, and logs what it
-// couldn't. Call it at start, once the agent runtime's client is set (SetAgent), and again whenever
-// something a step waits for comes on; Maintain does it on a timer.
 func (s *Service) RunCleanups(ctx context.Context) error {
 	wait, err := s.runCleanups(ctx, 0)
 	for _, on := range slices.Sorted(maps.Keys(wait)) {
@@ -444,12 +361,6 @@ func (s *Service) RunCleanups(ctx context.Context) error {
 	return err
 }
 
-// Maintain does, every interval until ctx ends, what must go on without a restart: the recorded
-// steps that aren't done, and the purge job of an account whose tries ran out or whose job was lost
-// (Reconcile), so a purge that failed is tried again for as long as it takes.
-//
-// It starts with a pass of its own, so the server runs it in the background: the steps pending at
-// start are tried at once and never hold up the server's start.
 func (s *Service) Maintain(ctx context.Context, interval time.Duration) {
 	pass := func() {
 		if err := s.Reconcile(ctx); err != nil && ctx.Err() == nil {
@@ -459,7 +370,6 @@ func (s *Service) Maintain(ctx context.Context, interval time.Duration) {
 			slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
 		}
 	}
-	// The first pass only does the recorded steps: the server has just reconciled the purges.
 	if err := s.RunCleanups(ctx); err != nil && ctx.Err() == nil {
 		slog.Warn("account deletion: a step of a purge failed; it is tried again", "err", err)
 	}

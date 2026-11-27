@@ -1,12 +1,9 @@
-// First-run setup and logging in, in a real browser against the built server.
-
 import assert from 'node:assert/strict'
 import { owner, scenario, setUp } from '../support.mjs'
 
 scenario('first-run setup creates the owner, and the owner can log out and back in', async (s) => {
   const { page, context, base } = s
 
-  // A server with no account asks for its setup token, and a wrong one is refused.
   await page.goto('/')
   await page.getByRole('heading', { name: 'Set up this server' }).waitFor()
   await page.getByLabel('Setup token').fill('x'.repeat(43))
@@ -14,26 +11,20 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
   await page.getByLabel('Email').fill(owner.email)
   await page.getByLabel('Password', { exact: true }).fill(owner.password)
   await page.getByRole('button', { name: 'Create the owner' }).click()
-  // The refusal is said with the token's field, which is marked invalid.
   await page.getByLabel('Setup token').and(page.locator('[aria-invalid="true"]')).waitFor()
   assert.equal(await page.getByRole('navigation', { name: 'Sections' }).count(), 0)
 
-  // The right token signs the owner in, to their workspace.
   await setUp(s)
   await page.getByRole('link', { name: 'Knowledge base' }).waitFor()
 
-  // The session survives a reload.
   await page.reload()
   await page.getByRole('navigation', { name: 'Sections' }).waitFor()
 
-  // Logging out ends the session on the server too, not only on the screen: the cookie the
-  // browser had is refused afterwards.
   const cookies = await context.cookies()
   assert.ok(cookies.length > 0, 'the browser has a session cookie')
   const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
   assert.equal((await fetch(`${base}/api/me`, { headers: { cookie } })).status, 200)
 
-  // Logging out shows the login screen; a wrong password is refused and the right one gets in.
   await page.getByRole('button', { name: `Account: ${owner.name}` }).click()
   await page.getByRole('menuitem', { name: 'Log out' }).click()
   await page.getByRole('heading', { name: 'Log in' }).waitFor()

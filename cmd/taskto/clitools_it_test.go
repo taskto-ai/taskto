@@ -2,13 +2,6 @@
 
 package main
 
-// taskto's tools in CLI conversations (docs/cli-tools.md), end to end: the server binary with
-// its real sidecar, and the fake Claude Code, which reads the MCP settings the worker wrote and
-// calls the tools at the endpoint on the proxy's listener with its turn's token. The owner's
-// turn lists their spaces and writes a document once the owner allows it; the member's turn
-// reaches nothing of the owner's; the token of a turn that ended is refused. Gated by
-// TASKTO_AGENT_IT=1 like the other integration tests.
-
 import (
 	"encoding/json"
 	"errors"
@@ -53,8 +46,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		}
 	}
 	dataDir := filepath.Join(dir, "data")
-	// local-unsafe: two users on one OS user, as no real install may run; the isolation checked
-	// here is the server's.
 	server, addr := startServer(t, bin, "-addr", "127.0.0.1:0", "-data-dir", dataDir, "-agent", "-agent-entry", entry,
 		"-insecure-cookies", "-cli-workers", "local-unsafe")
 	layout := cliworker.Layout{Root: filepath.Join(dataDir, "cli")}
@@ -180,7 +171,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		return "(no call)"
 	}
 
-	// The owner's turn: a read that doesn't ask, then a write that does, and runs once allowed.
 	ownerClaude := homeOf(t, layout, ownerID).Config(cliworker.Claude)
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "list_spaces"},
@@ -215,7 +205,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 	if w := result(answer, "write_doc"); !strings.HasPrefix(w, "ok ") {
 		t.Fatalf("write_doc = %s", w)
 	}
-	// The document is the owner's, committed by the agent.
 	var history struct {
 		Commits []struct {
 			Author struct{ Name string } `json:"author"`
@@ -227,7 +216,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("history = %+v", history)
 	}
 
-	// The turn is over: its token is refused at the endpoint it was given.
 	calls := clitest.Calls(t, ownerClaude)
 	if len(calls) == 0 {
 		t.Fatal("the owner's CLI never ran")
@@ -275,8 +263,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("the ended turn's token = %d %s", res.StatusCode, body)
 	}
 
-	// The member's turn reaches nothing of the owner's: not their private space, not their
-	// document, whatever the model asks for.
 	clitest.WriteScenario(t, homeOf(t, layout, memberID).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "list_spaces"},
 		{Tool: "read_doc", Args: map[string]any{"space_id": ownerPrivate, "path": "from-claude.md"}},
@@ -302,9 +288,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 	if len(reads) != 2 || reads[0] != "refused error: not found" || !strings.HasPrefix(reads[1], "ok ") || !strings.Contains(reads[1], "The member's") {
 		t.Fatalf("the member's reads = %q", reads)
 	}
-	// A CLI's request to take over the browser is kept with its turn, for the conversation's
-	// card. The browser is off here, so the call itself is refused: the card shows what the
-	// model asked of the user, as for the built-in agent's call.
 	const plea = "Sign in to the shop, then press Done."
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "browser_help", Args: map[string]any{"tab": "T1", "reason": "login", "message": plea}},
@@ -322,7 +305,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("the turn didn't keep the request: %s", body)
 	}
 
-	// Each user's CLI got its own token, never the other's.
 	memberCalls := clitest.Calls(t, homeOf(t, layout, memberID).Config(cliworker.Claude))
 	if len(memberCalls) == 0 {
 		t.Fatal("the member's CLI never ran")
@@ -332,8 +314,6 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 	}
 }
 
-// homeOf is the directories of user's account in the CLI worker at layout: the home its records
-// give the account of that number (the worker keeps an account under its identity).
 func homeOf(t *testing.T, layout cliworker.Layout, user int64) cliworker.Dirs {
 	t.Helper()
 	d, ok := homeIfAny(t, layout, user)
@@ -343,8 +323,6 @@ func homeOf(t *testing.T, layout cliworker.Layout, user int64) cliworker.Dirs {
 	return d
 }
 
-// homeIfAny is homeOf, false when the worker never gave user's account a home (nothing of the
-// account's ever ran on it).
 func homeIfAny(t *testing.T, layout cliworker.Layout, user int64) (cliworker.Dirs, bool) {
 	t.Helper()
 	dir := filepath.Join(layout.Root, ".worker", "accounts")
@@ -356,7 +334,7 @@ func homeIfAny(t *testing.T, layout cliworker.Layout, user int64) (cliworker.Dir
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		b, err := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // G304: the test's own data directory
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}

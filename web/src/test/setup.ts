@@ -1,38 +1,16 @@
-// Runs before every test file (vite.config.ts, test.setupFiles).
-
 import { configure } from '@testing-library/react'
 import { afterEach, beforeEach } from 'vitest'
 import { resetSession } from '../session'
 import { closeQueued, resetCloses } from './dialogEvents'
 
-// How long findBy… and waitFor wait for what the page ends up showing. Testing Library's
-// default, 1 s, is tight on a CI runner shared with other jobs: there, a language switch that
-// takes about 20 ms on an idle machine (the whole app drawn again in the new language) took
-// just over 1 s once, and the test failed with the page about to be right. The tests check
-// what the page shows, not how fast it gets there. 4 s stays under the 10 s a whole test has
-// (vite.config.ts), so a page that never gets there still fails with Testing Library's own
-// message and the page it saw.
 configure({ asyncUtilTimeout: 4000 })
 
-// What a page keeps in the browser (an unsent message, the app being built) belongs to the test
-// that made it, not the next one.
 afterEach(() => {
   try {
     globalThis.localStorage?.clear()
-  } catch {
-    // A test environment without storage has none to clear.
-  }
+  } catch {}
 })
 
-// jsdom has <dialog> and the popover attribute but not their methods. The least of them, so the
-// overlays' own logic (src/ui/) can be tested: what the browser does beyond this (the top layer,
-// making the page inert, light dismiss) is not imitated, and is checked in a real browser.
-//
-// Escape is imitated as a browser handles it (its close watcher): a keydown of Escape that the
-// page left alone fires `cancel` on the topmost modal dialog, which the page may refuse once per
-// activation (a press of the person's: a pointer, a click, another key); the next Escape without
-// one fires a `cancel` it can't refuse, and the browser closes the dialog. That is how a
-// dialog the screen keeps open still gets closed under it.
 if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.showModal) {
   const modals: HTMLDialogElement[] = []
   let refusedSinceActivation = false
@@ -52,9 +30,7 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
     const at = modals.lastIndexOf(this)
     if (at >= 0) modals.splice(at, 1)
     if (value !== undefined) this.returnValue = value
-    // The focus leaves a dialog that closes, as a browser's does: nothing inside it keeps it.
     if (this.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
-    // The browser fires close in a task of its own.
     const delivered = closeQueued()
     setTimeout(() => {
       try {
@@ -68,9 +44,6 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
     refusedSinceActivation = false
   }
   for (const type of ['pointerdown', 'mousedown', 'click']) window.addEventListener(type, activate, true)
-  // Each test starts as a page just loaded: no Escape refused yet, no modal open. Otherwise what
-  // one test pressed decides what the next one's first Escape does (refusable or not), and a
-  // test means one thing alone and another after its neighbours.
   afterEach(() => {
     refusedSinceActivation = false
     modals.length = 0
@@ -97,7 +70,6 @@ if (typeof HTMLElement !== 'undefined' && !HTMLElement.prototype.showPopover) {
     open.delete(this)
     delete this.dataset.popoverOpen
   }
-  // jsdom hides every [popover] and has no :popover-open to show an open one.
   const style = document.createElement('style')
   style.textContent = '[popover][data-popover-open] { display: block; }'
   document.head.append(style)
@@ -109,6 +81,4 @@ if (typeof HTMLElement !== 'undefined' && !HTMLElement.prototype.showPopover) {
   }
 }
 
-// Each test starts with nobody signed in, in a session of its own (src/session.ts): nothing of one
-// test's session (a language being saved, a toast) reaches the next.
 beforeEach(() => resetSession())

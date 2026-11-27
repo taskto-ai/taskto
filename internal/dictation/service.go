@@ -13,41 +13,27 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Timeouts: a transcription, waiting for the local engine included, and a call to a hosted API.
 const (
 	transcribeTimeout  = 5 * time.Minute
 	apiTimeout         = 4 * time.Minute
 	egressCheckTimeout = 10 * time.Second
-	// uploadTimeout bounds reading a dictation's upload: 26 MiB at 2 Mbit/s.
-	uploadTimeout = 2 * time.Minute
+	uploadTimeout      = 2 * time.Minute
 )
 
-// maxInFlight is how many transcriptions the server takes at once. Each holds its audio:
-// up to about 70 MB while its upload is decoded, then about 40 MB (the samples, and the WAV
-// an engine is given), so this bounds their memory to about 300 MB.
 const maxInFlight = 4
 
-// maxPerUser is how many of those one person may hold: the web app sends one at a time.
 const maxPerUser = 1
 
-// Config is what a Service is made of.
 type Config struct {
-	DB  *sql.DB
-	Key *serverkey.Key
-	// Docs is the knowledge base, for the glossary.
-	Docs Docs
-	// Egress is the policy of workspaces' provider accounts: the API engine's endpoint
-	// follows it, when it is saved and on every connection.
-	Egress egress.Policy
-	// Local is the operator's local engine; nil when it is off.
-	Local Local
-	// Addons are the add-ons the operator installed (DetectAddons).
-	Addons []Installed
-	// Scratch is where add-ons get a folder of their own for each run.
+	DB      *sql.DB
+	Key     *serverkey.Key
+	Docs    Docs
+	Egress  egress.Policy
+	Local   Local
+	Addons  []Installed
 	Scratch string
 }
 
-// Service serves the dictation API (docs/api.md#dictation).
 type Service struct {
 	db         *sql.DB
 	key        *serverkey.Key
@@ -56,16 +42,14 @@ type Service struct {
 	client     *http.Client
 	local      Local
 	addons     map[string]*addonEngine
-	busy       chan struct{} // a slot per transcription in flight
+	busy       chan struct{}
 	mu         sync.Mutex
-	settingsMu sync.Mutex      // one settings change at a time
-	users      map[int64]int   // transcriptions in flight per user
-	resolve    egress.Resolver // nil: the system's
-	// language is the caller's language by default (auth.Service.Language, set by Routes).
-	language func(r *http.Request, browser string) string
+	settingsMu sync.Mutex
+	users      map[int64]int
+	resolve    egress.Resolver
+	language   func(r *http.Request, browser string) string
 }
 
-// New returns the service of o.
 func New(o Config) *Service {
 	s := &Service{
 		db: o.DB, key: o.Key, docs: o.Docs, egress: o.Egress, local: o.Local,
@@ -80,7 +64,6 @@ func New(o Config) *Service {
 	return s
 }
 
-// engine is the engine st uses now, its name, or an *Unavailable saying why there is none.
 func (s *Service) engine(workspaceID int64, st settings) (string, Engine, error) {
 	name := st.engine
 	switch name {
@@ -114,15 +97,12 @@ func (s *Service) engine(workspaceID int64, st settings) (string, Engine, error)
 	}
 }
 
-// checkEgress refuses a base URL the egress policy doesn't allow, resolving its host now; a
-// host that doesn't resolve now is left to the check of every connection.
 func (s *Service) checkEgress(ctx context.Context, host string) error {
 	ctx, cancel := context.WithTimeout(ctx, egressCheckTimeout)
 	defer cancel()
 	return s.egress.Check(ctx, host, s.resolve)
 }
 
-// claim takes one of userID's slots, if one is free.
 func (s *Service) claim(userID int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

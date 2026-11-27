@@ -25,10 +25,6 @@ import (
 	"taskto.ai/taskto/internal/privcheck"
 )
 
-// runTrustServer is `taskto cli-worker trust-server -boot BOOT`: an operator hands a CLI worker
-// that lost its history of server boots (the authority-lost state, docs/cli-workers.md) over to
-// the server with boot, which the server logs at its start and shows its operators. The worker
-// must be stopped, and every server but that one.
 func runTrustServer(args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("cli-worker trust-server", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -45,9 +41,6 @@ func runTrustServer(args []string, stderr io.Writer) error {
 	return nil
 }
 
-// runCLIWorker is `taskto cli-worker`: the CLI worker of container mode (docs/cli-workers.md),
-// in a container of its own, as root. Each taskto user's CLIs run as a Unix user of their own;
-// the server reaches the worker on a Unix socket only its user can open.
 func runCLIWorker(args []string, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "trust-server" {
 		return runTrustServer(args[1:], stderr)
@@ -98,8 +91,6 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		return err
 	}
 	if *proxySocket != "" {
-		// The worker's network reaches the internet only, not the server
-		// (docs/cli-workers.md#the-workers-network), so the proxy comes over the socket volume.
 		if err := prepareProxyDir(filepath.Dir(*proxySocket), uid, gid); err != nil {
 			return fmt.Errorf("the proxy's socket directory: %w", err)
 		}
@@ -111,23 +102,15 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		go relayProxy(relay, *proxySocket)
 		slog.Info("cli worker relays the shared accounts' proxy", "listen", relay.Addr().String(), "socket", *proxySocket)
 	}
-	// The agent browsers (docs/agent-browser.md), when the image has them: each user's as their
-	// own Unix user, through the helper. Chromium's sandbox can't start in this unprivileged
-	// container, so it is off; the OS boundary is the users'.
 	browsers := browser.NewManager(browser.Config{
 		Host:      w.BrowserHost(browser.FindBins("")),
 		Idle:      *browserIdle,
 		Max:       *browserMax,
 		NoSandbox: true,
-		// Every operation on an account's browsers follows the worker's rule for it: none while
-		// it is retired or its home is being removed.
-		Allow: w.BrowserAllowed,
-		// A deleted account's purge of its browsers is a deletion as the worker's Forget is:
-		// only the latest server's.
-		Fence: w.FenceDeletion,
+		Allow:     w.BrowserAllowed,
+		Fence:     w.FenceDeletion,
 	})
 	defer browsers.Close()
-	// Removing a user's whole directory (Forget, Reconcile) stops their browsers first.
 	w.SetBrowsers(browsers)
 	mux := http.NewServeMux()
 	mux.Handle("/browser/", browser.NewHandler(browsers))
@@ -156,9 +139,6 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 	return nil
 }
 
-// checkWorkerImage refuses an image (the file system at root) with a setuid or setgid
-// program: a CLI user must have nothing to escalate with (docs/agent-safety.md). The users'
-// homes are theirs, not the image's, and other file systems (/proc, volumes) aren't looked at.
 func checkWorkerImage(root, homes string, override bool) error {
 	found, unreadable, more, err := privcheck.SetuidFiles(root, 10, homes, filepath.Join(root, "proc"), filepath.Join(root, "sys"), filepath.Join(root, "dev"))
 	if err != nil {
@@ -172,9 +152,6 @@ func checkWorkerImage(root, homes string, override bool) error {
 		}
 		problems = append(problems, "the image has setuid or setgid programs ("+list+"); remove the bits, as the Dockerfile does with chmod a-s")
 	}
-	// The worker keeps only four capabilities, so a directory of another system user's (apt's
-	// cache, say) can be closed to it. The image's own build cleared every setuid bit as full
-	// root, so this only says what it couldn't look at again.
 	if len(unreadable) > 0 {
 		slog.Warn("cli worker: couldn't check these directories for setuid programs", "dirs", unreadable)
 	}
@@ -191,14 +168,12 @@ func parseOwner(s string) (int, int, error) {
 	return uid, gid, nil
 }
 
-// listenOwnerOnly listens on a Unix socket at path that only uid can open: mode 600, owned by
-// uid:gid, in a directory the worker makes passable (711) but not listable.
 func listenOwnerOnly(path string, uid, gid int) (net.Listener, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o711); err != nil { //nolint:gosec // G301: passable, not listable; the socket is 600
+	if err := os.MkdirAll(dir, 0o711); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(dir, 0o711); err != nil { //nolint:gosec // G302: as above
+	if err := os.Chmod(dir, 0o711); err != nil {
 		return nil, err
 	}
 	if info, err := os.Lstat(path); err == nil {
@@ -217,8 +192,6 @@ func listenOwnerOnly(path string, uid, gid int) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Mode first, then owner: once the socket is the server's, root without CAP_FOWNER (the
-	// worker keeps only SETUID, SETGID, CHOWN and KILL) can no longer change its mode.
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
 		return nil, err
@@ -230,11 +203,8 @@ func listenOwnerOnly(path string, uid, gid int) (net.Listener, error) {
 	return ln, nil
 }
 
-// prepareProxyDir makes dir, where the server listens for the proxy (-cli-proxy-listen
-// unix:…), the server's: uid:gid, mode 711, so the worker can pass through it to the socket
-// but not list it. The volume's root is the worker's (711), so the server can't make it.
 func prepareProxyDir(dir string, uid, gid int) error {
-	if err := os.Mkdir(dir, 0o711); err != nil && !errors.Is(err, os.ErrExist) { //nolint:gosec // G301: passable, not listable
+	if err := os.Mkdir(dir, 0o711); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	info, err := os.Lstat(dir)
@@ -250,15 +220,12 @@ func prepareProxyDir(dir string, uid, gid int) error {
 	case st.Uid != 0:
 		return fmt.Errorf("%s belongs to uid %d, not root or the server's %d", dir, st.Uid, uid)
 	}
-	// Mode first, then owner: once it is the server's, root without CAP_FOWNER can't chmod it.
-	if err := os.Chmod(dir, 0o711); err != nil { //nolint:gosec // G302: as above
+	if err := os.Chmod(dir, 0o711); err != nil {
 		return err
 	}
 	return os.Chown(dir, uid, gid)
 }
 
-// relayProxy joins each connection to ln to the server's proxy socket, until ln is closed.
-// It reads nothing: the CLI's requests and the proxy's answers pass as they are.
 func relayProxy(ln net.Listener, socket string) {
 	for {
 		c, err := ln.Accept()

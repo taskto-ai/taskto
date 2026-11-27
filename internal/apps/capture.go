@@ -14,36 +14,18 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Fields that capture something from the device or the person (definition version 2): a place, a
-// signature, a scanned code.
-//
-// A location is where the person was, with how sure the device was (accuracy_m) and when it
-// said so (captured_at). It is evidence: the browser asks for it once, on a button or when the
-// form is submitted, and never follows the person around; the server only stores what a screen
-// sends, validated strictly here. A signature is a PNG picture held as an attachment
-// (attachments.go), whose id the record keeps. Both are locked once stored: no later update (a
-// screen's, the records explorer's, any release's) can change or clear them, unless the field says
-// "editable". A barcode is the text a scanner (or the person's typing) read, optionally of a
-// stated format.
-
-// The capture types of field.
 const (
-	// TypeLocation is {lat, lon, accuracy_m?, captured_at, source}.
-	TypeLocation = "location"
-	// TypeSignature is the id of a PNG attachment.
+	TypeLocation  = "location"
 	TypeSignature = "signature"
-	// TypeBarcode is the text of a barcode or QR code.
-	TypeBarcode = "barcode"
+	TypeBarcode   = "barcode"
 )
 
-// The capabilities a client needs to hold these fields: to read and send their values.
 const (
 	LocationCapability  = "field.location"
 	SignatureCapability = "field.signature"
 	BarcodeCapability   = "field.barcode"
 )
 
-// fieldCapabilities is the capability each kind of field needs of a client that draws an app with one.
 var fieldCapabilities = map[string]string{
 	TypeAttachment: AttachmentCapability,
 	TypeLocation:   LocationCapability,
@@ -51,43 +33,29 @@ var fieldCapabilities = map[string]string{
 	TypeBarcode:    BarcodeCapability,
 }
 
-// When a location is taken: on the person's pressing a button (the default), or when they submit the
-// form. Either way once and in the foreground.
 const (
 	CaptureButton = "button"
 	CaptureSubmit = "submit"
 )
 
-// Where a location came from: the device's own position, or typed by the person when the device
-// couldn't give it.
 const (
 	SourceDevice = "device"
 	SourceManual = "manual"
 )
 
-// Bounds of captured values.
 const (
-	// MaxLocationAccuracy is the largest accuracy_m taken, in metres: a radius of 1,000 km is no position.
-	MaxLocationAccuracy = 1_000_000
-	// MaxClockSkew is how far ahead of the server's clock a location's captured_at may be: a phone's
-	// clock is not the server's.
-	MaxClockSkew = 5 * time.Minute
-	// DefaultSignatureBytes is the size a signature's PNG may have when the field says nothing.
+	MaxLocationAccuracy   = 1_000_000
+	MaxClockSkew          = 5 * time.Minute
 	DefaultSignatureBytes = 1 << 20
 )
 
-// earliestCapture is the oldest captured_at taken: nothing of this was captured before it.
 var earliestCapture = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// capturedFormat is how captured_at is stored: UTC, in milliseconds.
 const capturedFormat = "2006-01-02T15:04:05.000Z"
 
-// BarcodeFormats are the formats a barcode field may name, as the browser's BarcodeDetector names them.
 var BarcodeFormats = []string{"aztec", "codabar", "code_39", "code_93", "code_128", "data_matrix", "ean_8", "ean_13",
 	"itf", "pdf417", "qr_code", "upc_a", "upc_e"}
 
-// checkedFormats are the formats whose text is a number the server can check: only digits, of the
-// format's length, and for most the check digit.
 var checkedFormats = map[string]struct {
 	lengths []int
 	check   bool
@@ -98,8 +66,6 @@ var checkedFormats = map[string]struct {
 	"upc_e":  {[]int{6, 7, 8}, false},
 }
 
-// checkDigitOK reports whether digits end in the right GS1 check digit: the weights 3 and 1
-// alternate from the digit before it.
 func checkDigitOK(digits string) bool {
 	sum := 0
 	for i := len(digits) - 2; i >= 0; i-- {
@@ -112,7 +78,6 @@ func checkDigitOK(digits string) bool {
 	return (10-sum%10)%10 == int(digits[len(digits)-1]-'0')
 }
 
-// badBarcode is the error of a value that isn't the text of the field's code.
 func (f Field) badBarcode() error {
 	of := ""
 	if f.Format != "" {
@@ -121,8 +86,6 @@ func (f Field) badBarcode() error {
 	return invalidAs(apierr.CodeAppFieldNotBarcode, apierr.Params{"field": f.Name, "format": f.Format}, "%s must be the text of a code%s", f.Name, of)
 }
 
-// parseBarcode reads a barcode field's value: text with no control characters, of at most MaxLength
-// characters, valid for the field's format if it names one whose text can be checked.
 func (f Field) parseBarcode(s string) (any, bool, error) {
 	bad := f.badBarcode
 	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
@@ -139,7 +102,6 @@ func (f Field) parseBarcode(s string) (any, bool, error) {
 	return s, true, nil
 }
 
-// jsonNumber reads a JSON number only (no text that reads as one), and not NaN or infinity.
 func jsonNumber(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -153,11 +115,6 @@ func jsonNumber(v any) (float64, bool) {
 
 var locationKeys = []string{"lat", "lon", "accuracy_m", "captured_at", "source"}
 
-// parseLocation reads a location field's value and returns it as it is stored: lat and lon in
-// degrees within the globe, accuracy_m (metres, 0 to MaxLocationAccuracy; the device's own
-// reading, so a manual position may leave it out), captured_at in UTC, and source. An object with
-// no keys is no value. Whether captured_at is not in the future is checked unless the field is
-// read as stored (Field.asStored): a row keeps what was true when it was captured.
 func (f Field) parseLocation(v any) (any, bool, error) {
 	bad := func(format string, args ...any) error {
 		return invalidAs(apierr.CodeAppFieldNotLocation, apierr.Params{"field": f.Name}, format, args...)
@@ -206,18 +163,10 @@ func (f Field) parseLocation(v any) (any, bool, error) {
 	return out, true, nil
 }
 
-// zonePattern is the end of an RFC 3339 time: Z, or an offset of at most 23:59.
 var zonePattern = regexp.MustCompile(`(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$`)
 
-// validZone reports whether the time's zone is one: Go's parser lets an offset of +24:60 through.
 func validZone(text string) bool { return zonePattern.MatchString(text) }
 
-// parseSignature reads a signature field's value: the id of one attachment (or a list of one).
-// Whether it may be used, and that it is a PNG, is for claimAttachments.
-//
-// A row holds the id alone. A list of one is taken from a screen (what a picture input binds), but never
-// as a stored value: that is what a field that was an attachment field held, a photo that is no
-// signature, and it is hidden as any value of another type is.
 func (f Field) parseSignature(v any) (any, bool, error) {
 	bad := invalidAs(apierr.CodeAppFieldNotSignature, apierr.Params{"field": f.Name}, "%s must be the id of one signature picture", f.Name)
 	if list, ok := v.([]any); ok && !f.asStored {
@@ -236,8 +185,6 @@ func (f Field) parseSignature(v any) (any, bool, error) {
 	return id, true, nil
 }
 
-// locked is what a field's stored value was, when it can no longer change: the field is evidence
-// (a location or a signature) that doesn't say it is editable, and the row holds a value.
 func (f Field) locked(row map[string]any) (any, bool) {
 	if (f.Type != TypeLocation && f.Type != TypeSignature) || f.Editable {
 		return nil, false
@@ -250,9 +197,6 @@ func (f Field) locked(row map[string]any) (any, bool) {
 	return value, err == nil && present
 }
 
-// lockedChange refuses a change that would alter a captured location or a signature the row
-// already holds (replacing or clearing it): once captured, it stays as it was. Setting one the row
-// has none of is the capture, and is let through, as is giving it again unchanged.
 func (c Collection) lockedChange(before, after map[string]any) error {
 	for _, f := range c.Fields {
 		had, locked := f.locked(before)

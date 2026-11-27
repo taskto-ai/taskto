@@ -1,16 +1,3 @@
-// SPIKE CODE, not part of the product: runs the official Claude Code and Codex CLIs as
-// a Pi Durable tool, to see whether they stream, record, resume after a crash and hand over.
-// The write-up is docs/spikes/cli-workers.md. Build the agent first (pnpm run build), then:
-//
-//   SPIKE_DIR=/tmp/s SPIKE_BASE_URL=https://gateway.example SPIKE_KEY_FILE=/path/to/key \
-//     node spike/cli-workers.mjs run '{"cli":"claude","user":"u1","prompt":"Reply pong"}'
-//   node spike/cli-workers.mjs resume      # after a kill -9: finish what the last process left
-//   node spike/cli-workers.mjs transcript
-//
-// Each user gets their own HOME, CLI config dir and working directory under SPIKE_DIR/users.
-// Inference goes to a gateway that speaks Anthropic Messages and OpenAI Responses under /v1
-// (SPIKE_BASE_URL, its root); the key is read from SPIKE_KEY_FILE per call and only passed in
-// the child's environment, where every command the CLI runs can read it: use a low-value key.
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -36,7 +23,6 @@ const stateFile = join(dir, 'state.json')
 const state = () => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : {})
 const save = (patch) => writeFileSync(stateFile, JSON.stringify({ ...state(), ...patch }))
 
-// One user's files: nothing of the server's own HOME or config reaches the CLI.
 function profile(user) {
   if (!/^[a-z0-9-]+$/.test(user)) throw new Error('bad user name')
   const root = join(dir, 'users', user)
@@ -50,7 +36,6 @@ function profile(user) {
   writeFileSync(
     join(p.codex, 'config.toml'),
     [
-      // JSON string escapes are valid TOML basic-string escapes, so quotes or newlines can't break out.
       `model = ${JSON.stringify(process.env.SPIKE_MODEL ?? 'auto')}`,
       'model_provider = "gateway"',
       'approval_policy = "never"',
@@ -66,7 +51,6 @@ function profile(user) {
   return p
 }
 
-// A clean environment: only what the CLI needs, never the sidecar's own variables.
 function childEnv(cli, p) {
   const key = readFileSync(keyFile, 'utf8').trim()
   const base = { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: p.home, LANG: 'C.UTF-8' }
@@ -99,7 +83,6 @@ function argv(cli, prompt, session, fresh) {
   return ['codex', session ? [...head, 'resume', session, prompt] : [...head, prompt]]
 }
 
-// Only "no such process" means gone: EPERM is a group that exists but is not ours to signal.
 const alive = (pid) => {
   try {
     process.kill(-pid, 0)
@@ -109,8 +92,6 @@ const alive = (pid) => {
   }
 }
 
-// Throws when the group survives (or cannot be signalled), so a rerun fails instead of resuming
-// a session the old process is still writing to.
 async function stopGroup(pid) {
   for (const signal of ['SIGTERM', 'SIGKILL']) {
     if (!alive(pid)) return
@@ -120,7 +101,6 @@ async function stopGroup(pid) {
   if (alive(pid)) throw new Error(`the previous run's process group ${pid} is still running`)
 }
 
-// Both streams pass this before they reach the transcript.
 const redactKey = (text) => {
   const key = readFileSync(keyFile, 'utf8').trim()
   return key ? text.replaceAll(key, '[redacted]') : text
@@ -129,9 +109,6 @@ const redactKey = (text) => {
 const textOf = (content) =>
   typeof content === 'string' ? content : content.map((part) => (part.type === 'text' ? part.text : '')).join('')
 
-// Runs one CLI turn, streaming its JSON events as the tool's output. Replay-safe on purpose: after
-// a crash Pi Durable runs it again, and the memoised session id turns that rerun into a resume of
-// the same CLI session instead of a fresh one.
 const runCli = defineTool({
   name: 'run_cli',
   description: 'Run one turn of the Claude Code or Codex CLI for a user',
@@ -140,13 +117,8 @@ const runCli = defineTool({
   execute: async (args, api) => {
     if (args.cli !== 'claude' && args.cli !== 'codex') throw new Error('cli must be claude or codex')
     const p = profile(args.user)
-    // Claude Code takes a session id up front; Codex names its thread in its first event.
     const session =
       args.cli === 'claude' ? await api.memo('session', randomUUID(), context) : await api.memo('session', context)
-    // A kill -9 of the sidecar does not stop the CLI: the old process keeps running and writing
-    // to the same session. Every attempt memoises its PID, so a rerun stops all earlier groups,
-    // also after a second crash. (A real worker must also guard against PID reuse, e.g. by a
-    // per-run cgroup or container instead of a bare PID.)
     let attempt = 1
     for (
       let old = await api.memo('pid-1', context);
@@ -162,11 +134,8 @@ const runCli = defineTool({
     const rerun = attempt > 1
     let prompt = args.prompt
     if (args.withTranscript && !rerun) {
-      // The tool's own conversation handle can submit but not read; the Harness can.
       const conv = await harness.conversation(api.conversationId, context)
       const view = await conv.context(context)
-      // Everything before the current request: it is the last user message (after it come this
-      // run's assistant tool call and nothing else yet). System prompts are not part of the hand-off.
       const current = view.messages.findLastIndex((m) => m.role === 'user')
       const lines = view.messages
         .slice(0, current)
@@ -183,15 +152,13 @@ const runCli = defineTool({
       cwd: p.work,
       env: childEnv(args.cli, p),
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true, // its own process group, so the whole tree can be stopped at once
+      detached: true,
     })
-    // 'error' (e.g. ENOENT for a missing binary) fails the tool instead of throwing unhandled.
     const exited = new Promise((resolve, reject) => {
       child.once('error', reject)
       child.once('close', resolve)
     })
-    exited.catch(() => {}) // awaited below, after the output; not an unhandled rejection meanwhile
-    // Keep the tail of stderr: login and config errors show up only there.
+    exited.catch(() => {})
     let stderr = ''
     child.stderr.on('data', (chunk) => {
       stderr = (stderr + chunk).slice(-2000)
@@ -203,7 +170,7 @@ const runCli = defineTool({
     let result = ''
     let thread
     for await (const line of createInterface({ input: child.stdout })) {
-      api.output(`${redactKey(line)}\n`) // a command that prints its environment shows the key
+      api.output(`${redactKey(line)}\n`)
       let event
       try {
         event = JSON.parse(line)
@@ -212,7 +179,7 @@ const runCli = defineTool({
       }
       if (event.type === 'thread.started' && !thread) {
         thread = event.thread_id
-        await api.memo('session', thread, context) // write-once: a resumed run keeps the first
+        await api.memo('session', thread, context)
       }
       if (event.type === 'result') result = event.result ?? ''
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') result = event.item.text

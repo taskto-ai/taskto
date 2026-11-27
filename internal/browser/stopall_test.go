@@ -12,9 +12,6 @@ import (
 	"taskto.ai/taskto/internal/cliowner"
 )
 
-// StopAll stops a user's browsers and their live views and waits for their processes, without
-// refusing later starts or removing a file (the CLI worker does both when it removes the user's
-// whole directory); others' browsers go on.
 func TestStopAllStopsWithoutRefusingOrRemoving(t *testing.T) {
 	h := newProfileHost(t)
 	h.vnc = echoView
@@ -47,10 +44,6 @@ func TestStopAllStopsWithoutRefusingOrRemoving(t *testing.T) {
 	}
 }
 
-// Unforget takes back Forget's refusal of the users it is asked about, made before the time it is
-// given: after a restore of the server's data, a person whose account is back, or a number given
-// again. A refusal made after it (a deletion now) stays, and so does one of a user it isn't asked
-// about.
 func TestUnforgetTakesBackOnlyOlderRefusals(t *testing.T) {
 	h := newProfileHost(t)
 	m := NewManager(Config{Host: h, Max: 8})
@@ -80,9 +73,6 @@ func TestUnforgetTakesBackOnlyOlderRefusals(t *testing.T) {
 	}
 }
 
-// The worker's per-user rule (Config.Allow) holds for every operation on a user's browsers, the
-// reading of one already running and its tabs too: a user whose old directory couldn't be removed
-// yet reaches nothing of its browser. Stopping it is still allowed, and others go on.
 func TestAllowHoldsForARunningBrowser(t *testing.T) {
 	h := newProfileHost(t)
 	h.vnc = echoView

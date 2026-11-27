@@ -5,7 +5,6 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import type { Column } from './columns'
 
-// The form for a new card at the foot of a column: its title. Escape or Cancel closes it.
 export function AddCard({
   url,
   column,

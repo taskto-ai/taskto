@@ -22,9 +22,7 @@ import (
 	"taskto.ai/taskto/internal/ratelimit"
 )
 
-// Routes mounts the account endpoints on mux. docs/api.md describes them.
 func (s *Service) Routes(mux *http.ServeMux) {
-	// Logins and accounts are the browser's: these refuse access tokens outright.
 	mux.Handle("GET /api/setup", refuseTokens(s.handleSetupStatus))
 	mux.Handle("POST /api/setup", refuseTokens(s.handleSetup))
 	mux.Handle("POST /api/login", refuseTokens(s.handleLogin))
@@ -34,8 +32,6 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/workspaces", s.RequireUser(http.HandlerFunc(s.handleCreateWorkspace)))
 	mux.Handle("PATCH /api/workspaces/{workspace}", s.RequireAdmin(http.HandlerFunc(s.handleUpdateWorkspace)))
 
-	// An access token may read who the workspace's members are, to assign cards; the rest
-	// takes a session.
 	mux.Handle("GET /api/workspaces/{workspace}/members", AcceptTokens(s.RequireMember(http.HandlerFunc(s.handleMembers))))
 	mux.Handle("PATCH /api/workspaces/{workspace}/members/{user}", s.RequireAdmin(http.HandlerFunc(s.handleSetRole)))
 	mux.Handle("DELETE /api/workspaces/{workspace}/members/{user}", s.RequireAdmin(http.HandlerFunc(s.handleRemoveMember)))
@@ -62,20 +58,12 @@ const (
 	maxEmail   = 254
 )
 
-// Me is the reply of GET /api/me, and of the calls that log someone in.
 type Me struct {
-	User       MeUser       `json:"user"`
-	Workspaces []Membership `json:"workspaces" apitypes:"nonnull"`
-	// CanCreateWorkspace is whether POST /api/workspaces would let this user in, under the
-	// operator's setting: the web app offers "New workspace" only then.
-	CanCreateWorkspace bool `json:"can_create_workspace"`
-	// IsOperator is whether the user is an admin of the workspace the server's setup made: only
-	// then does the web app show what belongs to the whole server (backups, email).
-	IsOperator bool `json:"is_operator"`
-	// Session is the public id of the login this reply is for (the one a login just made, or the one
-	// the request came with), as GET /api/me/sessions names it; empty for an access token. The web
-	// app compares it to know a login is still the same one, not only the same account.
-	Session string `json:"session"`
+	User               MeUser       `json:"user"`
+	Workspaces         []Membership `json:"workspaces" apitypes:"nonnull"`
+	CanCreateWorkspace bool         `json:"can_create_workspace"`
+	IsOperator         bool         `json:"is_operator"`
+	Session            string       `json:"session"`
 }
 
 func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u User) {
@@ -84,7 +72,6 @@ func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u 
 		serverError(w, r, err)
 		return
 	}
-	// A login that was just made (its cookie is on this answer) is the one the reply is for.
 	for _, ck := range (&http.Response{Header: w.Header()}).Cookies() {
 		if ck.Name == s.cookieName() && ck.Value != "" {
 			if reply.Session, err = s.sessionPublicID(r.Context(), ck.Value); err != nil {
@@ -96,7 +83,6 @@ func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u 
 	writeJSON(w, status, reply)
 }
 
-// sessionPublicID is the public id of the live session whose token this is, or "" when none is.
 func (s *Service) sessionPublicID(ctx context.Context, token string) (string, error) {
 	var id string
 	err := s.db.QueryRowContext(ctx, `SELECT public_id FROM sessions WHERE token_hash = ? AND expires_at > ?`,
@@ -165,7 +151,6 @@ func (s *Service) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	// Checked before hashing, so a set-up server doesn't spend a hash on every request.
 	needed, err := s.setupNeeded(r.Context())
 	if err != nil {
 		serverError(w, r, err)
@@ -176,8 +161,6 @@ func (s *Service) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.validSetupToken(req.SetupToken) {
-		// Another request may have finished the setup since the check above, which also
-		// retires the token: then that is the answer, not a wrong token.
 		if s.setupDone.Load() {
 			s.fail(w, r, errSetupDone)
 			return
@@ -219,9 +202,6 @@ func (s *Service) handleSetup(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusCreated, u)
 }
 
-// handleCreateWorkspace creates a workspace with the caller as its first admin, if the
-// operator's setting lets them, and answers like GET /api/me with the new one added, and
-// its membership as "workspace".
 func (s *Service) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
 	var req struct {
@@ -277,8 +257,6 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	// The per-address limit comes first, so one client adds at most ipAttempts keys to the
-	// other two per window, whatever addresses it tries.
 	ip := s.clientIP(r)
 	limits := []struct {
 		l   *ratelimit.Limiter
@@ -298,10 +276,8 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// An account made by signing in with a provider has no password: it fails like a wrong one.
 	if !known || hash == "" {
 		s.hasher.burn(r.Context(), req.Password)
-		// The address typed is never recorded: it may be a password typed in the wrong box.
 		reason := "unknown_account"
 		if known {
 			reason = "no_password"
@@ -310,7 +286,6 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
 	}
-	// A server-side failure isn't a failed attempt: hand the attempts back.
 	refund := func() {
 		for _, lim := range limits {
 			lim.l.Give(lim.key)
@@ -330,8 +305,6 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	refund()
 	s.at("password-verified")
 
-	// Only after the password matched, so the answer doesn't tell anyone else that an account
-	// exists, or is off.
 	disabled, err := s.isDisabled(r.Context(), s.db, u.ID)
 	if err != nil {
 		serverError(w, r, err)
@@ -343,18 +316,12 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// What the password earns is decided in one transaction that checks the hash is still the
-	// one that matched (a change or reset meanwhile ended the sessions and challenges the old
-	// password could make) and reads the two-factor state: a user with it on gets no session
-	// yet, but a challenge, which only the second step (twofactor.go) accepts, and the
-	// browser's own session is left as it is.
 	out, err := s.passwordSignIn(r.Context(), u.ID, hash)
 	if errors.Is(err, errPasswordChanged) {
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
 	}
 	if errors.Is(err, errAccountDisabled) {
-		// Disabled since the check above.
 		s.loginFailed(r, u.ID, "account_disabled")
 		accountDisabled(w)
 		return
@@ -368,12 +335,9 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The new session first, then drop the one the browser had: a failure in between
-	// leaves the user signed in rather than signed out.
 	token := out.session
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
-			// The new session works; the old one just lives until it expires.
 			slog.WarnContext(r.Context(), "auth: deleting the replaced session", "err", err)
 		}
 	}
@@ -381,11 +345,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusOK, u)
 }
 
-// loginFailed records a refused password login: of the user, or of no one when the account
-// doesn't exist. Attempts the limiters turn away aren't recorded: the log would fill at the rate
-// an attacker chooses.
 func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
-	// No actor: the person at the keyboard isn't known to be the account's owner, who is the target.
 	e := audit.Event{Action: audit.LoginFailed, Details: audit.Details{"method": "password", "reason": reason}}
 	if userID != 0 {
 		e.TargetType, e.Target = audit.TargetUser, userID
@@ -393,18 +353,6 @@ func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
 	audit.Log(r.Context(), s.db, e)
 }
 
-// Logging out revokes the session the request carries, and that is all: the answer never
-// expires the browser's session cookie. The cookie is the browser's, shared by its tabs, and by the
-// time an answer arrives another tab may have signed in and replaced it; an expiring Set-Cookie
-// can't say "only if it is still this session", so it would sign that newer login out. The revoked
-// token left in the cookie is refused like any unknown one, and the next login replaces it. (The
-// single sign-on cookie follows the same rule.)
-//
-// A body may name the login the sign-out is for (`{"session": "<public id>"}`, as /api/me names it):
-// it is then revoked only if it is the login the request carries. A sign-out tried again after its
-// first answer was lost, from a tab whose browser has signed in again since (the same account in
-// another tab), must never revoke that newer login: it is refused (409 session_account_changed),
-// nothing is revoked, and the page says the account changed.
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Session string `json:"session"`
@@ -419,8 +367,6 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 				serverError(w, r, err)
 				return
 			}
-			// A login that is over already (revoked, expired) has nothing left to end: 204, as without
-			// a session.
 			if current != "" && current != body.Session {
 				writeError(w, http.StatusConflict, apierr.CodeAccountChanged, "this browser's login is not the one this sign-out was for")
 				return
@@ -446,7 +392,6 @@ func (s *Service) handleMembers(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	// Who has two-factor login on is for the admins, who can clear it, to see.
 	if m.Role == RoleAdmin {
 		if err := s.markTwoFactor(r.Context(), m.WorkspaceID, members); err != nil {
 			serverError(w, r, err)
@@ -506,10 +451,9 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	m, _ := MembershipFrom(r.Context())
 	u, _ := UserFrom(r.Context())
 	var req struct {
-		Email string `json:"email"`
-		Role  Role   `json:"role"`
-		// SendEmail also emails the invite link to the invited address (mailer.go).
-		SendEmail bool `json:"send_email"`
+		Email     string `json:"email"`
+		Role      Role   `json:"role"`
+		SendEmail bool   `json:"send_email"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -542,7 +486,7 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	inv, token, err := s.createInvite(r.Context(), m.WorkspaceID, u.ID, email, req.Role)
 	if err != nil {
 		if release != nil {
-			release() // nothing was sent
+			release()
 		}
 		s.fail(w, r, err)
 		return
@@ -552,13 +496,9 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		sent := s.emailInvite(r.Context(), m, u, inv, token)
 		reply.EmailSent = &sent
 	}
-	// The only time the token is shown: the database keeps its hash.
 	writeJSON(w, http.StatusCreated, reply)
 }
 
-// InviteCreated is the reply that makes an invite: the invite and its token, shown only now, and,
-// if the email was asked for, whether it went to the relay. The invite exists either way, and its
-// link is here, to copy.
 type InviteCreated struct {
 	Invite
 	Token     string `json:"token"`
@@ -578,9 +518,6 @@ func (s *Service) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleAcceptInvite joins the invite's workspace. A logged-in user whose email the
-// invite is for joins with their account; anyone else creates the account the invite
-// names, with a name and a password, and is logged in.
 func (s *Service) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token    string `json:"token"`
@@ -631,7 +568,6 @@ func (s *Service) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteError(w, e)
 		return
 	}
-	// Checked before hashing, which is slow; acceptAsNew checks again in its transaction.
 	switch _, _, err := s.userByEmail(r.Context(), inv.email); {
 	case err == nil:
 		s.fail(w, r, errEmailTaken)
@@ -654,7 +590,6 @@ func (s *Service) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusCreated, u)
 }
 
-// fail answers with the status for one of the package's errors, or 500.
 func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var status int
 	var code apierr.Code
@@ -683,7 +618,6 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, errInviteInvalid):
 		status, code, msg = http.StatusNotFound, apierr.CodeInviteInvalid, errInviteInvalid.Error()
 	case errors.Is(err, errAccountDisabled):
-		// The admin was disabled after the request was authenticated.
 		accountDisabled(w)
 		return
 	default:
@@ -709,7 +643,6 @@ func setRetryAfter(w http.ResponseWriter, wait time.Duration) {
 	w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
 }
 
-// pathID reads a numeric path value, answering 404 with code and notFound if it isn't one.
 func pathID(w http.ResponseWriter, r *http.Request, name string, code apierr.Code, notFound string) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue(name), 10, 64)
 	if err != nil {
@@ -719,8 +652,6 @@ func pathID(w http.ResponseWriter, r *http.Request, name string, code apierr.Cod
 	return id, true
 }
 
-// normalizeEmail trims and lower-cases an address, and reports whether it is a plain
-// address (no display name) of sensible length.
 func normalizeEmail(s string) (string, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" || len(s) > maxEmail {
@@ -730,9 +661,6 @@ func normalizeEmail(s string) (string, bool) {
 	return s, err == nil && addr.Address == s
 }
 
-// validName reports whether s is 1 to maxNameLen characters with none that could hide or
-// reorder what a reader sees: no control character (NUL, a newline), no line or paragraph
-// separator and no bidirectional override or isolate.
 func validName(s string) bool {
 	n := utf8.RuneCountInString(s)
 	if n < 1 || n > maxNameLen {
@@ -744,8 +672,6 @@ func validName(s string) bool {
 	})
 }
 
-// readJSON decodes the request body into v, strictly: unknown fields and trailing data
-// are errors. It answers 400 and returns false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
@@ -760,8 +686,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
-// with a broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

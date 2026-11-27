@@ -6,8 +6,6 @@ import { fieldLabels } from './labels'
 
 type Component = { type: string; properties: Record<string, unknown> }
 
-// A form of two screens: "other" has an input for the same field, and a Show hides one of the
-// inputs of "new" until the category is "other".
 function screens(): [string, Component][] {
   const c = (id: string, type: string, properties: Record<string, unknown>): [string, Component] => [
     id,
@@ -36,14 +34,11 @@ function screens(): [string, Component][] {
 const reading = (data: Record<string, unknown>) => (path: string) => data[path]
 
 test('a label is one the person can see: on the open screen and not hidden by a Show', () => {
-  // The Show's rule doesn't hold: the input behind it is not on the screen.
   const hidden = fieldLabels(screens(), reading({ '/screen': 'new', '/draft': { category: 'home' } }))
   expect(hidden.get('note')).toBeUndefined()
   expect(hidden.get('hidden')).toBe('Note (hidden)')
-  // It holds: that input is the field's label, not the one of the screen that isn't open.
   const shown = fieldLabels(screens(), reading({ '/screen': 'new', '/draft': { category: 'other' } }))
   expect(shown.get('note')).toBe('What kind?')
-  // Another screen's inputs are not this one's.
   const other = fieldLabels(screens(), reading({ '/screen': 'other', '/draft': {} }))
   expect(other.get('note')).toBe('On another screen')
   expect(other.get('hidden')).toBeUndefined()

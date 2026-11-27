@@ -1,29 +1,17 @@
-// A small Markdown renderer for previews: headings, paragraphs, lists, quotes, code, rules,
-// emphasis, links and task lists (read-only checkboxes), built as React elements. Nothing is
-// ever inserted as HTML, so raw HTML in a document shows as its text; links keep only http(s),
-// mailto and relative targets, and
-// images show as links rather than loading from anywhere. It covers the common syntax, not
-// all of CommonMark. Shared by every page that shows Markdown (documents, cards, comments).
-//
-// A document of the knowledge base is read with `look="document"`: the same elements, each with a
-// ui-prose class, styled from the tokens by knowledge/prose.css (the old stylesheet's element
-// rules leave an element with a ui- class alone). Its tables also align a column of numbers to
-// the end. Every other page keeps the old look.
-
 import { createContext, Fragment, type MouseEvent, type ReactNode, useContext } from 'react'
+import { byPlace } from './byPlace'
 
-// A link target that is safe to follow, or null. Browsers drop tabs, newlines and other
-// control characters inside a URL's scheme ("java\tscript:"), so those are removed before
-// looking at it, and anything with a scheme other than http, https or mailto is refused.
+function isShownInHref(char: string): boolean {
+  const code = char.codePointAt(0) ?? 0
+  return code > 0x20 && (code < 0x7f || code > 0x9f)
+}
+
 export function safeHref(raw: string): string | null {
   const href = raw.trim()
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
-  const bare = href.replace(/[\u0000- \u007f-\u009f]/g, '')
+  const bare = Array.from(href).filter(isShownInHref).join('')
   if (bare === '') return null
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(bare)
   if (scheme && !/^(https?|mailto)$/i.test(scheme[1])) return null
-  // And the browser's own URL parser, the one that will follow the link, must agree: a
-  // relative link or "//host/…" resolves against this page, so it is http(s) too.
   try {
     if (!['http:', 'https:', 'mailto:'].includes(new URL(href, 'https://taskto.invalid/').protocol)) return null
   } catch {
@@ -32,11 +20,8 @@ export function safeHref(raw: string): string | null {
   return href
 }
 
-// Browsers read a backslash in a URL as a slash, so "\\host" is another site too.
 const external = (href: string) => /^(https?:)?[\\/]{2}/i.test(href) || /^mailto:/i.test(href)
 
-// Nesting deeper than this (quotes in quotes, emphasis in links…) stays text, so a hostile
-// document can't exhaust the stack.
 const MAX_DEPTH = 16
 
 type Block =
@@ -48,22 +33,17 @@ type Block =
   | { kind: 'rule' }
   | { kind: 'table'; align: Align[]; head: string[]; rows: string[][] }
 
-// A table column's alignment, from its rule (":--", "--:", ":-:").
 type Align = 'left' | 'center' | 'right' | undefined
 
-// A fence, and the language named after it ("```ts"), if any.
 const FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)/
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
 const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/
 const QUOTE = /^ {0,3}> ?/
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])([ \t]+|$)/
-// The rule under a table's head row (GitHub's tables): cells of dashes, colons for alignment.
 const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
-// The most rows and columns a table shows; the rest of a hostile one stays out.
 const MAX_TABLE_ROWS = 1000
 const MAX_TABLE_COLUMNS = 64
 
-// A table row's cells, without its outer pipes; "\|" is a pipe inside a cell.
 function splitRow(line: string): string[] {
   let row = line.trim()
   if (row.startsWith('|')) row = row.slice(1)
@@ -85,7 +65,6 @@ function splitRow(line: string): string[] {
   return cells.slice(0, MAX_TABLE_COLUMNS)
 }
 
-// A table starts at line i: a row with a pipe, then a rule with as many cells.
 const tableAt = (lines: string[], i: number) =>
   lines[i].includes('|') &&
   i + 1 < lines.length &&
@@ -116,7 +95,7 @@ function blocks(lines: string[], depth: number): Block[] {
       const body: string[] = []
       i++
       while (i < lines.length && !close.test(lines[i])) body.push(lines[i++])
-      i++ // the closing fence, or past the end
+      i++
       out.push({ kind: 'code', text: body.join('\n'), lang: fence[2] || undefined })
       continue
     }
@@ -145,14 +124,11 @@ function blocks(lines: string[], depth: number): Block[] {
       const ordered = /\d/.test(item[2])
       const items: Block[][] = []
       while (i < lines.length) {
-        // Blank lines between two items keep them in one list.
         let next = i
         while (next < lines.length && blank(lines[next])) next++
         if (next > i && next < lines.length && ITEM.exec(lines[next])?.[1].length === indent) i = next
         const m = ITEM.exec(lines[i])
         if (!m || m[1].length !== indent || /\d/.test(m[2]) !== ordered) break
-        // The item's lines: its first, then those indented past the marker (a nested list,
-        // more text), and lazy continuations of its paragraph.
         const width = m[0].length
         const body = [lines[i].slice(width)]
         i++
@@ -208,8 +184,6 @@ function blocks(lines: string[], depth: number): Block[] {
   return out
 }
 
-// Inline text: code spans, escapes, links, images (as links), autolinks, strong, emphasis
-// and strikethrough. Unmatched markers stay as text.
 export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode[] {
   if (depth > MAX_DEPTH) return [text]
   const out: ReactNode[] = []
@@ -223,8 +197,6 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
     out.push(node)
   }
   let i = 0
-  // Where the last "@" typed as itself ends: a mention is a link right after one, not after an
-  // escaped "@".
   let atEnd = -1
   while (i < text.length) {
     const c = text[i]
@@ -259,8 +231,6 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
         continue
       }
     }
-    // A bare http(s) URL, as models write them, starting a word. Trailing punctuation, and a
-    // closing parenthesis it didn't open, are the sentence's, not the URL's.
     if ((c === 'h' || c === 'H') && !/[\p{L}\p{N}_]/u.test(text[i - 1] ?? '')) {
       const bare = /^https?:\/\/[^\s<>"'`]+/i.exec(text.slice(i, i + MAX_TARGET))
       if (bare) {
@@ -280,8 +250,7 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
       const link = parseLink(text, image ? i + 1 : i)
       const who = !image && atEnd === i ? /^user:([0-9]{1,18})$/.exec(link?.href ?? '') : null
       if (link && who) {
-        plain = plain.slice(0, -1) // the "@" is the mention's
-        // The ID as a number is written ("02" is 2), as the server reads it.
+        plain = plain.slice(0, -1)
         push(<Mention key={out.length} id={who[1].replace(/^0+(?=\d)/, '')} label={link.label} />)
         i = link.end
         continue
@@ -328,11 +297,6 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
   return out
 }
 
-// Where the run of `delim` opened at `from` closes, or -1. An underscore inside a word
-// (snake_case) neither opens nor closes; the content can't start or end with a space.
-// How far an emphasis may reach for its closer. Every unmatched "*" or "_" scans for one, so
-// without a bound a paragraph of them costs a scan to its end each: quadratic, and a shared
-// document could freeze the tab of whoever opens it (as unclosed "[" could, see MAX_LABEL).
 const MAX_EMPHASIS = 1000
 
 function closing(text: string, from: number, delim: string): number {
@@ -355,7 +319,6 @@ function closing(text: string, from: number, delim: string): number {
     }
     if (text.startsWith(delim, j) && j > open && !/\s/.test(text[j - 1])) {
       const after = text[j + delim.length]
-      // A single * or _ next to another one is part of a double: not this closer.
       const doubled = delim.length === 1 && (after === delim || text[j - 1] === delim)
       if (!doubled && !(delim[0] === '_' && word(after))) return j
     }
@@ -364,10 +327,6 @@ function closing(text: string, from: number, delim: string): number {
   return -1
 }
 
-// [label](href "title") starting at `at` (the "["), or null.
-// A link's label and target are bounded (as in CommonMark), so a document full of "[" that
-// never close costs a bounded scan at each one, not a scan to the end: no page can be made to
-// freeze the tab of whoever opens it.
 const MAX_LABEL = 999
 const MAX_TARGET = 4096
 
@@ -389,9 +348,6 @@ function parseLink(text: string, at: number): { label: string; href: string; end
   return { label: text.slice(at + 1, j), href, end: j + 1 + m[0].length }
 }
 
-// A link the page handles itself (a document of the knowledge base, say): return what opens it,
-// or null if the page has nowhere for it. A relative link the page doesn't handle shows as
-// text: following it would leave the page, an editor included.
 export type LinkHandler = (href: string) => (() => void) | null
 
 function A({ href, label, onLink }: { href: string; label: ReactNode; onLink?: LinkHandler }) {
@@ -419,14 +375,10 @@ function A({ href, label, onLink }: { href: string; label: ReactNode; onLink?: L
   )
 }
 
-// Blocks have no identity but their place, so each is keyed by it.
 function render(list: Block[], onLink?: LinkHandler, tight = false, prose = false): ReactNode[] {
-  // biome-ignore lint/suspicious/noArrayIndexKey: see above
-  return list.map((b, k) => <Fragment key={k}>{block(b, onLink, tight, prose)}</Fragment>)
+  return byPlace(list).map(({ key, item }) => <Fragment key={key}>{block(item, onLink, tight, prose)}</Fragment>)
 }
 
-// A column of numbers (every cell that has something is a number, an amount or a share) is set
-// to the end in a document, unless its rule aligns it.
 const NUMBER = /^[-+−]?[$€£¥]?\s?\d[\d\s.,]*\s?(%|[$€£¥])?$/
 
 function numericColumns(b: Extract<Block, { kind: 'table' }>): boolean[] {
@@ -458,25 +410,21 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean, prose:
       return <hr className={cls('rule')} />
     case 'table': {
       const numeric = prose ? numericColumns(b) : []
-      // Each row has the head's cells: missing ones are empty, extra ones are dropped.
       const row = (cells: string[], Cell: 'th' | 'td') =>
-        b.head.map((_, j) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: cells have no identity but their place
-          <Cell key={j} style={{ textAlign: b.align[j] }} data-numeric={numeric[j] || undefined}>
+        byPlace(b.head).map(({ key, place: j }) => (
+          <Cell key={key} style={{ textAlign: b.align[j] }} data-numeric={numeric[j] || undefined}>
             {inline(cells[j] ?? '', onLink)}
           </Cell>
         ))
       return (
-        // A wide table scrolls sideways in its own box.
         <div className={prose ? 'ui-prose-table' : 'tt-md-table'}>
           <table>
             <thead>
               <tr>{row(b.head, 'th')}</tr>
             </thead>
             <tbody>
-              {b.rows.map((r, n) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: rows have no identity but their place
-                <tr key={n}>{row(r, 'td')}</tr>
+              {byPlace(b.rows).map(({ key, item: r }) => (
+                <tr key={key}>{row(r, 'td')}</tr>
               ))}
             </tbody>
           </table>
@@ -484,15 +432,11 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean, prose:
       )
     }
     case 'list': {
-      // A list whose items are single paragraphs is tight: no paragraph margins.
-      const items = b.items.map((item, n) => {
+      const items = byPlace(b.items).map(({ key, item }) => {
         const tight = item.length === 1 && item[0].kind === 'paragraph'
         const task = taskItem(item)
         return task ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
-          <li key={n} className={prose ? 'ui-prose-task' : 'tt-task-item'}>
-            {/* Read-only: a document's checkboxes are its text, changed by editing it. The item's
-                own words are the label. */}
+          <li key={key} className={prose ? 'ui-prose-task' : 'tt-task-item'}>
             <label className={cls('task-label')}>
               <input className={cls('check')} type="checkbox" checked={task.checked} disabled />
               <Paragraph text={task.text} onLink={onLink} tight />
@@ -500,8 +444,7 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean, prose:
             {render(task.rest, onLink, tight, prose)}
           </li>
         ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
-          <li key={n}>{render(item, onLink, tight, prose)}</li>
+          <li key={key}>{render(item, onLink, tight, prose)}</li>
         )
       })
       return b.ordered ? (
@@ -515,8 +458,6 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean, prose:
   }
 }
 
-// A task list item ("- [ ] text", "- [x] text"): its first paragraph begins with a box, then a
-// space and some text. Its words, and the blocks after them (a nested list), are returned apart.
 const TASK = /^\[([ xX])\][ \t]+(?=\S)/
 
 function taskItem(item: Block[]): { checked: boolean; text: string; rest: Block[] } | null {
@@ -527,25 +468,17 @@ function taskItem(item: Block[]): { checked: boolean; text: string; rest: Block[
   return { checked: m[1] !== ' ', text: first.text.slice(m[0].length), rest: item.slice(1) }
 }
 
-// How a person mentioned in a comment is shown (`@[label](user:ID)`): by the name the server gives
-// for their ID, which is the only name the page trusts, never by the label in the text, which is
-// whatever its writer typed. An ID without a name shows `unknown`, a neutral placeholder. Without
-// this, a mention shows the label as a link without a target does.
 export type MentionNames = { names: ReadonlyMap<string, string>; unknown: string }
 const Mentions = createContext<MentionNames | null>(null)
 
 function Mention({ id, label }: { id: string; label: string }) {
   const known = useContext(Mentions)
-  // As plain text, never a link: it is a name, and nothing it says is followed.
   const name = known ? (known.names.get(id) ?? known.unknown) : label
   return <span className="tt-mention">{`@${name}`}</span>
 }
 
-// How many levels a heading is lowered by (a chat reply's "#" shouldn't outshout the page),
-// and whether a single line break in a paragraph is one (as a model means it in a reply).
 const HeadingShift = createContext(0)
 const LineBreaks = createContext(false)
-// A document read in the knowledge base (`look="document"`).
 const Prose = createContext(false)
 
 function InlineCode({ children }: { children: ReactNode }) {
@@ -553,7 +486,6 @@ function InlineCode({ children }: { children: ReactNode }) {
 }
 
 function Paragraph({ text, onLink, tight }: { text: string; onLink?: LinkHandler; tight: boolean }) {
-  // As a hard break ("  \n"), which inline() draws: only in a paragraph, never in code.
   const shown = useContext(LineBreaks) ? text.replace(/ *\n/g, '  \n') : text
   const className = useContext(Prose) ? 'ui-prose-p' : undefined
   return tight ? <span>{inline(shown, onLink)}</span> : <p className={className}>{inline(shown, onLink)}</p>
@@ -564,9 +496,6 @@ function Heading({ level, children }: { level: number; children: ReactNode }) {
   return <H className={useContext(Prose) ? 'ui-prose-heading' : undefined}>{children}</H>
 }
 
-// headingShift lowers every heading by that many levels (to h6 at most): 2 makes "#" an h3.
-// lineBreaks makes each line break in a paragraph a break, as in a chat reply. mentions says how
-// the people a comment mentions are named. look="document" is a document's own look, for reading.
 export function Markdown({
   text,
   onLink,

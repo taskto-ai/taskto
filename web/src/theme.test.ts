@@ -6,7 +6,6 @@ import { applyTheme, THEME_COLOR } from './theme'
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
-// The two metas as index.html declares them.
 function metas() {
   document.head.innerHTML = `
     <meta name="theme-color" content="${THEME_COLOR.light}" media="(prefers-color-scheme: light)" />
@@ -35,7 +34,6 @@ test("the system's theme puts back each meta's own colour, and keeps its media q
   expect([light.content, dark.content]).toEqual([THEME_COLOR.light, THEME_COLOR.dark])
   expect(light.getAttribute('media')).toBe('(prefers-color-scheme: light)')
   expect(dark.getAttribute('media')).toBe('(prefers-color-scheme: dark)')
-  // And again, from a light pick.
   applyTheme('light')
   applyTheme('system')
   expect([light.content, dark.content]).toEqual([THEME_COLOR.light, THEME_COLOR.dark])
@@ -48,7 +46,6 @@ test('a page without theme-color metas still takes a theme', () => {
 })
 
 test("the colours are the page's: the ground role, index.html's metas and the manifest", () => {
-  // The default brand's ground, which the old name still points at.
   expect(read('./ui/themes/mint.css')).toContain(`--color-bg: light-dark(${THEME_COLOR.light}, ${THEME_COLOR.dark});`)
   expect(read('./ui/legacy.css')).toContain('--tt-canvas: var(--color-bg);')
 

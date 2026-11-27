@@ -20,8 +20,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// census is what the tests' server says: the live users with the identities the tests give them,
-// and those given in owners, with the tests' boot.
 func census(owners map[int64]string, live ...int64) cliworker.Census {
 	c := cliworker.Census{Owners: map[int64]string{}, Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation, Before: time.Now()}
 	for _, user := range live {
@@ -33,12 +31,10 @@ func census(owners map[int64]string, live ...int64) cliworker.Census {
 	return c
 }
 
-// otherAccount is an account given number user in another history: an identity of its own.
 func otherAccount(user int64) cliowner.Account {
 	return cliowner.Account{User: user, Identity: fmt.Sprintf("%031xe", user), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}
 }
 
-// mine puts a file of the account's own in its working directory.
 func mine(t *testing.T, dirs cliworker.Dirs) string {
 	t.Helper()
 	if err := os.MkdirAll(dirs.Work, 0o700); err != nil {
@@ -51,10 +47,6 @@ func mine(t *testing.T, dirs cliworker.Dirs) string {
 	return p
 }
 
-// An account is kept under its identity, never its number: an account a restore of the server's
-// data gives a number that another had is served at once, before any census, in a home of its own,
-// and finds nothing of the other's, whose files are untouched; the other's own request reaches only
-// its own home.
 func TestAnAccountGivenANumberAgainGetsAHomeOfItsOwn(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -74,7 +66,6 @@ func TestAnAccountGivenANumberAgainGetsAHomeOfItsOwn(t *testing.T) {
 	if _, err := os.Stat(oldFile); err != nil {
 		t.Errorf("the old account's file went: %v", err)
 	}
-	// A request of the old account's, delayed past all this, reaches its own home only.
 	if st, err := h.w.Status(ctx, acct(3), cliworker.Claude, ""); err != nil || !st.LoggedIn {
 		t.Errorf("the old account's own request: %+v %v", st, err)
 	}
@@ -83,8 +74,6 @@ func TestAnAccountGivenANumberAgainGetsAHomeOfItsOwn(t *testing.T) {
 	}
 }
 
-// Nothing of a retired account comes back: no request, the account's own included, makes its home
-// again or runs anything for it, and its home number is never given to another account.
 func TestNothingBringsBackARetiredHome(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -104,8 +93,6 @@ func TestNothingBringsBackARetiredHome(t *testing.T) {
 			t.Errorf("%s of a retired account went through", name)
 		}
 	}
-	// A browser start that comes after the removal (one that raced it) starts nothing, makes no
-	// helper and leaves no file.
 	built := h.w.HelpersBuiltForTest()
 	host := h.w.BrowserHost(map[browser.Program]string{browser.Xvfb: "/bin/sh"})
 	if _, err := host.Start(acct(4), browser.ProcSpec{Program: browser.Xvfb, Kind: browser.Personal}, nil); err == nil {
@@ -125,9 +112,6 @@ func TestNothingBringsBackARetiredHome(t *testing.T) {
 	}
 }
 
-// A home number is taken, on disk, before it is used: a crash between taking it and recording the
-// account skips it, never gives it twice, and the account gets a home on its next request. What
-// was recorded is still there for a worker that starts again on the same directory.
 func TestAHomeNumberIsNeverGivenTwice(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -168,9 +152,6 @@ func TestAHomeNumberIsNeverGivenTwice(t *testing.T) {
 	}
 }
 
-// Local mode moves a directory from before homes (Root/u<n>) to the home of the first account of
-// its number, once: a stop before or after the move is finished by the next use, and the files are
-// the account's, in its home.
 func TestLocalModeAdoptsADirectoryFromBeforeHomesOnce(t *testing.T) {
 	for _, stop := range []string{"before the move", "after the move"} {
 		t.Run(stop, func(t *testing.T) {
@@ -191,12 +172,11 @@ func TestLocalModeAdoptsADirectoryFromBeforeHomesOnce(t *testing.T) {
 				return nil
 			})
 			if stop == "before the move" {
-				// The record says a move is due, and nothing has moved yet.
 				if err := os.Chmod(h.layout.Root, 0o500); err != nil {
 					t.Fatal(err)
 				}
 				_, err := h.w.Status(ctx, acct(7), cliworker.Claude, "")
-				_ = os.Chmod(h.layout.Root, 0o700) //nolint:gosec // G302: the test's own directory
+				_ = os.Chmod(h.layout.Root, 0o700)
 				if err == nil && os.Geteuid() != 0 {
 					t.Fatal("fixture: the move went through")
 				}
@@ -209,7 +189,6 @@ func TestLocalModeAdoptsADirectoryFromBeforeHomesOnce(t *testing.T) {
 				t.Fatalf("the account's own login after the stop: %+v %v", st, err)
 			}
 			gone(t, legacy)
-			// Once only: another account of the number later finds nothing to adopt.
 			if st, err := h.w.Status(ctx, otherAccount(7), cliworker.Claude, ""); err != nil || st.LoggedIn {
 				t.Errorf("another account of number 7: %+v %v", st, err)
 			}
@@ -217,7 +196,6 @@ func TestLocalModeAdoptsADirectoryFromBeforeHomesOnce(t *testing.T) {
 	}
 }
 
-// Container mode never adopts a directory from before homes: Reconcile removes it.
 func TestContainerModeRemovesDirectoriesFromBeforeHomes(t *testing.T) {
 	h := newHarness(t, nil)
 	legacy := h.layout.LegacyDirForTest(7)
@@ -233,7 +211,6 @@ func TestContainerModeRemovesDirectoriesFromBeforeHomes(t *testing.T) {
 	}
 }
 
-// bootCensus is a census of the server with boot, which read its database at before.
 func bootCensus(boot string, before time.Time, owners map[int64]string) cliworker.Census {
 	if owners == nil {
 		owners = map[int64]string{}
@@ -241,10 +218,6 @@ func bootCensus(boot string, before time.Time, owners map[int64]string) cliworke
 	return cliworker.Census{Owners: owners, Boot: boot, Installation: cliworker.TestInstallation, Before: before}
 }
 
-// Reconcile retires the accounts the census doesn't name that servers it heard from made (an
-// earlier census's server's), and removes their homes; the live ones keep theirs, as do those the
-// census's own server made since it read its database and those of a server whose census hasn't
-// come yet.
 func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	h := newHarness(t, nil)
 	browsers := &fakeBrowsers{stopped: map[string]bool{}}
@@ -253,11 +226,9 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	start := time.Now().Add(-time.Hour)
 	live := mine(t, h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true))
 	goneDirs := h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true)
-	// The first server's census, at its start.
 	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, map[int64]string{1: cliworker.IdentityForTest(1), 2: cliworker.IdentityForTest(2)})); err != nil {
 		t.Fatal(err)
 	}
-	// Another server after it, which made an account and told the worker.
 	other := cliowner.Account{User: 3, Identity: strings.Repeat("3", 32), Boot: strings.Repeat("9", 32), Installation: cliworker.TestInstallation}
 	if _, err := h.w.Status(ctx, other, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
@@ -265,8 +236,6 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	if err := h.w.Reconcile(ctx, bootCensus(other.Boot, start.Add(time.Minute), map[int64]string{1: cliworker.IdentityForTest(1), 2: cliworker.IdentityForTest(2), 3: other.Identity})); err != nil {
 		t.Fatal(err)
 	}
-	// The server starts again: its census has a boot of its own, and an account it makes since it
-	// read its database carries that boot.
 	again := bootCensus(strings.Repeat("a", 32), time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})
 	since := acct(4)
 	since.Boot = again.Boot
@@ -276,8 +245,6 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	if err := h.w.Reconcile(ctx, again); err != nil {
 		t.Fatal(err)
 	}
-	// A server whose census hasn't come makes an account after this census was registered: the
-	// census, tried again, keeps it.
 	coming := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: strings.Repeat("e", 32), Installation: cliworker.TestInstallation}
 	if _, err := h.w.Status(ctx, coming, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
@@ -307,8 +274,6 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	}
 }
 
-// An account's identity never reaches its CLI: not in its environment, its command line, its
-// working directory or any file in its home.
 func TestTheIdentityNeverReachesACLI(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 5, cliworker.Claude, clitest.Scenario{Probes: []string{"self"}}, true)
@@ -328,7 +293,7 @@ func TestTheIdentityNeverReachesACLI(t *testing.T) {
 			t.Errorf("a path in the home names the identity: %s", p)
 		}
 		if d.Type().IsRegular() {
-			if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), id) { //nolint:gosec // G304: the test's own files
+			if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), id) {
 				t.Errorf("%s holds the identity", p)
 			}
 		}
@@ -339,7 +304,6 @@ func TestTheIdentityNeverReachesACLI(t *testing.T) {
 	}
 }
 
-// fakeBrowsers is the agent browsers as the worker sees them: it records whose it stopped.
 type fakeBrowsers struct {
 	mu      sync.Mutex
 	stopped map[string]bool
@@ -359,9 +323,6 @@ func (f *fakeBrowsers) Unforget(again func(string) bool, _ time.Time) {
 	f.again = again
 }
 
-// The browsers' purge of an account the worker never gave a home (one a deletion retired before
-// it ever came, a record with no home) has nothing to remove, and asks no helper: there is no
-// home number to run one for.
 func TestABrowserPurgeOfAnAccountWithNoHomeDoesNothing(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -374,7 +335,6 @@ func TestABrowserPurgeOfAnAccountWithNoHomeDoesNothing(t *testing.T) {
 	if h.w.HelpersBuiltForTest() != built {
 		t.Error("a helper was made for an account with no home")
 	}
-	// Not even when a directory named for home 0 is there.
 	if err := os.MkdirAll(filepath.Join(h.layout.Root, "h0"), 0o700); err != nil {
 		t.Fatal(err)
 	}

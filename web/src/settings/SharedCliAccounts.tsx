@@ -1,9 +1,3 @@
-// A workspace's shared CLI accounts (docs/account-switching.md): API keys its admins add for
-// Claude Code, Codex or Grok Build, which members' turns use through the server's proxy. The key
-// never reaches the CLIs, and never comes back from the server. They are never subscription
-// logins: the providers' terms forbid sharing one. Admins also set which accounts each member's
-// turns use here (their own, the workspace's, or their own if connected, else the workspace's).
-
 import { type FormEvent, useId, useState } from 'react'
 import {
   api,
@@ -33,7 +27,6 @@ import { Select } from '../ui/Select'
 import { CliLimits } from './CliAccountsTab'
 import { Alert, Loading, Section, useAction } from './parts'
 
-// The terms that govern an API key of each provider, linked next to the shared accounts.
 export const SHARED_TERMS: Record<CliName, { label: Key; href: string }[]> = {
   claude: [
     { label: 'settings.sharedCli.terms.anthropicCommercial', href: 'https://www.anthropic.com/legal/commercial-terms' },
@@ -51,7 +44,6 @@ export const MODE_LABEL: Record<CliAccountMode, Key> = {
   shared: 'settings.sharedCli.modes.shared',
 }
 
-// What the viewer's own mode means for them.
 const YOURS: Record<CliAccountMode, Key> = {
   own_else_shared: 'settings.sharedCli.yours.own_else_shared',
   own: 'settings.sharedCli.yours.own',
@@ -64,7 +56,6 @@ const DEFAULT_URL: Record<CliName, string> = {
   grok: 'https://api.x.ai',
 }
 
-// A test's outcome: `code` and `params` are a failure's, for codeText().
 type Test = { ok: boolean; message: string; code?: string; params?: Params }
 
 export function SharedCliAccountsPanel({ workspace, admin }: { workspace: number; admin: boolean }) {
@@ -374,7 +365,6 @@ function SharedForm({
   )
 }
 
-// Which accounts members' turns use: the workspace's default, and each member's own.
 function Modes({ base, onChanged }: { base: string; onChanged: () => void }) {
   const modes = useLoad(() => api<CliMemberModes>(`${base}/modes`), [base])
   const action = useAction()

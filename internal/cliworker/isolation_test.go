@@ -21,10 +21,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// The container mode's OS boundary: each user's CLIs run as a Unix user of their own. These
-// tests need root on Linux (CI runs them in a container, see .github/workflows/ci.yml);
-// elsewhere they are skipped.
-
 const isoBase = 200000
 
 type isoHarness struct {
@@ -38,9 +34,6 @@ func newIsolated(t *testing.T) *isoHarness {
 	if os.Geteuid() != 0 {
 		t.Skip("the isolation tests need root (Linux); CI runs them in a container")
 	}
-	// Everything the users' processes run must be reachable by them: a directory others can
-	// pass through, a copy of this test binary as the helper and the fake CLIs. A short one: the
-	// agent browser's sockets under a home must fit a Unix socket's path.
 	base, err := os.MkdirTemp("/tmp", "iso")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +80,6 @@ func newIsolated(t *testing.T) *isoHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(w.Close)
-	// The server's census at its start, as newHarness: deletions are taken after it.
 	if err := w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +109,6 @@ func copyFile(t *testing.T, to string) {
 	}
 }
 
-// introduce gives the tests' accounts of users their homes, as their first requests would.
 func (h *isoHarness) introduce(t *testing.T, users ...int64) {
 	t.Helper()
 	for _, user := range users {
@@ -125,15 +116,12 @@ func (h *isoHarness) introduce(t *testing.T, users ...int64) {
 	}
 }
 
-// home is the directories of the tests' account of user.
 func (h *isoHarness) home(user int64) cliworker.Dirs {
 	return h.layout.Home(h.w.HomeForTest(acct(user)))
 }
 
-// uid is the Unix user of the tests' account of user: UIDBase plus its home number.
 func (h *isoHarness) uid(user int64) int { return isoBase + int(h.w.HomeForTest(acct(user))) }
 
-// signIn connects user's fake cli the way its login would: as the user, through the helper.
 func (h *isoHarness) signIn(t *testing.T, user int64, cli cliworker.CLI) {
 	t.Helper()
 	h.introduce(t, user)
@@ -158,7 +146,6 @@ func (h *isoHarness) signIn(t *testing.T, user int64, cli cliworker.CLI) {
 	}
 }
 
-// approveAs approves a device login as the user would, writing the fake's file as its owner.
 func approveAs(t *testing.T, configDir string, uid int) {
 	t.Helper()
 	clitest.Approve(t, configDir)
@@ -167,7 +154,6 @@ func approveAs(t *testing.T, configDir string, uid int) {
 	}
 }
 
-// scenario writes the fake's scenario for user as the user's own file.
 func (h *isoHarness) scenario(t *testing.T, user int64, cli cliworker.CLI, s clitest.Scenario) {
 	t.Helper()
 	dir := h.home(user).Config(cli)
@@ -190,16 +176,13 @@ func TestIsolationEachUserIsAUnixUser(t *testing.T) {
 		if got := probeResult(done.Text, "uid"); got != fmt.Sprintf("ok %d %d", h.uid(1), h.uid(1)) {
 			t.Errorf("%s ran as %s", cli, got)
 		}
-		// No capabilities: nothing to escalate with.
 		if got := probeResult(done.Text, "caps"); !strings.Contains(got, "CapPrm: 0000000000000000") || !strings.Contains(got, "CapEff: 0000000000000000") {
 			t.Errorf("%s capabilities: %s", cli, got)
 		}
-		// no_new_privs: a setuid program couldn't give it any either.
 		if got := probeResult(done.Text, "nnp"); got != "ok 1" {
 			t.Errorf("%s no_new_privs: %s", cli, got)
 		}
 	}
-	// The user exists, and their directory is theirs alone.
 	passwd, err := os.ReadFile(h.cfg.Isolation.UserFile)
 	if err != nil || !strings.Contains(string(passwd), fmt.Sprintf("th%d:x:%d:%d:", h.w.HomeForTest(acct(1)), h.uid(1), h.uid(1))) {
 		t.Fatalf("passwd = %q %v", passwd, err)
@@ -213,8 +196,6 @@ func TestIsolationEachUserIsAUnixUser(t *testing.T) {
 	}
 }
 
-// What the spike saw Codex do (cat another user's file) fails here: one user's CLI can't read,
-// list, write or signal anything of another user's, nor list the users.
 func TestIsolationBetweenUsers(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 1, cliworker.Claude)
@@ -225,7 +206,6 @@ func TestIsolationBetweenUsers(t *testing.T) {
 		t.Fatalf("user 1's login: %v", err)
 	}
 
-	// User 1 runs something long, so there is a process to signal.
 	h.scenario(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 20_000})
 	long, _, err := h.w.Start(spec("long", 1, cliworker.Claude, "slow"))
 	if err != nil {
@@ -260,19 +240,15 @@ func TestIsolationBetweenUsers(t *testing.T) {
 	if got := probeResult(done.Text, "kill:"+strconv.Itoa(victim)); !strings.Contains(got, "operation not permitted") {
 		t.Errorf("user 2 signalled user 1's CLI: %s", got)
 	}
-	// The account files are public, as on any system: they hold no secrets.
 	if got := probeResult(done.Text, "read:"+h.cfg.Isolation.UserFile); !strings.HasPrefix(got, "ok") {
 		t.Errorf("reading passwd: %s", got)
 	}
-	// User 1's CLI is untouched.
 	h.w.Stop("long")
 	if d := last(waitDone(t, long, 15*time.Second)); d.Status != cliworker.StatusStopped {
 		t.Errorf("user 1's turn: %+v", d)
 	}
 }
 
-// A new worker kills every process of every CLI user before it does anything: a uid, unlike
-// a PID, can't belong to something else.
 func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 1, cliworker.Grok)
@@ -289,7 +265,7 @@ func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 	bg := backgroundPID(t, cfg)
 	cli := clitest.Calls(t, cfg)[0].PID
 
-	h.w.CrashForTest() // the first worker's process is gone, and its lock with it
+	h.w.CrashForTest()
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -301,8 +277,6 @@ func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 	}
 }
 
-// A user's directory that isn't theirs (a symlink planted before the worker made it, or
-// another user's) is refused, not followed.
 func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	h := newIsolated(t)
 	h.introduce(t, 3, 4)
@@ -313,7 +287,7 @@ func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	if done.Status != cliworker.StatusFailed || !strings.Contains(done.Text, "not a directory") {
 		t.Fatalf("done = %+v", done)
 	}
-	if err := os.Mkdir(h.home(4).Root, 0o700); err != nil { // root's, not user 4's
+	if err := os.Mkdir(h.home(4).Root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	done = last(run(t, h.w, spec("foreign", 4, cliworker.Claude, "hi")))
@@ -322,8 +296,6 @@ func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	}
 }
 
-// The first uid must be above every system and image uid: the start-up sweep kills every
-// process from it up.
 func TestIsolationRefusesALowUIDBase(t *testing.T) {
 	h := newIsolated(t)
 	for _, base := range []int{-1, 1, 1000, 65534, cliworker.MaxUIDForTest - (1 << 30) + 1, 1 << 62} {
@@ -335,8 +307,6 @@ func TestIsolationRefusesALowUIDBase(t *testing.T) {
 	}
 }
 
-// An account entry that would make a user someone else (the name with another uid, or the
-// uid with another name) is refused, not duplicated.
 func TestIsolationRefusesAConflictingAccount(t *testing.T) {
 	h := newIsolated(t)
 	f, err := os.OpenFile(h.cfg.Isolation.UserFile, os.O_APPEND|os.O_WRONLY, 0)
@@ -353,9 +323,6 @@ func TestIsolationRefusesAConflictingAccount(t *testing.T) {
 	}
 }
 
-// A user's commands can ask the approval socket only about their own turns: the worker
-// knows who asks from the socket's peer uid, so naming another user's session reaches
-// nothing of theirs.
 func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 1, cliworker.Claude)
@@ -375,7 +342,6 @@ func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	if done.Status != cliworker.StatusOK {
 		t.Fatalf("user 2's turn: %+v", done)
 	}
-	// User 2's hook reached no turn: none of user 2's runs that session.
 	if got := probeResult(done.Text, "ask:"+s1.Session); !strings.Contains(got, "no running turn") {
 		t.Errorf("user 2's question about user 1's session: %s", got)
 	}
@@ -388,8 +354,6 @@ func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	waitDone(t, turn, 20*time.Second)
 }
 
-// Without a Unix user per taskto user, a worker running as root would run the CLIs as root:
-// the helper refuses, unless the development override is set (docs/agent-safety.md).
 func TestIsolationRefusesRootInLocalMode(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root (Linux); CI runs it in a container")
@@ -407,16 +371,12 @@ func TestIsolationRefusesRootInLocalMode(t *testing.T) {
 	}
 }
 
-// Before a number's directory goes, and so before the number can be given to someone else, every
-// process of its Unix user ends: one a CLI detached into a session of its own too, which no turn
-// or process group of the worker's lists, and which would otherwise reach the next account's
-// directory under the same uid.
 func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 5, cliworker.Claude)
 	detached := exec.Command("sleep", "60")
 	detached.Dir = "/"
-	detached.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: uint32(h.uid(5)), Gid: uint32(h.uid(5))}} //nolint:gosec // G115: uidOf keeps a uid below the 32-bit nobody
+	detached.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: uint32(h.uid(5)), Gid: uint32(h.uid(5))}}
 	if err := detached.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -424,15 +384,13 @@ func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	go func() { _ = detached.Wait(); close(ended) }()
 	t.Cleanup(func() { _ = detached.Process.Kill(); <-ended })
 
-	// The first server's census, at its start.
 	if err := h.w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now().Add(-time.Hour), map[int64]string{5: cliworker.IdentityForTest(5)})); err != nil {
 		t.Fatal(err)
 	}
-	// A restore gave 5 to another account: the old account is retired, and tidied up.
 	old := h.home(5)
 	next := cliowner.Account{User: 5, Identity: strings.Repeat("b", 32), Boot: strings.Repeat("c", 32), Installation: cliworker.TestInstallation}
 	again := census(map[int64]string{5: next.Identity})
-	again.Boot = next.Boot // the server's next start
+	again.Boot = next.Boot
 	if err := h.w.Reconcile(context.Background(), again); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +402,6 @@ func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	if _, err := os.Stat(old.Root); !os.IsNotExist(err) {
 		t.Errorf("the old home: %v", err)
 	}
-	// The new account has a home and a uid of its own.
 	if st, err := h.w.Status(context.Background(), next, cliworker.Claude, ""); err != nil || st.LoggedIn {
 		t.Errorf("the new account: %+v %v", st, err)
 	}
@@ -453,9 +410,6 @@ func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	}
 }
 
-// The worker removes a user's directory as itself, root with only CAP_CHOWN of the file powers
-// in the container (CI runs this with those capabilities alone too): a read-only part the user
-// made, and a link to a file of root's, don't stop it, and the link isn't followed.
 func TestIsolationRemovesAReadOnlyDirectoryOfTheUser(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 6, cliworker.Claude)
@@ -463,11 +417,10 @@ func TestIsolationRemovesAReadOnlyDirectoryOfTheUser(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("root's"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Made by the user, as a tool of theirs would.
 	work := h.home(6).Work
 	mk := exec.Command("sh", "-c", `set -e; mkdir -p "$1/ro/inner"; echo x > "$1/ro/inner/file"; ln -s "$2" "$1/ro/inner/link"; chmod 400 "$1/ro/inner/file"; chmod 500 "$1/ro/inner" "$1/ro"`, "sh", work, outside)
 	mk.Dir = "/"
-	mk.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(h.uid(6)), Gid: uint32(h.uid(6))}} //nolint:gosec // G115: uidOf keeps a uid below the 32-bit nobody
+	mk.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(h.uid(6)), Gid: uint32(h.uid(6))}}
 	if out, err := mk.CombinedOutput(); err != nil {
 		t.Fatalf("making the read-only directory as the user: %v %s", err, out)
 	}
@@ -485,18 +438,11 @@ func TestIsolationRemovesAReadOnlyDirectoryOfTheUser(t *testing.T) {
 	}
 }
 
-// (From the pull request that first ended a user's detached processes.) Forgetting a user ends
-// every process of their Unix user before their directory goes: also one
-// a tool of the CLI detached from the process group (a daemon, a browser's leftover), which the
-// stops of the turns and groups don't reach, and which would go on running as the user, writing
-// into the directory, or into a new person's that is given the number. Another user's processes,
-// turn and directory are not touched: a uid is one user's alone.
 func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
 	h := newIsolated(t)
 	for _, user := range []int64{1, 2} {
 		h.signIn(t, user, cliworker.Grok)
 	}
-	// User 1's tool detaches a process from the turn's group; user 2's stays in its own.
 	h.scenario(t, 1, cliworker.Grok, clitest.Scenario{SleepMS: 60_000, Background: true, Detached: true})
 	h.scenario(t, 2, cliworker.Grok, clitest.Scenario{SleepMS: 60_000, Background: true})
 	var turns [3]*cliworker.Turn
@@ -513,7 +459,6 @@ func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
 		})
 		turns[user], bg[user] = turn, backgroundPID(t, cfg)
 	}
-	// The detached process is in a session of its own: not in the turn's group.
 	if pgid, err := syscall.Getpgid(bg[1]); err != nil || pgid != bg[1] {
 		t.Fatalf("the detached process's group = %d, %v: want a group of its own (%d)", pgid, err, bg[1])
 	}
@@ -531,7 +476,6 @@ func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
 	}
 	gone(t, h.home(1).Root)
 
-	// The other user: process, turn and files.
 	if !alive(bg[2]) {
 		t.Error("another user's process was ended")
 	}
@@ -546,8 +490,6 @@ func TestIsolationForgetEndsTheUsersDetachedProcesses(t *testing.T) {
 	}
 }
 
-// A worker started on a volume with another UID base than the one its accounts were given their
-// uids under doesn't start: every home's uid would be another's.
 func TestIsolationRefusesAChangedUIDBase(t *testing.T) {
 	h := newIsolated(t)
 	h.introduce(t, 1)
@@ -568,9 +510,6 @@ func TestIsolationRefusesAChangedUIDBase(t *testing.T) {
 	w.Close()
 }
 
-// A home whose making stopped half way (after it was owned, before it was in place) is made again
-// on the account's next request, owned by its Unix user: never a home of the wrong owner refused
-// for good. What the stop left is removed when a worker starts.
 func TestIsolationAHomeInterruptedWhileMadeIsMadeAgain(t *testing.T) {
 	h := newIsolated(t)
 	ctx := context.Background()
@@ -600,9 +539,6 @@ func TestIsolationAHomeInterruptedWhileMadeIsMadeAgain(t *testing.T) {
 	}
 }
 
-// A removal stopped part way (the home taken off its path, not yet the worker's or in the trash)
-// leaves the account's published path empty, never a home of the wrong owner: a restore that
-// brings the account back gives it a home it can use.
 func TestIsolationARemovalStoppedPartWayLeavesNoForeignHome(t *testing.T) {
 	h := newIsolated(t)
 	ctx := context.Background()
@@ -611,7 +547,6 @@ func TestIsolationARemovalStoppedPartWayLeavesNoForeignHome(t *testing.T) {
 	if err := h.w.Forget(ctx, acct(1)); err == nil || !strings.Contains(err.Error(), "the worker stopped here") {
 		t.Fatalf("fixture: the removal didn't stop where the test stops it: %v", err)
 	}
-	// The worker's process starts again: nothing of the first one's memory.
 	h.w.Close()
 	cfg := h.cfg
 	cfg.Isolation = &cliworker.Isolation{UIDBase: h.cfg.Isolation.UIDBase, UserFile: h.cfg.Isolation.UserFile, Group: h.cfg.Isolation.Group}
@@ -621,7 +556,6 @@ func TestIsolationARemovalStoppedPartWayLeavesNoForeignHome(t *testing.T) {
 	}
 	h.w = w
 	t.Cleanup(w.Close)
-	// A restore brings the account back: the restored server's census, a later boot.
 	if err := h.w.Reconcile(ctx, bootCensus(strings.Repeat("d", 32), time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
 		t.Fatal(err)
 	}

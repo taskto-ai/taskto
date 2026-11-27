@@ -23,7 +23,6 @@ func TestLimiter(t *testing.T) {
 		t.Fatal("another key was refused")
 	}
 
-	// A given-back attempt frees a place.
 	l.Give("k")
 	if ok, _ := l.Take("k"); !ok {
 		t.Fatal("refused after give")
@@ -57,7 +56,7 @@ func TestLimiterUsed(t *testing.T) {
 	l := New(2, time.Minute, func() time.Time { return now })
 	l.Take("a")
 	l.Take("a")
-	l.Take("a") // refused: not counted
+	l.Take("a")
 	l.Take("b")
 	if n := l.Used(); n != 3 {
 		t.Fatalf("Used = %d, want 3", n)
@@ -68,7 +67,6 @@ func TestLimiterUsed(t *testing.T) {
 	}
 }
 
-// A map held at the sweep size by keys that haven't expired is not scanned on every new key.
 func TestLimiterSweepCostIsBounded(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	l := New(1, time.Minute, func() time.Time { return now })

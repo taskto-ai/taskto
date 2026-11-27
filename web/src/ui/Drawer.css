@@ -19,7 +19,6 @@
     animation: ui-drawer-in var(--duration-slow) var(--ease-out);
   }
 
-  /* It comes in from the inline end: the left in a right-to-left page. */
   :root[dir="rtl"] .ui-drawer {
     --ui-drawer-from: -100%;
   }

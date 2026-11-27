@@ -10,8 +10,6 @@ import (
 	"taskto.ai/taskto/internal/audit/audittest"
 )
 
-// Two-factor login's changes are audited, in the transaction of the change; a refused request
-// records none; and no secret, code or challenge is in the log.
 func TestAuditTwoFactor(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -19,7 +17,6 @@ func TestAuditTwoFactor(t *testing.T) {
 	ownerID := e.userID(owner)
 	memberID := memberMe.User.ID
 
-	// Starting, or confirming with a wrong code, turns nothing on: no event.
 	got, secret := e.enrol(owner, ownerPassword)
 	if status, _ := e.confirmStatus(owner, got.Enrolment, wrongCode); status != http.StatusForbidden {
 		t.Fatalf("wrong code: %d", status)
@@ -33,7 +30,6 @@ func TestAuditTwoFactor(t *testing.T) {
 	e.nextStep()
 	wantEvent(t, e.one(audit.TwoFactorEnabled), 0, ownerID, audit.TargetUser, ownerID)
 
-	// A password login with a session is an event; with a challenge it is not, until the code.
 	before := len(e.events(audit.LoginSucceeded))
 	c := e.client()
 	ch := c.challenge("owner@example.com", ownerPassword)
@@ -54,7 +50,6 @@ func TestAuditTwoFactor(t *testing.T) {
 	}
 	wantEvent(t, rows[len(rows)-1], 0, ownerID, audit.TargetUser, ownerID)
 
-	// New recovery codes, and turning it off: with a wrong code, nothing is recorded.
 	e.nextStep()
 	rec := owner.do(http.MethodPost, "/api/me/two-factor/recovery-codes", map[string]string{"password": ownerPassword, "code": wrongCode})
 	expect(t, rec, http.StatusForbidden)
@@ -71,14 +66,12 @@ func TestAuditTwoFactor(t *testing.T) {
 	expect(t, rec, http.StatusNoContent)
 	wantEvent(t, e.one(audit.TwoFactorDisabled), 0, ownerID, audit.TargetUser, ownerID)
 
-	// An admin clears a member's: the workspace's event, the admin the actor.
 	memberTwo := e.turnOn(member, otherPassword)
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d/two-factor", ws, memberID), nil), http.StatusNoContent)
 	wantEvent(t, e.one(audit.TwoFactorCleared), ws, ownerID, audit.TargetUser, memberID)
 	if n := len(e.events(audit.TwoFactorCleared)); n != 1 {
 		t.Fatalf("two_factor_cleared = %d", n)
 	}
-	// Clearing what isn't on is refused, and no event.
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d/two-factor", ws, memberID), nil), http.StatusConflict)
 	if n := len(e.events(audit.TwoFactorCleared)); n != 1 {
 		t.Fatalf("two_factor_cleared = %d after a refusal", n)

@@ -1,21 +1,5 @@
 //go:build unix
 
-// Package clitest provides fake Claude Code, Codex and Grok Build CLIs for tests. They print
-// what the real CLIs print (the event streams recorded in ../testdata), so the worker, the
-// server and the sidecar can be tested without a subscription or a network.
-//
-// The fakes are the test binary itself, run under the CLIs' names: call Main first thing in
-// TestMain, and Install to get the executables.
-//
-//	func TestMain(m *testing.M) {
-//		clitest.Main()
-//		os.Exit(m.Run())
-//	}
-//
-// What a fake does is set per user and CLI by a Scenario in the CLI's config directory
-// (WriteScenario). A fake is signed in when its credentials file exists there (SignIn), as
-// the real CLIs keep their logins. Every run appends a Call to calls.jsonl there, so tests can
-// check what the worker passed: arguments, environment, working directory and prompt.
 package clitest
 
 import (
@@ -42,65 +26,30 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// Scenario is what a fake does on its next turns.
 type Scenario struct {
-	// Answer is the final answer; empty answers "echo: <prompt>".
-	Answer string `json:"answer,omitempty"`
-	// SleepMS makes the turn run a tool for that long before it answers.
-	SleepMS int `json:"sleep_ms,omitempty"`
-	// TermWriteMS makes a turn or a sign-in that is stopped with SIGTERM take that long to end
-	// and, on its way out, write a file into its config directory (making the directory if it is
-	// gone), as a real CLI saves its session or a refreshed login as it stops.
-	TermWriteMS int `json:"term_write_ms,omitempty"`
-	// StatusSleepMS makes Claude Code's status check write status.started into its config
-	// directory, wait that long, and then write status.finished there (making the directory if it
-	// is gone), before it answers.
-	StatusSleepMS int `json:"status_sleep_ms,omitempty"`
-	// LogoutSleepMS makes `claude auth logout` write logout.started into its config directory,
-	// wait that long, and then write logout.finished there (making the directory if it is gone),
-	// as a sign-out that is slow and ends by writing to the account's directory.
-	LogoutSleepMS int `json:"logout_sleep_ms,omitempty"`
-	// Background starts a process that outlives the CLI, in its process group.
-	Background bool `json:"background,omitempty"`
-	// Detached, with Background, starts the process in a session of its own: it leaves the CLI's
-	// process group, as a daemon a tool started does, and a kill of the group doesn't reach it.
-	Detached bool `json:"detached,omitempty"`
-	// HoldStdout makes the background process keep the CLI's stdout open.
-	HoldStdout bool `json:"hold_stdout,omitempty"`
-	// Expired makes the login fail the way each CLI reports it.
-	Expired bool `json:"expired,omitempty"`
-	// RateLimits reports usage limits (Claude Code's rate_limit_event, Codex's rollout).
-	RateLimits bool `json:"rate_limits,omitempty"`
-	// Warn makes the fake print this line on stderr when it answers a status check, as a
-	// runtime or a CLI does with a warning: its answer on stdout must still be read.
-	Warn string `json:"warn,omitempty"`
-	// Fail makes the turn fail with this message.
-	Fail string `json:"fail,omitempty"`
-	// Garbage prints lines that aren't JSON among the events.
-	Garbage bool `json:"garbage,omitempty"`
-	// Tool makes the fake use a tool before it answers, asking its permission hook first the
-	// way the real CLI does, and report "tool <name>: ran" or "tool <name>: denied: <why>".
-	Tool *ToolUse `json:"tool,omitempty"`
-	// Probes are things the fake tries before it answers, reporting each outcome in its
-	// answer, as a command run by a model might: "read:<path>", "list:<dir>",
-	// "write:<path>", "kill:<pid>", "caps" (its effective capabilities), "nnp" (whether
-	// no_new_privs is set, Linux), "uid", and "ask:<session>" (its permission hook, asked
-	// about that session).
-	Probes []string `json:"probes,omitempty"`
-	// MCP makes the fake call taskto's tools, as the real CLI would: at the endpoint, with the
-	// token, of the MCP settings the worker wrote, after asking its permission hook. Each call
-	// is reported in the answer as "mcp <tool>: ok <result>", "mcp <tool>: refused <message>",
-	// "mcp <tool>: denied: <why>" or "mcp <tool>: error <what>".
-	MCP []MCPCall `json:"mcp,omitempty"`
+	Answer        string    `json:"answer,omitempty"`
+	SleepMS       int       `json:"sleep_ms,omitempty"`
+	TermWriteMS   int       `json:"term_write_ms,omitempty"`
+	StatusSleepMS int       `json:"status_sleep_ms,omitempty"`
+	LogoutSleepMS int       `json:"logout_sleep_ms,omitempty"`
+	Background    bool      `json:"background,omitempty"`
+	Detached      bool      `json:"detached,omitempty"`
+	HoldStdout    bool      `json:"hold_stdout,omitempty"`
+	Expired       bool      `json:"expired,omitempty"`
+	RateLimits    bool      `json:"rate_limits,omitempty"`
+	Warn          string    `json:"warn,omitempty"`
+	Fail          string    `json:"fail,omitempty"`
+	Garbage       bool      `json:"garbage,omitempty"`
+	Tool          *ToolUse  `json:"tool,omitempty"`
+	Probes        []string  `json:"probes,omitempty"`
+	MCP           []MCPCall `json:"mcp,omitempty"`
 }
 
-// MCPCall is a call of one of taskto's tools by a fake (Scenario.MCP).
 type MCPCall struct {
 	Tool string         `json:"tool"`
 	Args map[string]any `json:"args,omitempty"`
 }
 
-// Call is one run of a fake, as calls.jsonl records it.
 type Call struct {
 	UID    int      `json:"uid"`
 	Args   []string `json:"args"`
@@ -112,12 +61,8 @@ type Call struct {
 
 var names = map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "grok": "GROK_HOME"}
 
-// credentials is where each CLI keeps its login, relative to its config directory.
 var credentials = map[string]string{"claude": ".credentials.json", "codex": "auth.json", "grok": "auth.json"}
 
-// Main runs a fake CLI and exits if this process was started as one, or the worker's helper
-// (cliworker.RunHelper) or permission hook (cliworker.RunApprove) if it was started as that;
-// otherwise it returns.
 func Main() {
 	if len(os.Args) > 1 && os.Args[1] == cliworker.HelperArg {
 		if filepath.Base(os.Args[0]) == noisyHelperName {
@@ -135,15 +80,10 @@ func Main() {
 	os.Exit(run(name, os.Args[1:]))
 }
 
-// noisyHelperName is the name a helper that warns on stderr is run under (InstallNoisyHelper).
 const noisyHelperName = "taskto-noisy-helper"
 
-// HelperWarning is what a noisy helper prints on stderr before it answers.
 const HelperWarning = "warning: something the helper's runtime says on stderr"
 
-// InstallNoisyHelper puts in dir a helper that prints HelperWarning on stderr before it does
-// what it is asked, as a coverage build's runtime does on exit, and returns its path for
-// cliworker.Config.Helper. The helper's answers are on stdout, and must be read from there.
 func InstallNoisyHelper(t testing.TB, dir string) string {
 	t.Helper()
 	exe, err := os.Executable()
@@ -157,7 +97,6 @@ func InstallNoisyHelper(t testing.TB, dir string) string {
 	return path
 }
 
-// Install puts the fakes in dir and returns their paths, by CLI name.
 func Install(t testing.TB, dir string) map[string]string {
 	t.Helper()
 	exe, err := os.Executable()
@@ -175,8 +114,6 @@ func Install(t testing.TB, dir string) map[string]string {
 	return out
 }
 
-// WriteScenario sets what the fake cli does for the user whose config directory for it is
-// configDir.
 func WriteScenario(t testing.TB, configDir string, s Scenario) {
 	t.Helper()
 	b, _ := json.Marshal(s)
@@ -185,7 +122,6 @@ func WriteScenario(t testing.TB, configDir string, s Scenario) {
 	}
 }
 
-// SignIn makes the fake cli signed in for the config directory.
 func SignIn(t testing.TB, cli, configDir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(configDir, credentials[cli]), []byte(`{"fake":true}`), 0o600); err != nil {
@@ -193,7 +129,6 @@ func SignIn(t testing.TB, cli, configDir string) {
 	}
 }
 
-// Calls returns the fake's runs recorded in configDir.
 func Calls(t testing.TB, configDir string) []Call {
 	t.Helper()
 	f, err := os.Open(filepath.Join(configDir, "calls.jsonl"))
@@ -223,10 +158,7 @@ type fake struct {
 	args     []string
 	scenario Scenario
 	out      *json.Encoder
-	// term receives the signals that stop a turn with a tool to run. It is set up before the CLI
-	// says anything, so a stop that comes the moment a test sees the first event is not lost to the
-	// default action of the signal.
-	term chan os.Signal
+	term     chan os.Signal
 }
 
 func run(name string, args []string) int {
@@ -273,8 +205,6 @@ func (f *fake) record(prompt string) {
 	}
 }
 
-// keyVars are the variables that give each CLI an API key, as a gateway or the server's proxy
-// for a shared account does: with one set, the real CLI needs no login.
 var keyVars = map[string]string{"claude": "ANTHROPIC_AUTH_TOKEN", "codex": "TASKTO_PROXY_TOKEN", "grok": "XAI_API_KEY"}
 
 func (f *fake) signedIn() bool {
@@ -294,11 +224,6 @@ func (f *fake) garbage() {
 	}
 }
 
-// work runs the scenario's tool: a wait of SleepMS and optionally a real process that outlives
-// the CLI (so stopping the turn has a child to stop). The wait is the fake's own, not a `sleep`
-// process: a foreground child killed by the stop's signal would end with an error this fake
-// used to ignore, and report the tool as done. A wait a signal cuts short is an error, and the
-// CLI that was told to stop fails like a real one.
 func (f *fake) work() error {
 	if f.scenario.Background {
 		bg := exec.Command("sleep", "300")
@@ -309,8 +234,6 @@ func (f *fake) work() error {
 			bg.Stdout = os.Stdout
 		}
 		_ = bg.Start()
-		// Written whole or not at all: a test that sees the file may stop the turn at once,
-		// and a file created but not yet written would then stay empty for good.
 		pidFile := filepath.Join(f.config, "background.pid")
 		_ = os.WriteFile(pidFile+".tmp", []byte(fmt.Sprint(bg.Process.Pid)), 0o600)
 		_ = os.Rename(pidFile+".tmp", pidFile)
@@ -329,8 +252,6 @@ func (f *fake) work() error {
 	return nil
 }
 
-// writeOnTerm is what a stopped CLI does on its way out when the scenario says so: it takes a
-// moment, then saves a file into its config directory, making the directory again if it is gone.
 func (f *fake) writeOnTerm() {
 	if f.scenario.TermWriteMS <= 0 {
 		return
@@ -340,7 +261,6 @@ func (f *fake) writeOnTerm() {
 	_ = os.WriteFile(filepath.Join(f.config, LateWrite), []byte("saved on the way out"), 0o600)
 }
 
-// exitOnTerm makes a sign-in that is stopped end the way writeOnTerm says.
 func (f *fake) exitOnTerm() {
 	if f.scenario.TermWriteMS <= 0 {
 		return
@@ -354,9 +274,6 @@ func (f *fake) exitOnTerm() {
 	}()
 }
 
-// LateWrite is the file a stopped fake writes on its way out (Scenario.TermWriteMS), and
-// StatusStarted and StatusFinished the ones a slow status check writes (Scenario.StatusSleepMS),
-// in the config directory.
 const (
 	LateWrite      = "late-write"
 	StatusStarted  = "status.started"
@@ -378,7 +295,6 @@ func (f *fake) answer(prompt, session string) string {
 	}
 	for _, p := range f.scenario.Probes {
 		if session, ok := strings.CutPrefix(p, "ask:"); ok {
-			// Ask the permission hook about someone else's session, as a command might.
 			answer += "\nprobe " + p + ": " + f.useTool(session, ToolUse{Name: "Bash", Input: map[string]any{"command": "touch stolen"}})
 			continue
 		}
@@ -387,7 +303,6 @@ func (f *fake) answer(prompt, session string) string {
 	return answer
 }
 
-// probe tries what p says and reports the outcome: "ok …" or the error.
 func probe(p string) string {
 	kind, arg, _ := strings.Cut(p, ":")
 	outcome := func(err error, ok string) string {
@@ -432,13 +347,11 @@ func probe(p string) string {
 		}
 		return "ok unknown"
 	case "self":
-		// What the CLI itself is given: its environment, its arguments and its working directory.
 		cwd, _ := os.Getwd()
 		return "ok " + strings.Join(append(append(os.Environ(), os.Args...), cwd), " ")
 	case "uid":
 		return fmt.Sprintf("ok %d %d", os.Getuid(), os.Getgid())
 	case "connect":
-		// A Unix socket: what it says first (a VNC server's banner).
 		conn, err := net.DialTimeout("unix", arg, 2*time.Second)
 		if err != nil {
 			return outcome(err, "")
@@ -449,8 +362,6 @@ func probe(p string) string {
 		n, _ := io.ReadFull(conn, b)
 		return "ok " + strings.TrimSpace(string(b[:n]))
 	case "x11", "x11abstract":
-		// An X display's socket, filesystem or abstract: the server's answer to a connection
-		// setup without a cookie.
 		addr := arg
 		if kind == "x11abstract" {
 			addr = "@" + arg
@@ -461,7 +372,6 @@ func probe(p string) string {
 		}
 		defer conn.Close()
 		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-		// Little-endian, protocol 11.0, no authorization.
 		if _, err := conn.Write([]byte{'l', 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0}); err != nil {
 			return outcome(err, "")
 		}
@@ -482,8 +392,6 @@ func uuid() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// sessions keeps each session's prompts, so a resume of an unknown session fails as the real
-// CLIs do, and a resumed answer can show it remembers.
 func (f *fake) session(id string, create bool) (prompts []string, err error) {
 	path := filepath.Join(f.config, "sessions", id+".json")
 	b, err := os.ReadFile(path)
@@ -491,10 +399,9 @@ func (f *fake) session(id string, create bool) (prompts []string, err error) {
 	case err == nil && create:
 		return nil, fmt.Errorf("session ID %s is already in use", id)
 	case err != nil && !create:
-		// Each CLI's own words, as recorded from the real ones (Grok Build's from its guide).
 		switch f.name {
 		case "claude":
-			return nil, fmt.Errorf("No conversation found with session ID: %s", id) //nolint:staticcheck // Claude Code's own capitalised message
+			return nil, fmt.Errorf("No conversation found with session ID: %s", id)
 		case "codex":
 			return nil, fmt.Errorf("thread/resume: thread/resume failed: no rollout found for thread id %s (code -32600)", id)
 		}
@@ -511,7 +418,6 @@ func (f *fake) saveSession(id string, prompts []string) {
 	_ = os.WriteFile(filepath.Join(f.config, "sessions", id+".json"), b, 0o600)
 }
 
-// streamArgs reads Claude Code's and Grok Build's headless flags.
 func (f *fake) streamArgs() (prompt, session string, resume, ok bool) {
 	a := f.args
 	val := func(flag string) string {
@@ -555,7 +461,6 @@ func (f *fake) streamTurn(prompt, session string, resume bool) int {
 	f.emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "cwd": mustWD(), "model": "fake"})
 	f.garbage()
 	if !f.signedIn() {
-		// As recorded from Claude Code 2.1.311: a 401 is retried with backoff, for minutes.
 		for attempt := 1; attempt <= 10; attempt++ {
 			f.emit(map[string]any{"type": "system", "subtype": "api_retry", "attempt": attempt, "max_retries": 10, "error_status": 401, "error": "authentication_failed", "session_id": session})
 			time.Sleep(time.Second)
@@ -625,7 +530,7 @@ func (f *fake) codexExec(args []string) int {
 	prompt := rest[0]
 	if prompt == "-" {
 		fmt.Fprintln(os.Stderr, "Reading prompt from stdin...")
-		b, _ := io.ReadAll(os.Stdin) // the real Codex waits here until stdin closes
+		b, _ := io.ReadAll(os.Stdin)
 		prompt = string(b)
 	}
 	f.record(prompt)
@@ -644,7 +549,6 @@ func (f *fake) codexExec(args []string) int {
 	f.garbage()
 	f.emit(map[string]any{"type": "turn.started"})
 	if !f.signedIn() {
-		// As recorded from Codex 0.169.0 against a gateway that refused the key.
 		msg := "unexpected status 401 Unauthorized: Invalid API key, url: https://api.example.com/v1/responses"
 		for i := 1; i <= 5; i++ {
 			f.emit(map[string]any{"type": "error", "message": fmt.Sprintf("Reconnecting... %d/5 (%s)", i, msg)})
@@ -680,7 +584,6 @@ func (f *fake) codexExec(args []string) int {
 	return 0
 }
 
-// writeRollout writes the session file Codex keeps, with the usage limits it records there.
 func (f *fake) writeRollout(thread string) {
 	dir := filepath.Join(f.config, "sessions", "2026", "11", "19")
 	_ = os.MkdirAll(dir, 0o700)
@@ -708,19 +611,12 @@ func mustWD() string {
 	return strings.TrimSpace(d)
 }
 
-// GoodCode is the code the fake Claude Code login accepts; any other is refused.
 const GoodCode = "fake-code-0000"
 
-// Approve finishes a fake Codex or Grok Build device-code login waiting in configDir, as the
-// user would on the provider's page.
 func Approve(t testing.TB, configDir string) { approve(t, configDir, "approve") }
 
-// Deny refuses a fake device-code login waiting in configDir.
 func Deny(t testing.TB, configDir string) { approve(t, configDir, "deny") }
 
-// approve writes the verdict the waiting fake polls for, whole and at once (a file renamed
-// into place): written in place, the fake could read it created but still empty, and take
-// that for a refusal.
 func approve(t testing.TB, configDir, verdict string) {
 	t.Helper()
 	f, err := os.CreateTemp(configDir, ".device-verdict-*")
@@ -740,7 +636,6 @@ func approve(t testing.TB, configDir, verdict string) {
 	}
 }
 
-// claudeAuth is `claude auth login|status|logout`, printing what Claude Code 2.1.311 prints.
 func (f *fake) claudeAuth(cmd string) int {
 	creds := filepath.Join(f.config, credentials["claude"])
 	switch cmd {
@@ -781,7 +676,7 @@ func (f *fake) claudeAuth(cmd string) int {
 		}
 		f.emit(map[string]any{"loggedIn": err == nil, "authMethod": method, "apiProvider": "firstParty", "configDirectory": f.config})
 		if err != nil {
-			return 1 // as Claude Code 2.1.311 does on Linux when signed out
+			return 1
 		}
 		return 0
 	case "logout":
@@ -798,8 +693,6 @@ func (f *fake) claudeAuth(cmd string) int {
 	return 2
 }
 
-// deviceAuth is Codex's and Grok Build's `login --device-auth`, `login status` and `logout`.
-// The device-code login waits for Approve or Deny, polling as the real ones do.
 func (f *fake) deviceAuth(args []string) int {
 	creds := filepath.Join(f.config, credentials[f.name])
 	switch {
@@ -819,13 +712,11 @@ func (f *fake) deviceAuth(args []string) int {
 		return 2
 	}
 	if f.name == "codex" {
-		// As Codex 0.169.0 prints it (its binary's strings).
 		fmt.Println("\nFollow these steps to sign in with ChatGPT using device code authorization:")
 		fmt.Println("\n1. Open this link in your browser and sign in to your account\n   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m")
 		fmt.Println("\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94mFAKE-C0DE1\x1b[0m")
 		fmt.Println("\n\x1b[90mDevice codes are a common phishing target. Never share this code.\x1b[0m")
 	} else {
-		// As Grok Build 1.0.89 prints it (recorded).
 		fmt.Println("\nTo sign in, open this URL in your browser:\n\n  https://accounts.x.ai/oauth2/device?user_code=GR0K-FAKE")
 		fmt.Println("\n  (Could not open browser automatically — open the URL above manually.)\n\nConfirm this code in your browser:\n\n  GR0K-FAKE")
 		fmt.Println("\n\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m\n\nWaiting for authorization...")
@@ -850,24 +741,15 @@ func (f *fake) deviceAuth(args []string) int {
 	}
 }
 
-// ToolUse is a tool call of a fake.
 type ToolUse struct {
 	Name  string         `json:"name"`
 	Input map[string]any `json:"input,omitempty"`
 }
 
-// claudeAsksFor are the tools Claude Code's own rules let run without asking, in this fake.
 var claudeAsksFor = func(tool string) bool {
 	return !slices.Contains([]string{"Read", "Glob", "Grep", "LS"}, tool)
 }
 
-// useTool asks the permission hook the real CLI would ask (cliworker's, in the settings it
-// wrote), and says whether the tool ran:
-//   - Claude Code: its PermissionRequest hook, in settings.json, unless it runs with
-//     bypassPermissions or its own rules allow the tool; and only with --setting-sources
-//     user, as the user settings are where the hook is;
-//   - Codex: its PreToolUse hook, in hooks.json, only with --dangerously-bypass-hook-trust;
-//   - Grok Build: its PreToolUse hook, in config.toml, failing closed.
 func (f *fake) useTool(session string, u ToolUse) string {
 	dir, _ := os.Getwd()
 	input, _ := json.Marshal(map[string]any{
@@ -899,8 +781,6 @@ func (f *fake) useTool(session string, u ToolUse) string {
 		cmd.Stderr = &stderr
 		cmd.Stdin = strings.NewReader(string(input))
 		reply, err = cmd.Output()
-		// As Codex 0.169 does: a hook that exits 2 with nothing on stderr is ignored, its JSON
-		// too, and the tool runs.
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 2 {
 			if strings.TrimSpace(stderr.String()) == "" {
@@ -925,8 +805,6 @@ func (f *fake) useTool(session string, u ToolUse) string {
 			Reason             string `json:"permissionDecisionReason"`
 		} `json:"hookSpecificOutput"`
 	}
-	// A reply decides whatever the exit code; a hook that failed without one blocks (exit 2
-	// for Claude Code and Codex, failClosed for Grok Build).
 	if jerr := json.Unmarshal(reply, &out); jerr != nil {
 		return fmt.Sprintf("denied: the hook failed: %q (%v)", reply, err)
 	}
@@ -940,7 +818,6 @@ func (f *fake) useTool(session string, u ToolUse) string {
 	}
 }
 
-// flag returns the value after name in the fake's arguments.
 func (f *fake) flag(name string) string {
 	for i, a := range f.args {
 		if a == name && i+1 < len(f.args) {
@@ -950,7 +827,6 @@ func (f *fake) flag(name string) string {
 	return ""
 }
 
-// jsonHook returns the command of the first hook for event in the config directory's file.
 func (f *fake) jsonHook(file, event string) string {
 	b, err := os.ReadFile(filepath.Join(f.config, file))
 	if err != nil {
@@ -974,7 +850,6 @@ var (
 	tomlArgs    = regexp.MustCompile(`args = \[([^\]]*)\]`)
 )
 
-// tomlHook returns Grok Build's PreToolUse hook from config.toml as a command, if any.
 func (f *fake) tomlHook() *exec.Cmd {
 	b, err := os.ReadFile(filepath.Join(f.config, "config.toml"))
 	if err != nil || !strings.Contains(string(b), "[[hooks.PreToolUse]]") || !strings.Contains(string(b), "failClosed = true") {
@@ -988,10 +863,9 @@ func (f *fake) tomlHook() *exec.Cmd {
 	if m := tomlArgs.FindSubmatch(b); m == nil || json.Unmarshal(append(append([]byte("["), m[1]...), ']'), &args) != nil {
 		return nil
 	}
-	return exec.Command(command, args...) //nolint:gosec // G204: the worker's own hook, in a test
+	return exec.Command(command, args...)
 }
 
-// runHook runs a hook with input on its stdin and returns its stdout.
 func runHook(cmd *exec.Cmd, input []byte) ([]byte, error) {
 	cmd.Stdin = strings.NewReader(string(input))
 	var stderr strings.Builder
@@ -1003,11 +877,6 @@ func runHook(cmd *exec.Cmd, input []byte) ([]byte, error) {
 	return out, err
 }
 
-// The fakes' MCP client: what each real CLI does with the settings the worker wrote for
-// taskto's tools (docs/cli-tools.md), as checked against the real Claude Code and Codex.
-
-// toolsServer is how the fake finds taskto's MCP server: its URL and Authorization header,
-// and for Codex whether its own approval lets a tool without readOnlyHint run.
 type toolsServer struct {
 	url, auth      string
 	codex, approve bool
@@ -1018,10 +887,6 @@ var (
 	tomlHeader = regexp.MustCompile(`^headers = \{ Authorization = ("(?:[^"\\]|\\.)*") \}$`)
 )
 
-// tools reads the fake's MCP settings for the server "taskto": Claude Code's --mcp-config
-// file, Codex's and Grok Build's [mcp_servers.taskto] table in config.toml. Variables in a
-// header are expanded from the environment, as Claude Code and Grok Build do; Codex reads its
-// bearer_token_env_var.
 func (f *fake) tools() (toolsServer, error) {
 	var s toolsServer
 	if f.name == "claude" {
@@ -1093,9 +958,6 @@ func (f *fake) tools() (toolsServer, error) {
 	return s, nil
 }
 
-// callTool calls taskto's tool c.Tool, as the i-th tool call of the turn: it shows the call in
-// the CLI's events, asks the permission hook under the CLI's name for it, and calls the
-// endpoint.
 func (f *fake) callTool(session string, i int, c MCPCall) string {
 	srv, err := f.tools()
 	if err != nil {
@@ -1105,8 +967,6 @@ func (f *fake) callTool(session string, i int, c MCPCall) string {
 	if args == nil {
 		args = map[string]any{}
 	}
-	// The names each CLI gives the tool: Claude Code and Codex mcp__taskto__<tool>; Grok Build
-	// calls it through its use_tool meta-tool.
 	use := ToolUse{Name: "mcp__taskto__" + c.Tool, Input: args}
 	if f.name == "grok" {
 		use = ToolUse{Name: "use_tool", Input: map[string]any{"tool_name": "taskto__" + c.Tool, "tool_input": args}}
@@ -1126,7 +986,6 @@ func (f *fake) callTool(session string, i int, c MCPCall) string {
 	return out
 }
 
-// showTool prints a tool call's event as the CLI does.
 func (f *fake) showTool(id string, c MCPCall, use ToolUse, status string) {
 	if f.name == "codex" {
 		event := "item.completed"
@@ -1149,8 +1008,6 @@ func (f *fake) showTool(id string, c MCPCall, use ToolUse, status string) {
 	}}})
 }
 
-// call runs c on the server: initialize, then (for Codex, to read the tool's readOnlyHint)
-// tools/list, then tools/call.
 func (s toolsServer) call(c MCPCall) string {
 	if _, err := s.rpc(1, "initialize", map[string]any{
 		"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "fake", "version": "1"},
@@ -1158,8 +1015,6 @@ func (s toolsServer) call(c MCPCall) string {
 		return "error " + err.Error()
 	}
 	if s.codex && !s.approve {
-		// Codex's own approval: without "approve", a tool without readOnlyHint is refused
-		// under approval_policy "never" (checked against Codex 0.169).
 		res, err := s.rpc(2, "tools/list", map[string]any{})
 		if err != nil {
 			return "error " + err.Error()
@@ -1206,7 +1061,6 @@ func (s toolsServer) call(c MCPCall) string {
 	return "ok " + text
 }
 
-// rpc sends one JSON-RPC request to the server and returns its result.
 func (s toolsServer) rpc(id int, method string, params any) (json.RawMessage, error) {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 	req, err := http.NewRequest(http.MethodPost, s.url, bytes.NewReader(body))

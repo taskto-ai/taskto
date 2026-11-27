@@ -16,49 +16,25 @@ import (
 	"taskto.ai/taskto/internal/cliowner"
 )
 
-// Host starts a browser's processes for a user: as the server's own OS user (LocalHost), or
-// as the user's own Unix user in the CLI worker (container mode).
 type Host interface {
-	// Bin is prog's executable, or "" if it isn't installed.
 	Bin(prog Program) string
-	// Start starts spec's process for user in a process group of its own, with extra as its
-	// fds 3, 4, …, and returns it running.
 	Start(a cliowner.Account, spec ProcSpec, extra []*os.File) (*exec.Cmd, error)
-	// DialVNC connects to user's VNC socket.
 	DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error)
-	// Clean removes user's testing profile.
 	Clean(a cliowner.Account) error
-	// Purge removes everything kept for user's browsers, the personal profile included, for a
-	// deleted account. No process of theirs runs by then. Removing what isn't there is not an error.
 	Purge(a cliowner.Account) error
 }
 
-// Config configures a Manager.
 type Config struct {
-	Host Host
-	// Idle is how long a browser runs unused before it is stopped (default 5 minutes). An open
-	// live view counts as use.
-	Idle time.Duration
-	// Max bounds the browsers running at once, of every user and kind (default 4).
-	Max int
-	// NoSandbox turns off Chromium's sandbox (container mode: docs/agent-browser.md).
-	NoSandbox bool
-	// StartTimeout bounds a browser's start (default 30 s); StopGrace is the time between
-	// SIGTERM and SIGKILL when it stops (default 5 s).
+	Host                    Host
+	Idle                    time.Duration
+	Max                     int
+	NoSandbox               bool
 	StartTimeout, StopGrace time.Duration
-	// Tick is how often idle browsers are looked for (default 15 s).
-	Tick time.Duration
-	// Allow, when set, is asked before every operation on a user's browsers, the reading of a
-	// running one's state and tabs too, apart from stopping them: an error refuses it (the CLI
-	// worker's rule, cliworker.Worker.BrowserAllowed).
-	Allow func(a cliowner.Account) error
-	// Fence, when set, runs a deleted account's Forget (do) under the CLI worker's rule for
-	// deletions (cliworker.Worker.FenceDeletion): only the latest server's, the account retired
-	// first. A purge an earlier server sent then stops and removes nothing.
-	Fence func(ctx context.Context, a cliowner.Account, do func() error) error
+	Tick                    time.Duration
+	Allow                   func(a cliowner.Account) error
+	Fence                   func(ctx context.Context, a cliowner.Account, do func() error) error
 }
 
-// allowed asks Config.Allow about a.
 func (m *Manager) allowed(a cliowner.Account) error {
 	if m.cfg.Allow == nil {
 		return nil
@@ -66,51 +42,40 @@ func (m *Manager) allowed(a cliowner.Account) error {
 	return m.cfg.Allow(a)
 }
 
-// Manager runs the users' browsers. Its methods are safe for concurrent use.
 type Manager struct {
 	cfg Config
 
-	mu       sync.Mutex
-	sessions map[key]*session
-	// stopping is the browsers of each key still being stopped: a new one on the same profile
-	// waits for them to be gone, so the old ones have written their cookies first.
-	stopping map[key][]*session
-	// forgotten is the accounts that are deleted (Forget), by identity, with when: no browser of
-	// theirs starts. It is kept as long as the Manager runs, unless a restore of the server's data
-	// goes back before it (Unforget).
+	mu        sync.Mutex
+	sessions  map[key]*session
+	stopping  map[key][]*session
 	forgotten map[string]time.Time
 	closed    bool
 	stopTick  chan struct{}
 	wg        sync.WaitGroup
 }
 
-// key is a browser of one account, by its identity: never by its number, which a restore of the
-// server's data may give to another account.
 type key struct {
 	id   string
 	kind Kind
 }
 
-// session is one running (or starting) browser.
 type session struct {
 	key      key
 	acct     cliowner.Account
-	ready    chan struct{} // closed when the start is over; err says how
+	ready    chan struct{}
 	err      error
 	inst     *instance
-	procs    []*exec.Cmd // started so far, in order
+	procs    []*exec.Cmd
 	waits    []chan struct{}
 	chromium *exec.Cmd
 
-	// Under Manager.mu:
 	lastUse time.Time
 	live    int
-	conns   map[*liveConn]struct{} // the live views open on it
+	conns   map[*liveConn]struct{}
 	ending  bool
-	ended   chan struct{} // closed when every process is gone
+	ended   chan struct{}
 }
 
-// NewManager returns a Manager.
 func NewManager(cfg Config) *Manager {
 	if cfg.Idle <= 0 {
 		cfg.Idle = 5 * time.Minute
@@ -133,8 +98,6 @@ func NewManager(cfg Config) *Manager {
 	return m
 }
 
-// Available reports whether kind can run here: Chromium for both, and Xvfb and x11vnc for the
-// personal browser.
 func (m *Manager) Available(kind Kind) bool {
 	h := m.cfg.Host
 	if h == nil || h.Bin(Chromium) == "" {
@@ -143,23 +106,18 @@ func (m *Manager) Available(kind Kind) bool {
 	return kind == Testing || (h.Bin(Xvfb) != "" && h.Bin(X11vnc) != "")
 }
 
-// State is one browser's state, for Status.
 type State struct {
-	Available bool `json:"available"`
-	Running   bool `json:"running"`
-	// Live says a live view is open; StopsAt is when the browser stops if nothing uses it.
-	Live    bool       `json:"live"`
-	StopsAt *time.Time `json:"stops_at,omitempty"`
-	Tabs    []Tab      `json:"tabs,omitempty"`
+	Available bool       `json:"available"`
+	Running   bool       `json:"running"`
+	Live      bool       `json:"live"`
+	StopsAt   *time.Time `json:"stops_at,omitempty"`
+	Tabs      []Tab      `json:"tabs,omitempty"`
 }
 
-// Availability says which browsers can run here.
 func (m *Manager) Availability(context.Context) map[Kind]bool {
 	return map[Kind]bool{Personal: m.Available(Personal), Testing: m.Available(Testing)}
 }
 
-// Status is user's two browsers. The tabs are listed for a running browser that answers in a
-// few seconds.
 func (m *Manager) Status(ctx context.Context, a cliowner.Account) (map[Kind]State, error) {
 	if err := m.allowed(a); err != nil {
 		return nil, err
@@ -197,7 +155,6 @@ func isClosed(ch chan struct{}) bool {
 	}
 }
 
-// Start starts user's kind browser if it isn't running.
 func (m *Manager) Start(ctx context.Context, a cliowner.Account, kind Kind) error {
 	if !kind.Valid() {
 		return badf("browser must be %q or %q", Personal, Testing)
@@ -206,7 +163,6 @@ func (m *Manager) Start(ctx context.Context, a cliowner.Account, kind Kind) erro
 	return err
 }
 
-// Stop stops user's kind browser, and returns when it is gone.
 func (m *Manager) Stop(_ context.Context, a cliowner.Account, kind Kind) error {
 	if !kind.Valid() {
 		return badf("browser must be %q or %q", Personal, Testing)
@@ -223,18 +179,6 @@ func (m *Manager) Stop(_ context.Context, a cliowner.Account, kind Kind) error {
 	return nil
 }
 
-// Forget removes everything of user's browsers, for an account that is deleted: no browser of
-// theirs starts from the first moment (ErrAccountClosing), their live views are closed, their
-// running browsers are stopped and waited for (a browser still starting or already stopping too),
-// and then the personal profile and the rest of their browser directory are removed. It returns
-// nil only when the processes are gone and the files removed; on an error (ctx ended before they
-// were gone, or a file couldn't be removed) it is safe to call again. Other users' browsers are not
-// touched.
-//
-// The refusal lasts as long as the Manager runs: an account's id is never given to another
-// account, unless a restore of the server's data goes back before the deletion (Unforget). A
-// Manager that restarts forgets it, and then the account's being switched off is what keeps its
-// browsers from starting.
 func (m *Manager) Forget(ctx context.Context, a cliowner.Account) error {
 	if a.User <= 0 || (a.Identity != "" && !cliowner.IsIdentity(a.Identity)) {
 		return badf("invalid account")
@@ -249,8 +193,6 @@ func (m *Manager) Forget(ctx context.Context, a cliowner.Account) error {
 }
 
 func (m *Manager) forget(ctx context.Context, a cliowner.Account) error {
-	// A purge from before identities were kept names none: no session is keyed by it, and the
-	// host removes only the number's directory from before homes.
 	if a.Identity != "" {
 		if err := m.stopAll(ctx, a, true); err != nil {
 			return err
@@ -265,10 +207,6 @@ func (m *Manager) forget(ctx context.Context, a cliowner.Account) error {
 	return nil
 }
 
-// StopAll stops user's browsers and waits until their processes are gone, as Forget does, but
-// neither refuses later starts nor removes a file: the CLI worker does both around it when it
-// removes a user's whole directory, the browser's profile with it (cliworker.Worker.Reconcile).
-// Other users' browsers are not touched.
 func (m *Manager) StopAll(ctx context.Context, a cliowner.Account) error {
 	if !a.Valid() {
 		return badf("invalid account")
@@ -276,10 +214,6 @@ func (m *Manager) StopAll(ctx context.Context, a cliowner.Account) error {
 	return m.stopAll(ctx, a, false)
 }
 
-// Unforget drops the refusals Forget made before `before` of the users again says yes to: an
-// account a restore of the server's data brought back, or a number it gives to someone again
-// (cliworker.Worker.Reconcile). A refusal made after it is a deletion the restored database can't
-// know of, and stays.
 func (m *Manager) Unforget(again func(identity string) bool, before time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -290,8 +224,6 @@ func (m *Manager) Unforget(again func(identity string) bool, before time.Time) {
 	}
 }
 
-// stopAll closes user's live views and stops their browsers, and waits for them to be gone (one
-// still starting or already stopping too). With forget, nothing of theirs starts any more.
 func (m *Manager) stopAll(ctx context.Context, a cliowner.Account, forget bool) error {
 	m.mu.Lock()
 	if forget {
@@ -301,8 +233,6 @@ func (m *Manager) stopAll(ctx context.Context, a cliowner.Account, forget bool) 
 	var conns []*liveConn
 	for _, kind := range []Kind{Personal, Testing} {
 		k := key{a.Identity, kind}
-		// Every browser already stopping is waited for too: a newer one whose start gave up waiting
-		// for them doesn't take their place.
 		wait = append(wait, m.stopping[k]...)
 		if s := m.sessions[k]; s != nil {
 			for c := range s.conns {
@@ -326,7 +256,6 @@ func (m *Manager) stopAll(ctx context.Context, a cliowner.Account, forget bool) 
 	return nil
 }
 
-// Do runs a on user's browser, starting it first unless a only lists the tabs.
 func (m *Manager) Do(ctx context.Context, acct cliowner.Account, a Action) (Result, error) {
 	if err := a.Check(); err != nil {
 		return Result{}, err
@@ -346,18 +275,13 @@ func (m *Manager) Do(ctx context.Context, acct cliowner.Account, a Action) (Resu
 	return res, err
 }
 
-// MaxLive bounds the live views open on one browser at once: each holds a connection, and
-// keeps the browser from stopping when idle.
 const MaxLive = 4
 
-// OpenLive connects to user's personal browser's display, for a live view: an RFB stream.
-// The browser must be running; while the view is open it doesn't stop for being idle.
 func (m *Manager) OpenLive(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
 	s, err := m.session(ctx, a, Personal, false)
 	if err != nil {
 		return nil, err
 	}
-	// A place is taken before connecting, so views opened at once can't pass the cap.
 	m.mu.Lock()
 	if s.live >= MaxLive {
 		m.mu.Unlock()
@@ -381,8 +305,6 @@ func (m *Manager) OpenLive(ctx context.Context, a cliowner.Account) (io.ReadWrit
 		s.lastUse = time.Now()
 		m.mu.Unlock()
 	}
-	// A browser that began to end while the view was connecting (its account is being deleted,
-	// say) is not shown: the view is closed here, not left to a Forget that has already looked.
 	m.mu.Lock()
 	if s.ending {
 		m.mu.Unlock()
@@ -408,7 +330,6 @@ func (c *liveConn) Close() error {
 	return c.ReadWriteCloser.Close()
 }
 
-// Close stops every browser and waits for them.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	if m.closed {
@@ -435,7 +356,6 @@ func (m *Manager) touch(s *session) {
 	m.mu.Unlock()
 }
 
-// session returns user's kind browser, ready, starting it if start is set.
 func (m *Manager) session(ctx context.Context, a cliowner.Account, kind Kind, start bool) (*session, error) {
 	if !a.Valid() {
 		return nil, badf("invalid account")
@@ -490,8 +410,6 @@ func (m *Manager) session(ctx context.Context, a cliowner.Account, kind Kind, st
 	return s, nil
 }
 
-// evictLocked stops the least recently used browser without a live view, to make room; false
-// if there is none.
 func (m *Manager) evictLocked() bool {
 	var lru *session
 	for _, s := range m.sessions {
@@ -507,7 +425,6 @@ func (m *Manager) evictLocked() bool {
 	return true
 }
 
-// endLocked takes s off the map and stops it in the background.
 func (m *Manager) endLocked(s *session) {
 	if s.ending {
 		return
@@ -552,9 +469,6 @@ func (m *Manager) idleLoop() {
 	}
 }
 
-// launch starts s's processes, once prev (the same user's same browser, the ones being stopped) are
-// gone, and closes s.ready. A browser that fails to start is taken off the map, with whatever
-// started of it stopped.
 func (m *Manager) launch(s *session, prev []*session) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.StartTimeout)
 	defer cancel()
@@ -582,8 +496,6 @@ func (m *Manager) launch(s *session, prev []*session) {
 		return
 	}
 	close(s.ready)
-	// The browser ending on its own (it crashed, or the user closed its window) ends the
-	// session: the next request starts a new one.
 	go func() {
 		select {
 		case <-s.inst.cdp.Done():
@@ -619,7 +531,6 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 			return fmt.Errorf("starting Xvfb: %w", err)
 		}
 	}
-	// Chromium reads commands on its fd 3 and writes replies on its fd 4.
 	cmdR, cmdW, err := os.Pipe()
 	if err != nil {
 		return err
@@ -652,7 +563,6 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 	return nil
 }
 
-// add starts one process of s and keeps it.
 func (m *Manager) add(s *session, h Host, acct cliowner.Account, spec ProcSpec, extra ...*os.File) error {
 	cmd, err := h.Start(acct, spec, extra)
 	if err != nil {
@@ -668,7 +578,6 @@ func (m *Manager) add(s *session, h Host, acct cliowner.Account, spec ProcSpec, 
 	return nil
 }
 
-// readLineWithin reads the display number Xvfb writes, unless it exits or ctx ends first.
 func readLineWithin(ctx context.Context, r *os.File, exited <-chan struct{}) (int, error) {
 	type line struct {
 		s   string
@@ -688,13 +597,11 @@ func readLineWithin(ctx context.Context, r *os.File, exited <-chan struct{}) (in
 	case <-exited:
 		return 0, errors.New("it exited")
 	case <-ctx.Done():
-		r.Close() // ends the read
+		r.Close()
 		return 0, errors.New("it didn't start in time")
 	}
 }
 
-// stop ends s: Chromium closed over DevTools first, so the profile is written, then every
-// process group, last started first, with SIGTERM and then SIGKILL.
 func (m *Manager) stop(s *session) {
 	defer close(s.ended)
 	if s.inst != nil {
@@ -704,8 +611,6 @@ func (m *Manager) stop(s *session) {
 		_ = s.inst.cdp.Close()
 	}
 	for i := len(s.procs) - 1; i >= 0; i-- {
-		// Chromium gets a moment to exit after Browser.close; Xvfb and x11vnc never exit on
-		// their own.
 		var wait time.Duration
 		if s.procs[i] == s.chromium {
 			wait = m.cfg.StopGrace / 2
@@ -719,14 +624,8 @@ func (m *Manager) stop(s *session) {
 	}
 }
 
-// stopGroup waits up to wait for cmd to exit on its own, then signals its group: SIGTERM,
-// and SIGKILL after grace. Once the leader is reaped its group ID may be reused, so the group
-// is only signalled while the leader runs; what a browser starts dies with it (Chromium's
-// helpers watch it), and in container mode the worker's start-up sweep stops anything of a
-// browser user's left.
 func stopGroup(cmd *exec.Cmd, exited <-chan struct{}, wait, grace time.Duration) {
 	pgid := cmd.Process.Pid
-	// select picks at random between ready cases: look once more just before each signal.
 	running := func() bool {
 		select {
 		case <-exited:

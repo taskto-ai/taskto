@@ -1,14 +1,11 @@
 // @vitest-environment jsdom
 
-// What a contribution can't do: break the shell, Home or the other widgets, however it fails.
-
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { HomeItem, HomeView, Me } from '../api'
 import { Shell } from '../shell/Shell'
 import { fakeFetch } from '../test/fakes'
 
-// A widget whose renderer throws, as one with a broken definition or a bug in the renderer would.
 vi.mock('../apps/transport', () => ({
   httpTransport: () => ({ load: async () => [], act: async () => [] }),
 }))
@@ -46,7 +43,6 @@ const view = (over: Record<string, unknown>) =>
 beforeEach(() => {
   window.history.replaceState(null, '', '/w/1/home')
   localStorage.clear()
-  // React reports a caught render error to the console; the tests make them on purpose.
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(() => {
@@ -65,7 +61,6 @@ test('a widget that throws is replaced by a message; the other widgets, Home and
         widgets: [
           widget(1, 'Broken'),
           widget(2, 'Fine'),
-          // An answer with the wrong shape (a title that isn't text) throws while drawing too.
           widget(3, 'x', { widget: { id: 'w3', title: { not: 'text' }, kind: 'screen', screen: 'main' } }),
         ],
       }),
@@ -73,13 +68,10 @@ test('a widget that throws is replaced by a message; the other widgets, Home and
   })
   render(<Shell me={me} onLogout={() => {}} />)
   const fine = await screen.findByRole('article', { name: 'Fine' })
-  // The renderer is loaded when the first widget is drawn (LazyAppView): a moment later.
   expect(await within(fine).findByText('drawn: Fine')).toBeTruthy()
   await waitFor(() => expect(screen.getAllByText('This widget couldn’t be shown.')).toHaveLength(2))
-  // The page, and the shell around it.
   expect(screen.getByRole('heading', { name: 'Home', level: 1 })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Customize' })).toBeTruthy()
-  // A failed widget can still be taken off Home.
   expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
   fireEvent.click(settingsLink())
   expect(window.location.pathname).toBe('/w/1/settings')
@@ -107,7 +99,6 @@ test('a pin with a malformed label can’t take the menu down', async () => {
   })
   render(<Shell me={me} onLogout={() => {}} />)
   await screen.findByRole('heading', { name: 'Home', level: 1 })
-  // The sections are all there, and no pins section.
   const nav = screen.getByRole('navigation', { name: 'Sections' })
   expect(within(nav).getAllByRole('link')).toHaveLength(7)
   expect(within(nav).queryByRole('region')).toBeNull()
@@ -117,14 +108,12 @@ test('a pin with a malformed label can’t take the menu down', async () => {
 
 test('a page that fails to draw leaves the shell usable, and another page is drawn again', async () => {
   fakeFetch({
-    // Not even a list: Home itself throws while drawing it.
     'GET /api/workspaces/1/home': { body: { widgets: 'oops', pins: 'oops', hidden: [] } },
     'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
   })
   render(<Shell me={me} onLogout={() => {}} />)
   const failed = await screen.findByRole('alert')
   expect(failed.textContent).toContain('This page couldn’t be shown. The menu and your settings still work.')
-  // And what to do: reload.
   expect(within(failed).getByRole('button', { name: 'Reload' })).toBeTruthy()
   const nav = screen.getByRole('navigation', { name: 'Sections' })
   expect(within(nav).getAllByRole('link')).toHaveLength(7)
@@ -138,7 +127,6 @@ test('a pin can’t stand in for a platform page: pins come after the sections a
     'GET /api/workspaces/1/home': {
       body: view({
         pins: [
-          // A label that imitates a platform page, or markup, is only text.
           {
             id: 1,
             source: 'personal',
@@ -180,7 +168,6 @@ test('a pin can’t stand in for a platform page: pins come after the sections a
     'Notifications',
     'Settings',
   ])
-  // The real Settings link still goes to settings; the pin of that name goes to its app.
   expect(platform.at(-1)?.getAttribute('href')).toBe('/w/1/settings')
   expect(within(pins).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/w/1/apps/2-1')
   expect(container.querySelector('img')).toBeNull()

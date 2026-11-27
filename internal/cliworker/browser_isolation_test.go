@@ -22,11 +22,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// The agent browser inside the container mode's OS boundary (docs/agent-browser.md): each
-// user's Xvfb, Chromium and x11vnc run as their own Unix user, and another user's process can
-// reach none of it. These need root and the programs: CI's browser job (browser.yml) runs
-// them; they run only with TASKTO_BROWSER_IT=1.
-
 func browserBins(t *testing.T) map[browser.Program]string {
 	t.Helper()
 	if os.Getenv("TASKTO_BROWSER_IT") != "1" {
@@ -39,7 +34,6 @@ func browserBins(t *testing.T) map[browser.Program]string {
 	return bins
 }
 
-// proc is a process as /proc shows it.
 type proc struct {
 	pid     int
 	uid     int
@@ -80,7 +74,6 @@ func procs(t *testing.T) []proc {
 	return out
 }
 
-// tcpListeners lists the listening TCP sockets (IPv4 and IPv6) owned by uid min or more.
 func tcpListeners(t *testing.T, min int) []string {
 	t.Helper()
 	var out []string
@@ -92,7 +85,6 @@ func tcpListeners(t *testing.T, min int) []string {
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
 			fields := strings.Fields(sc.Text())
-			// sl local_address rem_address st tx:rx tr:when retrnsmt uid …; st 0A is LISTEN.
 			if len(fields) < 8 || fields[3] != "0A" {
 				continue
 			}
@@ -112,7 +104,7 @@ func TestIsolationBrowser(t *testing.T) {
 	m := browser.NewManager(browser.Config{Host: h.w.BrowserHost(bins), NoSandbox: true, StartTimeout: 60 * time.Second})
 	t.Cleanup(m.Close)
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "secret", Value: "user-1-session", MaxAge: 3600, HttpOnly: true}) //nolint:gosec // a plain-http test page
+		http.SetCookie(w, &http.Cookie{Name: "secret", Value: "user-1-session", MaxAge: 3600, HttpOnly: true})
 		fmt.Fprint(w, "<!doctype html><title>Signed in</title><p>hello</p>")
 	}))
 	defer site.Close()
@@ -127,9 +119,6 @@ func TestIsolationBrowser(t *testing.T) {
 		t.Fatalf("opened %+v", res.Tab)
 	}
 
-	// Every process of the browser is user 1's Unix user, with no capabilities. They are
-	// told apart from other tests' browsers by this test's directories on their command lines
-	// (Chromium's own helper processes inherit its uid, and the sweep below covers them).
 	var chromium int
 	found := map[string]bool{}
 	for _, p := range procs(t) {
@@ -154,12 +143,10 @@ func TestIsolationBrowser(t *testing.T) {
 	if !found["Xvfb"] || !found["x11vnc"] || !found["chromium"] {
 		t.Fatalf("the browser's processes: %v", found)
 	}
-	// None of them listens on TCP: x11vnc's IPv6 port 5900 among them.
 	if l := tcpListeners(t, isoBase); len(l) > 0 {
 		t.Errorf("a browser listens on TCP: %v", l)
 	}
 
-	// User 1's directory, profile and sockets are theirs alone.
 	p := h.layout.BrowserPaths(h.w.HomeForTest(acct(1)))
 	for _, dir := range []string{p.Root, p.Profile(), p.Run()} {
 		var st syscall.Stat_t
@@ -168,7 +155,6 @@ func TestIsolationBrowser(t *testing.T) {
 		}
 	}
 
-	// The live view reaches user 1's display, through the helper as user 1.
 	live, err := m.OpenLive(ctx, acct(1))
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +165,6 @@ func TestIsolationBrowser(t *testing.T) {
 	}
 	live.Close()
 
-	// User 2 tries everything of user 1's browser, and gets nothing.
 	sockets, err := filepath.Glob("/tmp/.X11-unix/X*")
 	if err != nil || len(sockets) == 0 {
 		t.Fatalf("no X display socket: %v", err)
@@ -215,7 +200,6 @@ func TestIsolationBrowser(t *testing.T) {
 		}
 	}
 
-	// User 2's own browser is another profile: user 1's cookie isn't in it.
 	res, err = m.Do(ctx, acct(2), browser.Action{Op: browser.OpOpen, Browser: browser.Testing, URL: "about:blank"})
 	if err != nil {
 		t.Fatal(err)
@@ -230,8 +214,6 @@ func TestIsolationBrowser(t *testing.T) {
 		}
 	}
 
-	// A new worker stops every browser process, as it does every CLI's (the first one's process
-	// gone, and its lock with it).
 	h.w.CrashForTest()
 	second, err := cliworker.New(h.cfg)
 	if err != nil {

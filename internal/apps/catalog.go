@@ -13,66 +13,47 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// The catalog is every component and function an app's screen may use, and the props and
-// arguments of each: A2UI v0.9's basic catalog, without the components and functions that
-// load or open outside addresses (Image, Video, AudioPlayer, openUrl: an app is shared,
-// and a picture from elsewhere would tell that server who opens it, and could carry the
-// app's data in its address), plus taskto.ai's Stat, Show, PhotoInput and Photos. The last two
-// are how photos get in and out without an outside address: they upload to, and draw from, this
-// server's authenticated attachment routes (attachments.go). The web app's catalog
-// (web/src/apps/catalog.tsx) is the same set; testdata/catalog.json is the contract between
-// the two, which both test against.
-//
-// checkComponents validates a screen against it strictly, as the renderer's
-// STRICT_VALIDATION does, without relying on the browser: an unknown component, prop,
-// function or argument, a value of the wrong type, an enum value outside its list, a
-// reference to a component that doesn't exist and a cycle are all refused.
-
-// kind is the type of a prop or argument.
 type kind int
 
 const (
-	kString        kind = iota // a literal string
-	kNumber                    // a literal number
-	kInteger                   // a literal whole number, at least 0
-	kBool                      // a literal boolean
-	kEnum                      // one of the prop's values
-	kDynString                 // a string, a data binding, or a function returning a string
-	kDynNumber                 // a number, a binding, or a function returning a number
-	kDynBool                   // a boolean, a binding, or a function returning a boolean
-	kDynStringList             // a list of strings, a binding, or a function returning a list
-	kDynValue                  // any of the above
-	kDynBoolList               // a list of at least two dynamic booleans (and, or)
-	kComponentID               // the ID of another component
-	kChildList                 // a list of component IDs, or a template over a data list
-	kAction                    // what a button does: an event the app declares, or a function
-	kChecks                    // a list of {condition, message} rules
-	kAccessibility             // {label, description}, both dynamic strings
-	kTabs                      // a list of {title, child}
-	kOptions                   // a list of {label, value}
-	kIconName                  // an icon's SVG path, its name (drawn as nothing), or a binding
-	kRule                      // a rule (rules.go) over the collection's fields
-	kScreenRefs                // a list of {name, child}: the host of the screens' own
+	kString kind = iota
+	kNumber
+	kInteger
+	kBool
+	kEnum
+	kDynString
+	kDynNumber
+	kDynBool
+	kDynStringList
+	kDynValue
+	kDynBoolList
+	kComponentID
+	kChildList
+	kAction
+	kChecks
+	kAccessibility
+	kTabs
+	kOptions
+	kIconName
+	kRule
+	kScreenRefs
 )
 
-// prop is one prop of a component, or argument of a function.
 type prop struct {
 	kind     kind
 	required bool
-	values   []string // for kEnum
+	values   []string
 }
 
 func req(k kind) prop            { return prop{kind: k, required: true} }
 func opt(k kind) prop            { return prop{kind: k} }
 func enum(values ...string) prop { return prop{kind: kEnum, values: values} }
 func props(m map[string]prop) map[string]prop {
-	// Every component may have these.
 	m["accessibility"] = opt(kAccessibility)
 	m["weight"] = opt(kNumber)
 	return m
 }
 
-// checkable adds the checks of an input component.
 func checkable(m map[string]prop) map[string]prop {
 	m["checks"] = opt(kChecks)
 	return props(m)
@@ -136,36 +117,16 @@ var components = map[string]map[string]prop{
 		"max":        opt(kDynString),
 		"label":      opt(kDynString),
 	}),
-	// Ours: a labelled headline value, such as a total. Only these two props.
-	"Stat": {"label": req(kDynString), "value": req(kDynString)},
-	// Ours: draws its child only while its rule holds of the form (/draft, the default) or of
-	// the record a screen shows (/record). It hides an input; it decides nothing the server
-	// accepts (rules.go).
-	"Show": {"when": req(kRule), "source": enum("draft", "record"), "child": req(kComponentID)},
-	// Ours: a photo input for an attachment field. It takes photos from the camera or the
-	// library, uploads each to the server (attachments.go) and holds their ids in value, a list
-	// at a path such as /draft/photos. field names the attachment field it is for.
-	"PhotoInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynStringList)},
-	// Ours: draws the thumbnails of the attachments whose ids are in value, fetched from the
-	// server with the viewer's own session, never from an outside address.
-	"Photos": {"label": opt(kDynString), "value": req(kDynStringList)},
-	// Ours: input for a location field (capture.go). It asks the browser for the position once, on
-	// the person's button or, for a field whose capture is "submit", when the form is submitted, and
-	// never follows it; where the position can't be had the person types it. value holds the
-	// location object at a path such as /draft/<field>; readOnly only shows what is stored.
-	"LocationInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
-	// Ours: a pad to sign on, for a signature field: the PNG is uploaded like a photo and its id held
-	// in value; readOnly only shows the stored signature. A typed name is the keyboard's way to sign.
+	"Stat":           {"label": req(kDynString), "value": req(kDynString)},
+	"Show":           {"when": req(kRule), "source": enum("draft", "record"), "child": req(kComponentID)},
+	"PhotoInput":     {"field": req(kString), "label": opt(kDynString), "value": req(kDynStringList)},
+	"Photos":         {"label": opt(kDynString), "value": req(kDynStringList)},
+	"LocationInput":  {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
 	"SignatureInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
-	// Ours: input for a barcode field: scans with the camera where the browser can, and always takes
-	// the code typed. value holds its text.
-	"BarcodeInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynString)},
-	// Ours, and the server's: the host of an app's screens, which the server adds as the root
-	// (screens.go). An app's own components may not use it.
+	"BarcodeInput":   {"field": req(kString), "label": opt(kDynString), "value": req(kDynString)},
 	screensComponent: {"current": req(kDynString), "screens": req(kScreenRefs)},
 }
 
-// inputFields is the kind of field each input component is for.
 var inputFields = map[string]string{
 	"PhotoInput":     TypeAttachment,
 	"LocationInput":  TypeLocation,
@@ -173,8 +134,6 @@ var inputFields = map[string]string{
 	"BarcodeInput":   TypeBarcode,
 }
 
-// function is one function of the catalog: its arguments, what it returns, and whether it
-// needs at least one of min and max.
 type function struct {
 	args     map[string]prop
 	returns  string
@@ -201,9 +160,6 @@ var functions = map[string]function{
 	"not": {args: map[string]prop{"value": req(kDynBool)}, returns: "boolean"},
 }
 
-// Capabilities are what a client's catalog can draw, named so a release can say which it needs: a
-// component is component.<Name>, a function function.<name>, an effect effect.<kind>. A new component or function is a new
-// capability, so an app that uses it is not drawn by a client that lacks it. The list is sorted.
 func Capabilities() []string {
 	var all []string
 	for name := range components {
@@ -215,7 +171,7 @@ func Capabilities() []string {
 	for _, kind := range EffectKinds {
 		all = append(all, EffectCapability(kind))
 	}
-	for _, capability := range fieldCapabilities { // includes AttachmentCapability
+	for _, capability := range fieldCapabilities {
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
@@ -224,49 +180,33 @@ func Capabilities() []string {
 	return all
 }
 
-// SummaryMonthCapability is what a client needs to total one calendar month: to read a summary's
-// month_of. A definition with one requires it, so a client that predates it (and would total every
-// month) says it must be updated.
 const SummaryMonthCapability = "summary.month_of"
 
-// LabelsCapability is what a client needs to draw a screen that binds to a choice's label
-// (/_labels/<field>): to hold it with each item and record, which a client that predates it
-// doesn't, and would draw nothing there. A definition whose screens bind one requires it.
 const LabelsCapability = "data.labels"
 
-// AttachmentCapability is what a client needs to hold an attachment field: to read its value as a
-// list of attachment ids and send them. A collection with one requires it (Definition.Check).
 const AttachmentCapability = "field.attachment"
 
-// ComponentCapability is the capability of drawing component name.
 func ComponentCapability(name string) string { return "component." + name }
 
-// FunctionCapability is the capability of calling function name.
 func FunctionCapability(name string) string { return "function." + name }
 
-// Bounds of a screen.
 const (
 	MaxComponents = 300
 	maxIDLen      = 64
-	maxTextLen    = 4000 // a literal string anywhere in a screen
+	maxTextLen    = 4000
 	maxPathLen    = 200
-	maxListLen    = 200 // children, tabs, options, checks, and/or values
-	maxDepth      = 16  // functions nested in functions
+	maxListLen    = 200
+	maxDepth      = 16
 )
 
-// screenCheck validates one screen.
 type screenCheck struct {
 	*screenScope
-	used      map[string]bool // the capabilities the screen needs
+	used      map[string]bool
 	ids       map[string]bool
-	pathIcons map[string]bool     // the Icons given as a path
-	refs      map[string][]string // component ID → the IDs it refers to
+	pathIcons map[string]bool
+	refs      map[string][]string
 }
 
-// checkComponents validates a screen's components and returns them re-encoded, so what is
-// stored is exactly what was checked (no duplicate keys, nothing the decoder skipped). root is
-// the id of its root component, "root" for an app with one screen. taken holds the ids of the
-// app's other screens' components, which this one's may not reuse, and gets this one's.
 func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, scope *screenScope) ([]json.RawMessage, []string, error) {
 	if len(raw) == 0 {
 		return nil, nil, invalidf("components: a screen needs at least its root component")
@@ -307,8 +247,6 @@ func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, 
 		id := obj["id"].(string)
 		byID[id] = obj
 		if err := c.component(id, obj); err != nil {
-			// An icon's refusal keeps its code, with the component it is in, so the web app can say
-			// what is wrong with it.
 			var coded *invalidError
 			if errors.As(err, &coded) && coded.code == apierr.CodeAppIconPath {
 				params := apierr.Params{"component": id}
@@ -334,7 +272,6 @@ func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, 
 	return out, sortedKeys(c.used), nil
 }
 
-// decodeObject decodes one JSON object, keeping numbers as written.
 func decodeObject(raw json.RawMessage) (map[string]any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -381,7 +318,6 @@ func (c *screenCheck) component(id string, obj map[string]any) error {
 	return nil
 }
 
-// value checks v against p; id is the component it is in, for its references.
 func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 	if depth > maxDepth {
 		return fmt.Errorf("nested more than %d deep", maxDepth)
@@ -467,8 +403,6 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 			if _, isPath := n["svgPath"]; isPath {
 				return c.iconPath(id, n)
 			}
-			// A bound name is drawn only if it holds a path, which the renderer checks then: a
-			// client that doesn't check paths must not draw one, so it needs the capability too.
 			c.used[IconPathCapability] = true
 			return binding(n)
 		default:
@@ -480,7 +414,6 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 	return nil
 }
 
-// object checks an object whose keys are exactly spec's (the required ones at least).
 func (c *screenCheck) object(id string, o map[string]any, spec map[string]prop, depth int) error {
 	for key, v := range o {
 		p, ok := spec[key]
@@ -499,8 +432,6 @@ func (c *screenCheck) object(id string, o map[string]any, spec map[string]prop, 
 	return nil
 }
 
-// dynamic checks a dynamic value of kind k: a literal of its type, a data binding, or a
-// call of a function returning its type.
 func (c *screenCheck) dynamic(id string, k kind, v any, depth int) error {
 	want := map[kind]string{kDynString: "text", kDynNumber: "a number", kDynBool: "true or false",
 		kDynStringList: "a list of texts", kDynValue: "a value"}[k]
@@ -542,7 +473,6 @@ func (c *screenCheck) dynamic(id string, k kind, v any, depth int) error {
 	return fmt.Errorf("must be %s, a data binding {\"path\": …} or a function call", want)
 }
 
-// call checks a function call whose result is used as k.
 func (c *screenCheck) call(id string, o map[string]any, k kind, depth int) error {
 	name, _ := o["call"].(string)
 	fn, ok := functions[name]
@@ -583,8 +513,6 @@ func (c *screenCheck) call(id string, o map[string]any, k kind, depth int) error
 	return nil
 }
 
-// childList is a list of component IDs, or {componentId, path}: one copy of a component
-// per item of the data list at path.
 func (c *screenCheck) childList(id string, v any) error {
 	switch x := v.(type) {
 	case []any:
@@ -605,8 +533,6 @@ func (c *screenCheck) childList(id string, v any) error {
 	return fmt.Errorf("must be a list of component ids or {\"componentId\", \"path\"}")
 }
 
-// action is what a button does: send an event the app declares, with a context of dynamic
-// values, or call a function.
 func (c *screenCheck) action(id string, v any, depth int) error {
 	o, ok := v.(map[string]any)
 	if !ok || len(o) != 1 {
@@ -654,8 +580,6 @@ func (c *screenCheck) action(id string, v any, depth int) error {
 		return fmt.Errorf("event needs a name")
 	}
 	if named.Kind == ActionNavigate {
-		// What navigating takes is known here: the record's id for a screen that shows one,
-		// and nothing else.
 		ctx, _ := ev["context"].(map[string]any)
 		_, hasID := ctx["id"]
 		switch target := c.screens[named.Screen]; {
@@ -670,9 +594,6 @@ func (c *screenCheck) action(id string, v any, depth int) error {
 	return nil
 }
 
-// submitCaptured checks an event context entry that passes a location field taken at submit
-// (capture "submit"): the browser takes the position as the button is pressed and puts it in the
-// context under the field's own name, so the entry must be named so.
 func (c *screenCheck) submitCaptured(key string, v any) error {
 	o, ok := v.(map[string]any)
 	if !ok {
@@ -691,8 +612,6 @@ func (c *screenCheck) submitCaptured(key string, v any) error {
 	return nil
 }
 
-// references checks that every component referred to exists, and that no component
-// contains itself, however indirectly: the renderer would draw it forever.
 func (c *screenCheck) references() error {
 	for from, to := range c.refs {
 		for _, id := range to {
@@ -732,8 +651,6 @@ func (c *screenCheck) references() error {
 	return nil
 }
 
-// binding is a data binding: {"path": "/a/b"} or, inside a template, a path relative to
-// the item.
 func binding(o map[string]any) error {
 	path, ok := o["path"].(string)
 	if !ok || len(o) != 1 {
@@ -744,12 +661,6 @@ func binding(o map[string]any) error {
 	}
 	return nil
 }
-
-// No regular expressions: A2UI's validationRegexp prop and regex function aren't in the
-// catalog. Every viewer's browser would run an app's pattern, with a backtracking engine,
-// against text other members can store, and no check of the pattern can tell all the ones
-// that take exponential or high polynomial time (such as (a+)+ or .*.*.*.*) from the
-// rest. Apps validate with required, length, numeric and email instead.
 
 func text(v any) error {
 	s, ok := v.(string)
@@ -793,14 +704,10 @@ func sortedKeys[V any](m map[string]V) []string {
 
 func componentNames() []string { return sortedKeys(components) }
 
-// authorable are the components an app's own screens may use: all but the host of the screens,
-// which the server adds.
 func authorable() []string {
 	return slices.DeleteFunc(componentNames(), func(n string) bool { return n == screensComponent })
 }
 
-// iconNames are A2UI's basic catalog's icon names, still accepted so apps saved with one stay
-// valid; the web app draws nothing for them (icons.go).
 var iconNames = []string{"accountCircle", "add", "arrowBack", "arrowForward", "attachFile", "calendarToday",
 	"call", "camera", "check", "close", "delete", "download", "edit", "event", "error", "fastForward", "favorite",
 	"favoriteOff", "folder", "help", "home", "info", "locationOn", "lock", "lockOpen", "mail", "menu", "moreVert",

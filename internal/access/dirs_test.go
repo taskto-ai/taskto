@@ -17,7 +17,6 @@ func TestSpaceDir(t *testing.T) {
 func TestCheckName(t *testing.T) {
 	ok := []string{
 		"a", "notes/plan.md", "a b/c d.md", "ü/日本語.md", "..a", "a..", "...", "a/b/c/d/e",
-		// Look like git's, but aren't its directory.
 		".gitignore", ".github/workflows/ci.yml", "git", "a/.gitkeep", "gitx", ".gitx", ".taskto-notes", "taskto", "a/.tasktox", "taskto~2", "taskto~10", "xtaskto~1",
 	}
 	for _, name := range ok {
@@ -26,24 +25,15 @@ func TestCheckName(t *testing.T) {
 		}
 	}
 	refused := []string{
-		// Empty.
 		"", ".",
-		// Absolute.
 		"/", "/etc/passwd", "//host/share",
-		// Parents, also ones that would stay inside.
 		"..", "../x", "a/../b", "a/..", "a/b/../../..",
-		// Not the shortest form.
 		"a//b", "a/./b", "./a", "a/", "a/.",
-		// Backslashes: Windows separators, and names that mean other things to other tools.
 		`a\b`, `..\x`, `C:\x`, `\\host\share`,
-		// Control characters.
 		"a\x00b", "a\nb", "a\rb", "\x7f", "a\tb",
-		// git's directory, in every spelling some file system reads as it.
 		".git", ".git/config", "a/.git/hooks/pre-commit", ".GIT", ".Git/x", ".git.", ".git ", ".git. .",
 		".g\u200cit", "\ufeff.git", ".gi\u206at/hooks", "git~1/config", "GIT~1",
-		// The server's managed storage, spelled as the same file systems read it.
 		".taskto", ".taskto/app-files/1/x", "a/.TASKTO/x", ".Taskto.", ".taskto ", ".task\u200cto/x", "\ufeff.taskto",
-		// ... and by its 8.3 short name, as with git's.
 		"taskto~1", "TASKTO~1", "taskto~1/app-files/1/x", "TASKTO~1.", "a/taskto~1",
 	}
 	for _, name := range refused {
@@ -53,7 +43,6 @@ func TestCheckName(t *testing.T) {
 	}
 }
 
-// symlink makes a link, or skips the test where the system can't.
 func symlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
@@ -68,21 +57,6 @@ func mkdir(t *testing.T, dir string) {
 	}
 }
 
-// linkedSpace builds a space directory with links in and out of it:
-//
-//	tmp/outside/secret
-//	tmp/space/inside/note.md
-//	tmp/space/in-link       -> inside
-//	tmp/space/abs-in        -> tmp/space/inside
-//	tmp/space/self          -> .
-//	tmp/space/out-link      -> ../outside
-//	tmp/space/abs-out       -> tmp/outside
-//	tmp/space/up            -> ..
-//	tmp/space/chain         -> in-link/to-out
-//	tmp/space/inside/to-out -> ../../outside
-//	tmp/space/dangling      -> nowhere
-//	tmp/space/to-file-out   -> ../outside/secret
-//	tmp/space-link          -> space
 func linkedSpace(t *testing.T) (tmp, root string) {
 	t.Helper()
 	tmp = t.TempDir()
@@ -123,10 +97,8 @@ func TestSafeJoin(t *testing.T) {
 		"out-link", "out-link/secret", "out-link/new.md", "abs-out/secret", "up/outside/secret", "up",
 		"chain/secret", "in-link/to-out/secret", "inside/to-out", "dangling", "dangling/x",
 		"to-file-out", "self/out-link/secret",
-		// CheckName's refusals come first.
 		"../outside/secret", "/etc/passwd", ".git/config",
 	}
-	// The same through a root that is itself a link, as a data directory may be.
 	for _, r := range []string{root, filepath.Join(tmp, "space-link")} {
 		for _, name := range ok {
 			got, err := SafeJoin(r, name)

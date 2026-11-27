@@ -12,19 +12,14 @@ import (
 	"testing"
 )
 
-// fakeBrowsers stands in for the agent browsers: some users have one running, with a profile on
-// disk under the data directory as the local host keeps it. Forget stops the user's and removes
-// their profile, as browser.Manager does, and records what it did.
 type fakeBrowsers struct {
 	dir string
 
 	mu      sync.Mutex
 	running map[int64]bool
 	calls   []int64
-	// fail, if set, is what Forget answers instead of doing anything.
-	fail error
-	// named is the account identity the last Forget was meant for.
-	named string
+	fail    error
+	named   string
 }
 
 func newFakeBrowsers(dir string) *fakeBrowsers {
@@ -35,7 +30,6 @@ func (f *fakeBrowsers) browserDir(user int64) string {
 	return filepath.Join(f.dir, "cli", fmt.Sprintf("u%d", user), "browser")
 }
 
-// start makes user's browser run, with a profile that holds a login.
 func (f *fakeBrowsers) start(t *testing.T, user int64) {
 	t.Helper()
 	profile := filepath.Join(f.browserDir(user), "profile")
@@ -79,15 +73,11 @@ func (f *fakeBrowsers) forgotten() []int64 {
 	return append([]int64(nil), f.calls...)
 }
 
-// orderedCLI is a CLI worker that says whether the user's browser was still running when its
-// directory, which holds the browser's profile, was removed.
 type orderedCLI struct {
 	fakeCLI
 	browsers *fakeBrowsers
-	// ranWith lists the users whose browser still ran when their directory was removed.
-	ranWith []int64
-	// named is the account identity the last call was meant for.
-	named string
+	ranWith  []int64
+	named    string
 }
 
 func (c *orderedCLI) Forget(ctx context.Context, user int64) error {
@@ -102,15 +92,12 @@ func browserWorld(t *testing.T) (*world, *fakeBrowsers, *orderedCLI) {
 	t.Helper()
 	w := newWorld(t)
 	b := newFakeBrowsers(w.dir)
-	// The container worker runs, as the world's history says it has.
 	cli := &orderedCLI{fakeCLI: fakeCLI{kind: cliContainer}, browsers: b}
 	w.svc.o.Browsers = b
 	w.svc.o.CLI = cli
 	return w, b, cli
 }
 
-// A purged account's running browser is stopped and its profile removed, before the CLI worker's
-// directory goes; the browsers of everyone else are left running with their profiles.
 func TestPurgeStopsTheBrowserAndRemovesItsProfile(t *testing.T) {
 	ctx := context.Background()
 	w, b, cli := browserWorld(t)
@@ -134,7 +121,6 @@ func TestPurgeStopsTheBrowserAndRemovesItsProfile(t *testing.T) {
 	if len(cli.users) != 1 || cli.users[0] != w.leaver {
 		t.Errorf("the CLI worker forgot %v", cli.users)
 	}
-	// Someone else's browser, and what it keeps, are not touched.
 	if !b.isRunning(w.carol) || !b.profileExists(w.carol) {
 		t.Errorf("another user's browser: running %v, profile %v", b.isRunning(w.carol), b.profileExists(w.carol))
 	}
@@ -143,9 +129,6 @@ func TestPurgeStopsTheBrowserAndRemovesItsProfile(t *testing.T) {
 	}
 }
 
-// A browser that can't be stopped or removed leaves its step recorded, with a fixed reason and
-// never the error's text, and nothing under it is removed: not the CLI directory, which holds its
-// profile. Once it can, a retry finishes the whole purge, and the step goes only then.
 func TestAFailedBrowserStepIsRecordedAndRetried(t *testing.T) {
 	ctx := context.Background()
 	w, b, cli := browserWorld(t)
@@ -192,8 +175,6 @@ func TestAFailedBrowserStepIsRecordedAndRetried(t *testing.T) {
 	}
 }
 
-// A purge that began before browsers were a step (its CLI step is recorded, the browser's is made
-// later and so comes after it) still stops the browser first.
 func TestTheCLIDirectoryWaitsForABrowserStepRecordedAfterIt(t *testing.T) {
 	ctx := context.Background()
 	w, b, cli := browserWorld(t)
@@ -230,8 +211,6 @@ func TestTheCLIDirectoryWaitsForABrowserStepRecordedAfterIt(t *testing.T) {
 	}
 }
 
-// With no agent browser to stop on this server the step is done at once, and the rest of the
-// purge goes on.
 func TestPurgeWithoutAgentBrowsers(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -244,9 +223,6 @@ func TestPurgeWithoutAgentBrowsers(t *testing.T) {
 	}
 }
 
-// A purge's steps on the CLI worker's files say whose they are: the account's identity, kept with
-// the steps when the purge began, so the worker removes nothing of an account a restore gave the
-// number to since.
 func TestPurgeNamesTheAccountWhoseFilesGo(t *testing.T) {
 	ctx := context.Background()
 	w, b, cli := browserWorld(t)

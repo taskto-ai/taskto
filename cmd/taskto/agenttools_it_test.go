@@ -2,11 +2,6 @@
 
 package main
 
-// The agent's knowledge-base and board tools with the real sidecar and its scripted model,
-// through the server binary: the tools call back into the server on its tools socket, as the
-// conversation's owner, and reach nothing of anyone else's. Gated by TASKTO_AGENT_IT=1 like
-// the other integration tests.
-
 import (
 	"context"
 	"encoding/json"
@@ -39,20 +34,13 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	dataDir := filepath.Join(dir, "data")
-	// The scripted model answers a tool's result by repeating it, at the pace of a model people
-	// watch (agent/src/model.ts): minutes for the app catalog. This test reads the answers, not
-	// the stream, so the sidecar, which inherits the server's environment, writes them at once.
 	t.Setenv("TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND", "0")
 	server, addr := startServer(t, bin, "-addr", "127.0.0.1:0", "-data-dir", dataDir, "-agent", "-agent-entry", entry, "-insecure-cookies")
 	_, socketDir, _ := agentPaths(dataDir)
 	sidecar := agentrt.New(filepath.Join(socketDir, "agent.sock"))
-	// Every tool call is a model turn in a conversation of its own, so each replays a history of
-	// one message, and the model writes without pacing: the whole test takes a few seconds, even
-	// on a busy runner. This budget is for a turn that is stuck, not a slow one.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	// The tools socket is owner-only, next to the sidecar's.
 	info, err := os.Lstat(filepath.Join(socketDir, "tools.sock"))
 	if err != nil || info.Mode().Type() != os.ModeSocket || info.Mode().Perm() != 0o600 {
 		t.Fatalf("tools socket: %v, %v", info, err)
@@ -65,7 +53,6 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		}
 		return &api{t: t, base: "http://" + addr, http: &http.Client{Jar: jar}}
 	}
-	// as is the same session with failures reported by the subtest that makes the call.
 	as := func(t *testing.T, a *api) *api {
 		bound := *a
 		bound.t = t
@@ -138,7 +125,6 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		ID   int64 `json:"id"`
 		path string
 	}
-	// open starts a conversation of a person's own, with no history.
 	open := func(t *testing.T, a *api) conversation {
 		t.Helper()
 		var c conversation
@@ -146,7 +132,6 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		c.path = fmt.Sprintf("%s/%d", base, c.ID)
 		return c
 	}
-	// turn has the scripted model call a tool in a person's conversation and returns what it got.
 	turn := func(t *testing.T, a *api, c conversation, tool string, args map[string]any) string {
 		t.Helper()
 		raw, err := json.Marshal(args)
@@ -169,8 +154,6 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		}
 		return got
 	}
-	// use is one tool call by the owner's agent, in a conversation of its own: a turn replays the
-	// conversation's history, so one call per conversation keeps every turn as short as the first.
 	use := func(t *testing.T, tool string, args map[string]any) string {
 		t.Helper()
 		o := as(t, owner)
@@ -210,7 +193,6 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		}
 	})
 
-	// The conversation the capability check below looks at: one that has had a tool turn.
 	var cardConv conversation
 	t.Run("a card the agent creates links the conversation by its API ID", func(t *testing.T) {
 		o, m := as(t, owner), as(t, member)
@@ -229,11 +211,9 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		if len(card.Conversations) != 1 || card.Conversations[0] != convID || !card.CreatedBy.Agent {
 			t.Fatalf("create_card = %s", created)
 		}
-		// The member sees the link on the card, and can't follow it; the owner can.
 		m.expect(http.StatusOK, http.MethodGet, spacePath(team.ID, fmt.Sprintf("/boards/%d/cards/%d", board.ID, card.ID)), nil)
 		m.expect(http.StatusNotFound, http.MethodGet, fmt.Sprintf("%s/%s", base, card.Conversations[0]), nil)
 		o.expect(http.StatusOK, http.MethodGet, fmt.Sprintf("%s/%s", base, card.Conversations[0]), nil)
-		// And the agent can't link a conversation of the member's.
 		theirs := open(t, m)
 		if got := use(t, "create_card", map[string]any{"space_id": team.ID, "board_id": board.ID, "title": "x", "conversations": []string{strconv.FormatInt(theirs.ID, 10)}}); !strings.HasPrefix(got, "error: conversations:") {
 			t.Fatalf("linking the member's conversation: %s", got)
@@ -261,7 +241,6 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		if app.ID == 0 || !app.CreatedBy.Agent {
 			t.Fatalf("create_app = %s", built)
 		}
-		// What the agent builds is a draft: launched once a person publishes it.
 		surface := spacePath(team.ID, fmt.Sprintf("/apps/%d/surface", app.ID))
 		m.expect(http.StatusConflict, http.MethodGet, surface, nil)
 		o.expect(http.StatusOK, http.MethodPost, spacePath(team.ID, fmt.Sprintf("/apps/%d/publish", app.ID)),

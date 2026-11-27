@@ -12,8 +12,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// The server's operators see whether the CLI worker lost its authority, and the boot to hand it
-// over to; an admin who isn't an operator, and a member, don't see the worker at all.
 func TestOperatorsSeeTheCLIWorkersLostAuthority(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, Container, nil)

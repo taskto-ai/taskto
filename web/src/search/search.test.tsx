@@ -15,7 +15,6 @@ const spaces = [
   { id: 3, workspace_id: 1, kind: 'shared', name: 'Team', archived_at: null, role: 'viewer', access: 'read' },
 ]
 
-// Records and conversations are searched too: unless a test says otherwise, they find nothing.
 const none = { body: { results: [] } }
 function fakeSearch(routes: Parameters<typeof fakeFetch>[0]) {
   return fakeFetch({
@@ -42,7 +41,6 @@ const result = (space: (typeof spaces)[number], path: string, title: string) => 
 function search(q: string, scope?: 'Search in all spaces') {
   fireEvent.change(screen.getByLabelText('Search the knowledge base'), { target: { value: q } })
   if (scope) {
-    // The scope says it is the search's, so it doesn't read like the space picker above it.
     const where = screen.getByLabelText('Where to search')
     expect(within(where).getByRole('option', { name: scope })).toBeTruthy()
     expect(within(where).getAllByRole('option')[0].textContent).toMatch(/^Search in /)
@@ -74,7 +72,6 @@ test('searches the space shown, and shows matches as marked text, never markup',
   expect(within(hit).getByText('orchard').tagName).toBe('MARK')
   expect(hit.textContent).toContain('<b>next</b>')
   expect(hit.querySelector('b')).toBeNull()
-  // A hybrid search with nothing to report shows no notice.
   expect(within(results).queryByText(/full-text|embedded|catching up/)).toBeNull()
 
   fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
@@ -98,9 +95,7 @@ test.each([
   await screen.findByText('No documents in this space yet.')
   search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
-  // Something that is off is said in the neutral tone: a part of the page, not an alert.
   const said = await within(results).findByText(notice)
-  // Announced as a status when it comes, never as an alert, and drawn in the neutral tone.
   expect(said.closest('[role="status"]')).not.toBeNull()
   expect(said.closest('[role="alert"]')).toBeNull()
   expect(said.closest('[data-tone]')?.getAttribute('data-tone')).toBe('neutral')
@@ -165,18 +160,15 @@ test('searches every space, pages on, and opens a result in its own space', asyn
   fireEvent.click(within(results).getByRole('button', { name: 'More results' }))
   const team = await within(results).findByRole('button', { name: /Team notes/ })
   expect(team.closest('li')?.textContent).toContain('Team · team.md')
-  // The latest page's notice: it is no longer embedding.
   expect(within(results).queryByText(embedding)).toBeNull()
   expect(within(results).queryByRole('button', { name: 'More results' })).toBeNull()
 
   fireEvent.click(team)
   const doc = await screen.findByRole('article', { name: 'team.md' })
-  // The document's text, under its path in the space it is in (Team).
   expect(await within(doc).findByText('Team', { selector: 'p' })).toBeTruthy()
   expect(within(doc).getByRole('heading', { level: 2 }).textContent).toBe('Team/team.md')
   expect((screen.getByLabelText('Space') as HTMLSelectElement).value).toBe('3')
   expect(calls.some((c) => c.path === '/api/workspaces/1/spaces/3/docs/team.md')).toBe(true)
-  // Team is read-only for this user.
   expect(within(doc).queryByRole('button', { name: 'Edit' })).toBeNull()
 })
 
@@ -251,7 +243,6 @@ test('shows cards apart from documents, each linking to its card', async () => {
   const [first, second] = links.map((a) => a.closest('li') as HTMLElement)
   expect(first.textContent).toContain('Team · Roadmap · Doing')
   expect(second.textContent).toContain('Team · Roadmap · Archived')
-  // Matches are marked by the element, never as markup.
   expect(within(first).getByText('orchard').tagName).toBe('MARK')
   expect(first.textContent).toContain('<i>release</i>')
   expect(first.querySelector('i')).toBeNull()
@@ -260,7 +251,6 @@ test('shows cards apart from documents, each linking to its card', async () => {
   await within(list).findByRole('link', { name: /Orchard party/ })
   expect(within(results).queryByRole('button', { name: 'More cards' })).toBeNull()
   expect(calls.some((c) => c.path === '/api/workspaces/1/search/cards?q=orchard&offset=2')).toBe(true)
-  // Never a card in the documents' list.
   expect(within(results).queryByText('Nothing found.')).toBeNull()
 })
 
@@ -393,7 +383,6 @@ test('shows records and conversations apart from documents, each linking to its 
   expect(within(results).getByRole('heading', { name: 'Records', level: 3 })).toBeTruthy()
   const recordLinks = within(records).getAllByRole('link')
   expect(recordLinks.map((a) => a.getAttribute('href'))).toEqual(['/w/1/apps/3-9', '/w/1/apps/3-9'])
-  // Each a row: the link is its title, with where it is and the snippet beside it.
   const firstRecord = recordLinks[0].closest('li') as HTMLElement
   expect(firstRecord.textContent).toContain('Team · Expenses')
   expect(within(firstRecord).getByText('orchard').tagName).toBe('MARK')
@@ -416,7 +405,6 @@ test('shows records and conversations apart from documents, each linking to its 
   fireEvent.click(within(results).getByRole('button', { name: 'More conversations' }))
   await within(list).findByRole('link', { name: /More/ })
   expect(calls.some((c) => c.path === '/api/workspaces/1/search/conversations?q=orchard&offset=2')).toBe(true)
-  // Something was found: not "nothing".
   expect(within(results).queryByText('Nothing found.')).toBeNull()
 })
 
@@ -512,7 +500,6 @@ test('a page of records that has none to show still leads to the next', async ()
   search('orchard', 'Search in all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   const more = await within(results).findByRole('button', { name: 'More records' })
-  // Not "nothing found" while a page of records is still to come.
   expect(within(results).queryByText('Nothing found.')).toBeNull()
   fireEvent.click(more)
   await within(results).findByRole('link', { name: /Garden log/ })

@@ -1,10 +1,4 @@
-// Home's customize mode, under the widgets: the pins in the menu, the space's defaults the person
-// hid, and the person's apps, each with the widgets and the pin it offers, to add or take off. Who
-// may publish an app of a shared space also sets what it offers as the space's defaults, from the
-// row's "more" menu. Visible labels are short ("Add", "Pin"); each control's name says what it acts
-// on ("Add Spending to Home"), so a list of them heard one after another is still clear.
-
-import { useEffect, useRef } from 'react'
+import { useEffect, useEffectEvent, useRef } from 'react'
 import { type AvailableApp, api, type HomeView, ws } from '../api'
 import { type Key, useT } from '../i18n'
 import { Badge } from '../ui/Badge'
@@ -39,21 +33,19 @@ export function HomeCustomize({
   move: Move
   remove: Act
   hide: Act
-  // Put the keyboard on the "Add from your apps" heading when this opens.
   focusOnOpen?: boolean
 }) {
   const t = useT()
   const addHeading = useRef<HTMLHeadingElement>(null)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only when it opens
-  useEffect(() => {
+  const focusWhenOpened = useEffectEvent(() => {
     if (focusOnOpen) addHeading.current?.focus()
-  }, [])
+  })
+  useEffect(() => focusWhenOpened(), [])
   const base = ws(workspace)
   const available = useHomeLoad(
     () => api<{ apps: AvailableApp[] }>(`${base}/home/available`).then((r) => r.apps),
     [base],
   )
-  // An offer's controls: the add or remove button, and its "more" menu.
   const offer = (a: AvailableApp, what: string, control: string) =>
     focusName('offer', `${a.space_id}:${a.app_id}:${what}`, control)
   const ownPins = home.pins.filter((p) => p.source === 'personal')
@@ -73,7 +65,6 @@ export function HomeCustomize({
           method: 'POST',
           body: { kind, app_id: a.app_id, widget },
         }),
-      // The menu gives the keyboard back to its button, which stays.
       { message: t('home.announce.defaultSet', { name }) },
     )
   const unsetDefault = (a: AvailableApp, id: number, name: string) =>
@@ -85,8 +76,6 @@ export function HomeCustomize({
     home.widgets.find((i) => i.source === 'personal' && i.app_id === a.app_id && i.widget_id === id)
   const placedPin = (a: AvailableApp) => home.pins.find((i) => i.source === 'personal' && i.app_id === a.app_id)
 
-  // The "more" menu of an offered widget or pin, for those who may set the space's defaults.
-  // Its name says whether it is the widget's or the pin's, which may share a name.
   const defaults = (
     a: AvailableApp,
     name: string,

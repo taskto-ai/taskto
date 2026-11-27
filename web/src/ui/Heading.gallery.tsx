@@ -10,7 +10,6 @@ const SIZES: HeadingSize[] = ['display', 'title', 'section', 'subsection']
 
 export default function HeadingGallery() {
   const t = useT()
-  // A heading the keyboard is sent to when what had it goes away (a panel dismissed).
   const target = useRef<HTMLHeadingElement>(null)
   return (
     <>

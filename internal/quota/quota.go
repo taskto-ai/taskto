@@ -1,22 +1,3 @@
-// Package quota is the storage quotas: the most a workspace may store, and the most a
-// member's private space may, and the usage view that shows what each space takes.
-//
-// The operator sets two defaults (internal/config: the workspace's and the private space's),
-// each in bytes, zero meaning unlimited, which is what an install has until the operator
-// says otherwise. The workspace's quota counts everything its spaces store, shared and
-// private; the private space's counts that space alone, so a member's private space in each
-// workspace they belong to has its own allowance.
-//
-// What counts, per space: the knowledge base's bytes (the repository's history and the
-// unversioned files, internal/knowledge) and the apps' photo attachments, with their
-// thumbnails (internal/apps). Rows of apps, boards and conversations live in the database,
-// which no per-space figure covers, and aren't counted.
-//
-// The knowledge base's figures come from counters it keeps up to date as it commits, never
-// from walking git on a request; the attachments' from one indexed query. A write that would
-// take a space or its workspace over a quota is refused with an *Error, which the HTTP
-// routes answer with 507 and a code the web app translates; a change that adds nothing
-// (deleting, moving) is never refused, so a full space can always make room.
 package quota
 
 import (
@@ -32,36 +13,26 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Limits are the quotas, in bytes. Zero is unlimited.
 type Limits struct {
-	// Workspace caps the bytes all of a workspace's spaces store together.
 	Workspace int64 `json:"workspace"`
-	// User caps the bytes of each member's private space.
-	User int64 `json:"user"`
+	User      int64 `json:"user"`
 }
 
-// Files tells what a space's knowledge base takes on disk: the bytes git keeps (every
-// version) and the bytes of its unversioned files. internal/knowledge's Store is one.
 type Files interface {
 	Usage(sp access.Space) (versioned, unversioned int64, err error)
 }
 
-// Scope is which quota was reached.
 type Scope string
 
-// The quotas.
 const (
 	ScopeWorkspace Scope = "workspace"
 	ScopeUser      Scope = "user"
 )
 
-// ErrExceeded is what every *Error is.
 var ErrExceeded = errors.New("storage quota exceeded")
 
-// Error is a write refused for taking a space or its workspace over a quota.
 type Error struct {
-	Scope Scope
-	// Limit is the quota, and Used what was stored when the write was refused, in bytes.
+	Scope       Scope
 	Limit, Used int64
 }
 
@@ -73,10 +44,8 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s quota is %d bytes", ErrExceeded, what, e.Limit)
 }
 
-// Is makes errors.Is(err, ErrExceeded) true.
 func (e *Error) Is(target error) bool { return target == ErrExceeded }
 
-// API is the answer to give for the error: 507, with the code of its scope.
 func (e *Error) API() *apierr.Error {
 	code := apierr.CodeQuotaWorkspace
 	if e.Scope == ScopeUser {
@@ -85,27 +54,20 @@ func (e *Error) API() *apierr.Error {
 	return apierr.New(http.StatusInsufficientStorage, code, e.Error(), apierr.Params{"max_mib": (e.Limit + 1<<20 - 1) >> 20})
 }
 
-// ErrUnavailable is what every *UnavailableError is.
 var ErrUnavailable = errors.New("storage usage can't be measured right now")
 
-// UnavailableError is a write refused because the usage it would be checked against couldn't
-// be measured: trying again may work.
 type UnavailableError struct{ Err error }
 
 func (e *UnavailableError) Error() string { return fmt.Sprintf("%s: %v", ErrUnavailable, e.Err) }
 
-// Is makes errors.Is(err, ErrUnavailable) true.
 func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailable }
 
-// Unwrap returns the failure.
 func (e *UnavailableError) Unwrap() error { return e.Err }
 
-// API is the answer to give for the error: 503, which the web app translates.
 func (e *UnavailableError) API() *apierr.Error {
 	return apierr.New(http.StatusServiceUnavailable, apierr.CodeQuotaUnavailable, ErrUnavailable.Error())
 }
 
-// AsAPI is the answer to give for err if it is a refusal of this package's, either kind.
 func AsAPI(err error) (*apierr.Error, bool) {
 	var over *Error
 	if errors.As(err, &over) {
@@ -118,36 +80,30 @@ func AsAPI(err error) (*apierr.Error, bool) {
 	return nil, false
 }
 
-// Queryer is a database or a transaction.
 type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// Service checks writes against the quotas and reports usage.
 type Service struct {
 	db     *sql.DB
 	limits Limits
 	files  Files
 
-	mu   sync.Mutex // guards held, never held across a measurement or a query
+	mu   sync.Mutex
 	held map[int64]*held
 }
 
-// New returns the quotas over db, which must be migrated. files measures the knowledge
-// base; it may be nil, for a server with none (its bytes are then counted as nothing).
 func New(db *sql.DB, limits Limits, files Files) *Service {
 	return &Service{db: db, limits: limits, files: files, held: map[int64]*held{}}
 }
 
-// Limits returns the quotas.
 func (s *Service) Limits() Limits { return s.limits }
 
-// spaceRow is a space of a workspace, as the usage queries read them.
 type spaceRow struct {
 	id    int64
 	kind  access.Kind
 	name  string
-	owner *Owner // for a private space
+	owner *Owner
 }
 
 func (s *Service) spaces(ctx context.Context, q Queryer, workspaceID int64) ([]spaceRow, error) {
@@ -176,8 +132,6 @@ func (s *Service) spaces(ctx context.Context, q Queryer, workspaceID int64) ([]s
 	return out, rows.Err()
 }
 
-// attachments is the bytes of each space's photo attachments (the uploads on their way, at
-// the size they declared, count: they hold their place), by space ID.
 func attachments(ctx context.Context, q Queryer, workspaceID int64) (map[int64]int64, error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT a.space_id, sum(a.size + coalesce(a.thumb_size, 0))
@@ -199,7 +153,6 @@ func attachments(ctx context.Context, q Queryer, workspaceID int64) (map[int64]i
 	return out, rows.Err()
 }
 
-// knowledge measures space id's knowledge base.
 func (s *Service) knowledge(workspaceID, id int64) (versioned, unversioned int64, err error) {
 	if s.files == nil {
 		return 0, 0, nil
@@ -207,13 +160,8 @@ func (s *Service) knowledge(workspaceID, id int64) (versioned, unversioned int64
 	return s.files.Usage(access.Space{ID: id, WorkspaceID: workspaceID})
 }
 
-// maxAttempts bounds how often a reservation measures again because another write finished
-// meanwhile; past it the write is refused as unavailable, to be tried again.
 const maxAttempts = 16
 
-// Reservation is the bytes a write holds while it runs: they count against the quotas, with
-// every other write's, from the moment it is granted until Release, which a write calls once
-// its real usage is published (or it failed). The zero of it, nil, holds nothing.
 type Reservation struct {
 	s     *Service
 	ws    int64
@@ -222,7 +170,6 @@ type Reservation struct {
 	once  sync.Once
 }
 
-// Release gives the bytes back. It is safe to call twice, and on nil.
 func (r *Reservation) Release() {
 	if r == nil {
 		return
@@ -236,31 +183,16 @@ func (r *Reservation) Release() {
 		if st.spaces[r.space] <= 0 {
 			delete(st.spaces, r.space)
 		}
-		st.epoch++ // what a check measured before this may not count what this write stored
+		st.epoch++
 	})
 }
 
-// held is what a workspace's writes have reserved.
 type held struct {
 	total  int64
 	spaces map[int64]int64
-	// epoch counts the releases: a check whose measurement began before one measures again.
-	epoch uint64
+	epoch  uint64
 }
 
-// Reserve refuses with an *Error a write of adding bytes to space sp that would take it, or
-// its workspace, over a quota, counting what the writes that are running have reserved and
-// not yet stored; otherwise it reserves the bytes, atomically with the check, and the caller
-// releases them when the write's usage is published or the write failed. q is where the
-// attachments are read: the caller's transaction if it has one, so the check sees what the
-// transaction has reserved. Zero or fewer bytes are never refused, and reserve nothing.
-//
-// The reservations are kept in memory under a mutex held only to read and change them: never
-// while a space is measured or a database is read, so no lock order is involved. A write that
-// finishes while a check measures makes the check measure again.
-//
-// If a space can't be measured the write is refused with ErrUnavailable, never allowed on a
-// guess.
 func (s *Service) Reserve(ctx context.Context, q Queryer, sp access.Space, adding int64) (*Reservation, error) {
 	if adding <= 0 || (s.limits.Workspace <= 0 && s.limits.User <= 0) {
 		return nil, nil
@@ -303,7 +235,6 @@ func (s *Service) Reserve(ctx context.Context, q Queryer, sp access.Space, addin
 	return nil, &UnavailableError{Err: errors.New("writes kept finishing while the usage was measured")}
 }
 
-// state is the reservations of workspace id, with s.mu held.
 func (s *Service) state(id int64) *held {
 	st := s.held[id]
 	if st == nil {
@@ -313,7 +244,6 @@ func (s *Service) state(id int64) *held {
 	return st
 }
 
-// measureWorkspace is what the workspace's spaces store now, and sp's own share of it.
 func (s *Service) measureWorkspace(ctx context.Context, q Queryer, sp access.Space) (total, own int64, private bool, err error) {
 	spaces, err := s.spaces(ctx, q, sp.WorkspaceID)
 	if err != nil {
@@ -326,7 +256,6 @@ func (s *Service) measureWorkspace(ctx context.Context, q Queryer, sp access.Spa
 	for _, r := range spaces {
 		v, u, err := s.knowledge(sp.WorkspaceID, r.id)
 		if err != nil {
-			// A space that can't be measured is not zero: the write waits, and is tried again.
 			slog.Warn("quota: measuring a space", "space", r.id, "err", err)
 			return 0, 0, false, &UnavailableError{Err: err}
 		}
@@ -339,25 +268,20 @@ func (s *Service) measureWorkspace(ctx context.Context, q Queryer, sp access.Spa
 	return total, own, private, nil
 }
 
-// Check is Reserve that holds nothing: it refuses what couldn't be stored now.
 func (s *Service) Check(ctx context.Context, q Queryer, sp access.Space, adding int64) error {
 	r, err := s.Reserve(ctx, q, sp, adding)
 	r.Release()
 	return err
 }
 
-// CheckDB is Check reading the attachments from the database.
 func (s *Service) CheckDB(ctx context.Context, sp access.Space, adding int64) error {
 	return s.Check(ctx, s.db, sp, adding)
 }
 
-// ReserveDB is Reserve reading the attachments from the database.
 func (s *Service) ReserveDB(ctx context.Context, sp access.Space, adding int64) (*Reservation, error) {
 	return s.Reserve(ctx, s.db, sp, adding)
 }
 
-// KnowledgeCheck is the check for knowledge.Store.SetQuota: it reserves what a change adds,
-// reading the attachments from the database, and answers what releases the reservation.
 func (s *Service) KnowledgeCheck() func(sp access.Space, adding int64) (release func(), err error) {
 	return func(sp access.Space, adding int64) (func(), error) {
 		r, err := s.ReserveDB(context.Background(), sp, adding)
@@ -368,41 +292,30 @@ func (s *Service) KnowledgeCheck() func(sp access.Space, adding int64) (release 
 	}
 }
 
-// Owner is the member whose private space it is.
 type Owner struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
 }
 
-// SpaceUsage is what one space stores, in bytes.
 type SpaceUsage struct {
-	ID    int64       `json:"id"`
-	Kind  access.Kind `json:"kind"`
-	Name  string      `json:"name"`
-	Owner *Owner      `json:"owner,omitempty"`
-	// KnowledgeVersioned is what git keeps of the knowledge base, every version included;
-	// KnowledgeUnversioned the bytes of its unversioned files.
-	KnowledgeVersioned   int64 `json:"knowledge_versioned"`
-	KnowledgeUnversioned int64 `json:"knowledge_unversioned"`
-	// Attachments is the apps' photos, thumbnails included.
-	Attachments int64 `json:"attachments"`
-	Total       int64 `json:"total"`
-	// Limit is the quota of the space itself: the private space's for a private space, zero
-	// (none) for a shared one, which only the workspace's quota bounds.
-	Limit int64 `json:"limit"`
+	ID                   int64       `json:"id"`
+	Kind                 access.Kind `json:"kind"`
+	Name                 string      `json:"name"`
+	Owner                *Owner      `json:"owner,omitempty"`
+	KnowledgeVersioned   int64       `json:"knowledge_versioned"`
+	KnowledgeUnversioned int64       `json:"knowledge_unversioned"`
+	Attachments          int64       `json:"attachments"`
+	Total                int64       `json:"total"`
+	Limit                int64       `json:"limit"`
 }
 
-// Report is a workspace's usage.
 type Report struct {
-	Quota Limits `json:"quota"`
-	// Total is what all the workspace's spaces store.
+	Quota  Limits       `json:"quota"`
 	Total  int64        `json:"total"`
 	Spaces []SpaceUsage `json:"spaces"`
 }
 
-// Usage reports what every space of workspaceID stores: the shared ones, then each member's
-// private one.
 func (s *Service) Usage(ctx context.Context, workspaceID int64) (Report, error) {
 	spaces, err := s.spaces(ctx, s.db, workspaceID)
 	if err != nil {
@@ -439,8 +352,6 @@ func (s *Service) spaceUsage(workspaceID int64, r spaceRow, photos int64) (Space
 	return u, nil
 }
 
-// Mine reports what the private space of userID in workspaceID stores; false if they have
-// none there.
 func (s *Service) Mine(ctx context.Context, workspaceID, userID int64) (SpaceUsage, bool, error) {
 	spaces, err := s.spaces(ctx, s.db, workspaceID)
 	if err != nil {

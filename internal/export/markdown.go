@@ -8,10 +8,6 @@ import (
 	"taskto.ai/taskto/internal/boards"
 )
 
-// A board's Markdown file is for reading: its name, then each card, in the order of their IDs, with
-// its details, its body as it was written, and its comments. The JSON file next to it has
-// everything.
-
 func writeBoardHeading(w io.Writer, b boards.Board) error {
 	_, err := fmt.Fprintf(w, "# %s\n", oneLine(b.Name))
 	return err
@@ -35,7 +31,6 @@ func writeCardMarkdown(w io.Writer, c boards.Thread) error {
 		fmt.Fprintf(&b, "- Document: %s\n", oneLine(d))
 	}
 	if c.Body != "" {
-		// Quoted, every line, so an unclosed code fence in it can't swallow the next card.
 		b.WriteString("\n")
 		for line := range strings.SplitSeq(strings.TrimRight(c.Body, "\n"), "\n") {
 			fmt.Fprintf(&b, "> %s\n", line)
@@ -58,7 +53,6 @@ func writeCardMarkdown(w io.Writer, c boards.Thread) error {
 	return err
 }
 
-// oneLine is s with its line breaks as spaces, for a heading or a list item.
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

@@ -23,15 +23,12 @@ import (
 	"taskto.ai/taskto/internal/lockfile"
 )
 
-// fixture is a data directory like a running server's: the server's database, an agent
-// database in WAL mode with writes not yet checkpointed, a key file, a space's files, a
-// socket and a symbolic link.
 type fixture struct {
 	dir     string
 	server  *sql.DB
 	agent   *sql.DB
-	files   map[string]string // other files by relative path, and their content
-	execBit string            // a file the owner may execute
+	files   map[string]string
+	execBit string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -74,8 +71,6 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 
-	// The agent database stays open, in WAL mode with checkpoints off, so its latest rows
-	// are only in agent.db-wal: a copy of agent.db alone would miss them.
 	if err := os.MkdirAll(filepath.Join(f.dir, "agent"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +93,6 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("agent.db-wal = %v, %v: the fixture wants uncheckpointed writes", info, err)
 	}
 
-	// A socket, as the agent runtime has. Unix socket paths are short, so it may not fit
-	// under the test's temporary directory; then that part is left out.
 	sock := filepath.Join(f.dir, "agent", "run", "agent.sock")
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		t.Fatal(err)
@@ -114,7 +107,6 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.Symlink("/etc/passwd", filepath.Join(f.dir, "workspaces", "1", "spaces", "2", "link")); err != nil {
 		t.Fatal(err)
 	}
-	// What the server writes from the database at start, decrypted keys included.
 	for _, name := range []string{"agent/providers.json", "agent/.tmp-123", "agent/keys/ws1-local.key"} {
 		p := filepath.Join(f.dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -142,7 +134,6 @@ func backupWith(t *testing.T, dir string, opts Options) (*bytes.Buffer, Result) 
 	return &buf, res
 }
 
-// entries lists the names in an archive, gzipped or plain.
 func entries(t *testing.T, archive []byte) []string {
 	t.Helper()
 	var r io.Reader = bytes.NewReader(archive)
@@ -179,7 +170,6 @@ func count(t *testing.T, sqlDB *sql.DB, query string) int {
 func TestBackupRestoreRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
-	// What a failed backup left behind isn't data.
 	stale := filepath.Join(f.dir, tmpPrefix+"stale")
 	if err := os.MkdirAll(stale, 0o700); err != nil {
 		t.Fatal(err)
@@ -209,7 +199,6 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		}
 	}
 
-	// A later write isn't in the backup.
 	if _, err := f.agent.Exec(`INSERT INTO events (body) VALUES ('after the backup')`); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +245,6 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Errorf("the symbolic link was restored (%v)", err)
 	}
 
-	// The restored server database opens, is up to date and has the user.
 	server, err := db.Open(ctx, filepath.Join(dst, db.FileName))
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +257,6 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("restored users = %d, want 1", n)
 	}
 
-	// The agent database has the rows that were only in its WAL file, and not the later one.
 	agent, err := sql.Open("sqlite", filepath.Join(dst, "agent", "agent.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -279,15 +266,12 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("restored agent events = %d, want 2", n)
 	}
 
-	// A backup of the restored directory restores again: the round trip is stable.
 	again, _ := backup(t, dst)
 	if _, err := Restore(ctx, again, filepath.Join(t.TempDir(), "again")); err != nil {
 		t.Fatalf("restore of a backup of a restore: %v", err)
 	}
 }
 
-// A backup taken while the server writes is consistent: every database passes the
-// integrity check and holds a whole number of transactions.
 func TestBackupWhileWriting(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -299,7 +283,6 @@ func TestBackupWhileWriting(t *testing.T) {
 	var writeErr error
 	wg.Go(func() {
 		for i := 0; !stop.Load(); i++ {
-			// Each transaction adds two rows: a torn copy could have an odd number.
 			tx, err := f.server.BeginTx(ctx, nil)
 			if err == nil {
 				_, err = tx.Exec(`INSERT INTO pairs (n) VALUES (?), (?)`, i, i)
@@ -352,15 +335,11 @@ func TestRestoreRefusesANonEmptyDirectory(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(dst, "keep")); string(got) != "existing data" {
 		t.Fatal("the existing file changed")
 	}
-	// An empty directory, such as a fresh volume's mount point, is fine.
 	if _, err := Restore(context.Background(), bytes.NewReader(archive.Bytes()), t.TempDir()); err != nil {
 		t.Fatalf("Restore into an empty directory: %v", err)
 	}
 }
 
-// A backup runs beside the server that holds the data directory's lock, and leaves the
-// lock file out. A restore takes the lock: it is refused while another process holds it,
-// and a lock file left behind on its own doesn't make the directory non-empty.
 func TestBackupAndRestoreWithTheLock(t *testing.T) {
 	f := newFixture(t)
 	server, err := lockfile.DataDir(f.dir)
@@ -385,7 +364,6 @@ func TestBackupAndRestoreWithTheLock(t *testing.T) {
 	if _, err := Restore(context.Background(), bytes.NewReader(archive.Bytes()), dst); err != nil {
 		t.Fatalf("Restore into a directory with only a lock file left in it: %v", err)
 	}
-	// Restore released it.
 	again, err := lockfile.DataDir(dst)
 	if err != nil {
 		t.Fatalf("lock after the restore: %v", err)
@@ -400,8 +378,6 @@ type entry struct {
 	linkname string
 }
 
-// archiveOf makes a gzipped archive of es, after manifest if it isn't nil, and with the
-// end entry a format 2 manifest needs.
 func archiveOf(t *testing.T, manifest *Manifest, es ...entry) []byte {
 	t.Helper()
 	if manifest != nil && manifest.Format >= 2 {
@@ -410,14 +386,11 @@ func archiveOf(t *testing.T, manifest *Manifest, es ...entry) []byte {
 	return rawArchive(t, true, manifest, es...)
 }
 
-// endOf is an end entry that counts n entries.
 func endOf(n int) entry {
 	raw, _ := json.Marshal(end{Entries: n})
 	return entry{name: endName, typeflag: tar.TypeReg, body: string(raw)}
 }
 
-// rawArchive makes an archive of exactly es, after manifest if it isn't nil, gzipped or
-// plain.
 func rawArchive(t *testing.T, gzipped bool, manifest *Manifest, es ...entry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -498,7 +471,6 @@ func TestRestoreRefusesBadArchives(t *testing.T) {
 	}
 }
 
-// A truncated archive fails: a backup cut short in transfer must not restore quietly.
 func TestRestoreRefusesATruncatedArchive(t *testing.T) {
 	f := newFixture(t)
 	archive, _ := backup(t, f.dir)
@@ -514,8 +486,6 @@ func TestCreateNeedsADirectory(t *testing.T) {
 	}
 }
 
-// Stray files named like the archive's manifest or end are left out (and reported), so
-// the backup still restores.
 func TestAFileNamedLikeTheManifestIsSkipped(t *testing.T) {
 	f := newFixture(t)
 	for _, name := range []string{manifestName, endName} {
@@ -534,7 +504,6 @@ func TestAFileNamedLikeTheManifestIsSkipped(t *testing.T) {
 	}
 }
 
-// A plain backup, as restic stores it, restores like a gzipped one.
 func TestPlainBackupRoundTrip(t *testing.T) {
 	f := newFixture(t)
 	archive, res := backupWith(t, f.dir, Options{Uncompressed: true})
@@ -562,13 +531,10 @@ func TestPlainBackupRoundTrip(t *testing.T) {
 	}
 }
 
-// A plain archive has no checksum: one cut short anywhere, even right after an entry, is
-// refused by its missing end.
 func TestRestoreRefusesATruncatedPlainArchive(t *testing.T) {
 	f := newFixture(t)
 	archive, _ := backupWith(t, f.dir, Options{Uncompressed: true})
 	raw := archive.Bytes()
-	// Every cut at a 512-byte block boundary (where an entry may end), and a few others.
 	cuts := []int{len(raw) - 1, len(raw) / 3}
 	for n := 512; n < len(raw)-1024; n += 512 {
 		cuts = append(cuts, n)
@@ -580,7 +546,6 @@ func TestRestoreRefusesATruncatedPlainArchive(t *testing.T) {
 	}
 }
 
-// Backups made before the end entry existed (format 1, gzipped) still restore.
 func TestRestoreReadsFormat1(t *testing.T) {
 	archive := rawArchive(t, true, &Manifest{Format: 1, Version: "v-old"},
 		entry{name: "spaces/", typeflag: tar.TypeDir},
@@ -594,8 +559,6 @@ func TestRestoreReadsFormat1(t *testing.T) {
 	}
 }
 
-// The cache holds only what can be downloaded again (dictation models): a backup leaves it
-// out, and a cache file elsewhere is kept.
 func TestTheCacheIsLeftOut(t *testing.T) {
 	f := newFixture(t)
 	for _, name := range []string{"cache/dictation/model.onnx", "workspaces/1/spaces/1/cache/kept.md"} {
@@ -622,8 +585,6 @@ func TestTheCacheIsLeftOut(t *testing.T) {
 	}
 }
 
-// A restore that fails partway removes what it wrote, so the directory is empty for the
-// next attempt; the lock file may stay.
 func TestAFailedRestoreLeavesTheDirectoryEmpty(t *testing.T) {
 	f := newFixture(t)
 	archive, _ := backupWith(t, f.dir, Options{Uncompressed: true})
@@ -646,7 +607,6 @@ func TestAFailedRestoreLeavesTheDirectoryEmpty(t *testing.T) {
 	}
 }
 
-// A format 1 archive has no end entry: one cut short is refused by gzip's checksum.
 func TestRestoreRefusesATruncatedFormat1Archive(t *testing.T) {
 	archive := rawArchive(t, true, &Manifest{Format: 1}, entry{name: "a.md", typeflag: tar.TypeReg, body: "kept"})
 	for _, cut := range []int{4, 8, 20} {
@@ -656,8 +616,6 @@ func TestRestoreRefusesATruncatedFormat1Archive(t *testing.T) {
 	}
 }
 
-// A restore ends every login the backup held, whatever has been revoked since: the rows
-// that stand for a bearer's way in are gone from the restored database, its other rows stay.
 func TestRestoreEndsEveryLogin(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -685,8 +643,8 @@ func TestRestoreEndsEveryLogin(t *testing.T) {
 	}
 	defer server.Close()
 	for _, table := range loginTables {
-		if n := count(t, server, `SELECT count(*) FROM `+table); n != 0 {
-			t.Errorf("%s has %d rows after the restore, want none", table, n)
+		if n := count(t, server, `SELECT count(*) FROM `+table.name); n != 0 {
+			t.Errorf("%s has %d rows after the restore, want none", table.name, n)
 		}
 	}
 	for table, want := range map[string]int{"users": 1, "workspaces": 1, "invites": 1} {
@@ -696,15 +654,12 @@ func TestRestoreEndsEveryLogin(t *testing.T) {
 	}
 }
 
-// A restore can't say which CLI workers ran after the backup was made: the history it brings back
-// is marked unknown up to the restore, so the purge of an account from the backup waits for both.
 func TestRestoreMarksTheCLIWorkersHistoryUnknown(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	if _, err := f.server.Exec(`INSERT INTO cli_worker_history (worker, since) VALUES ('local', '2026-01-01T00:00:00.000Z')`); err != nil {
 		t.Fatal(err)
 	}
-	// An account made, by the backup's clock, after what this host's clock says now.
 	if _, err := f.server.Exec(`UPDATE users SET created_at = '2999-01-01T00:00:00.000Z'`); err != nil {
 		t.Fatal(err)
 	}

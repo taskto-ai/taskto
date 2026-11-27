@@ -1,10 +1,3 @@
-// The signed-in layout, led by the sidebar (Sidebar.tsx: the logo, the workspace switcher, the
-// sections, the inbox, the pinned apps, Settings and the account) beside the page, which owns its
-// title. There is no top bar on a wide screen; on a tablet the sidebar is a rail of icons, and on a
-// phone a slim bar (PhoneBar.tsx) has the menu button that opens the sidebar as a drawer. The URL
-// names the workspace and section (/w/{workspace}/{section}); a URL that names neither, or a
-// workspace the user isn't in, goes to the last workspace used.
-
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import type { Me, Workspace } from '../api'
 import { WorkspaceAdmin } from '../apps/admin'
@@ -32,9 +25,7 @@ import { PhoneBar } from './PhoneBar'
 import { Sidebar } from './Sidebar'
 import './Shell.css'
 
-// The A2UI renderer is most of the app's code: loaded when Apps is opened.
 const AppsPage = lazy(() => import('../apps/AppsPage').then((m) => ({ default: m.AppsPage })))
-// Home draws its widgets with it too.
 const HomePage = lazy(() => import('../home/HomePage').then((m) => ({ default: m.HomePage })))
 
 const LAST_WORKSPACE = 'taskto.workspace'
@@ -47,8 +38,6 @@ function lastWorkspace(): number | null {
   }
 }
 
-// The workspace to show when the address names none of the person's: the one used last, else the
-// first.
 function homeWorkspace(me: Me): Workspace | undefined {
   return me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
 }
@@ -56,21 +45,9 @@ function homeWorkspace(me: Me): Workspace | undefined {
 function rememberWorkspace(id: number) {
   try {
     localStorage.setItem(LAST_WORKSPACE, String(id))
-  } catch {
-    // Not remembered: the first workspace next time.
-  }
+  } catch {}
 }
 
-// Two addresses that come from outside the app are pages of the frame without being sections: a
-// push's /notification/{id} (read as the signed-in person and followed to where it leads) and an
-// email's confirmation link. They are drawn inside the frame (the sidebar, the skip link, <main>),
-// with the section they belong to marked, and the frame doesn't take their address for an unknown
-// route and rewrite it. Someone signed out never gets here: the sign-in screen comes first.
-// `onMe` takes the account's new state when the shell changed it (a workspace was created).
-//
-// The toasts' stack is drawn here, once, before anything shows one: its live regions are then on
-// the page, empty, when the first toast comes, so that one is said too. Only the shell's screens
-// show toasts (the account menu, "New workspace"), the one for someone with no workspace included.
 export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   return (
     <>
@@ -83,8 +60,6 @@ export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; on
 function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   const opening = parseNotificationPath(path)
-  // The workspace the frame shows (the one used last, else the first): the page's own links (to
-  // the inbox, to the notification settings) go to it too.
   const first = homeWorkspace(me)?.id ?? null
   if (path === EMAIL_CONFIRM_PATH) {
     const page = <ConfirmEmail token={window.location.hash.slice(1)} workspace={first} />
@@ -99,11 +74,8 @@ function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe
   return <Frame me={me} onLogout={onLogout} onMe={onMe} />
 }
 
-// A page of the frame that is not a section's (above): what it draws, and the section it belongs to.
 interface SpecialPage {
   section: Route['section']
-  // The workspace resolved for the page's own links, which the frame shows too: resolved once, so a
-  // frame drawn again (another tab chose another workspace) stays with its page.
   workspace: number | null
   page: ReactNode
 }
@@ -141,7 +113,6 @@ function Frame({
   const main = useRef<HTMLElement>(null)
   const t = useT()
 
-  // A special page keeps its own address (its link's): the frame rewrites only a section's.
   const target = route && !special ? routePath(route) : null
   useEffect(() => {
     if (target && target !== path) navigate(target, { replace: true })
@@ -150,25 +121,12 @@ function Frame({
   useEffect(() => {
     if (shown) rememberWorkspace(shown)
   }, [shown])
-  // The workspace's default language, for a browser that asks for none the app has.
   const workspaceLocale = me.workspaces.find((w) => w.id === shown)?.locale ?? null
   useEffect(() => {
     void setPreferences({ workspace: workspaceLocale })
   }, [workspaceLocale])
-  // A page picked in the drawer closes it, and focus goes to the page, since the link that
-  // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
-  // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
-  // The page shown when a link of the drawer was followed: the drawer closes in one draw and the new
-  // page comes in a later one, which draws a new <main> (keyed by its section). The page is focused
-  // at once (in case the move is refused, a draft kept) and again once the page has changed.
   const followedFrom = useRef<string | null>(null)
-  // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
-  // click on the menu button before it would be undone. The page is the resolved route, not the
-  // address: the shell rewriting an address to its canonical form (a trailing slash, a default
-  // page, another workspace) isn't a navigation. A hash or a query never reaches either.
-  // A special page has no target (its address is kept): its address is what changes then (Back from
-  // one notification's link to another's).
   const shownPage = special ? path : target
   const drawnAt = useRef(shownPage)
   useEffect(() => {
@@ -180,16 +138,12 @@ function Frame({
   useEffect(() => {
     if (drawer || !focusPage.current) return
     main.current?.focus({ preventScroll: true })
-    // A link's move: done once the page has changed; anything else, done now.
     if (followedFrom.current !== null && followedFrom.current === shownPage) return
     focusPage.current = false
     followedFrom.current = null
   }, [drawer, shownPage])
-  // An open drawer takes focus, Escape closes it and gives focus back to its button.
   useEffect(() => {
     if (!drawer) return
-    // Opened again: a page focus still waiting from a link whose move was refused (a draft kept) is
-    // forgotten, so closing it now (Escape gives the menu button the focus) isn't undone.
     focusPage.current = false
     followedFrom.current = null
     ;(
@@ -197,16 +151,10 @@ function Frame({
       sidebar.current?.querySelector<HTMLElement>('a')
     )?.focus()
     const onKey = (e: KeyboardEvent) => {
-      // An Escape a menu has taken is the menu's, and one in a dialog (a new workspace's) is the
-      // dialog's: the drawer stays.
       if (e.key !== 'Escape' || e.defaultPrevented || modalOpen()) return
       setDrawer(false)
       menuButton.current?.focus()
     }
-    // A link of the drawer that is followed closes it at once, before the page hears of the click:
-    // a page that asks before it is left (a draft) shows its question in the page, which is inert
-    // while the drawer is open. On the window, in the capture phase, so it comes before a handler
-    // on the document that stops the click. A click that opens a new tab leaves it open.
     const onClick = (e: MouseEvent) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
       const link = e.target instanceof Element ? e.target.closest('a[href]') : null
@@ -223,7 +171,6 @@ function Frame({
     }
   }, [drawer])
 
-  // With no workspace there is no frame to draw a special page in: it is drawn alone, as before.
   if (!route) return special ? special.page : <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
 
   const workspace = me.workspaces.find((w) => w.id === route.workspace) ?? me.workspaces[0]
@@ -243,11 +190,7 @@ function Frame({
         sidebarRef={sidebar}
         t={t}
       />
-      {drawer && (
-        // A press on the page beside the open drawer closes it. Only for a pointer: the keyboard
-        // has Escape and the menu button, and a screen reader the menu button.
-        <div className="ui-shell-scrim" aria-hidden="true" onClick={() => setDrawer(false)} />
-      )}
+      {drawer && <div className="ui-shell-scrim" aria-hidden="true" onClick={() => setDrawer(false)} />}
       <main
         id={MAIN_ID}
         ref={main}
@@ -256,7 +199,6 @@ function Frame({
         inert={drawer || undefined}
         key={special ? path : `${workspace.id}/${route.section}`}
       >
-        {/* A page that fails to draw leaves the shell around it (the menu, the settings) usable. */}
         <ErrorBoundary fallback={<PageFailed />} resetKey={path}>
           {special ? special.page : <Page route={route} me={me} workspace={workspace} />}
         </ErrorBoundary>
@@ -288,8 +230,6 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
       return <BoardsPage key={route.item ?? ''} workspace={route.workspace} open={route.item} />
     case 'apps':
       return (
-        // Whether the person is an admin decides which step of publishing is offered (approve and
-        // publish); the server checks the role on every route all the same.
         <WorkspaceAdmin value={workspace.role === 'admin'}>
           <Suspense fallback={<Loading />}>
             <AppsPage workspace={route.workspace} open={route.item} />
@@ -314,7 +254,6 @@ function PageFailed() {
   )
 }
 
-// A page whose code is still on its way: the shape of a page, and the word for a screen reader.
 function Loading() {
   const t = useT()
   return (

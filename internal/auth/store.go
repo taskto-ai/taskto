@@ -11,10 +11,8 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// Role is what a member may do in a workspace.
 type Role string
 
-// The roles. An admin manages the workspace's members and invites; a member uses it.
 const (
 	RoleAdmin  Role = "admin"
 	RoleMember Role = "member"
@@ -22,39 +20,28 @@ const (
 
 func (r Role) valid() bool { return r == RoleAdmin || r == RoleMember }
 
-// User is a person with a login.
 type User struct {
 	ID    int64  `json:"id"`
 	Email string `json:"email"`
 	Name  string `json:"name"`
 }
 
-// Membership is a user's place in one workspace.
 type Membership struct {
 	WorkspaceID   int64  `json:"id"`
 	WorkspaceName string `json:"name"`
 	Role          Role   `json:"role"`
-	// Locale is the workspace's default language, a BCP 47 tag, or "" for English.
-	Locale string `json:"locale"`
+	Locale        string `json:"locale"`
 }
 
-// Member is a workspace's view of one of its users.
 type Member struct {
 	User
-	Role     Role   `json:"role"`
-	JoinedAt string `json:"joined_at"`
-	// Disabled says the account is switched off (disable.go): it keeps its membership and what it
-	// owns, and can't sign in or act until an admin enables it again.
-	Disabled bool `json:"disabled"`
-	// DeletionAt is when the account is purged, if it was deleted and waits out its grace period
-	// (deletion.go); it is Disabled too.
+	Role       Role    `json:"role"`
+	JoinedAt   string  `json:"joined_at"`
+	Disabled   bool    `json:"disabled"`
 	DeletionAt *string `json:"deletion_at"`
-	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
-	// list has it.
-	TwoFactor *bool `json:"two_factor,omitempty"`
+	TwoFactor  *bool   `json:"two_factor,omitempty"`
 }
 
-// Invite is a pending invitation, without its token.
 type Invite struct {
 	ID        int64  `json:"id"`
 	Email     string `json:"email"`
@@ -64,49 +51,34 @@ type Invite struct {
 }
 
 var (
-	errSetupDone = errors.New("the server is already set up")
-	errNotFound  = errors.New("not found")
-	// errCreationRefused: this server's setting doesn't let the caller create a workspace.
+	errSetupDone       = errors.New("the server is already set up")
+	errNotFound        = errors.New("not found")
 	errCreationRefused = errors.New("this server doesn't let you create a workspace")
-	// errWorkspaceLimit: the caller has made as many workspaces as one account may.
-	errWorkspaceLimit = fmt.Errorf("an account can create at most %d workspaces", maxWorkspacesPerUser)
-	errLastAdmin      = errors.New("a workspace needs at least one admin")
-	errAlreadyMember  = errors.New("already a member of this workspace")
-	errEmailTaken     = errors.New("an account with this email exists")
-	errInviteInvalid  = errors.New("the invite is unknown, used or expired")
-	// errAccountDisabled is the answer of every way of signing in, or of acting as an account, for
-	// a disabled one (disable.go).
+	errWorkspaceLimit  = fmt.Errorf("an account can create at most %d workspaces", maxWorkspacesPerUser)
+	errLastAdmin       = errors.New("a workspace needs at least one admin")
+	errAlreadyMember   = errors.New("already a member of this workspace")
+	errEmailTaken      = errors.New("an account with this email exists")
+	errInviteInvalid   = errors.New("the invite is unknown, used or expired")
 	errNotOperator     = errors.New("only the server's operator can do this")
 	errAccountDisabled = errors.New("this account is disabled: ask a workspace admin to enable it")
 )
 
-// The limits on one account's workspace creation, whatever -workspace-creation says: with
-// "anyone" a single session would otherwise make workspaces without end, each with its own
-// private space, audit rows and storage.
 const (
-	// maxWorkspacesPerUser is how many workspaces one account may have made, ever.
 	maxWorkspacesPerUser = 10
-	// workspaceBurst workspaces may be made within workspaceWindow by one account.
-	workspaceBurst  = 5
-	workspaceWindow = time.Hour
+	workspaceBurst       = 5
+	workspaceWindow      = time.Hour
 )
 
-// workspaceRateError is a refusal to create another workspace so soon: try again after wait.
 type workspaceRateError struct{ wait time.Duration }
 
 func (e *workspaceRateError) Error() string {
 	return "too many workspaces created lately: try again later"
 }
 
-// timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the format of the schema's
-// defaults, so stored times compare correctly as text.
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
 func stamp(t time.Time) string { return t.UTC().Format(timeFormat) }
 
-// write runs fn in a transaction. Transactions take the write lock when they begin (see
-// package db), so a check and the writes that depend on it can't interleave with another
-// writer's.
 func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -129,8 +101,6 @@ func (s *Service) setupNeeded(ctx context.Context) (bool, error) {
 	return SetupNeeded(ctx, s.db)
 }
 
-// setup creates the first user, as the admin of a new workspace, and logs them in. It
-// fails with errSetupDone once any user exists, also when two setups race.
 func (s *Service) setup(ctx context.Context, email, name, passwordHash, workspace string) (User, string, error) {
 	var u User
 	var token string
@@ -167,8 +137,6 @@ func (s *Service) setup(ctx context.Context, email, name, passwordHash, workspac
 	return u, token, err
 }
 
-// creationMode is who may create a workspace: CreateByAdmins unless the operator chose
-// another of the three.
 func (s *Service) creationMode() string {
 	switch s.opts.WorkspaceCreation {
 	case CreateByAnyone, CreateByNobody:
@@ -177,8 +145,6 @@ func (s *Service) creationMode() string {
 	return CreateByAdmins
 }
 
-// mayCreateWorkspace reports whether userID may create a workspace under the operator's
-// setting, reading through q.
 func (s *Service) mayCreateWorkspace(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, userID int64) (bool, error) {
@@ -194,10 +160,6 @@ func (s *Service) mayCreateWorkspace(ctx context.Context, q interface {
 	return admin, err
 }
 
-// createWorkspace makes a workspace named name with userID as its first admin, as setup
-// does for the first one, in one transaction: the membership's trigger gives them their
-// private space. It fails with errCreationRefused unless the operator's setting lets userID
-// create one, checked in the same transaction as the insert so a demotion can't race it.
 func (s *Service) createWorkspace(ctx context.Context, userID int64, name string) (Membership, error) {
 	m := Membership{WorkspaceName: name, Role: RoleAdmin}
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -229,10 +191,6 @@ func (s *Service) createWorkspace(ctx context.Context, userID int64, name string
 	return m, err
 }
 
-// checkWorkspaceLimits refuses with errWorkspaceLimit once userID has made
-// maxWorkspacesPerUser workspaces, and with a *workspaceRateError once they made workspaceBurst
-// within workspaceWindow. It reads through tx, the transaction that inserts the new one, so
-// concurrent requests can't each pass.
 func (s *Service) checkWorkspaceLimits(ctx context.Context, tx *sql.Tx, userID int64) error {
 	var total int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workspaces WHERE created_by = ?`, userID).Scan(&total); err != nil {
@@ -264,17 +222,12 @@ func (s *Service) checkWorkspaceLimits(ctx context.Context, tx *sql.Tx, userID i
 		return err
 	}
 	if len(recent) >= workspaceBurst {
-		// The oldest of the burst leaves the window first.
 		wait := recent[len(recent)-1].Add(workspaceWindow).Sub(now)
 		return &workspaceRateError{wait: max(wait, time.Second)}
 	}
 	return nil
 }
 
-// insertUser adds a user, whose id is above every id there has been: SQLite alone would give a
-// purged account's id to the next one when it was the newest (users_remember_id, migration 0050).
-// What is kept by a user's id (the browser's drafts and offline records, mentions in comments)
-// would then be the new person's.
 func insertUser(ctx context.Context, tx *sql.Tx, email, name, passwordHash string) (User, error) {
 	var id int64
 	err := tx.QueryRowContext(ctx, `
@@ -287,7 +240,6 @@ func insertUser(ctx context.Context, tx *sql.Tx, email, name, passwordHash strin
 	return User{ID: id, Email: email, Name: name}, nil
 }
 
-// userByEmail returns the user with email and their password hash, or errNotFound.
 func (s *Service) userByEmail(ctx context.Context, email string) (User, string, error) {
 	u := User{Email: email}
 	var hash string
@@ -299,16 +251,11 @@ func (s *Service) userByEmail(ctx context.Context, email string) (User, string, 
 	return u, hash, err
 }
 
-// insertSession adds a session for userID, and drops the user's expired ones so they
-// don't pile up.
 func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (string, error) {
 	now := s.now()
-	// Sweep every expired session, not just this user's, so sessions of users who never
-	// come back don't pile up.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, stamp(now)); err != nil {
 		return "", err
 	}
-	// Every new session is made here, so a disabled account never gets one, whichever way it signed in.
 	var disabled bool
 	if err := tx.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&disabled); err != nil {
 		return "", err
@@ -324,11 +271,8 @@ func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (
 	return token, err
 }
 
-// sessionTouchEvery is the most often a session's last use is written down.
 const sessionTouchEvery = time.Minute
 
-// sessionUser returns the user a session token belongs to, or errNotFound if the token
-// is unknown or expired. It records the use, at most once a minute.
 func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 	var u User
 	var id int64
@@ -346,13 +290,10 @@ func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 		return u, err
 	}
 	if seen <= stamp(now.Add(-sessionTouchEvery)) {
-		// The cutoff is in the statement too: of two requests that both read the old time, only the
-		// first finds the row still stale, so a session is written once a minute under concurrency.
 		if _, err := s.db.ExecContext(ctx, `
 			UPDATE sessions SET last_seen_at = ?
 			WHERE id = ? AND COALESCE(last_seen_at, created_at) <= ?`,
 			stamp(now), id, stamp(now.Add(-sessionTouchEvery))); err != nil {
-			// The request can go ahead: last_seen_at is a hint for the user, not a control.
 			slog.WarnContext(ctx, "auth: recording a session's use", "session_id", id, "err", err)
 		}
 	}
@@ -364,18 +305,13 @@ func (s *Service) deleteSession(ctx context.Context, token string) error {
 	return err
 }
 
-// endSession logs out the session token belongs to, and records it. A token that is no
-// session, such as one that expired, ends nothing and records nothing.
 func (s *Service) endSession(ctx context.Context, token string) error {
 	var ended int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var userID int64
-		// The same test as sessionUser: a session that has expired is no longer a login to
-		// end, even while its row is still there to be swept.
 		err := tx.QueryRowContext(ctx, `DELETE FROM sessions WHERE token_hash = ? AND expires_at > ? RETURNING user_id`,
 			hashToken(token), stamp(s.now())).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
-			// Still drop an expired row, unrecorded.
 			_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
 			return err
 		}
@@ -387,12 +323,11 @@ func (s *Service) endSession(ctx context.Context, token string) error {
 			TargetType: audit.TargetUser, Target: userID})
 	})
 	if err == nil && ended != 0 {
-		s.endLive(ended, token) // this login's open connections go with it
+		s.endLive(ended, token)
 	}
 	return err
 }
 
-// workspacesOf lists the workspaces userID belongs to, oldest first.
 func (s *Service) workspacesOf(ctx context.Context, userID int64) ([]Membership, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT w.id, w.name, m.role, w.locale
@@ -414,7 +349,6 @@ func (s *Service) workspacesOf(ctx context.Context, userID int64) ([]Membership,
 	return all, rows.Err()
 }
 
-// membership returns userID's membership of workspaceID, or errNotFound.
 func (s *Service) membership(ctx context.Context, workspaceID, userID int64) (Membership, error) {
 	m := Membership{WorkspaceID: workspaceID}
 	err := s.db.QueryRowContext(ctx, `
@@ -432,26 +366,16 @@ func (s *Service) members(ctx context.Context, workspaceID int64) ([]Member, err
 	return Roster(ctx, s.db, workspaceID, RosterPage{})
 }
 
-// Queryer is what Roster reads through: a *sql.DB, or a transaction a caller keeps its other
-// reads consistent with.
 type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// RosterPage selects part of a roster. The zero value is all of it, by name.
 type RosterPage struct {
-	// ByID orders by user ID, a stable order to page through, instead of by name.
-	ByID bool
-	// AfterID, when above 0, leaves out the members whose user ID is not above it, and orders
-	// by user ID whatever ByID says.
+	ByID    bool
 	AfterID int64
-	// Limit, when above 0, is the most members to return.
-	Limit int
+	Limit   int
 }
 
-// Roster lists the members of workspaceID, as the one definition of who is a member of a
-// workspace: the workspace's own page and the agent's list_members both read through it. It
-// checks nothing about the caller.
 func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) ([]Member, error) {
 	order := "u.name, u.id"
 	if page.ByID || page.AfterID > 0 {
@@ -484,7 +408,6 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 	return all, rows.Err()
 }
 
-// IsMember reports whether userID is a member of workspaceID, reading through q.
 func IsMember(ctx context.Context, q interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }, workspaceID, userID int64) (bool, error) {
@@ -497,7 +420,6 @@ func IsMember(ctx context.Context, q interface {
 	return err == nil, err
 }
 
-// roleIn returns userID's role in workspaceID within tx, or errNotFound.
 func roleIn(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) (Role, error) {
 	var role Role
 	err := tx.QueryRowContext(ctx, `SELECT role FROM memberships WHERE workspace_id = ? AND user_id = ?`,
@@ -508,9 +430,6 @@ func roleIn(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) (Role, e
 	return role, err
 }
 
-// checkNotLastAdmin fails with errLastAdmin unless the workspace has an admin besides userID
-// whose account is in use: a disabled admin can't run the workspace, so they don't count. Call
-// it before demoting or removing an admin.
 func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error {
 	var others int
 	if err := tx.QueryRowContext(ctx, `
@@ -525,7 +444,6 @@ func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID, userID int6
 	return nil
 }
 
-// setRole changes a member's role. The last admin can't be demoted.
 func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role Role) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		if err := EnsureActorEnabled(ctx, tx); err != nil {
@@ -549,7 +467,6 @@ func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role R
 	})
 }
 
-// removeMember takes a user out of a workspace. The last admin can't be removed.
 func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		if err := EnsureActorEnabled(ctx, tx); err != nil {
@@ -564,9 +481,6 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 				return err
 			}
 		}
-		// What the removal takes with it, by the schema's triggers: the member's access tokens in
-		// the workspace and their places in its shared spaces. Read before they go, so each is
-		// recorded in this transaction like the removal.
 		tokens, err := removedTokens(ctx, tx, workspaceID, userID)
 		if err != nil {
 			return err
@@ -579,9 +493,6 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 			workspaceID, userID); err != nil {
 			return err
 		}
-		// The scheduler's jobs of the member in this workspace went with it, but not the purge of an
-		// account that is waiting to be deleted: that job doesn't depend on any membership (migration
-		// 0050), so a purge that failed is tried again whoever leaves what.
 		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"role": string(current)}}); err != nil {
 			return err
@@ -603,7 +514,6 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 	})
 }
 
-// cascaded is a row a removal deletes along with the membership.
 type cascaded struct {
 	id      int64
 	created string
@@ -627,21 +537,17 @@ func cascadedRows(ctx context.Context, tx *sql.Tx, query string, args ...any) ([
 	return all, rows.Err()
 }
 
-// removedTokens lists userID's access tokens in workspaceID.
 func removedTokens(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
 	return cascadedRows(ctx, tx, `SELECT id, created_at, '' FROM access_tokens WHERE workspace_id = ? AND user_id = ? ORDER BY id`,
 		workspaceID, userID)
 }
 
-// leftSpaces lists the shared spaces of workspaceID that userID is a member of, with their role.
 func leftSpaces(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
 	return cascadedRows(ctx, tx, `
 		SELECT sp.id, sp.created_at, sm.role FROM space_members sm JOIN spaces sp ON sp.id = sm.space_id
 		WHERE sp.workspace_id = ? AND sm.user_id = ? ORDER BY sp.id`, workspaceID, userID)
 }
 
-// createInvite stores an invite to workspaceID for email and returns it with its token,
-// which isn't kept. It fails with errAlreadyMember if email already belongs to a member.
 func (s *Service) createInvite(ctx context.Context, workspaceID, by int64, email string, role Role) (Invite, string, error) {
 	now := s.now()
 	inv := Invite{Email: email, Role: role, CreatedAt: stamp(now), ExpiresAt: stamp(now.Add(s.opts.InviteTTL))}
@@ -677,7 +583,6 @@ func (s *Service) createInvite(ctx context.Context, workspaceID, by int64, email
 	return inv, token, nil
 }
 
-// pendingInvites lists a workspace's invites that can still be accepted.
 func (s *Service) pendingInvites(ctx context.Context, workspaceID int64) ([]Invite, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, email, role, created_at, expires_at
@@ -699,7 +604,6 @@ func (s *Service) pendingInvites(ctx context.Context, workspaceID int64) ([]Invi
 	return all, rows.Err()
 }
 
-// deleteInvite withdraws an invite of workspaceID, or fails with errNotFound.
 func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		if err := EnsureActorEnabled(ctx, tx); err != nil {
@@ -721,7 +625,6 @@ func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64)
 	})
 }
 
-// mustAffect returns none if the statement behind res changed no row.
 func mustAffect(res sql.Result, none error) error {
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -733,7 +636,6 @@ func mustAffect(res sql.Result, none error) error {
 	return nil
 }
 
-// pendingInvite is an invite looked up by its token.
 type pendingInvite struct {
 	id          int64
 	workspaceID int64
@@ -741,8 +643,6 @@ type pendingInvite struct {
 	role        Role
 }
 
-// inviteByToken returns the invite a token belongs to, or errInviteInvalid if it is
-// unknown, used or expired.
 func (s *Service) inviteByToken(ctx context.Context, token string) (pendingInvite, error) {
 	var inv pendingInvite
 	err := s.db.QueryRowContext(ctx, `
@@ -755,8 +655,6 @@ func (s *Service) inviteByToken(ctx context.Context, token string) (pendingInvit
 	return inv, err
 }
 
-// useInvite marks an invite accepted within tx, or fails with errInviteInvalid if it
-// already was or has expired: an invite works once.
 func (s *Service) useInvite(ctx context.Context, tx *sql.Tx, inv pendingInvite) error {
 	now := stamp(s.now())
 	res, err := tx.ExecContext(ctx, `
@@ -778,8 +676,6 @@ func (s *Service) join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userI
 	if err != nil {
 		return err
 	}
-	// The invite is used up even when the person was already a member (an account made from
-	// several invites to one workspace), so the event says which it was.
 	n, err := res.RowsAffected()
 	if err != nil {
 		return err
@@ -798,7 +694,6 @@ func (s *Service) join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userI
 	return mustAffect(res, errAlreadyMember)
 }
 
-// acceptAsUser adds an existing user to the invite's workspace.
 func (s *Service) acceptAsUser(ctx context.Context, inv pendingInvite, userID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.useInvite(ctx, tx, inv); err != nil {
@@ -808,8 +703,6 @@ func (s *Service) acceptAsUser(ctx context.Context, inv pendingInvite, userID in
 	})
 }
 
-// acceptAsNew creates the invited person's account, adds it to the workspace and logs it
-// in.
 func (s *Service) acceptAsNew(ctx context.Context, inv pendingInvite, name, passwordHash string) (User, string, error) {
 	var u User
 	var token string

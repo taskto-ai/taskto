@@ -15,11 +15,7 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// A live view whose account's removal begins just as its connection is handed out ends, and the
-// removal, which waits for it, finishes: the removal's cancel and the hand-off never miss each
-// other (run with -race).
 func TestALiveViewHandedOutAsItsAccountGoesEnds(t *testing.T) {
-	// A short root: the VNC socket's path must fit a Unix socket's.
 	root, err := os.MkdirTemp("/tmp", "lv")
 	if err != nil {
 		t.Fatal(err)

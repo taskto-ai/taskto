@@ -6,35 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// Paths is one user's browser directory and what is in it. Only that user's processes (in
-// container mode, their Unix user) create or open anything here.
-//
-// Short, when set, holds what must have a short path: the VNC socket and $TMPDIR, where Chromium
-// makes its singleton socket. A Unix socket's path is at most 104 bytes on macOS and 108 on Linux,
-// so these are not under Root (HomePaths).
 type Paths struct {
 	Root  string
 	Short string
 }
 
-// HomePaths is the browser directory of the CLI home at home: home/browser, with the short
-// directory home/r beside it, so the VNC socket's path (home/r/vnc.sock) and Chromium's are no
-// longer than they were under a home from before account homes (u<n>/browser/run/vnc.sock).
 func HomePaths(home string) Paths {
 	return Paths{Root: filepath.Join(home, "browser"), Short: filepath.Join(home, "r")}
 }
 
-// Home is $HOME for the browser's processes: Chromium keeps its NSS database and caches there.
 func (p Paths) Home() string { return filepath.Join(p.Root, "home") }
 
-// Tmp is $TMPDIR: Short itself, when there is one, so Chromium's singleton socket under it stays
-// as short as it can be.
 func (p Paths) Tmp() string {
 	if p.Short != "" {
 		return p.Short
@@ -42,13 +31,10 @@ func (p Paths) Tmp() string {
 	return filepath.Join(p.Root, "tmp")
 }
 
-// Profile is the personal browser's profile, kept between runs.
 func (p Paths) Profile() string { return filepath.Join(p.Root, "profile") }
 
-// Testing is the testing browser's profile, made empty each time it starts.
 func (p Paths) Testing() string { return filepath.Join(p.Root, "testing") }
 
-// Run holds the display's cookie and the VNC socket.
 func (p Paths) Run() string {
 	if p.Short != "" {
 		return p.Short
@@ -56,40 +42,30 @@ func (p Paths) Run() string {
 	return filepath.Join(p.Root, "run")
 }
 
-// Xauthority is the display's cookie file: the X server refuses a client without it.
 func (p Paths) Xauthority() string { return filepath.Join(p.Run(), "xauthority") }
 
-// VNCSocket is where x11vnc serves the personal browser's display.
 func (p Paths) VNCSocket() string { return filepath.Join(p.Run(), "vnc.sock") }
 
-// Program is one of the processes of a browser.
 type Program string
 
-// The programs.
 const (
 	Xvfb     Program = "xvfb"
 	Chromium Program = "chromium"
 	X11vnc   Program = "x11vnc"
 )
 
-// Valid reports whether p is one of the programs.
 func (p Program) Valid() bool { return p == Xvfb || p == Chromium || p == X11vnc }
 
-// Screen is the virtual display's size, and the personal browser's window.
 const (
 	ScreenWidth  = 1280
 	ScreenHeight = 800
 )
 
-// ProcSpec says which process of a browser to start.
 type ProcSpec struct {
-	Program Program `json:"program"`
-	Kind    Kind    `json:"kind"`
-	// Display is the X display, for Chromium (personal) and x11vnc.
-	Display int `json:"display,omitempty"`
-	// NoSandbox turns off Chromium's sandbox, which can't start in an unprivileged container
-	// (docs/agent-browser.md).
-	NoSandbox bool `json:"no_sandbox,omitempty"`
+	Program   Program `json:"program"`
+	Kind      Kind    `json:"kind"`
+	Display   int     `json:"display,omitempty"`
+	NoSandbox bool    `json:"no_sandbox,omitempty"`
 }
 
 func (s ProcSpec) check() error {
@@ -106,11 +82,6 @@ func (s ProcSpec) check() error {
 	return nil
 }
 
-// Prepare makes the directories and files spec's process needs in p, mode 700 and 600: for
-// Xvfb a new cookie; for the personal Chromium, the profile with any stale lock removed (a
-// recreated container is another host to Chromium, which then refuses the profile: there is
-// only ever one personal browser per user, so a lock left is always stale); for the testing
-// Chromium, an empty profile. It runs as the user (the helper, in container mode).
 func Prepare(p Paths, spec ProcSpec) error {
 	if err := spec.check(); err != nil {
 		return err
@@ -141,13 +112,8 @@ func Prepare(p Paths, spec ProcSpec) error {
 	return nil
 }
 
-// Clean removes the testing browser's profile, when it stops.
 func Clean(p Paths) error { return removeAll(p.Testing()) }
 
-// Purge removes everything of an account's browsers: the personal profile (cookies, logins,
-// history) and the rest of the browser directory. It is for a deleted account, once no process of
-// its is left; a file a process still wrote meanwhile makes it fail, and it is tried again. It runs
-// as the directory's owner, so a read-only part (a page's, a tool's) is no obstacle (removeAll).
 func Purge(p Paths) error {
 	if p.Short != "" {
 		if err := removeAll(p.Short); err != nil {
@@ -157,9 +123,6 @@ func Purge(p Paths) error {
 	return removeAll(p.Root)
 }
 
-// removeAll deletes path and everything under it, as their owner: each directory is opened up to
-// its owner (0700) before it is read, so a read-only one doesn't stop it, and a link is removed,
-// never followed.
 func removeAll(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -172,7 +135,7 @@ func removeAll(path string) error {
 		return os.Remove(path)
 	}
 	if info.Mode().Perm()&0o700 != 0o700 {
-		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // G302: a directory needs x; 0700 is owner-only
+		if err := os.Chmod(path, 0o700); err != nil {
 			return err
 		}
 	}
@@ -188,29 +151,27 @@ func removeAll(path string) error {
 	return os.Remove(path)
 }
 
-// ownerOnlyDir makes dir (mode 700), or tightens it if it is there.
 func ownerOnlyDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.Chmod(dir, 0o700) //nolint:gosec // G302: a directory needs x; 0700 is owner-only
+	return os.Chmod(dir, 0o700)
 }
 
-// writeXauthority writes a new MIT-MAGIC-COOKIE-1 for any display on any host (FamilyWild,
-// no display number), mode 600: what Xvfb's -auth reads, and its clients find through
-// XAUTHORITY.
 func writeXauthority(path string) error {
 	cookie := make([]byte, 16)
 	if _, err := rand.Read(cookie); err != nil {
 		return err
 	}
-	field := func(b []byte) []byte { return append(binary.BigEndian.AppendUint16(nil, uint16(len(b))), b...) } //nolint:gosec // short constant fields
-	// FamilyWild, then no address and no display number: any host, any display.
 	entry := binary.BigEndian.AppendUint16(nil, 0xffff)
-	entry = append(entry, field(nil)...)
-	entry = append(entry, field(nil)...)
-	entry = append(entry, field([]byte("MIT-MAGIC-COOKIE-1"))...)
-	entry = append(entry, field(cookie)...)
+	for _, field := range [][]byte{nil, nil, []byte("MIT-MAGIC-COOKIE-1"), cookie} {
+		size := len(field)
+		if size > math.MaxUint16 {
+			return errors.New("xauthority: a field is too long")
+		}
+		entry = binary.BigEndian.AppendUint16(entry, uint16(size))
+		entry = append(entry, field...)
+	}
 	tmp := path + ".tmp"
 	_ = os.Remove(tmp)
 	if err := os.WriteFile(tmp, entry, 0o600); err != nil {
@@ -219,10 +180,6 @@ func writeXauthority(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// Command returns the command line, environment and working directory of spec's process in
-// p, with bin the program's executable and path $PATH. Chromium reads DevTools commands on
-// fd 3 and writes on fd 4; Xvfb writes its display number on fd 3. The environment is built
-// from nothing.
 func Command(p Paths, spec ProcSpec, bin, path string) (argv, env []string, err error) {
 	if err := spec.check(); err != nil {
 		return nil, nil, err
@@ -236,14 +193,9 @@ func Command(p Paths, spec ProcSpec, bin, path string) (argv, env []string, err 
 	display := ":" + strconv.Itoa(spec.Display)
 	switch spec.Program {
 	case Xvfb:
-		// -displayfd picks a free display and says which; -nolisten local drops the abstract
-		// socket, which has no permissions, and -auth refuses a client without the cookie.
 		argv = []string{bin, "-displayfd", "3", "-auth", p.Xauthority(), "-nolisten", "tcp", "-nolisten", "local",
 			"-screen", "0", fmt.Sprintf("%dx%dx24", ScreenWidth, ScreenHeight)}
 	case X11vnc:
-		// Only the Unix socket: -rfbport 0 alone leaves TCP 5900 open over IPv6 (x11vnc
-		// 0.9.17), where any user could connect. No password: the socket's directory is
-		// owner-only. -norc, -nocmds and -noremote: nothing but serving the display.
 		argv = []string{bin, "-display", display, "-auth", p.Xauthority(), "-unixsock", p.VNCSocket(),
 			"-rfbport", "0", "-rfbportv6", "-1", "-noipv6", "-forever", "-shared", "-nopw",
 			"-norc", "-nocmds", "-noremote", "-xkb", "-quiet"}
@@ -275,7 +227,6 @@ func Command(p Paths, spec ProcSpec, bin, path string) (argv, env []string, err 
 	return argv, env, nil
 }
 
-// readDisplay reads the display number Xvfb writes on -displayfd.
 func readDisplay(line string) (int, error) {
 	n, err := strconv.Atoi(strings.TrimSpace(line))
 	if err != nil || n < 0 || n > 65535 {

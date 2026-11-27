@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// A browser directory's purge and its testing profile's clean remove read-only parts too (a page
-// or a tool may leave a directory with no write bit), and remove a link without following it.
 func TestPurgeRemovesReadOnlyPartsAndNoLinksTarget(t *testing.T) {
 	for name, remove := range map[string]func(Paths) error{"purge": Purge, "clean": Clean} {
 		t.Run(name, func(t *testing.T) {
@@ -41,10 +39,9 @@ func TestPurgeRemovesReadOnlyPartsAndNoLinksTarget(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Whatever happens, the test's temporary directories can go.
 			t.Cleanup(func() {
-				_ = os.Chmod(locked, 0o700)                         //nolint:gosec // G302: the test's own directory
-				_ = os.Chmod(filepath.Join(locked, "inner"), 0o700) //nolint:gosec // G302: the test's own directory
+				_ = os.Chmod(locked, 0o700)
+				_ = os.Chmod(filepath.Join(locked, "inner"), 0o700)
 			})
 			if err := remove(p); err != nil {
 				t.Fatalf("%s: %v", name, err)

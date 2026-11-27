@@ -1832,6 +1832,12 @@
         "api_key": "Chave secreta",
         "webhook_secret": "Segredo de assinatura do webhook"
       },
+      "secretOf": {
+        "square": {
+          "api_key": "Token de acesso",
+          "webhook_secret": "Chave de assinatura do webhook"
+        }
+      },
       "setting": {
         "environment": "Ambiente",
         "location_id": "ID do local"
@@ -1857,6 +1863,9 @@
       "allowedIn": "Permitida em: {spaces}",
       "allowedNowhere": "Ainda não permitida em nenhum espaço, então nenhum app pode usá-la.",
       "webhookAddress": "Registre este endereço no provedor:",
+      "webhookMoved": "Endereço mudou",
+      "webhookMovedHelp": "A URL pública do servidor mudou depois que o campo “{secret}” foi salvo, então o provedor ainda envia os eventos para o endereço antigo. Registre o endereço acima no provedor e salve o campo “{secret}” de novo.",
+      "squareSignsAddress": "O Square assina cada evento sobre exatamente este endereço: se a URL pública do servidor mudar, registre o novo endereço no Square e salve a chave de assinatura de novo.",
       "polling": "Sem URL pública: os webhooks ficam indisponíveis, e a conferência de pagamentos sem eles ainda não foi construída.",
       "switchedOff": "Desligada",
       "switchOff": "Desligar",
@@ -3124,6 +3133,7 @@
       "body_other": "Este navegador guarda {count} registros não enviados de outra conta. Entre nessa conta para enviá-los ou descarte-os.",
       "signOut": "Sair para entrar nessa conta",
       "discard": "Descartá-los",
+      "failed": "Não foi possível descartar alguns deles. Tente de novo.",
       "discardQuestion_one": "Descartar {count} registro que nunca foi enviado? Não é possível recuperá-lo.",
       "discardQuestion_many": "Descartar {count} de registros que nunca foram enviados? Não é possível recuperá-los.",
       "discardQuestion_other": "Descartar {count} registros que nunca foram enviados? Não é possível recuperá-los."

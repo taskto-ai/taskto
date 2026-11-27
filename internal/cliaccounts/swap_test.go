@@ -8,13 +8,8 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// swapWorker is a Worker a test can change while the service runs (a worker that stops being
-// reachable, one started again): the service keeps one reference, and each call reads the current
-// worker atomically, so a sign-in's watcher or a turn reading it doesn't race the test.
 type swapWorker struct{ cur atomic.Pointer[Worker] }
 
-// swappable installs a swapWorker in e's service, with e's own worker in it, before the test
-// starts anything that reads the service's worker.
 func (e *env) swappable() *swapWorker {
 	sw := &swapWorker{}
 	sw.use(LocalWorker(e.worker))
@@ -27,7 +22,6 @@ func (s *swapWorker) w() Worker    { return *s.cur.Load() }
 
 func (s *swapWorker) Available(cli cliworker.CLI) bool { return s.w().Available(cli) }
 
-// Availability answers as the current worker does, which may say it can't be reached.
 func (s *swapWorker) Availability(cli cliworker.CLI) (bool, error) {
 	if av, ok := s.w().(interface {
 		Availability(cliworker.CLI) (bool, error)

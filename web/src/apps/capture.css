@@ -1,8 +1,3 @@
-/* An app's capture fields (photo, location, signature, barcode) and the dictation beside its text
-   fields. Each is a group with Field's label as its legend, its value or state, its actions as
-   buttons a finger can use (44px, whatever the pointer), and a note on how it works. The pad and the
-   camera keep their fixed grounds: paper and media, the same in every theme. */
-
 @layer screens {
   .ui-capture {
     display: grid;
@@ -37,7 +32,6 @@
     gap: var(--space-2);
   }
 
-  /* A typed field and its button side by side, the button under it on a phone. */
   .ui-capture-row {
     display: flex;
     flex-wrap: wrap;
@@ -62,7 +56,6 @@
     justify-self: stretch;
   }
 
-  /* What was captured: a mark, the value, and how and when it was taken. */
   .ui-capture-value {
     display: flex;
     align-items: flex-start;
@@ -96,7 +89,6 @@
     color: var(--color-text-muted);
   }
 
-  /* In progress (muted, with a spinner), and done (the success colour, with a check). */
   .ui-capture-progress {
     display: flex;
     align-items: center;
@@ -127,10 +119,6 @@
     outline-offset: var(--line-focus-offset);
   }
 
-  /* The pad: touch-action is none here, on the canvas alone, so a touch that starts on it draws and
-     everything else on the page scrolls as usual (it is also set inline, where the element is made).
-     Three times as wide as high, as the picture is; the pad never takes the whole screen. Paper in
-     every theme, as the picture saved is. */
   .ui-signature-canvas {
     touch-action: none;
     -webkit-user-select: none;
@@ -161,7 +149,6 @@
     background: var(--color-paper);
   }
 
-  /* The camera's view, on the media ground. */
   .ui-capture-camera {
     display: grid;
     gap: var(--space-2);
@@ -177,8 +164,6 @@
     background: var(--color-media);
   }
 
-  /* Photos: thumbnails in a grid, each with its remove button in a corner; uploads on their way
-     with their progress, a failure in the danger colour with its retry. */
   .ui-photos {
     margin: 0;
     min-inline-size: 0;
@@ -266,7 +251,6 @@
     accent-color: var(--color-focus);
   }
 
-  /* The add buttons are labels drawn as buttons, with the file input unseen over each. */
   .ui-photo-add > label {
     position: relative;
     gap: var(--space-2);
@@ -301,7 +285,6 @@
     cursor: not-allowed;
   }
 
-  /* Dictation beside a text field of the app. */
   .ui-dictate-slot {
     margin-block-start: var(--space-1);
   }
@@ -313,8 +296,6 @@
     gap: var(--space-2);
   }
 
-  /* While recording: the time so far, in figures that line up, in the danger colour as a recording
-     light is. */
   .ui-dictate-clock {
     font: var(--type-small);
     font-weight: 600;
@@ -332,12 +313,10 @@
     color: var(--color-danger);
   }
 
-  /* The manual coordinates' error, which both inputs are described by. */
   .ui-capture-error {
     justify-self: stretch;
   }
 
-  /* Every dictation action, the small ones too, is a finger's size whatever the pointer. */
   .ui-dictate .ui-button {
     min-block-size: var(--control-touch);
   }

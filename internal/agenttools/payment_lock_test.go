@@ -9,8 +9,6 @@ import (
 	"taskto.ai/taskto/internal/integrations"
 )
 
-// The agent's run_app_action refuses a change of an invoice's money while its link may be paid as the
-// web app's action route does: 422, with the code app_payment_link_open, and nothing changed.
 func TestRunAppActionRefusesAnOpenLinksMoneyWith422(t *testing.T) {
 	tm := newTeam(t)
 	row := id(tm.add(tm.aliceConv, "Invoice", 10)["id"])

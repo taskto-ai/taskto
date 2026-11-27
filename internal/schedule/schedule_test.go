@@ -17,7 +17,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// clock is a clock the tests move.
 type clock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -37,11 +36,6 @@ func (c *clock) advance(d time.Duration) {
 
 var start = time.Date(2030, 1, 2, 9, 0, 0, 0, time.UTC)
 
-// world is a workspace with people in every relation to its spaces:
-//
-//   - alice, bob: members of ws, editors of team (a shared space);
-//   - carol: a member of ws, in no shared space;
-//   - eve: a member of another workspace only.
 type world struct {
 	t                          *testing.T
 	db                         *sql.DB
@@ -115,11 +109,9 @@ func (w *world) privateSpace(ws, user int64) int64 {
 	return id
 }
 
-// recorder is a handler that notes its calls and answers from a script.
 type recorder struct {
-	mu    sync.Mutex
-	calls []Job
-	// answer returns the error of call n (1-based); nil by default.
+	mu     sync.Mutex
+	calls  []Job
 	answer func(n int, j Job) error
 }
 
@@ -152,7 +144,6 @@ func (w *world) register(kind Kind) *recorder {
 
 const remind Kind = "test.remind"
 
-// job is a job of alice's in her private space, due after d.
 func (w *world) job(key string, after time.Duration) Job {
 	return Job{
 		Kind: remind, UserID: w.alice, WorkspaceID: w.ws, SpaceID: w.alicePrivate,
@@ -215,7 +206,6 @@ func TestJobsSurviveARestart(t *testing.T) {
 	w.register(remind)
 	w.schedule(w.job("card:7", time.Minute))
 
-	// The server stops; a new one starts on the same database, with its own handlers.
 	again := New(w.db, w.access, Options{Clock: w.clock.now})
 	h := &recorder{}
 	if err := again.Register(remind, h.handle); err != nil {
@@ -248,7 +238,6 @@ func TestDedupeKeyMakesSchedulingIdempotent(t *testing.T) {
 		t.Fatalf("scheduling again changed the job: %+v", j)
 	}
 
-	// The key is per owner and kind.
 	other := w.job("card:7", time.Minute)
 	other.UserID, other.SpaceID = w.bob, w.privateSpace(w.ws, w.bob)
 	if !w.schedule(other) {
@@ -261,10 +250,9 @@ func TestDedupeKeyMakesSchedulingIdempotent(t *testing.T) {
 		t.Fatal("another kind's job with the same key was refused")
 	}
 
-	// A job that has run still holds its key: the reminder is not made twice.
 	w.clock.advance(time.Minute)
 	w.run()
-	if h.count() != 2 { // alice's and bob's
+	if h.count() != 2 {
 		t.Fatalf("calls = %d, want 2", h.count())
 	}
 	if w.schedule(w.job("card:7", time.Minute)) {
@@ -294,7 +282,6 @@ func TestRescheduleReplacesTheJob(t *testing.T) {
 		t.Fatalf("calls = %+v", h.calls)
 	}
 
-	// A job that is done is armed again by a new time.
 	if _, err := w.s.Reschedule(context.Background(), w.db, w.job("card:7", time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +294,6 @@ func TestRescheduleReplacesTheJob(t *testing.T) {
 		t.Fatalf("calls = %d, want 2", h.count())
 	}
 
-	// Reschedule adds a job that doesn't exist.
 	created, err = w.s.Reschedule(context.Background(), w.db, w.job("card:9", time.Minute))
 	if err != nil || !created {
 		t.Fatalf("reschedule of a new key = %v, %v", created, err)
@@ -326,7 +312,6 @@ func TestRescheduleWhileRunningKeepsTheNewSchedule(t *testing.T) {
 	if _, err := w.s.Reschedule(context.Background(), w.db, w.job("card:7", time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	// The worker that was running the old occurrence finishes: it must not mark the new one done.
 	if err := w.s.succeed(context.Background(), claimed); err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +326,6 @@ func TestCancel(t *testing.T) {
 	h := w.register(remind)
 	w.schedule(w.job("card:7", time.Minute))
 
-	// Someone else's cancel finds nothing: the key is the owner's.
 	if ok, err := w.s.Cancel(context.Background(), w.db, w.bob, remind, "card:7"); err != nil || ok {
 		t.Fatalf("another user's cancel = %v, %v", ok, err)
 	}
@@ -359,7 +343,6 @@ func TestCancel(t *testing.T) {
 	if _, err := w.s.Find(context.Background(), w.db, w.alice, remind, "card:7"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("find after cancel = %v", err)
 	}
-	// The key is free again.
 	if !w.schedule(w.job("card:7", time.Minute)) {
 		t.Fatal("the key of a cancelled job was not free")
 	}
@@ -411,7 +394,6 @@ func TestSchedulingIsPartOfTheCallersTransaction(t *testing.T) {
 	if _, err := w.s.Schedule(ctx, tx, w.job("committed", time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	// Seen inside the transaction; cancelling there takes it back before it is ever visible.
 	if _, err := w.s.Find(ctx, tx, w.alice, remind, "committed"); err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +419,7 @@ func TestFailedTriesAreRetriedWithGrowingWaits(t *testing.T) {
 	if h.count() != 1 || j.State != StatePending || j.Attempts != 1 || !strings.Contains(j.LastError, "network") {
 		t.Fatalf("after the first try: calls %d, job %+v", h.count(), j)
 	}
-	w.run() // too soon: the wait is 5s
+	w.run()
 	if h.count() != 1 {
 		t.Fatal("a failed try was repeated at once")
 	}
@@ -446,7 +428,7 @@ func TestFailedTriesAreRetriedWithGrowingWaits(t *testing.T) {
 	if h.count() != 2 {
 		t.Fatalf("calls = %d, want 2", h.count())
 	}
-	w.clock.advance(backoffBase) // the second wait is twice as long
+	w.clock.advance(backoffBase)
 	w.run()
 	if h.count() != 2 {
 		t.Fatal("the second wait was no longer than the first")
@@ -457,7 +439,6 @@ func TestFailedTriesAreRetriedWithGrowingWaits(t *testing.T) {
 	if h.count() != 3 || j.State != StateDone || j.LastError != "" {
 		t.Fatalf("calls %d, job %+v", h.count(), j)
 	}
-	// Every try of the occurrence has the same key and the same due time.
 	for _, c := range h.calls {
 		if c.Occurrence() != h.calls[0].Occurrence() || !c.RunAt.Equal(start) {
 			t.Fatalf("occurrence changed between tries: %q vs %q", c.Occurrence(), h.calls[0].Occurrence())
@@ -531,7 +512,6 @@ func TestALeaseThatRanOutAfterACrashIsTakenAgain(t *testing.T) {
 	h := w.register(remind)
 	w.schedule(w.job("card:7", 0))
 
-	// A worker takes the job and dies before it notes anything.
 	dead, ok, err := w.s.claim(context.Background())
 	if err != nil || !ok {
 		t.Fatalf("claim = %v, %v", ok, err)
@@ -555,7 +535,6 @@ func TestALeaseThatRanOutAfterACrashIsTakenAgain(t *testing.T) {
 		t.Fatalf("job %+v, attempts seen %d (the crash counts as a try)", j, h.calls[0].Attempts)
 	}
 
-	// The worker that was thought dead wakes up: it owns nothing.
 	if err := w.s.fail(context.Background(), dead, errors.New("late")); err != nil {
 		t.Fatal(err)
 	}
@@ -589,8 +568,6 @@ func TestACrashOnTheLastTryIsTheEnd(t *testing.T) {
 func TestAJobWhoseOwnerLostAccessDoesNotRun(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)
-	// The schema drops the jobs of a person who leaves (TestAJobGoesWithItsOwnersAccess); this is the
-	// floor under it, for access that is lost by any other way, so the triggers are left out here.
 	exec(t, w.db, `DROP TRIGGER space_members_drop_jobs`)
 	exec(t, w.db, `DROP TRIGGER memberships_drop_jobs`)
 
@@ -605,7 +582,6 @@ func TestAJobWhoseOwnerLostAccessDoesNotRun(t *testing.T) {
 		w.schedule(j)
 	}
 
-	// Alice is taken out of the shared space; and, for the others, out of the workspace.
 	exec(t, w.db, `DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.team, w.alice)
 	w.run()
 	if h.count() != 3 {
@@ -623,7 +599,6 @@ func TestAJobWhoseOwnerLostAccessDoesNotRun(t *testing.T) {
 		t.Fatalf("another person's job in the same space = %+v", j)
 	}
 
-	// Leaving the workspace ends her space-less jobs too.
 	w.schedule(w.job("later-private", time.Minute))
 	w.schedule(func() Job { j := w.job("later-wide", time.Minute); j.SpaceID = 0; return j }())
 	exec(t, w.db, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, w.ws, w.alice)
@@ -689,8 +664,6 @@ func TestAJobInAnotherWorkspacesSpaceIsRefused(t *testing.T) {
 	if _, err := w.s.Schedule(context.Background(), w.db, j); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("schedule with a space of another workspace = %v", err)
 	}
-	// Even a row that got there some other way doesn't run. Its owner can read the space (it is
-	// eve's own), so only the comparison of the space's workspace with the job's refuses it.
 	exec(t, w.db, `INSERT INTO scheduled_jobs (kind, user_id, workspace_id, space_id, dedupe_key, run_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, 'x', ?, ?, ?)`, string(remind), w.eve, w.ws, w.evePrv, stamp(start), stamp(start), stamp(start))
 	w.run()
@@ -712,13 +685,11 @@ func TestARecurringJobRunsOnItsGrid(t *testing.T) {
 	if h.count() != 1 || got.State != StatePending || !got.RunAt.Equal(start.Add(time.Minute+time.Hour)) {
 		t.Fatalf("calls %d, job %+v", h.count(), got)
 	}
-	// A run a little late doesn't move the grid.
 	w.clock.advance(time.Hour + 10*time.Minute)
 	w.run()
 	if got := w.find(w.alice, "poll"); h.count() != 2 || !got.RunAt.Equal(start.Add(time.Minute+2*time.Hour)) {
 		t.Fatalf("calls %d, job %+v", h.count(), got)
 	}
-	// The server was off for a day: the job runs once, not once per missed hour.
 	w.clock.advance(24 * time.Hour)
 	w.run()
 	got = w.find(w.alice, "poll")
@@ -807,7 +778,7 @@ func TestTheRegistryIsClosed(t *testing.T) {
 	if _, err := w.s.Schedule(context.Background(), w.db, j); !errors.Is(err, ErrUnknownKind) {
 		t.Fatalf("scheduling an unknown kind = %v", err)
 	}
-	w.run() // closes it
+	w.run()
 	if err := w.s.Register("test.late", func(context.Context, Job) error { return nil }); !errors.Is(err, ErrRegistryClosed) {
 		t.Fatalf("registering after the worker ran = %v", err)
 	}
@@ -822,7 +793,6 @@ func TestAKindWithoutAHandlerIsLeftAlone(t *testing.T) {
 	w.schedule(newer)
 	w.schedule(w.job("r", 0))
 
-	// An older server that doesn't know "test.newer" starts on the same database.
 	old := New(w.db, w.access, Options{Clock: w.clock.now})
 	h := &recorder{}
 	if err := old.Register(remind, h.handle); err != nil {
@@ -837,7 +807,6 @@ func TestAKindWithoutAHandlerIsLeftAlone(t *testing.T) {
 	if err != nil || j.State != StatePending || j.Attempts != 0 {
 		t.Fatalf("a job of an unknown kind = %+v, %v; want it untouched", j, err)
 	}
-	// A server with no handler at all does nothing.
 	New(w.db, w.access, Options{Clock: w.clock.now}).RunDue(context.Background())
 }
 
@@ -872,7 +841,6 @@ func TestInvalidJobsAreRefused(t *testing.T) {
 			t.Errorf("reschedule with %s = %v, want ErrInvalid", name, err)
 		}
 	}
-	// No payload is an empty object.
 	j := w.job("empty", time.Minute)
 	j.Payload = nil
 	w.schedule(j)
@@ -885,7 +853,6 @@ func TestOnePersonCantFillTheQueue(t *testing.T) {
 	w := newWorld(t)
 	w.register(remind)
 	ctx := context.Background()
-	// One short of the bound, made in bulk; the last one goes through Schedule.
 	exec(t, w.db, `
 		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
 		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
@@ -900,14 +867,12 @@ func TestOnePersonCantFillTheQueue(t *testing.T) {
 	if _, err := w.s.Reschedule(ctx, w.db, w.job("one-more", time.Hour)); !errors.Is(err, ErrTooMany) {
 		t.Fatalf("reschedule of a new job over the bound = %v", err)
 	}
-	// Changing one they have, or scheduling one already there, is not more jobs.
 	if _, err := w.s.Reschedule(ctx, w.db, w.job("k0", 2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if created, err := w.s.Schedule(ctx, w.db, w.job("k0", 2*time.Hour)); err != nil || created {
 		t.Fatalf("schedule of a job that exists = %v, %v", created, err)
 	}
-	// Someone else is not held back by it.
 	other := w.job("mine", time.Hour)
 	other.UserID, other.SpaceID = w.bob, w.privateSpace(w.ws, w.bob)
 	if !w.schedule(other) {
@@ -951,7 +916,6 @@ func TestJobsEndWithTheirOwnerSpaceOrWorkspace(t *testing.T) {
 	if _, err := w.s.Find(context.Background(), w.db, w.alice, remind, "private"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a job of a deleted workspace is still there: %v", err)
 	}
-	// And an account's jobs go with it.
 	w.schedule(Job{Kind: remind, UserID: w.eve, WorkspaceID: w.other, DedupeKey: "k", RunAt: start})
 	exec(t, w.db, `DELETE FROM spaces WHERE owner_id = ?`, w.eve)
 	exec(t, w.db, `DELETE FROM users WHERE id = ?`, w.eve)
@@ -973,7 +937,6 @@ func TestTheWorkerRunsJobsInTheBackground(t *testing.T) {
 	stop := s.Start(context.Background())
 	defer stop()
 
-	// Scheduled after the worker started, in a transaction, and woken after the commit.
 	ctx := context.Background()
 	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -998,7 +961,7 @@ func TestTheWorkerRunsJobsInTheBackground(t *testing.T) {
 		t.Fatalf("register after Start = %v", err)
 	}
 	stop()
-	stop2 := s.Start(context.Background()) // a stopped worker can be started again, as a new server would
+	stop2 := s.Start(context.Background())
 	stop2()
 }
 
@@ -1012,7 +975,7 @@ func TestStoppingTheWorkerLeavesTheJobToBeTakenAgain(t *testing.T) {
 	started := make(chan struct{})
 	if err := s.Register(remind, func(ctx context.Context, _ Job) error {
 		close(started)
-		<-ctx.Done() // a handler that is still working when the server stops
+		<-ctx.Done()
 		return ctx.Err()
 	}); err != nil {
 		t.Fatal(err)
@@ -1023,7 +986,7 @@ func TestStoppingTheWorkerLeavesTheJobToBeTakenAgain(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() { s.RunDue(ctx); close(done) }()
-	t.Cleanup(func() { cancel(); <-done }) // the worker is joined before the database closes
+	t.Cleanup(func() { cancel(); <-done })
 	select {
 	case <-started:
 	case <-done:
@@ -1054,9 +1017,6 @@ func TestNextOccurrence(t *testing.T) {
 	}
 }
 
-// A job whose owner's account is disabled waits: no handler is called, nothing is recorded as a
-// failure, no try is used up and a recurring job isn't ended, however long the account stays off.
-// Enabling the account lets it run.
 func TestAJobOfADisabledOwnerWaitsForTheAccount(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)
@@ -1072,7 +1032,6 @@ func TestAJobOfADisabledOwnerWaitsForTheAccount(t *testing.T) {
 	}
 	exec(t, w.db, `UPDATE users SET disabled_at = '2030-01-02T08:00:00.000Z' WHERE id = ?`, w.alice)
 
-	// Far more rounds than a job has tries, over more time than any failure's backoff.
 	for range 3 * defaultMaxAttempts {
 		w.clock.advance(holdDelay + time.Second)
 		w.run()
@@ -1111,8 +1070,6 @@ func TestAJobOfADisabledOwnerWaitsForTheAccount(t *testing.T) {
 	}
 }
 
-// A handler's own check, refused because the account was disabled after the worker's, holds the job
-// the same way.
 func TestAHandlerRefusedForADisabledAccountHoldsTheJob(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)

@@ -12,26 +12,21 @@ import (
 	"unicode/utf8"
 )
 
-// session is a Checkout Session and what the fake keeps beside it to make the payment's other
-// objects (the intent, the charge, the receipt).
 type session struct {
 	Session
-	description string
-	piMetadata  map[string]string
-	piID        string
-	chargeID    string
-	// chargeCreated is when the latest charge was made (Unix seconds): its "created".
+	description   string
+	piMetadata    map[string]string
+	piID          string
+	chargeID      string
 	chargeCreated int64
 	receiptURL    string
 	refunded      int64
 	attempts      int
-	// delayed is true from a delayed payment's start (PayDelayed) until it settles, either way.
-	delayed bool
+	delayed       bool
 }
 
 func ptr[T any](v T) *T { return &v }
 
-// optionalBool is a boolean parameter's value, or nil (Stripe's null) when it wasn't sent.
 func optionalBool(form url.Values, name string) any {
 	if v, ok := form[name]; ok {
 		return v[len(v)-1] == "true"
@@ -39,10 +34,8 @@ func optionalBool(form url.Values, name string) any {
 	return nil
 }
 
-// submitTypes are the values of submit_type, which a session and a link both take.
 var submitTypes = []string{"auto", "book", "donate", "pay"}
 
-// copyOf points at a copy of what p points at.
 func copyOf[T any](p *T) *T {
 	if p == nil {
 		return nil
@@ -50,8 +43,6 @@ func copyOf[T any](p *T) *T {
 	return ptr(*p)
 }
 
-// snapshot is the session as an API answer or an event shows it now: it shares nothing with the
-// session the fake keeps, so a test that changes what it was given changes nothing else.
 func (ss *session) snapshot() Session {
 	out := ss.Session
 	out.CancelURL, out.ClientReferenceID, out.Customer = copyOf(out.CancelURL), copyOf(out.ClientReferenceID), copyOf(out.Customer)
@@ -181,16 +172,11 @@ func (s *Stripe) retrieveSession(_ *http.Request, form url.Values, id string) re
 	return jsonReply(http.StatusOK, s.expanded(ss, expand))
 }
 
-// Expansion (https://docs.stripe.com/expand): a session's payment_intent, and that intent's
-// latest_charge, can be asked for as objects in the same answer instead of their ids. These are the
-// only expansions the fake knows; any other is refused as Stripe refuses a property it can't expand.
 const (
 	expandIntent = "payment_intent"
 	expandCharge = "payment_intent.latest_charge"
 )
 
-// expansions reads the expand[] parameters, each under prefix ("data." for a list), and says whether
-// the intent and its charge were asked for.
 func expansions(form url.Values, prefix string) (map[string]bool, *reply) {
 	out := map[string]bool{}
 	for k, vs := range form {
@@ -212,8 +198,6 @@ func expansions(form url.Values, prefix string) (map[string]bool, *reply) {
 	return out, nil
 }
 
-// expanded is the session's snapshot with the expansions asked for: the intent as the object it is
-// now, and its latest charge as one too (both null where the session has none).
 func (s *Stripe) expanded(ss *session, expand map[string]bool) any {
 	snap := ss.snapshot()
 	if !expand[expandIntent] {
@@ -249,7 +233,6 @@ func (s *Stripe) expanded(ss *session, expand map[string]bool) any {
 	return m
 }
 
-// noSuch is Stripe's answer to a retrieval of an id that doesn't exist: a 404.
 func noSuch(kind, id, param string) reply {
 	return errorReply(http.StatusNotFound, "invalid_request_error", "resource_missing",
 		"No such "+kind+": '"+id+"'", param)
@@ -272,17 +255,14 @@ func (s *Stripe) expireSession(_ *http.Request, form url.Values, id string) repl
 	return out
 }
 
-// expireLocked expires an open session at time at and emits the event.
 func (s *Stripe) expireLocked(ss *session, at time.Time) {
 	ss.Status = SessionExpired
 	ss.URL = nil
 	s.emit(EventSessionExpired, ss.snapshot(), at)
 }
 
-// expireDue expires the open sessions whose time has come. The caller holds s.mu.
 func (s *Stripe) expireDue() { s.expireDueAt(s.clock.Now()) }
 
-// expireDueAt is expireDue at a time the caller read once, for a caller that goes on to use it.
 func (s *Stripe) expireDueAt(now time.Time) {
 	for _, id := range s.sessionOrder {
 		ss := s.sessions[id]
@@ -308,7 +288,7 @@ func (s *Stripe) listSessions(_ *http.Request, form url.Values, _ string) reply 
 		return *rp
 	}
 	var ids []string
-	for i := len(s.sessionOrder) - 1; i >= 0; i-- { // newest first
+	for i := len(s.sessionOrder) - 1; i >= 0; i-- {
 		ss := s.sessions[s.sessionOrder[i]]
 		if !created(ss.Created) {
 			continue
@@ -335,8 +315,6 @@ func (s *Stripe) listSessions(_ *http.Request, form url.Values, _ string) reply 
 	return jsonReply(http.StatusOK, listOf("/v1/checkout/sessions", more, data))
 }
 
-// createdFilter is the `created` filter of a list: an exact second, or a range with gt, gte, lt
-// and lte (whole seconds since the epoch).
 func createdFilter(form url.Values) (func(int64) bool, *reply) {
 	type bound struct {
 		param string
@@ -375,8 +353,6 @@ func listOf(path string, more bool, data any) map[string]any {
 	return map[string]any{"object": "list", "url": path, "has_more": more, "data": data}
 }
 
-// paginate applies limit (1 to 100, default 10), starting_after and ending_before to ids, which
-// are in the list's order (newest first).
 func paginate(ids []string, form url.Values, kind string) ([]string, bool, *reply) {
 	limit := 10
 	if v := form.Get("limit"); v != "" {
@@ -417,7 +393,7 @@ func paginate(ids []string, form url.Values, kind string) ([]string, bool, *repl
 			return nil, false, rp
 		}
 		ids = ids[:i]
-		if len(ids) > limit { // the page just before the cursor
+		if len(ids) > limit {
 			return ids[len(ids)-limit:], true, nil
 		}
 		return ids, false, nil

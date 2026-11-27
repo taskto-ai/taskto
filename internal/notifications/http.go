@@ -20,10 +20,6 @@ import (
 	"taskto.ai/taskto/internal/egress"
 )
 
-// Routes mounts the inbox's and push's endpoints on mux. The inbox of a workspace is behind a's
-// RequireMember, and a person's own notification, the server's push key and a device's
-// subscription are behind RequireUser: all of them need a browser session, never an access token,
-// and the CSRF guard checks every one that isn't a GET. docs/api.md describes them.
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	user := func(h http.HandlerFunc) http.Handler { return a.RequireUser(h) }
@@ -55,19 +51,16 @@ func notFound(w http.ResponseWriter) {
 
 func (s *Service) serverError(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
-		return // the client went away
+		return
 	}
 	slog.Error("notifications: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	apierr.Internal(w)
 }
 
-// List is a page of the inbox, newest first.
 type List struct {
 	Notifications []Item `json:"notifications" apitypes:"nonnull"`
-	// More says whether older ones than the page's last exist (ask again with before).
-	More bool `json:"more"`
-	// Unread counts all the person's unread ones in the workspace, not only the page's.
-	Unread int `json:"unread"`
+	More          bool   `json:"more"`
+	Unread        int    `json:"unread"`
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +86,6 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	unreadOnly := q.Get("unread") == "true"
 
-	// One static query: before = 0 is no bound, and unread = 0 is every notification.
 	unreadFlag := 0
 	if unreadOnly {
 		unreadFlag = 1
@@ -171,7 +163,6 @@ func (s *Service) handleRead(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Only the person's own, in this workspace; reading one again is nothing to do.
 	var found int64
 	err := s.db.QueryRowContext(r.Context(), `
 		UPDATE notifications SET read_at = coalesce(read_at, ?) WHERE id = ? AND user_id = ? AND workspace_id = ? RETURNING id`,
@@ -201,9 +192,6 @@ func (s *Service) handleReadAll(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleGet is one notification of the caller's, whatever its workspace: the address a push
-// opens, which holds nothing but the notification's own ID. Someone else's is as missing as one
-// that never was.
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 	u, _ := auth.UserFrom(r.Context())
 	id, ok := notificationID(w, r)
@@ -231,7 +219,6 @@ func (s *Service) handleKey(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"public_key": s.vapid.publicKey()})
 }
 
-// subscription is what a browser's PushSubscription.toJSON() says.
 type subscription struct {
 	Endpoint string `json:"endpoint"`
 	Keys     struct {
@@ -240,10 +227,8 @@ type subscription struct {
 	} `json:"keys"`
 }
 
-// maxEndpoint bounds an endpoint's length; the push services' are a few hundred bytes.
 const maxEndpoint = 2048
 
-// checkEndpoint accepts an https address of a push service: no credentials, no fragment.
 func checkEndpoint(raw string) (*url.URL, bool) {
 	if raw == "" || len(raw) > maxEndpoint {
 		return nil, false
@@ -255,7 +240,6 @@ func checkEndpoint(raw string) (*url.URL, bool) {
 	return u, true
 }
 
-// parseKeys reads a browser's key and secret: base64url, an uncompressed P-256 point and 16 bytes.
 func parseKeys(p256dh, authSecret string) (pub, secret []byte, ok bool) {
 	pub, err := b64.DecodeString(strings.TrimRight(p256dh, "="))
 	if err != nil {
@@ -284,8 +268,6 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 		apierr.Write(w, http.StatusBadRequest, apierr.CodePushEndpointInvalid, "the endpoint must be an https address of at most "+strconv.Itoa(maxEndpoint)+" characters")
 		return
 	}
-	// The addresses the sender may connect to, and no others: refused here, where the person
-	// sees why, and again on every push.
 	lookup, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	err := s.egress.Check(lookup, target.Hostname(), nil)
 	cancel()
@@ -313,8 +295,6 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 		return
 	}
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
-		// Push is for people in a workspace: leaving the last one ended their subscriptions, and
-		// the app opening afterwards must not make one again.
 		var member bool
 		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)`, u.ID).Scan(&member); err != nil {
 			return err
@@ -328,7 +308,6 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 			return err
 		}
 		if !owner.Valid || owner.Int64 != u.ID {
-			// A new device, or one that changes hands: either way it is one more of this person's.
 			var have int
 			if err := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM push_subscriptions WHERE user_id = ?`, u.ID).Scan(&have); err != nil {
 				return err
@@ -338,7 +317,6 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 			}
 		}
 		if owner.Valid && owner.Int64 != u.ID {
-			// The browser is now someone else's: what was queued for the one before is not sent.
 			if _, err := tx.ExecContext(r.Context(), `
 				DELETE FROM push_deliveries WHERE subscription_id IN (SELECT id FROM push_subscriptions WHERE endpoint = ?)`, req.Endpoint); err != nil {
 				return err
@@ -376,7 +354,6 @@ func (s *Service) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	// Only the caller's own; one that isn't there, or is someone else's, is the same answer.
 	if _, err := s.db.ExecContext(r.Context(), `DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?`, req.Endpoint, u.ID); err != nil {
 		s.serverError(w, r, err)
 		return
@@ -400,7 +377,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// readEmptyJSON takes the empty object the web app sends with a request that has no fields.
 func readEmptyJSON(w http.ResponseWriter, r *http.Request) bool {
 	if r.ContentLength == 0 && len(r.TransferEncoding) == 0 {
 		return true
@@ -422,7 +398,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(append(body, '\n'))
 }
 
-// handleEmailGet answers the caller's own email choices in the workspace.
 func (s *Service) handleEmailGet(w http.ResponseWriter, r *http.Request) {
 	userID, workspaceID := callerAndWorkspace(r)
 	c, err := s.EmailChoices(r.Context(), userID, workspaceID)
@@ -433,14 +408,13 @@ func (s *Service) handleEmailGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
-// handleEmailPut changes the caller's own email choices in the workspace and answers the result.
 func (s *Service) handleEmailPut(w http.ResponseWriter, r *http.Request) {
 	userID, workspaceID := callerAndWorkspace(r)
 	var req *EmailUpdate
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req == nil { // a JSON null is not the object of the route's fields
+	if req == nil {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: one object expected")
 		return
 	}
@@ -462,8 +436,6 @@ func (s *Service) handleEmailPut(w http.ResponseWriter, r *http.Request) {
 	s.handleEmailGet(w, r)
 }
 
-// handleVerificationSend mails the caller a link that confirms their address, unless it is
-// confirmed already. It asks for no body.
 func (s *Service) handleVerificationSend(w http.ResponseWriter, r *http.Request) {
 	userID, workspaceID := callerAndWorkspace(r)
 	var soon *TooSoonError
@@ -485,7 +457,6 @@ func (s *Service) handleVerificationSend(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleVerificationConfirm confirms the caller's own address with the token of a link sent to it.
 func (s *Service) handleVerificationConfirm(w http.ResponseWriter, r *http.Request) {
 	u, _ := auth.UserFrom(r.Context())
 	var req struct {

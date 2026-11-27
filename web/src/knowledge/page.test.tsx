@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The knowledge base's page as it is laid out: the tree of folders, where the keyboard goes when
-// a part of the page changes, the one primary action, loading, empty and failing states.
-
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { fakeFetch } from '../test/fakes'
@@ -39,7 +36,6 @@ function kb(access: 'write' | 'read', extra: Parameters<typeof fakeFetch>[0] = {
   })
 }
 
-// A folder of the tree, by its exact path.
 const folder = (path: string) => {
   const name = [...document.querySelectorAll<HTMLElement>('[data-name-of]')].find(
     (el) => el.dataset.nameOf === `folder:${path}`,
@@ -68,7 +64,6 @@ test('the tree: folders from the paths, first and in order; a closed one says ho
   fireEvent.click(notes)
   expect(notes.getAttribute('aria-expanded')).toBe('true')
   expect(notes.textContent).not.toContain('2 documents')
-  // Inside it: its folder first, then its document.
   const inside = [...(notes.closest('li')?.querySelectorAll(':scope > ul > li') ?? [])].map(
     (li) => li.querySelector('button')?.textContent,
   )
@@ -93,10 +88,8 @@ test('a document opened by a link shows where it is in the tree', async () => {
   await screen.findByRole('list', { name: 'Documents' })
   expect(folder('notes').getAttribute('aria-expanded')).toBe('true')
   expect(screen.getByRole('button', { name: /^plan\.md/ }).getAttribute('aria-current')).toBe('true')
-  // The path line: the space, the folders, the name, and the size.
   expect(heading(article).textContent).toBe('Team/notes/plan.md')
   expect(within(article).getByText('7 B')).toBeTruthy()
-  // A page that opens on a document leaves the keyboard alone, also once the document has come.
   await within(article).findByRole('heading', { name: 'Plan' })
   expect(document.activeElement).toBe(document.body)
 })
@@ -139,7 +132,6 @@ test('one primary action on the screen, and a document heading with at most thre
   const article = await screen.findByRole('article', { name: 'ideas.md' })
   await within(article).findByRole('button', { name: 'Edit' })
   expect(primary()).toEqual(['New'])
-  // Edit, History, and the rest in a menu.
   const bar = heading(article).closest('.kb-doc-bar') as HTMLElement
   expect(
     within(bar)
@@ -154,7 +146,6 @@ test('one primary action on the screen, and a document heading with at most thre
   ).toEqual(['Move', 'Delete'])
   fireEvent.keyDown(within(bar).getByRole('menu'), { key: 'Escape' })
 
-  // Editing: Save is the one primary, and New steps back.
   fireEvent.click(within(article).getByRole('button', { name: 'Edit' }))
   await waitFor(() => expect(primary()).toEqual(['Save']))
 })
@@ -171,8 +162,6 @@ test('the list loads as the shape of a list, and the document as the shape of a 
     },
   })
   render(<KnowledgePage workspace={1} open="3:ideas.md" />)
-  // Said once, through the page's polite status region, which is there before and after; the
-  // shapes that stand in for what comes say nothing themselves.
   const status = () => screen.getAllByRole('status').find((el) => el.textContent === 'Loading…')
   await waitFor(() => expect(status()).toBeTruthy())
   expect(screen.getAllByText('Loading…')).toHaveLength(1)
@@ -202,7 +191,6 @@ test('an empty space says so and offers to write or upload', async () => {
   kb('write', { [`GET ${S}/docs`]: { body: { docs: [] } } })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
-  // Its own New and Upload, beside the page's.
   expect(screen.getAllByRole('button', { name: 'New' })).toHaveLength(2)
   fireEvent.click(screen.getAllByRole('button', { name: 'Upload' }).at(-1) as HTMLElement)
   expect(screen.getByRole('dialog', { name: 'Upload a file' })).toBeTruthy()
@@ -263,13 +251,11 @@ test('a document is read in its own look, a column of numbers set to the end', a
   expect(plan.dataset.numeric).toBeUndefined()
   expect(seats.dataset.numeric).toBe('true')
   expect(within(article).getByRole('cell', { name: '1,000' }).dataset.numeric).toBe('true')
-  // A task is a box that can't be pressed; raw HTML stays text.
   expect((within(article).getByRole('checkbox', { name: 'Done' }) as HTMLInputElement).disabled).toBe(true)
   expect(within(article).getByText('<b>raw</b>')).toBeTruthy()
   expect(article.querySelector('b')).toBeNull()
 })
 
-// Every document in a tree, as the paths its folders make, each once.
 function paths(folder: Folder): string[] {
   return [
     ...folder.files.map((d) => d.path),
@@ -298,17 +284,14 @@ test('the tree holds every document once, under the folders its path names', () 
   const tree = buildTree(all)
   expect(paths(tree).sort()).toEqual(all.map((d) => d.path).sort())
   expect(tree.count).toBe(all.length)
-  // A document and a folder of the same name are both there.
   expect(tree.files.map((d) => d.path)).toContain('a')
   const a = tree.folders.find((f) => f.name === 'a') as Folder
   expect(a.files.map((d) => d.path)).toEqual(['a/b.md'])
   expect(a.folders.map((f) => f.path)).toEqual(['a/b'])
   expect(a.count).toBe(2)
-  // Sixteen folders deep, the document is at the bottom of them.
   let at = tree
   for (let i = 0; i < 16; i++) at = at.folders.find((f) => f.name === `d${i}`) as Folder
   expect(at.files.map((d) => d.path)).toEqual([`${deep}/bottom.md`])
-  // Each folder's count is every document under it.
   expect(tree.folders.find((f) => f.name === 'x')?.count).toBe(1)
   expect(tree.folders.find((f) => f.name === 'd0')?.count).toBe(1)
 })
@@ -321,7 +304,6 @@ test('numbers sort as numbers', () => {
 test('a name the column cuts shows in full in a tooltip, and only then', async () => {
   const long = 'a-folder-name-that-is-much-too-long-for-the-column-of-the-tree'
   kb('read', { [`GET ${S}/docs`]: { body: { docs: [doc(`${long}/plan.md`), doc('ideas.md')] } } })
-  // jsdom lays nothing out: a name longer than 30 characters is the one the column cuts.
   const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth')
   const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
   Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
@@ -344,7 +326,6 @@ test('a name the column cuts shows in full in a tooltip, and only then', async (
     await waitFor(() => expect(tip(/^a-folder-name/)).toBe(long))
     expect(tip(/^ideas\.md/)).toBe('')
   } finally {
-    // jsdom defines them on Element: when HTMLElement had none of its own, the overrides go.
     if (sw) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', sw)
     else Reflect.deleteProperty(HTMLElement.prototype, 'scrollWidth')
     if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)
@@ -395,10 +376,8 @@ test('a search made while a document is open shows its results, and the document
   searchFor('ideas')
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: 'Ideas' })
-  // The document is behind the results, not shown.
   expect(screen.queryByRole('article')).toBeNull()
   expect(article.closest('[hidden]')).not.toBeNull()
-  // Closing the results shows it again.
   fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
   expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
 })
@@ -415,12 +394,9 @@ test('a search made while editing keeps the unsaved text, and Back to the result
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: 'Ideas' })
   expect(screen.queryByRole('article')).toBeNull()
-  // The search's Close brings the edit back as it was.
   fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
   expect((within(article).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Unsaved words.')
 
-  // Searching again and opening the same document from the results: the edit is there, and Back
-  // to the results, then their Close, keep it too.
   searchFor('ideas')
   const again = await screen.findByRole('region', { name: 'Search results' })
   fireEvent.click(await within(again).findByRole('button', { name: 'Ideas' }))
@@ -447,9 +423,7 @@ test('a delete from a search result is said beside the results, with the keyboar
   fireEvent.click(within(article).getByRole('menuitem', { name: 'Delete' }))
   fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
   const said = await screen.findByText(/Deleted ideas\.md/)
-  // In the pane that shows (the results'), not the list's, which a narrow page hides.
   const pane = await screen.findByRole('region', { name: 'Search results' })
-  // Above the pane that is in front (the results), not in the list's, which a narrow page hides.
   expect(pane.closest('[hidden]')).toBeNull()
   expect(said.closest('.kb-side')).toBeNull()
   expect(said.closest('[hidden]')).toBeNull()
@@ -514,21 +488,18 @@ test('another result, opened while a draft waits behind the results, asks with t
   const results = await screen.findByRole('region', { name: 'Search results' })
   fireEvent.click(await within(results).findByRole('button', { name: 'Plan' }))
 
-  // The question, over the document it is about, which is in front again; the results wait.
   const question = asked() as HTMLElement
   expect(question).not.toBeNull()
   expect(article.closest('[hidden]')).toBeNull()
   expect(results.closest('[hidden]')).not.toBeNull()
   expect(document.activeElement).toBe(within(question).getByRole('button', { name: 'Keep editing' }))
 
-  // Keep editing: back in the text, where the cursor was, with the document in front.
   fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }))
   expect(asked()).toBeNull()
   expect(article.closest('[hidden]')).toBeNull()
   expect(document.activeElement).toBe(text)
   expect([text.selectionStart, text.selectionEnd]).toEqual([3, 7])
 
-  // Asked again and answered Discard: the other result opens.
   searchFor('plan')
   fireEvent.click(
     await within(await screen.findByRole('region', { name: 'Search results' })).findByRole('button', { name: 'Plan' }),
@@ -558,7 +529,6 @@ test('closing the upload dialog leaves the upload going; only its Cancel stops i
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(calls.find((c) => c.method === 'PUT')?.signal?.aborted).toBe(false)
   release(undefined)
-  // It finished: the list is read again, and nothing opened over the page.
   await waitFor(() => expect(calls.filter((c) => c.path === `${S}/docs?limit=1000`)).toHaveLength(2))
   expect(screen.queryByRole('article')).toBeNull()
 })
@@ -613,8 +583,6 @@ test('a restore from the notice is the same one whichever pane comes in front wh
   const restore = await screen.findByRole('button', { name: /Restore/ })
   fireEvent.click(restore)
   await waitFor(() => expect(restore.getAttribute('aria-busy')).toBe('true'))
-  // A search brings the results in front while the restore runs: the notice is the same one, still
-  // busy, and offers no second Restore.
   searchFor('ideas')
   await screen.findByRole('region', { name: 'Search results' })
   expect(screen.getByRole('button', { name: /Restore/ })).toBe(restore)
@@ -717,11 +685,9 @@ test('opening the open document while a save is in flight drops another opening 
   fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
   fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'New words.' } })
   fireEvent.click(within(article).getByRole('button', { name: 'Save' }))
-  // While it saves: another document from the results waits for the save...
   searchFor('plan')
   const results = await screen.findByRole('region', { name: 'Search results' })
   fireEvent.click(await within(results).findByRole('button', { name: 'Plan' }))
-  // ...and then the person chooses the document that is open, which is their last choice.
   fireEvent.click(screen.getByRole('button', { name: /^ideas\.md/ }))
   release(undefined)
   await waitFor(() => expect(within(article).queryByLabelText('Text')).toBeNull())

@@ -6,9 +6,6 @@ import { Menu, MenuButton, MenuItem, MenuList } from '../ui/Menu'
 import type { Person } from './people'
 import { assigneeLabel } from './text'
 
-// Who the card is for: nobody, the agent, or someone who can read the space. A writer picks from
-// a menu. Someone assigned who has since lost access stays listed until the assignee is changed;
-// an account that was deleted is shown as "Deleted user" and can't be picked.
 export function Assignee({
   card,
   canWrite,
@@ -67,7 +64,6 @@ export function Assignee({
   )
 }
 
-// The person the card is for, or the agent, with their mark.
 function Who({ assignee }: { assignee: NonNullable<Card['assignee']> }) {
   const t = useT()
   const name = assigneeLabel(t, assignee)

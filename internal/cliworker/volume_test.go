@@ -19,7 +19,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// reopen closes h's worker and starts another on the same volume.
 func (h *harness) reopen(t *testing.T) {
 	t.Helper()
 	h.w.Close()
@@ -31,9 +30,6 @@ func (h *harness) reopen(t *testing.T) {
 	h.w = w
 }
 
-// A home number is never given twice, whatever happened to the counter: one lost, rolled back or
-// damaged is moved past every home the volume has, by record, by directory (a record that was
-// lost) and in the trash.
 func TestALostOrRolledBackCounterGivesNoHomeAgain(t *testing.T) {
 	for name, damage := range map[string]func(path string) error{
 		"lost": os.Remove,
@@ -49,7 +45,6 @@ func TestALostOrRolledBackCounterGivesNoHomeAgain(t *testing.T) {
 			h := newHarness(t, nil)
 			h.introduce(t, 1, 2)
 			taken := map[int64]bool{h.w.HomeForTest(acct(1)): true, h.w.HomeForTest(acct(2)): true}
-			// A home whose record went, its directory still there.
 			orphan := h.w.HomeForTest(acct(3))
 			if _, err := h.layout.Ensure(orphan); err != nil {
 				t.Fatal(err)
@@ -74,9 +69,6 @@ func TestALostOrRolledBackCounterGivesNoHomeAgain(t *testing.T) {
 	}
 }
 
-// The same while the worker runs: a counter lost or put back under it never sends the allocator
-// lower, and a home the volume has is skipped, a retired account's whose directory is gone and a
-// record's whose directory was never made included.
 func TestACounterLostWhileTheWorkerRunsGivesNoHomeAgain(t *testing.T) {
 	for name, damage := range map[string]func(path string) error{
 		"lost": os.Remove,
@@ -89,13 +81,11 @@ func TestACounterLostWhileTheWorkerRunsGivesNoHomeAgain(t *testing.T) {
 			ctx := context.Background()
 			h.introduce(t, 1)
 			taken := map[int64]bool{h.w.HomeForTest(acct(1)): true}
-			// A retired account: its record keeps its home, its directory is gone.
 			h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true)
 			taken[h.w.HomeForTest(acct(2))] = true
 			if err := h.w.Forget(ctx, acct(2)); err != nil {
 				t.Fatal(err)
 			}
-			// An account recorded, its directory not made yet.
 			taken[h.w.HomeForTest(acct(3))] = true
 			if err := damage(h.w.CounterFileForTest()); err != nil {
 				t.Fatal(err)
@@ -111,7 +101,6 @@ func TestACounterLostWhileTheWorkerRunsGivesNoHomeAgain(t *testing.T) {
 	}
 }
 
-// Two records with the same home are a damaged volume: the worker doesn't start on it.
 func TestTwoAccountsWithOneHomeStopTheWorker(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1)
@@ -129,8 +118,6 @@ func TestTwoAccountsWithOneHomeStopTheWorker(t *testing.T) {
 	}
 }
 
-// One worker per volume: a second one doesn't start while the first runs, so the two never take
-// the same home number, and it leaves the first's sockets alone. Once the first stops, it starts.
 func TestASecondWorkerOnTheVolumeDoesNotStart(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1)
@@ -143,9 +130,7 @@ func TestASecondWorkerOnTheVolumeDoesNotStart(t *testing.T) {
 	if st, err := h.w.Status(context.Background(), acct(1), cliworker.Claude, ""); err != nil || st.LoggedIn {
 		t.Errorf("the first worker after the second's attempt: %+v %v", st, err)
 	}
-	// Nor does it change the layout root's mode the first one set (a worker of another mode would
-	// set another: 711 with isolation, 700 without).
-	if err := os.Chmod(h.layout.Root, 0o711); err != nil { //nolint:gosec // G302: the test's own directory
+	if err := os.Chmod(h.layout.Root, 0o711); err != nil {
 		t.Fatal(err)
 	}
 	if w, err := cliworker.New(h.cfg); err == nil {
@@ -157,8 +142,6 @@ func TestASecondWorkerOnTheVolumeDoesNotStart(t *testing.T) {
 	h.reopen(t)
 }
 
-// Every home number up to the last is given, and then none: new accounts are refused, the
-// accounts there are go on.
 func TestTheLastHomeNumberIsTheLast(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1)
@@ -182,22 +165,17 @@ func TestTheLastHomeNumberIsTheLast(t *testing.T) {
 	}
 }
 
-// A census or a deletion from a server boot older than one whose census the worker applied (a
-// server a restore replaced, still running or delayed) retires nothing, and neither does an
-// earlier server's census that comes while a later server already made accounts but hasn't sent
-// its own: those accounts keep their homes.
 func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
 	start := time.Now().Add(-time.Hour)
-	old := acct(1) // the tests' boot: the earlier server's
+	old := acct(1)
 	if _, err := h.w.Status(ctx, old, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, map[int64]string{1: old.Identity})); err != nil {
 		t.Fatal(err)
 	}
-	// The later server makes an account before its census reaches the worker.
 	later := strings.Repeat("c", 32)
 	made := cliowner.Account{User: 2, Identity: strings.Repeat("d", 32), Boot: later, Installation: cliworker.TestInstallation}
 	dirs, err := h.w.AccountDirs(made, cliworker.Claude, "")
@@ -206,19 +184,15 @@ func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 	}
 	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
 	login := filepath.Join(dirs.Config(cliworker.Claude), ".credentials.json")
-	// The earlier server's census again (a retry, or one delayed), which doesn't know the account.
 	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, map[int64]string{1: old.Identity})); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := h.w.Status(ctx, made, cliworker.Claude, ""); err != nil || !st.LoggedIn {
 		t.Fatalf("the later server's account after the earlier census: %+v %v", st, err)
 	}
-	// The later server's census.
 	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), map[int64]string{2: made.Identity})); err != nil {
 		t.Fatal(err)
 	}
-	// From now on the earlier server's census and deletion are stale: registered before the
-	// latest, whatever its clock says (it says later here).
 	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now().Add(time.Hour), nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
 		t.Errorf("the earlier boot's census: %v, want ErrStaleBoot", err)
 	}
@@ -236,14 +210,11 @@ func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 	if _, err := os.Stat(login); err != nil {
 		t.Errorf("the later server's account's login: %v", err)
 	}
-	// The later server's census applied: the account it doesn't name is retired.
 	if _, err := h.w.Status(ctx, old, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the account the later census doesn't name: %v, want ErrForgotten", err)
 	}
 }
 
-// While an earlier server's censuses run, a later server's requests make accounts at the same
-// time: none of them is retired, whichever comes first (run with -race).
 func TestAnEarlierCensusRacingALaterServersAccountsRetiresNone(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -280,9 +251,6 @@ func TestAnEarlierCensusRacingALaterServersAccountsRetiresNone(t *testing.T) {
 	}
 }
 
-// A retired account reaches nothing of what the worker still holds of it (a removal that failed
-// before it dropped it): not its turn's state or events, not its sign-in, not its permission
-// questions.
 func TestARetiredAccountReachesNothingItHad(t *testing.T) {
 	h := newHarness(t, nil)
 	h.user(t, 1, cliworker.Claude, clitest.Scenario{Tool: &clitest.ToolUse{Name: "Bash", Input: map[string]any{"command": "touch x"}}}, true)
@@ -317,6 +285,6 @@ func TestARetiredAccountReachesNothingItHad(t *testing.T) {
 	if err := h.w.Answer(acct(1), s.Conversation, q.ID, true); err == nil {
 		t.Error("the retired account answered a permission question")
 	}
-	h.w.Stop(s.ID) // the removal's own way, by the object: it still reaches the turn
+	h.w.Stop(s.ID)
 	waitDone(t, turn, 20*time.Second)
 }

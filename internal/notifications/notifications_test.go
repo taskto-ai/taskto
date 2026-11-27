@@ -33,15 +33,12 @@ const fakePassword = "fake-test-password"
 
 var setupToken = auth.NewSetupToken()
 
-// pushServer is a browser's push service: it records what the server sends and answers as told.
 type pushServer struct {
 	*httptest.Server
 	mu       sync.Mutex
 	requests []pushRequest
-	// status is the answer for the next request to a path; 201 when none is set.
-	status map[string][]int
-	// delay is how long each request takes to answer.
-	delay time.Duration
+	status   map[string][]int
+	delay    time.Duration
 }
 
 type pushRequest struct {
@@ -85,27 +82,22 @@ func (p *pushServer) answer(path string, codes ...int) {
 }
 
 type env struct {
-	t     *testing.T
-	db    *sql.DB
-	key   *serverkey.Key
-	h     http.Handler
-	svc   *notifications.Service
-	cards *boards.Service
-	push  *pushServer
-	// skew moves the service's clock forward, to reach the wait before a retry.
-	skew time.Duration
-	// sched runs the daily summary's jobs (email_test.go); box holds the mail the server "sent".
-	sched *schedule.Service
-	box   *mailbox
-	// bodies is every API answer, which must never show the VAPID private key.
+	t      *testing.T
+	db     *sql.DB
+	key    *serverkey.Key
+	h      http.Handler
+	svc    *notifications.Service
+	cards  *boards.Service
+	push   *pushServer
+	skew   time.Duration
+	sched  *schedule.Service
+	box    *mailbox
 	bodies [][]byte
-	// hooks run what a test sets at chosen moments of the database's use.
-	hooks *db.Hooks
+	hooks  *db.Hooks
 }
 
 func newEnv(t *testing.T, tls bool) *env { return newEnvWith(t, tls, nil) }
 
-// newEnvWith is newEnv with the service's options changed by change.
 func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options)) *env {
 	t.Helper()
 	ctx := context.Background()
@@ -127,7 +119,6 @@ func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options
 	e := &env{t: t, db: sqlDB, hooks: hooks, key: key, push: newPushServer(t), cards: boards.New(sqlDB, spaces)}
 	opts := notifications.Options{Key: key, Now: func() time.Time { return time.Now().Add(e.skew) }}
 	if tls {
-		// The test push service is on loopback: a client of its own, and the policy that goes with it.
 		anywhere := egress.MustParse("any")
 		opts.HTTPClient, opts.Egress = e.push.Client(), &anywhere
 	}
@@ -141,7 +132,6 @@ func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options
 	if err := e.svc.AttachScheduler(e.sched); err != nil {
 		t.Fatal(err)
 	}
-	// As the server does: a change of a person's time zone moves the summaries that follow it.
 	accounts.OnTimeZoneChanged(e.svc.SyncTimeZone)
 	mux := http.NewServeMux()
 	accounts.Routes(mux)
@@ -206,8 +196,6 @@ type meReply struct {
 	Workspaces []auth.Membership
 }
 
-// world is a workspace with an admin (owner), a member who is in the shared space (bob), one who
-// is in no shared space (mallory), a shared space with a board, and a card assigned to nobody.
 type world struct {
 	*env
 	ws                  int64
@@ -218,7 +206,6 @@ type world struct {
 
 func newWorld(t *testing.T, tls bool) *world { return worldOn(t, newEnv(t, tls)) }
 
-// worldOn makes the world in e.
 func worldOn(t *testing.T, e *env) *world {
 	t.Helper()
 	w := &world{env: e, owner: &user{e: e}}
@@ -255,7 +242,6 @@ func (w *world) join(name string) *user {
 	return u
 }
 
-// assign makes a card titled title and assigns it to who, as the owner.
 func (w *world) assign(title string, who *user) int64 {
 	w.t.Helper()
 	c, err := w.cards.CreateCard(context.Background(), boards.Actor{UserID: w.owner.id}, w.space.ID, w.board,
@@ -281,7 +267,6 @@ func (w *world) count(table, where string, args ...any) (n int) {
 	return n
 }
 
-// device is a browser with push: its keys, and the endpoint the push service gave it.
 type device struct {
 	client   *notifications.Client
 	endpoint string
@@ -300,7 +285,6 @@ func (w *world) subscribe(u *user, d *device) {
 	expect(w.t, u.do(http.MethodPut, "/api/me/push/subscription", d.body()), http.StatusNoContent)
 }
 
-// pushed decrypts what the push service received for the device.
 func (w *world) pushed(d *device) (payloads []map[string]any, requests []pushRequest) {
 	w.t.Helper()
 	for _, r := range w.push.got() {
@@ -334,11 +318,9 @@ func TestAssignedCardIsInTheInboxWithItsTitleAndLink(t *testing.T) {
 		it.Target.Section != "boards" || it.Target.Item != wantItem || it.WorkspaceID != w.ws {
 		t.Fatalf("item = %+v", it)
 	}
-	// The owner assigned it: they are told nothing, and nobody else is.
 	if n := w.inbox(w.owner, "").Unread + w.inbox(w.mallory, "").Unread; n != 0 {
 		t.Fatalf("others were told: %d", n)
 	}
-	// Assigning yourself, or the same person again, tells nobody.
 	if _, err := w.cards.CreateCard(context.Background(), boards.Actor{UserID: w.bob.id}, w.space.ID, w.board,
 		boards.NewCard{Title: "Mine", Assignee: &boards.Assignee{Kind: boards.AssignUser, ID: w.bob.id}}); err != nil {
 		t.Fatal(err)
@@ -368,7 +350,7 @@ func TestInboxPagingUnreadAndMarkingRead(t *testing.T) {
 	id := first.Notifications[0].ID
 	read := fmt.Sprintf("/api/workspaces/%d/notifications/%d/read", w.ws, id)
 	expect(t, w.bob.do(http.MethodPost, read, map[string]any{}), http.StatusNoContent)
-	expect(t, w.bob.do(http.MethodPost, read, map[string]any{}), http.StatusNoContent) // again: nothing to do
+	expect(t, w.bob.do(http.MethodPost, read, map[string]any{}), http.StatusNoContent)
 	if got := w.inbox(w.bob, "?unread=true"); got.Unread != 4 || len(got.Notifications) != 4 {
 		t.Fatalf("unread = %+v", got)
 	}
@@ -389,7 +371,6 @@ func TestNotificationsBelongToTheirRecipient(t *testing.T) {
 	w.assign("Private to Bob", w.bob)
 	id := w.inbox(w.bob, "").Notifications[0].ID
 
-	// Someone else's notification is as missing as one that never was, however it is asked for.
 	for _, u := range []*user{w.mallory, w.owner} {
 		expect(t, u.do(http.MethodGet, fmt.Sprintf("/api/me/notifications/%d", id), nil), http.StatusNotFound)
 		expect(t, u.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/notifications/%d/read", w.ws, id), map[string]any{}), http.StatusNotFound)
@@ -402,7 +383,6 @@ func TestNotificationsBelongToTheirRecipient(t *testing.T) {
 	}
 	expect(t, w.bob.do(http.MethodGet, fmt.Sprintf("/api/me/notifications/%d", id), nil), http.StatusOK)
 	expect(t, w.bob.do(http.MethodGet, "/api/me/notifications/999999", nil), http.StatusNotFound)
-	// Nobody outside the workspace reads its inbox, and nobody without a session reads any.
 	stranger := &user{e: w.env}
 	expect(t, stranger.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil), http.StatusUnauthorized)
 	expect(t, stranger.do(http.MethodGet, "/api/me/push/key", nil), http.StatusUnauthorized)
@@ -413,7 +393,6 @@ func TestNotificationsBelongToTheirRecipient(t *testing.T) {
 func TestPushCarriesOnlyTheIDAndKindEncryptedToTheDevice(t *testing.T) {
 	w := newWorld(t, true)
 	d := w.newDevice("phone")
-	// Made before the device opted in: nothing is pushed for it.
 	w.assign("Before opting in", w.bob)
 	w.subscribe(w.bob, d)
 	w.assign("Fix the secret thing", w.bob)
@@ -428,7 +407,6 @@ func TestPushCarriesOnlyTheIDAndKindEncryptedToTheDevice(t *testing.T) {
 		t.Fatalf("payload = %v, want only id %d and the kind", got, newest.ID)
 	}
 	r := requests[0]
-	// The push service carries it and can't read it.
 	if bytes.Contains(r.body, []byte("secret")) || bytes.Contains(r.body, []byte("card_assigned")) {
 		t.Fatal("the message is in clear on the wire")
 	}
@@ -438,7 +416,6 @@ func TestPushCarriesOnlyTheIDAndKindEncryptedToTheDevice(t *testing.T) {
 	if auth := r.header.Get("Authorization"); !strings.HasPrefix(auth, "vapid t=") || !strings.Contains(auth, ", k=") {
 		t.Fatalf("Authorization = %q", auth)
 	}
-	// The key it names is the one the server publishes.
 	rec := w.bob.do(http.MethodGet, "/api/me/push/key", nil)
 	expect(t, rec, http.StatusOK)
 	if key := decode[struct {
@@ -446,7 +423,6 @@ func TestPushCarriesOnlyTheIDAndKindEncryptedToTheDevice(t *testing.T) {
 	}](t, rec).PublicKey; !strings.HasSuffix(r.header.Get("Authorization"), "k="+key) {
 		t.Fatalf("Authorization = %q, public key %s", r.header.Get("Authorization"), key)
 	}
-	// Once sent, not sent again.
 	w.svc.DrainOnce(context.Background())
 	if n, _ := w.pushed(d); len(n) != 1 {
 		t.Fatalf("%d pushes after draining again", len(n))
@@ -463,7 +439,6 @@ func TestNothingIsPushedWithoutOptingIn(t *testing.T) {
 	if w.count("push_deliveries", "1=1") != 0 {
 		t.Fatal("a push was queued with no subscription")
 	}
-	// A subscription of someone else is not Bob's.
 	other := w.newDevice("owner-phone")
 	w.subscribe(w.owner, other)
 	w.assign("Still quiet for the owner", w.bob)
@@ -480,7 +455,6 @@ func TestAccessRevokedAfterTheNotificationShowsNothingOfTheCard(t *testing.T) {
 	card := w.assign("Quarterly layoffs plan", w.bob)
 	id := w.inbox(w.bob, "").Notifications[0].ID
 
-	// Bob's access to the space ends before the push is sent and before he opens the inbox.
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.space.ID, w.bob.id), nil), http.StatusNoContent)
 
 	it := w.inbox(w.bob, "").Notifications[0]
@@ -506,7 +480,6 @@ func TestAccessRevokedAfterTheNotificationShowsNothingOfTheCard(t *testing.T) {
 	if bytes.Contains(requests[0].body, []byte("Quarterly")) {
 		t.Fatal("the title is on the wire")
 	}
-	// The generic item's address is the home page; opening the card is refused by the boards routes.
 	expect(t, w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards/%d/cards/%d", w.ws, w.space.ID, w.board, card), nil), http.StatusNotFound)
 }
 
@@ -525,7 +498,6 @@ func TestAnAppsFailedEffectNotificationNamesTheAppOnlyWhileItIsViewable(t *testi
 	if err := notifications.Add(context.Background(), tx, notice); err != nil {
 		t.Fatal(err)
 	}
-	// A retry of the same failure adds nothing.
 	if err := notifications.Add(context.Background(), tx, notice); err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +575,6 @@ func TestPushesAreRetriedWithBoundsAndNotRetriedWhenRefused(t *testing.T) {
 
 	w.svc.DrainOnce(ctx)
 	reached := func(d *device) int { _, r := w.pushed(d); return len(r) }
-	// One try each, so far; a refusal (403) won't change by trying again, a 5xx and a 429 may.
 	if reached(flaky) != 1 || reached(refused) != 1 || reached(down) != 1 {
 		t.Fatalf("tries = %d, %d, %d", reached(flaky), reached(refused), reached(down))
 	}
@@ -614,7 +585,6 @@ func TestPushesAreRetriedWithBoundsAndNotRetriedWhenRefused(t *testing.T) {
 	if reached(flaky) != 1 {
 		t.Fatal("a push was tried again before its wait was over")
 	}
-	// Time passes: each retry waits longer than the last (30s, 2m, 8m, 32m), at most five tries, all within the hour a push service keeps a message.
 	for _, wait := range []time.Duration{time.Minute, 3 * time.Minute, 10 * time.Minute, 40 * time.Minute, 2 * time.Hour} {
 		w.skew += wait
 		w.svc.DrainOnce(ctx)
@@ -632,7 +602,6 @@ func TestPushesAreRetriedWithBoundsAndNotRetriedWhenRefused(t *testing.T) {
 		w.count("push_deliveries", "state = 'failed'") != 2 {
 		t.Fatal("the pushes did not all settle: one sent, two given up")
 	}
-	// Giving up on a push keeps the device: only the push service saying it is gone ends one.
 	if w.count("push_subscriptions", "1=1") != 3 {
 		t.Fatal("a subscription was removed for a failed push")
 	}
@@ -650,7 +619,6 @@ func TestAPushIsNotSentForANotificationThatWasReadOrIsStale(t *testing.T) {
 	if len(w.push.got()) != 0 {
 		t.Fatal("a notification that was read was pushed")
 	}
-	// A push isn't a sync guarantee: one that waited past its lifetime is dropped, not sent late.
 	w.assign("Stale", w.bob)
 	w.skew = 2 * time.Hour
 	w.svc.DrainOnce(ctx)
@@ -663,7 +631,6 @@ func TestSigningOutRemovesThatDevicesSubscription(t *testing.T) {
 	w := newWorld(t, true)
 	d, other := w.newDevice("phone"), w.newDevice("laptop")
 	w.subscribe(w.bob, d)
-	// The same person on another browser, with a session of its own.
 	laptop := &user{e: w.env}
 	rec := laptop.do(http.MethodPost, "/api/login", map[string]string{"email": "bob@example.com", "password": fakePassword})
 	expect(t, rec, http.StatusOK)
@@ -697,7 +664,6 @@ func TestSessionsEndingRemoveSubscriptions(t *testing.T) {
 	if _, err := w.db.Exec(`UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`, w.bob.id); err != nil {
 		t.Fatal(err)
 	}
-	// An expired session is swept when anyone logs in next.
 	extra := &user{e: w.env}
 	expect(t, extra.do(http.MethodPost, "/api/login", map[string]string{"email": "mallory@example.com", "password": fakePassword}), http.StatusOK)
 	if w.count("push_subscriptions", "1=1") != 0 {
@@ -710,7 +676,6 @@ func TestLeavingAWorkspaceStopsItsNotificationsAndAtTheLastOneEndsPush(t *testin
 	w := newWorld(t, true)
 	d := w.newDevice("phone")
 	w.subscribe(w.bob, d)
-	// A second workspace Bob is in too.
 	var second int64
 	if err := w.db.QueryRow(`INSERT INTO workspaces (name) VALUES ('Other') RETURNING id`).Scan(&second); err != nil {
 		t.Fatal(err)
@@ -731,7 +696,6 @@ func TestLeavingAWorkspaceStopsItsNotificationsAndAtTheLastOneEndsPush(t *testin
 	if len(w.push.got()) != 0 {
 		t.Fatal("a push of a workspace the person left was sent")
 	}
-	// Bob is still in the other workspace, so his device stays; leaving that one ends push.
 	if w.count("push_subscriptions", "user_id = ?", w.bob.id) != 1 {
 		t.Fatal("the device was unsubscribed though Bob is still in a workspace")
 	}
@@ -788,7 +752,6 @@ func TestSubscriptionsAreValidatedBoundedAndOwnedByTheirPerson(t *testing.T) {
 		t.Fatal("an invalid subscription was stored")
 	}
 
-	// Subscribing again is the same device, not another; the auth secret is sealed.
 	w.subscribe(w.bob, good)
 	w.subscribe(w.bob, good)
 	if w.count("push_subscriptions", "user_id = ?", w.bob.id) != 1 {
@@ -802,7 +765,6 @@ func TestSubscriptionsAreValidatedBoundedAndOwnedByTheirPerson(t *testing.T) {
 		t.Fatal("the auth secret is stored in clear")
 	}
 
-	// Someone else can't remove it; its person can, and removing what isn't there is not an error.
 	expect(t, w.mallory.do(http.MethodDelete, "/api/me/push/subscription", map[string]any{"endpoint": good.endpoint}), http.StatusNoContent)
 	if w.count("push_subscriptions", "1=1") != 1 {
 		t.Fatal("another person removed Bob's device")
@@ -813,8 +775,6 @@ func TestSubscriptionsAreValidatedBoundedAndOwnedByTheirPerson(t *testing.T) {
 		t.Fatal("the device was not removed")
 	}
 
-	// A device is a person's at a time: a browser signed in as someone else takes it over, and what
-	// was queued for the one before is dropped.
 	w.subscribe(w.bob, good)
 	w.assign("For Bob", w.bob)
 	w.subscribe(w.mallory, good)
@@ -826,7 +786,6 @@ func TestSubscriptionsAreValidatedBoundedAndOwnedByTheirPerson(t *testing.T) {
 		t.Fatal("Mallory's browser got Bob's notification")
 	}
 
-	// The most a person may have.
 	for i := range notifications.MaxSubscriptions {
 		w.subscribe(w.bob, w.newDevice(fmt.Sprintf("d%d", i)))
 	}
@@ -834,13 +793,10 @@ func TestSubscriptionsAreValidatedBoundedAndOwnedByTheirPerson(t *testing.T) {
 	if rec.Code != http.StatusConflict || codeOf(rec) != "push_too_many_subscriptions" {
 		t.Fatalf("past the limit: %d %s", rec.Code, rec.Body)
 	}
-	// An existing device can still be updated at the limit.
 	w.subscribe(w.bob, w.newDevice("d0"))
 }
 
 func TestAnEndpointOnThePrivateNetworkIsRefusedAtRegistrationAndNeverConnectedTo(t *testing.T) {
-	// The default policy is the one for public addresses only: an endpoint is an address a person
-	// gave, and the test push service is on loopback.
 	public := newWorld(t, false)
 	d := public.newDevice("loopback")
 	for _, endpoint := range []string{d.endpoint, "https://169.254.169.254/latest", "https://[::1]:8443/x", "https://10.1.2.3/x", "https://localhost/x"} {
@@ -855,8 +811,6 @@ func TestAnEndpointOnThePrivateNetworkIsRefusedAtRegistrationAndNeverConnectedTo
 		t.Fatal("a private endpoint was stored")
 	}
 
-	// A subscription that is there anyway (made before a policy changed, or by an address that
-	// resolved elsewhere then) is refused on every connection, and its push fails at once.
 	w := newWorld(t, true)
 	d = w.newDevice("loopback")
 	w.subscribe(w.bob, d)
@@ -915,7 +869,6 @@ func TestTheVAPIDPrivateKeyIsNeverReturnedOrLogged(t *testing.T) {
 			t.Fatal("the VAPID private key is in an API answer, a push or the log")
 		}
 	}
-	// The subscription's endpoint is a capability: the log names the service's host, not the address.
 	if strings.Contains(logs.String(), "/push/phone") {
 		t.Fatalf("the log has a subscription's endpoint: %s", logs.String())
 	}
@@ -935,7 +888,6 @@ func TestOneVAPIDKeyPairPerServer(t *testing.T) {
 	if err != nil || len(raw) != 65 || raw[0] != 4 {
 		t.Fatalf("public key %q is not an uncompressed P-256 point: %v", first, err)
 	}
-	// A restart reads the same pair.
 	again, err := notifications.New(context.Background(), w.db, access.New(w.db, nil), notifications.Options{Key: w.key})
 	if err != nil {
 		t.Fatal(err)
@@ -963,16 +915,15 @@ func TestOldNotificationsAndFinishedPushesArePurgedAndAPersonsListIsBounded(t *t
 			}
 		}
 	}
-	// One instant for the whole fixture: today's notifications are all made at it, and compared with it.
 	now := time.Now()
 	day := func(ago int) string {
 		return now.Add(-time.Duration(ago) * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	}
-	add(day(200), "", 2)      // older than anything is kept
-	add(day(100), day(95), 3) // read long ago
-	add(day(100), "", 4)      // old but unread: kept
-	add(day(1), "", 500)      // a person's most
-	add(day(0), "", 5)        // and 5 newer ones push the 5 oldest of these out
+	add(day(200), "", 2)
+	add(day(100), day(95), 3)
+	add(day(100), "", 4)
+	add(day(1), "", 500)
+	add(day(0), "", 5)
 	if err := w.svc.Purge(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +936,6 @@ func TestOldNotificationsAndFinishedPushesArePurgedAndAPersonsListIsBounded(t *t
 	if n := w.count("notifications", "user_id = ?", w.bob.id); n != 500 {
 		t.Fatalf("%d notifications kept, want the person's most, 500", n)
 	}
-	// The newest are the ones kept.
 	if n := w.count("notifications", "created_at >= ?", day(0)); n != 5 {
 		t.Fatalf("%d of today's notifications kept, want all 5", n)
 	}
@@ -999,7 +949,6 @@ func TestAPushIsNotSentToASubscriptionWhoseSessionExpired(t *testing.T) {
 	other := &user{e: w.env}
 	expect(t, other.do(http.MethodPost, "/api/login", map[string]string{"email": "bob@example.com", "password": fakePassword}), http.StatusOK)
 	w.subscribe(other, kept)
-	// Only the first session ends, and nobody logs in afterwards, which is when auth sweeps sessions.
 	if _, err := w.db.Exec(`UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = (SELECT session_id FROM push_subscriptions WHERE endpoint = ?)`, d.endpoint); err != nil {
 		t.Fatal(err)
 	}
@@ -1041,7 +990,6 @@ func TestAPushThatUsedAllItsTriesIsGivenUpAfterARestart(t *testing.T) {
 	d := w.newDevice("phone")
 	w.subscribe(w.bob, d)
 	w.assign("Ping", w.bob)
-	// A worker that died on its fifth try left it pending with five tries counted.
 	if _, err := w.db.Exec(`UPDATE push_deliveries SET attempts = 5`); err != nil {
 		t.Fatal(err)
 	}
@@ -1064,7 +1012,6 @@ func TestNoSubscriptionIsMadeForSomeoneInNoWorkspace(t *testing.T) {
 	if w.count("push_subscriptions", "user_id = ?", w.mallory.id) != 0 {
 		t.Fatal("leaving the last workspace should have ended the subscription")
 	}
-	// The app opening afterwards registers the device again; it must not take.
 	rec := w.mallory.do(http.MethodPut, "/api/me/push/subscription", d.body())
 	if rec.Code != http.StatusForbidden || decode[struct{ Code string }](t, rec).Code != "push_no_workspace" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
@@ -1100,7 +1047,6 @@ func TestRetentionRunsOnItsOwnScheduleWhileAPushBacklogIsSent(t *testing.T) {
 	for i := range 5 {
 		w.assign(fmt.Sprintf("Card %d", i), w.bob)
 	}
-	// 100 pushes, each taking a while: the sender has no pause for far longer than the tidy interval.
 	w.push.mu.Lock()
 	w.push.delay = 15 * time.Millisecond
 	w.push.mu.Unlock()
@@ -1178,7 +1124,6 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 		}
 		notice := notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: kind,
 			Ref: notifications.Ref{Space: w.space.ID, Board: w.board, Card: card, Due: "2030-01-10"}, DedupeKey: "job:1:r0:" + kind}
-		// A retry makes nothing twice.
 		for range 2 {
 			if err := notifications.Add(context.Background(), tx, notice); err != nil {
 				t.Fatal(err)
@@ -1189,7 +1134,7 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 		}
 	}
 	items := w.inbox(w.bob, "").Notifications
-	if len(items) != 3 { // newest first: overdue, due, assigned
+	if len(items) != 3 {
 		t.Fatalf("inbox = %+v", items)
 	}
 	wantItem := fmt.Sprintf("%d:%d:%d", w.space.ID, w.board, card)
@@ -1200,13 +1145,10 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 			t.Fatalf("item %d = %+v", i, it)
 		}
 	}
-	// Someone else is told nothing of them.
 	if n := len(w.inbox(w.mallory, "").Notifications); n != 0 {
 		t.Fatalf("mallory's inbox has %d items", n)
 	}
 
-	// A notice says its date only while the card is still due then: once the date moved or was cleared,
-	// "overdue since" a day that may be ahead would be false, and it is a plain mention of the card.
 	for _, due := range []string{"2030-02-01", ""} {
 		if due == "" {
 			if _, err := w.db.Exec(`UPDATE cards SET due = NULL WHERE id = ?`, card); err != nil {
@@ -1225,7 +1167,6 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 		t.Fatal(err)
 	}
 
-	// The push carries the kind and ID only; once access ends it says only that something changed.
 	w.svc.DrainOnce(context.Background())
 	payloads, _ := w.pushed(d)
 	if len(payloads) != 3 {
@@ -1233,7 +1174,6 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 	}
 	kinds := map[string]bool{}
 	for _, p := range payloads {
-		// What the device is sent, decrypted: the ID and the kind, and nothing of the record.
 		if len(p) != 2 || p["id"] == nil || p["kind"] == nil {
 			t.Fatalf("a push carries more than its ID and kind: %v", p)
 		}
@@ -1252,7 +1192,6 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 	}
 }
 
-// comment adds a comment to a card as u, through the boards service.
 func (w *world) comment(u *user, card int64, body string) {
 	w.t.Helper()
 	if _, err := w.cards.Comment(context.Background(), boards.Actor{UserID: u.id}, w.space.ID, w.board, card, body); err != nil {
@@ -1265,7 +1204,7 @@ func mention(name string, u *user) string { return fmt.Sprintf("@[%s](user:%d)",
 func TestACommentTellsTheAssigneeAndNotTheCommenter(t *testing.T) {
 	w := newWorld(t, true)
 	card := w.assign("Paint the fence", w.bob)
-	before := w.inbox(w.bob, "").Unread // the assignment
+	before := w.inbox(w.bob, "").Unread
 
 	w.comment(w.owner, card, "The paint is in the shed")
 	in := w.inbox(w.bob, "")
@@ -1277,20 +1216,16 @@ func TestACommentTellsTheAssigneeAndNotTheCommenter(t *testing.T) {
 	if it.Kind != notifications.KindCardComment || it.Params["title"] != "Paint the fence" || it.Target.Section != "boards" || it.Target.Item != wantItem {
 		t.Fatalf("item = %+v", it)
 	}
-	// The text of the comment is in no notification: it is only a reference to the card.
 	if raw, _ := json.Marshal(in); strings.Contains(string(raw), "shed") {
 		t.Fatalf("the comment's text is in the inbox: %s", raw)
 	}
-	// The commenter, and a member who can't see the space, are told nothing.
 	if n := w.inbox(w.owner, "").Unread + w.inbox(w.mallory, "").Unread; n != 0 {
 		t.Fatalf("others were told: %d", n)
 	}
-	// Commenting on a card assigned to yourself tells nobody.
 	w.comment(w.bob, card, "Mine, on it")
 	if w.inbox(w.bob, "").Unread != before+1 {
 		t.Fatal("commenting on your own card made a notification")
 	}
-	// A card of nobody tells nobody.
 	unowned, err := w.cards.CreateCard(context.Background(), boards.Actor{UserID: w.owner.id}, w.space.ID, w.board, boards.NewCard{Title: "Unowned"})
 	if err != nil {
 		t.Fatal(err)
@@ -1308,8 +1243,6 @@ func TestAMentionTellsThePersonOnceAndOnlyIfTheyMayReadTheBoard(t *testing.T) {
 	card := w.assign("Plan", w.owner)
 	base := w.inbox(w.owner, "").Unread
 
-	// Bob is mentioned twice and the owner (the assignee) once, by someone else; mallory, who is a
-	// member of the workspace but not of the space, and a user that doesn't exist, are mentioned too.
 	w.comment(w.bob, card, "Hi "+mention("Bob", w.bob)+" and "+mention("Mallory", w.mallory)+" and "+mention("Owner", w.owner)+
 		" "+mention("Bob", w.bob)+" @[Nobody](user:99999)")
 	if n := w.inbox(w.owner, "").Unread - base; n != 1 {
@@ -1318,11 +1251,9 @@ func TestAMentionTellsThePersonOnceAndOnlyIfTheyMayReadTheBoard(t *testing.T) {
 	if it := w.inbox(w.owner, "").Notifications[0]; it.Kind != notifications.KindCardMention {
 		t.Fatalf("item = %+v: a mention takes the place of the comment's", it)
 	}
-	// Mentioning yourself tells nobody.
 	if w.inbox(w.bob, "").Unread != 0 {
 		t.Fatalf("bob = %+v", w.inbox(w.bob, ""))
 	}
-	// Mallory can't read the board: no notification, not even a "changed" one.
 	if n := w.count("notifications", "user_id = ?", w.mallory.id); n != 0 {
 		t.Fatalf("someone who can't read the board has %d notifications", n)
 	}
@@ -1331,12 +1262,10 @@ func TestAMentionTellsThePersonOnceAndOnlyIfTheyMayReadTheBoard(t *testing.T) {
 	if in.Unread != 1 || in.Notifications[0].Kind != notifications.KindCardMention || in.Notifications[0].Params["title"] != "Plan" {
 		t.Fatalf("bob = %+v", in)
 	}
-	// The name in the token isn't trusted: it is the ID that counts.
 	w.comment(w.owner, card, "@[Someone else](user:"+fmt.Sprint(w.bob.id)+")")
 	if w.inbox(w.bob, "").Unread != 2 {
 		t.Fatal("a mention with another name didn't tell the person of that ID")
 	}
-	// Plain text isn't a mention.
 	w.comment(w.owner, card, "@Bob @bob@example.com [Bob](user:"+fmt.Sprint(w.bob.id)+")")
 	if w.inbox(w.bob, "").Unread != 2 {
 		t.Fatal("plain text told someone")
@@ -1352,7 +1281,6 @@ func TestACommentNotificationShowsNothingOnceAccessEnds(t *testing.T) {
 	}
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.space.ID, w.bob.id), nil), http.StatusNoContent)
 
-	// What bob was told before shows nothing of the card, and mentioning him now tells him nothing.
 	w.comment(w.owner, card, "Bob is out: "+mention("Bob", w.bob))
 	raw := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil)
 	expect(t, raw, http.StatusOK)
@@ -1367,9 +1295,6 @@ func TestACommentNotificationShowsNothingOnceAccessEnds(t *testing.T) {
 	}
 }
 
-// whileRendering makes fn happen just after the inbox has read what it needs to decide, and before
-// it reads what it shows: the moment two separate reads would leave open. A renderer that decides
-// and reads in one statement runs fn before the statement, or after it, and either is consistent.
 func (w *world) whileRendering(fn func()) {
 	w.hooks.BeforeQuery("title", fn)
 }
@@ -1386,8 +1311,6 @@ func TestARenamedCardShowsNothingToSomeoneWhoseAccessEndedAtTheSameTime(t *testi
 				w.comment(w.owner, card, "Please read "+mention("Bob", w.bob))
 			}
 			w.whileRendering(func() {
-				// Bob is taken out of the space and the card is renamed, between the access check and
-				// the title's read, if there were two.
 				if _, err := w.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.space.ID, w.bob.id); err != nil {
 					t.Error(err)
 				}
@@ -1401,7 +1324,6 @@ func TestARenamedCardShowsNothingToSomeoneWhoseAccessEndedAtTheSameTime(t *testi
 				t.Fatalf("the inbox shows a title to someone who lost access: %s", raw.Body)
 			}
 			assertOnlyGeneric(t, raw, 1+btoi(kind != notifications.KindCardAssigned))
-			// Settled, it is the same answer.
 			if strings.Contains(w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil).Body.String(), "Secret") {
 				t.Fatal("the title shows once the rename has settled")
 			}
@@ -1442,8 +1364,6 @@ func TestAnAppNameShowsNothingToSomeoneWhoseAccessEndedAtTheSameTime(t *testing.
 	assertOnlyGeneric(t, raw, 1)
 }
 
-// assertOnlyGeneric checks that every one of the want items an inbox answer holds is the generic
-// "something changed": no names, no IDs, a link to the workspace's home.
 func assertOnlyGeneric(t *testing.T, raw *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	expect(t, raw, http.StatusOK)
@@ -1465,15 +1385,12 @@ func btoi(b bool) int {
 	return 0
 }
 
-// A grant the app's roles get while the inbox renders it must not show the name read before it: the
-// right to view and the name are one snapshot.
 func TestAnAppNameAndTheRightToViewItAreOneSnapshot(t *testing.T) {
 	w := newWorld(t, true)
 	var app int64
 	if err := w.db.QueryRow(`INSERT INTO apps (space_id, name, definition) VALUES (?, 'Inspections', '{}') RETURNING id`, w.space.ID).Scan(&app); err != nil {
 		t.Fatal(err)
 	}
-	// Restricted to the owner: Bob can't view it.
 	if _, err := w.db.Exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'builder')`, app, w.owner.id); err != nil {
 		t.Fatal(err)
 	}
@@ -1488,7 +1405,6 @@ func TestAnAppNameAndTheRightToViewItAreOneSnapshot(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	// Between the two reads there were, Bob is granted the app and it is renamed.
 	w.hooks.BeforeQuery("FROM app_roles", func() {
 		if _, err := w.db.Exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, app, w.bob.id); err != nil {
 			t.Error(err)

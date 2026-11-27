@@ -17,8 +17,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// A user's second account for a CLI is a config directory of its own: its login, status,
-// turns and sign-out never touch the first's.
 func TestAccountSlots(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)
@@ -31,7 +29,6 @@ func TestAccountSlots(t *testing.T) {
 		t.Fatalf("second account's directory = %s", second)
 	}
 
-	// The second account signs in through its own login, in its own directory.
 	l, err := h.w.StartLogin(acct(1), cliworker.Claude, "2")
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +53,6 @@ func TestAccountSlots(t *testing.T) {
 		t.Error("signing in the second account signed in the first")
 	}
 
-	// A turn on the second account runs with its directory.
 	s := spec("slot-2", 1, cliworker.Claude, "hello")
 	s.Slot = "2"
 	turn, _, err := h.w.Start(s)
@@ -76,13 +72,11 @@ func TestAccountSlots(t *testing.T) {
 		}
 	}
 
-	// The same turn ID on another account is another turn.
 	s.Slot = ""
 	if _, _, err := h.w.Start(s); err == nil || !strings.Contains(err.Error(), "different turn") {
 		t.Errorf("same ID, other account: %v", err)
 	}
 
-	// Signing the second account out leaves the first alone.
 	clitest.SignIn(t, "claude", first)
 	if err := h.w.Logout(ctx, acct(1), cliworker.Claude, "2"); err != nil {
 		t.Fatal(err)
@@ -94,7 +88,6 @@ func TestAccountSlots(t *testing.T) {
 		t.Error("signing out the second account signed out the first")
 	}
 
-	// A slot is a name the worker knows, never a path.
 	for _, bad := range []cliworker.Slot{"1", "10", "../x", "s0", "s", "2/..", "a"} {
 		if _, err := h.w.StartLogin(acct(1), cliworker.Claude, bad); err == nil {
 			t.Errorf("slot %q accepted for a login", bad)
@@ -104,15 +97,11 @@ func TestAccountSlots(t *testing.T) {
 			t.Errorf("slot %q accepted for a turn", bad)
 		}
 	}
-	// A shared account's directory has no login of its own.
 	if _, err := h.w.StartLogin(acct(1), cliworker.Claude, "s3"); err == nil {
 		t.Error("a login started in a shared account's directory")
 	}
 }
 
-// Forgetting a deleted account removes everything the worker kept for it: the logins of every
-// account, their sessions and working directories, and the user's directory; another user's
-// stay. Doing it again is no error.
 func TestForgetRemovesEverythingKeptForAUser(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)

@@ -1,17 +1,3 @@
-// Boards: a space's boards, the chosen board's cards by column, and the open card. Writers
-// add, rename and archive boards, add and edit cards, assign them, link documents and
-// conversations to them, move them between columns (with a card's Move menu, the open card's
-// status, or by dragging them with a mouse), comment, mark them blocked, and give them a due date
-// and labels (the board can be narrowed to a label, or to the overdue cards); viewers only read.
-// Every change sends the version last read: if someone changed the card meanwhile, the server
-// answers 409 with the card as it is, and the writer chooses to take that or to redo their change
-// over it. The open card's thread is polled, so others' comments appear. The open card is a
-// drawer over the board; on a phone it takes the screen.
-//
-// This file is the page that composes the parts: the head (BoardsHeader.tsx), the dialogs for a
-// board (BoardForms.tsx), the board's columns (BoardView.tsx) and the open card (CardView.tsx).
-// Its layout is boards.css.
-
 import { type ReactNode, useState } from 'react'
 import { ApiError, api, type Board, errorText, ws } from '../api'
 import { useT } from '../i18n'
@@ -28,12 +14,10 @@ import { BoardMenu, BoardsHeader } from './BoardsHeader'
 import { BoardSkeleton, BoardView } from './BoardView'
 import './boards.css'
 
-// open is a link's item (boardItem): the space, board and card to open on.
 export function BoardsPage({ workspace, open }: { workspace: number; open?: string }) {
   const target = parseBoardItem(open)
   const { spaces, space, choose } = useSpaces(workspace, target?.space)
   const base = space ? `${ws(workspace)}/spaces/${space.id}/boards` : null
-  // Archived boards are listed only when asked for, after the others.
   const [archived, setArchived] = useState(false)
   const boards = useLoad(
     () =>
@@ -47,8 +31,6 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
   const [renaming, setRenaming] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
   const [confirmDialog, confirm] = useConfirm()
-  // A link names its board: if that one isn't among those listed (it was archived since, or
-  // is gone) another board is not shown in its place, which would read as the card's board.
   const linkedMissing =
     boards.data !== undefined &&
     target?.board !== undefined &&
@@ -58,8 +40,6 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
   const canWrite = space?.access === 'write'
   const t = useT()
 
-  // Renames, archives or unarchives the board, with the version last read. A 409 means
-  // someone changed it meanwhile: the list is read again, to do it over the current board.
   const changeBoard = async (b: Board, fields: { name?: string; archived?: boolean }) => {
     setBoardError(null)
     try {
@@ -70,8 +50,6 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
     }
     boards.reload()
   }
-  // Archiving a team board takes it off the list for everyone in the space: asked first.
-  // Unarchiving puts it back, and isn't.
   const archiveBoard = async (b: Board) => {
     if (
       !b.archived_at &&

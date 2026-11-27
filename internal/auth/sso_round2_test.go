@@ -13,12 +13,8 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// ---- redirects, per provider ----
-
-// withDevProvider adds a second provider whose issuer is http on loopback, so that the server
-// as a whole has the development exception somewhere. The provider under test must not get it.
 func withDevProvider(t *testing.T) func(*SSOProvider, *Options) {
-	dev := newFakeIdP(t) // plain http on 127.0.0.1
+	dev := newFakeIdP(t)
 	return func(_ *SSOProvider, o *Options) {
 		o.SSO = append(o.SSO, SSOProvider{ID: "dev", Name: "Dev", Issuer: dev.srv.URL, ClientID: testClientID,
 			ClientSecret: testClientSecret, Scopes: []string{"openid", "email", "profile"}})
@@ -33,7 +29,7 @@ func TestSSORedirectsNeverLeaveTheirOrigin(t *testing.T) {
 	t.Run("an https provider is not given another provider's http exception", func(t *testing.T) {
 		for _, what := range []string{"discovery", "keys", "userinfo"} {
 			t.Run(what, func(t *testing.T) {
-				target, hits := hitCounter(t, false) // http on loopback
+				target, hits := hitCounter(t, false)
 				path := map[string]string{"discovery": "/.well-known/openid-configuration", "keys": "/keys", "userinfo": "/userinfo"}[what]
 				idp := newFakeIdPWith(t, func(f *fakeIdP) {
 					f.useTLS = true
@@ -46,13 +42,12 @@ func TestSSORedirectsNeverLeaveTheirOrigin(t *testing.T) {
 					expect(t, s.browser().do(http.MethodPost, "/api/sso/fake/start", map[string]string{}), http.StatusBadGateway)
 				case "keys":
 					s.wantFailure(s.signIn(s.browser(), "", verified("owner@example.com")), apierr.CodeSSOFailed)
-				default: // an ID token without an email makes the server ask UserInfo
+				default:
 					s.wantFailure(s.signIn(s.browser(), "", map[string]any{"email": nil}), apierr.CodeSSOEmailUnverified)
 				}
 				if n := hits.Load(); n != 0 {
 					t.Fatalf("the redirect to http loopback was followed (%d requests)", n)
 				}
-				// The development provider itself still works.
 				expect(t, s.browser().do(http.MethodPost, "/api/sso/dev/start", map[string]string{}), http.StatusOK)
 			})
 		}
@@ -66,11 +61,11 @@ func TestSSORedirectsNeverLeaveTheirOrigin(t *testing.T) {
 			http.Redirect(w, r, final.URL+"/x", http.StatusFound)
 		}))
 		t.Cleanup(mid.Close)
-		idp := newFakeIdPWith(t, func(f *fakeIdP) { // the provider is http on loopback itself
+		idp := newFakeIdPWith(t, func(f *fakeIdP) {
 			f.handlers["/.well-known/openid-configuration"] = redirectTo(mid.URL + "/x")
 		})
 		s := newSSOEnvWith(t, idp)
-		s.svc.sso.byID["fake"].guard.base = mid.Client().Transport // the middle hop's certificate is trusted
+		s.svc.sso.byID["fake"].guard.base = mid.Client().Transport
 		expect(t, s.browser().do(http.MethodPost, "/api/sso/fake/start", map[string]string{}), http.StatusBadGateway)
 		if finalHits.Load() != 0 || midHits.Load() != 0 {
 			t.Fatalf("the chain was followed: %d and %d requests", midHits.Load(), finalHits.Load())
@@ -78,7 +73,7 @@ func TestSSORedirectsNeverLeaveTheirOrigin(t *testing.T) {
 	})
 
 	t.Run("UserInfo's redirect to another origin carries no token", func(t *testing.T) {
-		other, hits := hitCounter(t, true) // another https origin, with the test certificate
+		other, hits := hitCounter(t, true)
 		idp := newFakeIdPWith(t, func(f *fakeIdP) {
 			f.useTLS = true
 			f.handlers["/userinfo"] = redirectTo(other.URL + "/x")
@@ -119,8 +114,6 @@ func TestSameOrigin(t *testing.T) {
 		{"https://a.example", "https://b.a.example", false},
 		{"https://a.example", "https://a.example:8443", false},
 		{"http://127.0.0.1:1", "http://127.0.0.1:2", false},
-		// Unicode case folding equates names that IDNA keeps apart: K (U+212A, Kelvin) folds to
-		// k, but xn--... of "\u212aey.example" isn't key.example. Non-ASCII hosts never match.
 		{"https://key.example", "https://\u212aey.example", false},
 		{"https://\u212aey.example", "https://\u212aey.example", false},
 		{"https://b\u00fccher.example", "https://xn--bcher-kva.example", false},
@@ -134,11 +127,7 @@ func TestSameOrigin(t *testing.T) {
 	}
 }
 
-// ---- the invitee's landing ----
-
 func TestSSONewAccountLandsOnTheRightWorkspace(t *testing.T) {
-	// Two workspaces whose invites are in the opposite order to their ids: the second workspace
-	// (the higher id) invited first.
 	var owner *client
 	setup := func(t *testing.T) (s *ssoEnv, ws1, ws2 int64, tok1, tok2 string) {
 		s = newSSOEnv(t)
@@ -170,8 +159,6 @@ func TestSSONewAccountLandsOnTheRightWorkspace(t *testing.T) {
 		s.wantLogin(b, s.signIn(b, "/invite#not-a-token", verified("new@example.com")),
 			fmt.Sprintf("/w/%d/conversations", ws2), "new@example.com")
 	})
-	// Tokens of invites to a workspace the account did join, but that this login didn't accept:
-	// they mustn't pick the landing, which is the first invite accepted (the second workspace).
 	t.Run("someone else's invite to a joined workspace is not followed", func(t *testing.T) {
 		s, ws1, ws2, _, _ := setup(t)
 		other := s.invite(owner, ws1, "other@example.com", RoleMember)
@@ -192,10 +179,8 @@ func TestSSONewAccountLandsOnTheRightWorkspace(t *testing.T) {
 	})
 }
 
-// ---- a callback in flight, and a callback to the wrong provider ----
-
 func TestSSOCallbackInFlightDoesNotBreakANewerAttempt(t *testing.T) {
-	var blocked atomic.Value // the code whose token exchange waits
+	var blocked atomic.Value
 	blocked.Store("")
 	entered, release := make(chan struct{}), make(chan struct{})
 	idp := newFakeIdPWith(t, func(f *fakeIdP) {
@@ -219,22 +204,19 @@ func TestSSOCallbackInFlightDoesNotBreakANewerAttempt(t *testing.T) {
 	go func() {
 		done <- b.do(http.MethodGet, "/api/sso/fake/callback?state="+url.QueryEscape(qa.Get("state"))+"&code="+codeA, nil)
 	}()
-	<-entered // A's callback is at the token endpoint
+	<-entered
 
-	qb := s.start(b, "/b") // the person starts again in another tab: the cookie is B's now
+	qb := s.start(b, "/b")
 	close(release)
 	recA := <-done
 	if recA.Code != http.StatusSeeOther || recA.Header().Get("Location") != "/a" {
 		t.Fatalf("A: %d %q", recA.Code, recA.Header().Get("Location"))
 	}
 
-	// A's answer must not have taken B's cookie away.
 	codeB := s.idp.issue(qb.Get("nonce"), qb.Get("code_challenge"), verified("owner@example.com"))
 	rec := b.do(http.MethodGet, "/api/sso/fake/callback?state="+url.QueryEscape(qb.Get("state"))+"&code="+codeB, nil)
 	s.wantLogin(b, rec, "/b", "owner@example.com")
 }
-
-// ---- Google: an hd that is empty ----
 
 func TestSSOGoogleHostedDomainMustHaveContent(t *testing.T) {
 	for name, hd := range map[string]any{"empty": "", "blank": "  \t", "absent": nil} {
@@ -266,8 +248,6 @@ func TestSSOGoogleHostedDomainMustHaveContent(t *testing.T) {
 	})
 }
 
-// ---- the logs keep the status, never the body ----
-
 func TestSSOLogsTheStatusOfEveryFailingCall(t *testing.T) {
 	unavailable := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -276,7 +256,7 @@ func TestSSOLogsTheStatusOfEveryFailingCall(t *testing.T) {
 	for _, c := range []struct {
 		name, path string
 		claims     map[string]any
-		start      bool // the failure is the start's
+		start      bool
 	}{
 		{"discovery", "/.well-known/openid-configuration", nil, true},
 		{"keys", "/keys", verified("owner@example.com"), false},
@@ -318,7 +298,6 @@ func TestSSOLoopbackExceptionIsPerProvider(t *testing.T) {
 func TestSSOTokenEndpointAuthStyleIsLearnedOnce(t *testing.T) {
 	var basic, form atomic.Int32
 	idp := newFakeIdPWith(t, func(f *fakeIdP) {
-		// A token endpoint that takes the client's credentials in the form only.
 		f.handlers["/token"] = func(w http.ResponseWriter, r *http.Request) {
 			if _, _, ok := r.BasicAuth(); ok {
 				basic.Add(1)

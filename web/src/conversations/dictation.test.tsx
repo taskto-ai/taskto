@@ -9,7 +9,6 @@ import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { ConversationsPage } from './ConversationsPage'
 import { clock, DICTATION_RATE, Downsampler, encodeWav, type Recording, toBase64 } from './recorder'
 
-// The microphone: a recording the test ends, holding a second of samples.
 const recorded = vi.hoisted(() => ({ samples: new Int16Array(16000).fill(1000), cancelled: 0, started: 0 }))
 vi.mock('./recorder', async (original) => {
   const real = await original<typeof import('./recorder')>()
@@ -82,7 +81,7 @@ test('dictation puts the text where the cursor is, to edit before sending', asyn
   render(<Page />)
   const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
   fireEvent.change(box, { target: { value: 'Hello world' } })
-  box.setSelectionRange(6, 6) // after "Hello "
+  box.setSelectionRange(6, 6)
 
   fireEvent.click(await screen.findByRole('button', { name: 'Dictate' }))
   const stop = await screen.findByRole('button', { name: 'Stop dictation' })
@@ -91,7 +90,6 @@ test('dictation puts the text where the cursor is, to edit before sending', asyn
   fireEvent.click(stop)
 
   await waitFor(() => expect(box.value).toBe('Hello brave new world'))
-  // Nothing was sent to the agent: the text waits in the box.
   expect(calls.some((c) => c.path.endsWith('/messages'))).toBe(false)
   const sent = calls.find((c) => c.path.endsWith('/transcriptions'))?.body as { audio_base64: string }
   const wav = Uint8Array.from(atob(sent.audio_base64), (ch) => ch.charCodeAt(0))
@@ -149,16 +147,15 @@ test('a server without dictation shows no microphone', async () => {
 test('the downsampler averages 48 kHz down to 16 kHz', () => {
   const d = new Downsampler(48000)
   const input = new Float32Array(4800)
-  for (let i = 0; i < input.length; i++) input[i] = i % 3 === 0 ? 0.3 : 0 // mean 0.1 per 3
+  for (let i = 0; i < input.length; i++) input[i] = i % 3 === 0 ? 0.3 : 0
   d.push(input.subarray(0, 1000))
   d.push(input.subarray(1000))
   const out = d.result()
   expect(out.length).toBe(1600)
   expect(d.length).toBe(1600)
   for (const v of out) expect(Math.abs(v - Math.round(0.1 * 0x7fff))).toBeLessThanOrEqual(1)
-  // 44.1 kHz: a second in, a second out.
   const e = new Downsampler(44100)
-  e.push(new Float32Array(44100).fill(-2)) // clipped
+  e.push(new Float32Array(44100).fill(-2))
   expect(Math.abs(e.length - DICTATION_RATE)).toBeLessThanOrEqual(1)
   expect(e.result()[0]).toBe(-32768)
 })
@@ -185,7 +182,6 @@ test('a recording whose session ended while it was made ready to send is not sen
   const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
   fireEvent.click(await screen.findByRole('button', { name: 'Dictate' }))
   const stop = await screen.findByRole('button', { name: 'Stop dictation' })
-  // Stopped, and the session ends before the recording has been made ready to send.
   fireEvent.click(stop)
   endSession()
   await new Promise((r) => setTimeout(r, 50))

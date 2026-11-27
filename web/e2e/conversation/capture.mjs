@@ -1,15 +1,3 @@
-// Captures the conversations page from harness.tsx (a fake API and a replayed stream, no
-// server, no agent runtime) in Playwright's Chromium, at the sizes and themes of make screens and a
-// short phone (390 by 480, as with the screen keyboard up):
-//
-//   node web/e2e/conversation/capture.mjs [out-dir] [scenario,…]
-//
-// Writes <out>/<size>-<theme>/conversation-<scenario>.png (default out: web/screens/harness), and
-// checks on every capture that the window itself doesn't scroll (only the panes do) and that Send is
-// on screen. It also checks that the locators the manual end to end scripts use
-// (dictation.e2e.mjs, browser-handover.e2e.mjs) each find what they look for. Exits non-zero
-// when a check fails. Development only; CI never runs it.
-
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -20,7 +8,6 @@ const out = resolve(process.argv[2] ?? join(web, 'screens/harness'))
 const scenarios = (process.argv[3] ?? 'chat,running,cli,cli-allow,browser,long,flaky,list,empty,failed').split(',')
 const sizes = { desktop: [1440, 900], tablet: [820, 1100], phone: [390, 844], short: [390, 480] }
 const themes = ['light', 'dark']
-// The scenarios with no conversation open.
 const listOnly = new Set(['list', 'empty'])
 
 const { createServer } = await import('vite')
@@ -40,8 +27,6 @@ const fail = (what, e) => {
   console.error(`${what}: ${e.message}`)
 }
 
-// The window never scrolls, even when the transcript is scrolled to its end and further; with a
-// conversation open, Send is inside the window.
 async function checkLayout(page, s) {
   const transcript = page.locator('.ui-chat-transcript')
   if ((await transcript.count()) === 1 && (await transcript.isVisible())) {
@@ -65,16 +50,13 @@ async function checkLayout(page, s) {
   assert.ok(box && box.y + box.height <= doc.window, `Send ends at ${box && box.y + box.height}px, below the window`)
 }
 
-// The end to end scripts' locators, each finding exactly what it should.
 async function checkLocators(page) {
   await page.goto(`${base}e2e/conversation/index.html?s=chat`)
   await page.getByRole('heading', { name: 'Plan the launch week' }).waitFor()
   await page.waitForTimeout(1000)
   assert.equal(await page.getByRole('textbox', { name: 'Message', exact: true }).count(), 1, 'the message box')
-  // dictation.e2e.mjs: the conversation's alerts (this one has a failed turn).
   const alerts = page.getByRole('region', { name: 'Conversation' }).getByRole('alert')
   assert.deepEqual(await alerts.allTextContents(), ['The provider is rate limited. Try again in a minute.'])
-  // browser-handover.e2e.mjs: a failed turn's error, read from the transcript.
   assert.deepEqual(await page.getByRole('article').getByRole('alert').allTextContents(), [
     'The provider is rate limited. Try again in a minute.',
   ])
@@ -87,7 +69,6 @@ async function checkLocators(page) {
   const live = page.getByRole('img', { name: 'The browser, under your control' })
   await live.waitFor({ timeout: 5000 })
   assert.equal(await live.count(), 1, 'the live view under control')
-  // Here the live view can't connect (no server), so its status line stays: exactly one.
   const status = page.getByRole('region', { name: 'Your browser' }).getByRole('status')
   await status.first().waitFor({ timeout: 5000 })
   assert.equal(await status.count(), 1, "the live view's status line")
@@ -111,7 +92,6 @@ try {
         try {
           await page.goto(`${base}e2e/conversation/index.html?s=${s}`)
           await page.waitForSelector('[aria-label="Conversations"]', { state: 'attached', timeout: 15000 })
-          // The stream's view, the inline app and the fonts.
           await page.waitForTimeout(s === 'chat' ? 2500 : 1500)
           await page.evaluate(() => document.fonts.ready)
           const file = join(out, `${size}-${theme}`, `conversation-${s}.png`)

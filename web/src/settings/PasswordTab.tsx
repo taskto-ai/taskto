@@ -1,7 +1,3 @@
-// Your own password: the current one, then the new one twice. Changing it signs you out
-// everywhere else; this browser gets a new session and stays signed in (docs/api.md#passwords).
-// Below it, your two-factor login.
-
 import { type FormEvent, useState } from 'react'
 import { api } from '../api'
 import { useT } from '../i18n'

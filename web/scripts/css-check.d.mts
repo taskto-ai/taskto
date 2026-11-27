@@ -1,5 +1,3 @@
-// The types of what the tests take from css-check.mjs (a plain script).
-
 export interface CssRule {
   selector: string
   line: number

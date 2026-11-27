@@ -24,27 +24,27 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// world is two workspaces and three people:
-//
-//   - one: alice and bob. shared, a shared space alice edits and bob views; each has a
-//     private space; aliceConv and bobConv are their conversations there.
-//   - two: alice and carol. aliceConv2 is alice's conversation there.
 type world struct {
 	t                          *testing.T
 	db                         *sql.DB
 	kb                         *knowledge.Store
 	tools                      *Service
-	apps                       *apps.Service // the one the tools use, for a test to set its clock
+	apps                       *apps.Service
 	alice, bob, carol          int64
 	one, two                   int64
 	alicePrivate, bobPrivate   int64
 	alicePrivate2, shared      int64
 	aliceConv, bobConv         int64
 	aliceConv2                 int64
-	alicePersonal, bobPersonal int64 // their personal boards in one
+	alicePersonal, bobPersonal int64
 }
 
 func newWorld(t *testing.T) *world {
+	t.Helper()
+	return newWorldWith(t, search.Options{})
+}
+
+func newWorldWith(t *testing.T, searchOpts search.Options) *world {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -61,7 +61,7 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	kb := knowledge.New(dir, knowledge.Options{})
-	index := search.New(sqlDB, kb, providers.NewStore(sqlDB, key), search.Options{})
+	index := search.New(sqlDB, kb, providers.NewStore(sqlDB, key), searchOpts)
 	checker := access.New(sqlDB, nil)
 	appSvc := apps.New(sqlDB, checker)
 	w := &world{t: t, db: sqlDB, kb: kb, apps: appSvc, tools: New(Options{
@@ -115,13 +115,11 @@ func (w *world) conversation(ws, user int64) int64 {
 	return w.insert(`INSERT INTO conversations (workspace_id, owner_id, agent_id) VALUES (?, ?, ?) RETURNING id`, ws, user, agentIDs)
 }
 
-// call calls tool for conversation conv with args, and returns the status and reply.
 func (w *world) call(conv int64, tool string, args any) (int, map[string]any) {
 	w.t.Helper()
 	return w.callWith("Bearer "+w.capability(conv), tool, args)
 }
 
-// capability is conv's, as the server hands it out.
 func (w *world) capability(conv int64) string {
 	w.t.Helper()
 	return w.tools.Capability(conv, w.insert(`SELECT agent_id FROM conversations WHERE id = ?`, conv))
@@ -149,7 +147,6 @@ func (w *world) callWith(authorization, tool string, args any) (int, map[string]
 	return rec.Code, out
 }
 
-// ok calls a tool that must succeed.
 func (w *world) ok(conv int64, tool string, args any) map[string]any {
 	w.t.Helper()
 	code, out := w.call(conv, tool, args)
@@ -159,7 +156,6 @@ func (w *world) ok(conv int64, tool string, args any) map[string]any {
 	return out
 }
 
-// status calls a tool that must answer with code.
 func (w *world) status(code int, conv int64, tool string, args any) map[string]any {
 	w.t.Helper()
 	got, out := w.call(conv, tool, args)
@@ -180,8 +176,6 @@ func TestCapabilities(t *testing.T) {
 	if code, out := w.callWith("Bearer "+good, "list_spaces", map[string]any{}); code != http.StatusOK {
 		t.Fatalf("a genuine capability: %d %v", code, out)
 	}
-	// Another conversation's MAC, a changed ID, a changed MAC, another server's key, and
-	// no capability at all are all refused alike.
 	other := w.capability(w.bobConv)
 	_, otherMAC, _ := strings.Cut(strings.TrimPrefix(other, "ttc1."), ".")
 	dir := t.TempDir()
@@ -190,11 +184,7 @@ func TestCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := New(Options{Key: key}).Capability(w.aliceConv, w.insert(`SELECT agent_id FROM conversations WHERE id = ?`, w.aliceConv))
-	// The conversation's ID with another agent runtime conversation, as if the ID had been
-	// used again.
 	reused := w.tools.Capability(w.aliceConv, 9999)
-	// The MAC's first character changed, always to a different one: with a random key, a
-	// fixed replacement can be what the MAC already has.
 	at := strings.LastIndex(good, ".") + 1
 	swap := map[bool]string{true: "B", false: "A"}[good[at] == 'A']
 	changed := good[:at] + swap + good[at+1:]
@@ -229,9 +219,6 @@ func TestRequests(t *testing.T) {
 	}
 }
 
-// A conversation reaches exactly its owner's spaces in its own workspace: never another
-// user's, never the owner's in another workspace, and answers alike for those and for
-// spaces that don't exist.
 func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -275,10 +262,8 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 			}
 		}
 	}
-	// Bob's board through alice's own space is no way round.
 	w.status(http.StatusNotFound, w.aliceConv, "show_card", map[string]any{"space_id": w.alicePrivate, "board_id": w.bobPersonal, "card_id": bobCard.ID})
 
-	// Searching everything alice can read finds nothing of bob's, nor of her other workspace.
 	res := w.ok(w.aliceConv, "search_docs", map[string]any{"query": "zanzibar"})["results"].([]any)
 	if len(res) != 0 {
 		t.Fatalf("alice's search found %v", res)
@@ -286,7 +271,6 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 	if res := w.ok(w.bobConv, "search_docs", map[string]any{"query": "zanzibar"})["results"].([]any); len(res) != 1 {
 		t.Fatalf("bob's search = %v", res)
 	}
-	// So do the cards: bob's card is found for bob only, and by none of alice's searches.
 	if res := w.ok(w.aliceConv, "search_cards", map[string]any{"query": "zanzibar"})["results"].([]any); len(res) != 0 {
 		t.Fatalf("alice's card search found %v", res)
 	}
@@ -295,7 +279,6 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 		t.Fatalf("bob's card search = %v", cards)
 	}
 
-	// Nothing was written or changed for alice's calls.
 	card, err := w.tools.o.Boards.ShowCard(ctx, boards.Actor{UserID: w.bob}, w.bobPrivate, w.bobPersonal, bobCard.ID)
 	if err != nil || card.Version != 1 || card.Title != "Bob's card" || len(card.Comments) != 0 {
 		t.Fatalf("bob's card = %+v, %v", card, err)
@@ -305,7 +288,6 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 	}
 }
 
-// What the agent writes is its user's, marked as the agent's.
 func TestWritesAreTheUsersMadeByTheAgent(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -358,13 +340,10 @@ func TestWritesAreTheUsersMadeByTheAgent(t *testing.T) {
 		t.Fatalf("thread = %v", thread)
 	}
 
-	// A card links conversations by the conversation API's ID, and only the user's own.
 	w.status(http.StatusBadRequest, w.aliceConv, "update_card", with(map[string]any{"version": thread["version"], "conversations": []string{strconv.FormatInt(w.bobConv, 10)}}))
 	w.status(http.StatusBadRequest, w.aliceConv, "update_card", with(map[string]any{"version": thread["version"], "conversations": []string{strconv.FormatInt(w.aliceConv2, 10)}}))
 }
 
-// The agent sets, reads, filters and sorts by a card's due date and labels, with the same
-// checks as the API.
 func TestCardDueDateAndLabels(t *testing.T) {
 	w := newWorld(t)
 	board := id(w.ok(w.aliceConv, "list_boards", map[string]any{"space_id": w.alicePrivate})["boards"].([]any)[0].(map[string]any)["id"])
@@ -408,7 +387,6 @@ func TestCardDueDateAndLabels(t *testing.T) {
 	}
 	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"due_before": "soon"}))
 	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"sort": "rank"}))
-	// The store's limit on filter labels holds for the agent as for the API.
 	many := []string{}
 	for i := 0; i < 11; i++ {
 		many = append(many, fmt.Sprint("l", i))
@@ -437,11 +415,9 @@ func TestCardDueDateAndLabels(t *testing.T) {
 	if shown["due"] != nil || fmt.Sprint(shown["labels"]) != "[docs]" {
 		t.Fatalf("show_card = %v", shown)
 	}
-	// A stale version still fails, whatever the change.
 	w.status(http.StatusConflict, w.aliceConv, "update_card", with(map[string]any{"card_id": id(b["id"]), "version": 1, "due": "2027-01-01"}))
 }
 
-// Access is asked again on every call, so a change applies to the next one.
 func TestAccessIsCheckedOnEveryCall(t *testing.T) {
 	w := newWorld(t)
 	put := func(conv int64, path string) (int, map[string]any) {
@@ -450,7 +426,6 @@ func TestAccessIsCheckedOnEveryCall(t *testing.T) {
 	if code, out := put(w.aliceConv, "a.md"); code != http.StatusOK {
 		t.Fatalf("alice, an editor: %d %v", code, out)
 	}
-	// bob only views the shared space: he reads, and can't write.
 	w.ok(w.bobConv, "read_doc", map[string]any{"space_id": w.shared, "path": "a.md"})
 	if code, _ := put(w.bobConv, "b.md"); code != http.StatusForbidden {
 		t.Fatalf("bob, a viewer: %d", code)
@@ -458,7 +433,6 @@ func TestAccessIsCheckedOnEveryCall(t *testing.T) {
 	board := w.insert(`INSERT INTO boards (space_id, kind, name) VALUES (?, 'team', 'Team') RETURNING id`, w.shared)
 	w.status(http.StatusForbidden, w.bobConv, "create_card", map[string]any{"space_id": w.shared, "board_id": board, "title": "x"})
 
-	// The space archived: read-only for everyone, at once.
 	w.exec(`UPDATE spaces SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.shared)
 	if code, _ := put(w.aliceConv, "c.md"); code != http.StatusForbidden {
 		t.Fatalf("archived space: %d", code)
@@ -467,18 +441,14 @@ func TestAccessIsCheckedOnEveryCall(t *testing.T) {
 	w.ok(w.aliceConv, "read_doc", map[string]any{"space_id": w.shared, "path": "a.md"})
 	w.exec(`UPDATE spaces SET archived_at = NULL WHERE id = ?`, w.shared)
 
-	// Alice taken off the space: not found, at once.
 	w.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.shared, w.alice)
 	w.status(http.StatusNotFound, w.aliceConv, "read_doc", map[string]any{"space_id": w.shared, "path": "a.md"})
 
-	// Her conversation archived: no tools at all; back once unarchived.
 	w.exec(`UPDATE conversations SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.aliceConv)
 	w.status(http.StatusForbidden, w.aliceConv, "list_spaces", map[string]any{})
 	w.exec(`UPDATE conversations SET archived_at = NULL WHERE id = ?`, w.aliceConv)
 	w.ok(w.aliceConv, "list_spaces", map[string]any{})
 
-	// Alice out of the workspace: her conversations there can't do anything, those in her
-	// other workspace still can.
 	w.exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, w.one, w.alice)
 	w.status(http.StatusForbidden, w.aliceConv, "list_spaces", map[string]any{})
 	w.status(http.StatusForbidden, w.aliceConv, "read_doc", map[string]any{"space_id": w.alicePrivate, "path": "a.md"})
@@ -489,7 +459,6 @@ func TestResultsAreBounded(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 
-	// A long document is read in pieces that add up to it.
 	var long strings.Builder
 	for long.Len() < 100<<10 {
 		long.WriteString("Ünïcode line, to cut at a character boundary.\n")
@@ -515,7 +484,6 @@ func TestResultsAreBounded(t *testing.T) {
 		t.Fatalf("read %d bytes in %d pieces, want %d", read.Len(), pieces, long.Len())
 	}
 
-	// A card with a long thread shows the newest comments that fit, each cut.
 	a := boards.Actor{UserID: w.alice}
 	card, err := w.tools.o.Boards.CreateCard(ctx, a, w.alicePrivate, w.alicePersonal, boards.NewCard{Title: "Long", Body: strings.Repeat("b", 30<<10)})
 	if err != nil {
@@ -539,7 +507,6 @@ func TestResultsAreBounded(t *testing.T) {
 		t.Fatalf("the body is %d bytes", len(body))
 	}
 
-	// Many cards: bodies cut, and the list shortened to fit.
 	for i := range 150 {
 		if _, err := w.tools.o.Boards.CreateCard(ctx, a, w.alicePrivate, w.alicePersonal, boards.NewCard{
 			Title: fmt.Sprintf("Card %d %s", i, strings.Repeat("t", 150)), Body: strings.Repeat("b", 2000),

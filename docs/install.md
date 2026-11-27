@@ -927,10 +927,16 @@ A private space's files go under the knowledge base's own lock for that space, w
 photo writes in it held too: a write already under way finishes first, and one that comes after
 is refused as a space that isn't there, so nothing of the space is written again once it is
 removed. A call that had found the space before the purge is told from a space made later with the
-same number (the database can give a purged space's number again) by its creation time, and its row
-is checked once more under the lock, so it can't make the directory again either. The directory is renamed aside in one step and then deleted, so a server that stops in the
+same number (the database can give a purged space's number again) by its generation, and its row
+is checked once more under the lock, so it can't make the directory again either. The generation is
+a number no space has twice: a counter in the database (`space_generations`) gives each new space
+the next one, and never goes down, so it doesn't depend on the clock the way a creation time does.
+The counter is in the database, which a restore brings back together with the data directory, so
+the two are always consistent; spaces made after the backup are gone with it, and their numbers
+may be given again. The directory is renamed aside in one step and then deleted, so a server that stops in the
 middle leaves no half-deleted repository at the space's path; the purge's next try deletes what
-was left.
+was left. A removal that comes late, for a space that is no longer the one with the number, leaves
+the directory alone, since the files there are the new space's.
 
 **What stays: what they made for others.** Cards, comments, documents and app records in shared
 spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records
@@ -951,8 +957,28 @@ is a decision about the workspace's records, not an account's.
   restored account that was purged is a live one again.
 - **Steps that wait for the agent runtime or the CLI workers.** Pi Durable, the runtime, has no way
   to delete a conversation, so the purge **retires** each one (its work stops and the runtime refuses
-  it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`, with the
-  deleted content zeroed in the file. It also rewrites the runtime's providers file, stops the
+  it from then on) and has the runtime **purge** its records, in `<data>/agent/agent.db`. What is
+  deleted there is overwritten with zeros in the file, whoever deletes it: the purge, and the
+  runtime's own work as it goes (input withdrawn from a queue, a document's older versions), since
+  every connection the runtime opens sets SQLite's `secure_delete`; the purge ends by emptying the
+  write-ahead log. A database written by a version before this one can still hold what was deleted
+  then: the runtime compacts it once (`VACUUM`) when it next starts, before it serves, if it is at
+  most 256 MiB and the disk has room for twice its size. It is recorded done only once the
+  write-ahead log is empty too; when it can't be finished (a reader such as a backup holds the log,
+  or SQLite fails: the disk full, the file read-only), the log says it is deferred, the runtime
+  starts all the same, and it is tried again at the next start. A larger one is left as it is, and
+  the log says so at each start: compact it by hand. Stop the server and everything else that reads
+  `agent.db` first, the backup schedule and any backup or `sqlite3` shell still running included
+  (`docker compose down` stops the schedule when its profile is in `COMPOSE_PROFILES`), then run
+  `docker compose run --rm taskto agent-compact` (outside Docker, `taskto agent-compact -data-dir
+  <data>`), which needs room on the disk for twice the database's size (`VACUUM` builds a copy
+  and SQLite can need that much beside the original). It refuses while a server or
+  the runtime has the data directory, rewrites the database (`VACUUM`), empties the write-ahead
+  log, and records the compaction only when SQLite says the log was emptied: when a reader still
+  holds it, what was deleted may still be in it, so it says so, records nothing and exits with an
+  error; stop that reader and run it again. Don't record it by hand. Removed files' blocks on the disk
+  itself are the file system's (see SQLite and the filesystem below).
+  It also rewrites the runtime's providers file, stops the
   person's agent browsers (none starts meanwhile, and their live views close) and, once their
   processes are gone, removes their profile, and then removes the CLI worker's directory of the
   person, which is left alone while a browser step is still recorded: the account's home in

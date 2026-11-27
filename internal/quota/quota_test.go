@@ -28,7 +28,6 @@ func TestErrorIsAnAPIAnswer(t *testing.T) {
 	}
 }
 
-// Without a quota, or for a write that adds nothing, the check answers before it reads anything.
 func TestCheckNeedsNoDatabaseWhenThereIsNothingToCheck(t *testing.T) {
 	sp := access.Space{ID: 1, WorkspaceID: 1}
 	for name, s := range map[string]*Service{

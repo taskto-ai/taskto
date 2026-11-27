@@ -33,7 +33,6 @@ func TestWorkspaceMembersPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The owner, admin2, alice, bob and mallory; gone and stranger have left.
 	want := []int64{w.owner.id, w.admin2.id, w.alice.id, w.bob.id, w.mallory.id}
 	if got := ids(all); !slices.Equal(got, want) {
 		t.Fatalf("members = %v, want %v", got, want)
@@ -46,7 +45,6 @@ func TestWorkspaceMembersPages(t *testing.T) {
 		t.Fatalf("a page after admin2, of 2 = %v, want %v", got, want[2:4])
 	}
 
-	// Not a member of the workspace: the same answer as for a workspace that doesn't exist.
 	for _, who := range []int64{w.gone.id, w.stranger.id} {
 		if _, err := w.e.c.WorkspaceMembers(ctx, who, w.ws, auth.RosterPage{}); !errors.Is(err, ErrNotFound) {
 			t.Errorf("user %d: err = %v, want ErrNotFound", who, err)
@@ -72,7 +70,6 @@ func TestReadableSpaceMembersIsOfTheCallsWorkspace(t *testing.T) {
 	if err != nil || !slices.Equal(memberIDs(members), []int64{w.alice.id}) {
 		t.Fatalf("a page of shared after the owner, of 1 = %v, %v", memberIDs(members), err)
 	}
-	// A private space has its owner alone, past which there is nothing.
 	_, members, err = w.e.c.ReadableSpaceMembers(ctx, w.alice.id, w.ws, w.alicePrivate.ID, auth.RosterPage{})
 	if err != nil || !slices.Equal(memberIDs(members), []int64{w.alice.id}) {
 		t.Fatalf("members of alice's private space = %v, %v", memberIDs(members), err)
@@ -82,7 +79,6 @@ func TestReadableSpaceMembersIsOfTheCallsWorkspace(t *testing.T) {
 		t.Fatalf("members of alice's private space after her = %v, %v", memberIDs(members), err)
 	}
 
-	// A space the user reads, asked about as of another workspace they are also in, is not found.
 	both := w.e.join(w.owner, w.ws, "Both", auth.RoleMember)
 	if _, err := w.e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, w.other, both.id); err != nil {
 		t.Fatal(err)
@@ -100,16 +96,11 @@ func TestReadableSpaceMembersIsOfTheCallsWorkspace(t *testing.T) {
 	if _, _, err := w.e.c.ReadableSpaceMembers(ctx, both.id, w.ws, mine.ID, auth.RosterPage{}); err != nil {
 		t.Errorf("the same, as of its own workspace: %v", err)
 	}
-	// Not shared with the user, nor readable: the same.
 	if _, _, err := w.e.c.ReadableSpaceMembers(ctx, w.mallory.id, w.ws, w.shared.ID, auth.RosterPage{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a shared space the user isn't in: err = %v, want ErrNotFound", err)
 	}
 }
 
-// What a call checks and what it lists are of one snapshot: while bob and mallory take each
-// other's place in the shared space, in one transaction each time, a list that bob gets has
-// bob in it. Checked apart, bob could pass the check and then be listed as gone, with
-// mallory in his place.
 func TestSpaceMembersAreOfTheSnapshotTheyAreCheckedIn(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -155,7 +146,7 @@ func TestSpaceMembersAreOfTheSnapshotTheyAreCheckedIn(t *testing.T) {
 	for i := 0; i < 3000 && !t.Failed(); i++ {
 		_, members, err := w.e.c.ReadableSpaceMembers(ctx, w.bob.id, w.ws, w.shared.ID, auth.RosterPage{ByID: true})
 		if errors.Is(err, ErrNotFound) {
-			continue // bob wasn't in it then
+			continue
 		}
 		if err != nil {
 			t.Fatal(err)

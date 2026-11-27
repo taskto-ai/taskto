@@ -1,6 +1,3 @@
-// The shell in a real browser, where only layout and the accessibility tree tell: on a tablet the
-// sidebar is a rail of icons, and each of its links and buttons must still have its whole name.
-
 import assert from 'node:assert/strict'
 import { api, installExpenseTracker, owner, scenario, setUp } from '../support.mjs'
 
@@ -9,7 +6,6 @@ scenario(
   async (s) => {
     const { page, context } = s
     await setUp(s)
-    // A pinned app, so the rail has one of those too.
     await installExpenseTracker(s)
     const { spaces } = await api(context, 'GET', '/api/workspaces/1/spaces')
     const space = spaces.find((x) => x.kind === 'private')
@@ -19,11 +15,9 @@ scenario(
 
     const nav = page.getByRole('navigation', { name: 'Sections' })
     await nav.getByRole('region', { name: 'Pinned apps' }).waitFor()
-    // The rail: the labels are out of sight.
     const label = nav.locator('.ui-shell-link-label').first()
     assert.ok((await label.boundingBox()).width <= 1, 'the rail shows icons, not labels')
 
-    // Every link, as the accessibility tree has it: a name for each, the same as its label.
     const tree = await nav.ariaSnapshot()
     const links = tree.split('\n').filter((line) => /^\s*- link\b/.test(line))
     assert.ok(links.length >= 8, `the sections, the inbox, Settings and the pin: ${tree}`)
@@ -33,8 +27,6 @@ scenario(
     }
     assert.equal(await nav.getByRole('region', { name: 'Pinned apps' }).getByRole('link').count(), 1)
 
-    // The switcher and the account, which show only their avatars here, still name what they
-    // hold: "Workspace: …" and "Account: …", not the label alone.
     const exact = true
     assert.equal(await page.getByRole('button', { name: `Workspace: ${owner.workspace}`, exact }).count(), 1)
     assert.equal(await page.getByRole('button', { name: `Account: ${owner.name} ${owner.email}`, exact }).count(), 1)
@@ -55,23 +47,16 @@ scenario(
       await page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name, exact: true }).click()
       await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN', null, { timeout: 5_000 })
     }
-    // Settings on a phone: its title is the tab's, and "Settings" is the line above it.
     const main = page.getByRole('main')
     assert.equal(await main.locator('.settings-path').isVisible(), true)
     assert.equal((await main.locator('.settings-path').textContent()).trim(), 'Settings')
-    // Wide, the side list's title says it, and the line is not drawn.
     await page.setViewportSize({ width: 1440, height: 900 })
     assert.equal(await main.locator('.settings-path').isVisible(), false)
   },
 )
 
-// --- Layout that only a browser can tell ------------------------------------------------------
-
-// A workspace name of one long word (the most a name may be is 100 characters).
 const LONG = 'Northwind'.repeat(9)
 
-// The switcher's menu, opened by keyboard, with a long name in it: nothing scrolls sideways, every
-// check mark is inside the list and in the text's colour, and wrapped items keep room between them.
 async function menuFacts(page) {
   const switcher = page.getByRole('button', { name: /^Workspace: / })
   await switcher.focus()
@@ -115,9 +100,7 @@ for (const width of [390, 1440]) {
       assert.ok(facts.checkInside, 'the check mark is inside the menu')
       assert.ok(facts.checkColour, "the check mark has the item's text colour, not the icons' muted one")
       assert.ok(facts.wrapped, 'the long name wraps')
-      // The items of a group are a thin line apart (--line-thin), as the menu's items are.
       assert.equal(facts.groupGap, '1px', 'the gap between grouped items is the thin line')
-      // --space-2 above and below a wrapped label.
       assert.ok(facts.roomAbove >= 7 && facts.roomBelow >= 7, `room around a wrapped item: ${JSON.stringify(facts)}`)
     },
   )
@@ -143,7 +126,6 @@ scenario(
       return { overflow: sidebar.scrollWidth - sidebar.clientWidth, overTop: Math.max(0, pill.bottom - bell.top) }
     })
     assert.equal(facts.overflow, 0, 'the rail does not overflow sideways')
-    // On the corner: at most a few pixels of the bell's top under the count, not half of it.
     assert.ok(facts.overTop <= 4, `the count covers ${facts.overTop}px of the bell`)
     const switcher = page.getByRole('button', { name: /^Workspace: / })
     await switcher.hover()
@@ -184,7 +166,6 @@ for (const dir of ['ltr', 'rtl']) {
     await page.locator('.ui-shell').waitFor()
     await page.evaluate((d) => document.documentElement.setAttribute('dir', d), dir)
     await page.getByRole('button', { name: 'Open the menu' }).click()
-    // Past the drawer's slide.
     await page.waitForTimeout(500)
     await page.getByRole('button', { name: /^Workspace: / }).focus()
     await page.keyboard.press('Shift+Tab')

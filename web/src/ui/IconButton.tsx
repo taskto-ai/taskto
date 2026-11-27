@@ -1,10 +1,3 @@
-// A button that is only an icon. Its label is required: it is the button's accessible name and the
-// text of the tooltip that shows on hover and on keyboard focus, so the icon is never the only way
-// to learn what the button does.
-//
-// Two sizes, md (36px) and sm (28px), square with the control's radius; on a touch screen both
-// are 44px. A toggle passes aria-pressed and gets the selected look.
-
 import type { ComponentPropsWithRef } from 'react'
 import { Icon, type IconName } from './Icon'
 import { Tooltip } from './Tooltip'

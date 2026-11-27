@@ -9,8 +9,6 @@ import (
 	"testing/fstest"
 )
 
-// migrationsBefore returns the embedded migrations that come before the one whose name ends
-// in suffix.
 func migrationsBefore(t *testing.T, suffix string) fstest.MapFS {
 	t.Helper()
 	sub, err := fs.Sub(migrations, "migrations")
@@ -36,8 +34,6 @@ func migrationsBefore(t *testing.T, suffix string) fstest.MapFS {
 	return nil
 }
 
-// Several accounts per CLI rebuild cli_accounts and cli_sessions: what a database had keeps,
-// as each user's first account, with its sessions.
 func TestCLIAccountSlotsKeepTheAccounts(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -67,14 +63,12 @@ func TestCLIAccountSlotsKeepTheAccounts(t *testing.T) {
 	if slot != 1 || state != "reconnect" || method != "chatgpt" || session != "thread-1" {
 		t.Fatalf("after the migration: slot %d, state %s, method %s, session %s", slot, state, method, session)
 	}
-	// A second account of the same CLI now fits; a second first one doesn't.
 	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO cli_accounts (user_id, cli, slot, state) VALUES (1, 'codex', 2, 'connected')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO cli_accounts (user_id, cli, slot, state) VALUES (1, 'codex', 1, 'connected')`); err == nil {
 		t.Fatal("two first accounts for one CLI")
 	}
-	// The sessions still go with their account.
 	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM cli_accounts WHERE id = 3`); err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +78,6 @@ func TestCLIAccountSlotsKeepTheAccounts(t *testing.T) {
 	}
 }
 
-// A purge's CLI home step recorded before the browser's step existed gets a browser step, which
-// the purge does first; the rows and their numbers stay.
 func TestPurgeCleanupsGainTheBrowserStep(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -100,7 +92,6 @@ func TestPurgeCleanupsGainTheBrowserStep(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	// Up to this migration only: the CLI step's target changes in a later one (0059, its own test).
 	if _, err := migrate(ctx, sqlDB, upTo(t, 58)); err != nil {
 		t.Fatal(err)
 	}

@@ -1,8 +1,3 @@
-// The page as text for the agent, run by browser_snapshot in an isolated world of the page's
-// main frame: it shares the DOM with the page, but not its JavaScript, so the page's scripts
-// can't see or change the refs kept here. Interactive elements get a ref (e1, e2, …), kept in
-// this world for browser_click and browser_type until the next snapshot. Frames are named,
-// not entered: a login or captcha in a frame is the user's to do.
 (() => {
   const MAX = 48000
   const refs = new Map()

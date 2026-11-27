@@ -20,12 +20,6 @@ import (
 	"taskto.ai/taskto/internal/cliowner"
 )
 
-// These tests drive a real Chromium (and, for the personal browser, Xvfb and x11vnc) against
-// local test pages, a fake login page among them: no real site, no real account. They run
-// only with TASKTO_BROWSER_IT=1, which CI's browser job sets, and then must not be skipped: a
-// Chromium found on the PATH elsewhere (a CI image's, whose sandbox the host may block) is
-// no reason to run them. TASKTO_BROWSER_CHROMIUM names another Chromium (or Chrome).
-
 func realHost(t *testing.T, needDisplay bool) *LocalHost {
 	t.Helper()
 	if os.Getenv("TASKTO_BROWSER_IT") != "1" {
@@ -35,7 +29,6 @@ func realHost(t *testing.T, needDisplay bool) *LocalHost {
 	if bins[Chromium] == "" || (needDisplay && (bins[Xvfb] == "" || bins[X11vnc] == "")) {
 		t.Fatalf("TASKTO_BROWSER_IT=1 but the programs aren't all installed: %v", bins)
 	}
-	// Homes named as the CLI worker names them, with a home number as long as its are.
 	root := t.TempDir()
 	home := func(a cliowner.Account) (string, error) {
 		return filepath.Join(root, "h"+strconv.FormatInt(1<<30+a.User, 10)), nil
@@ -46,7 +39,6 @@ func realHost(t *testing.T, needDisplay bool) *LocalHost {
 func newRealManager(t *testing.T, h *LocalHost, cfg Config) *Manager {
 	t.Helper()
 	cfg.Host = h
-	// Chromium won't run as root with its sandbox (CI runs these in a root container).
 	cfg.NoSandbox = os.Geteuid() == 0
 	cfg.StartTimeout = 60 * time.Second
 	m := NewManager(cfg)
@@ -54,13 +46,12 @@ func newRealManager(t *testing.T, h *LocalHost, cfg Config) *Manager {
 	return m
 }
 
-// testSite is the pages the browser is tried on, including a fake login.
 func testSite(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	page := func(w http.ResponseWriter, title, body string) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, "<!doctype html><title>%s</title><body>%s</body>", title, body) //nolint:gosec // G705: the test's own fixed pages
+		fmt.Fprintf(w, "<!doctype html><title>%s</title><body>%s</body>", title, body)
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		page(w, "Home", `<h1>Home page</h1><p>Some <b>text</b> here.</p>
@@ -83,7 +74,7 @@ func testSite(t *testing.T) *httptest.Server {
 			page(w, "Sign in", `<p>Wrong password.</p>`)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "session", //nolint:gosec // G124: a plain-http test page's cookie
+		http.SetCookie(w, &http.Cookie{Name: "session",
 			Value: r.FormValue("email"), Path: "/", MaxAge: 3600, HttpOnly: true})
 		http.Redirect(w, r, "/account", http.StatusSeeOther)
 	})
@@ -101,7 +92,6 @@ func testSite(t *testing.T) *httptest.Server {
 
 var refLine = regexp.MustCompile(`^\[(e[0-9]+)\] (.*)$`)
 
-// refFor returns the ref of the snapshot's element whose line contains text.
 func refFor(t *testing.T, snapshot, text string) string {
 	t.Helper()
 	for _, line := range strings.Split(snapshot, "\n") {
@@ -138,7 +128,6 @@ func snapshot(t *testing.T, m *Manager, user int64, kind Kind, tab string) strin
 	return do(t, m, user, Action{Op: OpSnapshot, Browser: kind, Tab: tab}).Snapshot
 }
 
-// signIn signs in on the fake login page in tab, as the agent would.
 func signIn(t *testing.T, m *Manager, user int64, kind Kind, site string) string {
 	t.Helper()
 	tab := do(t, m, user, Action{Op: OpOpen, Browser: kind, URL: site + "/login"}).Tab.ID
@@ -149,7 +138,6 @@ func signIn(t *testing.T, m *Manager, user int64, kind Kind, site string) string
 	do(t, m, user, Action{Op: OpType, Browser: kind, Tab: tab, Ref: refFor(t, snap, "Email"), Text: "a@example.com"})
 	do(t, m, user, Action{Op: OpType, Browser: kind, Tab: tab, Ref: refFor(t, snap, "Password"), Text: "correct horse"})
 	snap = snapshot(t, m, user, kind, tab)
-	// A password's value never reaches the agent.
 	if strings.Contains(snap, "correct horse") || !strings.Contains(snap, `input password "Password" (filled)`) {
 		t.Fatalf("the password field in the snapshot:\n%s", snap)
 	}
@@ -168,7 +156,6 @@ func TestRealTestingBrowser(t *testing.T) {
 	site := testSite(t)
 	m := newRealManager(t, h, Config{})
 
-	// Listing tabs doesn't start the browser.
 	if res := do(t, m, 1, Action{Op: OpTabs, Browser: Testing}); len(res.Tabs) != 0 || status(t, m, 1)[Testing].Running {
 		t.Fatalf("tabs before start: %+v", res)
 	}
@@ -185,11 +172,9 @@ func TestRealTestingBrowser(t *testing.T) {
 	if strings.Contains(snap, "Hidden link") {
 		t.Errorf("a hidden element is in the snapshot:\n%s", snap)
 	}
-	// A real click on the button runs the page's handler.
 	if res := do(t, m, 1, Action{Op: OpClick, Browser: Testing, Tab: tab.ID, Ref: refFor(t, snap, "Press me")}); res.Tab.Title != "clicked" {
 		t.Errorf("after the click: %+v", res.Tab)
 	}
-	// A link navigates; the refs of the old page are then refused.
 	res := do(t, m, 1, Action{Op: OpClick, Browser: Testing, Tab: tab.ID, Ref: refFor(t, snap, "Next page")})
 	if !strings.HasSuffix(res.Tab.URL, "/next") {
 		t.Fatalf("after the link: %+v", res.Tab)
@@ -204,7 +189,6 @@ func TestRealTestingBrowser(t *testing.T) {
 
 	signIn(t, m, 1, Testing, site.URL)
 
-	// The agent can't close a tab the user opened.
 	s, err := m.session(ctx, acct(1), Testing, false)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +209,6 @@ func TestRealTestingBrowser(t *testing.T) {
 		}
 	}
 
-	// The testing browser keeps nothing: after a stop the login is gone, and so is its profile.
 	if err := m.Stop(context.Background(), acct(1), Testing); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +233,6 @@ func TestRealPersonalBrowser(t *testing.T) {
 	}
 	signIn(t, m, 1, Personal, site.URL)
 
-	// The live view is the display over RFB.
 	live, err := m.OpenLive(ctx, acct(1))
 	if err != nil {
 		t.Fatal(err)
@@ -259,13 +241,11 @@ func TestRealPersonalBrowser(t *testing.T) {
 	if _, err := io.ReadFull(live, banner); err != nil || string(banner) != "RFB 003.008\n" {
 		t.Fatalf("the live view said %q, %v", banner, err)
 	}
-	// While it is open the browser isn't idle.
 	time.Sleep(3 * time.Second)
 	if st := status(t, m, 1)[Personal]; !st.Running || !st.Live || st.StopsAt != nil {
 		t.Fatalf("with a live view open: %+v", st)
 	}
 	live.Close()
-	// Closed, the browser stops after the idle time, and the profile keeps the login.
 	deadline := time.Now().Add(20 * time.Second)
 	for status(t, m, 1)[Personal].Running {
 		if time.Now().After(deadline) {
@@ -277,9 +257,7 @@ func TestRealPersonalBrowser(t *testing.T) {
 	if snap := snapshot(t, m, 1, Personal, tab.ID); !strings.Contains(snap, "Signed in as a@example.com") {
 		t.Errorf("the login wasn't kept:\n%s", snap)
 	}
-	// Bringing the tab to the front, for the user to take over.
 	do(t, m, 1, Action{Op: OpFront, Browser: Personal, Tab: tab.ID})
-	// Closing the agent's last tab leaves the browser open, with a blank tab.
 	for _, open := range do(t, m, 1, Action{Op: OpTabs, Browser: Personal}).Tabs {
 		if open.Agent {
 			do(t, m, 1, Action{Op: OpClose, Browser: Personal, Tab: open.ID})
@@ -292,7 +270,6 @@ func TestRealPersonalBrowser(t *testing.T) {
 	}
 }
 
-// Over the cap, the least recently used browser makes room.
 func TestRealCap(t *testing.T) {
 	h := realHost(t, false)
 	m := newRealManager(t, h, Config{Max: 1})

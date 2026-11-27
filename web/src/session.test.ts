@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 
-// What api() does for the session (session.ts): the account it names, and the 401 it acts on.
-
 import { afterEach, expect, test, vi } from 'vitest'
 import { ACCOUNT_CHANGED_EVENT, api, SESSION_LOST } from './api'
 import { beginSession, endSession, SessionEnded, sameSession, sessionUser, steps } from './session'
@@ -25,7 +23,6 @@ test('while a session lasts, a request that changes something names its account;
   await api('/api/x', { method: 'POST', body: {} })
   await api('/api/x', { method: 'PATCH', body: {} })
   await api('/api/x', { method: 'DELETE' })
-  // One that names its own (the offline queue, signing out) keeps it, in whatever case it is written.
   await api('/api/x', { method: 'POST', body: {}, headers: { 'X-Taskto-Expected-User': '3' } })
   await api('/api/x', { method: 'POST', body: {}, headers: { 'x-taskto-expected-user': '4' } })
   endSession()
@@ -95,7 +92,6 @@ test("a refusal as another account's, answered after the same account signed in 
   beginSession(1)
   const old = api('/api/x', { method: 'POST', body: {} }).catch(() => {})
   await vi.waitFor(() => expect(answer).not.toBeNull())
-  // Signed out, someone else in and out, and the first account in again: a session of its own.
   endSession()
   beginSession(1)
   const changed = vi.fn()

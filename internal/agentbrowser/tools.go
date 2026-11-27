@@ -17,11 +17,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// The browser tools (internal/agenttools/tools.json), for the conversation's owner. Every
-// call acts on that user's own browsers: the user comes from the conversation's capability,
-// never from the arguments.
-
-// toolArgs are every browser tool's arguments; each tool takes the ones its schema names.
 type toolArgs struct {
 	Browser browser.Kind `json:"browser"`
 	Tab     string       `json:"tab"`
@@ -34,7 +29,6 @@ type toolArgs struct {
 	Message string       `json:"message"`
 }
 
-// allowed is the arguments each tool takes, beyond "browser".
 var allowed = map[string][]string{
 	"browser_tabs":     {},
 	"browser_open":     {"url"},
@@ -59,22 +53,16 @@ var ops = map[string]browser.Op{
 	"browser_help":     browser.OpFront,
 }
 
-// helpReasons are browser_help's reasons.
 var helpReasons = map[string]bool{"login": true, "captcha": true, "two_factor": true, "other": true}
 
 func refuse(status int, format string, args ...any) error {
 	return &agenttools.Refusal{Status: status, Message: fmt.Sprintf(format, args...)}
 }
 
-// signInNote goes with a snapshot of the personal browser that has a password field. Real
-// models, told only by browser_help's description, sometimes submitted the empty form or asked
-// for the password in the chat instead: said here, at the moment it matters, they don't.
 const signInNote = "This page asks for a password. Don't ask the user for it in the chat, and don't " +
 	"submit the form: if you need to be signed in, call browser_help (reason login) so they sign in " +
 	"themselves in the live view."
 
-// decodeArgs reads name's arguments strictly: an argument the tool doesn't take is refused,
-// so a misspelt one doesn't silently do something else.
 func decodeArgs(name string, raw json.RawMessage) (toolArgs, error) {
 	var fields map[string]json.RawMessage
 	if len(strings.TrimSpace(string(raw))) == 0 {
@@ -102,7 +90,6 @@ func decodeArgs(name string, raw json.RawMessage) (toolArgs, error) {
 	return a, nil
 }
 
-// Call implements agenttools.BrowserTools: runs tool name for user, in conversation.
 func (s *Service) Call(ctx context.Context, user, conversation int64, name string, raw json.RawMessage) (any, error) {
 	op, known := ops[name]
 	if !known {
@@ -111,7 +98,6 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 	if err := s.Usable(ctx, user); err != nil {
 		var e *apierr.Error
 		if errors.As(err, &e) {
-			// The CLI worker isn't ready yet: 503 with its code, and the caller tries again.
 			return nil, &agenttools.Refusal{Status: e.Status, Message: e.Msg, Code: e.Code}
 		}
 		return nil, refuse(http.StatusConflict, "%s", err.Error())
@@ -134,8 +120,6 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 			return nil, refuse(http.StatusBadRequest, "message must say in up to 500 characters what the user should do")
 		}
 	}
-	// Checked here too, before anything reaches the worker, which checks it again: the URL's
-	// scheme (no file:, chrome: or javascript:), the browser, a tab's and a ref's form, the key.
 	if err := action.Check(); err != nil {
 		return nil, toolError(ctx, name, err)
 	}
@@ -172,7 +156,6 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 	return map[string]any{"tab": res.Tab}, nil
 }
 
-// toolError turns a browser's error into a refusal for the model, in its own words.
 func toolError(ctx context.Context, name string, err error) error {
 	var bad *browser.BadAction
 	switch {
@@ -190,9 +173,6 @@ func toolError(ctx context.Context, name string, err error) error {
 		return ctx.Err()
 	}
 	slog.WarnContext(ctx, "browser tool failed", "tool", name, "err", err)
-	// Only what is about the page reaches the model (and so the conversation): a page that
-	// didn't load (net::ERR_…), an error the page's own script threw, a browser that stopped.
-	// Anything else can name the server's insides (paths, sockets), and stays in the log.
 	msg := firstLine(err.Error())
 	for _, prefix := range pageErrors {
 		if strings.HasPrefix(msg, prefix) {
@@ -202,7 +182,6 @@ func toolError(ctx context.Context, name string, err error) error {
 	return refuse(http.StatusBadGateway, "the browser failed: try again, or ask the user to look at it")
 }
 
-// pageErrors start the browser's errors that are about the page, which the model may see.
 var pageErrors = []string{"the page didn't load: ", "in the page: ", "the browser stopped"}
 
 func firstLine(s string) string {

@@ -35,7 +35,6 @@ func status(t *testing.T, w *cliworker.Worker, user int64, cli cliworker.CLI) cl
 	return st
 }
 
-// Claude Code: the URL it prints is shown, and the code the sign-in page gives is pasted back.
 func TestClaudeCodeLogin(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)
@@ -51,7 +50,6 @@ func TestClaudeCodeLogin(t *testing.T) {
 	if info.State != cliworker.LoginWaiting || !info.NeedsCode || !info.URLTrusted || !strings.HasPrefix(info.URL, "https://claude.com/cai/oauth/authorize?") || !strings.HasSuffix(info.URL, "state=fake") {
 		t.Fatalf("info = %+v", info)
 	}
-	// Starting again while one waits returns the same login.
 	if again, _ := h.w.StartLogin(acct(1), cliworker.Claude, ""); again != l {
 		t.Error("a second start began another login")
 	}
@@ -93,8 +91,6 @@ func TestClaudeCodeLoginWrongCode(t *testing.T) {
 	}
 }
 
-// Codex and Grok Build: the URL and the one-time code are shown; the CLI polls until the user
-// confirms on the provider's page.
 func TestDeviceCodeLogins(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)
@@ -151,7 +147,6 @@ func TestCancelLogin(t *testing.T) {
 	if info := waitLogin(t, l); info.State != cliworker.LoginCancelled {
 		t.Fatalf("info = %+v", info)
 	}
-	// A new start begins a new login.
 	again, err := h.w.StartLogin(acct(1), cliworker.Grok, "")
 	if err != nil || again == l || again.Info().State != cliworker.LoginWaiting {
 		t.Fatalf("restart: %v %+v", err, again.Info())
@@ -159,7 +154,6 @@ func TestCancelLogin(t *testing.T) {
 	h.w.CancelLogin(acct(1), cliworker.Grok, "")
 }
 
-// One user's login is theirs: another user never sees it, can't answer it and can't cancel it.
 func TestLoginsAreTheUsers(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)
@@ -193,7 +187,7 @@ func TestLogout(t *testing.T) {
 	for _, cli := range cliworker.CLIs {
 		t.Run(string(cli), func(t *testing.T) {
 			dirs := h.user(t, 1, cli, clitest.Scenario{}, true)
-			run(t, h.w, spec("before-logout-"+string(cli), 1, cli, "hi")) // leaves a session
+			run(t, h.w, spec("before-logout-"+string(cli), 1, cli, "hi"))
 			if !status(t, h.w, 1, cli).LoggedIn {
 				t.Fatal("not signed in")
 			}
@@ -203,8 +197,6 @@ func TestLogout(t *testing.T) {
 			if status(t, h.w, 1, cli).LoggedIn {
 				t.Error("still signed in")
 			}
-			// Emptied, but for the settings files the worker writes for every run (the status
-			// check above was one).
 			entries, err := os.ReadDir(dirs.Config(cli))
 			if err != nil {
 				t.Fatal(err)
@@ -218,8 +210,6 @@ func TestLogout(t *testing.T) {
 	}
 }
 
-// The URL shown is the CLI's own sign-in host; another link the CLI prints doesn't win, and a
-// URL on an unknown host is marked untrusted.
 func TestSignInURL(t *testing.T) {
 	for _, tc := range []struct {
 		cli     cliworker.CLI
@@ -238,10 +228,6 @@ func TestSignInURL(t *testing.T) {
 	}
 }
 
-// A warning on stderr (a CLI's, or the helper's runtime's) is not part of an answer: the JSON of
-// a status, of the helper's reads of Grok's credentials file and of Codex's usage limits is read
-// from stdout alone. Under `go test -cover` the helper and fakes print such a warning when they
-// exit through os.Exit.
 func TestStderrWarningsAreNotAnswers(t *testing.T) {
 	t.Run("claude status", func(t *testing.T) {
 		h := newHarness(t, nil)
@@ -259,7 +245,6 @@ func TestStderrWarningsAreNotAnswers(t *testing.T) {
 		}
 	})
 	t.Run("codex status keeps reading its text", func(t *testing.T) {
-		// Codex answers on stderr; the noisy helper adds a line to it, and nothing else changes.
 		h := newHarness(t, noisy)
 		h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
 		if st := status(t, h.w, 1, cliworker.Codex); !st.LoggedIn || st.Method != "chatgpt" {

@@ -83,7 +83,6 @@ func TestVerifyDoesNotLeakTheSecret(t *testing.T) {
 	if strings.Contains(err.Error(), stripeHook) || strings.Contains(err.Error(), stripeHookNew) {
 		t.Fatalf("the error holds a secret: %v", err)
 	}
-	// A secret never prints, whatever formats it.
 	s := WebhookSecrets{Current: Secret(stripeHook), Previous: Secret(stripeHookNew)}
 	for _, out := range []string{fmt.Sprint(s), fmt.Sprintf("%+v", s), fmt.Sprintf("%#v", s), fmt.Sprintf("%v", s.Current)} {
 		if strings.Contains(out, "whsec_") {
@@ -165,17 +164,14 @@ func TestNormalizeStripe(t *testing.T) {
 			t.Errorf("fields: %+v", e)
 		}
 	})
-	// A refund is mapped through its payment intent: without one there is nothing to map it to.
 	no("a refund with no intent", "charge.refunded", charge(map[string]any{"payment_intent": nil}))
 
-	// What isn't the payment's.
 	no("a paid-looking completed but unpaid", "checkout.session.completed", session(map[string]any{"payment_status": "unpaid"}))
 	no("no payment needed", "checkout.session.completed", session(map[string]any{"payment_status": "no_payment_required"}))
 	for _, typ := range []string{"payment_intent.payment_failed", "payment_intent.succeeded", "payment_intent.created", "charge.succeeded", "charge.failed",
 		"charge.updated", "refund.created", "checkout.session.async_payment_pending", "customer.created", "", "CHECKOUT.SESSION.COMPLETED"} {
 		no("type "+typ, typ, session(nil))
 	}
-	// A session that isn't ours, or isn't the shape we rely on.
 	no("a subscription", "checkout.session.completed", session(map[string]any{"mode": "subscription"}))
 	no("a setup session", "checkout.session.completed", session(map[string]any{"mode": "setup"}))
 	no("no reference", "checkout.session.completed", session(map[string]any{"client_reference_id": nil}))
@@ -199,7 +195,6 @@ func TestNormalizeStripe(t *testing.T) {
 	no("a currency of four letters", "checkout.session.completed", session(map[string]any{"currency": "euro"}))
 	no("no currency", "checkout.session.completed", session(map[string]any{"currency": nil}))
 
-	// A body that isn't an event.
 	for name, body := range map[string]string{
 		"empty": "", "a brace": "{", "null": "null", "an array": "[]", "a string": `"x"`, "an empty object": "{}",
 		"no id":     `{"object":"event","type":"checkout.session.expired","created":1,"data":{"object":{}}}`,
@@ -225,7 +220,6 @@ func TestNormalizeStripe(t *testing.T) {
 	}
 }
 
-// Nothing a payer or a merchant wrote reaches an Event: its text is identifiers of fixed shapes.
 func TestNormalizedEventsHoldNoFreeText(t *testing.T) {
 	shapes := map[string]*regexp.Regexp{
 		"ID": stripeEventIDRe, "Kind": regexp.MustCompile(`^payment\.(succeeded|expired|failed|refunded)$`), "RefToken": regexp.MustCompile(`^([0-9a-f]{32})?$`),
@@ -264,16 +258,17 @@ func TestNormalizedEventsHoldNoFreeText(t *testing.T) {
 	}
 }
 
-func TestStripeIsAReceiverAndSquareIsNot(t *testing.T) {
-	if _, ok := Lookup("stripe").(Receiver); !ok {
-		t.Error("Stripe doesn't receive webhooks")
-	}
-	if _, ok := Lookup("square").(Receiver); ok {
-		t.Error("Square receives webhooks before its card adds it")
+func TestEveryProviderMakesLinksAndReceivesWebhooks(t *testing.T) {
+	for _, p := range Providers() {
+		if _, ok := p.(Receiver); !ok {
+			t.Errorf("%s doesn't receive webhooks", p.ID())
+		}
+		if _, ok := p.(PaymentProvider); !ok {
+			t.Errorf("%s doesn't make payment links", p.ID())
+		}
 	}
 }
 
-// A session opened from a Payment Link names the link, which the event keeps, only in its own shape.
 func TestASessionsPaymentLinkIsKeptOnlyInItsShape(t *testing.T) {
 	ev, ok := (stripe{}).Normalize(event("checkout.session.completed", session(map[string]any{"payment_link": "plink_" + "1AbC"})))
 	if !ok || ev.LinkID != "plink_1AbC" {

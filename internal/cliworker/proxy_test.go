@@ -14,9 +14,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// A turn on a workspace's shared account runs in a directory of its own with no login, and
-// the CLI is pointed at the server's proxy with the turn's token: the settings each CLI takes
-// for a gateway.
 func TestTurnThroughTheProxy(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)
@@ -24,7 +21,7 @@ func TestTurnThroughTheProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const token = "tt1.payload-for-the-test.signature" //nolint:gosec // G101: made up for the test
+	const token = "tt1.payload-for-the-test.signature"
 	proxy := &cliworker.Proxy{URL: "http://taskto:8081", Token: token}
 	for _, cli := range []cliworker.CLI{cliworker.Claude, cliworker.Codex, cliworker.Grok} {
 		t.Run(string(cli), func(t *testing.T) {
@@ -34,7 +31,6 @@ func TestTurnThroughTheProxy(t *testing.T) {
 			if err := os.MkdirAll(config, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			// No login there: the token is the CLI's credential, as for a real CLI.
 			turn, _, err := h.w.Start(s)
 			if err != nil {
 				t.Fatal(err)
@@ -74,7 +70,6 @@ func TestTurnThroughTheProxy(t *testing.T) {
 		})
 	}
 
-	// The proxy goes only with a shared account's directory, and that directory only with it.
 	s := spec("proxy-mismatch", 1, cliworker.Claude, "hello")
 	s.Proxy = proxy
 	if _, _, err := h.w.Start(s); err == nil {
@@ -84,7 +79,7 @@ func TestTurnThroughTheProxy(t *testing.T) {
 	if _, _, err := h.w.Start(s); err == nil {
 		t.Error("a shared account's turn ran without the proxy")
 	}
-	s.Proxy = &cliworker.Proxy{URL: "http://user:pw@taskto:8081", Token: token} //nolint:gosec // G101: made up, to be refused
+	s.Proxy = &cliworker.Proxy{URL: "http://user:pw@taskto:8081", Token: token}
 	if _, _, err := h.w.Start(s); err == nil {
 		t.Error("a proxy URL with credentials was taken")
 	}
@@ -94,13 +89,12 @@ func TestTurnThroughTheProxy(t *testing.T) {
 	}
 }
 
-// The worker's API never hands a turn's proxy token back.
 func TestRemoteHidesTheProxyToken(t *testing.T) {
 	h := newHarness(t, nil)
 	h.introduce(t, 1, 2)
 	r := serve(t, h)
 	s := spec("remote-proxy", 1, cliworker.Grok, "hello")
-	s.Slot, s.Proxy = "s2", &cliworker.Proxy{URL: "http://taskto:8081", Token: "tt1.payload-for-the-test.signature"} //nolint:gosec // G101: made up for the test
+	s.Slot, s.Proxy = "s2", &cliworker.Proxy{URL: "http://taskto:8081", Token: "tt1.payload-for-the-test.signature"}
 	if _, _, err := r.StartTurn(s); err != nil {
 		t.Fatal(err)
 	}

@@ -16,173 +16,73 @@ import (
 	"unicode/utf8"
 )
 
-// The calls of the payments kind. A provider that makes payment links implements PaymentProvider;
-// the registry's Provider is only what a connection holds.
-
-// PaymentProvider is the part of a provider that makes payment links.
 type PaymentProvider interface {
-	// CreatePaymentLink asks the provider for a hosted page on which one payer pays one amount, in one
-	// request that is never sent twice by the HTTP client itself. Its failures are *CallError, which
-	// never holds the provider's words: they could name a customer, and what the provider says is not
-	// for a person or a record to read. A failure is NotExecuted only when the request certainly never
-	// ran (it never left, or the provider documents the answer as given before execution); any other
-	// is OutcomeUnknown.
 	CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error)
-	// FindPaymentLink looks for the object a call under one key may have made without its answer
-	// being noted: an object that carries l.Token, the key's own token, and nothing of any other key.
-	// A call whose outcome is unknown (a 5xx, a timeout, a dropped connection, any error after the
-	// request may have run) may have made one, and a call under a new key would make a second. since
-	// is when the reference was first made; nothing of it was created before. found is false only when
-	// the provider was read in full and has no such object that a payer can use: a read that couldn't
-	// be finished is an error, never "not found". expired says that it saw an object of the token that
-	// no payer can use and that was never paid (an expired Checkout Session): the key's outcome is then
-	// known. Its failures are *CallError. A failure after an object of the token was seen (one that
-	// couldn't be checked, such as a link whose line items couldn't be read, or one that isn't a link a
-	// payer may be given) returns that object's id in link.ObjectID (and no URL): it is not adopted, and it
-	// is kept on the key, so that no one takes the key's outcome for "nothing made".
 	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found, expired bool, err error)
-	// LinkState reads, from the provider, whether the object (the one a call answered or a lookup
-	// found) can take a payment now. What a call answered, and above all what the provider replays for
-	// a key it kept, is the object as it was made: a session replayed a day later says "open" in its
-	// own words and may have expired since. Nothing is saved as the link before this says LinkOpen.
 	LinkState(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (LinkState, error)
-	// AccountID is the id of the provider's account the credentials belong to. A reference keeps
-	// it: what a call made is only to be looked for, and a call only to be repeated, in the account
-	// it was made in, and a key replaced by another account's must not move an unfinished call there.
-	// Its failures are *CallError.
 	AccountID(ctx context.Context, creds Credentials, c *Client) (string, error)
+	KeyKept() time.Duration
 }
 
-// PaymentPoller is the part of a provider that reads what became of an object the server made, for
-// the reconciliation polling (poll.go). It only reads: a call of it never makes, changes or deletes
-// anything at the provider. Its failures are *CallError, with RetryAfter set when the provider asked
-// for a wait.
 type PaymentPoller interface {
-	// ReadPayment retrieves the object (a Checkout Session, or for a hosted link, the sessions that
-	// took a payment through a Payment Link) and says what it shows: payments that arrived, an end that
-	// isn't money (an expired session), or nothing yet. Every id and amount in the answer is checked
-	// against the provider's shape, as an event's is.
 	ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error)
 }
 
-// Observed is what ReadPayment found.
 type Observed struct {
-	// Expired says that the object can take no payment any more and was never paid.
-	Expired bool
-	// Livemode says whether the object is of live money; it is what an expired object's event is of.
+	Expired  bool
 	Livemode bool
-	// Payments are the payments that arrived on the object, oldest first: one for a session, and for a
-	// Payment Link one for each of its sessions that was paid.
 	Payments []ObservedPayment
 }
 
-// ObservedPayment is a payment that arrived, as the apply step is told of it: the same fields a paid
-// event holds.
 type ObservedPayment struct {
-	// ObjectID is the session the payment arrived on, and PaymentID the payment itself ("" when the
-	// provider names none).
 	ObjectID, PaymentID string
 	AmountMinor         int64
-	// Currency is the code, upper case.
-	Currency string
-	Livemode bool
-	// PaidAt is when the payment was made, as the provider says, read in the same request as the
-	// payment: the time a webhook's event of the payment would carry, so that a payment made just
-	// before midnight and found by a poll just after it is dated the day it was made. An adapter whose
-	// provider says when gives it (the contract suite requires it); the zero time means the provider
-	// says nothing, and only then is the payment dated by the time the poll found it.
-	PaidAt time.Time
+	Currency            string
+	Livemode            bool
+	PaidAt              time.Time
 }
 
-// NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
-// exact, in the currency's smallest unit; the token is the key's; the two addresses are the
-// server's own pages, never a definition's, and both are empty when the server has no public
-// address: the payer then stays on a confirmation page the provider hosts.
 type NewLink struct {
-	// Token is the key's own token: the idempotency key of the call, the reference the provider echoes
-	// back with the payment, and what a lookup for the key's object matches. Every key of a ref has
-	// its own (the first key's is the ref's), so what one key made is never taken for another's.
-	Token string
-	// KeySeq is the number of the key among the ref's (0 for the first). It is not part of the key.
+	Token       string
 	KeySeq      int
 	AmountMinor int64
-	// Currency is the code, upper case.
 	Currency    string
 	Description string
-	// SuccessURL and CancelURL are the server's own pages (both set), or both empty. They are the
-	// reference's, as its first try asked: a retry sends the same parameters (a provider answers
-	// a key used with other parameters with an error) and looks among the same kind of objects.
-	SuccessURL string
-	CancelURL  string
+	SuccessURL  string
+	CancelURL   string
 }
 
-// IdempotencyKey is the key the call is sent with: the key's own token.
 func (l NewLink) IdempotencyKey() string { return l.Token }
 
-// Link is what the provider made.
 type Link struct {
-	// URL is the address the payer opens, on the provider's own domain.
-	URL string
-	// ObjectID is the provider's id of the object, which polling reads: a Checkout Session's
-	// (cs_...) when the payer returns to the server's pages, a Payment Link's (plink_...) when not.
+	URL      string
 	ObjectID string
 }
 
-// LinkState is what an object at the provider can do now.
 type LinkState int
 
 const (
-	// LinkOpen: a payer can pay it.
 	LinkOpen LinkState = iota + 1
-	// LinkExpired: no payer can use it, and it was never paid (an expired Checkout Session).
 	LinkExpired
-	// LinkSettled: it was paid, or no payer can use it for a reason that doesn't say it wasn't paid (a
-	// completed session, a Payment Link deactivated or at its limit).
 	LinkSettled
 )
 
-// CallKind says what kind of failure a call had, which decides what happens next.
 type CallKind int
 
 const (
-	// CallUnreachable: no answer, or an answer that may pass (a timeout, 429, 5xx) or can't be
-	// read. The call is tried again.
 	CallUnreachable CallKind = iota + 1
-	// CallRefused: the provider refused the request, and asking again the same way will not help.
 	CallRefused
-	// CallCredentials: the provider doesn't accept the integration's key.
 	CallCredentials
-	// CallLookupIncomplete: the provider was read, every read worked, and the account holds more
-	// than a lookup reads, so it can't be said whether the key made the object. It tells nothing: a
-	// key whose outcome was unknown stays so.
 	CallLookupIncomplete
-	// CallSettled: the lookup found an object of the reference that was paid, or that no payer can
-	// use any more for a reason that doesn't say it wasn't paid (a completed session, a Payment Link
-	// deactivated or at its limit). Nothing is made: a person reconciles that payment.
 	CallSettled
 )
 
-// CallError is the failure of a call to a provider. It carries no text of the provider's.
 type CallError struct {
-	Kind CallKind
-	// Status is the HTTP status answered, 0 for none.
-	Status int
-	// NotExecuted, for a call that makes an object, is that the request certainly never ran: it never
-	// left (no connection was made), or the provider answered with a refusal it documents as given
-	// before execution, which keeps nothing under the key (a rate limit, a lock timeout, the key in use
-	// by a request still running). The same key is asked again later, never a new one.
-	NotExecuted bool
-	// OutcomeUnknown, for a call that makes an object, is that it may have run and what it made, if
-	// anything, is not known: every failure after the request may have left that isn't NotExecuted
-	// (any 4xx or 5xx, 408 and 409 included, a timeout, a dropped connection, an answer that can't be
-	// read). The provider says to resolve the original outcome before a call under a new key
-	// (https://docs.stripe.com/error-low-level#server-errors), and may keep even a 4xx under the key
-	// once execution began (https://docs.stripe.com/error-low-level#content-errors), so the reference
-	// gets no new key until it is resolved.
+	Kind           CallKind
+	Status         int
+	NotExecuted    bool
 	OutcomeUnknown bool
-	// RetryAfter is how long the provider asked for the next call to wait (its Retry-After of a 429),
-	// 0 when it said nothing; bounded by maxRetryAfter.
-	RetryAfter time.Duration
+	RetryAfter     time.Duration
 }
 
 func (e *CallError) Error() string {
@@ -199,7 +99,6 @@ func (e *CallError) Error() string {
 	return "the provider didn't answer (status " + strconv.Itoa(e.Status) + ")"
 }
 
-// IsCall reports whether err is a *CallError and returns it.
 func IsCall(err error) (*CallError, bool) {
 	var ce *CallError
 	if errors.As(err, &ce) {
@@ -209,72 +108,24 @@ func IsCall(err error) (*CallError, bool) {
 }
 
 const (
-	stripeHost = "api.stripe.com"
-	// maxAnswer bounds what is read of an answer.
-	maxAnswer = 1 << 20
-	// The most of an address the write-back takes, which the app's fields are guaranteed to hold
-	// (apps.minLinkLength, minPaymentIDLength).
-	maxLinkURL = 2048
-	maxLinkID  = 255
-	// maxProductName is what a payer reads as what they pay for.
-	maxProductName = 250
-	// fallbackProductName is what the payer reads when the app's description is empty.
+	stripeHost          = "api.stripe.com"
+	maxAnswer           = 1 << 20
+	maxLinkURL          = 2048
+	maxLinkID           = 255
+	maxProductName      = 250
 	fallbackProductName = "Payment"
-	// stripeUserAgent says what is calling, and nothing about who.
-	stripeUserAgent = "taskto"
-	// stripeRefMetadata is the key of a Payment Link's metadata that holds the ref's token.
-	stripeRefMetadata = "taskto_ref"
+	stripeUserAgent     = "taskto"
+	stripeRefMetadata   = "taskto_ref"
 )
 
 var (
-	// stripeSessionID is what the id of a Checkout Session looks like.
-	stripeSessionID = regexp.MustCompile(`^cs_(test|live)_[A-Za-z0-9]{1,200}$`)
-	// stripeAccountID is what the id of an account looks like.
-	stripeAccountID = regexp.MustCompile(`^acct_[A-Za-z0-9]{1,200}$`)
-	// stripeLinkID is what the id of a Payment Link looks like.
-	stripeLinkID = regexp.MustCompile(`^plink_[A-Za-z0-9]{1,200}$`)
-	// stripeCheckoutHost is the domain of the pages Stripe hosts for a Checkout Session, and
-	// stripeLinkHost of a Payment Link's (the default submit_type, which is the one asked for, is
-	// buy.stripe.com), where a link must point.
+	stripeSessionID    = regexp.MustCompile(`^cs_(test|live)_[A-Za-z0-9]{1,200}$`)
+	stripeAccountID    = regexp.MustCompile(`^acct_[A-Za-z0-9]{1,200}$`)
+	stripeLinkID       = regexp.MustCompile(`^plink_[A-Za-z0-9]{1,200}$`)
 	stripeCheckoutHost = "checkout.stripe.com"
 	stripeLinkHost     = "buy.stripe.com"
 )
 
-// CreatePaymentLink makes a hosted page for one payment of an exact amount, in one of two shapes
-// that the server's address decides.
-//
-// With the server's own pages (a public URL is set) it makes a Checkout Session in payment mode:
-// success_url and cancel_url are those pages, client_reference_id is the ref's token (what the
-// event of the payment echoes back), and the session expires by itself within Stripe's default of
-// 24 hours.
-//
-// Without a public URL the payer has no page of ours to return to. Stripe documents success_url
-// only as "required conditionally" and every hosted example sets one, so a hosted session
-// without one is not relied on. It makes a Payment Link instead, whose payer stays on a
-// confirmation page that Stripe hosts (after_completion[type]=hosted_confirmation) and which
-// takes one payment (restrictions[completed_sessions][limit]=1: an invoice's link can't be paid
-// twice). The token is in the link's metadata, which Stripe copies to the session of the payment,
-// and in the address as ?client_reference_id=, the documented way a link's sessions carry one. A
-// link doesn't expire by itself.
-//
-// Either way the parameters are the same on every call under one key, so Stripe's idempotency (the
-// key's token as the key) answers a repeated call with what the first one made.
-//
-// Stripe's documentation relied on, at the pinned API version (StripeAPIVersion):
-//   - Create a Checkout Session, https://docs.stripe.com/api/checkout/sessions/create: success_url
-//     is "required conditionally" and not allowed for an embedded or elements ui_mode, cancel_url
-//     is optional, expires_at runs 30 minutes to 24 hours (default 24), client_reference_id has at
-//     most 200 characters;
-//   - Create a payment link, https://docs.stripe.com/api/payment-link/create: after_completion
-//     (type hosted_confirmation, "displays a message on the hosted surface after the purchase is
-//     complete", or redirect), restrictions[completed_sessions][limit], line_items with price_data
-//     (https://docs.stripe.com/payment-links/api), and metadata, "automatically copied to checkout
-//     sessions created by this payment link";
-//   - Track a payment link, https://docs.stripe.com/payment-links/url-parameters: client_reference_id
-//     in the link's address, alphanumeric, dashes or underscores, up to 200 characters, reaches
-//     checkout.session.completed;
-//   - List Checkout Sessions, https://docs.stripe.com/api/checkout/sessions/list: payment_link is a
-//     filter, which is how a later poll finds the payments of a link.
 func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error) {
 	name := strings.TrimSpace(l.Description)
 	if name == "" {
@@ -283,7 +134,7 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 	if utf8.RuneCountInString(name) > maxProductName {
 		name = string([]rune(name)[:maxProductName])
 	}
-	hosted := l.SuccessURL == "" // no pages of ours: Stripe's own confirmation
+	hosted := l.SuccessURL == ""
 	form := url.Values{}
 	form.Set("line_items[0][quantity]", "1")
 	form.Set("line_items[0][price_data][currency]", strings.ToLower(l.Currency))
@@ -312,8 +163,6 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 
 	resp, sent, err := sendOnce(c, req)
 	if err != nil {
-		// Unless no connection was ever made, the request may have reached the provider, which then
-		// holds what it made and says nothing of it. Nothing of err is kept: it can quote the address.
 		if !sent {
 			return Link{}, &CallError{Kind: CallUnreachable, NotExecuted: true}
 		}
@@ -333,8 +182,6 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 		Object string `json:"object"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		// An answer that isn't the object asked for: the call was made, and nothing says what became
-		// of it, so it is not tried again as if it had not been.
 		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode, OutcomeUnknown: true}
 	}
 	link, ok := stripeLinkOf(hosted, l.Token, out.Object, out.ID, out.URL)
@@ -344,16 +191,6 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 	return link, nil
 }
 
-// sendOnce sends a request that makes an object exactly once, and says whether it may have left.
-//
-// Go's transport sends a request again by itself, on a new connection, when a reused one breaks
-// before the answer and the request is "replayable": its body can be read again (GetBody) and it has an
-// Idempotency-Key header, which ours has. The first copy may have reached the provider and run, and
-// the error returned is then the second's, a failed dial that says nothing left. So the body is made
-// one that can't be read again, which stops every such resend (only a request that wrote nothing at
-// all could be, and with a body it isn't either). And whether anything may have left is told by the
-// connection, not by the error: sent is false only if no connection was ever handed to the request,
-// so not a byte of it was written.
 func sendOnce(c *Client, req *http.Request) (*http.Response, bool, error) {
 	req.GetBody = nil
 	var sent atomic.Bool
@@ -370,10 +207,6 @@ func stripeHeaders(req *http.Request, creds Credentials) {
 	req.Header.Set("User-Agent", stripeUserAgent)
 }
 
-// stripeLinkOf checks what Stripe says of an object it made (or of one a list shows) and returns
-// the link: the object must be the kind asked for, with an id and an address of the shapes and
-// the domain Stripe uses for it. A hosted Payment Link's address gets the ref's token as
-// ?client_reference_id=, the documented way its payments carry one.
 func stripeLinkOf(hosted bool, token, object, id, rawURL string) (Link, bool) {
 	want, idPattern, host := "checkout.session", stripeSessionID, stripeCheckoutHost
 	if hosted {
@@ -400,48 +233,13 @@ func stripeLinkOf(hosted bool, token, object, id, rawURL string) (Link, bool) {
 }
 
 const (
-	// findPageSize is the most Stripe lists in a page, and findMaxPages how many pages a lookup
-	// reads, newest first: the object looked for is among the newest, since its call was one of
-	// the last the integration's account saw (a Checkout Session is also bounded by its creation
-	// time). A lookup that reaches the last page with more behind it finds nothing out: it fails
-	// with CallLookupIncomplete, which tells nothing of the key's outcome.
 	findPageSize = 100
 	findMaxPages = 20
-	// findSkew is how far before the ref's creation a session may have been created by the
-	// provider's clock.
-	findSkew = 10 * time.Minute
+	findSkew     = 10 * time.Minute
 )
 
-// FindPaymentLink lists what the account made and picks the object that has the key's token. Stripe
-// documents the outcome of a request answered with a 5xx as indeterminate, "the operation might
-// have produced side effects even though you received an error", and says not to "retry with a
-// new idempotency key until you've resolved the original outcome", by retrieving the object and
-// matching it on a local identifier kept in its metadata
-// (https://docs.stripe.com/error-low-level#server-errors). A 500 is saved under the idempotency
-// key and answered again to that key (https://docs.stripe.com/api/idempotent_requests), so asking
-// again under the key can say nothing more. So the object a lost call made is looked for, by the
-// key's own token, at the pinned API version (StripeAPIVersion):
-//   - List Checkout Sessions, https://docs.stripe.com/api/checkout/sessions/list: filters by
-//     created, status, payment_intent and payment_link, and none by client_reference_id or
-//     metadata, so the sessions created since the ref was made are read and matched on
-//     client_reference_id, the token (the object has it, https://docs.stripe.com/api/checkout/sessions/object);
-//   - List all payment links, https://docs.stripe.com/api/payment-link/list: only active and the
-//     cursors, so the links are read newest first, active or not, and matched on metadata[taskto_ref];
-//   - the Search API (https://docs.stripe.com/search) doesn't list Checkout Sessions or Payment
-//     Links, and its data can take a minute to be searchable ("don't use search for
-//     read-after-write flows", which this is), so it isn't used.
-//
-// An object is adopted only if it asks what the payment asks now: a session's amount_total and
-// currency, and a link's currency and the line items it lists
-// (https://docs.stripe.com/api/payment-link/line_items). The list APIs read what was written. Every
-// state is listed (sessions of any status since the reference was made, links active or not), since
-// an object of the token that is no longer payable may have been paid: an open session or an active
-// link is adopted, an expired session is passed over (it can't be paid), and a completed session or
-// an inactive link (deactivated, or at its limit of payments) stops the call with a refusal, so no
-// second object is made and a person reconciles the payment.
 func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
 	hosted := l.SuccessURL == ""
-	// sawExpired: an object of the token that can't be paid and never was.
 	sawExpired := false
 	path := "/v1/checkout/sessions"
 	q := url.Values{"limit": {strconv.Itoa(findPageSize)}}
@@ -470,9 +268,6 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				Metadata          map[string]string `json:"metadata"`
 			} `json:"data"`
 		}
-		// A negative answer is only as good as the page it rests on: an answer that isn't a list,
-		// that doesn't say whether there is more, or that says there is more and shows none, says
-		// nothing about the object.
 		if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || page.HasMore == nil || (*page.HasMore && len(*page.Data) == 0) {
 			return Link{}, false, false, &CallError{Kind: CallUnreachable, Status: status}
 		}
@@ -487,46 +282,34 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			if !ours {
 				continue
 			}
-			// Every state is read, not only the payable ones: an object of the token that was paid, or
-			// that a payer can no longer use for another reason, shows the earlier try did make one, and
-			// must not read as "not made" (the next call would make a second payable link). Whatever
-			// fails from here returns the object seen, unchecked, for the key to keep.
 			seen := Link{ObjectID: seenObjectID(o.ID)}
 			if hosted && (o.Active == nil || !*o.Active) {
-				// Deactivated by a person, or by its limit of payments: no one can say it wasn't paid.
 				return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 			}
 			if !hosted {
 				switch o.Status {
 				case "open":
 				case "expired":
-					// Can't be paid, and the payer was never given an address that works: the call that
-					// made it is accounted for, and another may be made.
 					sawExpired = true
 					continue
 				default:
 					if o.Status == "complete" {
 						return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 					}
-					return seen, false, false, &CallError{Kind: CallRefused, Status: status} // a state not said
+					return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 				}
 			}
 			link, ok := stripeLinkOf(hosted, l.Token, o.Object, o.ID, o.URL)
 			if !ok || !strings.EqualFold(o.Currency, l.Currency) {
-				// Ours, and not a link the payer could be given: nothing says what it is.
 				return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			amount := o.AmountTotal
 			if hosted {
-				// A link's list entry has no amount: its line items do. If they can't be read, the link
-				// is seen and not checked: it is never adopted unchecked, and never taken for none.
 				if amount, err = stripeLinkAmount(ctx, creds, c, o.ID, l.Currency); err != nil {
 					return seen, false, false, err
 				}
 			}
 			if amount != l.AmountMinor {
-				// Made for another amount than the one asked for now: its address is never given
-				// to a payer, and no other is made while it stands.
 				return seen, false, false, &CallError{Kind: CallRefused, Status: status}
 			}
 			return link, true, false, nil
@@ -536,17 +319,13 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 		}
 		last := data[len(data)-1].ID
 		if last == "" {
-			return Link{}, false, false, &CallError{Kind: CallUnreachable, Status: status} // no cursor to read on from
+			return Link{}, false, false, &CallError{Kind: CallUnreachable, Status: status}
 		}
 		q.Set("starting_after", last)
 	}
-	// Every page read was whole, and there is more behind them: asking again reads the same.
 	return Link{}, false, false, &CallError{Kind: CallLookupIncomplete}
 }
 
-// seenObjectID is what is kept of the id of an object of the token a lookup saw and couldn't adopt: the
-// id as Stripe gave it, cut to what the key's record holds, or a stand-in when it gave none, so that the
-// object is on record (and blocks a new key) even then. It is shown to an admin, never used in a call.
 func seenObjectID(id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -558,10 +337,6 @@ func seenObjectID(id string) string {
 	return id
 }
 
-// LinkState retrieves the object and says what it can do now: a Checkout Session by its status
-// (https://docs.stripe.com/api/checkout/sessions/retrieve: open, complete or expired), a Payment Link
-// by whether it is active (https://docs.stripe.com/api/payment-links/payment_links/retrieve; one at
-// its limit of payments or deactivated is not, and nothing says it wasn't paid).
 func (stripe) LinkState(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (LinkState, error) {
 	want, idPattern, path := "checkout.session", stripeSessionID, "/v1/checkout/sessions/"
 	if hosted {
@@ -600,12 +375,9 @@ func (stripe) LinkState(ctx context.Context, creds Credentials, c *Client, hoste
 	case "complete":
 		return LinkSettled, nil
 	}
-	return 0, &CallError{Kind: CallRefused, Status: status} // a state not said
+	return 0, &CallError{Kind: CallRefused, Status: status}
 }
 
-// stripeLinkAmount is what a Payment Link asks, from its line items
-// (https://docs.stripe.com/api/payment-link/line_items), which must be in the currency and fit
-// one page.
 func stripeLinkAmount(ctx context.Context, creds Credentials, c *Client, id, currency string) (int64, error) {
 	body, status, err := stripeGet(ctx, creds, c, "/v1/payment_links/"+id+"/line_items?limit="+strconv.Itoa(findPageSize))
 	if err != nil {
@@ -635,7 +407,6 @@ func stripeLinkAmount(ctx context.Context, creds Credentials, c *Client, id, cur
 	return sum, nil
 }
 
-// stripeGet reads one answer of a list or a retrieval: the body and the status, or a *CallError.
 func stripeGet(ctx context.Context, creds Credentials, c *Client, pathAndQuery string) ([]byte, int, error) {
 	req, err := c.NewRequest(ctx, http.MethodGet, c.BaseURL(stripeHost)+pathAndQuery, nil)
 	if err != nil {
@@ -657,11 +428,8 @@ func stripeGet(ctx context.Context, creds Credentials, c *Client, pathAndQuery s
 	return body, resp.StatusCode, nil
 }
 
-// maxRetryAfter bounds a wait a provider asks for: a header can't park the polling for longer.
 const maxRetryAfter = time.Hour
 
-// stripeLookupFailure classifies an answer to a read, which makes nothing. A 429 carries the wait
-// Stripe asked for (https://docs.stripe.com/rate-limits: "Retry-After", whole seconds).
 func stripeLookupFailure(status int, h http.Header) error {
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return &CallError{Kind: CallCredentials, Status: status}
@@ -675,8 +443,6 @@ func stripeLookupFailure(status int, h http.Header) error {
 	return ce
 }
 
-// polledSession holds the fields of a Checkout Session that a poll reads. Nothing a payer typed (name,
-// email, address) is decoded, of the session or of the charge expanded into it.
 type polledSession struct {
 	ID            string        `json:"id"`
 	Object        string        `json:"object"`
@@ -690,15 +456,8 @@ type polledSession struct {
 	Livemode      bool          `json:"livemode"`
 }
 
-// stripePollExpand asks for the session's PaymentIntent and its latest Charge as objects in the same
-// answer (https://docs.stripe.com/expand), for the time of the payment: a Checkout Session and a
-// PaymentIntent say when they were created, not when they were paid, and the Charge's "created" is
-// when the payer's payment was made (for a card, the moment it succeeded). The webhook's
-// checkout.session.completed is sent at that moment too. For a list the paths are under "data.".
 const stripePollExpand = "payment_intent.latest_charge"
 
-// polledIntent is a session's payment_intent: its id, or with the expansion the object, of which the
-// id and the latest charge's time are read.
 type polledIntent struct {
 	ID            string
 	ChargeCreated int64
@@ -735,9 +494,6 @@ func (pi *polledIntent) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// payment is what the session says of a payment made on it, or false if it isn't a paid session of
-// the shape Normalize relies on (a one-time payment, an exact positive amount, ids of the provider's
-// shapes).
 func (o polledSession) payment() (ObservedPayment, bool) {
 	if o.Object != "checkout.session" || o.Mode != "payment" || o.Status != "complete" || o.PaymentStatus != "paid" ||
 		!stripeSessionIDRe.MatchString(o.ID) || o.AmountTotal <= 0 || !currencyCodeRe.MatchString(o.Currency) {
@@ -756,18 +512,6 @@ func (o polledSession) payment() (ObservedPayment, bool) {
 	return p, true
 }
 
-// ReadPayment retrieves what became of the object, and nothing else is called:
-//   - a Checkout Session, by Retrieve a Checkout Session
-//     (https://docs.stripe.com/api/checkout/sessions/retrieve): status "complete" with payment_status
-//     "paid" is a payment ("unpaid" is a delayed method that hasn't settled: nothing yet), "expired"
-//     is an end, "open" is nothing yet;
-//   - a Payment Link, by List Checkout Sessions with the payment_link filter and status "complete"
-//     (https://docs.stripe.com/api/checkout/sessions/list): each paid session is a payment. A link
-//     itself has no payment status, and one that was deactivated says nothing of whether it was paid.
-//
-// Both ask for the session's intent and its latest charge in the same answer (stripePollExpand), for
-// the time of each payment. An expiry has no such time: expires_at is when the session was due to
-// expire, and one the server expired early keeps it, so an expired session is dated by the read.
 func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error) {
 	if hosted {
 		return stripeReadLinkPayments(ctx, creds, c, objectID)
@@ -791,7 +535,7 @@ func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hos
 		return Observed{Livemode: out.Livemode, Expired: true}, nil
 	case "complete":
 		if out.PaymentStatus != "paid" {
-			return Observed{Livemode: out.Livemode}, nil // a delayed payment that hasn't settled
+			return Observed{Livemode: out.Livemode}, nil
 		}
 		p, ok := out.payment()
 		if !ok {
@@ -799,7 +543,7 @@ func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hos
 		}
 		return Observed{Livemode: out.Livemode, Payments: []ObservedPayment{p}}, nil
 	}
-	return Observed{}, &CallError{Kind: CallRefused, Status: status} // a state not said
+	return Observed{}, &CallError{Kind: CallRefused, Status: status}
 }
 
 func stripeReadLinkPayments(ctx context.Context, creds Credentials, c *Client, linkID string) (Observed, error) {
@@ -821,11 +565,11 @@ func stripeReadLinkPayments(ctx context.Context, creds Credentials, c *Client, l
 		return Observed{}, &CallError{Kind: CallUnreachable, Status: status}
 	}
 	var out Observed
-	data := *page.Data // newest first: the payments are told oldest first
+	data := *page.Data
 	for i := len(data) - 1; i >= 0; i-- {
 		o := data[i]
 		if o.PaymentLink == nil || *o.PaymentLink != linkID {
-			continue // not of this link, whatever the list said
+			continue
 		}
 		if o.Status != "complete" || o.PaymentStatus != "paid" {
 			continue
@@ -840,20 +584,6 @@ func stripeReadLinkPayments(ctx context.Context, creds Credentials, c *Client, l
 	return out, nil
 }
 
-// stripeFailure classifies an answer to a call that makes an object and isn't a success, from its
-// status and the code Stripe names, never from its words. Only what Stripe documents as refused before
-// the request ran is NotExecuted:
-//   - 429 with the code rate_limit (https://docs.stripe.com/rate-limits) or lock_timeout, an object lock
-//     that timed out (https://docs.stripe.com/rate-limits#object-lock-timeouts);
-//   - 409 with the code idempotency_key_in_use: another request with the same key is still running
-//     (https://docs.stripe.com/error-codes#idempotency-key-in-use). That request may make the object, so
-//     the same key is asked again later, and its answer is what the first one made.
-//
-// Every other answer leaves the outcome unknown. A 5xx is indeterminate
-// (https://docs.stripe.com/error-low-level#server-errors); Stripe saves the result of a request whose
-// execution began under its key, a 4xx included (https://docs.stripe.com/error-low-level#content-errors,
-// https://docs.stripe.com/api/idempotent_requests), so a refusal may follow side effects; a 429 of
-// another kind, a 409 that is not the key in use and a 408 say nothing documented of execution.
 func stripeFailure(status int, body []byte) error {
 	var e struct {
 		Error struct {
@@ -873,9 +603,8 @@ func stripeFailure(status int, body []byte) error {
 	return &CallError{Kind: CallRefused, Status: status, OutcomeUnknown: true}
 }
 
-// AccountID is the id of the account the key belongs to: Stripe's "Retrieve account" with no id
-// answers the account of the authenticating key (https://docs.stripe.com/api/accounts/retrieve).
-// The id is an acct_ followed by letters and digits, and an answer without one is no answer.
+func (stripe) KeyKept() time.Duration { return stripeKeyKept }
+
 func (stripe) AccountID(ctx context.Context, creds Credentials, c *Client) (string, error) {
 	body, status, err := stripeGet(ctx, creds, c, "/v1/account")
 	if err != nil {

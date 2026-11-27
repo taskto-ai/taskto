@@ -1,12 +1,3 @@
-// vitest-report prints vitest's JSON reports the way people read a failure: one line per test
-// file (ok or FAIL, with its time), then each failing test's name and whole error, and the
-// error of every file that failed outside a test (an import that threw, say). CI's Web job
-// runs it after the tests, so a failure that happens once in a while can be read from the
-// log, and keeps the reports as an artifact.
-//
-// Usage: node .github/scripts/vitest-report.mjs <report.json>...
-//
-// Node's standard library only: it is CI's glue, not the product.
 import { readFileSync } from 'node:fs'
 import { relative } from 'node:path'
 
@@ -49,7 +40,6 @@ for (const file of files) {
       details.push(`\n===== ${name}: the file's own message =====\n${result.message}`)
     }
   }
-  // Errors vitest caught outside any file (an unhandled rejection) only fail the run.
   if (report.success === false && (report.numFailedTests ?? 0) === 0 && (report.numFailedTestSuites ?? 0) === 0) {
     failures++
     details.push(`\n===== ${file}: the run failed with no failing test: see the errors in the step above =====`)

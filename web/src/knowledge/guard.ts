@@ -1,38 +1,16 @@
-// Not losing a draft: the editor says whether its text differs from what was loaded, and every
-// way out of it (Cancel, Back, another document, another space, a link to another page, a
-// request that lands and would close or replace it) asks first when it does. Closing the tab
-// or leaving the app asks through the browser's own question.
-//
-// While a save is in flight nothing is asked: the person has already chosen to keep the text.
-// What they were doing waits for the save, and goes on when it has landed; if the save failed
-// (a conflict), the question is asked then, since the draft is still there.
-
 import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { navigate } from '../router'
 
-// Why the question is asked, for what it says: the person left, or the document was deleted or
-// moved under the draft.
 export type Why = 'leave' | 'deleted' | 'moved'
 
 type Wait = { go: () => void; why: Why }
 
 export type Guard = {
-  // Runs `go`: at once if no draft would be lost, else after the question is answered yes.
   ask: (go: () => void, why?: Why) => void
-  // What an editor tells the guard, each with its own id: only the editor that was last heard
-  // from is listened to, so a save that lands late from one that is gone changes nothing.
-  //
-  // Whether its draft differs from what was loaded, and whether it is saving.
   report: (editor: string, dirty: boolean, saving: boolean) => void
-  // Its save landed, so what was waiting for it goes on.
   saved: (editor: string) => void
-  // It is gone, saved or not. The question about its draft goes with it, and so does what
-  // waited for a save that never landed: a later choice of the person is not undone.
   dispose: (editor: string) => void
-  // A later choice that loses nothing (the document that is already open, opened again) replaces
-  // what was waiting for a save: when the save lands, nothing older goes on.
   forget: () => void
-  // The question about discarding the draft, when it is open, and its two answers.
   asking: Why | null
   discard: () => void
   keep: () => void
@@ -53,14 +31,11 @@ export const GuardContext = createContext<Guard>(nothing)
 
 export function useGuard(): Guard {
   const state = useRef({ dirty: false, saving: false })
-  // The editor that is there: the one that reported last and has not been disposed.
   const current = useRef<string | null>(null)
   const [pending, setPending] = useState<Wait | null>(null)
   const open = useRef<Wait | null>(null)
   open.current = pending
   const queued = useRef<Wait | null>(null)
-  // While what the person chose to discard goes on: a question it raises on its way (a link's
-  // navigate asks the router, which asks this page) is the same one, already answered.
   const through = useRef(false)
 
   const goOn = useCallback(() => {
@@ -79,17 +54,14 @@ export function useGuard(): Guard {
       current.current = editor
       state.current = { dirty, saving }
       if (saving) {
-        // Saving after being asked is an answer: the person keeps the text, and goes on after it.
         if (open.current) {
           queued.current = open.current
           setPending(null)
         }
       } else if (!dirty) {
-        // Nothing left to lose (the text was put back, or the save changed nothing).
         setPending(null)
         goOn()
       } else if (queued.current) {
-        // The save did not land and the draft is still there: now it is asked.
         setPending(queued.current)
         queued.current = null
       }
@@ -115,8 +87,6 @@ export function useGuard(): Guard {
   const forget = useCallback(() => {
     queued.current = null
   }, [])
-  // The draft stays the editor's until it is gone (dispose): a move that kept the editor would keep
-  // the guard, the link guard and the browser's question on.
   const discard = useCallback(() => {
     setPending(null)
     through.current = true
@@ -127,9 +97,6 @@ export function useGuard(): Guard {
     }
   }, [pending])
 
-  // The page closing or reloading, and a link of the app that would leave this page: both
-  // with a draft that differs. The rest of leaving (the workspace switcher, the browser's Back and
-  // Forward) asks through the router's useBeforeLeave, in KnowledgePage.
   useEffect(() => {
     const unload = (e: BeforeUnloadEvent) => {
       if (!state.current.dirty) return

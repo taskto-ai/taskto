@@ -8,22 +8,15 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// membersPage is the most people one list_members reply holds, whatever their size: a
-// workspace can have many more.
 const membersPage = 500
 
 type memberReply struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
-	// Role is the person's place in the space asked about ("owner", "editor", "viewer"), or in
-	// the workspace ("admin", "member") when no space was.
-	Role string `json:"role"`
+	Role  string `json:"role"`
 }
 
-// positiveID reads an argument that, when it is there, is a whole number of 1 or more. A null
-// is refused like any other value that isn't one: it is never the same as leaving the argument
-// out, which is what widens a call.
 func positiveID(raw json.RawMessage, name string) (int64, error) {
 	var id int64
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -33,14 +26,8 @@ func positiveID(raw json.RawMessage, name string) (int64, error) {
 	return id, nil
 }
 
-// listMembers lists who is in the call's workspace, or who has access to one space of it: the
-// IDs that create_card and update_card take as an assignee. Only what the user can read is
-// listed: the workspace's members, whom every member sees, or a space the user may read. They
-// come by user ID, a page at a time: next_cursor, when there are more, is the cursor of the
-// next page.
 func (s *Service) listMembers(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
-		// Both are raw so that a null is told from an omitted argument.
 		SpaceID json.RawMessage `json:"space_id"`
 		Cursor  json.RawMessage `json:"cursor"`
 	}
@@ -68,7 +55,6 @@ func (s *Service) listMembers(ctx context.Context, c *call, args json.RawMessage
 		if err != nil {
 			return nil, err
 		}
-		// The space is checked, as being of this workspace too, with the list.
 		_, members, err := s.o.Access.ReadableSpaceMembers(ctx, c.User, c.Workspace, spaceID, page)
 		if err != nil {
 			return nil, err
@@ -81,8 +67,6 @@ func (s *Service) listMembers(ctx context.Context, c *call, args json.RawMessage
 	if more {
 		out = out[:membersPage]
 	}
-	// The size measured is that of the reply sent, next_cursor included: a reply that is cut
-	// short, or that has more after it, says where the next page starts.
 	_, res, err := fitting(len(out), func(n int) any {
 		reply := map[string]any{"members": out[:n]}
 		if (n < len(out) || more) && n > 0 {

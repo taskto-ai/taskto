@@ -1,6 +1,3 @@
-/* The box is Input's (Input.css); here, the room for the chevron and the chevron itself, which
-   doesn't take the pointer: a click on it opens the select underneath. */
-
 @layer components {
   .ui-select {
     position: relative;
@@ -37,7 +34,6 @@
     color: var(--color-text-muted);
   }
 
-  /* The list the browser draws follows the page's colours. */
   .ui-select-native option {
     background: var(--color-surface);
     color: var(--color-text);

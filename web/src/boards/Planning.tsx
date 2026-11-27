@@ -10,11 +10,6 @@ import type { Fields } from './card'
 import { useDraft } from './drafts'
 import { dueState, useToday } from './due'
 
-// The card's due date. A due date is a calendar day, so it reads the same wherever it is seen; it
-// is late from the day after, for a card that isn't done. The date is a draft until it is saved
-// (with Enter or the button, which shows once the draft differs), so typing a date a part at a
-// time never saves the part. The field itself never turns red: the badge beside it says the card
-// is late.
 export function Due({
   card,
   canWrite,
@@ -27,8 +22,6 @@ export function Due({
   onChange: (fields: Fields) => Promise<boolean>
 }) {
   const [due, setDue] = useState(card.due ?? '')
-  // The draft follows the card's date when that changes (a save, or someone else's edit),
-  // unless it has been edited since: a date typed while a save was pending stays to be saved.
   const synced = useRef(card.due ?? '')
   useEffect(() => {
     const next = card.due ?? ''
@@ -40,7 +33,6 @@ export function Due({
   const f = useFormat()
   const today = useToday()
   const state = dueState(card, today)
-  // A date picked and not saved yet.
   useDraft(canWrite && due !== '' && due !== (card.due ?? ''))
   const badge = state && card.due && <DueBadge state={state} text={dueWords(t, state, card.due, today, f)} />
   if (!canWrite || card.column === 'archived')
@@ -48,7 +40,6 @@ export function Due({
 
   const saveDue = (e: FormEvent) => {
     e.preventDefault()
-    // Emptying a part of the field gives '': clearing is the button's.
     if (due && due !== card.due) void onChange({ due })
   }
   return (
@@ -80,10 +71,6 @@ export function Due({
   )
 }
 
-// The card's labels, each in the hue its name gives it. Labels are free text the server
-// normalizes (Unicode form, case, spaces), so what people type is sent as it is and the card
-// shown is the server's. A label is added or removed over the latest card's, so redoing the
-// change keeps the labels others set. A writer adds one with a small form behind the + button.
 export function Labels({
   card,
   canWrite,
@@ -104,8 +91,6 @@ export function Labels({
   const add = async (e: FormEvent) => {
     e.preventDefault()
     if (!typed) return
-    // The server normalizes and removes repeats; the field empties once it has saved.
-    // Only if it still holds what was sent: a label typed meanwhile stays.
     const sent = label
     if (await onChange((base) => ({ labels: [...base.labels, typed] }))) setLabel((now) => (now === sent ? '' : now))
   }
@@ -131,7 +116,6 @@ export function Labels({
           icon="plus"
           size="sm"
           label={t('boards.newLabel')}
-          // Where the focus goes when the form closes, or a label's remove button goes.
           data-focus-default
           onClick={() => setAdding(true)}
         />

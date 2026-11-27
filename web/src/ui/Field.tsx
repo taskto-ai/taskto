@@ -1,12 +1,3 @@
-// A form field: its label, the control, a hint and an error. The control inside (Input, Textarea,
-// Select) takes its id, its description (the hint and the error, through aria-describedby), whether
-// it is invalid and whether it is required from the field, so a screen reader says all of it when
-// the control is focused. A required field shows a mark after its label; the control itself is
-// `required`, which is what a screen reader says.
-//
-// The error replaces nothing: the hint stays, and the error is said after it. An error is shown
-// in words with an icon, never by the red edge alone.
-
 import { createContext, type ReactNode, useContext, useId } from 'react'
 import { useT } from '../i18n'
 import { Icon } from './Icon'
@@ -24,10 +15,8 @@ const FieldContext = createContext<FieldState | null>(null)
 export interface FieldProps {
   label: ReactNode
   hint?: ReactNode
-  // What is wrong, in words: the field is invalid while it has one.
   error?: ReactNode
   required?: boolean
-  // The control's id, when the page needs to know it; one is made otherwise.
   id?: string
   className?: string
   children: ReactNode
@@ -43,8 +32,6 @@ export function Field({ label, hint, error, required = false, id, className, chi
   const describedBy = [hint ? hintId : '', invalid ? errorId : ''].filter(Boolean).join(' ') || undefined
   return (
     <div className={['ui-field', className ?? ''].filter(Boolean).join(' ')} data-invalid={invalid ? '' : undefined}>
-      {/* The mark is beside the label, not in it: the label's text, and so the control's name, is
-          the label alone, and the control's own `required` is what a screen reader says. */}
       <span className="ui-field-label-row">
         <label className="ui-field-label" htmlFor={controlId}>
           {label}
@@ -63,8 +50,6 @@ export function Field({ label, hint, error, required = false, id, className, chi
           {hint}
         </p>
       )}
-      {/* Always there, so a screen reader hears an error when it appears, also while the focus is
-          elsewhere (a form's check on submit); polite, so it doesn't cut off what is being said. */}
       <div className="ui-field-live" aria-live="polite">
         {invalid && (
           <p className="ui-field-error" id={errorId}>
@@ -77,9 +62,6 @@ export function Field({ label, hint, error, required = false, id, className, chi
   )
 }
 
-// What a control takes from the field it is in, merged with its own props. In a field the id is
-// the field's (give the Field an `id` to choose it), so the label always names the control; the
-// control's own description comes before the field's, and its own validity and requirement win.
 export function useFieldControl(own: {
   id?: string
   'aria-describedby'?: string
@@ -94,8 +76,6 @@ export function useFieldControl(own: {
       ? own['aria-invalid'] !== 'false' && own['aria-invalid'] !== false
       : (field?.invalid ?? false))
   const describedBy = [own['aria-describedby'], field?.describedBy].filter(Boolean).join(' ') || undefined
-  // A specific kind of error the control names (grammar, spelling) is kept as it is said; only a
-  // plain one becomes true.
   const token = own.invalid === undefined ? own['aria-invalid'] : undefined
   const kind = token === 'grammar' || token === 'spelling' ? token : true
   return {

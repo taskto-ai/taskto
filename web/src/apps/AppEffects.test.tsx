@@ -63,7 +63,6 @@ test('shows what waits and what failed, and why', async () => {
     },
   })
   render(<AppEffects workspace={1} base={base} writable />)
-  // Collapsed, a failure is still said.
   await screen.findByRole('button', { name: /Effects/ })
   expect(screen.getByRole('status').textContent).toContain('1 failed')
   fireEvent.click(screen.getByRole('button', { name: /Effects/ }))
@@ -130,7 +129,6 @@ test('offers a retry only to the person who acted, in a space they can write', a
   expect(screen.getAllByRole('button', { name: /Retry/ })).toHaveLength(1)
   unmount()
 
-  // A read-only space: none.
   render(<AppEffects workspace={1} base={base} writable={false} />)
   fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
   await screen.findByRole('list')
@@ -281,14 +279,12 @@ test('failed effects older than the newest page are reachable and can be retried
   render(<AppEffects workspace={1} base={base} writable />)
   fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
   await screen.findByRole('list')
-  // Not among the newest page, so a retry isn't offered there; the older page and the filter reach it.
   expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Show older effects' }))
   await screen.findByRole('button', { name: /Retry/ })
   expect(screen.queryByRole('button', { name: 'Show older effects' })).toBeNull()
   expect(calls.some((c) => c.path.endsWith('before=151'))).toBe(true)
 
-  // The filter asks for the failed ones alone.
   fireEvent.click(screen.getByRole('checkbox', { name: 'Only the failed (2)' }))
   await screen.findByText('Old one')
   expect(screen.getAllByRole('listitem')).toHaveLength(1)
@@ -337,10 +333,8 @@ test('retrying an effect on an older page shows it retried there, not still fail
   fireEvent.click(screen.getByRole('button', { name: 'Show older effects' }))
   fireEvent.click(await screen.findByRole('button', { name: /Retry/ }))
   await screen.findByText('It will be tried again shortly.')
-  // The older page is read again: the row is no longer failed, and offers no retry.
   await waitFor(() => expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull())
   expect(calls.some((c) => c.path.endsWith('before=41'))).toBe(true)
-  // Its status, said by its badge: waiting, not failed.
   const old = screen
     .getAllByRole('listitem')
     .find((li) => li.textContent?.includes('Fix East gate') && !li.textContent?.includes('Done'))

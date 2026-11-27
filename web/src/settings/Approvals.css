@@ -1,16 +1,10 @@
-/* The approvals queue: the settings frame, a filter and a list of requests, each opened in a dialog.
-   Every part is a component from web/src/ui; this only places them. */
-
 @layer screens {
-  /* The filter sits at the start of the page, as wide as its choices and never wider than the page. */
   .approvals-filters {
     justify-self: start;
     align-self: flex-start;
     max-inline-size: 100%;
   }
 
-  /* On a phone the choices wrap onto a second row when the language's words are long, rather than being
-     cut off: the pill keeps its ground, and each segment keeps a control's height. */
   @media (max-width: 40rem) {
     .approvals-filters .ui-segmented {
       flex-wrap: wrap;

@@ -11,7 +11,6 @@ import (
 	"testing"
 )
 
-// parseFile runs the parser over a recorded stream and returns its events.
 func parseFile(t *testing.T, cli CLI, name string) ([]Event, *parser) {
 	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", name))
@@ -37,9 +36,6 @@ func types(events []Event) []EventType {
 	return out
 }
 
-// The streams in testdata were recorded from the real CLIs (versions in the file names)
-// running against a gateway, with paths and host names replaced. A CLI upgrade re-records
-// them; a change in what the worker reads fails here.
 func TestParseClaudeCodeTurn(t *testing.T) {
 	events, p := parseFile(t, Claude, "claude-2.1.311-turn.jsonl")
 	want := []EventType{EventSession, EventThinking, EventTool, EventTool, EventText, EventUsage}
@@ -64,8 +60,6 @@ func TestParseClaudeCodeTurn(t *testing.T) {
 	}
 }
 
-// Claude Code retries a refused login for minutes (system/api_retry, error_status 401): the
-// first retry is enough to know.
 func TestParseClaudeCodeLoginRefused(t *testing.T) {
 	events, p := parseFile(t, Claude, "claude-2.1.311-401.jsonl")
 	if got := types(events); !slices.Equal(got, []EventType{EventSession, EventLoginRequired}) {
@@ -93,9 +87,6 @@ func TestParseCodexTurn(t *testing.T) {
 	}
 }
 
-// A Codex MCP tool call (recorded against a scripted model and a stand-in for taskto's
-// endpoint): the tool event names the server and the tool, with the call's arguments, which
-// the sidecar reads for a browser_help (docs/cli-tools.md).
 func TestParseCodexMCPToolCall(t *testing.T) {
 	events, p := parseFile(t, Codex, "codex-0.169.0-mcp.jsonl")
 	var tools []Tool
@@ -113,7 +104,6 @@ func TestParseCodexMCPToolCall(t *testing.T) {
 	if p.answer != "done" {
 		t.Errorf("answer %q", p.answer)
 	}
-	// A call without arguments shows none, whether the field is absent or null.
 	for _, line := range []string{
 		`{"type":"item.started","item":{"id":"i1","type":"mcp_tool_call","server":"taskto","tool":"list_spaces","status":"in_progress"}}`,
 		`{"type":"item.started","item":{"id":"i2","type":"mcp_tool_call","server":"taskto","tool":"list_spaces","arguments":null,"status":"in_progress"}}`,
@@ -126,8 +116,6 @@ func TestParseCodexMCPToolCall(t *testing.T) {
 	}
 }
 
-// Codex retries a 401 five times ("Reconnecting... 1/5 (… 401 Unauthorized …)") before the
-// turn fails: the first retry is enough to know.
 func TestParseCodexLoginRefused(t *testing.T) {
 	events, p := parseFile(t, Codex, "codex-0.169.0-401.jsonl")
 	got := types(events)
@@ -152,7 +140,6 @@ func TestParseClaudeCodeRateLimit(t *testing.T) {
 	}
 }
 
-// Without a rate_limit_event, a turn refused on a plan limit is known from its message.
 func TestParseLimitMessage(t *testing.T) {
 	for _, tc := range []struct {
 		cli  CLI
@@ -210,8 +197,6 @@ func TestCodexLimits(t *testing.T) {
 	}
 }
 
-// A prompt never goes in argv, where one starting with "-" would read as a flag: it goes on
-// stdin, or (Grok Build) in a file the helper writes.
 func TestTurnCommandKeepsThePromptOutOfArgv(t *testing.T) {
 	prompt := "--dangerously-skip-permissions please"
 	for _, spec := range []TurnSpec{
@@ -316,13 +301,10 @@ func TestAuthFailurePatterns(t *testing.T) {
 
 func TestOneTimeCode(t *testing.T) {
 	for text, want := range map[string]string{
-		// Codex 0.169.0
 		"Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link\n   https://auth.openai.com/codex/device\n\n2. Enter this one-time code (expires in 15 minutes)\n   ABCD-EFGHI\n": "ABCD-EFGHI",
-		// Grok Build 1.0.89: the code is in the URL too, but taken from its own line.
-		"To sign in, open this URL in your browser:\n\n  https://accounts.x.ai/oauth2/device?user_code=S8X2-4PCV\n\nConfirm this code in your browser:\n\n  S8X2-4PCV\n": "S8X2-4PCV",
-		// Noise: an uppercase token far from any mention of a code.
-		"Build ABCD-1234 ready.\nNothing else.\nStill nothing.\nMore.\nAnd more.\n": "",
-		"Your code:\n\n\n\n\nWXYZ-1234 (too far)\n":                                 "",
+		"To sign in, open this URL in your browser:\n\n  https://accounts.x.ai/oauth2/device?user_code=S8X2-4PCV\n\nConfirm this code in your browser:\n\n  S8X2-4PCV\n":                                                    "S8X2-4PCV",
+		"Build ABCD-1234 ready.\nNothing else.\nStill nothing.\nMore.\nAnd more.\n":                                                                                                                                         "",
+		"Your code:\n\n\n\n\nWXYZ-1234 (too far)\n": "",
 	} {
 		if got := oneTimeCode(text); got != want {
 			t.Errorf("%q: got %q, want %q", text, got, want)
@@ -330,8 +312,6 @@ func TestOneTimeCode(t *testing.T) {
 	}
 }
 
-// Grok Build 1.0.89, signed out (recorded from the real binary in the worker image): the
-// reason is only in errors[].
 func TestParseGrokNotSignedIn(t *testing.T) {
 	events, p := parseFile(t, Grok, "grok-1.0.89-not-signed-in.jsonl")
 	if !p.login {
@@ -342,8 +322,6 @@ func TestParseGrokNotSignedIn(t *testing.T) {
 	}
 }
 
-// The app a CLI saved through taskto's create_app or update_app is named in the tool event, read
-// from the whole answer even where the event's output is cut, so the conversation can show it.
 func TestParseSavedApps(t *testing.T) {
 	big := strings.Repeat("x", 3*maxToolText)
 	answer := `{"id":7,"space_id":3,"name":"Tracker","definition":{"note":"` + big + `"}}`

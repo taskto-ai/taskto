@@ -1,16 +1,9 @@
-/* The conversations: the list beside the open one (one or the other on a phone), and a
-   conversation as a column: its head, its notices, the transcript (which takes what is left and
-   scrolls on its own) and the composer. The transcript, the notices and the composer keep to
-   the reading width in the middle of the pane, at the reading size. */
-
 @layer screens {
   .ui-chat-layout {
     block-size: 100%;
     display: grid;
     grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
   }
-
-  /* The list. */
 
   .ui-chat-list {
     position: relative;
@@ -31,7 +24,6 @@
     padding: var(--space-1) var(--space-2) var(--space-2);
   }
 
-  /* Never broken inside a word: with too little room, the buttons go under it. */
   .ui-chat-list-title {
     flex: 1 0 auto;
     overflow-wrap: normal;
@@ -43,7 +35,6 @@
     padding: var(--space-2) var(--space-3);
   }
 
-  /* The conversations as quiet rows: no rule between them, the open one on the selected ground. */
   .ui-chat-rows .ui-row {
     min-block-size: 0;
     padding: var(--space-2) var(--space-3);
@@ -67,10 +58,6 @@
     padding-block-start: var(--space-3);
   }
 
-  /* A conversation. */
-
-  /* Positioned, as are the transcript and the list: what is placed absolutely inside them (the
-     screen reader's labels) stays inside, and never makes the window itself scroll. */
   .ui-chat {
     position: relative;
     display: flex;
@@ -106,7 +93,6 @@
     min-block-size: var(--space-10);
   }
 
-  /* Back to the list: only where the list isn't beside it. */
   .ui-chat-back {
     display: none;
   }
@@ -144,8 +130,6 @@
     gap: var(--space-1);
   }
 
-  /* What asks for the person: a CLI's question, a sign-in, the browser. */
-  /* At most a part of the pane, scrolling inside, so the transcript and the composer stay in view. */
   .ui-chat-notices {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -182,8 +166,6 @@
     gap: var(--space-2);
   }
 
-  /* The transcript. */
-
   .ui-chat-transcript {
     position: relative;
     flex: 1 1 0;
@@ -212,7 +194,6 @@
     min-inline-size: 0;
   }
 
-  /* The person's message: a quiet bubble at the end side. */
   .ui-chat-msg[data-role="user"] {
     justify-self: end;
     display: grid;
@@ -230,7 +211,6 @@
     overflow-wrap: anywhere;
   }
 
-  /* The agent's reply: its dot, then what it did and said. */
   .ui-chat-msg[data-role="assistant"] {
     display: grid;
     grid-template-columns: var(--space-6) minmax(0, 1fr);
@@ -241,7 +221,6 @@
     margin-block-start: calc((1lh - var(--mark-node)) / 2);
   }
 
-  /* The agent's entries one after another are one turn: one dot, closer together. */
   .ui-chat-msg[data-role="assistant"] + .ui-chat-msg[data-role="assistant"] {
     margin-block-start: calc(var(--space-2) - var(--space-5));
   }
@@ -280,7 +259,6 @@
     font: var(--type-small);
   }
 
-  /* What the agent did: compact lines. */
   .ui-chat-tool {
     display: grid;
     gap: var(--space-2);
@@ -355,7 +333,6 @@
     rotate: 180deg;
   }
 
-  /* A CLI's work, or what it asks to run: plain text lines. */
   .ui-chat-output {
     margin: 0;
     padding: var(--space-2) var(--space-3);
@@ -374,13 +351,10 @@
     inline-size: 100%;
   }
 
-  /* The composer: one box at the reading width. */
-
   .ui-chat-composer {
     padding: 0 var(--space-6) calc(var(--space-5) + env(safe-area-inset-bottom));
   }
 
-  /* The screen keyboard is up (src/pwa/viewport.ts): the home bar isn't there. */
   html[data-keyboard="open"] .ui-chat-composer {
     padding-block-end: var(--space-3);
   }
@@ -419,7 +393,6 @@
     background: var(--color-bg-sunken);
   }
 
-  /* The box draws the field: the text area inside has no edge of its own. */
   .ui-chat-box .ui-chat-input,
   .ui-chat-box .ui-chat-input:hover,
   .ui-chat-box .ui-chat-input:focus-visible,
@@ -451,12 +424,10 @@
     padding-inline: 0;
   }
 
-  /* The model: a quiet control in the box, and its notes on a line of their own under it. */
   .ui-chat-model {
     display: contents;
   }
 
-  /* It may shrink, its text cut by the select itself; nothing clips its focus ring. */
   .ui-chat-model-select {
     flex: 0 1 auto;
     inline-size: auto;
@@ -498,7 +469,6 @@
     }
   }
 
-  /* A phone: the list or the conversation, with a way back. */
   @media (max-width: 48rem) {
     .ui-chat-layout {
       grid-template-columns: minmax(0, 1fr);
@@ -539,8 +509,6 @@
       max-inline-size: 90%;
     }
 
-    /* Short, with the screen keyboard up: the notices take less, and the composer is compact
-       (one line of text that grows as it fills, the controls on one row), so Send stays in view. */
     .ui-chat-notices {
       max-block-size: 30%;
       padding-block: var(--space-2);

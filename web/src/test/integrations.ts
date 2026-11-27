@@ -1,6 +1,3 @@
-// Fixtures for the integration screens' tests: the contract of an invoicing app's payments slot as
-// the server works it out, an approval of it, and an integration of the workspace.
-
 import type { Integration, IntegrationApproval, IntegrationContract, SlotStatus } from '../api'
 
 export const contract: IntegrationContract = {
@@ -101,6 +98,7 @@ export const shop: Integration = {
   currencies: ['EUR'],
   secrets: { api_key: 'set', webhook_secret: 'not set' },
   webhook_url: null,
+  webhook_url_changed: false,
   disabled: false,
   disabled_at: null,
   spaces: [12],

@@ -1,12 +1,8 @@
-// The place a person settles a change that needs them (docs/offline.md, "Conflicts and what
-// doesn't fit"): a conflict shows what they changed beside the record as the server has it now,
-// a record deleted meanwhile says so, and what no longer fits the app can be fixed. Every choice
-// is explicit; closing it changes nothing, and nothing is overwritten by being looked at.
-
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, errorText } from '../api'
 import { optionLabel } from '../apps/RecordParts'
 import { type Format, useFormat, useT } from '../i18n'
+import { useChanged } from '../memo'
 import { Button } from '../ui/Button'
 import { Checkbox } from '../ui/Checkbox'
 import { Field as LabelledField } from '../ui/Field'
@@ -35,7 +31,6 @@ import { type Download, kindOf, type OutboxItem, type Problem, seenOf, versionOf
 
 type Field = Download['definition']['collection']['fields'][number]
 
-// A value as it is shown: a number in the person's format, yes or no, a choice by its label, the text as it is.
 function ValueText({ value, f, field }: { value: unknown; f: Format; field?: Field }) {
   const t = useT()
   if (value === undefined || value === null || value === '')
@@ -47,7 +42,6 @@ function ValueText({ value, f, field }: { value: unknown; f: Format; field?: Fie
   return <>{String(value)}</>
 }
 
-// What the person's change sets, as the values it gives (an update's cleared field is none).
 function mine(download: Download | undefined, item: OutboxItem): Record<string, unknown> {
   const context = item.action.context
   try {
@@ -55,9 +49,7 @@ function mine(download: Download | undefined, item: OutboxItem): Record<string, 
       const changes = parseUpdate(download.definition, context)
       return Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v === null ? undefined : v]))
     }
-  } catch {
-    // Shown as it was entered.
-  }
+  } catch {}
   const { id: _id, ...rest } = context
   return rest
 }
@@ -75,8 +67,6 @@ export function Resolve({
   download: Download | undefined
   name: string
   onClose: () => void
-  // The Discard question was open when this screen went away (the record started sending in another
-  // tab, or this tab stopped being the writer): this screen is gone with it, so the list says why.
   onDiscardClosed?: () => void
 }) {
   const t = useT()
@@ -86,20 +76,23 @@ export function Resolve({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
-  // The app as it is live now, for what no longer fits it (downloaded again), else the copy held.
   const needsLive = reason === 'schema' || reason === 'refused' || reason === 'outdated'
   const [live, setLive] = useState<Download | undefined>(needsLive ? undefined : download)
   const [deleted, setDeleted] = useState<Deleted | null | 'loading'>(reason === 'deleted' ? 'loading' : null)
-  // The record as the server has it now, read when this opens (and again when the item changes, or
-  // a choice found the record had moved on): what is shown beside the person's change is never
-  // what an earlier answer was cached with.
   const [server, setServer] = useState<ServerRecord | 'loading' | 'failed'>('loading')
-  const [again, setAgain] = useState(0)
+  const [check, setCheck] = useState(() => ({ runtime, item }))
+  const latest = useRef({ runtime, item })
+  useLayoutEffect(() => {
+    latest.current = { runtime, item }
+  })
+  const itemChanged = useChanged(JSON.stringify([item.id, item.operation, versionOf(item)]))
+  if (itemChanged) setCheck({ runtime, item })
 
-  // Asked when it opens, and again for another version of the item or after a review again: the
-  // app as it is now, the record, or the deletion's revision.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: for this item as it was shown
   useEffect(() => {
+    const { runtime, item } = check
+    const reason = item.attention
+    const kind = kindOf(item)
+    const needsLive = reason === 'schema' || reason === 'refused' || reason === 'outdated'
     let current = true
     if (reason === 'conflict') {
       setServer('loading')
@@ -132,21 +125,17 @@ export function Resolve({
     return () => {
       current = false
     }
-  }, [item.id, item.operation, versionOf(item), again])
+  }, [check])
 
   const run = async (go: () => Promise<boolean>) => {
     setBusy(true)
     setError(null)
     try {
-      // A choice is applied only to the item as it was shown: if another tab moved it on, or the
-      // record moved on, it says so (and what is shown is read again), and nothing is applied.
       await go()
       onClose()
     } catch (e) {
-      // The record moved on, or the copy of the app was replaced while the server was read: what is
-      // shown is read again.
       if (e instanceof ApiError && (e.code === REVIEW_AGAIN || e.code === 'offline_copy_changed')) {
-        setAgain((n) => n + 1)
+        setCheck({ ...latest.current })
       }
       setError(errorText(e))
       setBusy(false)
@@ -305,8 +294,6 @@ export function Resolve({
       {editing && def && (live ?? download) && (
         <EditForm
           fields={fields}
-          // What every field holds now: the record as the server has it (read again when it moved
-          // on) with the person's own change on top. A field they didn't touch follows it.
           initial={kind === 'update' ? { ...base, ...changed } : stripId(item.action.context)}
           busy={busy || server === 'loading'}
           onCancel={() => setEditing(false)}
@@ -319,7 +306,6 @@ export function Resolve({
                 (live ?? download) as Download,
                 current,
                 seenOf(item),
-                // An update applies only what is the person's: their change, and what they edited.
                 kind === 'update' ? [...new Set([...Object.keys(changed), ...touched])] : undefined,
               ),
             )
@@ -348,10 +334,6 @@ const stripId = (context: Record<string, unknown>) => {
 
 const as = (role: 'table' | 'rowgroup' | 'row' | 'columnheader' | 'rowheader' | 'cell') => ({ role })
 
-// What the person changed, field by field, beside what was there when they started and what the
-// server has now. Its roles are said outright: on a phone its rows and cells are laid out as grids
-// (one under the other), and some browsers drop a table's meaning when its parts aren't displayed
-// as a table's. (Written through `as`, since a linter takes a table's own roles for redundant.)
 function ConflictTable({
   fields,
   item,
@@ -443,10 +425,6 @@ function ChangeSummary({ fields, changed, f }: { fields: Field[]; changed: Recor
   )
 }
 
-// The record's fields as inputs, by type: what the person edits to retry. Photos stay as they are.
-// A field shows what the person typed in it, and until they type, what `initial` says now: the form
-// remembers only the fields that were edited (`onSave` says which), so a record read again while it
-// is open comes with its new values in every other field, and only what the person changed is applied.
 function EditForm({
   fields,
   initial,

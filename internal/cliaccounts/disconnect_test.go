@@ -17,9 +17,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// Disconnecting an account through the API stops the turn that is using its login and waits for
-// it before the login's files go; another user's turn goes on, and so does the owner's turn on
-// another account.
 func TestDisconnectStopsTheTurnUsingTheLogin(t *testing.T) {
 	e := newTurnEnv(t)
 	conv := e.conversation(e.owner)
@@ -69,7 +66,6 @@ func TestDisconnectStopsTheTurnUsingTheLogin(t *testing.T) {
 	}
 }
 
-// The worker's refusals while an account is being removed are answers the web app translates.
 func TestRemovalRefusalsAreAPIErrors(t *testing.T) {
 	for _, tc := range []struct {
 		err    error

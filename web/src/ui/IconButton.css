@@ -43,7 +43,6 @@
     outline-offset: var(--line-focus-offset);
   }
 
-  /* Disabled: muted and inert, with no ground on hover. */
   .ui-icon-button:disabled,
   .ui-icon-button:disabled:hover {
     background: transparent;
@@ -51,7 +50,6 @@
     cursor: not-allowed;
   }
 
-  /* Fingers: the touch size, either size. */
   @media (pointer: coarse) {
     .ui-icon-button,
     .ui-icon-button-sm {

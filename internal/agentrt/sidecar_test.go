@@ -1,10 +1,5 @@
 package agentrt
 
-// Integration tests against the real sidecar (agent/dist), with the scripted offline model.
-// They need Node and a built agent package, so they only run with TASKTO_AGENT_IT=1:
-//
-//	pnpm --filter @taskto/agent build && TASKTO_AGENT_IT=1 go test ./internal/agentrt/
-
 import (
 	"bytes"
 	"context"
@@ -24,16 +19,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// The sidecar's entry points. The tests use test-entry.js: the production sidecar with the pause
-// tools (pause_safe, pause_once), which the scripted model calls, and a few fixture tools
-// (agent/src/test-entry.ts). index.js is what the server runs, and it can't be given any of them.
 const (
 	testEntry       = "../../agent/dist/test-entry.js"
 	productionEntry = "../../agent/dist/index.js"
 )
 
-// spikeToolsEnv is the variable an earlier version of the sidecar read to install the pause tools.
-// Nothing reads it now; tests set it to prove that.
 const spikeToolsEnv = "TASKTO_AGENT_SPIKE_TOOLS"
 
 type sidecar struct {
@@ -42,24 +32,21 @@ type sidecar struct {
 	socket string
 	cmd    *exec.Cmd
 	client *Client
-	entry  string       // the entry point's path
-	env    []string     // extra environment, such as TASKTO_AGENT_PROVIDERS
-	output lockedBuffer // everything the sidecar wrote to stderr, across restarts
+	entry  string
+	env    []string
+	output lockedBuffer
 }
 
-// startSidecar starts the sidecar for tests (test-entry.js) with env added to its environment.
 func startSidecar(t *testing.T, env ...string) *sidecar {
 	t.Helper()
 	return startSidecarAt(t, testEntry, env...)
 }
 
-// startSidecarAt starts the sidecar at the entry point, a path relative to this package.
 func startSidecarAt(t *testing.T, entry string, env ...string) *sidecar {
 	t.Helper()
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	// A short directory: Unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "taskto-agent-")
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +57,7 @@ func startSidecarAt(t *testing.T, entry string, env ...string) *sidecar {
 		t.Fatal(err)
 	}
 	s := &sidecar{t: t, dir: dir, socket: filepath.Join(dir, "agent.sock"), entry: abs, env: env}
-	t.Cleanup(s.stop) // before start: a start that fails the test still reaps the process
+	t.Cleanup(s.stop)
 	s.start()
 	return s
 }
@@ -103,7 +90,6 @@ func (s *sidecar) start() {
 	}
 }
 
-// kill stops the sidecar with SIGKILL: no shutdown code runs.
 func (s *sidecar) kill() {
 	s.t.Helper()
 	if err := s.cmd.Process.Kill(); err != nil {
@@ -121,7 +107,6 @@ func (s *sidecar) stop() {
 
 type testWriter struct{ t *testing.T }
 
-// lockedBuffer collects output written from other goroutines.
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -165,7 +150,6 @@ func lastAssistant(t *testing.T, c *Client, conv int64) string {
 	return ""
 }
 
-// waitForOps reads the watch until an ops line contains want.
 func waitForOps(t *testing.T, w *Watch, want string) {
 	t.Helper()
 	for {
@@ -199,12 +183,10 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("answer = %q, want %q", got, "echo: hello")
 	}
 
-	// The sidecar refuses what it doesn't understand instead of passing it on.
 	if _, err := s.client.Submit(ctx, conv, Input{Content: "hi", WhenBusy: "sometimes"}); err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("submit with whenBusy=sometimes: err = %v, want a 400", err)
 	}
 
-	// The same request ID returns the same submission instead of submitting twice.
 	again, err := s.client.Submit(ctx, conv, Input{Content: "hi", RequestID: "r1"})
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +222,7 @@ func TestTwoWatchersSeeTheSameRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, w := range watches {
-		waitForOps(t, w, "waited 200ms") // streamed tool output
+		waitForOps(t, w, "waited 200ms")
 		waitForOps(t, w, "finished pause_safe")
 	}
 }
@@ -272,7 +254,6 @@ func TestSteerJoinsTheRunningWork(t *testing.T) {
 			t.Fatalf("submission %d = %+v, %v; want done", id, settled, err)
 		}
 	}
-	// The steer was placed after the tool round, so the run's answer replies to it.
 	if got := lastAssistant(t, s.client, conv); got != "echo: use pnpm" {
 		t.Fatalf("answer = %q, want the steer answered in the same run", got)
 	}
@@ -284,11 +265,7 @@ func TestCrashDuringToolCall(t *testing.T) {
 		want     string
 		alsoWant string
 	}{
-		// Replay-safe: the call runs again after the restart and succeeds.
 		{tool: "pause_safe", want: "finished pause_safe: paused 2500ms"},
-		// Not replay-safe: the model gets an interrupted error result instead of a rerun. The
-		// word "interrupted" also proves the kill landed mid-call: a call that had finished
-		// would report "paused 2500ms" instead.
 		{tool: "pause_once", want: "finished pause_once:", alsoWant: "was interrupted"},
 	}
 	for _, tc := range cases {
@@ -307,10 +284,9 @@ func TestCrashDuringToolCall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitForOps(t, w, "waited 400ms") // mid-call, with about 2 s to spare before it ends
+			waitForOps(t, w, "waited 400ms")
 			s.kill()
 			if _, err := w.Next(); err == nil {
-				// Drain whatever was buffered; the stream must end with the process.
 				for err == nil {
 					_, err = w.Next()
 				}
@@ -348,7 +324,6 @@ func TestSecondSidecarRefusesARunningSocket(t *testing.T) {
 	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 		t.Fatalf("second sidecar: err = %v, output %q; want exit 1", err, out)
 	}
-	// The first one still owns the socket.
 	if err := s.client.Healthy(ctxFor(t)); err != nil {
 		t.Fatalf("first sidecar after the attempt: %v", err)
 	}
@@ -361,7 +336,6 @@ func TestSecondSidecarRefusesARunningSocket(t *testing.T) {
 	}
 }
 
-// notFound reports whether err is the sidecar's 404.
 func notFound(err error) bool {
 	var se *StatusError
 	return errors.As(err, &se) && se.Code == 404
@@ -388,7 +362,6 @@ func TestListAndRetireConversations(t *testing.T) {
 		t.Fatalf("conversations = %+v, want %d and %d, created since %d, not retired", list, keep, orphan, before)
 	}
 
-	// Retiring stops the conversation's running work.
 	w, err := s.client.Watch(ctx, orphan)
 	if err != nil {
 		t.Fatal(err)
@@ -407,7 +380,6 @@ func TestListAndRetireConversations(t *testing.T) {
 	if settled, err := s.client.Wait(waitCtx, running); err != nil || settled.Status != "unanswered" {
 		t.Fatalf("the running submission = %+v, %v; want unanswered at once", settled, err)
 	}
-	// A retired conversation is unknown to every route, retiring included; the other one isn't.
 	if _, err := s.client.Submit(ctx, orphan, Input{Content: "hello"}); !notFound(err) {
 		t.Fatalf("submit to a retired conversation: err = %v, want a 404", err)
 	}
@@ -437,7 +409,6 @@ func TestListAndRetireConversations(t *testing.T) {
 		t.Fatalf("messages of the kept conversation: %v", err)
 	}
 
-	// Retiring is stored: it survives a restart.
 	s.kill()
 	s.start()
 	list, err = s.client.Conversations(ctx)
@@ -452,9 +423,6 @@ func TestListAndRetireConversations(t *testing.T) {
 	}
 }
 
-// Pi Durable can't delete a conversation, so the sidecar purges a retired one's records from its
-// database itself, for the purge of a deleted account: what was said is gone from the file, and the
-// other conversations are intact.
 func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 	s := startSidecar(t)
 	ctx := ctxFor(t)
@@ -486,7 +454,6 @@ func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 		for _, name := range []string{"agent.db", "agent.db-wal"} {
 			b, err := os.ReadFile(filepath.Join(s.dir, name))
 			if err != nil {
-				// The log may be absent (checkpointed away); the database file never is.
 				if name == "agent.db-wal" && errors.Is(err, os.ErrNotExist) {
 					continue
 				}
@@ -502,7 +469,6 @@ func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 		t.Fatal("fixture: the database doesn't hold what was said")
 	}
 
-	// Only a retired conversation is purged: one in use is refused, and untouched.
 	var se *StatusError
 	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 409 {
 		t.Fatalf("purging a conversation that isn't retired: err = %v, want a 409", err)
@@ -526,13 +492,11 @@ func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 	if msgs, err := s.client.Messages(ctx, keep); err != nil || !strings.Contains(fmt.Sprint(msgs), keptWord) {
 		t.Fatalf("the kept conversation: %v, %v", msgs, err)
 	}
-	// Again, and for one it never had: done, not an error.
 	for _, id := range []int64{doomed, doomed + 1000} {
 		if err := s.client.PurgeConversation(ctx, id); err != nil {
 			t.Fatalf("purging conversation %d again: %v", id, err)
 		}
 	}
-	// It stays gone after a restart, and the sidecar goes on working.
 	s.kill()
 	s.start()
 	list, err := s.client.Conversations(ctx)
@@ -549,9 +513,6 @@ func TestPurgeConversationDeletesItsRecordsFromTheDatabase(t *testing.T) {
 	say(fresh, "still working")
 }
 
-// The text of a purged conversation stays in the write-ahead log until it is truncated, and a reader
-// can hold the log up without an error: the purge then says it isn't done (so the server keeps its
-// record of the step), and a retry, with the conversation's rows long gone, still empties the log.
 func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 	s := startSidecar(t)
 	ctx := ctxFor(t)
@@ -580,7 +541,6 @@ func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A read transaction pinned on the database, as a watch's is.
 	reader, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -607,8 +567,6 @@ func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 	if !inLog() {
 		t.Fatal("fixture: the reader didn't hold the log")
 	}
-	// The sidecar restarts, and no longer has the conversation at all: purging it again is still not
-	// done while the log holds what was said, and is done once it is empty.
 	s.kill()
 	s.start()
 	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
@@ -623,6 +581,89 @@ func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 	}
 	if inLog() {
 		t.Error("what was said is still in the write-ahead log after the purge was acknowledged")
+	}
+}
+
+func TestPurgeAskedAgainWhileItRunsHasItsOutcome(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	conn, err := reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	first := make(chan error, 1)
+	go func() { first <- s.client.PurgeConversation(ctx, doomed) }()
+	var se *StatusError
+	joined := fmt.Sprintf("conversation %d purge joins the running one", doomed)
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(s.output.String(), joined); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the purge asked again never joined the running one; output %q", s.output.String())
+		}
+		if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
+			t.Fatalf("the purge asked again while the first waits for the reader: err = %v, want the first's 503", err)
+		}
+	}
+	if err := <-first; !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("the first purge: err = %v, want a 503", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.PurgeConversation(ctx, doomed); err != nil {
+		t.Fatalf("the retry once the reader is gone: %v", err)
+	}
+}
+
+func waitForOutput(t *testing.T, s *sidecar, want string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(s.output.String(), want); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the sidecar never said %q; output %q", want, s.output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSetModelOvertakenByARetireIsRefused(t *testing.T) {
+	s := startSidecar(t, "TASKTO_AGENT_TEST_MODEL_PAUSE_MS=600")
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := s.client.Models(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := make(chan error, 1)
+	go func() { set <- s.client.SetModel(ctx, conv, catalog.Default) }()
+	waitForOutput(t, s, "test: the model write is waiting before its commit")
+	if err := s.client.RetireConversation(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-set; !notFound(err) {
+		t.Fatalf("a model change the retire overtook: err = %v, want a 404", err)
 	}
 }
 
@@ -651,7 +692,6 @@ func TestAbortStopsTheRunningWork(t *testing.T) {
 	if settled, err := s.client.Wait(waitCtx, running); err != nil || settled.Status != "unanswered" {
 		t.Fatalf("the running submission = %+v, %v; want unanswered at once", settled, err)
 	}
-	// Unlike retiring, the conversation goes on.
 	next, err := s.client.Submit(ctx, conv, Input{Content: "again"})
 	if err != nil {
 		t.Fatal(err)
@@ -709,11 +749,9 @@ func TestEntriesPagesBackThroughTheHistory(t *testing.T) {
 			t.Fatalf("entries out of order: %+v", all.Entries)
 		}
 	}
-	// Shaped like the watch's entries: the web app draws a page's messages as the view's.
 	if first := all.Entries[0]; first.Kind != "pi.user" || !strings.Contains(string(first.Model), `"one"`) {
 		t.Fatalf("first entry = %s %s, want the user's message one", first.Kind, first.Model)
 	}
-	// Two at a time, back from the newest: the pages join up to the whole history.
 	var joined []int64
 	before := int64(0)
 	for range len(all.Entries) {

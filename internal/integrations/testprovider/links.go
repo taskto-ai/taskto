@@ -11,16 +11,12 @@ import (
 
 type paymentLink struct {
 	PaymentLink
-	items []lineItem
-	// completed is how many Checkout Sessions made through the link have completed, whether or
-	// not it has a limit (yet): the count a limit is measured against.
+	items     []lineItem
 	completed int
 }
 
-// linkHosts is the host a link of a submit_type lives on.
 var linkHosts = map[string]string{"auto": "buy", "pay": "buy", "donate": "donate", "book": "book"}
 
-// limitReached is true when the link has taken as many completed sessions as its limit allows.
 func (l *paymentLink) limitReached() bool {
 	r := l.Restrictions
 	return r != nil && l.completed >= r.CompletedSessions.Limit
@@ -94,7 +90,7 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 		submit = "auto"
 	}
 	id := "plink_" + randomID(24)
-	host := "https://" + linkHosts[submit] + ".stripe.com/" // buy, donate or book
+	host := "https://" + linkHosts[submit] + ".stripe.com/"
 	if !s.live {
 		host += "test_"
 	}
@@ -111,8 +107,6 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 
 var linkListParams = compileAll([]string{`limit`, `starting_after`, `ending_before`, `active`})
 
-// listLinks lists the payment links, newest first. Like Stripe's, it has no filter on metadata:
-// a caller looking for a link's metadata reads the pages.
 func (s *Stripe) listLinks(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, linkListParams); rp != nil {
 		return *rp
@@ -125,7 +119,7 @@ func (s *Stripe) listLinks(_ *http.Request, form url.Values, _ string) reply {
 		active = v[len(v)-1]
 	}
 	var ids []string
-	for i := len(s.linkOrder) - 1; i >= 0; i-- { // newest first
+	for i := len(s.linkOrder) - 1; i >= 0; i-- {
 		l := s.links[s.linkOrder[i]]
 		if active != "" && strconv.FormatBool(l.Active) != active {
 			continue
@@ -145,8 +139,6 @@ func (s *Stripe) listLinks(_ *http.Request, form url.Values, _ string) reply {
 
 var linkLineItemParams = compileAll([]string{`limit`, `starting_after`, `ending_before`})
 
-// linkLineItems lists what a link asks for, in the order it was made, as Stripe's line items of a
-// payment link: the amounts that are the payer's.
 func (s *Stripe) linkLineItems(_ *http.Request, form url.Values, id string) reply {
 	if rp := unknownParam(form, linkLineItemParams); rp != nil {
 		return *rp
@@ -192,9 +184,6 @@ func (s *Stripe) retrieveLink(_ *http.Request, form url.Values, id string) reply
 	return jsonReply(http.StatusOK, l.snapshot())
 }
 
-// updateLink changes a link's active flag (the way to stop a link taking payments), its limit of
-// completed sessions and its metadata. A new limit that the link has already reached
-// deactivates it, as reaching the limit does.
 func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 	if rp := unknownParam(form, linkUpdateParamRes); rp != nil {
 		return *rp
@@ -203,7 +192,6 @@ func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 	if !ok {
 		return noSuch("payment link", id, "payment_link")
 	}
-	// Everything is checked before anything changes: a refused update leaves the link as it was.
 	active := l.Active
 	if v := form.Get("active"); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -224,7 +212,7 @@ func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 		if form.Get("metadata") != "" {
 			return invalid("", "Invalid metadata: pass an empty string to clear it, or set its keys one by one.", "metadata")
 		}
-		clear(meta) // `metadata=` empties it; keys passed beside it are then set
+		clear(meta)
 	}
 	if rp := mergeMetadata(meta, form, "metadata"); rp != nil {
 		return *rp
@@ -245,7 +233,6 @@ func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 	return out
 }
 
-// Link returns the payment link as the API would show it now.
 func (s *Stripe) Link(id string) (PaymentLink, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,7 +243,6 @@ func (s *Stripe) Link(id string) (PaymentLink, bool) {
 	return l.snapshot(), true
 }
 
-// Links returns every payment link, sorted by id.
 func (s *Stripe) Links() []PaymentLink {
 	s.mu.Lock()
 	defer s.mu.Unlock()

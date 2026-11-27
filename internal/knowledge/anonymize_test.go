@@ -15,8 +15,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// history writes three versions of a document, by alice, bob and alice again (whose address is
-// written in capitals the second time), and a file by bob.
 func anonymizeFixture(t *testing.T) (*Store, string) {
 	t.Helper()
 	s, dataDir := newStore(t, Options{})
@@ -65,12 +63,10 @@ func TestAnonymizeAuthorsReplacesOnlyTheNamedAddress(t *testing.T) {
 		case !named && (a.author != b.author || a.committer != b.committer):
 			t.Errorf("commit %d, by someone else, changed: %q", i, a.author)
 		}
-		// The time of the commit stays.
 		if named && !strings.HasSuffix(a.author, b.author[strings.LastIndex(b.author, "> ")+1:]) {
 			t.Errorf("commit %d's date changed: %q -> %q", i, b.author, a.author)
 		}
 	}
-	// The documents read as they did, and their history lists the placeholder.
 	if doc := must[Doc](t)(s.Read(ctx, sp, "plan.md", "")); string(doc.Content) != "v3" {
 		t.Errorf("plan.md = %q", doc.Content)
 	}
@@ -81,7 +77,6 @@ func TestAnonymizeAuthorsReplacesOnlyTheNamedAddress(t *testing.T) {
 		}
 	}
 	gitFsck(t, dataDir, sp)
-	// Nothing in git holds the old address: the old commits were deleted, not just unlinked.
 	var leaks []string
 	_ = filepath.WalkDir(filepath.Join(sp.Dir(dataDir), ".git", "objects"), func(path string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
@@ -93,11 +88,9 @@ func TestAnonymizeAuthorsReplacesOnlyTheNamedAddress(t *testing.T) {
 		t.Errorf("%d loose objects remain for %d commits: the old ones weren't pruned", len(leaks), len(after))
 	}
 
-	// Idempotent: nothing left to do.
 	if n, err := s.AnonymizeAuthors(ctx, sp, []string{"alice@example.com"}); err != nil || n != 0 {
 		t.Errorf("a second run rewrote %d commits: %v", n, err)
 	}
-	// A space with no repository, and no addresses, are nothing to do.
 	if n, err := s.AnonymizeAuthors(ctx, writable(99), []string{"alice@example.com"}); err != nil || n != 0 {
 		t.Errorf("a space without a repository: %d, %v", n, err)
 	}
@@ -126,7 +119,6 @@ func TestAnonymizeAuthorsRecoversFromACrash(t *testing.T) {
 				t.Fatalf("no journal after the crash: %v", err)
 			}
 
-			// The next process finishes it.
 			s = New(dataDir, Options{})
 			if err := s.Recover(ctx); err != nil {
 				t.Fatal(err)
@@ -144,9 +136,6 @@ func TestAnonymizeAuthorsRecoversFromACrash(t *testing.T) {
 	}
 }
 
-// A purge that stopped after main moved and is tried again (the scheduler's retry, not a restart)
-// must finish the rewrite, not find main clean and call it done: the journal still names the
-// address and the old commits, which hold it, are still in the object store.
 func TestAnonymizeAuthorsAgainAfterAStopAfterTheRefMovedFinishesTheRewrite(t *testing.T) {
 	s, dataDir := anonymizeFixture(t)
 	sp := writable(1)
@@ -169,7 +158,6 @@ func TestAnonymizeAuthorsAgainAfterAStopAfterTheRefMovedFinishesTheRewrite(t *te
 		t.Fatal("fixture: the old commits aren't in the store after the stop")
 	}
 
-	// The same call again, on the same Store, with no restart in between.
 	if _, err := s.AnonymizeAuthors(ctx, sp, []string{"alice@example.com"}); err != nil {
 		t.Fatalf("the second attempt: %v", err)
 	}
@@ -182,8 +170,6 @@ func TestAnonymizeAuthorsAgainAfterAStopAfterTheRefMovedFinishesTheRewrite(t *te
 	gitFsck(t, dataDir, sp)
 }
 
-// storeHolds reports whether any commit in the repository's object store, reachable or not, has
-// an author or committer with the address.
 func storeHolds(t *testing.T, dataDir string, sp access.Space, email string) bool {
 	t.Helper()
 	repo, err := git.PlainOpen(sp.Dir(dataDir))
@@ -224,8 +210,6 @@ func TestRemoveSpaceDeletesItsFilesAndIsRepeatable(t *testing.T) {
 	}
 }
 
-// The count to rewrite is told before the rewrite is journaled: a caller that can't keep it stops
-// the rewrite, and a space with nothing of theirs tells nothing.
 func TestAnonymizeAuthorsNotingTellsTheCountFirst(t *testing.T) {
 	s, dataDir := anonymizeFixture(t)
 	sp := writable(1)

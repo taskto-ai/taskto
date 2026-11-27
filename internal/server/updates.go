@@ -16,18 +16,6 @@ import (
 	"taskto.ai/taskto/internal/updatestatus"
 )
 
-// updateStatus is GET /api/workspaces/{workspace}/updates, for the server's operators
-// (Settings → About; routed through auth.Service.RequireOperator, like the backups: the updates
-// are the whole server's, not a workspace's): the version this server runs, and what the host's
-// updater last wrote (docs/install.md#automatic-updates). The updater is the server's host's,
-// not the server's: this only reads the status file it leaves in a directory mounted
-// read-only, which holds codes and versions only (internal/updatestatus).
-//
-// `configured` is whether the server was told where the status is, and `status` is set once the
-// updater has written one; `stale` says it wasn't written for days; `expects_status` is set when
-// the server is a release (or a commit's build) and the status is still missing, which only an
-// updater of the host that predates it explains; `request` says whether "Update now" can be
-// pressed. The status is never cached.
 func updateStatus(version, statusDir, requestDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reply, err := updatestatus.BuildReport(version, statusDir, requestDir, time.Now())
@@ -42,15 +30,6 @@ func updateStatus(version, statusDir, requestDir string) http.Handler {
 	})
 }
 
-// updateRequest is POST /api/workspaces/{workspace}/updates/request, "Update now", for the
-// server's operators. It carries nothing: the host installs what the nightly run would take, on
-// its configured channel, under every gate of that run. The server writes one file into the
-// request directory (updatestatus.Request) and never runs anything; the host's path unit and
-// updater do the rest (docs/install.md#update-now). One request waits at a time, none while a
-// run is changing the install, and each is an audit event, committed before the file is made
-// visible to the host, so an authorization or preflight refusal records none and an update
-// always has a record. The event records intent, not delivery: if publication fails or the
-// server stops after commit, the intent remains, and no hidden request is replayed on restart.
 func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now func() time.Time) http.Handler {
 	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,9 +61,6 @@ func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now fun
 			}
 			return
 		}
-		// The request is written first but kept out of sight; the event is committed; only then
-		// is the request made visible. A host that took a request always has its record, and a
-		// request that couldn't be published leaves an event of one that came to nothing.
 		prepared, err := updatestatus.Prepare(requestDir, t)
 		switch {
 		case errors.Is(err, updatestatus.ErrPending):

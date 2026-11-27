@@ -1,24 +1,17 @@
-// Test doubles for the server: a fetch that answers by method and path, and EventSources the
-// test drives by hand.
-
 import { vi } from 'vitest'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 
-// body is the JSON sent, parsed; any other body (a file's Blob, text that isn't JSON) as it was.
 export type Call = {
   method: string
   path: string
   body: unknown
   headers: Record<string, string>
   signal?: AbortSignal
-  // Settles when the app has read the answer's body: proof that a late answer was delivered.
   read?: Promise<void>
 }
 type Answer = { status?: number; body?: unknown }
-// A function may answer later, to hold a request open.
 type Reply = Answer | ((call: Call) => Answer | Promise<Answer>)
 
-// routes: "METHOD /path" → reply. An unknown route is a 404, and every call is recorded.
 function parseBody(body: BodyInit | null | undefined): unknown {
   if (typeof body !== 'string') return body ?? undefined
   try {
@@ -38,12 +31,10 @@ export function fakeFetch(routes: Record<string, Reply>) {
       path: url.pathname + url.search,
       body: parseBody(init?.body),
     } as Call
-    // The headers are there to be read, but not part of what a test compares calls by.
     Object.defineProperty(call, 'headers', {
       value: Object.fromEntries(new Headers(init?.headers).entries()),
       enumerable: false,
     })
-    // So is the signal a request can be aborted with: a held-open route watches it.
     Object.defineProperty(call, 'signal', { value: init?.signal ?? undefined, enumerable: false })
     let markRead!: () => void
     Object.defineProperty(call, 'read', {
@@ -53,8 +44,6 @@ export function fakeFetch(routes: Record<string, Reply>) {
       enumerable: false,
     })
     calls.push(call)
-    // As a real fetch does: a request whose signal aborts, before or while it is answered, ends
-    // with an AbortError, whatever the route would have said.
     const signal = init?.signal ?? undefined
     const aborted = () => signal?.reason ?? new DOMException('This operation was aborted', 'AbortError')
     if (signal?.aborted) throw aborted()

@@ -9,25 +9,21 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// The values of Settings.Engine besides add-on IDs. Local is the default: the hosted API is
-// used only when an admin picks it, never because a key is set (docs/dictation.md).
 const (
 	EngineAPI   = "api"
 	EngineLocal = "local"
 )
 
-// The API engine's defaults: OpenAI's endpoint and its Whisper model.
 const (
 	defaultBaseURL = "https://api.openai.com/v1"
 	defaultModel   = "whisper-1"
 )
 
-// settings is a workspace's row, with the API key still sealed.
 type settings struct {
 	engine, language string
 	baseURL, model   string
 	sealed           []byte
-	notice           string // the add-on whose notice an admin confirmed, or ""
+	notice           string
 	updatedAt        string
 }
 
@@ -35,7 +31,6 @@ func defaults() settings {
 	return settings{engine: EngineLocal, baseURL: defaultBaseURL, model: defaultModel}
 }
 
-// keyAD binds a sealed key to its workspace's row, so a sealed value copied elsewhere doesn't open.
 func keyAD(workspaceID int64) []byte {
 	return []byte("taskto dictation_settings " + strconv.FormatInt(workspaceID, 10) + " api_key")
 }
@@ -53,7 +48,6 @@ func (s *Service) load(ctx context.Context, workspaceID int64) (settings, error)
 	return st, err
 }
 
-// apiKey returns the workspace's key in clear, or "" without one.
 func (s *Service) apiKey(workspaceID int64, st settings) (string, error) {
 	if st.sealed == nil {
 		return "", nil
@@ -62,9 +56,6 @@ func (s *Service) apiKey(workspaceID int64, st settings) (string, error) {
 	return string(plain), err
 }
 
-// save writes st for workspaceID. newKey, if not nil, replaces the stored key ("" removes
-// it); the clear key only lives between here and Seal. noticeBy is set when st.notice is
-// newly confirmed.
 func (s *Service) save(ctx context.Context, workspaceID, userID int64, st settings, newKey *string, noticeBy bool) error {
 	sealed := st.sealed
 	if newKey != nil {
@@ -84,7 +75,7 @@ func (s *Service) save(ctx context.Context, workspaceID, userID int64, st settin
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck // after a commit, a no-op
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO dictation_settings
 			(workspace_id, engine, language, api_base_url, api_model, api_key, addon_notice, notice_by, notice_at, updated_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN ? END, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END, ?)
@@ -100,7 +91,6 @@ func (s *Service) save(ctx context.Context, workspaceID, userID int64, st settin
 		noticeBy, userID, noticeBy, userID, noticeBy, noticeBy); err != nil {
 		return err
 	}
-	// The key is only said to have changed, and to be set; the address is kept as its host.
 	details := audit.Details{"engine": st.engine, "api_key_changed": newKey != nil, "api_key_set": sealed != nil, "notice_confirmed": noticeBy}
 	if st.language != "" {
 		details["language"] = st.language

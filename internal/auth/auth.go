@@ -1,15 +1,3 @@
-// Package auth is accounts and access: users, workspaces and their members, invites,
-// password logins with session cookies, and the middleware that puts the caller on the
-// request.
-//
-// One person or a company use the same model: a solo install is a workspace with one
-// member, and a team is the same workspace after inviting people. A user can belong to
-// several workspaces; picking one is picking its ID in the URL.
-//
-// Routes that act on a workspace go under /api/workspaces/{workspace}/ and wrap their
-// handler in RequireMember or RequireAdmin; they then find the caller with UserFrom and
-// MembershipFrom. CSRF protects every state-changing /api route, cookie-authenticated or
-// not, so new routes are covered without doing anything.
 package auth
 
 import (
@@ -32,67 +20,29 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Options are the account system's settings. Zero values take the defaults.
 type Options struct {
-	// InsecureCookies drops the Secure attribute from the session cookie, for plain-http
-	// development on localhost.
-	InsecureCookies bool
-	// SessionTTL is how long a login lasts. Default 30 days.
-	SessionTTL time.Duration
-	// InviteTTL is how long an invite can be accepted. Default 7 days.
-	InviteTTL time.Duration
-	// ResetTTL is how long a password reset link works. Default 24 hours.
-	ResetTTL time.Duration
-	// AccountDeletionGrace is how long an account that was deleted is kept, disabled, before its
-	// purge (docs/api.md#deleting-an-account). Default 14 days.
+	InsecureCookies      bool
+	SessionTTL           time.Duration
+	InviteTTL            time.Duration
+	ResetTTL             time.Duration
 	AccountDeletionGrace time.Duration
-	// HashParams are the argon2id costs for new password hashes. Default DefaultParams.
-	HashParams Params
-	// SetupToken is the token POST /api/setup requires (see NewSetupToken). Empty means
-	// first-run setup is refused: the server makes one only while no user exists.
-	SetupToken string
-	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed, for the
-	// client address the login limits use. Empty means none: the client is the direct peer.
-	TrustedProxies []netip.Prefix
-	// SSO are the OpenID Connect providers people may sign in with (LoadSSOProviders); none
-	// means password logins only.
-	SSO []SSOProvider
-	// PublicURL is the server's external origin, such as https://taskto.example.com, which the
-	// providers' redirect URIs are built on. Required with SSO.
-	PublicURL string
-	// DisablePasswordLogin turns off logging in, setting up an account on an invite, and
-	// using a reset link with a password. Needs SSO, or nobody could log in.
+	HashParams           Params
+	SetupToken           string
+	TrustedProxies       []netip.Prefix
+	SSO                  []SSOProvider
+	PublicURL            string
 	DisablePasswordLogin bool
-	// WorkspaceCreation says who may create a workspace with POST /api/workspaces: "admins"
-	// (the default, and what any value other than the next two means: an admin of any existing
-	// workspace), "anyone" (every signed-in person) or "off" (nobody).
-	WorkspaceCreation string
-	// Key seals the secrets of two-factor login (internal/serverkey). Without one nobody can
-	// turn it on, and the routes that need it answer 500.
-	Key *serverkey.Key
-	// Mail is the server's outgoing email (docs/install.md#email); nil, or one that isn't
-	// configured, leaves every flow as it is without email. The links accounts email are built on
-	// PublicURL, never on a request's Host, so they are on only when both are set (EmailLinks).
-	Mail *mail.Service
+	WorkspaceCreation    string
+	Key                  *serverkey.Key
+	Mail                 *mail.Service
 }
 
-// The values of Options.WorkspaceCreation.
 const (
 	CreateByAdmins = "admins"
 	CreateByAnyone = "anyone"
 	CreateByNobody = "off"
 )
 
-// Login limits, in failed attempts per window; a successful login counts against none.
-//
-//   - per client address: stops one client guessing across many accounts;
-//   - per email and address: stops one client guessing one account, without letting it
-//     lock that account for anyone else;
-//   - per email: a higher ceiling that slows guessing spread over many addresses. Locking
-//     someone out now takes their own address, or this many attempts from many addresses.
-//
-// Every limit is keyed by the normalized email as typed, the same way whether an account
-// exists or not, so the answers never reveal which addresses have one.
 const (
 	ipAttempts           = 30
 	accountAndIPAttempts = 10
@@ -100,16 +50,12 @@ const (
 	attemptWindow        = 15 * time.Minute
 )
 
-// Service holds the account system's state; its methods are the HTTP handlers and
-// middleware.
 type Service struct {
 	db     *sql.DB
 	opts   Options
 	now    func() time.Time
 	hasher *hasher
 
-	// setupHash is the SHA-256 of Options.SetupToken, nil without one; setupDone is set
-	// once setup has succeeded, so the token is unusable even before the server restarts.
 	setupHash []byte
 	setupDone atomic.Bool
 
@@ -117,68 +63,44 @@ type Service struct {
 	perAccountIP *ratelimit.Limiter
 	perAccount   *ratelimit.Limiter
 
-	// The second step's limits (twofactor.go), apart from the login's: a wrong code is not a
-	// wrong password.
 	codePerIP        *ratelimit.Limiter
 	codePerAccountIP *ratelimit.Limiter
 	codePerAccount   *ratelimit.Limiter
 
-	key *serverkey.Key
-	// The limits of the emailed reset link (mailer.go).
+	key           *serverkey.Key
 	resetPerIP    *ratelimit.Limiter
 	resetPerEmail *ratelimit.Limiter
-	// resetStarts is the server's own limit on reset emails: how many it starts, never how many
-	// are running, so a refusal can't depend on how long the mail server takes for the accounts
-	// that exist.
-	resetStarts *bucket
-	// mailSlots bounds the emails being made at once, after the request was answered; mailWork
-	// waits for them. workCtx ends when the server stops (Shutdown), and so ends their sends.
-	mailSlots chan struct{}
-	mailWork  sync.WaitGroup
-	workCtx   context.Context
-	stopWork  context.CancelFunc
+	resetStarts   *bucket
+	mailSlots     chan struct{}
+	mailWork      sync.WaitGroup
+	workCtx       context.Context
+	stopWork      context.CancelFunc
 
-	// The limits of invitations sent by email (mailer.go): per admin, and per invited address.
 	invitePerAdmin     *ratelimit.Limiter
 	invitePerRecipient *ratelimit.Limiter
 
 	sso *sso
 
-	// live is the connections that end with their login (WatchSession).
 	live liveWatches
 
-	// hook is nil outside tests, which set it to make another request land at a named point
-	// of a login route, where a race would.
 	hook func(point string)
 
-	// deletions makes and cancels the timed purge of a deleted account (SetDeletionScheduler).
 	deletions DeletionScheduler
 
-	// memberHooks are told when a person is added to a workspace (OnMemberAdded).
 	memberHooks []MemberHook
-	// zoneHooks are told when a person's time zone changes (OnTimeZoneChanged).
-	zoneHooks []TimeZoneHook
+	zoneHooks   []TimeZoneHook
 }
 
-// at calls the test hook, if there is one, at a named point.
 func (s *Service) at(point string) {
 	if s.hook != nil {
 		s.hook(point)
 	}
 }
 
-// MemberHook is told, in the transaction that adds a person to a workspace, that it did, with the
-// workspace's and the person's IDs; the membership is already there. What the hook writes is
-// committed with the change, and an error it returns undoes it. It lets a feature that keeps timed
-// work for a person's access (package boards' reminders, which the schema drops when the access
-// ends) take it up again without this package knowing the feature. It is not called for a person
-// who already was a member.
 type MemberHook func(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error
 
-// OnMemberAdded adds a hook. It is for startup, before the service serves requests.
 func (s *Service) OnMemberAdded(h MemberHook) { s.memberHooks = append(s.memberHooks, h) }
 
-// New returns the account system backed by sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, opts Options) *Service {
 	if opts.SessionTTL == 0 {
 		opts.SessionTTL = 30 * 24 * time.Hour
@@ -213,9 +135,6 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 	return s
 }
 
-// cookieName is the session cookie's name. With Secure, the __Host- prefix makes the
-// browser refuse the cookie unless it is also host-only with Path=/, so a sibling
-// subdomain can't set or shadow it.
 func (s *Service) cookieName() string {
 	if s.opts.InsecureCookies {
 		return "taskto_session"
@@ -228,8 +147,6 @@ func (s *Service) setSessionCookie(w http.ResponseWriter, token string) {
 }
 
 func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
-	// #nosec G124 -- Secure is off only when the operator sets insecure_cookies, for
-	// plain-http development; HttpOnly and SameSite are always set.
 	return &http.Cookie{
 		Name:     s.cookieName(),
 		Value:    value,
@@ -241,7 +158,6 @@ func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
 	}
 }
 
-// sessionToken returns the session token the request carries, or "".
 func (s *Service) sessionToken(r *http.Request) string {
 	c, err := r.Cookie(s.cookieName())
 	if err != nil {
@@ -250,8 +166,6 @@ func (s *Service) sessionToken(r *http.Request) string {
 	return c.Value
 }
 
-// currentUser returns the user the request's session belongs to, with ok false if it has
-// no valid session.
 func (s *Service) currentUser(r *http.Request) (u User, ok bool, err error) {
 	token := s.sessionToken(r)
 	if token == "" {
@@ -267,9 +181,6 @@ func (s *Service) currentUser(r *http.Request) (u User, ok bool, err error) {
 	return u, true, nil
 }
 
-// SessionID returns the database ID of the login the request carries, for what is bound to a
-// login and goes with it (a device's push subscription): ok is false for a request with no valid
-// session, such as one made with an access token.
 func (s *Service) SessionID(r *http.Request) (id int64, ok bool, err error) {
 	token := s.sessionToken(r)
 	if token == "" {
@@ -288,22 +199,16 @@ type (
 	membershipKey struct{}
 )
 
-// UserFrom returns the user RequireUser, RequireMember or RequireAdmin put on ctx.
 func UserFrom(ctx context.Context) (User, bool) {
 	u, ok := ctx.Value(userKey{}).(User)
 	return u, ok
 }
 
-// MembershipFrom returns the caller's membership of the workspace in the URL, put on ctx
-// by RequireMember or RequireAdmin.
 func MembershipFrom(ctx context.Context) (Membership, bool) {
 	m, ok := ctx.Value(membershipKey{}).(Membership)
 	return m, ok
 }
 
-// authenticate returns the request's user, or answers 401 (or 500) and returns false. A
-// request carrying an access token is authenticated by the token alone, on routes that
-// accept one (see AcceptTokens), and refused with 403 on the rest; t is then the token.
 func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (u User, t *Token, ok bool) {
 	if raw, isToken := BearerToken(r); isToken {
 		return s.tokenRequest(w, r, raw)
@@ -314,18 +219,12 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (u User, 
 		return User{}, nil, false
 	}
 	if !ok {
-		// The cookie is left as it is: a stale session's is inert (its row is revoked or expired),
-		// and expiring it here would wipe a newer one that a sign-in in the same browser set while
-		// this request was on its way. No answer expires it, logging out included (handleLogout).
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return User{}, nil, false
 	}
 	return u, nil, true
 }
 
-// RequireUser lets through requests with a valid session, with the user on the context
-// (see UserFrom), and answers 401 to the rest. It takes no access tokens: they act in one
-// workspace, and the routes it guards are about the whole account.
 func (s *Service) RequireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, _, ok := s.authenticate(w, r)
@@ -337,24 +236,14 @@ func (s *Service) RequireUser(next http.Handler) http.Handler {
 	})
 }
 
-// RequireMember is for routes with a {workspace} path value: it lets through members of
-// that workspace, with the user and the membership on the context (see MembershipFrom).
-// It answers 401 without a session, and 404 to anyone else, so outsiders can't tell
-// which workspaces exist. Wrapped in AcceptTokens, it also lets through access tokens of
-// that workspace (see TokenFrom), whose user is still a member.
 func (s *Service) RequireMember(next http.Handler) http.Handler {
 	return s.requireRole(next, false)
 }
 
-// RequireAdmin is RequireMember for admins only; it answers 403 to other members.
 func (s *Service) RequireAdmin(next http.Handler) http.Handler {
 	return s.requireRole(next, true)
 }
 
-// RequireOperator is RequireAdmin for what belongs to the whole server rather than to one
-// workspace (its backups, its outgoing email): it also answers 403 (operator_only) unless the
-// caller is an operator, an admin of the workspace the server's setup made. An admin of a
-// workspace someone made later is not.
 func (s *Service) RequireOperator(next http.Handler) http.Handler {
 	return s.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, _ := UserFrom(r.Context())
@@ -371,9 +260,6 @@ func (s *Service) RequireOperator(next http.Handler) http.Handler {
 	}))
 }
 
-// IsOperator reports whether userID is an admin of the workspace the server's setup made
-// (workspaces.is_setup), which is how the server tells the people who run it from the admins
-// of the workspaces others create. See docs/api.md#operators.
 func (s *Service) IsOperator(ctx context.Context, userID int64) (bool, error) {
 	return isOperator(ctx, s.db, userID)
 }
@@ -395,7 +281,6 @@ func (s *Service) requireRole(next http.Handler, admin bool) http.Handler {
 		}
 		id, err := strconv.ParseInt(r.PathValue("workspace"), 10, 64)
 		if err != nil || (t != nil && t.WorkspaceID != id) {
-			// A token reaches its own workspace only.
 			writeError(w, http.StatusNotFound, apierr.CodeWorkspaceNotFound, "workspace not found")
 			return
 		}
@@ -421,10 +306,9 @@ func (s *Service) requireRole(next http.Handler, admin bool) http.Handler {
 	})
 }
 
-// serverError logs err and answers 500 without details, which can name server paths.
 func serverError(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
-		return // the client went away
+		return
 	}
 	slog.Error("auth: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	apierr.Internal(w)

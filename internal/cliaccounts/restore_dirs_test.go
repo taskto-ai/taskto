@@ -16,9 +16,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// signedInWithFiles signs user's account in svc to Claude Code on the worker, runs a turn, and
-// leaves a file in its working directory and its browser's profile: everything a new person given
-// the number must never see. It returns the files.
 func signedInWithFiles(t *testing.T, svc *Service, e *env, user int64) []string {
 	t.Helper()
 	a := accountIn(t, svc, user)
@@ -60,12 +57,6 @@ func keptFile(t *testing.T, what, p string) {
 	}
 }
 
-// A restore of the server's data gives again the numbers that came after the backup, while the CLI
-// worker's directory (a volume of its own in container mode) isn't part of the backup and keeps
-// the homes of the people who had them: their logins, working files, browser profiles, and, the
-// worker having kept running, their sign-in in progress. A person given such a number starts with
-// nothing of anyone's, at once, before the server told the worker anything; the census then removes
-// the lost history's homes and a directory from before homes; the people in the backup keep theirs.
 func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 	ctx := context.Background()
 	dataA := t.TempDir()
@@ -73,7 +64,6 @@ func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	svcA := New(dbA, Container, LocalWorker(e.worker))
 	t.Cleanup(svcA.Close)
-	// The first server's census at its start: its boot is the one the worker heard from.
 	if err := svcA.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +74,6 @@ func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 	if _, err := backup.Create(ctx, dataA, "test", &archive, backup.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	// After the backup: a person uses the CLIs and leaves a sign-in waiting in the worker, and a
-	// directory from before homes is there for the next number.
 	lost := newUser(t, dbA, "lost@example.com")
 	lostFiles := signedInWithFiles(t, svcA, e, lost)
 	if _, err := svcA.worker.StartLogin(lost, cliworker.Codex, ""); err != nil {
@@ -97,8 +85,6 @@ func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 	}
 	clitest.SignIn(t, "claude", legacy)
 
-	// The operator restores the backup into a data directory and starts a server on it, with the
-	// same worker, still running. A person signs up at once.
 	dataB := filepath.Join(t.TempDir(), "restored")
 	if _, err := backup.Restore(ctx, bytes.NewReader(archive.Bytes()), dataB); err != nil {
 		t.Fatal(err)
@@ -111,8 +97,6 @@ func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 	svcB := New(dbB, Container, LocalWorker(e.worker))
 	t.Cleanup(svcB.Close)
 
-	// Before any census: the new person is served, in a home of their own, with nothing of the
-	// lost history's: no login, no sign-in in progress, no working file.
 	freshAcct := accountIn(t, svcB, fresh)
 	if _, ok, err := svcB.worker.LoginInfo(fresh, cliworker.Codex, ""); err != nil || ok {
 		t.Errorf("the new person sees the old person's sign-in: %v %v", ok, err)
@@ -145,7 +129,6 @@ func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 			t.Errorf("%s after the census: %+v %v", name, st, err)
 		}
 	}
-	// The lost history's account is retired: a request of its, however late, reaches nothing.
 	if _, err := e.worker.Status(ctx, accountIn(t, svcA, lost), cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the lost history's account after the census: %v", err)
 	}

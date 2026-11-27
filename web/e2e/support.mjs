@@ -1,11 +1,3 @@
-// What the web app's end to end tests share (`make web-e2e`, docs/web-e2e.md): the built server
-// on a fresh data directory, a real Chromium (Playwright), and the traces and screenshots a
-// failing scenario leaves behind.
-//
-// Every scenario starts a server of its own, so scenarios never see one another's data and can
-// run in any order. There is no agent runtime and no model: nothing here reaches the network,
-// and the browser is the only thing downloaded (`playwright install chromium`).
-
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -17,7 +9,6 @@ import { chromium } from 'playwright'
 
 const repo = fileURLToPath(new URL('../..', import.meta.url))
 
-// Where a failing scenario's trace and screenshot go (CI keeps this folder as an artifact).
 export const resultsDir = process.env.TASKTO_WEB_E2E_RESULTS || join(repo, 'web/e2e-results')
 
 export const owner = {
@@ -27,13 +18,9 @@ export const owner = {
   workspace: 'Home',
 }
 
-// Starts bin/taskto (TASKTO_WEB_E2E_BIN names another) on a fresh data directory and waits until
-// it listens. The setup token is in the server's log while no account exists.
 export async function startServer() {
   const dir = mkdtempSync(join(tmpdir(), 'tt-web-e2e-'))
   const bin = process.env.TASKTO_WEB_E2E_BIN || join(repo, 'bin/taskto')
-  // The server gets its own flags only: a TASKTO_* variable of the machine running the tests
-  // (a config file, a data directory, a provider) must not change what is under test.
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('TASKTO_')))
   const server = spawn(bin, ['-addr', '127.0.0.1:0', '-data-dir', join(dir, 'data'), '-insecure-cookies'], {
     env,
@@ -55,7 +42,6 @@ export async function startServer() {
       clearTimeout(giveUp)
       reject(e)
     }
-    // No bin/taskto: `make web-e2e` builds it first.
     server.on('error', (e) => fail(new Error(`the server didn't start: ${e.message}`)))
     server.on('exit', (code) => fail(new Error(`the server exited (${code}):\n${logs}`)))
   })
@@ -73,7 +59,6 @@ export async function startServer() {
     }
     rmSync(dir, { recursive: true, force: true })
   }
-  // Until the server is up the caller has nothing to stop: a failed start cleans up here.
   try {
     const { addr, built, token } = await listening
     assert.equal(built, 'true', 'the web app isn’t built into the binary: run make web-e2e (it builds first)')
@@ -84,15 +69,8 @@ export async function startServer() {
   }
 }
 
-// A scenario: a fresh server, a browser context with its trace running, and `fn({ page, context,
-// server, base })`. When it fails, or times out, the trace (a zip for `playwright show-trace`) and
-// a screenshot of every open page are written to resultsDir.
 export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } = {}) {
   test(name, { timeout: 120_000 }, async (t) => {
-    // Everything is torn down by one hook of the test, not by `finally` blocks: when a browser
-    // call hangs until the scenario times out, the function never returns, but the hook still
-    // runs. It saves the failure's files first, while the browser is open, then closes the browser
-    // and stops the server, so nothing outlives its scenario.
     let browser
     let context
     let server
@@ -113,8 +91,6 @@ export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } =
           )
         }
       } finally {
-        // Whatever went wrong saving the files (an unwritable results folder), the browser and
-        // the server still stop.
         try {
           await browser?.close()
         } finally {
@@ -136,7 +112,6 @@ export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } =
   })
 }
 
-// First-run setup through the screen: the token from the server's log, then the owner.
 export async function setUp({ page, server }, who = owner) {
   await page.goto('/')
   await page.getByRole('heading', { name: 'Set up this server' }).waitFor()
@@ -149,7 +124,6 @@ export async function setUp({ page, server }, who = owner) {
   await page.getByRole('navigation', { name: 'Sections' }).waitFor()
 }
 
-// The browser's own JSON calls to the API, with its session and the header the CSRF guard wants.
 export async function api(context, method, path, body) {
   const res = await context.request.fetch(path, {
     method,
@@ -160,8 +134,6 @@ export async function api(context, method, path, body) {
   return res.status() === 204 ? null : res.json()
 }
 
-// The Expense tracker template, installed from the Apps page into the owner's private space and
-// published, through the screens; it ends on the live app. Returns where the app is on the API.
 export async function installExpenseTracker({ page, context }) {
   await page.getByRole('link', { name: 'Apps', exact: true }).click()
   await page.getByRole('link', { name: 'Start from a template' }).first().click()
@@ -180,7 +152,6 @@ export async function installExpenseTracker({ page, context }) {
   return { records: `/api/workspaces/1/spaces/${space.id}/apps/${apps[0].id}/records` }
 }
 
-// Fills the template's expense form and saves it.
 export async function addExpense(page, { what, amount }) {
   await page.getByRole('button', { name: 'New expense' }).click()
   await page.getByRole('textbox', { name: 'What was it for?' }).fill(what)

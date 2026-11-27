@@ -13,10 +13,6 @@ import (
 	"time"
 )
 
-// TestRealLocalModels downloads the pinned runtimes and models for this platform (about
-// 700 MB) and transcribes a real recording with each. It runs only with
-// TASKTO_DICTATION_IT=1, never in CI by default. TASKTO_DICTATION_IT_CACHE keeps the files
-// between runs.
 func TestRealLocalModels(t *testing.T) {
 	if os.Getenv("TASKTO_DICTATION_IT") != "1" {
 		t.Skip("set TASKTO_DICTATION_IT=1 to download the real models and run them")
@@ -25,10 +21,8 @@ func TestRealLocalModels(t *testing.T) {
 	if dir == "" {
 		dir = t.TempDir()
 	}
-	// sherpa-onnx's English test clip of Parakeet v3, at the pinned commit.
 	clip := fetchClip(t, "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/test_wavs/en.wav",
 		"148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6")
-	// Ten copies with a second of silence between them: past one piece, so it is split.
 	var long Audio
 	for range 10 {
 		long.Samples = append(long.Samples, clip.Samples...)
@@ -76,7 +70,7 @@ func TestRealLocalModels(t *testing.T) {
 
 func fetchClip(t *testing.T, url, sha string) Audio {
 	t.Helper()
-	resp, err := http.Get(url) //nolint:gosec,noctx // a pinned test file
+	resp, err := http.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,11 +82,10 @@ func fetchClip(t *testing.T, url, sha string) Audio {
 	if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != sha {
 		t.Fatalf("%s: unexpected sha256", url)
 	}
-	// The clip is a canonical 24 kHz WAV: resample it to 16 kHz as the web app would.
 	rate := int(binary.LittleEndian.Uint32(b[24:28]))
 	in := make([]int16, (len(b)-44)/2)
-	for i := range in {
-		in[i] = int16(binary.LittleEndian.Uint16(b[44+2*i:])) //nolint:gosec // PCM
+	if _, err := binary.Decode(b[44:44+2*len(in)], binary.LittleEndian, in); err != nil {
+		t.Fatal(err)
 	}
 	out := make([]int16, len(in)*SampleRate/rate)
 	for i := range out {

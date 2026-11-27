@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
-// Notice.
-
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -114,7 +111,6 @@ describe('Rows', () => {
     )
     const list = screen.getByRole('list', { name: 'Apps' })
     expect(list.querySelectorAll('li')).toHaveLength(2)
-    // Said explicitly, so Safari keeps it a list though its markers are styled away.
     expect(list.getAttribute('role')).toBe('list')
     const link = screen.getByRole('link', { name: 'Equipment' })
     expect(link.getAttribute('href')).toBe('/w/1/apps/3')
@@ -137,7 +133,6 @@ describe('Rows', () => {
     expect(title.closest('li')?.dataset.link).toBe('true')
     fireEvent.click(title)
     expect(open).toHaveBeenCalledOnce()
-    // A row with neither a link nor onOpen is text.
     expect(screen.queryByRole('button', { name: 'Ideas' })).toBeNull()
     expect(screen.getByText('Ideas').closest('li')?.dataset.link).toBeUndefined()
   })
@@ -172,7 +167,6 @@ describe('Table', () => {
     expect(screen.getByRole('columnheader', { name: 'Seats' }).dataset.numeric).toBe('true')
     expect(screen.getByRole('cell', { name: '10' }).dataset.numeric).toBe('true')
     expect(screen.getByRole('cell', { name: 'Team' }).dataset.numeric).toBeUndefined()
-    // It doesn't overflow here (jsdom lays nothing out): no tab stop of its own.
     expect(table.parentElement?.getAttribute('tabindex')).toBeNull()
     expect(table.parentElement?.getAttribute('role')).toBeNull()
   })
@@ -189,7 +183,6 @@ describe('Row, actions below', () => {
     const [coffee, tea] = screen.getAllByRole('listitem')
     expect(coffee.dataset.actionsBelow).toBe('true')
     expect(tea.dataset.actionsBelow).toBeUndefined()
-    // jsdom lays nothing out: the stylesheet is what puts them below and lets them wrap.
     const css = readFileSync(join(__dirname, 'Rows.css'), 'utf8')
     const rule = /\.ui-row\[data-actions-below\] > \.ui-row-actions \{([^}]*)\}/.exec(css)?.[1] ?? ''
     expect(rule).toMatch(/flex: 1 1 100%/)
@@ -211,7 +204,6 @@ describe('Row, opened', () => {
     const opened = screen.getByRole('region', { name: 'Review Coffee' })
     expect(coffee.contains(opened)).toBe(true)
     expect(coffee.lastElementChild?.contains(opened)).toBe(true)
-    // A row with nothing under it has no room for it.
     expect(tea.querySelector('.ui-row-more')).toBeNull()
   })
 })
@@ -242,10 +234,8 @@ describe('Table, sorted', () => {
       />,
     )
     expect(screen.getByRole('columnheader', { name: 'Seats' }).getAttribute('aria-sort')).toBe('descending')
-    // A sortable column the rows aren't in order by says no order: only one header does.
     expect(screen.getByRole('columnheader', { name: 'Plan' }).hasAttribute('aria-sort')).toBe(false)
     expect(screen.getByRole('button', { name: 'Plan' })).toBeTruthy()
-    // A column that can't be sorted says nothing of an order, and has no button.
     expect(screen.getByRole('columnheader', { name: 'Note' }).hasAttribute('aria-sort')).toBe(false)
     expect(screen.queryByRole('button', { name: 'Note' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Plan' }))
@@ -285,7 +275,6 @@ describe('Notice', () => {
       const el = container.firstElementChild as HTMLElement
       expect(el.getAttribute('role')).toBe(role)
       expect(el.dataset.tone).toBe(tone)
-      // An icon that a screen reader passes over: the words say it.
       expect(el.querySelector('svg')?.closest('[aria-hidden="true"]')).not.toBeNull()
       unmount()
     }

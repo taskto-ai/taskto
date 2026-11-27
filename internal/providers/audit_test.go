@@ -50,13 +50,11 @@ func TestAuditWorkspaceProviderAccounts(t *testing.T) {
 		t.Fatalf("updated = %+v", u)
 	}
 
-	// A change of nothing but the models names only them, and the key stays unchanged.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"models": []map[string]any{{"id": "model-z"}}}), http.StatusOK)
 	updated = e.events(ws, audit.ProviderAccountUpdated)
 	if len(updated) != 2 || updated[0].Details["api_key_changed"] != false || fmt.Sprint(updated[0].Details["fields"]) != "[models]" {
 		t.Fatalf("updated = %+v", updated)
 	}
-	// Removing the key is a key change too.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"api_key": nil}), http.StatusOK)
 	if got := e.events(ws, audit.ProviderAccountUpdated)[0]; got.Details["api_key_changed"] != true {
 		t.Fatalf("removing the key = %+v", got)
@@ -68,7 +66,6 @@ func TestAuditWorkspaceProviderAccounts(t *testing.T) {
 		t.Fatalf("removed = %+v", removed)
 	}
 
-	// Refusals record nothing: a member, a missing account, a bad body.
 	n := len(e.events(0, ""))
 	expect(t, member.do(http.MethodPost, wsPath(ws, "providers"), account("mine", localURL, nil)), http.StatusForbidden)
 	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNotFound)
@@ -78,7 +75,6 @@ func TestAuditWorkspaceProviderAccounts(t *testing.T) {
 		t.Fatalf("refusals left %d events", got-n)
 	}
 
-	// Neither key is anywhere in the log.
 	audittest.NoSecrets(t, e.db, map[string]string{"first key": testKey, "rotated key": otherKey})
 }
 
@@ -98,7 +94,6 @@ func TestAuditPersonalProviderAccountsBelongToNoWorkspace(t *testing.T) {
 		if len(rows) != 1 || rows[0].WorkspaceID != nil || *rows[0].ActorID != member.id || rows[0].Details["scope"] != "user" {
 			t.Fatalf("%s = %+v, want one event of the member, in no workspace", action, rows)
 		}
-		// The workspace's admins, whose log it isn't, find nothing of it there.
 		if got := e.events(ws, action); len(got) != 0 {
 			t.Fatalf("the workspace's log holds %+v", got)
 		}

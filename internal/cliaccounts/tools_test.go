@@ -27,12 +27,6 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// taskto's tools in CLI turns (docs/cli-tools.md): every turn gets the endpoint on the proxy's
-// listener with a token of its own, and each call acts for the conversation's owner, with
-// exactly their access, while the turn runs.
-
-// newToolsEnv is newTurnEnv with taskto's tools on: the real tools over the real endpoint,
-// served where the CLIs reach the proxy.
 func newToolsEnv(t *testing.T) *turnEnv {
 	t.Helper()
 	e := newTurnEnv(t)
@@ -55,7 +49,6 @@ func newToolsEnv(t *testing.T) *turnEnv {
 	return e
 }
 
-// privateSpace returns c's private space in the workspace.
 func (e *turnEnv) privateSpace(c *client) int64 {
 	e.t.Helper()
 	var id int64
@@ -65,7 +58,6 @@ func (e *turnEnv) privateSpace(c *client) int64 {
 	return id
 }
 
-// mcpResult is what the fake reported for its call of tool.
 func mcpResult(answer, tool string) string {
 	for _, line := range strings.Split(answer, "\n") {
 		if rest, ok := strings.CutPrefix(line, "mcp "+tool+": "); ok {
@@ -75,7 +67,6 @@ func mcpResult(answer, tool string) string {
 	return "(no call)"
 }
 
-// toolsToken returns the tools token the last run of c's cli was given.
 func (e *turnEnv) toolsToken(c *client, cli cliworker.CLI) string {
 	e.t.Helper()
 	calls := clitest.Calls(e.t, e.dirs(c.id).Config(cli))
@@ -91,8 +82,6 @@ func (e *turnEnv) toolsToken(c *client, cli cliworker.CLI) string {
 	return ""
 }
 
-// listSpaces calls list_spaces at the endpoint with token, as a CLI would, and returns the
-// status and the body.
 func (e *turnEnv) listSpaces(token string) (int, string) {
 	e.t.Helper()
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_spaces","arguments":{}}}`
@@ -112,8 +101,6 @@ func (e *turnEnv) listSpaces(token string) (int, string) {
 	return res.StatusCode, string(b)
 }
 
-// Each user's turn reaches their own spaces, writes as them through the agent, and never
-// reaches the other's; the token stops with the turn.
 func TestTurnsUseTaskToTools(t *testing.T) {
 	e := newToolsEnv(t)
 	ownerSpace, otherSpace := e.privateSpace(e.owner), e.privateSpace(e.other)
@@ -131,8 +118,6 @@ func TestTurnsUseTaskToTools(t *testing.T) {
 			{Tool: "write_doc", Args: map[string]any{"space_id": c.other, "path": "planted.md", "content": "# Not yours\n"}},
 		}})
 		conv := e.conversation(c.who)
-		// Writes would ask; this conversation's owner allowed everything (asking is the
-		// worker's, tested there).
 		if _, err := e.db.Exec(`UPDATE conversations SET cli_permissions = 'allow_all' WHERE id = ?`, conv); err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +133,6 @@ func TestTurnsUseTaskToTools(t *testing.T) {
 		if got := mcpResult(answer, "read_doc"); got != "refused error: not found" {
 			t.Errorf("user %d: read_doc in the other's space = %s", c.who.id, got)
 		}
-		// The second write_doc line is the planted one: the fake reports each call in order.
 		lines := strings.Split(answer, "\n")
 		var writes []string
 		for _, l := range lines {
@@ -160,7 +144,6 @@ func TestTurnsUseTaskToTools(t *testing.T) {
 			t.Errorf("user %d: writing into the other's space = %q", c.who.id, writes)
 		}
 
-		// The turn is over: its token is refused, by the server's list and by the worker alike.
 		token := e.toolsToken(c.who, cliworker.Claude)
 		if status, body := e.listSpaces(token); status != http.StatusUnauthorized {
 			t.Errorf("user %d: the ended turn's token = %d %s", c.who.id, status, body)
@@ -168,13 +151,10 @@ func TestTurnsUseTaskToTools(t *testing.T) {
 	}
 }
 
-// A token works only while its turn runs, for its own conversation's owner, with the
-// conversation active; anything else about it is refused.
 func TestToolsTokenRefusals(t *testing.T) {
 	e := newToolsEnv(t)
 	conv := e.conversation(e.owner)
 	ctx := t.Context()
-	// A turn the worker is running: the fake works for a while.
 	dirs, err := e.dirs(e.owner.id), error(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -218,21 +198,17 @@ func TestToolsTokenRefusals(t *testing.T) {
 		t.Fatalf("a running turn's token: %d %+v", status, c)
 	}
 
-	// A token of the number's earlier account, from before a restore: the same key, another
-	// identity.
 	before := claims
 	before.Identity = strings.Repeat("ab", 16)
 	if _, status := caller(mint(before)); status == http.StatusOK {
 		t.Error("a token of the number's earlier account was accepted")
 	}
-	// Nor one for the conversation's number in another workspace.
 	elsewhere := claims
 	elsewhere.Workspace = e.ws + 1
 	if _, status := caller(mint(elsewhere)); status == http.StatusOK {
 		t.Error("a token of another workspace's conversation was accepted")
 	}
 
-	// Forged, signed for something else, expired, malformed or missing.
 	forged := good[:len(good)-4] + "AAAA"
 	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id})
 	if err != nil {
@@ -253,8 +229,6 @@ func TestToolsTokenRefusals(t *testing.T) {
 		}
 	}
 
-	// Another conversation's turn, or one the worker doesn't run, or claims about another
-	// user's conversation.
 	for name, c := range map[string]toolsClaims{
 		"a turn the worker doesn't know":     {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-unknown"},
 		"the turn, for another user":         {User: e.other.id, Identity: e.acct(e.other.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id},
@@ -265,12 +239,10 @@ func TestToolsTokenRefusals(t *testing.T) {
 		}
 	}
 
-	// A replay of the turn has a new token: the earlier one stops.
 	replayed := mint(claims)
 	if _, status := caller(good); status != http.StatusUnauthorized {
 		t.Errorf("the token a replay replaced: %d", status)
 	}
-	// The conversation archived, or its owner gone from the workspace: refused, then back.
 	if _, err := e.db.Exec(`UPDATE conversations SET archived_at = CURRENT_TIMESTAMP WHERE id = ?`, conv); err != nil {
 		t.Fatal(err)
 	}
@@ -283,8 +255,6 @@ func TestToolsTokenRefusals(t *testing.T) {
 	if _, status := caller(replayed); status != http.StatusOK {
 		t.Fatalf("back: %d", status)
 	}
-	// Disabled: the turn that is running loses taskto's tools at its next call, and gets them back
-	// when its owner is enabled.
 	if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2026-01-02T03:04:05.000Z' WHERE id = ?`, e.owner.id); err != nil {
 		t.Fatal(err)
 	}
@@ -310,8 +280,6 @@ func TestToolsTokenRefusals(t *testing.T) {
 		t.Fatalf("back in the workspace: %d", status)
 	}
 
-	// The turn ends: its token is refused, and still so when the server's list is forgotten
-	// (a restart), since the worker says the turn is over.
 	e.worker.Stop(id)
 	waitOver(t, turn)
 	if _, status := caller(replayed); status != http.StatusUnauthorized {
@@ -336,7 +304,6 @@ func waitOver(t *testing.T, turn *cliworker.Turn) {
 	}
 }
 
-// Without the tools, or without a proxy address, a turn gets none; the endpoint says so.
 func TestTurnsWithoutTaskToTools(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
@@ -350,8 +317,6 @@ func TestTurnsWithoutTaskToTools(t *testing.T) {
 	}
 }
 
-// A worker that can't be asked whether a token's turn runs is an outage, said with its code, not a
-// bad token: the CLI's model tries again. No tool runs meanwhile.
 func TestAToolsTokenCheckDuringAnOutageIsNotReady(t *testing.T) {
 	e := newTurnEnv(t)
 	sw := e.swappable()

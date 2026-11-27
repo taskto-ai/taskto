@@ -1,10 +1,3 @@
-// A barcode field's input (docs/api.md, "Location, signature and barcode fields"): the code's
-// text, which can always be typed, and can be scanned with the camera where the browser lets the
-// page use one. The decoder is the browser's own BarcodeDetector if it has one, else a bundled one
-// loaded on first use (scanner.ts). A camera that is blocked, missing or insecure, or a decoder that
-// can't load (offline, before it was ever cached), is said in words and leaves the typed field as
-// it was: nothing here depends on scanning working.
-
 import { useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
@@ -85,8 +78,6 @@ export function BarcodeField({
           setScanning(false)
         }
       } catch (e) {
-        // A decoder that can't work (it isn't supported, or failed every frame from the start) turns the
-        // camera off (the cleanup of this effect) and leaves the typed field, which the message says.
         fail(
           e instanceof DecoderError
             ? t('apps.barcode.decoderStopped')

@@ -13,7 +13,6 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// event inserts an event at a time, as the log would hold it.
 func event(t *testing.T, d *sql.DB, ws, actor int64, at, action string) int64 {
 	t.Helper()
 	return exec(t, d, `INSERT INTO audit_events (at, workspace_id, actor_id, action) VALUES (?, ?, ?, ?)`,
@@ -53,7 +52,6 @@ func TestListWorkspaceHoldsOnlyItsWorkspacesEvents(t *testing.T) {
 	if err != nil || len(page.Events) != 1 || page.Events[0].ID != mine {
 		t.Fatalf("page = %+v, %v", page, err)
 	}
-	// The unrestricted List the tests use does see all three: the view must not be it.
 	if all, _ := audit.List(context.Background(), d, audit.Filter{}); len(all) != 3 {
 		t.Fatalf("List = %d events", len(all))
 	}
@@ -64,7 +62,6 @@ func TestListWorkspaceFiltersAndPages(t *testing.T) {
 	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)
 	a := exec(t, d, `INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', '')`)
 	b := exec(t, d, `INSERT INTO users (email, name, password_hash) VALUES ('b@example.com', 'B', '')`)
-	// Five events at one instant and two later: the cursor must not skip or repeat the ties.
 	var ids []int64
 	for range 5 {
 		ids = append(ids, event(t, d, ws, a, "2026-01-01T00:00:00.000Z", audit.SpaceCreated))
@@ -158,13 +155,13 @@ func TestListWorkspaceNamesOnlyWhatBelongsToTheWorkspace(t *testing.T) {
 		exec(t, d, `INSERT INTO audit_events (workspace_id, actor_id, action, target_type, target_id, target_created_at)
 			VALUES (?, ?, 'space_updated', ?, ?, ?)`, one, nullable(actor), typ, target, nullable2(created))
 	}
-	record(member, "space", space, spaceCreated)               // named
-	record(left, "space", otherSpace, otherCreated)            // a user and a space of workspace two
-	record(0, "space", space, "2020-01-01T00:00:00.000Z")      // the id of another object, made earlier
-	record(0, "space", space, "")                              // no creation time
-	record(member, "user", member, memberCreated)              // a member
-	record(member, "user", left, leftCreated)                  // a user of another workspace
-	record(member, "user", member, "2020-01-01T00:00:00.000Z") // another user's id, once
+	record(member, "space", space, spaceCreated)
+	record(left, "space", otherSpace, otherCreated)
+	record(0, "space", space, "2020-01-01T00:00:00.000Z")
+	record(0, "space", space, "")
+	record(member, "user", member, memberCreated)
+	record(member, "user", left, leftCreated)
+	record(member, "user", member, "2020-01-01T00:00:00.000Z")
 	record(member, "workspace", one, "")
 	record(member, "workspace", two, "")
 
@@ -176,7 +173,7 @@ func TestListWorkspaceNamesOnlyWhatBelongsToTheWorkspace(t *testing.T) {
 		actor, user, name string
 	}
 	var got []shown
-	for i := len(page.Events) - 1; i >= 0; i-- { // oldest first, as recorded
+	for i := len(page.Events) - 1; i >= 0; i-- {
 		e := page.Events[i]
 		s := shown{}
 		if e.Actor != nil {
@@ -238,7 +235,6 @@ func TestListWorkspaceBoundsWithFinerDigitsKeepMillisecondEvents(t *testing.T) {
 		}
 		return len(page.Events)
 	}
-	// An event at .123 is before .1235: out of "from" it, in "to" it.
 	if n := count(audit.Query{From: bound}); n != 0 {
 		t.Errorf("from .1235 includes the event at .123 (%d)", n)
 	}
@@ -251,8 +247,6 @@ func TestListWorkspaceBoundsWithFinerDigitsKeepMillisecondEvents(t *testing.T) {
 	}
 }
 
-// The cursor is a row-value comparison on the index's own order, so an older page seeks to the
-// cursor instead of walking the workspace's events from the newest.
 func TestListWorkspaceCursorSeeksTheIndex(t *testing.T) {
 	d := open(t)
 	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)
@@ -298,8 +292,6 @@ func TestListWorkspaceCursorBreaksTiesById(t *testing.T) {
 	older := event(t, d, ws, 0, "2025-12-31T00:00:00.000Z", audit.SpaceCreated)
 	newer := event(t, d, ws, 0, "2026-01-02T00:00:00.000Z", audit.SpaceCreated)
 
-	// Pages of one event each: the three at one instant come by descending id, between the
-	// newer and the older, none skipped or repeated.
 	var got []int64
 	cursor := ""
 	for range 10 {
@@ -321,8 +313,6 @@ func TestListWorkspaceCursorBreaksTiesById(t *testing.T) {
 	}
 }
 
-// A bound in the last millisecond of the year 9999 rounds up past the text the log can sort:
-// "from" it finds nothing and "to" it leaves nothing out.
 func TestListWorkspaceBoundsRoundingPastTheLastYear(t *testing.T) {
 	d := open(t)
 	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)

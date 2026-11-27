@@ -26,19 +26,12 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Placeholders, made up for the test: the append-only user's password and the repository's.
 const (
 	itRestUser     = "taskto"
-	itRestPassword = "fake-append-only-password" // #nosec G101 -- a made-up placeholder.
+	itRestPassword = "fake-append-only-password"
 	itRepoPassword = "fake-repository-password"
 )
 
-// The append-only backups of docs/install.md, end to end, with the real restic and
-// rest-server: the server's credentials add snapshots and can't remove them, the backup
-// host's direct access to the files can, the nightly schedule's run records its success
-// and stops early, leaving nothing behind, when the backup host is down, and the latest
-// snapshot restores into a server that starts. Opt in with TASKTO_BACKUP_IT=1; restic and rest-server come from PATH, or
-// TASKTO_RESTIC and TASKTO_REST_SERVER.
 func TestAppendOnlyBackupAndRestore(t *testing.T) {
 	if os.Getenv("TASKTO_BACKUP_IT") == "" {
 		t.Skip("set TASKTO_BACKUP_IT=1 (with restic and rest-server installed) to run the append-only backup test")
@@ -54,8 +47,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 
-	// A running server with an owner, and files such as other features keep under the data
-	// directory: a CLI login of local mode's, and a large file outside the spaces' git.
 	logs := captureLog(t)
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -81,7 +72,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		"cli/1/home/.claude/.credentials.json": []byte(`{"fake":"cli-login"}`),
 		"workspaces/1/large/recording.bin":     large,
 	}
-	// And the cache, of what can be downloaded again: left out.
 	cached := "cache/dictation/model.bin"
 	extra[cached] = []byte("fake-model")
 	for name, content := range extra {
@@ -94,7 +84,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		}
 	}
 
-	// The backup host: rest-server, append-only, a repository per user.
 	repos := filepath.Join(dir, "repos")
 	hash, err := bcrypt.GenerateFromPassword([]byte(itRestPassword), bcrypt.MinCost)
 	if err != nil {
@@ -121,7 +110,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 	})
 	itWaitListening(t, restAddr)
 
-	// The taskto.ai server's side: the append-only user, as compose.yaml's backup service.
 	repoURL := fmt.Sprintf("http://%s:%s@%s/%s/", itRestUser, itRestPassword, restAddr, itRestUser)
 	server := itResticEnv(dir, "rest:"+repoURL, "TASKTO_DATA_DIR="+cfg.DataDir)
 	itRun(t, ctx, server, restic, "init")
@@ -133,12 +121,10 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatalf("the first backup added %d bytes, want at least the large file's %d", first.DataAdded, len(large))
 	}
 	t.Logf("restic stored %d new bytes for the first backup, %d for the second", first.DataAdded, second.DataAdded)
-	// Plain archives deduplicate: the second stores little beyond what changed.
 	if second.DataAdded > first.DataAdded/4 {
 		t.Fatalf("the second backup added %d bytes of the first's %d: the archive doesn't deduplicate", second.DataAdded, first.DataAdded)
 	}
 
-	// restic stores nothing when `taskto backup` fails.
 	failing := append([]string{}, backupArgs[:len(backupArgs)-1]...)
 	failing = append(failing, "-data-dir", filepath.Join(dir, "missing"), "-")
 	if out, err := itTry(ctx, server, restic, failing...); err == nil {
@@ -148,8 +134,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatalf("snapshots after a failed backup = %v, want the 2 good ones", ids)
 	}
 
-	// The nightly schedule's run, once and now (the install's first backup): it checks the
-	// repository, backs up, and records the success where the server reads it.
 	itRun(t, ctx, server, bin, "backup-schedule", "-now", "-restic", restic)
 	st, ok, err := backup.ReadStatus(cfg.DataDir)
 	if err != nil || !ok || st.LastSnapshot == "" || st.Health(time.Now()) != backup.HealthOK {
@@ -160,8 +144,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatalf("snapshots after the scheduled one = %v, want a third, %s", ids, st.LastSnapshot)
 	}
 
-	// The backup host is down: the run stops at the check, well before restic would give
-	// up, writes nothing in the data directory, and records why, without the password.
 	down := itResticEnv(dir, fmt.Sprintf("rest:http://%s:%s@%s/%s/", itRestUser, itRestPassword, itFreeAddr(t), itRestUser),
 		"TASKTO_DATA_DIR="+cfg.DataDir)
 	started := time.Now()
@@ -183,8 +165,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatalf("snapshots after the failed run = %v, want 3", ids)
 	}
 
-	// The server's user can't remove anything: restic's forget is refused, and so is a
-	// DELETE of a snapshot's file sent to rest-server directly.
 	if out, err := itTry(ctx, server, restic, "forget", "--keep-last=1", "--prune"); err == nil {
 		t.Fatalf("forget with the append-only user succeeded:\n%s", out)
 	} else {
@@ -211,7 +191,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatalf("the snapshot's file after the DELETE: %v", err)
 	}
 
-	// Restore the latest snapshot into a new data directory, as after losing the server.
 	serverKey, err := os.ReadFile(filepath.Join(cfg.DataDir, serverkey.FileName))
 	if err != nil {
 		t.Fatal(err)
@@ -265,8 +244,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The backup host's side, with the repository's files: the window keeps both, and
-	// forgetting a snapshot works here, the only place it can.
 	host := itResticEnv(dir, filepath.Join(repos, itRestUser))
 	itRun(t, ctx, host, restic, "forget", "--keep-within=90d", "--prune")
 	if got := itSnapshots(t, ctx, host, restic); len(got) != 3 {
@@ -279,9 +256,6 @@ func TestAppendOnlyBackupAndRestore(t *testing.T) {
 	itRun(t, ctx, host, restic, "check")
 }
 
-// itTool is the path of a program the test needs: from env, else from PATH. Once the test
-// is opted in, a missing program fails it rather than skipping it, so CI can't pass
-// without running it.
 func itTool(t *testing.T, env, name string) string {
 	t.Helper()
 	if p := os.Getenv(env); p != "" {
@@ -294,7 +268,6 @@ func itTool(t *testing.T, env, name string) string {
 	return p
 }
 
-// itFreeAddr is a loopback address with a port nothing listens on right now.
 func itFreeAddr(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -324,8 +297,6 @@ func itWaitListening(t *testing.T, addr string) {
 	}
 }
 
-// itResticEnv is the environment restic runs with: this process's, without any RESTIC_*
-// of the caller's, and with the repository, its password and a cache in dir.
 func itResticEnv(dir, repo string, extra ...string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -360,7 +331,6 @@ func itRun(t *testing.T, ctx context.Context, env []string, name string, args ..
 	return out
 }
 
-// resticSummary is the part of `restic backup --json`'s summary the test reads.
 type resticSummary struct {
 	MessageType string `json:"message_type"`
 	DataAdded   int64  `json:"data_added"`
@@ -384,7 +354,6 @@ func itSummary(t *testing.T, out []byte) resticSummary {
 	return resticSummary{}
 }
 
-// itSnapshots are the repository's snapshots' full IDs, oldest first.
 func itSnapshots(t *testing.T, ctx context.Context, env []string, restic string) []string {
 	t.Helper()
 	var snaps []struct {

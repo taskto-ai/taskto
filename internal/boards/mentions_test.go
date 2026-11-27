@@ -25,14 +25,12 @@ func TestMentionsReadsOnlyTheTokenWithAnID(t *testing.T) {
 		{"@Ana @ana@example.com [Ana](user:12) @[Ana](12) @[Ana](user:) @[Ana](user:x1)", nil},
 		{"@[Ana](user:0) @[Ana](user:99999999999999999999)", nil},
 		{"@[multi\nline](user:3) @[](user:4)", nil},
-		// A label a Markdown link's label couldn't hold isn't a link.
 		{"@[a[b](user:3) @[a\\](user:4)", nil},
 	} {
 		if got := Mentions(c.body); !slices.Equal(got, c.want) {
 			t.Errorf("Mentions(%q) = %v, want %v", c.body, got, c.want)
 		}
 	}
-	// A comment tells a bounded number of people.
 	var b strings.Builder
 	for i := 1; i <= 50; i++ {
 		fmt.Fprintf(&b, "@[x](user:%d) ", i)
@@ -98,7 +96,6 @@ func TestMentionsInCodeOrEscapedTellNobody(t *testing.T) {
 	}
 }
 
-// commentTo posts a comment as u on a card of the shared space, over the API.
 func (w *world) commentTo(u *user, c Card, body string) Comment {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, cardPath(w.shared, c.BoardID, c.ID, "/comments"), map[string]string{"body": body})
@@ -116,8 +113,6 @@ func (w *world) notified(u *user) (n int) {
 
 func TestWhoACommentTellsIsDecidedWhenItIsWritten(t *testing.T) {
 	w := newWorld(t)
-	// The card is Bob's; Alice comments and mentions Carol, and as she does the card goes to Owner
-	// and Carol leaves the space: whoever is chosen before the comment's write is wrong by then.
 	ctx := context.Background()
 	carol := w.e.join(w.owner, w.ws, "Carol", auth.RoleMember)
 	w.e.addMember(w.owner, w.shared, carol, access.RoleEditor)
@@ -140,7 +135,6 @@ func TestWhoACommentTellsIsDecidedWhenItIsWritten(t *testing.T) {
 
 func TestACommentNamesWhomItMentionsFromTheirIDForWhoeverMayReadTheSpace(t *testing.T) {
 	w := newWorld(t)
-	// The label says Alice; the ID is Bob's. The label is only what the writer typed.
 	body := fmt.Sprintf("@[Alice](user:%d) and @[Mallory](user:%d) and @[Nobody](user:99999) and @[Owner](user:%d)",
 		w.bob.id, w.mallory.id, w.owner.id)
 	cm := w.commentTo(w.alice, w.teamCard, body)
@@ -154,17 +148,14 @@ func TestACommentNamesWhomItMentionsFromTheirIDForWhoeverMayReadTheSpace(t *test
 			t.Fatalf("user %d reads %+v", u.id, got)
 		}
 	}
-	// A comment that mentions nobody has an empty list, never null.
 	rec := w.alice.do(http.MethodPost, cardPath(w.shared, w.teamCard.BoardID, w.teamCard.ID, "/comments"), map[string]string{"body": "plain"})
 	expect(t, rec, http.StatusCreated)
 	if !strings.Contains(rec.Body.String(), `"mentions":[]`) {
 		t.Fatalf("body = %s", rec.Body)
 	}
-	// Code isn't a mention: no name for it either.
 	cm = w.commentTo(w.alice, w.teamCard, "`"+fmt.Sprintf("@[Bob](user:%d)", w.bob.id)+"`")
 	if len(cm.Mentions) != 0 {
 		t.Fatalf("mentions = %+v", cm.Mentions)
 	}
-	// Someone who can't read the space reads nothing of it, names included.
 	expect(t, w.mallory.do(http.MethodGet, cardPath(w.shared, w.teamCard.BoardID, w.teamCard.ID, ""), nil), http.StatusNotFound)
 }

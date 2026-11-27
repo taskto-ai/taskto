@@ -1,15 +1,3 @@
-// The first-run checklist an admin sees on Home: the steps that make a new workspace useful to a
-// team, each linking to the page where it is done. A step is done when the server says so (the
-// team has a member or an invite, a model provider exists, a shared space, an app), never by a
-// tick; the admin can skip one that doesn't apply (a one-person workspace has no team to
-// invite), and put the whole list away. It is the workspace's: another admin sees the same.
-//
-// It is an extra on Home: while it loads, or if it can't be loaded, there is nothing to show and
-// the page is as it was without it. It is shown until every step that isn't optional is done or
-// skipped, or it is dismissed; the Customize panel brings a dismissed one back. When it goes away
-// under the keyboard (dismissed, or its last step skipped) focus moves to the page's heading, and
-// finishing it is announced; when it comes back, focus moves to its own heading.
-
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { api, type Checklist, type ChecklistStep, errorText, ws } from '../api'
 import { templatesPath } from '../apps/route'
@@ -26,7 +14,6 @@ import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 
-// Where each step is done.
 function stepPath(workspace: number, step: ChecklistStep): string {
   switch (step) {
     case 'invite':
@@ -39,17 +26,12 @@ function stepPath(workspace: number, step: ChecklistStep): string {
       return templatesPath(workspace)
     case 'email':
     case 'backups':
-      // Set by whoever runs the server; the page shows how they are doing.
       return routePath({ workspace, section: 'settings', item: 'about' })
   }
 }
 
 const checklistPath = (workspace: number) => `${ws(workspace)}/checklist`
 
-// The list and the control that brings it back are two components that load it on their own: a
-// change made in one tells the other, as a reload of what is shown. It isn't Home's own version
-// (store.ts), whose change empties what is loaded and would take away the button being used, or the
-// error being read, while the answer is on its way.
 let changes = 0
 const listeners = new Set<() => void>()
 
@@ -65,8 +47,6 @@ function subscribe(listener: () => void) {
   }
 }
 
-// Set by the control that brings the list back, taken by the list when it is shown again, so the
-// keyboard follows the button that is gone.
 let focusWhenShown = false
 
 function useChecklist(workspace: number) {
@@ -88,8 +68,6 @@ export function SetupChecklist({
   onCompleted,
 }: {
   workspace: number
-  // Called once the checklist was put away, and once its last step was handled: the shown list is
-  // gone, and with it the keyboard's place.
   onDismissed?: () => void
   onCompleted?: () => void
 }) {
@@ -102,7 +80,6 @@ export function SetupChecklist({
   const data = list.data
   const shown = !!data && !data.dismissed && !data.complete
 
-  // A list that was shown and now has nothing left to do was finished by what the person did here.
   const wasShown = useRef(false)
   const completed = useRef(onCompleted)
   completed.current = onCompleted
@@ -116,7 +93,6 @@ export function SetupChecklist({
     wasShown.current = shown
   }, [complete, shown])
 
-  // Brought back from Customize: the button that had the keyboard is gone.
   useEffect(() => {
     if (shown && focusWhenShown) {
       focusWhenShown = false
@@ -124,7 +100,6 @@ export function SetupChecklist({
     }
   }, [shown])
 
-  // Always there, so that what it says when the list is finished is announced.
   const status = (
     <VisuallyHidden>
       <span role="status">{finished ? t('checklist.completed') : ''}</span>
@@ -132,7 +107,6 @@ export function SetupChecklist({
   )
   if (!data || !shown) return status
 
-  // Whether the change was made; the list is loaded again either way.
   const run = async (change: () => Promise<unknown>) => {
     let ok = false
     try {
@@ -229,8 +203,6 @@ export function SetupChecklist({
   )
 }
 
-// A step's state as a mark before it: a tick when done, a dash when skipped, an empty ring to do.
-// The badge says it in words.
 function StepMark({ state }: { state: Checklist['items'][number]['state'] }) {
   return (
     <span className="ui-checklist-mark" data-state={state} aria-hidden="true">
@@ -239,12 +211,10 @@ function StepMark({ state }: { state: Checklist['items'][number]['state'] }) {
   )
 }
 
-// In Home's Customize panel, for admins: the way back to a checklist that was put away.
 export function ChecklistRestore({ workspace }: { workspace: number }) {
   const t = useT()
   const list = useChecklist(workspace)
   const [error, setError] = useState<string | null>(null)
-  // Nothing to bring back once there is nothing left to do.
   if (!list.data?.dismissed || list.data.complete) return null
   const show = async () => {
     try {

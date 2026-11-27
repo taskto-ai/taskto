@@ -1,8 +1,3 @@
-// The agent's dot (docs/design.md, "How the mint is used"): the website's node, mint ringed with the
-// mint edge. It marks what the agent did, beside words that say so, so it is hidden from screen
-// readers unless it stands alone with a `label`. `ringed` rings it in ink, for a dot that must be
-// seen on its own (an unread mark).
-
 import './AgentDot.css'
 
 export interface AgentDotProps {

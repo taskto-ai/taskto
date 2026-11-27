@@ -10,49 +10,29 @@ import (
 	"taskto.ai/taskto/internal/cliowner"
 )
 
-// Permissions inside a turn (docs/agent-safety.md): by default a CLI asks before it runs a
-// command, edits a file or fetches a page, and the question goes to the conversation's owner.
-// Each CLI runs our hook program (`taskto cli-approve`, RunApprove) before a tool runs; it
-// asks the worker on its approval socket (approve.go), and the worker answers at once (an
-// AllowAll turn, or a call the read-only policy allows) or asks the owner: a
-// EventPermission in the turn, and a PermissionRequest that Permissions lists and Answer
-// answers.
-
-// Permissions says whether a turn's CLI asks before it acts.
 type Permissions string
 
-// The permission modes of a turn.
 const (
-	// Ask (the default, also the zero value): the CLI asks, and the owner answers.
-	Ask Permissions = "ask"
-	// AllowAll: nothing asks. The owner turns this on for one conversation.
+	Ask      Permissions = "ask"
 	AllowAll Permissions = "allow_all"
 )
 
-// Valid reports whether p is a known mode ("" is Ask).
 func (p Permissions) Valid() bool { return p == "" || p == Ask || p == AllowAll }
 
-// The states of a permission question, in EventPermission's Permission.Status.
 const (
 	PermissionAsked   = "asked"
 	PermissionAllowed = "allowed"
 	PermissionDenied  = "denied"
 )
 
-// Permission is a question to the owner, in an EventPermission: once when asked, and once
-// more when it is answered (or denied for want of an answer).
 type Permission struct {
-	ID string `json:"id"`
-	// Tool is the CLI's name for the tool (Bash, Edit, WebFetch, …).
-	Tool string `json:"tool"`
-	// Input is what the tool would do, shortened: a command, or the tool's input as JSON.
+	ID     string `json:"id"`
+	Tool   string `json:"tool"`
 	Input  string `json:"input,omitempty"`
 	Status string `json:"status"`
-	// Reason says why it was denied, when it wasn't the owner.
 	Reason string `json:"reason,omitempty"`
 }
 
-// PermissionRequest is a question waiting for its answer.
 type PermissionRequest struct {
 	ID      string    `json:"id"`
 	Turn    string    `json:"turn"`
@@ -62,21 +42,15 @@ type PermissionRequest struct {
 	AskedAt time.Time `json:"asked_at"`
 }
 
-// ErrNoPermission is Answer's error for a question that isn't waiting (any more), or isn't
-// in that user's conversation.
 var ErrNoPermission = errors.New("no such permission question is waiting")
 
-// pending is a question waiting in a turn.
 type pending struct {
 	req    PermissionRequest
-	answer chan bool // buffered: the first answer wins
+	answer chan bool
 }
 
-// maxPermissionInput bounds a question's input, for the UI.
 const maxPermissionInput = 2 << 10
 
-// ask asks t's owner whether the CLI may use tool, and waits for the answer, the end of the
-// turn or AskTimeout, whichever comes first.
 func (w *Worker) ask(t *Turn, tool, input string) (bool, string) {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
@@ -108,7 +82,6 @@ func (w *Worker) ask(t *Turn, tool, input string) (bool, string) {
 	return allow, reason
 }
 
-// addPending records p and announces it in the turn, unless the turn is over.
 func (t *Turn) addPending(p *pending) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -123,7 +96,6 @@ func (t *Turn) addPending(p *pending) bool {
 	return true
 }
 
-// removePending forgets p and records how it was answered.
 func (t *Turn) removePending(p *pending, allowed bool, reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -138,7 +110,6 @@ func (t *Turn) removePending(p *pending, allowed bool, reason string) {
 	t.push(Event{Type: EventPermission, Permission: &Permission{ID: p.req.ID, Tool: p.req.Tool, Status: status, Reason: reason}})
 }
 
-// Permissions returns the questions waiting in user's conversation, oldest first.
 func (w *Worker) Permissions(a cliowner.Account, conversation int64) []PermissionRequest {
 	out := []PermissionRequest{}
 	for _, t := range w.turnsOf(a, conversation) {
@@ -152,8 +123,6 @@ func (w *Worker) Permissions(a cliowner.Account, conversation int64) []Permissio
 	return out
 }
 
-// Answer answers question id in user's conversation: the CLI goes on with the tool, or is
-// told the user denied it. A question that isn't waiting there is ErrNoPermission.
 func (w *Worker) Answer(a cliowner.Account, conversation int64, id string, allow bool) error {
 	for _, t := range w.turnsOf(a, conversation) {
 		t.mu.Lock()
@@ -162,7 +131,7 @@ func (w *Worker) Answer(a cliowner.Account, conversation int64, id string, allow
 		if ok {
 			select {
 			case p.answer <- allow:
-			default: // answered already
+			default:
 			}
 			return nil
 		}
@@ -170,10 +139,7 @@ func (w *Worker) Answer(a cliowner.Account, conversation int64, id string, allow
 	return ErrNoPermission
 }
 
-// turnsOf returns a's turns in conversation: never another account's, the number's earlier
-// owner's included.
 func (w *Worker) turnsOf(a cliowner.Account, conversation int64) []*Turn {
-	// A retired account reaches none of what it had, even while its removal hasn't dropped it.
 	if w.retired(a.Identity) {
 		return nil
 	}

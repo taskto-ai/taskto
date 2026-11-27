@@ -1,7 +1,3 @@
-// The renderer's theme (ui/a2ui.css): every component the server's catalog lets an app use is
-// themed, its controls get the library's focus ring and the touch height, and its colours come from
-// the theme's roles, never from the renderer's own defaults.
-
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -12,9 +8,6 @@ const css = readFileSync(join(__dirname, '..', 'ui', 'a2ui.css'), 'utf8')
 const all = rules(css)
 const root = all.filter((r) => r.selector === ':root')
 
-// What themes each renderer component an app may use: a variable of its own on :root, or a rule under
-// .ui-app naming its element. taskto.ai's own components (drawn by catalog.tsx) are styled with the
-// components and are not the renderer's.
 const THEMED_BY: Record<string, string[]> = {
   Button: ['.a2ui-button'],
   Card: ['--a2ui-card-border'],
@@ -34,7 +27,6 @@ const THEMED_BY: Record<string, string[]> = {
 }
 const OWN = ['BarcodeInput', 'LocationInput', 'PhotoInput', 'Photos', 'Screens', 'Show', 'SignatureInput', 'Stat']
 
-// The renderer's controls: what a person focuses and presses.
 const CONTROLS = [
   '.a2ui-button',
   '.a2ui-textfield',
@@ -45,7 +37,6 @@ const CONTROLS = [
   '.a2ui-slider',
 ]
 
-// The body of the first block whose prelude is this at-rule, braces balanced.
 function block(at: string): string {
   const start = css.indexOf(at)
   if (start < 0) return ''
@@ -89,7 +80,6 @@ describe("the renderer's theme", () => {
     )
     expect(colours.length).toBeGreaterThan(20)
     for (const [name, value] of colours) {
-      // `none`: a line the theme draws another way (the tabs' hairline is a shadow, below).
       expect(value, name).toMatch(/var\(--color-[a-z-]+\)|currentColor|^none$/)
     }
   })
@@ -98,7 +88,6 @@ describe("the renderer's theme", () => {
     const primary = all.find((r) => r.selector === '.ui-app .a2ui-button.a2ui-button-primary')
     expect(primary?.declarations).toEqual(expect.arrayContaining(['border', 'box-shadow', 'font-weight']))
     const disabled = all.find((r) => r.selector.includes('.ui-app .a2ui-button:disabled'))
-    // A designed state, not the renderer's half opacity.
     expect(disabled?.declarations).toEqual(expect.arrayContaining(['opacity', 'background', 'color']))
   })
 
@@ -121,7 +110,6 @@ describe('the capture fields', () => {
     expect(declares('.ui-capture .ui-button', /min-block-size: var\(--control-touch\)/)).toBe(true)
     expect(declares('.ui-capture .ui-icon-button', /min-inline-size: var\(--control-touch\)/)).toBe(true)
     expect(declares('.ui-photo-add > label', /min-block-size: var\(--control-touch\)/)).toBe(true)
-    // The dictation's text buttons (Cancel, Try again) as well as its microphone.
     expect(declares('.ui-dictate .ui-button', /min-block-size: var\(--control-touch\)/)).toBe(true)
   })
 
@@ -133,8 +121,6 @@ describe('the capture fields', () => {
   })
 })
 
-// The declarations of the rule whose selector list holds exactly this selector, outside any at-rule,
-// as text, for a check of what a rule sets.
 function declarationsOf(source: string, selector: string): string {
   const text = source.replace(/\/\*[\s\S]*?\*\//g, '')
   const re = /([^{}]+)\{([^{}]*)\}/g
@@ -145,7 +131,6 @@ function declarationsOf(source: string, selector: string): string {
 }
 
 describe('rings and what could cut them', () => {
-  // Every control of the renderer a person can focus: each draws the library's ring.
   const RINGED = [
     '.a2ui-button',
     '.a2ui-textfield',
@@ -167,27 +152,22 @@ describe('rings and what could cut them', () => {
   })
 
   test('a tab’s ring is drawn inside it, and the row of tabs never scrolls up and down', () => {
-    // The row scrolls sideways, which makes it clip: a ring outside a tab would be cut.
     expect(declarationsOf(css, '.ui-app .a2ui-tab-button:focus-visible')).toMatch(
       /outline-offset: calc\(-1 \* var\(--line-focus\)\)/,
     )
     const bar = declarationsOf(css, '.ui-app .a2ui-tab-bar')
     expect(bar).toMatch(/overflow-y: hidden/)
-    // Its hairline is inside it, so the picked tab's underline needs no overlap the row would cut.
     expect(bar).toMatch(/box-shadow: inset/)
     expect(declarationsOf(css, '.ui-app .a2ui-tab-button')).toMatch(/margin-block-end: 0/)
   })
 
   test('a screen on a Home widget doesn’t scroll itself and leaves room for a ring and the lift', () => {
-    // The frame's rules, which AppView and its lazy loader both draw (AppLoading.css).
     const view = readFileSync(join(__dirname, 'AppLoading.css'), 'utf8')
     const bare = declarationsOf(view, '.ui-app[data-frame="bare"]')
-    // 8px: more than the ring's reach (2.5px wide, 2px off) and the primary's 3px lift.
     expect(bare).toMatch(/padding: var\(--space-2\)/)
     for (const selector of ['.ui-app[data-frame="bare"]', '.ui-app[data-frame]']) {
       expect(declarationsOf(view, selector), selector).not.toMatch(/overflow/)
     }
-    // The panel scrolls sideways, inside the padding that leaves the same room.
     const panel = declarationsOf(view, '.ui-app[data-frame="panel"]')
     expect(panel).toMatch(/overflow-x: auto/)
     expect(panel).toMatch(/padding: var\(--space-4\)/)

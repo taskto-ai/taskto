@@ -1,9 +1,3 @@
-// Integrations: the workspace's connections to accounts at outside providers (payments: Stripe,
-// Square), for its admins. A credential goes in and never comes back: the API answers "set" or
-// "not set", so the form only ever offers to replace it. The admin also says which spaces may use
-// an integration and the largest amount and the currencies one payment may have; no app can change
-// either (docs/integrations.md).
-
 import { type FormEvent, useId, useState } from 'react'
 import {
   api,
@@ -35,10 +29,14 @@ import { Alert, CopyButton, FormError, Loading, Section, SettingsTab, useAction,
 
 type Translate = ReturnType<typeof useT>
 
-// The labels the server's closed lists have in the catalog, or the code itself for one it doesn't.
 function label(t: Translate, group: string, code: string): string {
   const key = `settings.integrations.${group}.${code}`
   return has(key) ? t(key as Key) : code
+}
+
+function secretLabel(t: Translate, provider: string, code: string): string {
+  const key = `settings.integrations.secretOf.${provider}.${code}`
+  return has(key) ? t(key as Key) : label(t, 'secret', code)
 }
 
 export function IntegrationsTab({ workspace }: { workspace: number }) {
@@ -46,16 +44,12 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
   const base = `${ws(workspace)}/integrations`
   const registry = useLoad(() => api<IntegrationRegistry>(`${ws(workspace)}/integration-providers`), [workspace])
   const list = useLoad(() => api<{ integrations: Integration[] }>(base).then((r) => r.integrations), [base])
-  // Every space the admin manages, archived ones too: an archived space an integration is still
-  // allowed in has to be shown to be taken out (the spaces form offers the others only).
   const spaces = useLoad(
     () => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces?all=true`).then((r) => r.spaces),
     [workspace],
   )
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [confirmDialog, confirm] = useConfirm()
-  // What had the keyboard can go with a change: the removed row's menu, the empty state's button
-  // once the first account is in. The section's title takes it then.
   const refocus = useRefocus(list.data)
   const done = () => {
     if (list.data?.length === 0) refocus.after()
@@ -204,6 +198,11 @@ function IntegrationRow({
               {t('settings.providers.failing')}
             </Badge>
           )}
+          {i.webhook_url_changed && (
+            <Badge tone="warning" dot>
+              {t('settings.integrations.webhookMoved')}
+            </Badge>
+          )}
           {i.disabled && <Badge>{t('settings.integrations.switchedOff')}</Badge>}
         </>
       }
@@ -218,12 +217,12 @@ function IntegrationRow({
           </span>
           <span>
             {i.secrets.api_key === 'set'
-              ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'api_key') })
-              : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'api_key') })}
+              ? t('settings.integrations.secretSet', { name: secretLabel(t, i.provider, 'api_key') })
+              : t('settings.integrations.secretNotSet', { name: secretLabel(t, i.provider, 'api_key') })}
             {' · '}
             {i.secrets.webhook_secret === 'set'
-              ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'webhook_secret') })
-              : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'webhook_secret') })}
+              ? t('settings.integrations.secretSet', { name: secretLabel(t, i.provider, 'webhook_secret') })
+              : t('settings.integrations.secretNotSet', { name: secretLabel(t, i.provider, 'webhook_secret') })}
           </span>
           <span>
             {t('settings.integrations.limits', {
@@ -245,7 +244,14 @@ function IntegrationRow({
               t('settings.integrations.polling')
             )}
           </span>
-          {/* Always there, so what a check says is announced when it arrives. */}
+          {i.webhook_url_changed && (
+            <span className="settings-error-text">
+              {t('settings.integrations.webhookMovedHelp', { secret: secretLabel(t, i.provider, 'webhook_secret') })}
+            </span>
+          )}
+          {i.webhook_url && i.provider === 'square' && !i.webhook_url_changed && (
+            <span>{t('settings.integrations.squareSignsAddress')}</span>
+          )}
           <span role="status" className="settings-check-status">
             {checking ? t('settings.integrations.checking') : check?.ok ? t('settings.integrations.checkOk') : ''}
           </span>
@@ -305,16 +311,12 @@ function IntegrationRow({
   )
 }
 
-// A space as the lists name it: marked when it is the admin's private one or is archived.
 function spaceName(t: Translate, s: Space): string {
   if (s.kind === 'private') return t('settings.integrations.privateSpace', { name: s.name })
   if (s.archived_at) return t('settings.integrations.archivedSpace', { name: s.name })
   return s.name
 }
 
-// Which spaces may use the integration: the admin's own private space and the shared ones, since
-// those are the ones an admin may allow without being let into anyone else's. An archived space it
-// is still allowed in is listed too, marked, so it can be taken out.
 function SpacesForm({
   url,
   integration,
@@ -332,7 +334,6 @@ function SpacesForm({
   const action = useAction()
   const formId = useId()
   const [chosen, setChosen] = useState<number[]>(integration.spaces)
-  // The approval-made spaces the admin said to keep: saving the list alone never adopts one.
   const [kept, setKept] = useState<number[]>([])
   const flip = (id: number) => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
   const flipKept = (id: number) => setKept((k) => (k.includes(id) ? k.filter((x) => x !== id) : [...k, id]))
@@ -405,19 +406,6 @@ function IntegrationForm({
 }) {
   const t = useT()
   const f = useFormat()
-  // The server names a field by its code (api_key, max_amount_minor); the error says its label.
-  const action = useAction(
-    new Map([
-      ['name', t('settings.actions.name')],
-      ['display_name', t('settings.providers.displayName')],
-      ['max_amount_minor', t('settings.integrations.ceiling')],
-      ['currencies', t('settings.integrations.currencies')],
-      ...registry.providers.flatMap((p) => [
-        ...p.secrets.map((x) => [x.name, label(t, 'secret', x.name)] as const),
-        ...p.settings.map((x) => [x.name, label(t, 'setting', x.name)] as const),
-      ]),
-    ]),
-  )
   const formId = useId()
   const [form, setForm] = useState({
     provider: integration?.provider ?? registry.providers[0]?.id ?? '',
@@ -429,10 +417,18 @@ function IntegrationForm({
   const [secrets, setSecrets] = useState<Record<string, string>>({})
   const [currencies, setCurrencies] = useState<string[]>(integration?.currencies ?? [])
   const provider: IntegrationProvider | undefined = registry.providers.find((p) => p.id === form.provider)
+  const action = useAction(
+    new Map([
+      ['name', t('settings.actions.name')],
+      ['display_name', t('settings.providers.displayName')],
+      ['max_amount_minor', t('settings.integrations.ceiling')],
+      ['currencies', t('settings.integrations.currencies')],
+      ...(provider?.secrets ?? []).map((x) => [x.name, secretLabel(t, provider?.id ?? '', x.name)] as const),
+      ...(provider?.settings ?? []).map((x) => [x.name, label(t, 'setting', x.name)] as const),
+    ]),
+  )
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((x) => ({ ...x, [key]: e.target.value }))
-  // Another provider has other secrets and settings: what was typed for the last one is dropped,
-  // never sent to the new one.
   const pickProvider = (e: { target: { value: string } }) => {
     set('provider')(e)
     setSettings({})
@@ -447,7 +443,6 @@ function IntegrationForm({
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (!provider) return
-    // Only the secrets of this provider that were typed: an empty box keeps the stored one.
     const typed = Object.fromEntries(
       provider.secrets
         .map((spec) => [spec.name, (secrets[spec.name] ?? '').trim()] as const)
@@ -552,7 +547,7 @@ function IntegrationForm({
         ))}
         {provider?.secrets.map((spec) => {
           const stored = integration?.secrets[spec.name] === 'set'
-          const name = label(t, 'secret', spec.name)
+          const name = secretLabel(t, provider.id, spec.name)
           return (
             <Field
               key={spec.name}

@@ -7,30 +7,10 @@ import (
 	"time"
 )
 
-// Removing files that turns, sign-ins and helpers use (a deleted user's whole directory, Forget,
-// or one disconnected account's config directory, Logout) must not race them. A CLI that goes on
-// running keeps the login in its memory and writes its session back into a directory that was
-// just removed, a helper or a new turn makes the directory again, and a person who signed out or
-// is gone is still acted for. So a removal has three steps:
-//
-//  1. nothing new starts on what it covers: for Forget the user's durable mark (forget.go), for
-//     Logout a gate that lasts as long as the removal (ErrRemoving);
-//  2. what runs on it is stopped and waited for (quiesce): the helper requests in flight are
-//     cancelled, the turns (queued ones included) and sign-ins (every execution, also a cancelled
-//     one a new sign-in replaced) are stopped, and the process groups they started hold no live
-//     process;
-//  3. only then are the files removed.
-
-// ErrRemoving is the answer of Start, StartLogin and the helper requests while the files of the
-// account they would use are being removed (a disconnect): it is over in a moment.
 var ErrRemoving = errors.New("this account's CLI files are being removed: try again in a moment")
 
-// ErrBusy is a removal's answer when something of the account is still running after it was
-// stopped and waited for: the files are kept, and the removal can be tried again.
 var ErrBusy = errors.New("a process of this account is still running: its files are kept, try again")
 
-// scope is what a removal covers, of the taskto account with identity id: all of its CLI accounts,
-// or the one of cli in slot.
 type scope struct {
 	id   string
 	all  bool
@@ -42,40 +22,31 @@ func (s scope) covers(id string, cli CLI, slot Slot) bool {
 	return s.id == id && (s.all || (s.cli == cli && s.slot == slot))
 }
 
-// overlaps reports whether s and o cover an account in common.
 func (s scope) overlaps(o scope) bool {
 	return s.id == o.id && (s.all || o.all || (s.cli == o.cli && s.slot == o.slot))
 }
 
-// gate is an account whose files are being removed by a Logout.
 type gate struct {
 	scope
-	done chan struct{} // closed when the removal has ended
+	done chan struct{}
 }
 
-// helperRun is a helper request (a status check, a read of the account's files) that is running.
 type helperRun struct {
 	scope
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
-// groupRec is a process group started for an account. seq is the registration's own number: a
-// process group ID can be given again by the system, and a record that was seen dead must not be
-// taken for the one that replaced it (dropGroups).
 type groupRec struct {
 	scope
 	seq uint64
 }
 
-// groupSeen is a record as it was looked at: the group ID and the registration's number.
 type groupSeen struct {
 	pgid int
 	seq  uint64
 }
 
-// dropGroups lets go of the records that were seen to hold no live process, unless the record of
-// that group ID is a newer registration by now.
 func (w *Worker) dropGroups(seen []groupSeen) {
 	if len(seen) == 0 {
 		return
@@ -89,8 +60,6 @@ func (w *Worker) dropGroups(seen []groupSeen) {
 	}
 }
 
-// gated reports whether a removal's gate covers the CLI account of cli in slot of the account
-// with identity id. The caller holds w.mu.
 func (w *Worker) gated(id string, cli CLI, slot Slot) bool {
 	for _, g := range w.gates {
 		if g.covers(id, cli, slot) {
@@ -100,9 +69,6 @@ func (w *Worker) gated(id string, cli CLI, slot Slot) bool {
 	return false
 }
 
-// admissible says whether something may start for acct's CLI account of cli in slot: not for an
-// account that is retired (ErrForgotten), nor while a removal covers it (ErrRemoving). The caller
-// holds w.mu, which a removal holds as it closes its gate.
 func (w *Worker) admissible(acct account, cli CLI, slot Slot) error {
 	if w.retired(acct.id) {
 		return ErrForgotten
@@ -113,10 +79,6 @@ func (w *Worker) admissible(acct account, cli CLI, slot Slot) error {
 	return nil
 }
 
-// admit lets a helper request for acct's CLI account of cli in slot start, or refuses it (see
-// admissible). A removal that begins while it runs cancels the returned context and waits until
-// release is called. A request that names no CLI (the account's own files) is covered by a removal
-// of all of the account's CLI accounts only.
 func (w *Worker) admit(ctx context.Context, acct account, cli CLI, slot Slot) (context.Context, func(), error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -135,16 +97,8 @@ func (w *Worker) admit(ctx context.Context, acct account, cli CLI, slot Slot) (c
 	}, nil
 }
 
-// maxGroups is how many process groups are listed before the ones that hold no live process
-// are let go.
 const maxGroups = 256
 
-// trackGroup lists process group pgid, started for the account of user's cli in slot, until it
-// is seen to hold no live process. It returns ended, which the caller calls once its turn, sign-in
-// or helper is over and the group was killed: the record goes then if the group holds no live
-// process, so a group ID the system gives again later isn't taken for this account's (a removal
-// of it would wait for an unrelated group). A group is not forgotten only because its turn is
-// over: what a turn left behind may still be running, and then a removal waits for it.
 func (w *Worker) trackGroup(pgid int, id string, cli CLI, slot Slot) (ended func()) {
 	if pgid <= 1 || w.groupWait < 0 {
 		return func() {}
@@ -176,14 +130,8 @@ func (w *Worker) trackGroup(pgid int, id string, cli CLI, slot Slot) (ended func
 	}
 }
 
-// beginGate closes what sc covers (one account, or all of a user's) to new turns, sign-ins and
-// helper requests, once a removal of an account in common has ended, and returns the function that
-// opens it again. Removals of one account run one after the other: the helper requests of one (a
-// sign-out, the removal of the files) must not overlap another's, which would make the directory
-// again. A caller that must refuse a forgotten user asks isForgotten after it.
 func (w *Worker) beginGate(ctx context.Context, sc scope) (end func(), err error) {
 	for {
-		// A caller that has given up closes nothing.
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -217,12 +165,7 @@ func (w *Worker) beginGate(ctx context.Context, sc scope) (end func(), err error
 	}
 }
 
-// quiesce stops what runs on what sc covers and waits until nothing does: the caller has made
-// sure that nothing new starts (the user's mark, or a gate). It is ErrBusy when something
-// doesn't end in time; nothing has been removed then, and the caller keeps the files.
 func (w *Worker) quiesce(ctx context.Context, sc scope) error {
-	// Everything is read under the lock a start checks the gate or the mark under: a turn or a
-	// sign-in is either refused or among these.
 	w.mu.Lock()
 	var turns []*Turn
 	for _, t := range w.turns {
@@ -236,8 +179,6 @@ func (w *Worker) quiesce(ctx context.Context, sc scope) error {
 			helpers = append(helpers, h)
 		}
 	}
-	// Every execution, not only the current login of each account: a cancelled one that a new
-	// sign-in replaced is a process until it exits.
 	var logins []*Login
 	for l := range w.loginRuns {
 		if sc.covers(l.acct.id, l.cli, l.slot) {
@@ -255,7 +196,6 @@ func (w *Worker) quiesce(ctx context.Context, sc scope) error {
 	for _, l := range logins {
 		l.stop()
 	}
-	// A helper is killed at once; a turn or a sign-in gets SIGTERM, the grace time, SIGKILL.
 	wait := time.NewTimer(w.cfg.StopGrace + 10*time.Second)
 	defer wait.Stop()
 	pending := make([]<-chan struct{}, 0, len(helpers)+len(turns)+len(logins))
@@ -280,16 +220,8 @@ func (w *Worker) quiesce(ctx context.Context, sc scope) error {
 	return w.waitGroups(ctx, sc)
 }
 
-// defaultGroupWait is how long a removal waits for the process groups of an account to hold no
-// live process.
 const defaultGroupWait = 3 * time.Second
 
-// waitGroups waits until every process group started for what sc covers holds no live process: a
-// group that is gone, or holds only zombies (killed, waiting to be reaped: they hold no file and
-// write nothing). That includes the groups of turns and sign-ins that are over: their end kills
-// the group, but a process of it may be finishing a system call and could write a file after the
-// removal. A group that still has one after the wait is ErrBusy, and stays listed, so a retry
-// waits for it again.
 func (w *Worker) waitGroups(ctx context.Context, sc scope) error {
 	deadline := time.NewTimer(w.groupWait)
 	defer deadline.Stop()

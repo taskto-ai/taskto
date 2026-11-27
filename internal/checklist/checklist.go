@@ -1,16 +1,3 @@
-// Package checklist is the first-run checklist an admin sees on Home: the steps that make a
-// new workspace useful to a team (invite people, add a model provider, make a shared space,
-// add an app, and, if the server's operator has set them up, email and backups), each marked
-// done by what exists, not by a tick.
-//
-// Only two things are stored (migration 0039): that the checklist was dismissed, and which
-// steps an admin skipped because they don't apply (a one-person workspace has no team to
-// invite). Both are the workspace's, shared by its admins. Everything else is read when the
-// checklist is asked for, so a step done by any route, the settings pages or the agent, is done
-// here too, and a step undone (the last provider removed) is open again.
-//
-// The checklist is for the workspace's admins only. It says whether things exist, never what
-// they are: no names, addresses or counts of what other people own.
 package checklist
 
 import (
@@ -27,77 +14,57 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// inviteTimeFormat is how invites store their expiry (internal/auth), so it compares as text.
 const inviteTimeFormat = "2006-01-02T15:04:05.000Z"
 
-// Item names a step.
 type Item string
 
-// The steps, in the order they are shown.
 const (
-	Invite   Item = "invite"   // someone besides the person who set up is a member, or has an open or accepted invite
-	Provider Item = "provider" // the workspace has a model provider account
-	Space    Item = "space"    // the workspace has a shared space that isn't archived
-	App      Item = "app"      // an app exists in a shared space the caller is in, or in the caller's own space
-	Email    Item = "email"    // the server can send email (the operator's SMTP settings)
-	Backups  Item = "backups"  // the server's scheduled backups have a status
+	Invite   Item = "invite"
+	Provider Item = "provider"
+	Space    Item = "space"
+	App      Item = "app"
+	Email    Item = "email"
+	Backups  Item = "backups"
 )
 
-// Items lists the steps in order.
 var Items = []Item{Invite, Provider, Space, App, Email, Backups}
 
-// optional steps don't hold the checklist open: it is complete without them. Email and backups
-// are set by whoever runs the server, outside the app.
 func (i Item) optional() bool { return i == Email || i == Backups }
 
-// State is where a step stands.
 type State string
 
-// The states of a step. A step that is done stays done whatever was skipped.
 const (
 	Done    State = "done"
 	Todo    State = "todo"
 	Skipped State = "skipped"
 )
 
-// Entry is a step as the caller sees it.
 type Entry struct {
 	ID       Item  `json:"id"`
 	State    State `json:"state"`
 	Optional bool  `json:"optional"`
 }
 
-// View is the checklist of a workspace.
 type View struct {
-	// Dismissed is true after an admin put the checklist away; Home then shows nothing.
-	Dismissed bool `json:"dismissed"`
-	// Complete is true when every step that isn't optional is done or skipped.
-	Complete bool    `json:"complete"`
-	Items    []Entry `json:"items"`
+	Dismissed bool    `json:"dismissed"`
+	Complete  bool    `json:"complete"`
+	Items     []Entry `json:"items"`
 }
 
-// Options say what only the server knows.
 type Options struct {
-	// Email reports whether the server can send email. nil means it can't.
-	Email func() bool
-	// Backups reports whether the server's scheduled backups have a status. nil means they
-	// don't.
+	Email   func() bool
 	Backups func() (bool, error)
 }
 
-// Service answers the checklist.
 type Service struct {
 	db   *sql.DB
 	opts Options
 }
 
-// New returns the service over db, which must be migrated.
 func New(db *sql.DB, opts Options) *Service { return &Service{db: db, opts: opts} }
 
-// ErrUnknownItem is returned for a step that isn't in Items.
 var ErrUnknownItem = errors.New("checklist: no such step")
 
-// Parse returns the step named s.
 func Parse(s string) (Item, error) {
 	if i := Item(s); slices.Contains(Items, i) {
 		return i, nil
@@ -105,7 +72,6 @@ func Parse(s string) (Item, error) {
 	return "", ErrUnknownItem
 }
 
-// View returns the checklist of workspaceID for userID, one of its admins (the routes check).
 func (s *Service) View(ctx context.Context, workspaceID, userID int64) (View, error) {
 	done, err := s.done(ctx, workspaceID, userID)
 	if err != nil {
@@ -137,7 +103,6 @@ func (s *Service) View(ctx context.Context, workspaceID, userID int64) (View, er
 	return v, nil
 }
 
-// done works out which steps are done.
 func (s *Service) done(ctx context.Context, workspaceID, userID int64) (map[Item]bool, error) {
 	var invite, provider, space, app bool
 	err := s.db.QueryRowContext(ctx, `SELECT
@@ -160,7 +125,6 @@ func (s *Service) done(ctx context.Context, workspaceID, userID int64) (map[Item
 		done[Email] = s.opts.Email()
 	}
 	if s.opts.Backups != nil {
-		// A status that can't be read is a step still to do, not a failed checklist.
 		ok, err := s.opts.Backups()
 		done[Backups] = ok && err == nil
 	}
@@ -184,7 +148,6 @@ func (s *Service) skipped(ctx context.Context, workspaceID int64) (map[Item]bool
 	return out, rows.Err()
 }
 
-// Dismiss puts the checklist away for the workspace, or with false brings it back.
 func (s *Service) Dismiss(ctx context.Context, workspaceID, userID int64, dismissed bool) error {
 	if !dismissed {
 		_, err := s.db.ExecContext(ctx, `DELETE FROM setup_checklist_dismissed WHERE workspace_id = ?`, workspaceID)
@@ -195,7 +158,6 @@ func (s *Service) Dismiss(ctx context.Context, workspaceID, userID int64, dismis
 	return err
 }
 
-// Skip marks a step as not applying to the workspace, or with false takes the mark off.
 func (s *Service) Skip(ctx context.Context, workspaceID, userID int64, item Item, skipped bool) error {
 	if !skipped {
 		_, err := s.db.ExecContext(ctx, `DELETE FROM setup_checklist_skipped WHERE workspace_id = ? AND item = ?`, workspaceID, item)
@@ -206,8 +168,6 @@ func (s *Service) Skip(ctx context.Context, workspaceID, userID int64, item Item
 	return err
 }
 
-// Routes mounts the admins' routes (docs/api.md#setup-checklist). Every one is for a workspace's
-// admins only, and for that workspace.
 func (s *Service) Routes(mux *http.ServeMux, accounts *auth.Service) {
 	const base = "/api/workspaces/{workspace}/checklist"
 	admin := func(h http.HandlerFunc) http.Handler { return accounts.RequireAdmin(h) }
@@ -224,7 +184,6 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// fail logs err and answers 500 without details.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() == nil {
 		slog.Error("checklist: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
@@ -238,9 +197,6 @@ func caller(r *http.Request) (workspaceID, userID int64) {
 	return m.WorkspaceID, u.ID
 }
 
-// serverWide are the steps about the whole server, not the workspace: whether it can send email and
-// whether its backups run. Only operators (auth.Service.IsOperator) are told; the admins of a
-// workspace someone else created have no say in either, so their checklist doesn't list them.
 func serverWide(i Item) bool { return i == Email || i == Backups }
 
 func (s *Service) handleGet(accounts *auth.Service) http.HandlerFunc {

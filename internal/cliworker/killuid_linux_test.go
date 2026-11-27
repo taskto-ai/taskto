@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// Only a full look at the processes says none of a uid is left, before its number's directory goes
-// and the number may be given to someone else: a list of the processes that can't be made, or a
-// process whose state can't be read, is an error, not "none left".
 func TestKillUIDCountsOnlyAFullLookAsNoneLeft(t *testing.T) {
 	old := procRoot
 	t.Cleanup(func() { procRoot = old })
@@ -24,7 +21,7 @@ func TestKillUIDCountsOnlyAFullLookAsNoneLeft(t *testing.T) {
 	}
 
 	procRoot = t.TempDir()
-	if err := os.MkdirAll(filepath.Join(procRoot, "4242", "status"), 0o700); err != nil { // can't be read as a file
+	if err := os.MkdirAll(filepath.Join(procRoot, "4242", "status"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := killUID(uid, 100*time.Millisecond); err == nil {
@@ -45,8 +42,6 @@ func TestKillUIDCountsOnlyAFullLookAsNoneLeft(t *testing.T) {
 	}
 }
 
-// A uid range that would reach the 32-bit nobody is refused when the worker starts, so every
-// user's uid is valid wherever it is used.
 func TestUIDOfStaysInRange(t *testing.T) {
 	iso := &Isolation{UIDBase: 100000}
 	for _, home := range []int64{0, -1, 5, firstHome - 1, maxHome} {
@@ -59,8 +54,6 @@ func TestUIDOfStaysInRange(t *testing.T) {
 	}
 }
 
-// The worker's start-up sweep of every CLI user's processes is as strict: one it can't look at
-// fails the start, rather than leave a process of an earlier history running.
 func TestTheStartUpSweepCountsOnlyAFullLook(t *testing.T) {
 	old := procRoot
 	t.Cleanup(func() { procRoot = old })
@@ -77,8 +70,6 @@ func TestTheStartUpSweepCountsOnlyAFullLook(t *testing.T) {
 	}
 }
 
-// A zombie holds nothing only when it is alone: a thread group's leader that exited while other
-// threads of its run is a zombie in its status and still runs code as its uid, so it counts.
 func TestAZombieLeaderWithLiveThreadsCounts(t *testing.T) {
 	old := procRoot
 	t.Cleanup(func() { procRoot = old })

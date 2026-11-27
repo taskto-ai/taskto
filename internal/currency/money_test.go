@@ -16,14 +16,14 @@ func TestMinor(t *testing.T) {
 		{"120.10", "EUR", 12010, nil},
 		{"120", "EUR", 12000, nil},
 		{"0.01", "EUR", 1, nil},
-		{"5.500", "EUR", 550, nil}, // a trailing zero is not a decimal
+		{"5.500", "EUR", 550, nil},
 		{"5", "JPY", 5, nil},
 		{"5.0", "JPY", 5, nil},
 		{"007.5", "USD", 750, nil},
-		{"90071992547409.93", "USD", 9007199254740993, nil}, // beyond what a float holds, still exact as text
+		{"90071992547409.93", "USD", 9007199254740993, nil},
 
 		{"500", "ISK", 50000, nil},
-		{"500.00", "ISK", 50000, nil}, // decimals that are zero are whole
+		{"500.00", "ISK", 50000, nil},
 		{"5.5", "ISK", 0, ErrNotWhole},
 		{"5.01", "ISK", 0, ErrNotWhole},
 		{"5.001", "ISK", 0, ErrTooManyDecimals},
@@ -55,14 +55,13 @@ func TestMinor(t *testing.T) {
 }
 
 func TestMinorOfNeverRounds(t *testing.T) {
-	a, b := 0.1, 0.2 // variables: constants would add exactly
+	a, b := 0.1, 0.2
 	if _, err := MinorOf(a+b, "EUR"); !errors.Is(err, ErrTooManyDecimals) {
 		t.Errorf("0.1 + 0.2 = %v, want too many decimals", err)
 	}
 	if got, err := MinorOf(0.1, "EUR"); err != nil || got != 10 {
 		t.Errorf("0.1 = %d, %v", got, err)
 	}
-	// Three decimals in euros, and the yen with decimals.
 	if _, err := MinorOf(1.005, "EUR"); !errors.Is(err, ErrTooManyDecimals) {
 		t.Errorf("1.005 EUR = %v", err)
 	}
@@ -83,7 +82,6 @@ func TestMinorOfNeverRounds(t *testing.T) {
 	if _, err := MinorOf(-5, "EUR"); !errors.Is(err, ErrNotPositive) {
 		t.Errorf("-5 = %v", err)
 	}
-	// Every price that people write with two decimals converts to exactly the cents written.
 	for cents := int64(1); cents <= 200000; cents++ {
 		v := float64(cents) / 100
 		got, err := MinorOf(v, "EUR")

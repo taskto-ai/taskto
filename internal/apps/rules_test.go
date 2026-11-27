@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// testdata/rules.json holds the cases both this package and the web app (web/src/apps/rules.test.ts)
-// evaluate rules by: they must agree, since the browser hides what the server then requires.
 func TestRulesAreEvaluatedAsTheSharedCasesSay(t *testing.T) {
 	raw, err := os.ReadFile("testdata/rules.json")
 	if err != nil {
@@ -137,14 +135,12 @@ func TestConditionalRequirementsAreEnforcedOnEveryRow(t *testing.T) {
 	if err := c.Fits(map[string]any{"title": "x", "category": "home"}); err != nil {
 		t.Fatalf("where the rule doesn't hold: %v", err)
 	}
-	// An update that makes the rule hold, or clears the field it asks for, is refused too.
 	if _, err := c.Merge(map[string]any{"title": "x", "category": "home"}, map[string]any{"category": "other"}); err == nil {
 		t.Fatal("an update making the field required without it was taken")
 	}
 	if _, err := c.Merge(map[string]any{"title": "x", "category": "other", "category_note": "n"}, map[string]any{"category_note": nil}); err == nil {
 		t.Fatal("an update clearing a conditionally required field was taken")
 	}
-	// A conditionally required field can't also be always required, or read itself.
 	for name, change := range map[string]func(*Field){
 		"always required too": func(f *Field) { f.Required = true },
 		"reading itself":      func(f *Field) { f.RequiredWhen = &Rule{Field: f.Name, Op: OpEq, Value: "x"} },

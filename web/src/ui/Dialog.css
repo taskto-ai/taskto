@@ -62,7 +62,6 @@
     min-inline-size: 0;
     display: grid;
     gap: var(--space-1);
-    /* Level with the close button's middle. */
     padding-block-start: var(--space-1);
   }
 
@@ -103,7 +102,6 @@
     border-block-start: var(--line-thin) solid var(--color-border);
   }
 
-  /* On a phone the dialog sits at the bottom, the full width, and the actions fill the row. */
   @media (max-width: 40rem) {
     .ui-dialog,
     .ui-dialog[data-size] {

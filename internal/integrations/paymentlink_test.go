@@ -30,7 +30,6 @@ import (
 
 const publicURL = "https://tasks.example.com"
 
-// invoiceApp is an invoicing app: sending an invoice asks for a payment link of its total in euros.
 const invoiceApp = `{
   "components": [{"id":"root","component":"Text","text":"Invoices"}],
   "collection": {"fields": [
@@ -54,23 +53,20 @@ const invoiceApp = `{
       "set": {"status": {"value": "paid"}, "paid_at": {"from": "occurred_at"}}}}}}
 }`
 
-// pay is a workspace whose owner built, approved and published an invoicing app that asks Stripe
-// (the fake) for payment links, with a worker that can be started and a clock that can be moved.
 type pay struct {
 	*env
-	fake  *testprovider.Stripe
-	svc   *Service
-	apps  *apps.Service
-	owner *client
-	ws    int64
-	space access.Space
-	in    Integration
-	app   apps.App
-	// approval is the admin's approval of the app's payments contract.
+	fake     *testprovider.Stripe
+	sq       *testprovider.Square
+	svc      *Service
+	apps     *apps.Service
+	owner    *client
+	ws       int64
+	space    access.Space
+	in       Integration
+	app      apps.App
 	approval apps.IntegrationApproval
-	// offset moves the apps' clock on, in nanoseconds.
-	offset *atomic.Int64
-	stop   func()
+	offset   *atomic.Int64
+	stop     func()
 }
 
 func providerKinds(provider string) []string {
@@ -82,38 +78,47 @@ func providerKinds(provider string) []string {
 
 func newPay(t *testing.T, public string) *pay { return newPayWith(t, public, invoiceApp) }
 
-// newPayWith is newPay with the invoicing app's definition, for a test that needs another.
 func newPayWith(t *testing.T, public, definition string) *pay {
-	t.Helper()
-	return newPayClocked(t, public, definition, false)
+	return newPayFor(t, public, definition, "stripe")
 }
 
-// newPayOnOneClock is newPay with the fake Stripe on the server's clock too, for a test of the times
-// the provider says: p.later moves the provider's time as well.
+func newSquarePay(t *testing.T, public string) *pay {
+	return newPayFor(t, public, invoiceApp, "square")
+}
+
+func newPayFor(t *testing.T, public, definition, provider string) *pay {
+	t.Helper()
+	return newPayClocked(t, public, definition, provider, false)
+}
+
 func newPayOnOneClock(t *testing.T, public string) *pay {
 	t.Helper()
-	return newPayClocked(t, public, invoiceApp, true)
+	return newPayClocked(t, public, invoiceApp, "stripe", true)
 }
 
-// clockFunc is a testprovider.Clock of a function.
 type clockFunc func() time.Time
 
 func (f clockFunc) Now() time.Time { return f() }
 
-func newPayClocked(t *testing.T, public, definition string, providerToo bool) *pay {
+func newPayClocked(t *testing.T, public, definition, provider string, providerToo bool) *pay {
 	t.Helper()
 	ctx := context.Background()
-	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
-	// One clock moves the integrations' and the apps' alike.
+	e := newEnv(t, public)
 	offset := new(atomic.Int64)
 	var fakeOpts []testprovider.Option
 	if providerToo {
 		fakeOpts = append(fakeOpts, testprovider.WithClock(clockFunc(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })))
 	}
 	fake := testprovider.NewStripe(t, fakeOpts...)
+	var sq *testprovider.Square
+	endpoint := fake.Host()
+	if provider == "square" {
+		sq = testprovider.NewSquare(t)
+		endpoint = sq.Host()
+	}
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
 		Now:           func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
-		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host()), WithoutConnectionReuse()}})
+		ClientOptions: []ClientOption{WithTestEndpoint(endpoint), WithoutConnectionReuse()}})
 
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
@@ -122,14 +127,13 @@ func newPayClocked(t *testing.T, public, definition string, providerToo bool) *p
 	spaces.Routes(mux)
 	svc.Routes(mux, a, spaces)
 	svc.HookRoutes(mux)
-	p := &pay{env: e, fake: fake, svc: svc, offset: offset}
+	p := &pay{env: e, fake: fake, sq: sq, svc: svc, offset: offset}
 	p.apps = apps.New(e.db, spaces).WithPlatform(apps.Platform{ProviderKinds: providerKinds, Payments: svc}).
 		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) }).
-		// The worker sees a moved clock on its next poll: a short one, so a test's wait for it is short.
 		WithOutboxPoll(25 * time.Millisecond)
 	p.apps.Routes(mux)
 	p.apps.ApprovalRoutes(mux, a)
-	svc.UseRecords(p.apps) // stored events are applied (by drainEvents: the tests run the worker by hand)
+	svc.UseRecords(p.apps)
 	inbox, err := notifications.New(ctx, e.db, spaces, notifications.Options{Key: e.key})
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +149,11 @@ func newPayClocked(t *testing.T, public, definition string, providerToo bool) *p
 	body := stripeBody("main")
 	body["secrets"] = map[string]string{"api_key": fake.APIKey(), "webhook_secret": stripeHook}
 	body["currencies"] = []string{"EUR", "JPY"}
+	if provider == "square" {
+		body = squareBody("main")
+		body["settings"] = squareSettings()
+		body["secrets"] = map[string]string{"api_key": testprovider.SquareTestToken, "webhook_secret": testprovider.SquareSignatureKey}
+	}
 	p.in = e.create(p.owner, p.ws, body)
 	if _, err := e.db.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, p.in.ID, p.space.ID); err != nil {
 		t.Fatal(err)
@@ -153,8 +162,6 @@ func newPayClocked(t *testing.T, public, definition string, providerToo bool) *p
 	return p
 }
 
-// publishApp builds an app from the definition in the pay space, has its payments contract approved
-// for the integration and publishes it.
 func (p *pay) publishApp(name, definition string) (apps.App, apps.IntegrationApproval) {
 	p.t.Helper()
 	rec := p.owner.do(http.MethodPost, p.appsPath(""), map[string]any{"name": name, "definition": rawJSON(definition)})
@@ -189,7 +196,6 @@ func (p *pay) act(operation, name string, ctx map[string]any) {
 	expect(p.t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/actions", p.app.ID)), a), http.StatusOK)
 }
 
-// invoice adds an invoice with the total (a JSON number) in the currency, and returns its record.
 func (p *pay) invoice(total any, currency string) int64 {
 	p.t.Helper()
 	p.act("", "add", map[string]any{"number": "A-1", "customer": "Acme", "total": total, "currency": currency, "status": "draft"})
@@ -205,14 +211,12 @@ func (p *pay) send(record int64, operation string) {
 	p.act(operation, "send", map[string]any{"id": record, "status": "sent"})
 }
 
-// startWorker runs the apps' outbox worker, which does what is queued.
 func (p *pay) startWorker() {
 	p.t.Helper()
 	p.stop = p.apps.StartOutbox(context.Background())
 	p.t.Cleanup(p.stop)
 }
 
-// later moves the apps' clock on, so entries that wait to be tried again are due.
 func (p *pay) later(d time.Duration) { p.offset.Add(int64(d)) }
 
 type entry struct {
@@ -242,7 +246,6 @@ func (p *pay) entries() []entry {
 	return out
 }
 
-// settled waits for the only entry to be in one of the states, and returns it.
 func (p *pay) settled(states ...string) entry {
 	p.t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -260,8 +263,6 @@ func (p *pay) settled(states ...string) entry {
 	return entry{}
 }
 
-// waitsUnknown waits for the only entry to wait on the reconciliation's schedule: a key's outcome is
-// unknown, and the wait counts against none of its tries.
 func (p *pay) waitsUnknown() {
 	p.t.Helper()
 	p.waitFor("the entry waits for the outcome", func() bool {
@@ -270,7 +271,6 @@ func (p *pay) waitsUnknown() {
 	})
 }
 
-// waitFor waits for cond, which polls.
 func (p *pay) waitFor(what string, cond func() bool) {
 	p.t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -303,7 +303,6 @@ func (p *pay) posts() []testprovider.Request {
 	return p.fake.RequestsTo(http.MethodPost, "/v1/checkout/sessions")
 }
 
-// linkPosts are the calls that made Payment Links (what a server without a public URL asks for).
 func (p *pay) linkPosts() []testprovider.Request {
 	return p.fake.RequestsTo(http.MethodPost, "/v1/payment_links")
 }
@@ -338,8 +337,6 @@ func (p *pay) refs() []refRow {
 	return out
 }
 
-// ----- the link is made once -----
-
 func TestAnInvoiceSentMakesOneStripePaymentLinkWrittenBackBySystem(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(120.1, "EUR")
@@ -357,18 +354,15 @@ func TestAnInvoiceSentMakesOneStripePaymentLinkWrittenBackBySystem(t *testing.T)
 		t.Fatalf("refs = %+v", refs)
 	}
 	ref, call := refs[0], reqs[0]
-	// The token is the idempotency key and the reference the provider echoes back.
 	if call.IdempotencyKey != ref.token || call.Form.Get("client_reference_id") != ref.token {
 		t.Fatalf("the call's key and reference: %+v", call)
 	}
 	if call.APIVersion != StripeAPIVersion || call.Auth != "bearer" {
 		t.Fatalf("the call's version and auth: %+v", call)
 	}
-	// The success and cancel pages are the server's own, from the public URL.
 	if call.Form.Get("success_url") != publicURL+PaymentDonePath || call.Form.Get("cancel_url") != publicURL+PaymentCancelledPath {
 		t.Fatalf("pages: %q %q", call.Form.Get("success_url"), call.Form.Get("cancel_url"))
 	}
-	// The amount is exact, in the currency's smallest unit.
 	if call.Form.Get("line_items[0][price_data][unit_amount]") != "12010" || call.Form.Get("line_items[0][price_data][currency]") != "eur" ||
 		call.Form.Get("line_items[0][price_data][product_data][name]") != "Invoice A-1 for Acme" || call.Form.Get("mode") != "payment" {
 		t.Fatalf("form = %v", call.Form)
@@ -383,7 +377,6 @@ func TestAnInvoiceSentMakesOneStripePaymentLinkWrittenBackBySystem(t *testing.T)
 	if len(sessions) != 1 || sessions[0].ID != ref.object || sessions[0].AmountTotal != 12010 {
 		t.Fatalf("sessions = %+v", sessions)
 	}
-	// The link and its id are in the record, written by the integration, not by a person.
 	data, _ := p.record(record)
 	if !strings.Contains(data, `"payment_id":"`+ref.object+`"`) || !strings.Contains(data, ref.url) || ref.url != *sessions[0].URL {
 		t.Fatalf("record = %s, ref = %+v", data, ref)
@@ -398,7 +391,6 @@ func TestAnInvoiceSentMakesOneStripePaymentLinkWrittenBackBySystem(t *testing.T)
 		actor.Valid || actorSystem != system {
 		t.Fatalf("history actor = %v %q, %v", actor, actorSystem, err)
 	}
-	// Doing the same send again, with the same operation, makes no second link.
 	p.send(record, "op-send-0001")
 	time.Sleep(200 * time.Millisecond)
 	if n := len(p.posts()); n != 1 {
@@ -406,12 +398,9 @@ func TestAnInvoiceSentMakesOneStripePaymentLinkWrittenBackBySystem(t *testing.T)
 	}
 }
 
-// The provider answered, and the server died before it noted the answer: the entry is done again,
-// asks again under the same key, and Stripe answers with the object it made.
 func TestACrashBeforeTheAnswerIsNotedMakesNoSecondLink(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(50, "EUR")
-	// The link is made at Stripe, and the connection drops before the answer reaches the server.
 	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
 	p.startWorker()
 	p.send(record, "op-send-0002")
@@ -423,8 +412,6 @@ func TestACrashBeforeTheAnswerIsNotedMakesNoSecondLink(t *testing.T) {
 	p.later(time.Minute)
 	p.settled(apps.StateDone)
 
-	// The outcome of the dropped call was unknown, so the retry made no call: it read what Stripe holds
-	// and adopted the object the call made.
 	if reqs := p.posts(); len(reqs) != 1 || reqs[0].Replayed {
 		t.Fatalf("calls = %+v: the retry should only have looked", reqs)
 	}
@@ -440,7 +427,6 @@ func TestACrashBeforeTheAnswerIsNotedMakesNoSecondLink(t *testing.T) {
 	}
 }
 
-// The link was noted and the entry crashed before it was done: it asks Stripe nothing.
 func TestAnEntryDoneAgainAfterTheLinkWasNotedDoesNotCallStripe(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(99.99, "EUR")
@@ -460,8 +446,6 @@ func TestAnEntryDoneAgainAfterTheLinkWasNotedDoesNotCallStripe(t *testing.T) {
 		t.Fatalf("%d calls", n)
 	}
 
-	// And one that crashed after its call was written ahead and before the answer was noted finds the
-	// object by the key's token and makes nothing.
 	p.exec(`UPDATE integration_refs SET provider_object_id = NULL, url = NULL, state = 'creating'`)
 	p.exec(`UPDATE integration_ref_attempts SET outcome = NULL, object_id = NULL, url = NULL, object_verified = 0`)
 	third, err := p.svc.OpenPaymentLink(context.Background(), req)
@@ -477,8 +461,6 @@ func TestAnEntryDoneAgainAfterTheLinkWasNotedDoesNotCallStripe(t *testing.T) {
 	}
 }
 
-// What a payment link is made as, by the address the server has: a Checkout Session when it has a
-// public URL, a Payment Link when it hasn't.
 var linkShapes = map[string]struct {
 	public string
 	path   string
@@ -487,7 +469,6 @@ var linkShapes = map[string]struct {
 	"a payment link":     {"", "/v1/payment_links"},
 }
 
-// mustPost makes an object at Stripe directly, the way another system of the account would.
 func (p *pay) mustPost(path string, form url.Values) {
 	p.t.Helper()
 	req, err := http.NewRequest(http.MethodPost, p.fake.URL()+path, strings.NewReader(form.Encode()))
@@ -507,7 +488,6 @@ func (p *pay) mustPost(path string, form url.Values) {
 	}
 }
 
-// objects is how many objects of the shape Stripe holds.
 func (p *pay) exec(q string, args ...any) {
 	p.t.Helper()
 	if _, err := p.db.Exec(q, args...); err != nil {
@@ -522,7 +502,6 @@ func (p *pay) objects(path string) int {
 	return len(p.fake.Sessions())
 }
 
-// objectID is the id of the only object of the shape.
 func (p *pay) objectID(path string) string {
 	p.t.Helper()
 	if path == "/v1/payment_links" {
@@ -531,10 +510,6 @@ func (p *pay) objectID(path string) string {
 	return p.fake.Sessions()[0].ID
 }
 
-// Stripe keeps a failure it answered under the key, and would answer it again to the same key for
-// a day: the next try has a key of its own. But a 5xx is an indeterminate result: Stripe made the
-// object, and the failure is all the server was told. Another under the new key would be a second
-// payable link for one invoice, so the object is looked for and adopted.
 func TestAFailureStripeKeepsIsNotAskedAgainUnderItsKeyAndItsObjectIsAdopted(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -551,7 +526,6 @@ func TestAFailureStripeKeepsIsNotAskedAgainUnderItsKeyAndItsObjectIsAdopted(t *t
 			p.later(time.Minute)
 			e := p.settled(apps.StateDone)
 
-			// No second call that makes anything: the retry only read what Stripe holds.
 			if reqs := p.fake.RequestsTo(http.MethodPost, shape.path); len(reqs) != 1 {
 				t.Fatalf("%d calls that make an object: %+v", len(reqs), reqs)
 			}
@@ -565,7 +539,6 @@ func TestAFailureStripeKeepsIsNotAskedAgainUnderItsKeyAndItsObjectIsAdopted(t *t
 			if len(refs) != 1 || refs[0].keySeq != 0 || refs[0].state != "open" || refs[0].effect.Int64 != e.id || refs[0].object != p.objectID(shape.path) {
 				t.Fatalf("refs = %+v", refs)
 			}
-			// The adopted object is written back exactly as one a call answered: its address and id.
 			data, _ := p.record(record)
 			if !strings.Contains(data, `"payment_id":"`+refs[0].object+`"`) || !strings.Contains(data, refs[0].url) || refs[0].url == "" {
 				t.Fatalf("record = %s, ref = %+v", data, refs[0])
@@ -578,10 +551,6 @@ func TestAFailureStripeKeepsIsNotAskedAgainUnderItsKeyAndItsObjectIsAdopted(t *t
 	}
 }
 
-// While Stripe can't say whether an earlier call made the object, nothing is made under another key:
-// the lookups that fail tell nothing, the call is asked again only under its own key (which Stripe
-// answers with the 500 it kept), the entry waits without using up its tries and, once the lookup
-// works, adopts the object.
 func TestWhileTheLookupFailsNothingIsMade(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -623,12 +592,9 @@ func TestWhileTheLookupFailsNothingIsMade(t *testing.T) {
 	}
 }
 
-// An object Stripe lists that is another reference's is never adopted, and one that is no longer
-// open or active is not what the payer was given.
 func TestOnlyAnOpenObjectOfTheRefsTokenIsAdopted(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
-	// Another reference's session, made earlier at the same account, with the same amount.
 	other := url.Values{}
 	other.Set("mode", "payment")
 	other.Set("success_url", publicURL+PaymentDonePath)
@@ -653,13 +619,11 @@ func TestOnlyAnOpenObjectOfTheRefsTokenIsAdopted(t *testing.T) {
 	}
 }
 
-// ----- money -----
-
 func TestAmountsAreExactOrRefusedNeverRounded(t *testing.T) {
 	cases := map[string]struct {
 		total    any
 		currency string
-		minor    string // what Stripe is asked for; "" when the amount is refused
+		minor    string
 		code     apierr.Code
 	}{
 		"cents":                  {120.1, "EUR", "12010", ""},
@@ -693,7 +657,6 @@ func TestAmountsAreExactOrRefusedNeverRounded(t *testing.T) {
 			if e.code != string(tc.code) {
 				t.Fatalf("code = %q, want %q", e.code, tc.code)
 			}
-			// Refused before anything was made or asked.
 			if n := len(p.fake.Requests()); n != 0 {
 				t.Fatalf("Stripe was called %d times", n)
 			}
@@ -715,10 +678,6 @@ func floatNoise() float64 {
 	return a + b
 }
 
-// ----- without a public URL: Stripe's own confirmation page -----
-
-// A server with no public URL still makes the link: a Payment Link whose payer stays on the page
-// Stripe hosts, which takes one payment, and which carries no address of ours.
 func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.T) {
 	p := newPay(t, "")
 	record := p.invoice(120.1, "EUR")
@@ -738,7 +697,6 @@ func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.
 	if call.IdempotencyKey != ref.token || call.APIVersion != StripeAPIVersion || call.Auth != "bearer" {
 		t.Fatalf("the call: %+v", call)
 	}
-	// Stripe's hosted confirmation, one payment, the token in the metadata, the exact amount.
 	want := map[string]string{
 		"after_completion[type]":                        "hosted_confirmation",
 		"restrictions[completed_sessions][limit]":       "1",
@@ -753,7 +711,6 @@ func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.
 			t.Errorf("%s = %q, want %q", k, call.Form.Get(k), v)
 		}
 	}
-	// No address of ours is sent, and none of a Checkout Session's own parameters.
 	for _, k := range []string{"success_url", "cancel_url", "mode", "client_reference_id", "after_completion[redirect][url]"} {
 		if call.Form.Has(k) {
 			t.Errorf("the link was asked with %s", k)
@@ -771,7 +728,6 @@ func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.
 		links[0].AfterCompletion["type"] != "hosted_confirmation" || links[0].Metadata["taskto_ref"] != ref.token {
 		t.Fatalf("links = %+v, ref %+v", links, ref)
 	}
-	// The address is Stripe's, with the reference the payment echoes back, in the record.
 	if ref.url != links[0].URL+"?client_reference_id="+ref.token || !strings.HasPrefix(ref.url, "https://buy.stripe.com/") {
 		t.Fatalf("url = %q, link %q", ref.url, links[0].URL)
 	}
@@ -779,7 +735,6 @@ func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.
 	if !strings.Contains(data, `"payment_id":"`+ref.object+`"`) || !strings.Contains(data, ref.url) {
 		t.Fatalf("record = %s", data)
 	}
-	// The same send again makes no second link.
 	p.send(record, "op-hosted-0001")
 	time.Sleep(200 * time.Millisecond)
 	if n := len(p.linkPosts()); n != 1 {
@@ -787,7 +742,6 @@ func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.
 	}
 }
 
-// Money is as exact and as limited without a public URL.
 func TestWithoutAPublicURLAmountsAreStillExactOrRefused(t *testing.T) {
 	p := newPay(t, "")
 	record := p.invoice(10.005, "EUR")
@@ -799,8 +753,6 @@ func TestWithoutAPublicURLAmountsAreStillExactOrRefused(t *testing.T) {
 	}
 }
 
-// The answer is lost after Stripe made the link: the outcome is unknown, so the entry makes no call
-// again; it looks, and adopts the link Stripe made, so the payee has one payable link.
 func TestWithoutAPublicURLACrashBeforeTheAnswerIsNotedMakesNoSecondLink(t *testing.T) {
 	p := newPay(t, "")
 	record := p.invoice(50, "EUR")
@@ -827,8 +779,6 @@ func TestWithoutAPublicURLACrashBeforeTheAnswerIsNotedMakesNoSecondLink(t *testi
 	}
 }
 
-// The link was noted and the entry crashed before it was done: it asks Stripe nothing; one that
-// crashed before it noted the answer finds the link by its key's token and makes none.
 func TestWithoutAPublicURLAnEntryDoneAgainDoesNotMakeASecondLink(t *testing.T) {
 	p := newPay(t, "")
 	record := p.invoice(99.99, "EUR")
@@ -859,7 +809,6 @@ func TestWithoutAPublicURLAnEntryDoneAgainDoesNotMakeASecondLink(t *testing.T) {
 	}
 }
 
-// An answer that isn't a payment link on Stripe's own address is not taken for one.
 func TestWithoutAPublicURLALinkOnAnotherAddressIsRefused(t *testing.T) {
 	for name, body := range map[string]string{
 		"another host":  `{"id":"plink_abc","object":"payment_link","url":"https://evil.example.com/pay"}`,
@@ -879,8 +828,6 @@ func TestWithoutAPublicURLALinkOnAnotherAddressIsRefused(t *testing.T) {
 	}
 }
 
-// A lookup that rests on an answer that isn't a whole list says nothing about the object: it is an
-// error, never "not found", so no second object is made on it.
 func TestALookupOnAnIncompleteListFindsNothingOut(t *testing.T) {
 	for name, body := range map[string]string{
 		"more and none shown": `{"object":"list","has_more":true,"data":[]}`,
@@ -907,7 +854,6 @@ func TestALookupOnAnIncompleteListFindsNothingOut(t *testing.T) {
 			})
 		}
 	}
-	// A whole list that holds nothing of the token's is "not found".
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"object":"list","has_more":false,"data":[]}`))
 	}))
@@ -919,8 +865,6 @@ func TestALookupOnAnIncompleteListFindsNothingOut(t *testing.T) {
 	}
 }
 
-// An object of the token is adopted only if it asks what the payment asks: the amount and the
-// currency. Another is never given to a payer, and nothing else is made while it stands.
 func TestALookupAdoptsOnlyAnObjectOfTheAskedTerms(t *testing.T) {
 	p := newPay(t, "")
 	form := url.Values{}
@@ -961,12 +905,10 @@ func TestALookupAdoptsOnlyAnObjectOfTheAskedTerms(t *testing.T) {
 				other := nl
 				change(&other)
 				got, found, _, err := stripe{}.FindPaymentLink(context.Background(), creds, c, other, time.Now())
-				// Refused, and the object seen is named, for its key to keep: never a link to give.
 				if ce, ok := IsCall(err); !ok || ce.Kind != CallRefused || found || got.URL != "" || got.ObjectID != link.ObjectID {
 					t.Fatalf("%s: %+v, %v, %v", what, got, found, err)
 				}
 			}
-			// Another reference's token is no match at all.
 			nl.Token = strings.Repeat("c", 32)
 			if _, found, _, err := (stripe{}).FindPaymentLink(context.Background(), creds, c, nl, time.Now()); err != nil || found {
 				t.Fatalf("another token: %v, %v", found, err)
@@ -975,8 +917,6 @@ func TestALookupAdoptsOnlyAnObjectOfTheAskedTerms(t *testing.T) {
 	}
 }
 
-// A key moves on only from the key a try resolved: a late try that resolved an older key doesn't skip
-// the key a later one is using, and a key whose outcome is unknown never moves.
 func TestTheKeyMovesOnOnlyFromAResolvedKeyItUsed(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -995,7 +935,6 @@ func TestTheKeyMovesOnOnlyFromAResolvedKeyItUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Unknown (a call was written ahead and nothing resolved it): the key stays.
 	if r, err = p.svc.nextAttempt(ctx, r, a0); err != nil || r.keySeq != 0 {
 		t.Fatalf("an unknown key moved on: %+v, %v", r, err)
 	}
@@ -1005,14 +944,11 @@ func TestTheKeyMovesOnOnlyFromAResolvedKeyItUsed(t *testing.T) {
 	if r, err = p.svc.nextAttempt(ctx, r, a0); err != nil || r.keySeq != 1 {
 		t.Fatalf("an expired key didn't move on: %+v, %v", r, err)
 	}
-	// The same late resolution again: the key the later try uses stays.
 	if r, err = p.svc.nextAttempt(ctx, r, a0); err != nil || r.keySeq != 1 {
 		t.Fatalf("a stale try moved the key to %d, %v", r.keySeq, err)
 	}
 }
 
-// A key the provider may have forgotten (it keeps one for a day, at least) is never called again: its
-// object is looked for, so a call under the same key can't make a second one.
 func TestAnOldRefWithNoObjectLooksBeforeItCallsAgain(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -1042,19 +978,13 @@ func TestAnOldRefWithNoObjectLooksBeforeItCallsAgain(t *testing.T) {
 	}
 }
 
-// ----- failures of the provider -----
-
 func TestWhatTheProviderRefusesFailsTheEntryWithACodeAndLeavesNoProviderText(t *testing.T) {
 	for name, tc := range map[string]struct {
 		fault testprovider.Fault
 		code  apierr.Code
 		state string
 	}{
-		// A refusal of the call may come after its execution began (Stripe keeps it under the key): its
-		// outcome is unknown, and the entry waits; asked again under the same key, the call that never
-		// ran runs.
-		"a refused request": {testprovider.Refusal("amount_too_small").On(http.MethodPost, "/v1/checkout/sessions"), apierr.CodeIntegrationLinkLookupPending, "pending"},
-		// A key Stripe doesn't take is refused before anything (whose account the key is).
+		"a refused request":    {testprovider.Refusal("amount_too_small").On(http.MethodPost, "/v1/checkout/sessions"), apierr.CodeIntegrationLinkLookupPending, "pending"},
 		"a revoked key":        {testprovider.Unauthorized().Forever(), apierr.CodeIntegrationCredentialsRefused, "failed"},
 		"stripe down for good": {testprovider.Unavailable().Forever().On(http.MethodPost, "/v1/checkout/sessions"), apierr.CodeIntegrationLinkLookupPending, "pending"},
 	} {
@@ -1072,7 +1002,6 @@ func TestWhatTheProviderRefusesFailsTheEntryWithACodeAndLeavesNoProviderText(t *
 				if n := p.count(`SELECT count(*) FROM integration_refs`); n != 0 {
 					t.Fatalf("%d refs for a key Stripe refused", n)
 				}
-				// A retry by the person who acted, once the key works, makes the link.
 				p.fake.ClearFaults()
 				expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, p.entries()[0].id)), map[string]any{}), http.StatusOK)
 				p.settled(apps.StateDone)
@@ -1081,7 +1010,6 @@ func TestWhatTheProviderRefusesFailsTheEntryWithACodeAndLeavesNoProviderText(t *
 				}
 			}
 			if name == "a refused request" {
-				// The same key is asked again, and Stripe, which kept nothing of the refusal, runs it.
 				p.later(time.Hour)
 				p.settled(apps.StateDone)
 				posts := p.posts()
@@ -1089,7 +1017,6 @@ func TestWhatTheProviderRefusesFailsTheEntryWithACodeAndLeavesNoProviderText(t *
 					t.Fatalf("calls = %+v, sessions %d", posts, len(p.fake.Sessions()))
 				}
 			}
-			// What the provider said is nowhere: not in the entry, the API, or the log.
 			for _, hay := range []string{p.logs.String(), p.bodies.String(), p.entries()[0].params.String, p.entries()[0].result.String} {
 				for _, leaked := range []string{"Invalid API Key", "was refused", "temporarily unavailable", "amount_too_small", p.fake.APIKey()} {
 					if strings.Contains(hay, leaked) {
@@ -1101,20 +1028,13 @@ func TestWhatTheProviderRefusesFailsTheEntryWithACodeAndLeavesNoProviderText(t *
 	}
 }
 
-// A provider that doesn't answer is tried again, and the entry waits for the person at last.
 func TestAProviderThatNeverAnswersExhaustsTheEntry(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
-	// Rate limited: the call was not executed, so asking again under its key is safe (a dropped
-	// connection would leave the outcome unknown: TestAnUnknownOutcomeIsOnlyLookedFor...).
 	p.fake.Fail(testprovider.RateLimited(0).Forever().On(http.MethodPost, "/v1/checkout/sessions"))
 	p.startWorker()
 	p.send(record, "op-down-0001")
 	for i := 0; i < 6; i++ {
-		// The try is over once the entry waits again: its next attempt is then set from the
-		// clock, so moving the clock only now never lands between the call and that. The calls are
-		// counted first: a pending state read after them is the one that try left, not the one
-		// before it.
 		p.waitFor("a try", func() bool {
 			posts := len(p.posts())
 			es := p.entries()
@@ -1126,7 +1046,6 @@ func TestAProviderThatNeverAnswersExhaustsTheEntry(t *testing.T) {
 	if e.code != string(apierr.CodeIntegrationProviderUnreachable) || e.attempts != 5 {
 		t.Fatalf("entry = %+v", e)
 	}
-	// Every try was under the same key: whichever of them Stripe executed is the one link there is.
 	reqs := p.posts()
 	for _, r := range reqs {
 		if r.IdempotencyKey != reqs[0].IdempotencyKey {
@@ -1138,10 +1057,6 @@ func TestAProviderThatNeverAnswersExhaustsTheEntry(t *testing.T) {
 	}
 }
 
-// ----- isolation -----
-
-// The integration is looked for in the app's own workspace: another workspace's integration is
-// never opened, and the port refuses a workspace that isn't the integration's.
 func TestAnIntegrationOfAnotherWorkspaceIsNeverUsed(t *testing.T) {
 	p := newPay(t, publicURL)
 	_, other := p.otherWorkspace(p.owner)
@@ -1150,7 +1065,6 @@ func TestAnIntegrationOfAnotherWorkspaceIsNeverUsed(t *testing.T) {
 	theirs := p.create(p.owner, other, body)
 	record := p.invoice(10, "EUR")
 
-	// The schema keeps an integration out of another workspace's spaces and approvals.
 	if _, err := p.db.Exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, theirs.ID, p.space.ID); err == nil {
 		t.Fatal("their integration was allowed in this workspace's space")
 	}
@@ -1160,7 +1074,6 @@ func TestAnIntegrationOfAnotherWorkspaceIsNeverUsed(t *testing.T) {
 	p.send(record, "op-cross-0001")
 	e := p.entries()[0]
 
-	// The port itself, asked for another workspace's integration, says the same.
 	_, err := p.svc.OpenPaymentLink(context.Background(), paylink.Request{WorkspaceID: p.ws, IntegrationID: theirs.ID, SpaceID: p.space.ID,
 		AppID: p.app.ID, RecordID: record, EffectID: e.id, Slot: "payments", Amount: "10", Currency: "EUR"})
 	if !isUnavailable(err) {
@@ -1176,8 +1089,6 @@ func TestAnIntegrationOfAnotherWorkspaceIsNeverUsed(t *testing.T) {
 	}
 }
 
-// An entry's reference is its own: another record or app asking with that entry's number gets
-// nothing of it.
 func TestAnEntrysRefIsNotAnotherRecordsLink(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1194,7 +1105,6 @@ func TestAnEntrysRefIsNotAnotherRecordsLink(t *testing.T) {
 	}
 }
 
-// A link is not made for a switched-off integration or a space it isn't allowed in.
 func TestTheIntegrationIsCheckedWhenTheLinkIsAsked(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1223,10 +1133,6 @@ func TestTheIntegrationIsCheckedWhenTheLinkIsAsked(t *testing.T) {
 	}
 }
 
-// ----- the secret -----
-
-// The key opens for the call and goes nowhere else: not the log, not an answer of the API, not the
-// record, the entry or the ref.
 func TestTheKeyNeverLeavesTheCall(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1240,7 +1146,7 @@ func TestTheKeyNeverLeavesTheCall(t *testing.T) {
 		`SELECT coalesce(details, '') FROM audit_log`} {
 		rows, err := p.db.Query(q)
 		if err != nil {
-			continue // a table this build doesn't have
+			continue
 		}
 		for rows.Next() {
 			var s string
@@ -1258,23 +1164,17 @@ func TestTheKeyNeverLeavesTheCall(t *testing.T) {
 			t.Fatalf("the key is somewhere it must not be: %.200s", s)
 		}
 	}
-	// The call carried it as a bearer key, and only there.
 	if reqs := p.posts(); len(reqs) != 1 || reqs[0].Auth != "bearer" {
 		t.Fatalf("calls = %+v", reqs)
 	}
 	_ = e
 }
 
-// isUnavailable says whether err is the port's "integration_unavailable".
 func isUnavailable(err error) bool {
 	var pe *paylink.Error
 	return errors.As(err, &pe) && pe.Code == apierr.CodeIntegrationUnavailable
 }
 
-// ----- a ref keeps what its first try was -----
-
-// direct is the request of the only entry, for the tests that call the integration's side without
-// the worker (so nothing else reads what they change).
 func (p *pay) direct(record int64, op string) paylink.Request {
 	p.t.Helper()
 	p.send(record, op)
@@ -1283,15 +1183,12 @@ func (p *pay) direct(record int64, op string) paylink.Request {
 		Slot: "payments", Amount: "10", Currency: "EUR", Description: "Invoice"}
 }
 
-// A lost answer, then a restart with another public address (or none, or one where there was none):
-// the retry asks what the first try asked, so Stripe's key finds the object, and a lookup after the
-// key is forgotten reads the same kind of objects.
 func TestARetryAsksWhatTheFirstTryAskedWhateverTheServersAddressIsNow(t *testing.T) {
 	const otherURL = "https://moved.example.com"
 	for name, tc := range map[string]struct {
 		first, later string
 		path         string
-		other        string // the path of the kind the later address would have made
+		other        string
 		success      string
 	}{
 		"a session, then no address":      {publicURL, "", "/v1/checkout/sessions", "/v1/payment_links", publicURL + PaymentDonePath},
@@ -1314,7 +1211,7 @@ func TestARetryAsksWhatTheFirstTryAskedWhateverTheServersAddressIsNow(t *testing
 				if err := p.db.QueryRow(`SELECT success_url, cancel_url FROM integration_refs`).Scan(&success, &cancel); err != nil || success != tc.success {
 					t.Fatalf("the ref keeps its pages %q %q, %v; want %q", success, cancel, err, tc.success)
 				}
-				p.svc.publicURL = tc.later // the server restarted with another address
+				p.svc.publicURL = tc.later
 				if aged {
 					p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
 				}
@@ -1328,7 +1225,6 @@ func TestARetryAsksWhatTheFirstTryAskedWhateverTheServersAddressIsNow(t *testing
 				if n := p.objects(tc.other); n != 0 || len(p.fake.RequestsTo(http.MethodPost, tc.other)) != 0 {
 					t.Fatalf("%d objects of the other kind, %d calls: the retry took the address of now", n, len(p.fake.RequestsTo(http.MethodPost, tc.other)))
 				}
-				// Found by the look, in the kind of objects the first try made, not by a call.
 				if posts := p.fake.RequestsTo(http.MethodPost, tc.path); len(posts) != 1 || len(p.fake.RequestsTo(http.MethodGet, tc.path)) != 1 {
 					t.Fatalf("posts %d, lists %d", len(posts), len(p.fake.RequestsTo(http.MethodGet, tc.path)))
 				}
@@ -1337,12 +1233,8 @@ func TestARetryAsksWhatTheFirstTryAskedWhateverTheServersAddressIsNow(t *testing
 	}
 }
 
-// ----- the account a ref was made under -----
-
 const otherAccount = "acct_" + "Other0123456789"
 
-// A key replaced by another account's: an unfinished ref belongs to the account it was made in. The
-// retry looks nowhere and makes nothing; the entry fails for an admin to settle; the ref stays.
 func TestAKeyOfAnotherAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -1363,14 +1255,13 @@ func TestAKeyOfAnotherAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
 			}
 			requests := len(p.fake.Requests())
 
-			p.fake.SetAccount(otherAccount) // the integration's key is another account's now
+			p.fake.SetAccount(otherAccount)
 			p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
 			_, err := p.svc.OpenPaymentLink(context.Background(), req)
 			var pe *paylink.Error
 			if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationAccountChanged || pe.Transient {
 				t.Fatalf("err = %v", err)
 			}
-			// Only the account was asked: no list, no call that makes an object.
 			for _, r := range p.fake.Requests()[requests:] {
 				if r.Path != "/v1/account" {
 					t.Fatalf("after the key changed, %s %s was called", r.Method, r.Path)
@@ -1382,7 +1273,6 @@ func TestAKeyOfAnotherAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
 			if n := p.objects(shape.path); n != 1 {
 				t.Fatalf("%d objects, want the first account's one", n)
 			}
-			// The same account again: the ref carries on, and finds its object.
 			p.fake.SetAccount(testprovider.TestAccountID)
 			link, err := p.svc.OpenPaymentLink(context.Background(), req)
 			if err != nil || link.ObjectID != p.objectID(shape.path) {
@@ -1392,7 +1282,6 @@ func TestAKeyOfAnotherAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
 	}
 }
 
-// The entry fails with a code a person can act on, and never again asks anyone.
 func TestAnEntryOfAnotherAccountsKeyFailsForAnAdmin(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1411,8 +1300,6 @@ func TestAnEntryOfAnotherAccountsKeyFailsForAnAdmin(t *testing.T) {
 	}
 }
 
-// A link the ref made is the integration's that made it: another bound since is refused, and no
-// second link is made for the entry.
 func TestALinkMadeUnderOneIntegrationIsNeverGivenUnderAnother(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1440,12 +1327,6 @@ func TestALinkMadeUnderOneIntegrationIsNeverGivenUnderAnother(t *testing.T) {
 	}
 }
 
-// ----- the lookup's reach -----
-
-// More active links than a lookup reads, none of them the token's: the lookup can't say, and asking
-// again reads the same. It tells nothing of the key's outcome, which stays unknown: no key of its own is
-// taken on it, the call is asked again only under its key (which Stripe answers with the 500 it kept),
-// and the entry ends, at the end of the wait, with the code an admin confirms from.
 func TestALookupThatCannotSeeEverythingLeavesTheOutcomeUnknown(t *testing.T) {
 	p := newPay(t, "")
 	record := p.invoice(10, "EUR")
@@ -1459,7 +1340,6 @@ func TestALookupThatCannotSeeEverythingLeavesTheOutcomeUnknown(t *testing.T) {
 		p.mustPost("/v1/payment_links", form)
 	}
 	others := len(p.linkPosts())
-	// The call's execution began and made nothing, and Stripe keeps its 500 under the key.
 	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, "/v1/payment_links"))
 	p.startWorker()
 	p.send(record, "op-cap-0001")
@@ -1485,11 +1365,6 @@ func TestALookupThatCannotSeeEverythingLeavesTheOutcomeUnknown(t *testing.T) {
 	}
 }
 
-// ----- a link noted late, and objects that are no longer open -----
-
-// Another worker's call finishes under the integration the slot was bound to before, while this try
-// is between reading the ref and making it ready: the link it returns is that integration's, and is
-// refused here as it is on the early path.
 func TestALinkNotedWhileATryBeginsIsRefusedUnderAnotherIntegration(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1504,7 +1379,7 @@ func TestALinkNotedWhileATryBeginsIsRefusedUnderAnotherIntegration(t *testing.T)
 	second := p.create(p.owner, p.ws, body)
 	p.exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, second.ID, p.space.ID)
 	req.IntegrationID = second.ID
-	p.svc.beforeBeginRef = func() { // the other worker's call finishes, under the first integration
+	p.svc.beforeBeginRef = func() {
 		p.exec(`UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'`, p.fake.Sessions()[0].ID, *p.fake.Sessions()[0].URL)
 	}
 	_, err := p.svc.OpenPaymentLink(context.Background(), req)
@@ -1514,8 +1389,6 @@ func TestALinkNotedWhileATryBeginsIsRefusedUnderAnotherIntegration(t *testing.T)
 	}
 }
 
-// A try that failed while another's answer was on its way doesn't lose the answer: the link that is
-// returned is on the ref, so a later try finds it and makes no second one.
 func TestAnAnswerIsRecordedEvenIfAnotherTryMarkedTheRefFailed(t *testing.T) {
 	p := newPay(t, publicURL)
 	invoiceID := p.invoice(10, "EUR")
@@ -1530,9 +1403,7 @@ func TestAnAnswerIsRecordedEvenIfAnotherTryMarkedTheRefFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Another try marked the ref failed...
 	p.exec(`UPDATE integration_refs SET state = 'failed'`)
-	// ...and this try's answer, which made the object, is noted all the same, with its key's outcome.
 	if _, err := p.svc.noteLink(context.Background(), stale, a, req, Link{ObjectID: p.fake.Sessions()[0].ID, URL: *p.fake.Sessions()[0].URL}); err != nil {
 		t.Fatal(err)
 	}
@@ -1548,9 +1419,6 @@ func TestAnAnswerIsRecordedEvenIfAnotherTryMarkedTheRefFailed(t *testing.T) {
 	}
 }
 
-// An object of the token that is no longer open may have been paid, and the lookup sees it: a
-// completed session or an inactive link stops the call with a refusal (nothing else is made), an
-// expired session can't be paid and is passed over, and an open one is adopted.
 func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
 	token := strings.Repeat("d", 32)
 	session := func(p *pay) string {
@@ -1582,7 +1450,7 @@ func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
 		make   func(*pay) string
 		change func(*pay, string)
 		found  bool
-		kind   CallKind // of the error, 0 for none
+		kind   CallKind
 	}{
 		"an open session":    {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(*pay, string) {}, true, 0},
 		"a paid session":     {NewLink{SuccessURL: publicURL + PaymentDonePath}, session, func(p *pay, id string) { _, _ = p.fake.Pay(id) }, false, CallSettled},
@@ -1615,9 +1483,6 @@ func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
 	}
 }
 
-// ----- a ref belongs to its key's mode and its integration -----
-
-// setKey replaces the integration's key, and the one the fake accepts, as an admin does.
 func (p *pay) setKey(key string) {
 	p.t.Helper()
 	p.fake.SetAPIKey(key)
@@ -1625,9 +1490,6 @@ func (p *pay) setKey(key string) {
 		map[string]any{"secrets": map[string]string{"api_key": key}}), http.StatusOK)
 }
 
-// One Stripe account answers with the same id to its test key and its live key, but a test key
-// doesn't see what a live one made: an unfinished ref made under one mode is never looked for or
-// made again under the other, in either direction.
 func TestAKeyOfTheOtherModeOfTheSameAccountNeverMovesAnUnfinishedRefThere(t *testing.T) {
 	for name, swap := range map[string]struct{ from, to, mode string }{
 		"test to live": {stripeTestKey, stripeLiveKey, "test"},
@@ -1650,7 +1512,7 @@ func TestAKeyOfTheOtherModeOfTheSameAccountNeverMovesAnUnfinishedRefThere(t *tes
 				before := p.refs()
 				requests := len(p.fake.Requests())
 
-				p.setKey(swap.to) // the same account, the other mode
+				p.setKey(swap.to)
 				p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
 				_, err := p.svc.OpenPaymentLink(context.Background(), req)
 				var pe *paylink.Error
@@ -1668,7 +1530,6 @@ func TestAKeyOfTheOtherModeOfTheSameAccountNeverMovesAnUnfinishedRefThere(t *tes
 				if n := p.objects(shape.path); n != 1 {
 					t.Fatalf("%d objects, want the first mode's one", n)
 				}
-				// The mode it was made in again: the ref carries on, and finds its object.
 				p.setKey(swap.from)
 				link, err := p.svc.OpenPaymentLink(context.Background(), req)
 				if err != nil || link.ObjectID != p.objectID(shape.path) {
@@ -1679,9 +1540,6 @@ func TestAKeyOfTheOtherModeOfTheSameAccountNeverMovesAnUnfinishedRefThere(t *tes
 	}
 }
 
-// A slot bound to another integration since the ref's first try, even one of the same account, is
-// refused while the ref has no link, as it is when it has one: the ref is not moved, and nothing is
-// asked of the provider.
 func TestARefWithNoLinkIsNeverMovedToAnotherIntegration(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -1694,12 +1552,12 @@ func TestARefWithNoLinkIsNeverMovedToAnotherIntegration(t *testing.T) {
 			}
 			before, requests := p.refs(), len(p.fake.Requests())
 			body := stripeBody("second")
-			body["secrets"] = map[string]string{"api_key": p.fake.APIKey()} // the same account and mode
+			body["secrets"] = map[string]string{"api_key": p.fake.APIKey()}
 			body["currencies"] = []string{"EUR"}
 			second := p.create(p.owner, p.ws, body)
 			p.exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, second.ID, p.space.ID)
 			req.IntegrationID = second.ID
-			for range 2 { // asked again, and again: the same answer, and never a call that makes an object
+			for range 2 {
 				_, err := p.svc.OpenPaymentLink(context.Background(), req)
 				var pe *paylink.Error
 				if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationChanged || pe.Transient {
@@ -1714,7 +1572,6 @@ func TestARefWithNoLinkIsNeverMovedToAnotherIntegration(t *testing.T) {
 					t.Fatalf("after the slot was rebound, %s %s was called", r.Method, r.Path)
 				}
 			}
-			// Bound to the first one again, the ref carries on.
 			req.IntegrationID = p.in.ID
 			link, err := p.svc.OpenPaymentLink(context.Background(), req)
 			if err != nil || link.ObjectID != p.objectID(shape.path) {
@@ -1724,12 +1581,6 @@ func TestARefWithNoLinkIsNeverMovedToAnotherIntegration(t *testing.T) {
 	}
 }
 
-// ----- a key that may hold a dead answer is not used again -----
-
-// A Checkout Session of the ref that expired early (a person expired it) is passed over by the lookup,
-// but the key still holds Stripe's answer for the call that made it: under that key the next call
-// would be answered with the dead session. The lookup having found nothing a payer can use, the call
-// is made under a key of its own, once.
 func TestAnExpiredSessionIsNeverReplayedAsTheNewLink(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1742,7 +1593,6 @@ func TestAnExpiredSessionIsNeverReplayedAsTheNewLink(t *testing.T) {
 	if _, err := p.fake.Expire(dead); err != nil {
 		t.Fatal(err)
 	}
-	// The ref is past the time the key is trusted and Stripe still keeps it (a day).
 	p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-23*time.Hour-30*time.Minute)))
 	link, err := p.svc.OpenPaymentLink(context.Background(), req)
 	if err != nil {
@@ -1762,15 +1612,11 @@ func TestAnExpiredSessionIsNeverReplayedAsTheNewLink(t *testing.T) {
 	if refs := p.refs(); len(refs) != 1 || refs[0].keySeq != 1 || refs[0].object != link.ObjectID {
 		t.Fatalf("refs = %+v", refs)
 	}
-	// Asked again, the ref has its link: nothing more is made.
 	if again, err := p.svc.OpenPaymentLink(context.Background(), req); err != nil || again.ObjectID != link.ObjectID || len(p.posts()) != 2 {
 		t.Fatalf("again = %+v, %v, %d calls", again, err, len(p.posts()))
 	}
 }
 
-// Stripe may keep any answer of a call whose execution began under its key, a refusal of 4xx
-// included, so a refusal leaves the key's outcome unknown and never moves the ref to another key: the
-// next try looks for what the call made and asks again only under the same key.
 func TestARefusalNeverMovesTheKey(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name+" that made nothing", func(t *testing.T) {
@@ -1820,8 +1666,6 @@ func TestARefusalNeverMovesTheKey(t *testing.T) {
 	}
 }
 
-// An object of the ref that was paid, or that can no longer be used for another reason, is not given
-// and no other is made: the entry fails with a code that asks an admin to reconcile it.
 func TestAPaidObjectOfTheRefFailsTheEntryWithItsOwnCode(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1844,8 +1688,6 @@ func TestAPaidObjectOfTheRefFailsTheEntryWithItsOwnCode(t *testing.T) {
 	}
 }
 
-// A try whose answer was not recorded because another try changed the ref meanwhile gives what the
-// ref holds, checked as every finished ref is: under the integration that made it.
 func TestAnAnswerNotRecordedGivesWhatTheRefHolds(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -1861,14 +1703,13 @@ func TestAnAnswerNotRecordedGivesWhatTheRefHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	made := p.fake.Sessions()[0]
-	// The other try noted the object under the first integration.
 	p.exec(`UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'`, made.ID, *made.URL)
 	other := Link{ObjectID: "cs_test_" + strings.Repeat("z", 20), URL: "https://checkout.stripe.com/c/pay/x"}
 	link, err := p.svc.noteLink(context.Background(), stale, a, req, other)
 	if err != nil || link.ObjectID != made.ID || link.URL != *made.URL {
 		t.Fatalf("link = %+v, %v: not the ref's own", link, err)
 	}
-	req.IntegrationID = p.in.ID + 100 // another integration is bound now
+	req.IntegrationID = p.in.ID + 100
 	_, err = p.svc.noteLink(context.Background(), stale, a, req, other)
 	var pe *paylink.Error
 	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationChanged {
@@ -1876,9 +1717,6 @@ func TestAnAnswerNotRecordedGivesWhatTheRefHolds(t *testing.T) {
 	}
 }
 
-// ----- an unknown outcome is never answered with a second link -----
-
-// keyToken is the token of the only ref's key number seq.
 func (p *pay) keyToken(seq int) string {
 	p.t.Helper()
 	var token string
@@ -1888,26 +1726,21 @@ func (p *pay) keyToken(seq int) string {
 	return token
 }
 
-// keysUsed is the distinct idempotency keys the calls to path were made under, in the order first used.
 func (p *pay) keysUsed(path string) []string {
 	var out []string
 	for _, r := range p.fake.RequestsTo(http.MethodPost, path) {
-		if r.IdempotencyKey != "" && !slices.Contains(out, r.IdempotencyKey) { // "": made by the test, not the server
+		if r.IdempotencyKey != "" && !slices.Contains(out, r.IdempotencyKey) {
 			out = append(out, r.IdempotencyKey)
 		}
 	}
 	return out
 }
 
-// appear makes, at Stripe, the object the n-th call to path asked for, with its token: the object a
-// call whose outcome was unknown made after all, as Stripe's own reconciliation of an incident would.
 func (p *pay) appear(path string, n int) {
 	p.t.Helper()
 	p.mustPost(path, p.fake.RequestsTo(http.MethodPost, path)[n].Form)
 }
 
-// unknownOutcome sends an invoice whose first call is answered with a 500 that Stripe keeps under the
-// key, having made nothing (yet), and returns once the entry waits for the outcome.
 func (p *pay) unknownOutcome(shape struct {
 	public string
 	path   string
@@ -1922,7 +1755,6 @@ func (p *pay) unknownOutcome(shape struct {
 	return record
 }
 
-// looked waits for the n-th read of what Stripe holds and for the entry to be waiting (or failed) again.
 func (p *pay) looked(path string, n int) {
 	p.t.Helper()
 	p.waitFor(fmt.Sprintf("lookup %d", n), func() bool {
@@ -1932,10 +1764,6 @@ func (p *pay) looked(path string, n int) {
 	})
 }
 
-// Stripe documents a 5xx as indeterminate: the object may be made after the answer, and a call under a
-// new key then makes a second payable link for one invoice. After the 5xx and an empty lookup only the
-// same key is asked again (Stripe answers it with the 500 it kept); when the first object turns up, it
-// is the link, and the invoice has one.
 func TestAnEmptyLookupAfterA5xxNeverMakesASecondLinkWhenTheFirstAppearsLater(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -1953,7 +1781,7 @@ func TestAnEmptyLookupAfterA5xxNeverMakesASecondLinkWhenTheFirstAppearsLater(t *
 				t.Fatalf("refs = %+v: the ref moved on from its key", r)
 			}
 
-			p.appear(shape.path, 0) // Stripe completes the first call
+			p.appear(shape.path, 0)
 			p.later(time.Hour)
 			e := p.settled(apps.StateDone)
 
@@ -1974,8 +1802,6 @@ func TestAnEmptyLookupAfterA5xxNeverMakesASecondLinkWhenTheFirstAppearsLater(t *
 	}
 }
 
-// A 5xx before the call ran keeps nothing under the key: asked again under the same key, the call
-// runs, and the invoice has its link at once, under one key.
 func TestA5xxThatRanNothingIsAskedAgainUnderItsOwnKey(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -1995,8 +1821,6 @@ func TestA5xxThatRanNothingIsAskedAgainUnderItsOwnKey(t *testing.T) {
 	}
 }
 
-// The wait is bounded: after outcomeWait with nothing found the entry fails with the code that tells
-// an admin to check Stripe, and no call under another key was made.
 func TestTheBoundedWaitEndsInTheOutcomeUnknownCodeWithNoOtherKey(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2004,12 +1828,12 @@ func TestTheBoundedWaitEndsInTheOutcomeUnknownCodeWithNoOtherKey(t *testing.T) {
 			p.unknownOutcome(shape, "op-bound-0001")
 			p.later(time.Minute)
 			p.looked(shape.path, 1)
-			p.later(5 * time.Hour) // still within the wait
+			p.later(5 * time.Hour)
 			p.looked(shape.path, 2)
 			if es := p.entries(); es[0].state != "pending" || es[0].code != string(apierr.CodeIntegrationLinkLookupPending) || es[0].attempts != 0 {
 				t.Fatalf("within the wait: entry = %+v", es[0])
 			}
-			p.later(2 * time.Hour) // past it
+			p.later(2 * time.Hour)
 			e := p.settled(apps.StateFailed)
 			if e.code != string(apierr.CodeIntegrationOutcomeUnknown) {
 				t.Fatalf("entry = %+v", e)
@@ -2023,7 +1847,6 @@ func TestTheBoundedWaitEndsInTheOutcomeUnknownCodeWithNoOtherKey(t *testing.T) {
 			if r := p.refs(); len(r) != 1 || r[0].keySeq != 0 || r[0].object != "" {
 				t.Fatalf("refs = %+v", r)
 			}
-			// A retry of the entry looks once more and, finding nothing, fails again at once.
 			expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, e.id)), map[string]any{}), http.StatusOK)
 			p.looked(shape.path, 4)
 			if es := p.settled(apps.StateFailed); es.code != string(apierr.CodeIntegrationOutcomeUnknown) || len(p.keysUsed(shape.path)) != 1 {
@@ -2037,8 +1860,6 @@ func (p *pay) confirmPath(effect int64, tail string) string {
 	return wsPath(p.ws, fmt.Sprintf("integrations/%d/payment-links/%s%s", p.in.ID, tail, ""))
 }
 
-// An admin who checked Stripe and found nothing confirms it: exactly one new key is allowed, the entry
-// runs again and makes exactly one link; confirming again does nothing, and the audit log says who.
 func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2062,7 +1883,6 @@ func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 			}
 
 			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusNoContent)
-			// A second confirmation finds nothing to decide: no second key.
 			rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
 			expect(t, rec, http.StatusConflict)
 			if got := decode[struct {
@@ -2100,7 +1920,6 @@ func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 			if len(ev) != 1 || ev[0].ActorID == nil || *ev[0].ActorID != p.owner.id {
 				t.Fatalf("audit events = %+v", ev)
 			}
-			// What was confirmed is no longer waiting for anyone, and the abandoned key stays on record.
 			rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
 			expect(t, rec, http.StatusOK)
 			if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 0 {
@@ -2113,9 +1932,6 @@ func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 	}
 }
 
-// A lookup that stopped for another reason than the wait ending (the integration's account changed)
-// is neither waiting nor ready for a decision: the list says so and names the code the entry failed
-// with, and confirming is refused.
 func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
 	shape := linkShapes["a checkout session"]
 	p := newPay(t, shape.public)
@@ -2137,8 +1953,6 @@ func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
 	}
 	expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusConflict)
 
-	// A code whose message names values (the ceiling that refused the amount) is listed with them, as
-	// the entry failed with them.
 	p.exec(`UPDATE app_effects SET error_code = ?, error_params = ? WHERE id = ?`,
 		string(apierr.CodeIntegrationAmountAboveMax), `{"max":"5.00","currency":"EUR"}`, e.id)
 	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
@@ -2148,7 +1962,6 @@ func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
 		t.Fatalf("link = %+v: want the code with its params", got)
 	}
 
-	// A link ready for a decision carries no code.
 	p.exec(`UPDATE app_effects SET error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), e.id)
 	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
 	expect(t, rec, http.StatusOK)
@@ -2157,8 +1970,6 @@ func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
 	}
 }
 
-// While the server still looks, nothing is asked of an admin: confirming then is refused, and the key
-// stays where it is.
 func TestAnAdminCannotConfirmWhileTheServerStillLooks(t *testing.T) {
 	shape := linkShapes["a checkout session"]
 	p := newPay(t, shape.public)
@@ -2177,8 +1988,6 @@ func TestAnAdminCannotConfirmWhileTheServerStillLooks(t *testing.T) {
 	}
 }
 
-// The routes are an admin's, for the spaces the admin manages, and an entry of another workspace's
-// integration is never reached.
 func TestOnlyAnAdminOfTheWorkspaceMayConfirmNoLink(t *testing.T) {
 	shape := linkShapes["a checkout session"]
 	p := newPay(t, shape.public)
@@ -2197,14 +2006,12 @@ func TestOnlyAnAdminOfTheWorkspaceMayConfirmNoLink(t *testing.T) {
 	anyone.e = p.env
 	expect(t, anyone.do(http.MethodPost, confirm, map[string]any{}), http.StatusUnauthorized)
 
-	// Another workspace's admin, naming this workspace's integration in their own workspace.
 	_, other := p.otherWorkspace(p.owner)
 	rec := p.owner.do(http.MethodPost, wsPath(other, fmt.Sprintf("integrations/%d/payment-links/%d/confirm-no-link", p.in.ID, e.id)), map[string]any{})
 	expect(t, rec, http.StatusNotFound)
 	rec = p.owner.do(http.MethodGet, wsPath(other, fmt.Sprintf("integrations/%d/payment-links/unresolved", p.in.ID)), nil)
 	expect(t, rec, http.StatusNotFound)
 
-	// An admin who doesn't manage the entry's space is told it isn't there, and nothing changes.
 	if err := p.svc.ConfirmNoPaymentLink(context.Background(), p.ws, p.owner.id, p.in.ID, e.id, map[int64]bool{}); !errors.Is(err, errNotFound) {
 		t.Fatalf("err = %v", err)
 	}
@@ -2222,16 +2029,11 @@ func TestOnlyAnAdminOfTheWorkspaceMayConfirmNoLink(t *testing.T) {
 	}
 }
 
-// A lookup that finds a Payment Link carrying the key's token but can't read its line items can't check
-// its amount: the link is never adopted unchecked, and never taken for "none" either. It is kept on the
-// key, the entry waits and then fails for a person, the admins' list names it, and an admin can't
-// confirm that no link exists (which would allow a new key and a second payable link for the invoice).
-// Once its line items can be read, a retry checks it and adopts it: one key, one link.
 func TestALinkSeenWhoseAmountCannotBeReadBlocksANewKeyUntilItIsAdopted(t *testing.T) {
 	shape := linkShapes["a payment link"]
 	p := newPay(t, shape.public)
 	record := p.unknownOutcome(shape, "op-unchecked-0001")
-	p.appear(shape.path, 0) // Stripe completes the first call after all
+	p.appear(shape.path, 0)
 	object := p.objectID(shape.path)
 	p.fake.Fail(testprovider.Unavailable().Forever().On(http.MethodGet, shape.path+"/").
 		When(func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/line_items") }))
@@ -2297,7 +2099,6 @@ func TestALinkSeenWhoseAmountCannotBeReadBlocksANewKeyUntilItIsAdopted(t *testin
 		t.Fatalf("keys %v, %d objects at Stripe", keys, n)
 	}
 
-	// The line items can be read again: a retry checks the link and adopts it.
 	p.fake.ClearFaults()
 	expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, e.id)), map[string]any{}), http.StatusOK)
 	p.settled(apps.StateDone)
@@ -2316,10 +2117,6 @@ func TestALinkSeenWhoseAmountCannotBeReadBlocksANewKeyUntilItIsAdopted(t *testin
 	}
 }
 
-// ----- nothing that may have run is taken for something that didn't -----
-
-// A lookup that fails tells nothing of a key whose outcome is unknown: the next call is under the same
-// key, never a new one, and Stripe, which kept nothing of a refusal before the call ran, runs it.
 func TestAFailedLookupTellsNothingAndOnlyTheSameKeyIsAskedAgain(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2330,7 +2127,6 @@ func TestAFailedLookupTellsNothingAndOnlyTheSameKeyIsAskedAgain(t *testing.T) {
 			if _, err := p.svc.OpenPaymentLink(context.Background(), req); err == nil {
 				t.Fatal("the refusal was no error")
 			}
-			// The retry's lookup can't be read.
 			p.fake.Fail(testprovider.Unavailable().On(http.MethodGet, shape.path))
 			link, err := p.svc.OpenPaymentLink(context.Background(), req)
 			if err != nil || link.ObjectID != p.objectID(shape.path) {
@@ -2344,9 +2140,6 @@ func TestAFailedLookupTellsNothingAndOnlyTheSameKeyIsAskedAgain(t *testing.T) {
 	}
 }
 
-// What the provider replays for a kept key is the object as it was made: a session that has expired
-// since still says it is open. The state is read from the provider before anything is saved, and an
-// expired object is not the link: the call is made again under a key of its own, once.
 func TestAReplayedSessionThatExpiredIsNeverSavedAsTheLink(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -2359,8 +2152,6 @@ func TestAReplayedSessionThatExpiredIsNeverSavedAsTheLink(t *testing.T) {
 	if _, err := p.fake.Expire(dead); err != nil {
 		t.Fatal(err)
 	}
-	// The lookup can't be read, so the call is asked again under its key, and Stripe answers with the
-	// creation it kept.
 	p.fake.Fail(testprovider.Unavailable().On(http.MethodGet, "/v1/checkout/sessions"))
 	link, err := p.svc.OpenPaymentLink(context.Background(), req)
 	if err != nil {
@@ -2381,10 +2172,6 @@ func TestAReplayedSessionThatExpiredIsNeverSavedAsTheLink(t *testing.T) {
 	}
 }
 
-// settle saves an object only if a payer can use it now, whichever way the object came: a completed
-// session and a Payment Link that is no longer active are never the link and stop the entry, an
-// expired session is never the link, and one whose state can't be read is not saved either, with the
-// key's outcome left unknown and its object kept on the key.
 func TestNothingThatCannotTakePaymentIsSavedAsTheLink(t *testing.T) {
 	ctx := context.Background()
 	tryOf := func(p *pay, req paylink.Request, hosted bool) try {
@@ -2417,7 +2204,7 @@ func TestNothingThatCannotTakePaymentIsSavedAsTheLink(t *testing.T) {
 			}, attemptExpired},
 		} {
 			if hosted && state == "expired" {
-				continue // a Payment Link has no expiry: deactivated, it is settled as far as anyone can say
+				continue
 			}
 			t.Run(name+" "+state, func(t *testing.T) {
 				p := newPay(t, shape.public)
@@ -2428,7 +2215,7 @@ func TestNothingThatCannotTakePaymentIsSavedAsTheLink(t *testing.T) {
 					t.Fatal("the lost answer was no error")
 				}
 				id := p.objectID(shape.path)
-				var made Link // as the call answered it, before the object changed
+				var made Link
 				if hosted {
 					l := p.fake.Links()[0]
 					made = Link{ObjectID: l.ID, URL: l.URL}
@@ -2475,7 +2262,6 @@ func TestNothingThatCannotTakePaymentIsSavedAsTheLink(t *testing.T) {
 		p.fake.Fail(testprovider.Unavailable().Forever().On(http.MethodGet, "/v1/checkout/sessions/"))
 		_, _ = p.svc.OpenPaymentLink(ctx, req)
 		ss := p.fake.Sessions()[0]
-		// The lookup finds the session, and its state can't be read.
 		_, err := p.svc.OpenPaymentLink(ctx, req)
 		var pe *paylink.Error
 		if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkLookupPending {
@@ -2487,7 +2273,6 @@ func TestNothingThatCannotTakePaymentIsSavedAsTheLink(t *testing.T) {
 		if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE outcome IS NULL AND sends > clean_sends`); n != 1 {
 			t.Fatalf("the unreadable state resolved the key (%d)", n)
 		}
-		// Once the state reads, the session is the link, and nothing else was ever made.
 		p.fake.ClearFaults()
 		link, err := p.svc.OpenPaymentLink(ctx, req)
 		if err != nil || link.ObjectID != ss.ID || len(p.posts()) != 1 {
@@ -2496,12 +2281,6 @@ func TestNothingThatCannotTakePaymentIsSavedAsTheLink(t *testing.T) {
 	})
 }
 
-// ----- the reviewer's cases: at most one payable link, and no evidence lost -----
-
-// Every key of a ref has its own token. Key 0's session expired, and key 1's call ended in a 500 that
-// made nothing yet: the lookups for key 1 see key 0's expired session in the account, which says
-// nothing of key 1, so no third key is ever taken. When key 1's object turns up it is the link: one
-// payable link.
 func TestAnExpiredObjectOfOneKeyNeverResolvesAnotherKeysUnknownOutcome(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -2535,13 +2314,12 @@ func TestAnExpiredObjectOfOneKeyNeverResolvesAnotherKeysUnknownOutcome(t *testin
 	if r := p.refs(); len(r) != 1 || r[0].keySeq != 1 || r[0].object != "" {
 		t.Fatalf("refs = %+v", r)
 	}
-	// Each key's call carries its own token, which its object keeps.
 	posts := p.posts()
 	if posts[0].Form.Get("client_reference_id") != keys[0] || posts[len(posts)-1].Form.Get("client_reference_id") != keys[1] {
 		t.Fatalf("tokens: %+v", posts)
 	}
 
-	p.appear("/v1/checkout/sessions", len(posts)-1) // key 1's call made its session after all
+	p.appear("/v1/checkout/sessions", len(posts)-1)
 	link, err := p.svc.OpenPaymentLink(ctx, req)
 	if err != nil || link.ObjectID == first {
 		t.Fatalf("link = %+v, %v", link, err)
@@ -2555,7 +2333,6 @@ func TestAnExpiredObjectOfOneKeyNeverResolvesAnotherKeysUnknownOutcome(t *testin
 	if open != 1 || len(p.fake.Sessions()) != 2 {
 		t.Fatalf("%d payable sessions of %d", open, len(p.fake.Sessions()))
 	}
-	// A payment echoes the token of the key whose object it paid, and that finds the ref.
 	for _, token := range keys {
 		if got, found, err := p.svc.refByToken(ctx, token); err != nil || !found || got.id != p.refs()[0].id {
 			t.Fatalf("refByToken(%s) = %+v, %v, %v", token, got, found, err)
@@ -2566,10 +2343,6 @@ func TestAnExpiredObjectOfOneKeyNeverResolvesAnotherKeysUnknownOutcome(t *testin
 	}
 }
 
-// Stripe saves the result of a request whose execution began under its key, a 400 included, and the
-// lookup finds nothing: the refusal is not taken for a request that never ran. The key never moves by
-// itself, nor on a person's retry; the entry ends with the code an admin confirms from, and only that
-// confirmation gives the ref a new key.
 func TestARefusalKeptUnderTheKeyNeverRotatesTheKey(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2604,10 +2377,6 @@ func TestARefusalKeptUnderTheKeyNeverRotatesTheKey(t *testing.T) {
 	}
 }
 
-// Only what Stripe documents as refused before the request ran leaves a call's outcome known: a rate
-// limit or a lock timeout (429 with those codes) and the key in use by a request still running (409
-// idempotency_key_in_use). Any other answer, a 429 or a 409 of another kind, a 408 and every 4xx and
-// 5xx included, and an answer that can't be read, leave it unknown.
 func TestOnlyWhatStripeDocumentsAsNotRunLeavesTheOutcomeKnown(t *testing.T) {
 	for name, tc := range map[string]struct {
 		status      int
@@ -2646,9 +2415,6 @@ func TestOnlyWhatStripeDocumentsAsNotRunLeavesTheOutcomeKnown(t *testing.T) {
 	}
 }
 
-// A 409 for the key in use by another request: nothing ran under it, so the call is asked again later
-// under the same key, and never a new one. While an earlier call under the key is still unknown, the
-// 409 resolves nothing.
 func TestAKeyInUseIsAskedAgainUnderTheSameKey(t *testing.T) {
 	ctx := context.Background()
 	t.Run("alone", func(t *testing.T) {
@@ -2697,9 +2463,6 @@ func TestAKeyInUseIsAskedAgainUnderTheSameKey(t *testing.T) {
 	})
 }
 
-// The call that makes a link is sent once. Go's transport sends a request with an Idempotency-Key
-// again by itself when a reused connection breaks before the answer, and returns the second copy's
-// error: a failed dial that said nothing left, though the first copy reached the provider.
 func TestACallIsNeverSentTwiceByTheHTTPClient(t *testing.T) {
 	const account = `{"object":"account","id":"acct_Fake0123"}`
 	session := `{"id":"cs_test_abc","object":"checkout.session","url":"https://checkout.stripe.com/c/pay/cs_test_abc"}`
@@ -2707,9 +2470,6 @@ func TestACallIsNeverSentTwiceByTheHTTPClient(t *testing.T) {
 	answer := func(w io.Writer, body string) {
 		_, _ = fmt.Fprintf(w, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	}
-	// serve answers a GET on the first connection, then reads the POST that follows on it, runs it, and
-	// drops the connection with no answer. Any later connection gets the POST's answer, if listening
-	// goes on.
 	serve := func(ln net.Listener, keepListening bool, posts *atomic.Int32) {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -2766,7 +2526,6 @@ func TestACallIsNeverSentTwiceByTheHTTPClient(t *testing.T) {
 			}
 		})
 	}
-	// A call that never got a connection never left.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -2780,10 +2539,6 @@ func TestACallIsNeverSentTwiceByTheHTTPClient(t *testing.T) {
 	}
 }
 
-// The provider is unreachable for hours, the list and the account read included: every failure stays on
-// the reconciliation's schedule and uses up none of the entry's tries, so the reconciliation is never
-// ended early with integration_provider_unreachable; it ends at its own bound with
-// integration_outcome_unknown, which an admin can confirm.
 func TestRepeatedFailedReadsNeverEndTheReconciliationEarly(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2822,8 +2577,51 @@ func TestRepeatedFailedReadsNeverEndTheReconciliationEarly(t *testing.T) {
 	}
 }
 
-// A crash between the write-ahead and the call: nothing left, and the key's outcome reads unknown all
-// the same. The next try finds nothing and asks again under the same key, which makes the one link.
+func TestAKeyPastItsWindowAfterTheWriteAheadIsNotSent(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-window-0001")
+			p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+				t.Fatal("the 5xx was no error")
+			}
+			p.later(stripeKeyKept - time.Minute)
+			p.svc.afterWriteAhead = func() error { p.later(2 * time.Minute); return nil }
+			if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
+				t.Fatalf("err = %v", err)
+			}
+			p.svc.afterWriteAhead = nil
+			if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+				t.Fatalf("%d calls, want the first only", n)
+			}
+		})
+	}
+}
+
+func TestAKeyWhoseWindowClosesAsTheCallLeavesIsNotSent(t *testing.T) {
+	ctx := context.Background()
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-window-0002")
+	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, shape.path))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the 5xx was no error")
+	}
+	p.later(stripeKeyKept - 300*time.Millisecond)
+	p.svc.beforeCall = func() { time.Sleep(600 * time.Millisecond) }
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("a call past the key's window answered")
+	}
+	p.svc.beforeCall = nil
+	if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+		t.Fatalf("%d calls, want the first only", n)
+	}
+}
+
 func TestACrashBetweenTheWriteAheadAndTheCallMakesOneLink(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2854,9 +2652,6 @@ func TestACrashBetweenTheWriteAheadAndTheCallMakesOneLink(t *testing.T) {
 	}
 }
 
-// A crash after the call made the object and before anything of its answer was noted: the next try
-// finds the object by the key's token, even once the key is past the provider's window, and makes
-// nothing.
 func TestACrashAfterTheCallBeforeItsAnswerIsNotedMakesOneLink(t *testing.T) {
 	for name, shape := range linkShapes {
 		for _, aged := range []bool{false, true} {
@@ -2886,9 +2681,6 @@ func TestACrashAfterTheCallBeforeItsAnswerIsNotedMakesOneLink(t *testing.T) {
 	}
 }
 
-// A link saved on an earlier try is given again only while a payer can use it: its state is read at
-// the provider first. An expired or paid one is not given, and nothing else is made; a read that fails
-// gives nothing and makes nothing.
 func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
 	for name, end := range map[string]func(p *pay, session string) error{
 		"expired": func(p *pay, session string) error { _, err := p.fake.Expire(session); return err },
@@ -2911,7 +2703,6 @@ func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
 				t.Fatalf("the saved link was given with %d reads of its state, want %d", n, reads+1)
 			}
 
-			// The read fails: nothing is given, and nothing made.
 			p.fake.Fail(testprovider.ServerError().On(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
 			link, err := p.svc.OpenPaymentLink(ctx, req)
 			var pe *paylink.Error
@@ -2919,7 +2710,6 @@ func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
 				t.Fatalf("with the read failing: %+v, %v", link, err)
 			}
 
-			// A key of another account (same mode) never reads it: nothing given, nothing read.
 			p.fake.SetAccount(otherAccount)
 			reads = len(p.fake.RequestsTo(http.MethodGet, "/v1/checkout/sessions/"+first.ObjectID))
 			link, err = p.svc.OpenPaymentLink(ctx, req)
@@ -2945,10 +2735,6 @@ func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
 	}
 }
 
-// An admin looks for an unresolved payment at the provider by each attempt's reference, so the list
-// gives every attempt (not only the current one) with what to search and where: the reference, the kind
-// of object (which says the field it is in), any object seen and whether it was verified, the account and
-// mode it was made under, and when it was first sent.
 func TestTheUnresolvedListGivesEveryAttemptsReferenceAndWhereToLookForIt(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -2987,8 +2773,6 @@ func TestTheUnresolvedListGivesEveryAttemptsReferenceAndWhereToLookForIt(t *test
 				t.Fatalf("attempt = %+v, want reference %q of a %s under %s (%s)", a, first, kind, testprovider.TestAccountID, mode)
 			}
 
-			// The reference moved to a second key after an abandoned one, and the first saw an object that
-			// couldn't be checked: both are listed, the oldest first, each with its own reference.
 			second := strings.Repeat("c", 16) + strings.Repeat("d", 16)
 			p.exec(`UPDATE integration_ref_attempts SET outcome = 'abandoned', object_id = 'obj_seen', object_verified = 0 WHERE seq = 0`)
 			p.exec(`INSERT INTO integration_ref_attempts (ref_id, seq, token, sends, clean_sends, first_sent_at, unknown_since)
@@ -3005,8 +2789,6 @@ func TestTheUnresolvedListGivesEveryAttemptsReferenceAndWhereToLookForIt(t *test
 	}
 }
 
-// The list never carries what is sealed or sent to the provider: only the fields of an attempt that are
-// named, and nothing of the integration's keys, whatever the response holds.
 func TestTheUnresolvedListHoldsNoKeysOrOtherFields(t *testing.T) {
 	shape := linkShapes["a checkout session"]
 	p := newPay(t, shape.public)
@@ -3042,9 +2824,6 @@ func TestTheUnresolvedListHoldsNoKeysOrOtherFields(t *testing.T) {
 	}
 }
 
-// An admin of another workspace, who is not a member of this one, gets neither this workspace's payments
-// nor any attempt's reference: not by this workspace's route, and not by naming this integration's number
-// in their own.
 func TestAnotherWorkspacesAdminGetsNoAttemptsOfUnresolvedPayments(t *testing.T) {
 	shape := linkShapes["a checkout session"]
 	p := newPay(t, shape.public)
@@ -3057,7 +2836,6 @@ func TestAnotherWorkspacesAdminGetsNoAttemptsOfUnresolvedPayments(t *testing.T) 
 	if err := p.db.QueryRow(`SELECT token FROM integration_ref_attempts WHERE seq = 0`).Scan(&reference); err != nil {
 		t.Fatal(err)
 	}
-	// The same call, for the workspace's own admin, does hold it: the refusals below are about who asks.
 	own := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
 	expect(t, own, http.StatusOK)
 	if !strings.Contains(own.Body.String(), reference) {

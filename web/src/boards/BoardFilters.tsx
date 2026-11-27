@@ -4,7 +4,6 @@ import { Label } from '../ui/Label'
 import { Menu, MenuButton, MenuItem, MenuList, MenuSeparator } from '../ui/Menu'
 import { Toolbar } from '../ui/Toolbar'
 
-// The board's filters: a label among the board's (a menu), and only the overdue cards.
 export function BoardFilters({
   labels,
   label,

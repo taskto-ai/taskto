@@ -1,8 +1,7 @@
 import { type DependencyList, useCallback, useEffect, useRef, useState } from 'react'
 import { errorText } from './api'
+import { useMemoBy } from './memo'
 
-// `settled` counts the loads that have ended, with data or an error: a caller that asks again on
-// a timer waits for it to change, so a slow answer is never cut off by the next question.
 export type Loaded<T> = {
   data: T | undefined
   error: string | null
@@ -11,32 +10,27 @@ export type Loaded<T> = {
   loading?: boolean
 }
 
-// Loads with `load` whenever `deps` change, and on reload(); an answer that arrives after the
-// deps changed again is dropped, so a slow reply never shows under the wrong heading.
 export function useLoad<T>(load: () => Promise<T>, deps: DependencyList): Loaded<T> {
   const [state, setState] = useState<{ data: T | undefined; error: string | null }>({ data: undefined, error: null })
   const [settled, setSettled] = useState(0)
   const [loading, setLoading] = useState(true)
   const [tick, setTick] = useState(0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the caller's deps stand for `load`
-  const run = useCallback(load, deps)
+  const run = useMemoBy(() => load, deps)
+  const request = useMemoBy(() => ({ run, tick }), [run, tick])
   const last = useRef(run)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new tick is a reload
   useEffect(() => {
     let live = true
     setLoading(true)
-    // A reload keeps what is shown until the answer comes; other deps start empty.
-    const same = last.current === run
-    last.current = run
+    const same = last.current === request.run
+    last.current = request.run
     setState((s) => ({ data: same ? s.data : undefined, error: null }))
-    run().then(
+    request.run().then(
       (data) => {
         if (!live) return
         setState({ data, error: null })
         setSettled((n) => n + 1)
         setLoading(false)
       },
-      // A failed reload keeps what is shown, under the error.
       (e: unknown) => {
         if (!live) return
         setState((s) => ({ data: same ? s.data : undefined, error: errorText(e) }))
@@ -47,7 +41,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: DependencyList): Loaded
     return () => {
       live = false
     }
-  }, [run, tick])
+  }, [request])
   const reload = useCallback(() => {
     setLoading(true)
     setTick((t) => t + 1)

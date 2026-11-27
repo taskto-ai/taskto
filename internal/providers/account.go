@@ -1,12 +1,3 @@
-// Package providers is model provider accounts: endpoints, their models and API keys, owned
-// by a workspace or by one user, stored in the database with the keys sealed (see
-// internal/serverkey), and fed to the agent runtime as its providers file.
-//
-// A workspace's accounts are managed by its admins and usable by its members; a user's own
-// (personal) accounts are usable only in that user's conversations, in any workspace. In the
-// agent runtime an account is the provider ws<workspace>-<name> or u<user>-<name>: Usable
-// says who may pick which. The HTTP API is in docs/api.md; the files the agent runtime reads
-// are described in Feed and docs/agent-providers.md.
 package providers
 
 import (
@@ -25,44 +16,33 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Scope says who owns an account.
 type Scope string
 
-// The scopes. Instance providers come from the operator's providers file, not the database.
 const (
 	ScopeWorkspace Scope = "workspace"
 	ScopeUser      Scope = "user"
 	ScopeInstance  Scope = "instance"
-	// ScopeCLI is a CLI worker (docs/cli-workers.md): the official Claude Code, Codex or Grok
-	// Build CLI on the user's own login, offered to everyone while CLI workers are on.
-	ScopeCLI Scope = "cli"
+	ScopeCLI       Scope = "cli"
 )
 
-// CLIProviderPrefix starts the provider ID of every CLI worker ("cli-claude"); the operator's
-// providers file can't use it.
 const CLIProviderPrefix = "cli-"
 
-// KindOpenAICompatible is the only kind yet: any server speaking OpenAI's Chat Completions API.
 const KindOpenAICompatible = "openai-compatible"
 
-// Limits. The agent runtime's provider ID is ws<id>-<name> or u<id>-<name> and at most 64
-// characters, and an ID has at most 19 digits.
 const (
 	maxNameLen        = 40
 	maxDisplayNameLen = 100
 	maxURLLen         = 2048
-	minKeyLen         = 8 // the agent runtime refuses shorter keys
+	minKeyLen         = 8
 	maxKeyLen         = 4096
 	maxModels         = 100
-	maxModelText      = 256       // the agent runtime's limit for model IDs and names
-	maxSafeInt        = 1<<53 - 1 // the largest integer the agent runtime reads exactly
-	maxAccounts       = 50        // per workspace and per user
+	maxModelText      = 256
+	maxSafeInt        = 1<<53 - 1
+	maxAccounts       = 50
 )
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// Model is one model of an account. Zero ContextWindow and MaxTokens take the agent
-// runtime's defaults (128000 and 8192).
 type Model struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
@@ -71,8 +51,6 @@ type Model struct {
 	Reasoning     bool   `json:"reasoning"`
 }
 
-// Account is a provider account as the API shows it. The API key itself is never in it:
-// APIKey is "set" or "not set".
 type Account struct {
 	ID          int64           `json:"id"`
 	Scope       Scope           `json:"scope"`
@@ -88,34 +66,26 @@ type Account struct {
 	UpdatedAt   string          `json:"updated_at"`
 }
 
-// The values of Account.APIKey.
 const (
 	keySet    = "set"
 	keyNotSet = "not set"
 )
 
-// draft is an account's settings while they are created or changed. apiKey is the clear key:
-// it only lives here, between the request and sealing.
 type draft struct {
 	name        string
 	displayName string
 	kind        string
 	baseURL     string
 	apiKey      *string
-	keepKey     bool // an update that leaves the stored key as it is
+	keepKey     bool
 	compat      json.RawMessage
 	models      []Model
 }
 
-// invalid is a validation failure, a 400 with code: its message is safe to show and never
-// quotes a value, so a key pasted into the wrong field doesn't come back in an error or a
-// log line. Failures only a broken client causes share apierr.CodeBadRequest.
 func invalid(code apierr.Code, params apierr.Params, format string, args ...any) *apierr.Error {
 	return apierr.New(http.StatusBadRequest, code, fmt.Sprintf(format, args...), params)
 }
 
-// validate checks and normalizes d. hasKey says whether the account will have a key, the
-// stored one or a new one.
 func (d *draft) validate(hasKey bool) error {
 	if len(d.name) > maxNameLen || !nameRe.MatchString(d.name) {
 		return invalid(apierr.CodeProviderNameInvalid, apierr.Params{"max": maxNameLen},
@@ -142,11 +112,6 @@ func (d *draft) validate(hasKey bool) error {
 	return checkModels(d.models)
 }
 
-// CheckEndpoint checks a base URL, and a new API key for it unless apiKey is nil, by the
-// rules of accounts, for other features that keep an endpoint of their own (dictation).
-// hasKey says whether a key will be sent there, the stored one or the new one. It returns
-// the normalized base URL and the trimmed key. Its errors are safe to show: they name
-// base_url or api_key, never a value; they are *apierr.Error.
 func CheckEndpoint(baseURL string, apiKey *string, hasKey bool) (string, *string, error) {
 	u, err := checkBaseURL(baseURL)
 	if err != nil {
@@ -166,8 +131,6 @@ func CheckEndpoint(baseURL string, apiKey *string, hasKey bool) (string, *string
 	return u.String(), apiKey, nil
 }
 
-// checkBaseURL accepts what the agent runtime accepts, and is stricter where Go's and the
-// WHATWG URL parsers could disagree: ASCII only, a host, no query or fragment.
 func checkBaseURL(raw string) (*url.URL, error) {
 	bad := invalid(apierr.CodeBaseURLInvalid, apierr.Params{"max": maxURLLen},
 		"base_url must be an http or https URL of up to %d characters, without a query or fragment", maxURLLen)
@@ -197,9 +160,6 @@ func checkBaseURL(raw string) (*url.URL, error) {
 
 var hostRe = regexp.MustCompile(`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$`)
 
-// checkHost accepts a host and port the WHATWG URL parser (the agent runtime's) accepts too:
-// a port up to 65535, a bracketed IPv6 address, or a name; a name whose last label is a
-// number must be a full dotted IPv4 address, since WHATWG parses it as one.
 func checkHost(u *url.URL) bool {
 	if p := u.Port(); p != "" {
 		if n, err := strconv.Atoi(p); err != nil || n > 65535 {
@@ -225,8 +185,6 @@ func checkHost(u *url.URL) bool {
 
 var loopbackV4 = regexp.MustCompile(`^127\.\d+\.\d+\.\d+$`)
 
-// keySafeOver reports whether a key may be sent to u: over https, or to this machine. The
-// same rule as the agent runtime's, so a key never crosses the network in cleartext.
 func keySafeOver(u *url.URL) bool {
 	if u.Scheme == "https" {
 		return true
@@ -253,7 +211,6 @@ func printable(s string) bool {
 	return true
 }
 
-// jsLen is a string's length as the agent runtime (JavaScript) counts it: in UTF-16 units.
 func jsLen(s string) int {
 	n := 0
 	for _, r := range s {
@@ -295,11 +252,6 @@ func checkModels(models []Model) error {
 	return nil
 }
 
-// compatSettings are the pi-ai compatibility settings (OpenAICompletionsCompat) the API
-// accepts, with the values each may take: nil for a boolean, "number" for a number, else the
-// allowed strings. They are the flat ones; the nested routing and chat-template settings can
-// only be set in an operator's providers file. The agent runtime validates against pi-ai's
-// own schema, and an integration test (feed_it_test.go) checks it accepts every one of these.
 var compatSettings = map[string][]string{
 	"supportsStore":                               nil,
 	"supportsDeveloperRole":                       nil,
@@ -330,8 +282,6 @@ var compatSettings = map[string][]string{
 	"vllmPriority":                   {"number"},
 }
 
-// checkCompat checks a compat object and returns it compacted, or nil for none (absent, null
-// or {}). Messages name the setting, never its value.
 func checkCompat(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -364,7 +314,6 @@ func checkCompat(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, invalid(apierr.CodeBadRequest, nil, "compat.%s has a value of the wrong type or out of range", name)
 		}
 	}
-	// Compacted and with sorted keys: what's stored is what the agent runtime gets.
 	out, err := json.Marshal(settings)
 	if err != nil {
 		return nil, err
@@ -392,10 +341,8 @@ func truncate(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// providerRe matches the agent runtime provider IDs of accounts: ws<id>-<name>, u<id>-<name>.
 var providerRe = regexp.MustCompile(`^(ws|u)([0-9]+)-`)
 
-// providerID is the agent runtime's ID for an account.
 func providerID(scope Scope, owner int64, name string) string {
 	if scope == ScopeWorkspace {
 		return "ws" + strconv.FormatInt(owner, 10) + "-" + name
@@ -403,10 +350,6 @@ func providerID(scope Scope, owner int64, name string) string {
 	return "u" + strconv.FormatInt(owner, 10) + "-" + name
 }
 
-// Usable reports whether a conversation of user, in workspace, may use the agent runtime's
-// provider: a workspace's providers only in that workspace, a user's only in that user's
-// conversations, and the operator's (instance) providers anywhere. The agent runtime doesn't
-// check this; the server must, before it hands a model choice to it.
 func Usable(provider string, user, workspace int64) bool {
 	m := providerRe.FindStringSubmatch(provider)
 	if m == nil {
@@ -422,6 +365,4 @@ func Usable(provider string, user, workspace int64) bool {
 	return owner == user
 }
 
-// reserved reports whether an operator's provider ID looks like an account's, which the
-// operator's providers file may not use.
 func reserved(provider string) bool { return providerRe.MatchString(provider) }

@@ -44,7 +44,6 @@ func (a *api) link(id string) testprovider.PaymentLink {
 	return l
 }
 
-// restrictionsJSON is the link's "restrictions" as the API wrote it, compacted.
 func restrictionsJSON(t *testing.T, ans answer) string {
 	t.Helper()
 	var obj map[string]json.RawMessage
@@ -70,7 +69,6 @@ func count(l testprovider.PaymentLink) (limit, completed int, ok bool) {
 func TestAPaymentLinkDeactivatesAtItsLimitOfCompletedSessions(t *testing.T) {
 	f, _, a := newFake(t)
 
-	// Stripe takes the parameter on create, and says so in the object.
 	form := oneLineLink(5000, "usd")
 	form.Set("restrictions[completed_sessions][limit]", "2")
 	l := a.newLink(form)
@@ -104,7 +102,6 @@ func TestAPaymentLinkDeactivatesAtItsLimitOfCompletedSessions(t *testing.T) {
 		t.Errorf("count %d after one payment", done)
 	}
 
-	// The payment that reaches the limit deactivates the link.
 	if _, err := f.PayLink(l.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +109,6 @@ func TestAPaymentLinkDeactivatesAtItsLimitOfCompletedSessions(t *testing.T) {
 	if _, done, _ := count(got); got.Active || done != 2 {
 		t.Errorf("at the limit: %+v", got)
 	}
-	// A third takes nothing.
 	if _, err := f.PayLink(l.ID); !errors.Is(err, testprovider.ErrLinkInactive) {
 		t.Errorf("a payment past the limit: %v", err)
 	}
@@ -125,7 +121,6 @@ func TestAPaymentLinkDeactivatesAtItsLimitOfCompletedSessions(t *testing.T) {
 		t.Errorf("the sessions of the link: %d", len(list.Data))
 	}
 
-	// A raised limit doesn't reactivate by itself; the link's owner does.
 	up := a.post("/v1/payment_links/"+l.ID, url.Values{"restrictions[completed_sessions][limit]": {"3"}}, "")
 	var updated testprovider.PaymentLink
 	up.into(t, &updated)
@@ -147,7 +142,6 @@ func TestAPaymentLinkDeactivatesAtItsLimitOfCompletedSessions(t *testing.T) {
 func TestALinkLimitOnUpdateAndWhatIsRefused(t *testing.T) {
 	f, _, a := newFake(t)
 
-	// No limit: a link takes any number of payments and says null.
 	free := a.newLink(oneLineLink(5000, "usd"))
 	if free.Restrictions != nil {
 		t.Errorf("an unlimited link: %+v", free.Restrictions)
@@ -164,8 +158,6 @@ func TestALinkLimitOnUpdateAndWhatIsRefused(t *testing.T) {
 		t.Errorf("after three payments: %+v", got)
 	}
 
-	// A limit set by update is measured against the sessions the link has completed (the fake's
-	// reading of the count); one already reached deactivates the link.
 	up := a.post("/v1/payment_links/"+free.ID, url.Values{"restrictions[completed_sessions][limit]": {"5"}}, "")
 	var got testprovider.PaymentLink
 	up.into(t, &got)
@@ -173,7 +165,6 @@ func TestALinkLimitOnUpdateAndWhatIsRefused(t *testing.T) {
 		t.Fatalf("update: %d %s", up.status, up.raw)
 	}
 
-	// A refused limit refuses the whole request, on create and on update.
 	for _, bad := range []string{"0", "-1", "x", "01", "1.5", ""} {
 		form := oneLineLink(5000, "usd")
 		form.Set("restrictions[completed_sessions][limit]", bad)
@@ -192,7 +183,6 @@ func TestALinkLimitOnUpdateAndWhatIsRefused(t *testing.T) {
 			t.Errorf("a refused update with limit %q changed the link", bad)
 		}
 	}
-	// Another parameter of the family stays unknown.
 	form := oneLineLink(5000, "usd")
 	form.Set("restrictions[completed_sessions][count]", "1")
 	if ans := a.post("/v1/payment_links", form, ""); ans.status != http.StatusBadRequest {
@@ -222,8 +212,6 @@ func TestALinkWhoseNewLimitWasReachedDeactivates(t *testing.T) {
 	}
 }
 
-// The minimums are Stripe's, copied here from its documentation (amounts in the smallest unit):
-// https://docs.stripe.com/currencies, "Minimum charge amount by currency".
 var documentedMinimums = map[string]int{
 	"usd": 50, "aed": 200, "ars": 50, "aud": 50, "brl": 50, "cad": 50, "chf": 50, "cop": 50,
 	"czk": 1500, "dkk": 250, "eur": 50, "gbp": 30, "hkd": 400, "huf": 17500, "idr": 50, "ils": 50,
@@ -236,14 +224,12 @@ func TestEachCurrencyHasItsDocumentedMinimum(t *testing.T) {
 	for cur, min := range documentedMinimums {
 		below := a.post("/v1/checkout/sessions", sessionForm(min-1, cur, "r"), "")
 		if _, code := below.errorCode(); below.status != http.StatusBadRequest || code != "amount_too_small" {
-			// RUB and a few others aren't two-decimal in the fake's list: they must be known.
 			t.Errorf("%s %d: %d %s", cur, min-1, below.status, below.raw)
 		}
 		at := a.post("/v1/checkout/sessions", sessionForm(min, cur, "r"), "")
 		if at.status != http.StatusOK {
 			t.Errorf("%s %d: %d %s", cur, min, at.status, at.raw)
 		}
-		// A Payment Link follows the same rule.
 		if ans := a.post("/v1/payment_links", oneLineLink(min-1, cur), ""); ans.status != http.StatusBadRequest {
 			t.Errorf("link %s %d: %d", cur, min-1, ans.status)
 		}
@@ -251,7 +237,6 @@ func TestEachCurrencyHasItsDocumentedMinimum(t *testing.T) {
 			t.Errorf("link %s %d: %d %s", cur, min, ans.status, ans.raw)
 		}
 	}
-	// The examples of the documentation, by name: GBP 0.30 and HKD 4.00 where USD is 0.50.
 	for _, c := range []struct {
 		cur string
 		n   int
@@ -261,8 +246,6 @@ func TestEachCurrencyHasItsDocumentedMinimum(t *testing.T) {
 			t.Errorf("%s %d: accepted %v", c.cur, c.n, got)
 		}
 	}
-	// A charge may have any amount in HUF and TWD: whole units are a rule of their payouts, which
-	// the fake doesn't have.
 	for _, c := range []struct {
 		cur string
 		n   int
@@ -293,13 +276,11 @@ func TestUGXAndISKAreWholeUnitsWrittenWithTwoDecimals(t *testing.T) {
 			}
 		}
 	}
-	// A line of 500 UGX twice is fine; the rule is the line's, and a sum of whole lines is whole.
 	form := sessionForm(500, "ugx", "r")
 	form.Set("line_items[0][quantity]", "3")
 	if ans := a.post("/v1/checkout/sessions", form, ""); ans.status != http.StatusOK {
 		t.Errorf("a quantity of 3: %d %s", ans.status, ans.raw)
 	}
-	// JPY stays zero-decimal: 501 yen is a fine amount.
 	if ans := a.post("/v1/checkout/sessions", sessionForm(501, "jpy", "r"), ""); ans.status != http.StatusOK {
 		t.Errorf("501 JPY: %d %s", ans.status, ans.raw)
 	}
@@ -326,7 +307,6 @@ func TestEachFakeHasItsOwnPayer(t *testing.T) {
 	if got := two.f.Payer().Email; got != "w@example.test" {
 		t.Errorf("WithPayer: %q", got)
 	}
-	// Both fakes pay their sessions at once, each changing its own payer between payments.
 	var wg sync.WaitGroup
 	for n, s := range []*side{one, two} {
 		wg.Add(1)
@@ -359,7 +339,6 @@ func TestEachFakeHasItsOwnPayer(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	// Neither fake's payer reached the other's, and a fresh fake has the default one.
 	if got := one.f.Payer().Email; !strings.HasPrefix(got, "p0-") {
 		t.Errorf("fake one's payer: %q", got)
 	}
@@ -374,7 +353,6 @@ func TestEachFakeHasItsOwnPayer(t *testing.T) {
 	if got, _ := f3.Session(s3.ID); got.CustomerDetails == nil || *got.CustomerDetails != testprovider.DefaultPayer() {
 		t.Errorf("a new fake's payer: %+v", got.CustomerDetails)
 	}
-	// A delayed payment gives the payer's details too.
 	d := a3.newSession(12000, "eur", "delayed")
 	f3.SetPayer(testprovider.CustomerDetails{Email: "d@example.test"})
 	if _, err := f3.PayDelayed(d.ID); err != nil {
@@ -385,9 +363,6 @@ func TestEachFakeHasItsOwnPayer(t *testing.T) {
 	}
 }
 
-// A payer who opens a hosted payment link's address with ?client_reference_id= makes a session that
-// carries it, as Stripe's documented URL parameter does; a value Stripe doesn't take is left out, and
-// opening an address that isn't a link's takes no payment.
 func TestAPayerOpeningAHostedLinkAddressBringsItsClientReferenceId(t *testing.T) {
 	f, _, a := newFake(t)
 	l := a.newLink(oneLineLink(5000, "usd"))
@@ -415,7 +390,6 @@ func TestAPayerOpeningAHostedLinkAddressBringsItsClientReferenceId(t *testing.T)
 		t.Errorf("the session of a payer who came by the address: %+v", ss)
 	}
 
-	// Without the parameter, and with one Stripe doesn't take, the session has none.
 	for name, address := range map[string]string{"none": l.URL, "a space in it": l.URL + "?client_reference_id=a%20b", "a long one": l.URL + "?client_reference_id=" + strings.Repeat("x", 201)} {
 		evs, err := f.PayLinkAt(address)
 		if err != nil {
@@ -430,8 +404,6 @@ func TestAPayerOpeningAHostedLinkAddressBringsItsClientReferenceId(t *testing.T)
 	}
 }
 
-// A session's intent and its latest charge can be asked for as objects in the same answer, as Stripe's
-// expand[] does, and the charge says when it was made; any other expansion is refused.
 func TestASessionExpandsItsIntentAndItsLatestCharge(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
 	f := testprovider.NewStripe(t, testprovider.WithClock(clock))
@@ -464,7 +436,6 @@ func TestASessionExpandsItsIntentAndItsLatestCharge(t *testing.T) {
 	if len(list.Data) != 1 || list.Data[0].PaymentIntent.LatestCharge.Created != paidAt {
 		t.Errorf("the expanded list: %+v", list)
 	}
-	// Without the expansion the intent is its id.
 	var plain testprovider.Session
 	a.get("/v1/checkout/sessions/"+s.ID, nil).into(t, &plain)
 	if plain.PaymentIntent == nil || *plain.PaymentIntent != one.PaymentIntent.ID {
@@ -472,7 +443,7 @@ func TestASessionExpandsItsIntentAndItsLatestCharge(t *testing.T) {
 	}
 	for _, bad := range []url.Values{
 		{"expand[]": {"customer"}},
-		{"expand[]": {"data.payment_intent"}}, // a list's path on a retrieval
+		{"expand[]": {"data.payment_intent"}},
 	} {
 		if ans := a.get("/v1/checkout/sessions/"+s.ID, bad); ans.status != http.StatusBadRequest {
 			t.Errorf("%v: %d", bad, ans.status)
