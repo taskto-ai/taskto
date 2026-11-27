@@ -177,6 +177,12 @@ installed).
 
 - `main` is protected: every change goes through a pull request with green CI.
 - Small PRs with conventional titles (`feat:`, `fix:`, `docs:`, `chore:`), squash-merged.
+- A PR changes at most 800 lines of production code (CI's Lint job, `.github/scripts/prsize.go`;
+  tests, generated files, lock files, translations and Markdown aren't counted). Split larger
+  work into PRs that each stand on `main`; only a maintainer's `size-exception` label allows
+  more ([CONTRIBUTING.md](CONTRIBUTING.md#sending-a-change)).
+- The description lists the rules the change keeps, each with the test that fails when its
+  guard is removed (the PR template's "Rules this PR keeps"); reviews check against them.
 - A PR description says what changed, why, and how it was checked.
 - When CI's Go job fails, its "Test results" step prints each package's result and the whole
   output of every failing test (`.github/scripts/gotest-report.go`), and the run keeps

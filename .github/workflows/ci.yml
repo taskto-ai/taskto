@@ -14,8 +14,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # labeled and unlabeled too: the size-exception label decides the Lint job's size step,
+  # so adding or removing it runs CI again on the same head.
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   # The merge queue builds each entry on a temporary gh-readonly-queue/main/... branch (the
   # pull request merged onto the latest main, and onto the entries ahead of it) and waits for
   # every required check on it, so every job here must run for this event too. No job reads
@@ -41,12 +44,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Two commits: a pull request's run checks out the merge of the pull request onto
+          # main, whose first parent is main, so HEAD^1..HEAD is what the pull request changes.
+          fetch-depth: 2
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
             tools/go.sum
+      # Large pull requests took about seven times longer to merge, through more review
+      # rounds, so a pull request changes at most 800 lines of production code (tests,
+      # generated files, translations and docs aren't counted). Over that it fails, unless
+      # a maintainer has given it the size-exception label (CONTRIBUTING.md).
+      - name: Pull request size
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          PR_SIZE_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'size-exception') }}
+        run: go run .github/scripts/prsize.go HEAD^1
       # Pinned in tools/go.mod and verified against go.sum: no install script.
       - name: golangci-lint
         run: go tool -modfile=tools/go.mod golangci-lint run ./...
