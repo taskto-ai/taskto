@@ -1053,6 +1053,7 @@
     "search_query_no_words": "There are no words to search for.",
     "conversation_not_found": "Conversation not found.",
     "conversation_archived": "This conversation is archived: unarchive it first.",
+    "conversation_note_invalid": "A note must have 1 to {max} characters.",
     "conversation_title_invalid": "A title can have at most {max} characters, and no control characters.",
     "conversation_lost": "The agent no longer has this conversation's content. An operator can find out why in the server's log.",
     "conversation_no_model": "This conversation has no model: choose one.",
@@ -2814,6 +2815,15 @@
       "cliOptionNotConnected": "{provider}: {model} (not connected)",
       "signInAgain": "{cli} needs you to sign in again: reconnect it here or in <link>Settings → CLI accounts</link>.",
       "notConnected": "{cli} isn't connected: connect it in <link>Settings → CLI accounts</link>."
+    },
+    "note": {
+      "toggle": "What you are writing",
+      "modeMessage": "To the agent",
+      "modeNote": "Note",
+      "placeholder": "Add a note for the record",
+      "hint": "A note stays in this conversation but the agent never sees it.",
+      "send": "Add note",
+      "hidden": "Note · the agent doesn’t see this"
     },
     "composer": {
       "archived": "This conversation is archived.",

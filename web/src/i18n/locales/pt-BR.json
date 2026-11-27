@@ -1060,6 +1060,7 @@
     "search_query_no_words": "Não há palavras para buscar.",
     "conversation_not_found": "Conversa não encontrada.",
     "conversation_archived": "Esta conversa está arquivada: desarquive-a primeiro.",
+    "conversation_note_invalid": "Uma nota deve ter de 1 a {max} caracteres.",
     "conversation_title_invalid": "O título pode ter no máximo {max} caracteres, sem caracteres de controle.",
     "conversation_lost": "O agente não tem mais o conteúdo desta conversa. Um operador pode ver o motivo no log do servidor.",
     "conversation_no_model": "Esta conversa não tem modelo: escolha um.",
@@ -2835,6 +2836,15 @@
       "cliOptionNotConnected": "{provider}: {model} (não conectado)",
       "signInAgain": "{cli} precisa que você entre de novo: reconecte aqui ou em <link>Configurações → Contas de CLI</link>.",
       "notConnected": "{cli} não está conectado: conecte em <link>Configurações → Contas de CLI</link>."
+    },
+    "note": {
+      "toggle": "O que você está escrevendo",
+      "modeMessage": "Para o agente",
+      "modeNote": "Nota",
+      "placeholder": "Adicione uma nota para o registro",
+      "hint": "Uma nota fica nesta conversa, mas o agente nunca a vê.",
+      "send": "Adicionar nota",
+      "hidden": "Nota · o agente não vê isto"
     },
     "composer": {
       "archived": "Esta conversa está arquivada.",

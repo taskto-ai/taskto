@@ -31,6 +31,7 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base+"/{conversation}", member(s.handleGet))
 	mux.Handle("PATCH "+base+"/{conversation}", member(s.handleUpdate))
 	mux.Handle("POST "+base+"/{conversation}/messages", member(s.handleSend))
+	mux.Handle("POST "+base+"/{conversation}/notes", member(s.handleNote))
 	mux.Handle("GET "+base+"/{conversation}/messages", member(s.handleMessages))
 	mux.Handle("GET "+base+"/{conversation}/model", member(s.handleModel))
 	mux.Handle("PUT "+base+"/{conversation}/model", member(s.handleSetModel))
