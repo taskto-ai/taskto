@@ -232,6 +232,18 @@ no extra process); it has no feature of its own.
   with `schedule.LocalHour`; a change of a person's zone reaches the jobs through a hook in the
   transaction that stores it (`auth.Service.OnTimeZoneChanged`: `boards.Service.SyncTimeZone` and
   `notifications.Service.SyncTimeZone`), so auth knows no feature that is timed by it.
+- **Second user: reminders of app records.** A record of an app whose live release declares
+  [reminders](api.md#reminders-of-records) has one `app.record-reminder` job for each reminder, for
+  the person who created it, keyed by app, record and reminder name and holding only those IDs. The
+  jobs are made, moved and cancelled in the transaction of every write of a record
+  (`apps.Service.syncRecordReminders`: an action, a system write, a restore) and of what changes
+  who is reminded or when (`syncAppReminders`: a release, a rollback, an app archived or moved; the
+  same hooks as the boards' for a space archived, a member added and a time zone changed), and the
+  handler (`apps.Service.remindRecord`) trusts none of it: it asks `Holds`, the creator's access
+  to the space and the app, the live release, the record and its condition and the time again, and
+  makes an `app_reminder` notification keyed by `Job.Occurrence()`. The notification's text is read
+  from the record when the inbox is (`notifications.ReminderSource`, which `apps.Service`
+  implements, because `internal/notifications` can't import `internal/apps`).
 
 ## Agent safety
 

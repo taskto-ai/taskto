@@ -173,6 +173,7 @@ test('nothing is asked or subscribed until the person turns push on, and then on
       card_comment: 'A card of yours has a new comment',
       card_mention: 'You were mentioned in a comment',
       app_effect_failed: 'An app action needs your attention',
+      app_reminder: 'A reminder from one of your apps',
       integration_event: 'A payment needs an admin',
       changed: 'Something changed',
     },
@@ -296,6 +297,29 @@ const item = (id: number, over: Record<string, unknown> = {}) => ({
   read: false,
   created_at: '2026-03-01T10:00:00.000Z',
   ...over,
+})
+
+test('a reminder from an app names the app and the record and opens the app', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/notifications': {
+      body: {
+        notifications: [
+          item(5, {
+            kind: 'app_reminder',
+            params: { app: 'Dues', title: 'Pay the rent' },
+            target: { section: 'apps', item: '3-9' },
+          }),
+        ],
+        more: false,
+        unread: 1,
+      },
+    },
+  })
+  render(<NotificationsPage workspace={1} />)
+  const list = await screen.findByRole('list', { name: 'Notifications' })
+  const links = within(list).getAllByRole('link')
+  expect(links.map((a) => a.textContent)).toEqual(['Unread: Reminder from Dues: Pay the rent'])
+  expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/apps/3-9'])
 })
 
 test('the inbox lists notifications, marks one read when it is opened, and all read together, with push unavailable', async () => {
@@ -670,6 +694,7 @@ const emailChoices = (over: Record<string, unknown> = {}) => ({
     card_due: 'off',
     card_overdue: 'off',
     app_effect_failed: 'off',
+    app_reminder: 'off',
   },
   digest: { hour: 8, timezone: 'UTC', chosen: false },
   ...over,
@@ -729,6 +754,7 @@ test('every kind that can be mailed has a choice of its own, off until chosen', 
     card_due: 'A card of yours is due',
     card_overdue: 'A card of yours is overdue',
     app_effect_failed: 'An app action needs your attention',
+    app_reminder: 'A reminder from one of your apps',
   }
   for (const [kind, label] of Object.entries(labels)) {
     const select = (await screen.findByLabelText(label)) as HTMLSelectElement

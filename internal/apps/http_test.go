@@ -31,6 +31,8 @@ type env struct {
 	h       http.Handler
 	dataDir string
 	dbHooks *db.Hooks
+
+	accounts *auth.Service
 }
 
 func newEnv(t *testing.T) *env {
@@ -61,7 +63,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{}).Routes(mux, accounts, spaces)
-	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir, dbHooks: dbHooks}
+	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir, dbHooks: dbHooks, accounts: accounts}
 }
 
 type user struct {

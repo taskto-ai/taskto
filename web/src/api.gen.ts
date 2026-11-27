@@ -245,6 +245,7 @@ export type AppsDefinition = {
   summaries?: Record<string, AppsSummary>
   contributions?: AppsContributions
   integrations?: Record<string, AppsIntegrationSlot>
+  reminders?: AppsReminder[]
 }
 
 export type AppsEffect = {
@@ -341,6 +342,15 @@ export type AppsOfflineDefinition = {
 export type AppsOfflineScreen = {
   name: string
   record?: boolean
+}
+
+export type AppsReminder = {
+  name: string
+  date: string
+  time?: string
+  at?: string
+  title: string
+  where?: AppsRule
 }
 
 export type AppsRule = {

@@ -59,6 +59,7 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   'field.barcode',
   'summary.month_of',
   'data.labels',
+  'app.reminders',
   'icon.svg_path',
   'slot.home_widgets.v1',
   'slot.nav_pin.v1',

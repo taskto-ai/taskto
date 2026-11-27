@@ -225,6 +225,7 @@ const WORDS = {
   card_due: 'A card of yours is due',
   card_overdue: 'A card of yours is overdue',
   app_effect_failed: 'An app action needs your attention',
+  app_reminder: 'A reminder from one of your apps',
   changed: 'Something changed',
 }
 const pushOf = (data: unknown) => ({ data: { json: () => (typeof data === 'function' ? data() : data) } })
@@ -242,6 +243,20 @@ test('a push shows the brand and the words for its kind, tagged and carrying onl
     data: { id: 42 },
     icon: '/icons/icon-192.png',
   })
+})
+
+test('a reminder from an app is a push of generic words that never carry the record', async () => {
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
+  await sw.emit('push', pushOf({ id: 9, kind: 'app_reminder', title: 'Pay the rent', record: 4 }))
+  const [title, options] = shown(sw)[0] as [string, Record<string, unknown>]
+  expect(title).toBe('taskto.ai')
+  expect(options).toEqual({
+    body: 'A reminder from one of your apps',
+    tag: 'taskto-notification-9',
+    data: { id: 9 },
+    icon: '/icons/icon-192.png',
+  })
+  expect(JSON.stringify(shown(sw))).not.toContain('Pay the rent')
 })
 
 test('a push shows something whatever it carries: unknown kinds and unreadable data say only the brand and a generic line', async () => {

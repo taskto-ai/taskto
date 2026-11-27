@@ -175,7 +175,7 @@ func Capabilities() []string {
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
-	all = append(all, SummaryMonthCapability, LabelsCapability, IconPathCapability)
+	all = append(all, SummaryMonthCapability, LabelsCapability, IconPathCapability, RemindersCapability)
 	sort.Strings(all)
 	return all
 }

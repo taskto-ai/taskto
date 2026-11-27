@@ -1,5 +1,6 @@
 {
   "capabilities": [
+    "app.reminders",
     "component.BarcodeInput",
     "component.Button",
     "component.Card",

@@ -1536,6 +1536,42 @@
                 "additionalProperties": false
               }
             },
+            "reminders": {
+              "type": "array",
+              "maxItems": 3,
+              "description": "reminders for the person who created a record (version 3 of the format): at a date field, and optionally a time field, the creator gets a notification in their inbox (and a push or an email if they chose those), in their own time zone. It reaches only the creator, only while they may still read the record, and a push never carries the record's data. A changed or deleted record moves or cancels its reminder",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "a lowercase letter, then lowercase letters, digits or _; unique in the app"
+                  },
+                  "date": {
+                    "type": "string",
+                    "description": "the date field the reminder is set at"
+                  },
+                  "time": {
+                    "type": "string",
+                    "description": "optional: a time field that gives the time of day. A record that leaves it empty is reminded at \"at\""
+                  },
+                  "at": {
+                    "type": "string",
+                    "description": "optional: the time of day, HH:MM, used when there is no time field or the record leaves it empty. Default 09:00"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "what the notification says, a template: {{field}} is a field of the collection, {{id}} the record's number, and there is nothing more to it. At most 200 characters"
+                  },
+                  "where": {
+                    "type": "object",
+                    "description": "remind only for records this rule holds of (the same rule as required_when), e.g. status is not done"
+                  }
+                },
+                "required": ["name", "date", "title"],
+                "additionalProperties": false
+              }
+            },
             "integrations": {
               "type": "object",
               "description": "the outside services the app uses (version 3 of the format), by slot name (a lowercase letter, then lowercase letters, digits or _; at most 4 slots). A slot names a KIND of service, never a provider, an address, a key or an integration: an admin binds it to an account when approving the app. The server works out the slot's contract (what the app sends out and which fields the service may write back) and an admin approves its hash; a draft with an unapproved contract can't be published, and any change to what is sent or written is a new contract. You can't ask for approval, approve or read anything about accounts",
@@ -2023,6 +2059,42 @@
                   }
                 },
                 "required": ["kind"],
+                "additionalProperties": false
+              }
+            },
+            "reminders": {
+              "type": "array",
+              "maxItems": 3,
+              "description": "reminders for the person who created a record (version 3 of the format): at a date field, and optionally a time field, the creator gets a notification in their inbox (and a push or an email if they chose those), in their own time zone. It reaches only the creator, only while they may still read the record, and a push never carries the record's data. A changed or deleted record moves or cancels its reminder",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "a lowercase letter, then lowercase letters, digits or _; unique in the app"
+                  },
+                  "date": {
+                    "type": "string",
+                    "description": "the date field the reminder is set at"
+                  },
+                  "time": {
+                    "type": "string",
+                    "description": "optional: a time field that gives the time of day. A record that leaves it empty is reminded at \"at\""
+                  },
+                  "at": {
+                    "type": "string",
+                    "description": "optional: the time of day, HH:MM, used when there is no time field or the record leaves it empty. Default 09:00"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "what the notification says, a template: {{field}} is a field of the collection, {{id}} the record's number, and there is nothing more to it. At most 200 characters"
+                  },
+                  "where": {
+                    "type": "object",
+                    "description": "remind only for records this rule holds of (the same rule as required_when), e.g. status is not done"
+                  }
+                },
+                "required": ["name", "date", "title"],
                 "additionalProperties": false
               }
             },

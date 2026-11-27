@@ -265,6 +265,9 @@ func (s *Service) restoreRecord(ctx context.Context, sp access.Space, a Actor, a
 		if err := remember(ctx, tx, appID, id, revision+1, opRestore, data, at, a, Change{}); err != nil {
 			return err
 		}
+		if err := s.syncRecordReminders(ctx, tx, appID, id); err != nil {
+			return err
+		}
 		restored, _, err = scanRecord(tx.QueryRowContext(ctx, recordSelect+` WHERE r.id = ? AND r.app_id = ?`, id, appID), def)
 		return err
 	})

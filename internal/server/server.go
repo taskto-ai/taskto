@@ -118,6 +118,16 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 		appsService.WithQuota(opts.Quota)
 		opts.Quota.Routes(mux, accounts)
 	}
+	if opts.Scheduler != nil {
+		appsService.WithScheduler(opts.Scheduler)
+		spaces.OnArchiveChange(appsService.SyncSpaceReminders)
+		spaces.OnMemberAdded(appsService.SyncSpaceMemberReminders)
+		accounts.OnMemberAdded(appsService.SyncWorkspaceMemberReminders)
+		accounts.OnTimeZoneChanged(appsService.SyncTimeZoneReminders)
+	}
+	if opts.Notifications != nil {
+		opts.Notifications.WithReminderSource(appsService)
+	}
 	appsService.Routes(mux)
 	appsService.ApprovalRoutes(mux, accounts)
 	appsService.HomeRoutes(mux, accounts)

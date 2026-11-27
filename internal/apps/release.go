@@ -340,6 +340,9 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 			WHERE id = ?`, string(raw), number, stamp, stamp, a.UserID, a.Agent, via(a), appID); err != nil {
 			return err
 		}
+		if err := s.syncAppReminders(ctx, tx, appID, 0); err != nil {
+			return err
+		}
 		published, err = app(ctx, tx, sp.ID, appID)
 		return err
 	})
@@ -411,6 +414,9 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 			UPDATE apps SET live_release = ?, live_at = ?, draft_differs = ?,
 				version = version + 1, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?
 			WHERE id = ?`, target.Number, stamp, !sameDefinition(cur.draftDef, *target.Definition), stamp, a.UserID, a.Agent, via(a), appID); err != nil {
+			return err
+		}
+		if err := s.syncAppReminders(ctx, tx, appID, 0); err != nil {
 			return err
 		}
 		rolled, err = app(ctx, tx, sp.ID, appID)
