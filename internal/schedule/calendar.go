@@ -100,7 +100,7 @@ func (c Calendar) Next(after time.Time) (time.Time, error) {
 		return time.Time{}, ErrCalendar
 	}
 	localAfter := after.In(loc)
-	start := time.Date(localAfter.Year(), localAfter.Month(), localAfter.Day(), 0, 0, 0, 0, loc)
+	start := time.Date(localAfter.Year(), localAfter.Month(), localAfter.Day(), 0, 0, 0, 0, time.UTC)
 	limitDays := 2
 	if normal.At != "" || len(normal.Days) != 0 {
 		limitDays = 8

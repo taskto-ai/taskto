@@ -53,6 +53,12 @@ func TestCalendarNext(t *testing.T) {
 			after: time.Date(2026, time.January, 3, 1, 0, 0, 0, time.UTC),
 			want:  time.Date(2026, time.January, 4, 0, 0, 0, 0, time.UTC),
 		},
+		{
+			name:  "civil date advances across a midnight gap",
+			cal:   Calendar{At: "08:30", Zone: "America/Santiago"},
+			after: time.Date(2026, time.September, 5, 12, 0, 0, 0, mustLocation(t, "America/Santiago")),
+			want:  time.Date(2026, time.September, 6, 11, 30, 0, 0, time.UTC),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,4 +154,25 @@ func TestLocalTimeGapAndOverlap(t *testing.T) {
 	if !overlap.Equal(time.Date(2026, time.October, 25, 0, 30, 0, 0, time.UTC)) {
 		t.Fatalf("overlap LocalTime = %v, want first occurrence with UTC+1", overlap)
 	}
+}
+
+func TestLocalTimeNormalizesOverflowDateBeforeComparing(t *testing.T) {
+	loc, err := time.LoadLocation("Australia/Sydney")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := LocalTime(2029, time.March, 32, 2, 0, loc)
+	want := time.Date(2029, time.March, 31, 15, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("LocalTime = %v, want first instant of normalized date %v", got, want)
+	}
+}
+
+func mustLocation(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc
 }

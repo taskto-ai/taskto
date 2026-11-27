@@ -8,6 +8,8 @@ func LocalHour(year int, month time.Month, day, hour int, loc *time.Location) ti
 
 func LocalTime(year int, month time.Month, day, hour, minute int, loc *time.Location) time.Time {
 	want := time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
+	wantYear, wantMonth, wantDay := want.Date()
+	wantHour, wantMinute := want.Hour(), want.Minute()
 	start := want.Add(-48 * time.Hour)
 	limit := want.Add(48 * time.Hour)
 	var first time.Time
@@ -18,13 +20,13 @@ func LocalTime(year int, month time.Month, day, hour, minute int, loc *time.Loca
 		_, end := local.ZoneBounds()
 		if !at.Before(t) && (end.IsZero() || at.Before(end)) {
 			actual := at.In(loc)
-			if actual.Year() == year && actual.Month() == month && actual.Day() == day && actual.Hour() == hour && actual.Minute() == minute {
+			if actual.Year() == wantYear && actual.Month() == wantMonth && actual.Day() == wantDay && actual.Hour() == wantHour && actual.Minute() == wantMinute {
 				if first.IsZero() || at.Before(first) {
 					first = at
 				}
 			}
 		}
-		if end.IsZero() || !end.Before(limit) {
+		if end.IsZero() || !end.After(t) || !end.Before(limit) {
 			break
 		}
 		before := end.Add(-time.Nanosecond).In(loc)
