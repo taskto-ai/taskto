@@ -4,4 +4,5 @@ export const testHooks = {
   walBusyMs: undefined as number | undefined,
   spikeTools: false,
   extraToolSpecs: [] as ToolSpec[],
+  beforeModelWrite: undefined as (() => Promise<void>) | undefined,
 }
