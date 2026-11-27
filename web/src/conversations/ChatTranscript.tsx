@@ -76,7 +76,7 @@ export function ChatTranscript({
           <Message key={m.key} message={m} workspace={workspace} apps={apps} changes={changes.get(m.key)} />
         ))}
         <FollowNewest
-          key={JSON.stringify([last?.key ?? null, last?.text ?? null])}
+          key={JSON.stringify([last?.key ?? null, last?.text ?? null, (last && changes.get(last.key)?.length) ?? 0])}
           scroller={scroller}
           atBottom={atBottom}
         />

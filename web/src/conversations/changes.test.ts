@@ -292,7 +292,9 @@ test('a card made and then archived is still listed, as archived', () => {
 test("a comment doesn't hide the card's title or its creation", () => {
   const comment = { ...cardOf('commented'), title: '' }
   expect(run(user('1.0'), agent('2.0', cardOf('created'), comment))).toEqual({ '2.0': [cardOf('created')] })
-  expect(run(user('1.0'), agent('2.0', cardOf('edited'), comment))).toEqual({ '2.0': [cardOf('commented')] })
+  expect(run(user('1.0'), agent('2.0', cardOf('edited'), comment))).toEqual({ '2.0': [cardOf('edited')] })
+  expect(run(user('1.0'), agent('2.0', cardOf('archived'), comment))).toEqual({ '2.0': [cardOf('archived')] })
+  expect(run(user('1.0'), agent('2.0', comment, cardOf('moved')))).toEqual({ '2.0': [cardOf('moved')] })
 })
 
 test('a move rewrites the path of what the turn already changed', () => {

@@ -138,6 +138,7 @@ function withName(next: Changed, prev: Changed): Changed {
 }
 
 function merged(prev: Changed, next: Changed): Changed | null {
+  if (next.change === 'commented') return withName(prev, next)
   if (prev.change === 'created') {
     if (next.change === 'deleted') return null
     if (next.change === 'archived') return withName(next, prev)

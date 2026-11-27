@@ -273,3 +273,21 @@ test("a turn's list doesn't carry into the next turn's answer", async () => {
   const first = screen.getByText('Done: the notes, the card and the record are in.').closest('article') as HTMLElement
   expect(within(first).getByText('Changed in this turn (3)')).toBeTruthy()
 })
+
+test('the transcript follows a list that appears under the newest answer while the reader is at the bottom', async () => {
+  const source = await showTurn(turn.slice(0, 3))
+  const el = screen.getByRole('region', { name: 'Conversation' }).querySelector('.ui-chat-transcript') as HTMLDivElement
+  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1000 })
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
+  el.scrollTop = 800
+  fireEvent.scroll(el)
+  act(() => source.send({ type: 'value', value: { entries: turn.slice(0, 4) } }))
+  await screen.findByText('Changed in this turn (1)')
+  expect(el.scrollTop).toBe(1000)
+
+  el.scrollTop = 100
+  fireEvent.scroll(el)
+  act(() => source.send({ type: 'value', value: { entries: turn.slice(0, 5) } }))
+  await screen.findByText('Changed in this turn (2)')
+  expect(el.scrollTop).toBe(100)
+})
