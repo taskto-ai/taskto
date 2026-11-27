@@ -743,7 +743,8 @@ write.
     time the key was first sent), durably, and that record is never taken back. A crash between the
     record and the call, or between the call and its answer being noted, leaves the key as a call
     that may have run.
-  - *Sent once.* The HTTP client never resends the call by itself: Go's transport would resend a
+  - *Sent once.* The HTTP client never resends the call by itself (a later try of the entry may ask
+    the same key again within its window, below, and never a new key): Go's transport would resend a
     request with an `Idempotency-Key` on a new connection when a reused one breaks, and report the
     second copy's failed dial, though the first reached Stripe. The body is made one that can't be
     read again, which stops that, and whether a call may have left is told by whether a connection was
@@ -777,7 +778,10 @@ write.
   - *Then the same key is asked again*, with the same parameters, while Stripe still keeps it (23 hours
     from the key's first call; Stripe keeps keys at least 24): Stripe answers with what the first call
     made (an object, or the failure it kept), or runs the call if it never ran. Past that window the
-    key is never called again, since Stripe may have forgotten it and would run it a second time.
+    key is never called again, since Stripe may have forgotten it and would run it a second time. So
+    after an unknown outcome a call is never sent under a **new** key without an admin's
+    confirmation; the **same** key is sent again only within its window, where Stripe gives back
+    whatever the first call made and can't make a second object.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
     and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
