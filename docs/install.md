@@ -900,10 +900,15 @@ is a decision about the workspace's records, not an account's.
   write-ahead log is empty too; when it can't be finished (a reader such as a backup holds the log,
   or SQLite fails: the disk full, the file read-only), the log says it is deferred, the runtime
   starts all the same, and it is tried again at the next start. A larger one is left as it is, and
-  the log says so at each start: compact it by hand, with the server stopped, and record that it was
-  (`sqlite3 <data>/agent/agent.db "VACUUM; CREATE TABLE IF NOT EXISTS taskto_maintenance (name TEXT
-  PRIMARY KEY, done_at INTEGER NOT NULL) STRICT; INSERT OR REPLACE INTO taskto_maintenance VALUES
-  ('secure_delete_vacuum', 0)"`). Removed files' blocks on the disk
+  the log says so at each start: compact it by hand. Stop the server and everything else that reads
+  `agent.db` first, the backup schedule and any backup or `sqlite3` shell still running included
+  (`docker compose down` stops the schedule when its profile is in `COMPOSE_PROFILES`), then run
+  `docker compose run --rm taskto agent-compact` (outside Docker, `taskto agent-compact -data-dir
+  <data>`), which needs room on the disk for a copy of the database. It refuses while a server or
+  the runtime has the data directory, rewrites the database (`VACUUM`), empties the write-ahead
+  log, and records the compaction only when SQLite says the log was emptied: when a reader still
+  holds it, what was deleted may still be in it, so it says so, records nothing and exits with an
+  error; stop that reader and run it again. Don't record it by hand. Removed files' blocks on the disk
   itself are the file system's (see SQLite and the filesystem below).
   It also rewrites the runtime's providers file, stops the
   person's agent browsers (none starts meanwhile, and their live views close) and, once their

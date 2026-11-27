@@ -9,15 +9,21 @@
 // the main thread only awaits it.
 //
 // The harness writes on the main thread, also synchronously, and waits there whenever another
-// connection holds SQLite's write lock. So the purge never holds it for long: it deletes in short
-// transactions, each a bounded amount of work (CHUNK records a step, SLICE_STEPS steps and
-// SLICE_PAGES freed pages a transaction, counted, not timed), with a pause between them for the
-// harness's writes, in which what the transaction wrote is copied into the database (so the log
-// never piles up for one long copy at the end); and it empties the log by tries that don't wait (a
-// checkpoint that waits for readers holds the write lock all the while), sleeping between them on
-// its own thread. And the harness's commits don't checkpoint the log either (HARNESS_DB_OPTIONS):
-// one would copy, on the HTTP server's thread, what a purge or a reader let pile up. A thread of its
-// own does (startCheckpointer).
+// connection holds SQLite's write lock. So the purge holds it only briefly: it deletes in short
+// transactions, with a pause between them for the harness's writes. What a transaction deletes is
+// counted, not timed: CHUNK records a step at most, SLICE_STEPS steps, and rows whose pages, worked
+// out from their sizes before they go, fit in SLICE_PAGES (but a row larger than that, which goes
+// alone). What SQLite does besides isn't counted, only measured: the index and mark pages a delete
+// dirties, the queries that find the rows (the documents of a batch, before their revisions; the
+// look for what isn't marked yet, which skips more in a wide tree), and the last transaction, which
+// takes the root and whatever was written under it since the sweep. In each pause, what the
+// transaction wrote is copied into the database, so the log doesn't pile up for one long copy at
+// the end, unless a reader pins it, when the copy can't go past the reader's snapshot and the log
+// grows until it lets go. It empties the log at the end by tries that don't wait (a checkpoint
+// that waits for readers holds the write lock all the while), sleeping between them on its own
+// thread. And the harness's commits don't checkpoint the log either (HARNESS_DB_OPTIONS): one would
+// copy, on the HTTP server's thread, what a purge or a reader let pile up. A thread of its own
+// does (startCheckpointer).
 //
 // This module is also the worker's entry: it imports nothing of the sidecar's, so the same file
 // runs as the worker in the built sidecar (dist/purge.js) and in the tests (src/purge.ts).
@@ -209,10 +215,11 @@ export const SLICE_STEPS = 64
 const SLICE_MS = 20
 
 /**
- * How many pages one of the purge's transactions frees at most: each is written at the commit
- * (overwritten with zeros, secure_delete), so this bounds the commit's work as SLICE_STEPS and
- * CHUNK bound the rows. A step takes only as many rows as fit in what is left of it, by the most
- * pages a row of that table has freed so far in the purge (PageBudget).
+ * How many pages the rows one of the purge's transactions deletes take, at most, as rowPages works
+ * them out from their sizes before they go (but a row larger than this, which goes alone): each
+ * freed page is written at the commit (overwritten with zeros, secure_delete). A delete takes only
+ * the rows that fit in what is left (PageBudget). The pages of indexes and of the purge's marks
+ * that the deletes dirty aren't in it.
  */
 export const SLICE_PAGES = 512
 
@@ -251,68 +258,106 @@ export type PurgeHooks = {
 const NO_ROOM = -1
 
 /**
- * The pages one transaction may still free, and how many rows of a table the next delete may take
- * so that it stays within them: as many as fit by the most pages a row of that table has freed
- * so far in the purge, at most CHUNK and at most twice as many as before (the first delete of a
- * table takes one row, and only first in a transaction, to learn its size). The first delete of a
- * transaction takes one row at least, so a row larger than SLICE_PAGES goes alone; otherwise a
- * transaction goes past SLICE_PAGES only by a delete whose rows are larger than any of their table
- * before them. The pages are counted by delete (what the freelist gained), so pages the sweep's
- * marks take back from the freelist don't make room.
+ * The pages a row of bytes (its columns' content, as rowBytes reads it) takes in a database of
+ * pageSize, by SQLite's b-tree format: its share of a leaf when it fits in one (a cell of at most
+ * the page less 35 bytes), else its overflow pages and the part kept on the leaf. With a margin
+ * (ROW_MARGIN) for what deleting it frees besides: interior pages, index entries, a neighbouring
+ * leaf merged.
+ */
+export function rowPages(bytes: number, pageSize: number): number {
+  const cell = bytes + 24 // the record's header and the cell's
+  const usable = pageSize
+  const maxLocal = usable - 35
+  const minLocal = Math.floor(((usable - 12) * 32) / 255) - 23
+  let pages: number
+  if (cell <= maxLocal) {
+    pages = 1 / Math.max(1, Math.floor((usable - 8) / (cell + 4)))
+  } else {
+    let local = minLocal + ((cell - minLocal) % (usable - 4))
+    if (local > maxLocal) local = minLocal
+    pages = Math.ceil((cell - local) / (usable - 4)) + (local + 4) / (usable - 8)
+  }
+  return pages * ROW_MARGIN
+}
+
+/** rowPages's margin over a row's own pages. */
+const ROW_MARGIN = 1.25
+
+/**
+ * The SQL expression for the size of a row of table, in bytes: the sum of its columns' octet_length,
+ * which SQLite reads from the record's header without loading the content (an overflow chain is
+ * not read to be measured).
+ */
+function rowBytes(db: DatabaseSync, table: string): string {
+  let known = sizeExpressions.get(db)
+  if (!known) {
+    known = new Map()
+    sizeExpressions.set(db, known)
+  }
+  let expression = known.get(table)
+  if (expression === undefined) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+    expression = columns.map((c) => `coalesce(octet_length("${c.name.replaceAll('"', '""')}"), 0)`).join(' + ') || '0'
+    known.set(table, expression)
+  }
+  return expression
+}
+
+const sizeExpressions = new WeakMap<DatabaseSync, Map<string, string>>()
+
+/**
+ * The pages one of the purge's transactions may still free, and which of the rows a delete is about
+ * to take fit in them: each row's pages are worked out from its size before it is deleted (rowPages
+ * of what rowBytes reads), and rows are taken in order while their sum fits in SLICE_PAGES. The
+ * first delete of a transaction takes one row at least, so a row larger than SLICE_PAGES goes alone,
+ * in a transaction of its own. What the deletes freed is counted too (what the freelist gained, by
+ * delete, so pages the sweep's marks take back don't count), for the tests to compare.
  */
 class PageBudget {
-  private spent = 0
+  private planned = 0
+  private measured = 0
   private deleted = false
-  private readonly seen = new Map<string, { perRow: number; rows: number }>()
   private readonly freePages: () => number
-  constructor(freePages: () => number) {
+  readonly pageSize: number
+  constructor(freePages: () => number, pageSize: number) {
     this.freePages = freePages
+    this.pageSize = pageSize
   }
 
   /** A transaction begins. */
   begin(): void {
-    this.spent = 0
+    this.planned = 0
+    this.measured = 0
     this.deleted = false
   }
 
-  /** The pages the transaction's deletes have freed. */
+  /** The pages the transaction's deletes have freed, as the freelist counts them. */
   freed(): number {
-    return this.spent
-  }
-
-  /** How many rows of table the next delete may take: 0 when the transaction has no room for one. */
-  private rows(table: string): number {
-    const seen = this.seen.get(table)
-    if (!this.deleted) return seen ? Math.max(1, this.fit(seen)) : 1
-    return seen ? this.fit(seen) : 0
-  }
-
-  private fit(seen: { perRow: number; rows: number }): number {
-    const ramp = Math.min(CHUNK, seen.rows * 2)
-    if (seen.perRow === 0) return ramp
-    return Math.max(0, Math.min(ramp, Math.floor((SLICE_PAGES - this.spent) / seen.perRow)))
+    return this.measured
   }
 
   /**
-   * Deletes rows of table by remove(limit), which takes up to limit and says how many it took, and
-   * learns their size; NO_ROOM, with nothing deleted, when the transaction has no room for one of
-   * them and there is one (any(), asked only then).
+   * Deletes the first of the rows of sizes (in bytes, in the order they go) that fit, by
+   * remove(count), and says how many: 0 when there are none, NO_ROOM, with nothing deleted, when not
+   * even the first fits.
    */
-  take(table: string, remove: (limit: number) => number, any: () => boolean): number {
-    const limit = this.rows(table)
-    if (limit === 0) return any() ? NO_ROOM : 0
-    const before = this.freePages()
-    const n = remove(limit)
-    if (n > 0) {
-      const pages = Math.max(0, this.freePages() - before)
-      this.spent += pages
-      this.deleted = true
-      const seen = this.seen.get(table) ?? { perRow: 0, rows: 0 }
-      seen.perRow = Math.max(seen.perRow, Math.ceil(pages / n))
-      seen.rows = Math.max(seen.rows, n)
-      this.seen.set(table, seen)
+  take(sizes: number[], remove: (count: number) => void): number {
+    if (sizes.length === 0) return 0
+    let count = 0
+    let planned = this.planned
+    for (const bytes of sizes) {
+      const pages = rowPages(bytes, this.pageSize)
+      if (planned + pages > SLICE_PAGES && (count > 0 || this.deleted)) break
+      planned += pages
+      count++
     }
-    return n
+    if (count === 0) return NO_ROOM
+    const before = this.freePages()
+    remove(count)
+    this.measured += Math.max(0, this.freePages() - before)
+    this.planned = planned
+    this.deleted = true
+    return count
   }
 }
 
@@ -323,10 +368,9 @@ class PageBudget {
 // secure_delete zeroes the deleted content in the file, and the checkpoint takes it out of the
 // write-ahead log.
 //
-// Everything goes in short transactions (see the top of the file), each doing a bounded amount of
-// work whatever the tree's size, in an order that lets a purge that stops halfway be finished by the
-// next, which carries on from what this one left in taskto_purge_marks without looking at the rest
-// again. The purge marks the root, and then sweeps the marks (sweepStep): what a marked conversation
+// Everything goes in short transactions (see the top of the file, for what is counted in each and
+// what isn't), in an order that lets a purge that stops halfway be finished by the next, which
+// carries on from what this one left in taskto_purge_marks without looking at the rest again. The purge marks the root, and then sweeps the marks (sweepStep): what a marked conversation
 // or task started is marked before it goes, a batch at a time; then what is left of its records
 // goes, a chunk at a time, and its row (its mark stays, done); a second pass looks for anything that
 // refers to what is done (a late record) before it forgets the marks. A document's revisions go
@@ -355,7 +399,8 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
     const freePages = () => Number((freelist.get() as { freelist_count: number | bigint }).freelist_count)
     const totalChanges = db.prepare('SELECT total_changes() AS n')
     const changes = () => Number((totalChanges.get() as { n: number | bigint }).n)
-    const budget = new PageBudget(freePages)
+    const pageSize = Number((db.prepare('PRAGMA page_size').get() as { page_size: number | bigint }).page_size)
+    const budget = new PageBudget(freePages, pageSize)
     const step = sweepStep(db, root, budget)
     // Transactions of at most SLICE_STEPS steps of CHUNK records each, SLICE_PAGES freed and about
     // SLICE_MS, with a pause between them in which the harness's writes get the lock.
@@ -404,8 +449,9 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
         changes: mostChanged,
       })
       hooks?.afterSlice?.()
-      // What the transaction wrote is copied into the database now, by a checkpoint that waits for
-      // no one and holds no lock the harness's writes need, and syncs what it copied: a log left to
+      // What the transaction wrote is copied into the database now, as far as no reader's snapshot
+      // needs it, by a checkpoint that waits for no one and holds no lock the harness's writes
+      // need, and syncs what it copied: a log left to
       // pile up was copied at the end in one go (the whole account, 250 MB for 60,000 tasks of
       // 4 KB), and while the system wrote that out a one-row commit of the harness's took over
       // 300 ms in its own write, holding the write lock all the while (traced on every connection).
@@ -515,35 +561,45 @@ function ownedBy(tree: Tree): string {
 type Step = () => number
 
 /**
- * A step that deletes, a chunk at a time, what query (of rowids or ids) finds: CHUNK rows, or with
- * a budget as many as it leaves room for (NO_ROOM when none).
+ * A step that deletes, a chunk at a time, the rows of table where says (by key, rowid or id): CHUNK,
+ * or with a budget the first of them that fit in it (NO_ROOM when none does).
  */
 function each(
   db: DatabaseSync,
-  query: string,
+  table: string,
+  key: 'id' | 'rowid',
+  where: string,
   remove: (chunk: number[]) => void,
-  budget?: { table: string; of: PageBudget },
+  budget?: PageBudget,
 ): Step {
-  const take = (limit: number) => {
-    const chunk = select(db, `${query} LIMIT ${limit}`)
-    remove(chunk)
-    return chunk.length
+  if (!budget) {
+    return () => {
+      const chunk = select(db, `SELECT ${key} AS id FROM ${table} WHERE ${where} LIMIT ${CHUNK}`)
+      remove(chunk)
+      return chunk.length
+    }
   }
-  const any = () => select(db, `${query} LIMIT 1`).length > 0
-  return budget ? () => budget.of.take(budget.table, take, any) : () => take(CHUNK)
+  const sized = `SELECT ${key} AS id, ${rowBytes(db, table)} AS bytes FROM ${table} WHERE ${where} LIMIT ${CHUNK}`
+  return () => {
+    const rows = db.prepare(sized).all() as { id: number | bigint; bytes: number | bigint }[]
+    return budget.take(
+      rows.map((r) => Number(r.bytes)),
+      (count) => remove(rows.slice(0, count).map((r) => Number(r.id))),
+    )
+  }
 }
 
 /** The steps that delete what tree's conversations and tasks said: all but the root's lifecycle. */
 function contentSteps(db: DatabaseSync, tree: Tree): Step[] {
   const ids = list(tree.ids)
-  const docs = `SELECT id FROM documents WHERE ${ownedBy(tree)} AND kind <> ${LIFECYCLE}`
+  const docs = `${ownedBy(tree)} AND kind <> ${LIFECYCLE}`
   return [
-    each(db, `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`, (c) =>
+    each(db, 'document_revisions', 'rowid', `document_id IN (SELECT id FROM documents WHERE ${docs})`, (c) =>
       removeRows(db, 'document_revisions', c, false),
     ),
-    each(db, docs, (c) => removeDocuments(db, c)),
-    each(db, `SELECT id FROM submissions WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'submissions', c)),
-    each(db, `SELECT id FROM entries WHERE conversation_id IN (${ids})`, (c) => removeRows(db, 'entries', c)),
+    each(db, 'documents', 'id', docs, (c) => removeDocuments(db, c)),
+    each(db, 'submissions', 'id', `conversation_id IN (${ids})`, (c) => removeRows(db, 'submissions', c)),
+    each(db, 'entries', 'id', `conversation_id IN (${ids})`, (c) => removeRows(db, 'entries', c)),
   ]
 }
 
@@ -559,8 +615,9 @@ type Mark = { r: number | bigint; kind: string; id: number | bigint }
  * their rows, but the root's, and their marks are done. The root's mark stays: its row and
  * lifecycle go in the purge's last transaction. Second pass (once only the root is left to do):
  * anything that still refers to a done mark (a record written late) is taken, or marked if it is a
- * conversation or a task (back to the first pass), and then the marks are forgotten. Each call does
- * a bounded amount of work; 0 when there is none left.
+ * conversation or a task (back to the first pass), and then the marks are forgotten. Each call
+ * marks SWEEP or deletes CHUNK records at most, within the transaction's pages (NO_ROOM when none
+ * fits); 0 when there is none left.
  */
 function sweepStep(db: DatabaseSync, root: number, budget: PageBudget): Step {
   const batchOf = db.prepare(
@@ -591,24 +648,20 @@ function sweepStep(db: DatabaseSync, root: number, budget: PageBudget): Step {
     if (Number(owned.changes) > 0) return Number(owned.changes)
     // What is left of their records, a chunk at a time within the transaction's pages (the root's
     // lifecycle document stays).
-    const docs = `SELECT id FROM documents WHERE ((scope_kind = 'conversation' AND owner_id IN (${c}))
+    const docs = `((scope_kind = 'conversation' AND owner_id IN (${c}))
       OR (scope_kind = 'task' AND owner_id IN (${t}))) AND ${lifecycle}`
     for (const step of [
       each(
         db,
-        `SELECT rowid AS id FROM document_revisions WHERE document_id IN (${docs})`,
+        'document_revisions',
+        'rowid',
+        `document_id IN (SELECT id FROM documents WHERE ${docs})`,
         (x) => removeRows(db, 'document_revisions', x, false),
-        { table: 'document_revisions', of: budget },
+        budget,
       ),
-      each(db, docs, (x) => removeDocuments(db, x), { table: 'documents', of: budget }),
-      each(db, `SELECT id FROM submissions WHERE conversation_id IN (${c})`, (x) => removeRows(db, 'submissions', x), {
-        table: 'submissions',
-        of: budget,
-      }),
-      each(db, `SELECT id FROM entries WHERE conversation_id IN (${c})`, (x) => removeRows(db, 'entries', x), {
-        table: 'entries',
-        of: budget,
-      }),
+      each(db, 'documents', 'id', docs, (x) => removeDocuments(db, x), budget),
+      each(db, 'submissions', 'id', `conversation_id IN (${c})`, (x) => removeRows(db, 'submissions', x), budget),
+      each(db, 'entries', 'id', `conversation_id IN (${c})`, (x) => removeRows(db, 'entries', x), budget),
     ]) {
       const n = step()
       if (n !== 0) return n
@@ -622,20 +675,31 @@ function sweepStep(db: DatabaseSync, root: number, budget: PageBudget): Step {
       if (n !== 0) return n
       const others = todo.filter((m) => !isRoot(m))
       if (others.length > 0) {
-        // Nothing is left under any of the batch: their rows go, as many as the pages leave room
-        // for (tasks first, in the batch's order), and the rest with the next step.
+        // Nothing is left under any of the batch: their rows go, as many as fit in the transaction's
+        // pages by their sizes (tasks first, in the batch's order), and the rest with the next step.
+        const bytes = new Map<string, number>()
+        const sizes = (table: string, kind: string) => {
+          const ids = list(others.filter((m) => m.kind === kind).map((m) => Number(m.id)))
+          for (const row of db
+            .prepare(`SELECT id, ${rowBytes(db, table)} AS bytes FROM ${table} WHERE id IN (${ids})`)
+            .all() as {
+            id: number | bigint
+            bytes: number | bigint
+          }[])
+            bytes.set(`${kind}:${Number(row.id)}`, Number(row.bytes))
+        }
+        sizes('tasks', 'task')
+        sizes('conversations', 'conversation')
         return budget.take(
-          'tasks and conversations',
-          (limit) => {
-            const some = others.slice(0, limit)
+          others.map((m) => bytes.get(`${m.kind}:${Number(m.id)}`) ?? 0),
+          (count) => {
+            const some = others.slice(0, count)
             const t = list(some.filter((m) => m.kind === 'task').map((m) => Number(m.id)))
             const c = list(some.filter((m) => m.kind === 'conversation').map((m) => Number(m.id)))
             removeRows(db, 'tasks', select(db, `SELECT id FROM tasks WHERE id IN (${t})`))
             removeRows(db, 'conversations', select(db, `SELECT id FROM conversations WHERE id IN (${c})`))
             db.exec(`UPDATE taskto_purge_marks SET done = 1 WHERE rowid IN (${some.map((m) => Number(m.r)).join(',')})`)
-            return some.length
           },
-          () => true,
         )
       }
       // Only the root is left to do, and nothing under it: the second pass.
@@ -888,6 +952,9 @@ export function startCheckpointer(
     if (again !== undefined) clearTimeout(again)
     const w = worker
     if (!w || w.threadId === -1) return // none running: nothing to wait for
+    // Waited for with the thread keeping the process up: a caller that does nothing else meanwhile
+    // would otherwise end with this unsettled.
+    w.ref()
     await new Promise<void>((resolve) => {
       w.once('exit', () => resolve())
       if (w.threadId === -1) resolve()

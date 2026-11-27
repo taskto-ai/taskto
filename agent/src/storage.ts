@@ -39,6 +39,8 @@ export const COMPACT_MAX_BYTES = 256 * 1024 * 1024
  */
 export type Compaction = 'fresh' | 'done-before' | 'compacted' | 'too-large' | 'no-room' | 'deferred'
 
+// The same record as `taskto agent-compact` writes (internal/agentrt/compact.go; a test there checks
+// the two agree).
 const MAINTENANCE_TABLE = `CREATE TABLE IF NOT EXISTS taskto_maintenance (
   name    TEXT PRIMARY KEY,
   done_at INTEGER NOT NULL
@@ -84,7 +86,7 @@ export function compactOnce(path: string, maxBytes = COMPACT_MAX_BYTES): Compact
   }
   if (size > maxBytes) {
     console.error(
-      `agent.db is ${size} bytes, more than the ${maxBytes} compacted at start: content deleted before this version may remain in the file until it is compacted (docs/install.md#privacy-and-account-deletion)`,
+      `agent.db is ${size} bytes, more than the ${maxBytes} compacted at start: content deleted before this version may remain in the file until it is compacted: stop the server and its backups and run taskto agent-compact (docs/install.md#privacy-and-account-deletion)`,
     )
     return 'too-large'
   }

@@ -70,7 +70,7 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "backup" || os.Args[1] == "backup-schedule" || os.Args[1] == "restore" || os.Args[1] == "conversations") {
+	if len(os.Args) > 1 && (os.Args[1] == "backup" || os.Args[1] == "backup-schedule" || os.Args[1] == "restore" || os.Args[1] == "conversations" || os.Args[1] == "agent-compact") {
 		os.Exit(subcommand(os.Args[1], os.Args[2:]))
 	}
 
@@ -99,8 +99,8 @@ func main() {
 	}
 }
 
-// subcommand runs `taskto backup`, `taskto backup-schedule`, `taskto restore` or `taskto
-// conversations` and returns the exit code.
+// subcommand runs `taskto backup`, `taskto backup-schedule`, `taskto restore`, `taskto
+// conversations` or `taskto agent-compact` and returns the exit code.
 func subcommand(name string, args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -114,6 +114,8 @@ func subcommand(name string, args []string) int {
 		err = runRestore(ctx, args, os.Getenv, os.Stdin, os.Stderr)
 	case "conversations":
 		err = runConversations(ctx, args, os.Getenv, os.Stdout, os.Stderr)
+	case "agent-compact":
+		err = runAgentCompact(ctx, args, os.Getenv, os.Stderr)
 	}
 	switch {
 	case errors.Is(err, flag.ErrHelp):

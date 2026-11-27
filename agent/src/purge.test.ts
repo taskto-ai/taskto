@@ -44,9 +44,11 @@ function overloaded(before: number): string | undefined {
   return `skipped: the load average is ${load.toFixed(1)} on ${cores} cores, so this machine can't tell a stall of the purge's from its own; the bound is asserted when the load is at most the cores, and always in CI`
 }
 
-// The most frames of the log one transaction of the purge may leave for a checkpoint to copy: the
-// pages it freed (SLICE_PAGES at most, each written as zeros) and the pages beside them that SQLite
-// rebalanced, with those of the indexes its rows were in (measured: about twice the pages freed).
+// The most frames of the log the tests let one transaction of the purge leave for a checkpoint to
+// copy, with no reader and no other writer: the pages its rows took (SLICE_PAGES at most, each
+// written as zeros) and those SQLite dirtied besides, which the purge doesn't count (the leaves
+// beside a freed one that it rebalanced, the indexes' and the marks' pages; measured: about as
+// many again). A measured bound for these fixtures, not one the purge enforces.
 const LOG_FRAMES = 3 * SLICE_PAGES
 
 // How often the main thread got to run a timer while fn's promise was pending (or while fn ran,
@@ -815,58 +817,67 @@ describe('runPurge', () => {
     }
   })
 
+  // Purges root 1 of a fresh database that fill gave what is to go, and says what each transaction
+  // did: its work (SliceTiming) and the frames of the log it left for a checkpoint to copy (read
+  // before the purge's own checkpoint after it), and the same for the last one.
+  const workOf = (name: string, fill: (writer: DatabaseSync) => void) => {
+    path = join(dir, `${name}.db`)
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    writer.exec('BEGIN')
+    fill(writer)
+    writer.exec('COMMIT')
+    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    const slices: SliceTiming[] = []
+    const frames: number[] = []
+    let final: FinalWork | undefined
+    let finalFrames = 0
+    try {
+      purgeRecords(path, 1, 10_000, {
+        slice: (_, t) => slices.push(t),
+        afterSlice: () => frames.push(pending()),
+        final: (_, work) => {
+          final = work
+          finalFrames = pending()
+        },
+      })
+      expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
+      expect(writer.prepare('SELECT count(*) AS n FROM entries WHERE conversation_id <> 2').get()).toEqual({ n: 0 })
+      expect(writer.prepare('SELECT document_id FROM document_revisions').all()).toEqual([{ document_id: 42 }])
+    } finally {
+      reader.close()
+      writer.close()
+    }
+    const most = (key: keyof SliceTiming) => Math.max(...slices.map((s) => s[key]))
+    const seen = `${name}: ${JSON.stringify({ slices: slices.length, pages: most('pages'), records: most('records'), steps: most('steps'), changes: most('changes'), frames: Math.max(...frames), final, finalFrames })}`
+    return { slices, frames, final, finalFrames, most, seen }
+  }
+
   // The work of every transaction of the purge, counted, not timed: a step takes CHUNK records at
   // most, a transaction SLICE_STEPS steps and SLICE_PAGES freed pages at most (with records of 4 KB,
   // about a page each, and of 100 KB, 25 pages each), and the last transaction does the same work
   // however large the account. What each commits is copied into the database before the next
   // begins, so the log never holds more than one transaction's frames for a checkpoint to copy.
   it('bounds the work of every transaction by rows and pages, whatever the account', () => {
-    const run = (tasks: number, size: number) => {
-      path = join(dir, `bounds-${tasks}-${size}.db`)
-      const { writer, reader } = fixture()
-      reader.exec('COMMIT')
-      const task = writer.prepare('INSERT INTO tasks (id, conversation_id, record) VALUES (?, ?, ?)')
-      const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
-      const entry = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 3, ?)')
-      const body = 'r'.repeat(size)
-      writer.exec('BEGIN')
-      for (let id = 1_000_000; id < 1_000_000 + tasks; id++) {
-        task.run(id, id % 2 ? 1 : 3, body)
-        record.run(id)
-      }
-      // And what was said in the child conversation, in records of the same size.
-      for (let id = 2_000_000; id < 2_000_000 + tasks / 4; id++) {
-        entry.run(id, body)
-        record.run(id)
-      }
-      writer.exec('COMMIT')
-      writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
-      const slices: SliceTiming[] = []
-      const frames: number[] = []
-      let final: FinalWork | undefined
-      let finalFrames = 0
-      try {
-        purgeRecords(path, 1, 10_000, {
-          slice: (_, t) => slices.push(t),
-          // Before the purge's own checkpoint after it: the frames this transaction wrote.
-          afterSlice: () => frames.push(pending()),
-          final: (_, work) => {
-            final = work
-            finalFrames = pending()
-          },
-        })
-        expect(writer.prepare('SELECT count(*) AS n FROM tasks').get()).toEqual({ n: 0 })
-        expect(writer.prepare('SELECT count(*) AS n FROM entries WHERE conversation_id = 3').get()).toEqual({ n: 0 })
-      } finally {
-        reader.close()
-        writer.close()
-      }
-      return { slices, frames, final, finalFrames }
-    }
+    const run = (tasks: number, size: number) =>
+      workOf(`bounds-${tasks}-${size}`, (writer) => {
+        const task = writer.prepare('INSERT INTO tasks (id, conversation_id, record) VALUES (?, ?, ?)')
+        const record = writer.prepare('INSERT INTO record_ids (id) VALUES (?)')
+        const entry = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 3, ?)')
+        const body = 'r'.repeat(size)
+        for (let id = 1_000_000; id < 1_000_000 + tasks; id++) {
+          task.run(id, id % 2 ? 1 : 3, body)
+          record.run(id)
+        }
+        // And what was said in the child conversation, in records of the same size.
+        for (let id = 2_000_000; id < 2_000_000 + tasks / 4; id++) {
+          entry.run(id, body)
+          record.run(id)
+        }
+      })
     const runs = { small: run(2_000, 4000), large: run(20_000, 4000), wide: run(400, 100_000) }
-    for (const [name, r] of Object.entries(runs)) {
-      const most = (key: keyof SliceTiming) => Math.max(...r.slices.map((s) => s[key]))
-      const seen = `${name}: ${JSON.stringify({ slices: r.slices.length, pages: most('pages'), records: most('records'), steps: most('steps'), changes: most('changes'), frames: Math.max(...r.frames), final: r.final, finalFrames: r.finalFrames })}`
+    for (const r of Object.values(runs)) {
+      const { most, seen } = r
       expect(most('pages'), seen).toBeLessThanOrEqual(SLICE_PAGES)
       // The log is copied as the purge goes: no transaction finds more than its own frames there.
       expect(Math.max(...r.frames), seen).toBeLessThanOrEqual(LOG_FRAMES)
@@ -882,6 +893,56 @@ describe('runPurge', () => {
     expect(runs.large.final?.changes).toBeLessThanOrEqual(8)
     expect(runs.large.final?.pages).toBeLessThanOrEqual(4)
     expect(runs.large.slices.length).toBeGreaterThan(runs.small.slices.length * 5)
+  }, 120_000)
+
+  // The pages of a delete are worked out from the sizes of the rows it is about to take, so a table
+  // whose records change size from one to the next (small ones, then a run of wide ones of 256 KB,
+  // 64 pages each, or the other way) stays within SLICE_PAGES: not from what earlier rows freed.
+  // Tasks, what was said, and a document's revisions, in both orders.
+  it('sizes each delete by the rows it takes when records change size', () => {
+    const small = 'r'.repeat(200)
+    const wide = 'w'.repeat(256 * 1024)
+    // Small records first in the order the purge reads them, or wide ones first (the low ids are
+    // read first by the sweep's tasks, the high ids by entries, and revisions by their key).
+    const sizes = (wideFirst: boolean) => Array.from({ length: 140 }, (_, i) => (i < 100 !== wideFirst ? small : wide))
+    const kinds = {
+      tasks: (writer: DatabaseSync, bodies: string[]) => {
+        const task = writer.prepare('INSERT INTO tasks (id, conversation_id, record) VALUES (?, 1, ?)')
+        for (const [i, b] of bodies.entries()) task.run(1_000_000 + i, b)
+      },
+      entries: (writer: DatabaseSync, bodies: string[]) => {
+        const entry = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 1, ?)')
+        for (const [i, b] of bodies.entries()) entry.run(2_000_000 - i, b)
+      },
+      revisions: (writer: DatabaseSync, bodies: string[]) => {
+        writer.exec("INSERT INTO documents (id, scope_kind, owner_id) VALUES (3_000_000, 'conversation', 1)")
+        const revision = writer.prepare(
+          'INSERT INTO document_revisions (document_id, seq, content) VALUES (3_000_000, ?, ?)',
+        )
+        for (const [i, b] of bodies.entries()) revision.run(i + 1, b)
+      },
+    }
+    for (const [kind, fill] of Object.entries(kinds)) {
+      for (const wideFirst of [false, true]) {
+        const r = workOf(`sizes-${kind}-${wideFirst ? 'wide' : 'small'}-first`, (writer) =>
+          fill(writer, sizes(wideFirst)),
+        )
+        expect.soft(r.most('pages'), r.seen).toBeLessThanOrEqual(SLICE_PAGES)
+        expect.soft(Math.max(...r.frames), r.seen).toBeLessThanOrEqual(LOG_FRAMES)
+      }
+    }
+  }, 120_000)
+
+  // A record larger than SLICE_PAGES goes alone, in a transaction of its own, and the purge goes on.
+  it('takes a record larger than a transaction alone', () => {
+    const huge = 'h'.repeat(4 * 1024 * 1024) // about 1,000 pages
+    const r = workOf('huge', (writer) => {
+      const entry = writer.prepare('INSERT INTO entries (id, conversation_id, text) VALUES (?, 1, ?)')
+      for (let i = 0; i < 10; i++) entry.run(2_000_000 + i, i === 5 ? huge : 'small')
+    })
+    const big = r.slices.filter((s) => s.pages > SLICE_PAGES)
+    expect(big.length, r.seen).toBe(1)
+    expect(big[0].records, r.seen).toBe(1)
   }, 120_000)
 
   // The purge's last transaction checks again from the root and what is still marked, and takes
@@ -1196,6 +1257,30 @@ startCheckpointer(${JSON.stringify(path)}, 50, { started: () => console.log('sta
     expect(child.stdout).toContain('started')
     expect(child.signal, child.stderr).toBeNull()
     expect(child.status, child.stderr).toBe(0)
+  })
+
+  // A caller whose last work is to stop the checkpointer (a short-lived tool, a test) waits for it:
+  // the thread, which doesn't keep the process up while it runs, does while it is being stopped, so
+  // the process doesn't end with the stop unsettled.
+  it('keeps the process up until the checkpointer has stopped', () => {
+    const { writer, reader } = fixture()
+    reader.close()
+    writer.close()
+    const purge = new URL('./purge.ts', import.meta.url).href
+    const script = join(dir, 'stop.mjs')
+    writeFileSync(
+      script,
+      `import { startCheckpointer } from ${JSON.stringify(purge)}
+const stop = startCheckpointer(${JSON.stringify(path)}, 50)
+await new Promise((resolve) => setTimeout(resolve, 200))
+await stop()
+console.log('stopped')
+`,
+    )
+    const child = spawnSync(process.execPath, [script], { timeout: 10_000, encoding: 'utf8' })
+    expect(child.signal, child.stderr).toBeNull()
+    expect(child.status, child.stderr).toBe(0)
+    expect(child.stdout).toContain('stopped')
   })
 
   it('rejects with the failure of a purge that is not about the log', async () => {
