@@ -46,6 +46,10 @@ The panel shows what the person is relying on:
 - **A write that fails** (the storage is full, it is not available) is shown as the failure it is,
   and no copy is kept as if it were.
 
+A **`Table`** (a screen's records as sortable columns) works offline from the downloaded records:
+its rows are the same `/items` the screen reads, with the labels of choice fields and the offline
+changes on top, and sorting is done on the device.
+
 A release that **requires a capability this client lacks** (a newer component, a newer definition
 format) isn't downloaded, and one already on the device shows *update required* instead of a broken
 app, with the same button online does.
@@ -86,7 +90,13 @@ here: M). They are not the server's totals.* The summaries (count, sum, with the
 uses the device's clock for the current month, over the rows with a real date there; a client
 too old to know `month_of` asks to be updated and draws no app that uses it) are
 recomputed from those records with the same rules the server uses
-([`rules.ts`](../web/src/apps/rules.ts)).
+([`rules.ts`](../web/src/apps/rules.ts)). A date is `YYYY-MM-DD` and must exist on the calendar
+(`2026-02-30` and `2026-04-31` are not dates, `2028-02-29` is): the device checks a date it is
+given, and the rows a `month_of` summary counts, with [`dates.ts`](../web/src/offline/dates.ts),
+and the server and the device are tested against the same list of dates
+(`internal/apps/testdata/dates.json`).
+Declared chart series are recomputed from the downloaded rows plus queued changes, with the same
+grouping and bucket rules as the server.
 
 ## The outbox
 

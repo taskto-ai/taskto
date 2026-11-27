@@ -37,6 +37,12 @@
     "offlineNamed": "{name} está fora do ar: não pode ser aberto.",
     "openInApps": "Abrir em Apps",
     "openNamedInApps": "Abrir {name} em Apps",
+    "table": {
+      "yes": "Sim",
+      "no": "Não",
+      "more": "Mostrando {shown} de {total}",
+      "open": "Abrir {title}"
+    },
     "invalidScreen": "O app enviou uma tela que não pode ser mostrada: {error}",
     "noDataChanges": "Seu papel neste app permite ver, mas não alterar os dados.",
     "ownRecords": "Você vê apenas os registros que adicionou.",
@@ -1054,6 +1060,7 @@
     "search_query_no_words": "Não há palavras para buscar.",
     "conversation_not_found": "Conversa não encontrada.",
     "conversation_archived": "Esta conversa está arquivada: desarquive-a primeiro.",
+    "conversation_note_invalid": "Uma nota deve ter de 1 a {max} caracteres.",
     "conversation_title_invalid": "O título pode ter no máximo {max} caracteres, sem caracteres de controle.",
     "conversation_lost": "O agente não tem mais o conteúdo desta conversa. Um operador pode ver o motivo no log do servidor.",
     "conversation_no_model": "Esta conversa não tem modelo: escolha um.",
@@ -1227,8 +1234,11 @@
     "integration_event_not_retriable": "Só um evento que falhou pode ser tentado de novo.",
     "integration_outcome_unknown": "O provedor de pagamentos nunca informou se criou este link de pagamento, então nenhum outro foi criado: um segundo link poderia ser pago duas vezes. Um administrador precisa verificar, na conta do provedor, se há um link deste pagamento. Se houver, tente este pagamento de novo; se não houver, o administrador confirma que nenhum link existe e um novo é criado.",
     "integration_link_lookup_pending": "O provedor de pagamentos não informou se criou este link de pagamento. O servidor continua procurando por ele, e não cria outro, por algumas horas.",
-    "integration_condition_changed": "O registro foi alterado e não atende mais à condição desta ação, então nenhum link de pagamento foi criado. Ninguém precisa aprovar nada: desfaça a alteração ou execute a ação quando o registro se qualificar.",
+    "integration_condition_changed": "O registro foi alterado antes de o link de pagamento ser pedido e não atende mais à condição desta ação, então nenhum link de pagamento foi criado. Ninguém precisa aprovar nada: desfaça a alteração ou execute a ação quando o registro se qualificar.",
+    "integration_condition_changed_link_kept": "O registro foi alterado enquanto o link de pagamento era criado e não atende mais à condição desta ação. O link foi criado no provedor de pagamentos e fica guardado com esta entrada, então um pagamento nele ainda é registrado, mas ele não foi adicionado ao registro. Quando o registro voltar a atender à condição, tente esta entrada de novo (ou execute a ação de novo) para adicionar esse mesmo link: nenhum segundo link é criado enquanto este ainda puder ser pago.",
     "integration_nothing_to_confirm": "Este pagamento não está aguardando uma decisão sobre um resultado desconhecido.",
+    "integration_mode_change_refused": "Esta chave mudaria a integração entre os modos de teste e de produção, mas links de pagamento criados no modo atual ainda podem ser pagos ({count} deles), e os pagamentos deles não poderiam mais ser verificados nem registrados. Espere até que sejam pagos ou expirem (para um link de resultado desconhecido, confirme em Eventos que nenhum existe) e então troque a chave. Uma nova chave do mesmo modo pode ser definida a qualquer momento.",
+    "integration_link_attempt_changed": "Este link de pagamento foi tentado de novo desde que esta lista foi exibida, então o que você verificou no provedor de pagamentos pode não ser tudo o que existe. Verifique de novo a conta do provedor antes de confirmar.",
     "integration_link_not_confirmable": "Um link deste pagamento já foi visto no provedor de pagamentos, ou uma tentativa anterior dele já foi resolvida, então confirmar que nenhum existe não pode liberar um novo: um segundo link poderia ser pago duas vezes. Verifique a conta do provedor e concilie este pagamento lá.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_icon_path": "O ícone “{component}” não é um caminho SVG: ele deve começar com M ou m e só deve ter comandos de caminho, números, vírgulas e espaços, com no máximo {max} caracteres.",
@@ -1256,6 +1266,8 @@
     "home_limit": "Você pode ter no máximo {max} destes.",
     "home_order_invalid": "Essa ordem não é feita de itens seus.",
     "home_defaults_shared": "Padrões existem só para os apps de espaços compartilhados.",
+    "desk_changed": "Alguém alterou esta mesa enquanto isso: recarregue e tente de novo.",
+    "desk_invalid": "O layout desta mesa é inválido ({reason}).",
     "app_query_cursor": "Essa página não pode mais ser encontrada. Comece de novo pela primeira página.",
     "app_query_field": "O app não tem o campo “{field}” que possa ser usado aqui.",
     "app_query_condition": "O filtro em “{field}” não combina com o campo.",
@@ -2784,6 +2796,19 @@
     "openApp": "Abrir o app",
     "replyStopped": "A resposta foi interrompida.",
     "replyFailed": "A resposta falhou.",
+    "changes": {
+      "title": "Alterado neste turno ({count})",
+      "created": "Criado",
+      "edited": "Editado",
+      "moved": "Movido",
+      "deleted": "Excluído",
+      "restored": "Restaurado",
+      "archived": "Arquivado",
+      "commented": "Comentado",
+      "card": "Cartão {id}",
+      "record": "Registro {id} em {app}",
+      "recordBare": "Registro {id}"
+    },
     "tool": {
       "help": "Pediu para você assumir o navegador",
       "used": "Usou {name}",
@@ -2818,6 +2843,15 @@
       "cliOptionNotConnected": "{provider}: {model} (não conectado)",
       "signInAgain": "{cli} precisa que você entre de novo: reconecte aqui ou em <link>Configurações → Contas de CLI</link>.",
       "notConnected": "{cli} não está conectado: conecte em <link>Configurações → Contas de CLI</link>."
+    },
+    "note": {
+      "toggle": "O que você está escrevendo",
+      "modeMessage": "Para o agente",
+      "modeNote": "Nota",
+      "placeholder": "Adicione uma nota para o registro",
+      "hint": "Uma nota fica nesta conversa, mas o agente nunca a vê.",
+      "send": "Adicionar nota",
+      "hidden": "Nota · o agente não vê isto"
     },
     "composer": {
       "archived": "Esta conversa está arquivada.",

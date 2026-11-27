@@ -225,6 +225,10 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})); d.Status != cliworker.StatusOK {
 		t.Fatalf("turn = %+v", d)
 	}
+	var input, output int64
+	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens FROM agent_usage_daily WHERE user_id = ? AND workspace_id = ? AND source = 'cli' AND engine = 'claude'`, e.other.id, e.ws).Scan(&input, &output); err != nil || input != 10 || output != 5 {
+		t.Fatalf("shared account usage for the turn's owner = %d input, %d output, %v", input, output, err)
+	}
 	config := e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
 	calls := turnCalls(t, config)
 	if len(calls) != 1 {

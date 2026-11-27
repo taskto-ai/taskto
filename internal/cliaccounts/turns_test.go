@@ -153,6 +153,53 @@ func TestTurnOnTheOwnersAccount(t *testing.T) {
 	}
 }
 
+func TestTurnRecordsTokenEventsOnceForItsOwner(t *testing.T) {
+	e := newTurnEnv(t)
+	e.owner.connect(cliworker.Codex)
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{ExtraUsageEvents: 1})
+	conv := e.conversation(e.owner)
+	e.turn(conv, turnBody{Turn: "usage", CLI: "codex", Model: "default", Prompt: "hello"})
+	var input, output, turns int64
+	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens, turns FROM agent_usage_daily WHERE user_id = ? AND workspace_id = ? AND source = 'cli' AND engine = 'codex'`, e.owner.id, e.ws).Scan(&input, &output, &turns); err != nil {
+		t.Fatal(err)
+	}
+	if input != 20 || output != 10 || turns != 1 {
+		t.Fatalf("recorded usage = %d input, %d output, %d turns", input, output, turns)
+	}
+	var other int
+	if err := e.db.QueryRow(`SELECT count(*) FROM agent_usage_daily WHERE user_id = ?`, e.other.id).Scan(&other); err != nil || other != 0 {
+		t.Fatalf("other user's rows = %d, %v", other, err)
+	}
+}
+
+func TestReplayedTurnRecordsItsTokensOnce(t *testing.T) {
+	e := newTurnEnv(t)
+	e.owner.connect(cliworker.Codex)
+	conv := e.conversation(e.owner)
+	body := turnBody{Turn: "again", CLI: "codex", Model: "default", Prompt: "hello"}
+	e.turn(conv, body)
+	e.turn(conv, body)
+	var input, output, turns int64
+	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens, turns FROM agent_usage_daily WHERE user_id = ? AND source = 'cli' AND engine = 'codex'`, e.owner.id).Scan(&input, &output, &turns); err != nil {
+		t.Fatal(err)
+	}
+	if input != 10 || output != 5 || turns != 1 {
+		t.Fatalf("usage after a replay = %d input, %d output, %d turns", input, output, turns)
+	}
+}
+
+func TestTurnWithoutTokenEventsRecordsNothing(t *testing.T) {
+	e := newTurnEnv(t)
+	e.owner.connect(cliworker.Codex)
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{Fail: "provider failed"})
+	conv := e.conversation(e.owner)
+	e.turn(conv, turnBody{Turn: "no-usage", CLI: "codex", Model: "default", Prompt: "hello"})
+	var count int
+	if err := e.db.QueryRow(`SELECT count(*) FROM agent_usage_daily WHERE user_id = ?`, e.owner.id).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("usage rows = %d, %v", count, err)
+	}
+}
+
 func contains(args []string, flag, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag && args[i+1] == value {
