@@ -4354,7 +4354,7 @@ as `{"id":0,"name":"","updated_at":""}`. A read does not create a row.
 
 Saves a layout using optimistic concurrency. The request is `{"version":0,"layout":{...}}` for a
 new main desk, and each successful save increments the version. If another save has changed the
-version, the server returns `409 desk_changed` with the current desk in `current`.
+version, the server returns `409` with code `desk_changed` and the current desk in `current`.
 
 A version 1 layout has `v: 1`, a `focus` group id and a `root` node. A node is either a group with
 `group`, `tabs` and `active`, or a split with `split` (`row` or `column`), `sizes` and `children`.
@@ -4364,7 +4364,7 @@ Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes add
 at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
 `knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route. Unknown fields,
 other workspace paths, malformed layouts, and bodies larger than 32 KiB are refused; invalid
-layouts return `400 desk_invalid` with a closed `reason` code.
+layouts return `400` with code `desk_invalid` and a closed `reason` code.
 
 ## Integrations
 
