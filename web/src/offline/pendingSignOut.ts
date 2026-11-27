@@ -94,10 +94,16 @@ function read(): PendingSignOut[] {
 }
 
 // The record of one login: written (`p`), or removed (null).
-function put(user: number, session: string, p: PendingSignOut | null) {
+// Says whether the record was written (or removed) as asked.
+function put(user: number, session: string, p: PendingSignOut | null): boolean {
   try {
     if (p) window.localStorage.setItem(keyOf(user, session), JSON.stringify(p))
     else window.localStorage.removeItem(keyOf(user, session))
+  } catch {
+    // Not kept: the sign-out still goes on in this tab.
+    return false
+  }
+  try {
     const old = legacy()
     const rest = old.filter((r) => !(r.user === user && r.session === session))
     if (rest.length !== old.length) {
@@ -105,8 +111,9 @@ function put(user: number, session: string, p: PendingSignOut | null) {
       else window.localStorage.setItem(KEY, JSON.stringify(rest))
     }
   } catch {
-    // Not kept: the sign-out still goes on in this tab.
+    // The earlier version's list is left as it is; the record's own key is what is read first.
   }
+  return true
 }
 
 export function pendingSignOuts(): PendingSignOut[] {
@@ -144,9 +151,15 @@ export function recordSignOut(
 }
 
 // Changes the record of one login, when there is one.
-function change(user: number, session: string, to: (p: PendingSignOut) => PendingSignOut | null) {
+// 'none' when there is no record of that login, else whether the change was written.
+function change(
+  user: number,
+  session: string,
+  to: (p: PendingSignOut) => PendingSignOut | null,
+): 'none' | 'written' | 'failed' {
   const p = read().find((r) => r.user === user && r.session === session)
-  if (p) put(user, session, to(p))
+  if (!p) return 'none'
+  return put(user, session, to(p)) ? 'written' : 'failed'
 }
 
 // The logouts of a login on their way, in any tab: each one's own key (so no tab writes back
@@ -167,8 +180,10 @@ export function beginLogout(user: number, session: string): string {
 }
 
 // `answered`: the server's own answer came (it is over); without one, it may still reach the server.
+// The mark goes only once what it stands for is kept otherwise: a definite answer, or the sign-out
+// marked as unanswered. When the browser refuses that write, the mark stays (the safe side).
 export function endLogout(key: string, user: number, session: string, answered: boolean): void {
-  if (!answered) unansweredSignOut(user, session)
+  if (!answered && !unansweredSignOut(user, session)) return
   try {
     window.localStorage.removeItem(key)
   } catch {
@@ -192,8 +207,9 @@ function logoutsOnTheirWay(user: number, session: string): string[] {
 
 // A logout of `user`'s login `session` got no answer: it may reach the server yet. A record of
 // another login of the account (a newer one's, from another tab) stays as it is.
-export function unansweredSignOut(user: number, session: string): void {
-  change(user, session, (p) => ({ ...p, unanswered: true }))
+// False when the browser refused to write it (there is a record, and it isn't marked).
+export function unansweredSignOut(user: number, session: string): boolean {
+  return change(user, session, (p) => ({ ...p, unanswered: true })) !== 'failed'
 }
 
 // Back: `user`'s login `session` is this browser's still. Its sign-out is over, unless a logout of

@@ -6,8 +6,10 @@
 import { beforeEach, expect, test, vi } from 'vitest'
 import {
   backFromSignOut,
+  beginLogout,
   browserLogin,
   confirmSignOut,
+  endLogout,
   forgetLogin,
   pendingSignOutOf,
   pendingSignOuts,
@@ -138,4 +140,20 @@ test("two tabs recording sign-outs of two logins at once keep both: neither writ
   expect(pendingSignOuts().find((p) => p.session === 's2')?.approved).toEqual([
     ['r2', { version: 1, operation: 'op-2' }],
   ])
+})
+
+test('a logout with no answer keeps its mark when the browser refuses to note that on the sign-out', () => {
+  recordSignOut(1, 's1', false, new Map())
+  const logout = beginLogout(1, 's1')
+  // The browser refuses the write that would mark the sign-out as unanswered.
+  const set = Storage.prototype.setItem
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    if (key.startsWith(`${KEY}:`)) throw new DOMException('full', 'QuotaExceededError')
+    set.call(this, key, value)
+  })
+  endLogout(logout, 1, 's1', false)
+  vi.restoreAllMocks()
+  // The logout may still end the login: Back keeps the sign-out for it.
+  backFromSignOut(1, 's1')
+  expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'backed' })
 })
