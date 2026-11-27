@@ -1,11 +1,20 @@
 import { type ReactNode, useId, useState } from 'react'
-import { api, CLI_PRODUCTS, type CliAccounts, cliAccountFor, cliOfProvider, codeText, errorText } from '../api'
+import {
+  api,
+  CLI_PRODUCTS,
+  type CliAccounts,
+  cliAccountFor,
+  cliOfProvider,
+  codeText,
+  errorText,
+  type ModelRef,
+} from '../api'
 import { useT } from '../i18n'
 import { Link, routePath } from '../router'
 import { Select } from '../ui/Select'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 
-export type ModelRef = { provider: string; model_id: string }
+export type { ModelRef }
 export type ModelProvider = { provider: string; name: string; scope: string; models: { id: string; name: string }[] }
 
 const modelKey = (m: ModelRef) => JSON.stringify([m.provider, m.model_id])
@@ -29,10 +38,10 @@ export function ModelPicker({
 }) {
   const t = useT()
   const id = useId()
-  const [chosen, setChosen] = useState<ModelRef | null>(null)
+  const [pending, setPending] = useState<ModelRef | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const selected = chosen ?? current
+  const selected = pending ?? current
   const known = providers.some(
     (p) => p.provider === selected.provider && p.models.some((m) => m.id === selected.model_id),
   )
@@ -50,16 +59,16 @@ export function ModelPicker({
   const choose = async (key: string) => {
     const [provider, model_id] = JSON.parse(key) as [string, string]
     const model = { provider, model_id }
-    setChosen(model)
+    setPending(model)
     setBusy(true)
     setError(null)
     try {
       await api(url, { method: 'PUT', body: model })
       onChosen(model)
     } catch (e) {
-      setChosen(null)
       setError(errorText(e))
     } finally {
+      setPending(null)
       setBusy(false)
     }
   }

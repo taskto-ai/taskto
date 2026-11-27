@@ -32,6 +32,7 @@ type fakeRuntime struct {
 	models  map[int64]agentrt.ModelRef
 	created []agentrt.ModelRef
 	inputs  map[int64][]agentrt.Input
+	calls   []string
 	watches []*fakeWatch
 	aborts  map[int64]int
 	err     error
@@ -72,6 +73,7 @@ func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (i
 		return 0, f.err
 	}
 	f.inputs[conv] = append(f.inputs[conv], in)
+	f.calls = append(f.calls, "submit")
 	return int64(1000 + len(f.inputs[conv])), nil
 }
 
@@ -119,6 +121,7 @@ func (f *fakeRuntime) SetModel(_ context.Context, conv int64, model agentrt.Mode
 		return f.err
 	}
 	f.models[conv] = model
+	f.calls = append(f.calls, "set-model "+model.Provider+"/"+model.ModelID)
 	return nil
 }
 

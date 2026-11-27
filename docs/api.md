@@ -5556,6 +5556,18 @@ Sends a message: `{"content": "…", "when_busy": "steer", "request_id": "…", 
 `202 {"submission_id": 12}`; the answer arrives through the events stream. `409` for an
 archived conversation.
 
+A message that starts with an agent token, `@[Codex](agent:<provider>/<model id>)` (the label
+is up to 100 characters with no brackets, backslash or line break; the token is followed by
+whitespace or ends the message), moves the conversation to that model before the message is
+sent, with the hand-off that `PUT …/model` does: the web app's `@` menu inserts one. Only a
+token at the very start counts; one anywhere else is text. The token stays in the message, so
+the agent sees who was addressed. The model is checked as `PUT …/model` checks it: `400
+model_unknown` for one the caller may not use or that isn't configured, and then nothing is
+switched or sent. The reply then also names the model:
+`202 {"submission_id": 12, "model": {"provider": "cli-codex", "model_id": "default"}}`
+(`model` is absent when the message had no token). Conversations belong to their owner, so
+nobody else can send to one and so nobody else can switch its model this way.
+
 Sending and switching the model check access and the archive again just before passing the
 request to the agent runtime, after any wait for it to be ready. An archive, or a removal from
 the workspace, that commits while that call is in flight doesn't stop it. That is accepted:

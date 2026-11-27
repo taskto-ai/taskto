@@ -304,12 +304,30 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "request_id must be up to 128 printable ASCII characters")
 		return
 	}
+	var switchTo *agentrt.ModelRef
+	var reply SendReply
+	if mention, ok := agentMention(req.Content); ok {
+		model, ok := usable(w, r, mention)
+		if !ok {
+			return
+		}
+		switchTo = &model
+		reply.Model = &mention
+	}
 	rt, ok := s.runtime(w, r)
 	if !ok {
 		return
 	}
 	if !s.stillWritable(w, r) {
 		return
+	}
+	if switchTo != nil {
+		if err := rt.SetModel(r.Context(), c.agentID, *switchTo); err != nil {
+			conversationError(w, r, c, err)
+			return
+		}
+		user, _ := caller(r)
+		slog.InfoContext(r.Context(), "conversation model changed by a mention", "conversation", c.ID, "provider", switchTo.Provider, "by", user)
 	}
 	in := agentrt.Input{Content: req.Content, WhenBusy: busy, RequestID: req.RequestID}
 	if s.language != nil {
@@ -327,7 +345,8 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
 	s.markWhenSettled(rt, c.ID, c.agentID, sub)
-	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
+	reply.SubmissionID = sub
+	writeJSON(w, http.StatusAccepted, reply)
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {

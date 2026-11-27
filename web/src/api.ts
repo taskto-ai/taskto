@@ -132,6 +132,10 @@ export type Conversation = {
   cli_permissions?: 'ask' | 'allow_all'
 }
 
+export type ModelRef = { provider: string; model_id: string }
+
+export type SendReply = { submission_id: number; model?: ModelRef }
+
 export type CliQuestion = { id: string; turn: string; cli: string; tool: string; input?: string; asked_at: string }
 
 export type Space = {

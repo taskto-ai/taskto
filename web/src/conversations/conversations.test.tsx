@@ -820,3 +820,90 @@ test('each app shows once, at its latest save, and older apps only link', async 
     '/api/workspaces/1/spaces/2/apps/4',
   ])
 })
+
+const agentCatalog = {
+  'GET /api/workspaces/1/models': {
+    body: {
+      providers: [
+        { provider: 'script', name: 'Scripted', scope: 'instance', models: [{ id: 'script-1', name: 'Scripted' }] },
+        { provider: 'cli-codex', name: 'Codex', scope: 'cli', models: [{ id: 'default', name: 'Default' }] },
+      ],
+    },
+  },
+  'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'script', model_id: 'script-1' } },
+  'GET /api/me/cli-accounts': { body: { enabled: true, mode: 'local', accounts: [] } },
+}
+
+test('"@" at the start offers the agents, a choice inserts its token, and a send that switched updates the picker', async () => {
+  const { calls } = await openWith({
+    ...agentCatalog,
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: 'ask @' } })
+  expect(screen.queryByRole('listbox')).toBeNull()
+  fireEvent.change(box, { target: { value: '@' } })
+  const menu = screen.getByRole('listbox', { name: 'Hand this conversation to an agent' })
+  expect(
+    within(menu)
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['Codex: Default', 'Scripted'])
+
+  fireEvent.keyDown(box, { key: 'Escape' })
+  expect(screen.queryByRole('listbox')).toBeNull()
+  fireEvent.change(box, { target: { value: '@cod' } })
+  expect(
+    within(screen.getByRole('listbox'))
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['Codex: Default'])
+  fireEvent.change(box, { target: { value: '@nobody' } })
+  expect(screen.queryByRole('listbox')).toBeNull()
+
+  fireEvent.change(box, { target: { value: '@' } })
+  fireEvent.keyDown(box, { key: 'ArrowDown' })
+  fireEvent.keyDown(box, { key: 'ArrowUp' })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  expect(box.value).toBe('@[Codex](agent:cli-codex/default) ')
+  expect(screen.queryByRole('listbox')).toBeNull()
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) review this' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(box.value).toBe(''))
+  expect(calls.find((c) => c.method === 'POST')?.body).toMatchObject({
+    content: '@[Codex](agent:cli-codex/default) review this',
+  })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-codex', 'default'])))
+})
+
+test('a menu choice by pointer inserts the token too', async () => {
+  await openWith({ ...agentCatalog })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  fireEvent.change(box, { target: { value: '@' } })
+  fireEvent.pointerDown(within(screen.getByRole('listbox')).getByRole('option', { name: 'Scripted' }))
+  expect(box.value).toBe('@[Scripted](agent:script/script-1) ')
+  fireEvent.change(box, { target: { value: '' } })
+})
+
+test('a leading agent token shows as a chip in the sent message, and a later one stays as typed', async () => {
+  await openWith(
+    {},
+    viewOf([
+      entry(1, 'user', '@[Codex](agent:cli-codex/default) review this'),
+      entry(2, 'assistant', 'Looking.'),
+      entry(3, 'user', 'ask @[Codex](agent:cli-codex/default) again'),
+    ]),
+  )
+  const chip = await screen.findByText('@Codex')
+  expect(chip.getAttribute('title')).toBe('This conversation was handed to Codex')
+  expect(chip.parentElement?.textContent).toBe('@Codex review this')
+  expect(screen.getByText('ask @[Codex](agent:cli-codex/default) again')).toBeTruthy()
+})

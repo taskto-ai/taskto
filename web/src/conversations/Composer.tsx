@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { api, errorText } from '../api'
+import { api, errorText, type ModelRef, type SendReply } from '../api'
 import { browserLocale, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
@@ -17,6 +17,7 @@ import { Textarea } from '../ui/Textarea'
 import { Tooltip } from '../ui/Tooltip'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { draftKey, readDraft, writeDraft } from '../uiState'
+import { type AgentChoice, agentToken, matchingAgents, mentionQuery } from './agentMention'
 import { useDictation } from './Dictation'
 
 function requestId(): string {
@@ -32,6 +33,8 @@ export function Composer({
   unreadable = false,
   running,
   onSent,
+  agents = [],
+  onSwitched,
   children,
 }: {
   workspace: number
@@ -40,6 +43,8 @@ export function Composer({
   unreadable?: boolean
   running: boolean
   onSent: () => void
+  agents?: AgentChoice[]
+  onSwitched?: (model: ModelRef) => void
   children?: ReactNode
 }) {
   const t = useT()
@@ -54,6 +59,19 @@ export function Composer({
   const [error, setError] = useState<string | null>(null)
   const pendingId = useRef<string | null>(null)
   const box = useRef<HTMLTextAreaElement>(null)
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const [active, setActive] = useState(0)
+  const query = mentionQuery(text)
+  const matches = query === null || dismissed === text || off ? [] : matchingAgents(agents, query)
+  const menuOpen = matches.length > 0
+  const current = Math.min(active, Math.max(matches.length - 1, 0))
+  const optionId = (n: number) => `${id}-agent-${n}`
+  const chooseAgent = (choice: AgentChoice) => {
+    setText(`${agentToken(choice)} `)
+    setActive(0)
+    pendingId.current = null
+    box.current?.focus()
+  }
 
   const insert = (spoken: string) => {
     const el = box.current
@@ -84,8 +102,9 @@ export function Composer({
         browser_locale: browserLocale(),
         ...(whenBusy ? { when_busy: whenBusy } : {}),
       }
-      await api(`${base}/messages`, { method: 'POST', body })
+      const reply = await api<SendReply>(`${base}/messages`, { method: 'POST', body })
       pendingId.current = null
+      if (reply?.model) onSwitched?.(reply.model)
       setText((current) => (current === draft ? '' : current))
       onSent()
     } catch (err) {
@@ -99,6 +118,23 @@ export function Composer({
     send(running ? 'steer' : undefined)
   }
   const keyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (menuOpen && !e.nativeEvent.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        setActive((current + (e.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        chooseAgent(matches[current])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setDismissed(text)
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       send(running ? 'steer' : undefined)
@@ -150,12 +186,49 @@ export function Composer({
             }
             onChange={(e) => {
               setText(e.target.value)
+              setDismissed(null)
+              setActive(0)
               pendingId.current = null
             }}
             onKeyDown={keyDown}
             disabled={off}
             aria-describedby={hint ? `${id}-hint` : undefined}
+            {...(agents.length > 0
+              ? {
+                  role: 'combobox',
+                  'aria-autocomplete': 'list' as const,
+                  'aria-expanded': menuOpen,
+                  'aria-controls': menuOpen ? `${id}-agents` : undefined,
+                  'aria-activedescendant': menuOpen ? optionId(current) : undefined,
+                }
+              : {})}
           />
+          {menuOpen && (
+            <div
+              className="ui-chat-agents"
+              id={`${id}-agents`}
+              role="listbox"
+              aria-label={t('conversations.mentionAgent')}
+            >
+              {matches.map((choice, n) => (
+                <div
+                  key={`${choice.ref.provider} ${choice.ref.model_id}`}
+                  id={optionId(n)}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={n === current}
+                  className="ui-chat-agent"
+                  data-active={n === current || undefined}
+                  onPointerDown={(e) => {
+                    e.preventDefault()
+                    chooseAgent(choice)
+                  }}
+                >
+                  {choice.menu}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="ui-chat-box-row">
             {children}
             <span className="ui-chat-box-spacer" />

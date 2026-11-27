@@ -49,6 +49,7 @@ func Roots() []Root {
 		root[boards.Thread]("CardThread"),
 
 		root[conversations.Conversation]("Conversation"),
+		root[conversations.SendReply]("SendReply"),
 		root[notifications.Item]("NotificationItem"),
 		root[notifications.List]("NotificationList"),
 

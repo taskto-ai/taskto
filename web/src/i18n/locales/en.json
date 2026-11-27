@@ -2743,6 +2743,8 @@
     },
     "agentWorking": "The agent is working.",
     "agentReplied": "The agent replied.",
+    "mentionAgent": "Hand this conversation to an agent",
+    "agentChip": "This conversation was handed to {agent}",
     "agentWorkingLive": "The agent is working…",
     "loadEarlier": "Load earlier messages",
     "start": "Say something to start.",

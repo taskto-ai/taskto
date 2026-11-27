@@ -2764,6 +2764,8 @@
     },
     "agentWorking": "O agente está trabalhando.",
     "agentReplied": "O agente respondeu.",
+    "mentionAgent": "Passar esta conversa a um agente",
+    "agentChip": "Esta conversa foi passada a {agent}",
     "agentWorkingLive": "O agente está trabalhando…",
     "loadEarlier": "Carregar mensagens anteriores",
     "start": "Escreva algo para começar.",

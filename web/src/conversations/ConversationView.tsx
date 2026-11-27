@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
   api,
@@ -18,6 +18,7 @@ import { useChanged } from '../memo'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { agentChoices } from './agentMention'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
@@ -103,6 +104,11 @@ export function ConversationView({
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const model = picked ?? loadedModel.data
+  const agents = useMemo(
+    () =>
+      agentChoices(providers.data ?? [], (provider, model) => t('conversations.model.cliOption', { provider, model })),
+    [providers.data, t],
+  )
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
   const asks = messages.reduce((n, m) => n + m.tools.filter((t) => t.cli && t.output?.includes('⚠')).length, 0)
@@ -221,6 +227,8 @@ export function ConversationView({
         unreadable={unreadable}
         running={running}
         onSent={onChanged}
+        agents={agents}
+        onSwitched={setPicked}
       >
         {providers.data && model && (
           <ModelPicker
