@@ -1,10 +1,13 @@
 package conversations
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/apierr"
@@ -37,6 +40,7 @@ func TestOwnerAddsANote(t *testing.T) {
 	if len(inputs) != 0 {
 		t.Fatalf("a note reached the model as input: %+v", inputs)
 	}
+	time.Sleep(50 * time.Millisecond)
 	if n := e.rt.waited.Load(); n != 0 {
 		t.Fatalf("a note queued %d settle waits, which are what queue search indexing", n)
 	}
@@ -116,4 +120,66 @@ func TestNoteNeedsTheRuntime(t *testing.T) {
 	off := newEnv(t, true)
 	offOwner, offWS := off.setup()
 	offOwner.expect(http.StatusNotFound, http.MethodPost, notesPath(offWS, 1), map[string]any{"content": "hello"})
+}
+
+func TestNoteRechecksTheArchiveAfterWaitingForTheRuntime(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.svc.agent = func(ctx context.Context) (Runtime, error) {
+		if _, err := e.db.Exec(`UPDATE conversations SET archived_at = 'now' WHERE id = ?`, c.ID); err != nil {
+			t.Error(err)
+		}
+		return e.rt, nil
+	}
+	rec := owner.expect(http.StatusConflict, http.MethodPost, notesPath(ws, c.ID), map[string]any{"content": "late"})
+	if code := decode[map[string]any](t, rec)["code"]; code != string(apierr.CodeConversationArchived) {
+		t.Fatalf("code = %v", code)
+	}
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	if len(e.rt.notes) != 0 {
+		t.Fatalf("the agent runtime got %v", e.rt.notes)
+	}
+}
+
+type noteEntries struct{ Runtime }
+
+func (noteEntries) Entries(context.Context, int64, int64, int) (json.RawMessage, error) {
+	return json.RawMessage(`{"entries":[` +
+		`{"id":1,"kind":"pi.user","model":[{"role":"user","content":"hello"}]},` +
+		`{"id":2,"kind":"taskto.note","data":{"v":1,"author":7,"text":"checked with finance"}}]}`), nil
+}
+
+func TestTheExportCarriesANoteLikeAnyOtherEntry(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	owner.create(ws, nil)
+	e.svc.agent = func(context.Context) (Runtime, error) { return noteEntries{e.rt}, nil }
+
+	list, err := e.svc.ExportList(context.Background(), ws, owner.id)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	var kinds []string
+	var note string
+	err = e.svc.ExportEntries(context.Background(), list[0], func(raw json.RawMessage) error {
+		var entry struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Text string `json:"text"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return err
+		}
+		kinds = append(kinds, entry.Kind)
+		if entry.Kind == "taskto.note" {
+			note = entry.Data.Text
+		}
+		return nil
+	})
+	if err != nil || fmt.Sprint(kinds) != "[pi.user taskto.note]" || note != "checked with finance" {
+		t.Fatalf("exported %v with note %q, %v; want the message and the note, in order", kinds, note, err)
+	}
 }

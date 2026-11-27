@@ -241,3 +241,12 @@ test('a note does not clear what the agent is waiting for', () => {
   ]
   expect(pendingHelp(transcript({ entries }).messages)).toEqual({ reason: 'captcha', message: 'Solve it' })
 })
+
+test('an entry that is not a note never becomes one, whatever its data holds', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'hi' }], data: { text: 'sneaky', author: 1 } },
+    ],
+  })
+  expect(t.messages.map((m) => [m.role, m.text])).toEqual([['user', 'hi']])
+})

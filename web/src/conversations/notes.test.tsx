@@ -167,3 +167,92 @@ test('a message draft and a note draft are kept apart', async () => {
   fireEvent.click(screen.getByRole('radio', { name: 'To the agent' }))
   expect(box().value).toBe('to the agent')
 })
+
+test('a note that failed to send does not lend its request id to the message sent next', async () => {
+  claimDrafts(1)
+  let failing = true
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/conversations/7': { body: conversation },
+    'POST /api/workspaces/1/conversations/7/notes': () =>
+      failing ? { status: 500, body: { error: 'down' } } : { status: 202, body: { submission_id: 5 } },
+    'POST /api/workspaces/1/conversations/7/messages': { status: 202, body: { submission_id: 6 } },
+  })
+  render(view(fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  fireEvent.change(box(), { target: { value: 'to the agent' } })
+  fireEvent.click(screen.getByRole('radio', { name: 'Note' }))
+  fireEvent.change(box(), { target: { value: 'for me' } })
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1))
+  await screen.findByRole('alert')
+
+  failing = false
+  fireEvent.click(screen.getByRole('radio', { name: 'To the agent' }))
+  expect(box().value).toBe('to the agent')
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2))
+  const [note, message] = calls.filter((c) => c.method === 'POST')
+  expect(message.path).toBe('/api/workspaces/1/conversations/7/messages')
+  expect((message.body as { request_id: string }).request_id).not.toBe((note.body as { request_id: string }).request_id)
+})
+
+test('a note sent while the mode changes clears the note draft and leaves the message draft', async () => {
+  claimDrafts(1)
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/conversations/7': { body: conversation },
+    'POST /api/workspaces/1/conversations/7/notes': async () => {
+      await held
+      return { status: 202, body: { submission_id: 5 } }
+    },
+  })
+  render(view(fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  fireEvent.change(box(), { target: { value: 'to the agent' } })
+  fireEvent.click(screen.getByRole('radio', { name: 'Note' }))
+  fireEvent.change(box(), { target: { value: 'for me' } })
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+
+  fireEvent.click(screen.getByRole('radio', { name: 'To the agent' }))
+  await act(async () => {
+    release()
+    await held
+  })
+  await waitFor(() => expect(localStorage.getItem('taskto:note:1:/api/workspaces/1/conversations/7')).toBeNull())
+  expect(box().value).toBe('to the agent')
+  fireEvent.click(screen.getByRole('radio', { name: 'Note' }))
+  expect(box().value).toBe('')
+})
+
+test('what is typed while a note is being sent stays in the box', async () => {
+  claimDrafts(1)
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/conversations/7': { body: conversation },
+    'POST /api/workspaces/1/conversations/7/notes': async () => {
+      await held
+      return { status: 202, body: { submission_id: 5 } }
+    },
+  })
+  render(view(fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  fireEvent.click(screen.getByRole('radio', { name: 'Note' }))
+  fireEvent.change(box(), { target: { value: 'first' } })
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+
+  fireEvent.change(box(), { target: { value: 'first, and more' } })
+  await act(async () => {
+    release()
+    await held
+  })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Add note' })).toBeTruthy())
+  expect(box().value).toBe('first, and more')
+})
