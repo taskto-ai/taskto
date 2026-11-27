@@ -4,6 +4,7 @@ import { AgentDot } from '../ui/AgentDot'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Notice } from '../ui/Notice'
+import { turnChanges } from './changes'
 import { Message } from './Message'
 import type { ChatMessage, ToolUse } from './transcript'
 
@@ -35,6 +36,7 @@ export function ChatTranscript({
   const scroller = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const last = messages.at(-1)
+  const changes = turnChanges(messages)
 
   const before = useRef<{ first: string | undefined; fromBottom: number } | null>(null)
   const firstKey = messages[0]?.key
@@ -71,7 +73,7 @@ export function ChatTranscript({
         )}
         {started && messages.length === 0 && <EmptyState title={t('conversations.start')} />}
         {messages.map((m) => (
-          <Message key={m.key} message={m} workspace={workspace} apps={apps} />
+          <Message key={m.key} message={m} workspace={workspace} apps={apps} changes={changes.get(m.key)} />
         ))}
         <FollowNewest
           key={JSON.stringify([last?.key ?? null, last?.text ?? null])}

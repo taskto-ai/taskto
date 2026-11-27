@@ -1,6 +1,8 @@
 import { applyImmutable, type Op } from '@earendil-works/chord/delta'
 import { expect, test } from 'vitest'
+import { turnChanges } from './changes'
 import stream from './testdata/stream.json'
+import turn from './testdata/turn-changes.json'
 import { type ConversationView, transcript } from './transcript'
 
 type Event = { type: string; value?: ConversationView; ops?: Op[] }
@@ -108,7 +110,13 @@ test('a tool use names the app only from a saved result, never from its argument
     ],
   })
   expect(t.messages[0].tools).toEqual([
-    { id: 'ok', key: '1.0.0', name: 'create_app', app: { space: 2, app: 1 } },
+    {
+      id: 'ok',
+      key: '1.0.0',
+      name: 'create_app',
+      app: { space: 2, app: 1 },
+      changed: { kind: 'app', space: 2, app: 1, name: 'Expenses', change: 'created' },
+    },
     { id: 'refused', key: '1.0.1', name: 'create_app' },
     { id: 'odd', key: '1.0.2', name: 'update_app' },
     { id: 'other', key: '1.0.3', name: 'show_app' },
@@ -132,8 +140,24 @@ test('a result answers the latest call with its id: ids can repeat across turns'
     ],
   })
   expect(t.messages.map((m) => m.tools)).toEqual([
-    [{ id: 'call_0', key: '1.0.0', name: 'create_app', app: { space: 2, app: 1 } }],
-    [{ id: 'call_0', key: '3.0.0', name: 'update_app', app: { space: 2, app: 5 } }],
+    [
+      {
+        id: 'call_0',
+        key: '1.0.0',
+        name: 'create_app',
+        app: { space: 2, app: 1 },
+        changed: { kind: 'app', space: 2, app: 1, name: 'x', change: 'created' },
+      },
+    ],
+    [
+      {
+        id: 'call_0',
+        key: '3.0.0',
+        name: 'update_app',
+        app: { space: 2, app: 5 },
+        changed: { kind: 'app', space: 2, app: 5, name: 'x', change: 'edited' },
+      },
+    ],
   ])
 })
 
@@ -191,4 +215,50 @@ test('an app a CLI turn saved is the app of its cli_turn call, from the result i
     ],
   })
   expect(none.messages[0].tools[0].app).toBeUndefined()
+})
+
+test('keeps what each call that changed something changed, and nothing for readers or failed calls', () => {
+  const t = transcript({ entries: turn })
+  const used = t.messages.flatMap((m) => m.tools).map((u) => [u.name, u.changed])
+  expect(used).toEqual([
+    ['list_docs', undefined],
+    ['write_doc', { kind: 'doc', space: 3, path: 'notes/a.md', change: 'created' }],
+    ['create_card', { kind: 'card', space: 3, board: 4, card: 9, title: 'Call the bank', change: 'created' }],
+    ['write_doc', undefined],
+    ['run_app_action', { kind: 'record', space: 2, app: 5, record: 12, change: 'created' }],
+  ])
+  expect([...turnChanges(t.messages)]).toEqual([
+    [
+      '9.0',
+      [
+        { kind: 'doc', space: 3, path: 'notes/a.md', change: 'created' },
+        { kind: 'card', space: 3, board: 4, card: 9, title: 'Call the bank', change: 'created' },
+        { kind: 'record', space: 2, app: 5, record: 12, change: 'created' },
+      ],
+    ],
+  ])
+})
+
+test('a result that arrives for a call of another name is not taken for a change', () => {
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'x', name: 'read_doc', arguments: { space_id: 3, path: 'a.md' } }],
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'x',
+            toolName: 'write_doc',
+            content: [{ type: 'text', text: '{"commit":"c"}' }],
+          },
+        ],
+      },
+    ],
+  })
+  expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
 })

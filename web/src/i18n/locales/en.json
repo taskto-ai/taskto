@@ -2756,6 +2756,19 @@
     "openApp": "Open the app",
     "replyStopped": "The reply was stopped.",
     "replyFailed": "The reply failed.",
+    "changes": {
+      "title": "Changed in this turn ({count})",
+      "created": "Created",
+      "edited": "Edited",
+      "moved": "Moved",
+      "deleted": "Deleted",
+      "restored": "Restored",
+      "archived": "Archived",
+      "commented": "Commented",
+      "card": "Card #{id}",
+      "record": "Record #{id} in {app}",
+      "recordBare": "Record #{id}"
+    },
     "tool": {
       "help": "Asked you to take over the browser",
       "used": "Used {name}",
