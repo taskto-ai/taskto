@@ -102,17 +102,49 @@ func TestPlaceRankingUsesUnicodeCharacterCount(t *testing.T) {
 
 func TestPaletteQueryValidation(t *testing.T) {
 	w := newWorld(t)
-	for _, target := range []string{
-		fmt.Sprintf("/api/workspaces/%d/search/palette", w.ws),
-		fmt.Sprintf("/api/workspaces/%d/search/palette?q=orchard&limit=11", w.ws),
-	} {
-		expect(t, w.alice.do(http.MethodGet, target, nil), http.StatusBadRequest)
+	base := fmt.Sprintf("/api/workspaces/%d/search/palette", w.ws)
+	expectCode(t, w.alice.do(http.MethodGet, base, nil), http.StatusBadRequest, "search_query_required", nil)
+	for _, limit := range []string{"11", "-1", "many"} {
+		expectCode(t, w.alice.do(http.MethodGet, base+"?q=orchard&limit="+limit, nil), http.StatusBadRequest, "bad_request", nil)
 	}
-	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/palette?q=orchard", w.ws), nil)
-	request.Header.Set("Authorization", "Bearer invalid")
+	expect(t, w.alice.do(http.MethodGet, base+"?q=orchard&limit=10", nil), http.StatusOK)
+}
+
+func TestPaletteRefusesAccessTokens(t *testing.T) {
+	w := newWorld(t)
+	created := decode[struct {
+		Secret string `json:"token"`
+	}](t, w.alice.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", w.ws), map[string]string{"name": "palette"}))
+	target := fmt.Sprintf("/api/workspaces/%d/search/palette?q=orchard", w.ws)
+	for secret, status := range map[string]int{created.Secret: http.StatusForbidden, "invalid": http.StatusUnauthorized} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer "+secret)
+		response := httptest.NewRecorder()
+		w.e.h.ServeHTTP(response, request)
+		expect(t, response, status)
+	}
+	cards := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=orchard", w.ws), nil)
+	cards.Header.Set("Authorization", "Bearer "+created.Secret)
 	response := httptest.NewRecorder()
-	w.e.h.ServeHTTP(response, request)
-	expect(t, response, http.StatusUnauthorized)
+	w.e.h.ServeHTTP(response, cards)
+	expect(t, response, http.StatusOK)
+}
+
+func TestPaletteLimitsEachKind(t *testing.T) {
+	w := newWorld(t)
+	for i := 0; i < 4; i++ {
+		w.newApp(w.alice, w.team, fmt.Sprintf("Orchard app %d", i), false)
+	}
+	for _, c := range []struct {
+		query string
+		want  int
+	}{{"orchard", 5}, {"orchard&limit=2", 2}} {
+		rec := w.alice.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/palette?q=%s", w.ws, c.query), nil)
+		expect(t, rec, http.StatusOK)
+		if got := decode[paletteReply](t, rec); len(got.Places.Apps) != min(c.want, 4) {
+			t.Fatalf("query %q: %d apps, want %d", c.query, len(got.Places.Apps), min(c.want, 4))
+		}
+	}
 }
 
 func TestPaletteDoesNotCallEmbeddingsEndpoint(t *testing.T) {
