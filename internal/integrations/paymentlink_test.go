@@ -1090,10 +1090,13 @@ func TestAProviderThatNeverAnswersExhaustsTheEntry(t *testing.T) {
 	p.send(record, "op-down-0001")
 	for i := 0; i < 6; i++ {
 		// The try is over once the entry waits again: its next attempt is then set from the
-		// clock, so moving the clock only now never lands between the call and that.
+		// clock, so moving the clock only now never lands between the call and that. The calls are
+		// counted first: a pending state read after them is the one that try left, not the one
+		// before it.
 		p.waitFor("a try", func() bool {
+			posts := len(p.posts())
 			es := p.entries()
-			return len(es) == 1 && (es[0].state == "failed" || es[0].state == "pending" && len(p.posts()) == i+1)
+			return len(es) == 1 && (es[0].state == "failed" || es[0].state == "pending" && posts == i+1)
 		})
 		p.later(10 * time.Minute)
 	}
