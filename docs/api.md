@@ -3059,7 +3059,10 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
+  address), plus `Stat` (a labelled value), `Markdown` (formatted text from a literal or a
+  binding, drawn by the web app's own renderer, which never makes HTML: links show as text
+  and are never followed, and images show as links, so an app opens nothing outside),
+  `Show` (draws its child while a rule holds,
   [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
   attachments, which upload to and draw from this server's own authenticated routes, never an
   outside address: [Photo attachments](#photo-attachments)), and `LocationInput`, `SignatureInput` and

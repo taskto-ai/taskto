@@ -47,6 +47,28 @@ test('renders the common syntax as elements', () => {
   expect(el.querySelector('hr')).not.toBeNull()
 })
 
+test('links="text" shows a link as text, with its address when the label differs', () => {
+  const { container } = render(
+    <Markdown
+      text={
+        'Read [the guide](https://example.com/guide) or [https://example.com/raw](https://example.com/raw), or https://example.com/bare.'
+      }
+      links="text"
+    />,
+  )
+  expect(container.querySelector('a')).toBeNull()
+  expect(container.textContent).toContain('the guide (https://example.com/guide)')
+  expect(container.textContent).toContain('https://example.com/raw,')
+  expect(container.textContent).not.toContain('https://example.com/raw (')
+  expect(container.textContent).toContain('https://example.com/bare')
+  expect(container.textContent).not.toContain('https://example.com/bare (')
+})
+
+test('a link is followed by default', () => {
+  const { container } = render(<Markdown text={'[the guide](https://example.com/guide)'} />)
+  expect(container.querySelector('a')?.getAttribute('href')).toBe('https://example.com/guide')
+})
+
 test('raw HTML is shown as text, never made into elements', () => {
   const { container } = render(
     <Markdown

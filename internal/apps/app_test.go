@@ -498,3 +498,28 @@ func TestBindingToALabelRequiresTheCapability(t *testing.T) {
 		t.Errorf("template found %v, capabilities %v", found, Capabilities())
 	}
 }
+
+func TestMarkdownComponent(t *testing.T) {
+	check := func(component string) (Definition, error) {
+		return Definition{
+			Components: []json.RawMessage{json.RawMessage(component)},
+			Actions:    map[string]Action{"add": {Kind: ActionInsert}},
+		}.Check()
+	}
+	for name, component := range map[string]string{
+		"a literal": `{"id":"root","component":"Markdown","text":"**Hi**"}`,
+		"a binding": `{"id":"root","component":"Markdown","text":{"path":"/record/notes"}}`,
+	} {
+		def, err := check(component)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !slices.Contains(def.Requires, ComponentCapability("Markdown")) {
+			t.Errorf("%s requires %v, want %s", name, def.Requires, ComponentCapability("Markdown"))
+		}
+	}
+	if _, err := check(`{"id":"root","component":"Markdown","text":"# Hi","variant":"h1"}`); err == nil || !strings.Contains(err.Error(), "variant") {
+		t.Errorf("a variant: err = %v", err)
+	}
+}
