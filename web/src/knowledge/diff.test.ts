@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest'
-import { diffLines, diffWords, type Line, MAX_EDITS, MAX_LINES, splitLines } from './diff'
+import { describe, expect, test, vi } from 'vitest'
+import { diffLines, diffWords, type Line, MAX_EDITS, MAX_LINES, splitLines, tokenize } from './diff'
 
 function shown(a: string, b: string) {
   const result = diffLines(a, b)
@@ -207,5 +207,50 @@ describe('diffWords', () => {
   test('a line with too many words is left without highlights', () => {
     const long = Array.from({ length: 4001 }, (_, i) => `w${i}`).join(' ')
     expect(diffWords(long, 'short')).toBeNull()
+  })
+})
+
+describe('the limits, and how words are cut and joined', () => {
+  test('the line limit is 20,000 lines on a side, and the edit limit 5,000 changed lines', () => {
+    const lines = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => `${prefix}${i}`).join('\n')
+    expect(diffLines(`${lines(20000, 'x')}\n`, `${lines(20000, 'x')}\n`).tooLarge).toBe(false)
+    expect(diffLines(`${lines(20001, 'x')}\n`, `${lines(20001, 'x')}\n`)).toEqual({ tooLarge: true })
+    expect(diffLines(lines(2500, 'a'), lines(2500, 'b')).tooLarge).toBe(false)
+    expect(diffLines(lines(2501, 'a'), lines(2501, 'b'))).toEqual({ tooLarge: true })
+  })
+
+  test('words are limited to 4,000 tokens on a side and 1,000 edits, however small the other side is', () => {
+    const same = Array.from({ length: 3000 }, (_, i) => `w${i}`).join(' ')
+    expect(diffWords(same, `${same} end`)).toBeNull()
+    const few = Array.from({ length: 600 }, (_, i) => `a${i}`).join(' ')
+    expect(diffWords(few, `${few} end`)).not.toBeNull()
+    const left = Array.from({ length: 800 }, (_, i) => `a${i}`).join(' ')
+    const right = Array.from({ length: 800 }, (_, i) => `b${i}`).join(' ')
+    expect(diffWords(left, right)).toBeNull()
+  })
+
+  test('neighbouring words of one kind come back as one part', () => {
+    expect(diffWords('the quick brown fox', 'the slow brown fox')).toEqual({
+      old: [
+        { text: 'the ', changed: false },
+        { text: 'quick', changed: true },
+        { text: ' brown fox', changed: false },
+      ],
+      new: [
+        { text: 'the ', changed: false },
+        { text: 'slow', changed: true },
+        { text: ' brown fox', changed: false },
+      ],
+    })
+  })
+
+  test('without a word segmenter, text is cut into words, spaces and punctuation', () => {
+    const intl = new Proxy(Intl, { has: (target, key) => key !== 'Segmenter' && key in target })
+    vi.stubGlobal('Intl', intl)
+    try {
+      expect(tokenize('héllo, wörld 你好')).toEqual(['héllo', ',', ' ', 'wörld', ' ', '你好'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
