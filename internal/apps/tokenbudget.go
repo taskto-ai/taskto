@@ -51,6 +51,13 @@ func (s *Service) WithClock(clock func() time.Time) *Service {
 	return s
 }
 
+// WithOutboxPoll sets how often the outbox's worker looks for due entries when nothing wakes it,
+// for tests that move WithClock's time and wait for the worker to see it; it returns the service.
+func (s *Service) WithOutboxPoll(every time.Duration) *Service {
+	s.poll = every
+	return s
+}
+
 type budgetKey struct{ user, workspace int64 }
 
 type bucket struct {
