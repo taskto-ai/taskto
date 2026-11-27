@@ -458,10 +458,8 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
     const raw = row[s.group_by]
     if (!keeps(row)) continue
     let key: string | undefined
-    if (groupField.type === 'date' && typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-      const date = new Date(`${raw}T00:00:00.000Z`)
-      if (!Number.isNaN(date.getTime())) key = dateKey(date)
-    } else if (groupField.type === 'choice' && typeof raw === 'string' && groupIndex.has(raw)) key = raw
+    if (groupField.type === 'date' && isCalendarDate(raw)) key = dateKey(new Date(`${raw}T00:00:00.000Z`))
+    else if (groupField.type === 'choice' && typeof raw === 'string' && groupIndex.has(raw)) key = raw
     else if (groupField.type === 'boolean' && typeof raw === 'boolean') key = String(raw)
     else if (groupField.type === 'string' && typeof raw === 'string') key = groupIndex.has(raw) ? raw : 'other'
     const group = key === undefined ? undefined : groupIndex.get(key)

@@ -195,6 +195,9 @@ func TestSeriesFixtureSharedWithTheWebApp(t *testing.T) {
 		map[string]any{"id": 54, "name": "only-open", "status": "open"},
 		map[string]any{"id": 55, "status": "archived", "active": true, "day": "2027-01-05"},
 		map[string]any{"id": 56, "status": "open", "tier": "giant"},
+		map[string]any{"id": 57, "day": "2026-02-30"},
+		map[string]any{"id": 58, "day": "2026-04-31"},
+		map[string]any{"id": 59, "day": "2025-02-29"},
 	)
 	for i := 0; i < 22; i++ {
 		fixture.Rows = append(fixture.Rows, map[string]any{"id": 13 + i, "tag": "t" + strconv.Itoa(100+i)})
