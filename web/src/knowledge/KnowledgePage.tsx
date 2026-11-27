@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ws } from '../api'
 import { useT } from '../i18n'
-import { parseDocumentItem, useBeforeLeave } from '../router'
+import { parseDocumentItem, useBeforeLeave, usePlaceTitle } from '../router'
 import { SearchBox, type SearchQuery, SearchResults } from '../search/Search'
 import { spaceLabel, useSpaces } from '../spaces'
 import { Button } from '../ui/Button'
@@ -47,6 +47,7 @@ export function KnowledgePage({
   const [editing, setEditing] = useState(false)
   const canWrite = space?.access === 'write'
   const t = useT()
+  usePlaceTitle(t('shell.sections.knowledge'))
   const guard = useGuard()
   const { ask } = guard
   useBeforeLeave((go) => ask(go))

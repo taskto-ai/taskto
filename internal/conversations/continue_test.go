@@ -226,3 +226,18 @@ func TestContinueRechecksTheArchiveAfterLookingUpTheModels(t *testing.T) {
 		t.Fatalf("the runtime was asked to continue an archived conversation: %+v", got)
 	}
 }
+
+func TestAContinuedRunIsCountedInUsage(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	clearUsageMark(t, e, c.ID)
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7))
+	var marked bool
+	if err := e.db.QueryRow(`SELECT usage_mark IS NOT NULL FROM conversations WHERE id = ?`, c.ID).Scan(&marked); err != nil {
+		t.Fatal(err)
+	}
+	if !marked {
+		t.Fatal("a continue left the conversation without a usage mark, so its run's tokens are never counted")
+	}
+}

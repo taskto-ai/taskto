@@ -861,7 +861,7 @@ mappings and everything the CLI worker kept for them (including the agent browse
 agent runtime's providers file and key files (which hold their provider accounts), their unfinished
 photo uploads in shared apps, their access tokens, sessions, push subscriptions, notification
 settings, email ledger, two-factor data and single sign-on identities, the invitations to their
-address, the search index's rows for all of it, and the account.
+address, the search index's rows for all of it, their daily agent usage rows, and the account.
 
 A private space's files go under the knowledge base's own lock for that space, with the apps'
 photo writes in it held too: a write already under way finishes first, and one that comes after

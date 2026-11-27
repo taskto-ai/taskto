@@ -28,22 +28,23 @@ import (
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu      sync.Mutex
-	next    int64
-	models  map[int64]agentrt.ModelRef
-	created []agentrt.ModelRef
-	inputs  map[int64][]agentrt.Input
-	watches []*fakeWatch
-	aborts  map[int64]int
-	resumes map[int64]int
-	resumed []continueCall
-	sets    int
-	err     error
-	onAbort func(ctx context.Context)
-	replies map[int64][]agentrt.Message
-	settle  chan struct{}
-	waited  atomic.Int64
-	waitErr error
+	mu         sync.Mutex
+	next       int64
+	models     map[int64]agentrt.ModelRef
+	created    []agentrt.ModelRef
+	inputs     map[int64][]agentrt.Input
+	watches    []*fakeWatch
+	aborts     map[int64]int
+	resumes    map[int64]int
+	resumed    []continueCall
+	sets       int
+	err        error
+	onAbort    func(ctx context.Context)
+	replies    map[int64][]agentrt.Message
+	rawEntries map[int64][]json.RawMessage
+	settle     chan struct{}
+	waited     atomic.Int64
+	waitErr    error
 }
 
 var setupToken = auth.NewSetupToken()
@@ -161,6 +162,31 @@ func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) 
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
+	}
+	if entries, ok := f.rawEntries[conv]; ok {
+		var all []json.RawMessage
+		for _, raw := range entries {
+			var entry struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal(raw, &entry) == nil && (before == 0 || entry.ID < before) {
+				all = append(all, raw)
+			}
+		}
+		page := struct {
+			Entries []json.RawMessage `json:"entries"`
+			Before  int64             `json:"before,omitempty"`
+		}{Entries: []json.RawMessage{}}
+		if len(all) > limit {
+			var entry struct {
+				ID int64 `json:"id"`
+			}
+			_ = json.Unmarshal(all[len(all)-limit-1], &entry)
+			page.Before = entry.ID
+			all = all[len(all)-limit:]
+		}
+		page.Entries = append(page.Entries, all...)
+		return json.Marshal(page)
 	}
 	type entry struct {
 		ID      int64  `json:"id"`

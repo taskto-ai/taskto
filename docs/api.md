@@ -223,16 +223,19 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
 | `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
 | `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
-| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now: nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
+| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now (including a key saved after the call's credentials were read and before it was written ahead): nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
 | `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
 | `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing under another key is made (a second link could be paid twice), and for 6 hours the entry looked for the call's object by its own token and asked again under the same key without learning it. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
 | `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): a call may have run at the provider and nothing said what it made, so only the call's object is looked for and the call asked again under the same key, for at most 6 hours, and nothing under another key is made meanwhile. Failed reads and calls in that time don't end it early or use up the entry's tries. |
-| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link, before the link was asked for. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `integration_condition_changed_link_kept` | — | A failed `create_payment_link` entry: the record was changed while the provider was making the link, so that it no longer meets the `when` condition of the action's link. The link exists at the provider and stays with the entry (a payment on it is still recorded, and the admins are told when the app's rule leaves the record unchanged), but it isn't written to the record. Retry the entry (or run the action again) once the record meets the condition again to write that same link: no second link is made for the record while this one may still be paid. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
+| `integration_mode_change_refused` | 409 | A change of an integration's key or settings refused because it would switch the integration to the other mode (test or live) while `count` payment links made in its current mode may still be paid. Wait until they are paid or expire (or, for one whose outcome is unknown, confirm that none exists), then change the key. A new key of the same mode is always accepted. |
+| `integration_link_attempt_changed` | 409 | An admin's confirmation that no payment link exists, refused because it names another attempt than the one that waits now, or another call went out under that attempt since the list showed it (the entry was retried): what the admin checked at the provider may not be all there is. They read the list again and check the provider again. |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
-| `integration_link_still_open` | — | A failed `create_payment_link` entry: the record's earlier payment link may still take payment (it is open, still being made, or its outcome is unknown) and isn't one this entry can give again: it asks another amount or currency, it reads the same money from other fields of the record than this entry, or the record has more than one such link (left by an older server). No second link is made: a record has one payable link at a time, whatever field it is written to. Once that link has expired at the provider, run the action again. |
+| `integration_link_still_open` | — | A failed `create_payment_link` entry: the record's earlier payment link may still take payment (it is open, still being made, or its outcome is unknown) and isn't one this entry can give again: it asks another amount or currency, it reads the same money from other fields of the record than this entry, the record has more than one such link (left by an older server), or another object under the token of one of the earlier link's keys (left by a call whose answer was lost) may still be paid although the saved link has expired. No second link is made: a record has one payable link at a time, whatever field it is written to. Once that link has expired at the provider, run the action again. |
 | `integration_amount_changed` | — | A failed `create_payment_link` entry: the record's amount or currency is no longer what the entry was queued with (it failed before it made anything, and was retried after the record changed). Nothing was made; run the action again to ask for the record's money as it is now. |
 | `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
 | `integration_event_integration_changed` | — | A failed payment event: the app's slot is bound to another integration than the one whose payment this is. |
@@ -3059,7 +3062,10 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
+  address), plus `Stat` (a labelled value), `Markdown` (formatted text from a literal or a
+  binding, drawn by the web app's own renderer, which never makes HTML: links show as text
+  and are never followed, and images show as links, so an app opens nothing outside),
+  `Show` (draws its child while a rule holds,
   [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
   attachments, which upload to and draw from this server's own authenticated routes, never an
   outside address: [Photo attachments](#photo-attachments)), and `LocationInput`, `SignatureInput` and
@@ -3826,7 +3832,11 @@ or taking the space away stops entries that are waiting. Those reads, and the us
 one snapshot. An entry runs only in the space it was queued in: an app that was moved since (which
 clears its approvals) fails the entry with `app_effect_space_changed`, and the payment is started
 again. A record edited so that it no longer meets the `when` of the action's link fails it with
-`integration_condition_changed`: nothing was created.
+`integration_condition_changed`: nothing was created. One edited so while the provider was making the
+link fails it with `integration_condition_changed_link_kept`: the link exists, stays with the entry
+(a payment on it is still recorded) and is written once the entry is retried with the record meeting
+the condition again. A key replaced by one of the other mode while the link was made fails it with
+`integration_account_changed`, and the link is not written.
 
 **Money is exact.** The amount is the number field's value written as the shortest decimal text that
 reads back as the same number, read digit by digit into the currency's smallest unit (2 decimals for
@@ -4446,7 +4456,12 @@ Admin only. Any of `display_name`, `settings` and `currencies` (each replaces th
 value), `secrets` (replaces the ones named), `max_amount_minor` and `disabled`; the rest stay.
 `disabled: true` switches the integration off (nothing sends or receives through it, and its
 approvals and events are kept) and `false` back on. `200` with the integration; `400` for an
-invalid field or an attempt to change the name or provider; `404`.
+invalid field or an attempt to change the name or provider; `404`; `409
+integration_mode_change_refused` (`params.count`) when the new key or settings would switch the
+integration to the other mode (test or live) while payment links made in its current mode may still be
+paid: their payments could no longer be checked or recorded. Nothing changes; the admin waits until those
+links are paid or expire (or, for one whose outcome is unknown, confirms that none exists), then sets
+the key. A new key of the same mode can be set at any time.
 
 ### `PUT /api/workspaces/{workspace}/integrations/{integration}/spaces`
 
@@ -4512,6 +4527,8 @@ provider and none of its keys was resolved (otherwise a confirmation is refused,
 resolve (an answer named it, or a lookup found it carrying the key's token but couldn't read its amount,
 or found it asking another amount or currency), `""` when none: `can_confirm` is then false, and an
 admin checks that object at the provider; a retry of the entry adopts it once a lookup can check it.
+`attempt_seq` is the number of the attempt that waits (the reference's current key, from 0) and
+`attempt_sends` how many calls went out under it so far: a confirmation names both.
 When `waiting` and `can_confirm` are both false the lookup stopped, and `code` is the code the entry
 failed with (for example `integration_account_changed`), which clients say in words; it is left out
 otherwise. `params` are the values that code's message names, as the entry failed with them (for
@@ -4530,7 +4547,8 @@ account. `403` for a member, `404` for another workspace's integration.
 
 `POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`
 
-Admin only, body `{}`. For a payment link whose entry failed with `integration_outcome_unknown`: the
+Admin only, body `{"attempt_seq": 0, "attempt_sends": 3}`: the attempt the admin checked, as the
+list above showed it (both required). For a payment link whose entry failed with `integration_outcome_unknown`: the
 admin checked the provider's account for an object of the reference (a Payment Link's
 `metadata.taskto_ref`, a Checkout Session's `client_reference_id`, holding any of the reference's
 tokens) and found none. The key whose outcome was unknown is recorded as abandoned (its record stays),
@@ -4539,7 +4557,10 @@ the user who acted with their access then. Recorded in the audit log
 (`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
 integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
 entry isn't waiting for this decision (not failed with that code, the link was found, or it was
-confirmed already: a second request never allows a second key); `409 integration_link_not_confirmable`
+confirmed already: a second request never allows a second key); `409 integration_link_attempt_changed`
+when the attempt named is not the one that waits now, or another call went out under it since it was
+listed (the entry was retried): what the admin checked at the provider is not all that may be there,
+so they read the list again and check again; `409 integration_link_not_confirmable`
 when the server saw something of the reference that contradicts "none exists" (any of its keys has an
 object on record: a call's answer named one, or a lookup found one by the key's token, and its state
 could not be read) or any of its keys was already resolved (an earlier key whose object was seen

@@ -723,6 +723,8 @@ export type PaymentLinkOutcome = {
   code?: string
   params?: Params
   object_id: string
+  attempt_seq: number
+  attempt_sends: number
   attempts: PaymentLinkAttempt[]
 }
 export type PaymentLinkAttempt = {

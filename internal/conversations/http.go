@@ -322,6 +322,11 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if s.capability != nil {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
+	model, _ := rt.Model(r.Context(), c.agentID)
+	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
 	sub, err := rt.Submit(r.Context(), c.agentID, in)
 	if err != nil {
 		conversationError(w, r, c, err)
@@ -330,7 +335,8 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
-	s.markWhenSettled(rt, c.ID, c.agentID, sub)
+	user, _ := caller(r)
+	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
 }
 
@@ -414,6 +420,10 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !s.runnable(w, r, model) || !s.stillWritable(w, r) {
 		return
 	}
+	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
 	sub, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
 	if err != nil {
 		conversationError(w, r, c, err)
@@ -422,8 +432,8 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
-	s.markWhenSettled(rt, c.ID, c.agentID, sub)
 	user, _ := caller(r)
+	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
 	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", model.Provider, "by", user)
 	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub})
 }
