@@ -554,6 +554,10 @@
         "inspection": {
           "name": "Inspection",
           "description": "Walk a site, record pass or fail with the place and a signature, and have every failure become a card on a board you choose."
+        },
+        "invoicing": {
+          "name": "Invoicing",
+          "description": "Keep your invoices, send one with a payment link, and see it marked paid (or refunded) when the payment arrives. It needs an admin to connect a payments account and approve the app."
         }
       }
     },
@@ -1194,6 +1198,8 @@
     "integration_account_changed": "This payment link was started under another account of the payment provider, since the integration’s key was replaced. An admin needs to check that account first: if the earlier link was paid, nothing should be recreated; if not, it must be made unable to take payment before the action is run again.",
     "integration_changed": "This payment link was made under another payments integration than the one this app uses now. An admin needs to check whether that link was paid, and make it unable to take payment if not, before the action is run again.",
     "integration_link_already_paid": "An earlier try of this payment link was paid, or can no longer take payment (it was paid, expired by a person or reached its limit), so no new link was made. An admin needs to reconcile that payment in the payment provider’s account before the action is run again.",
+    "integration_link_still_open": "This record already has a payment link that may still be paid (or is still being made) and can’t be given again: it asks another amount or currency, reads them from other fields of the record, or the record has more than one. No second link was made. Run the action again once that link has expired.",
+    "integration_amount_changed": "The record’s amount or currency changed after this action ran, so no payment link was made for the old amount. Run the action again to ask for the amount the record has now.",
     "integration_event_unavailable": "A payment arrived, but the app's payments integration can't be used now: its approval was withdrawn, it was switched off or this space was taken away. Fix that, then retry the event.",
     "integration_event_integration_changed": "A payment arrived through an integration that is no longer the one this app is connected to. Connect the app to it again, or settle the payment by hand.",
     "integration_event_app_offline": "A payment arrived, but the app is offline, not published or in an archived space. Bring it back, then retry the event.",
@@ -1252,6 +1258,7 @@
     "app_field_not_signature": "{field} must be one signature picture.",
     "app_field_not_barcode": "{field} must be the text of a valid code (a code with the right check digit, if the field reads EAN or UPC).",
     "app_field_locked": "{field} was captured and can’t be changed afterwards.",
+    "app_payment_link_open": "{field} can’t change, or be read otherwise by a release, while a record’s payment link may still be paid (or is still being made). Change it once the link has expired.",
     "app_signature_type": "A signature must be a PNG picture.",
     "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
     "session_account_changed": "This browser is now signed in as another account, in another tab, so nothing was done. Reload the page to go on.",

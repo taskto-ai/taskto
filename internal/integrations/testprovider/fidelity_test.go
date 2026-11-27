@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
@@ -426,5 +427,58 @@ func TestAPayerOpeningAHostedLinkAddressBringsItsClientReferenceId(t *testing.T)
 	}
 	if _, err := f.PayLinkAt("https://buy.stripe.com/nothing?client_reference_id=x"); !errors.Is(err, testprovider.ErrNoSuchLink) {
 		t.Errorf("an address that isn't a link's: %v", err)
+	}
+}
+
+// A session's intent and its latest charge can be asked for as objects in the same answer, as Stripe's
+// expand[] does, and the charge says when it was made; any other expansion is refused.
+func TestASessionExpandsItsIntentAndItsLatestCharge(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	f := testprovider.NewStripe(t, testprovider.WithClock(clock))
+	a := newAPI(t, f)
+	s := a.newSession(5000, "eur", "r")
+	clock.Advance(time.Minute)
+	paidAt := clock.Now().Unix()
+	if _, err := f.Pay(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Hour)
+
+	type expanded struct {
+		PaymentIntent struct {
+			ID           string `json:"id"`
+			Object       string `json:"object"`
+			LatestCharge struct {
+				Object  string `json:"object"`
+				Created int64  `json:"created"`
+			} `json:"latest_charge"`
+		} `json:"payment_intent"`
+	}
+	var one expanded
+	a.get("/v1/checkout/sessions/"+s.ID, url.Values{"expand[]": {"payment_intent.latest_charge"}}).into(t, &one)
+	if pi := one.PaymentIntent; pi.Object != "payment_intent" || pi.LatestCharge.Object != "charge" || pi.LatestCharge.Created != paidAt {
+		t.Errorf("the expanded session: %+v", one)
+	}
+	var list struct{ Data []expanded }
+	a.get("/v1/checkout/sessions", url.Values{"expand[]": {"data.payment_intent.latest_charge"}}).into(t, &list)
+	if len(list.Data) != 1 || list.Data[0].PaymentIntent.LatestCharge.Created != paidAt {
+		t.Errorf("the expanded list: %+v", list)
+	}
+	// Without the expansion the intent is its id.
+	var plain testprovider.Session
+	a.get("/v1/checkout/sessions/"+s.ID, nil).into(t, &plain)
+	if plain.PaymentIntent == nil || *plain.PaymentIntent != one.PaymentIntent.ID {
+		t.Errorf("the plain session's intent: %v", plain.PaymentIntent)
+	}
+	for _, bad := range []url.Values{
+		{"expand[]": {"customer"}},
+		{"expand[]": {"data.payment_intent"}}, // a list's path on a retrieval
+	} {
+		if ans := a.get("/v1/checkout/sessions/"+s.ID, bad); ans.status != http.StatusBadRequest {
+			t.Errorf("%v: %d", bad, ans.status)
+		}
+	}
+	if ans := a.get("/v1/checkout/sessions", url.Values{"expand[]": {"payment_intent"}}); ans.status != http.StatusBadRequest {
+		t.Errorf("a retrieval's path on a list: %d", ans.status)
 	}
 }

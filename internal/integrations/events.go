@@ -132,7 +132,8 @@ var errHookRefused = errors.New("the integration changed since the delivery was 
 
 // hookGuard is what the route saw of the integration when it verified a delivery: the write
 // checks it again inside its own transaction, so a delivery that was in flight when an admin
-// disabled the integration or rotated its secret stores nothing.
+// disabled the integration or rotated its secret stores nothing. A poll's guard (poll.go) has no
+// revision: it checks the integration and its mode only, since it used no webhook secret.
 type hookGuard struct {
 	mode     string
 	revision string
@@ -156,6 +157,9 @@ func (g *hookGuard) check(ctx context.Context, s *Store, tx *sql.Tx, integration
 	if disabled || mode != g.mode {
 		return errHookRefused
 	}
+	if g.revision == "" {
+		return nil
+	}
 	rev, err := s.credentialRevision(ctx, tx, integration)
 	if err != nil {
 		return err
@@ -177,11 +181,11 @@ func (s *Store) recordGuarded(ctx context.Context, integration int64, guard *hoo
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO integration_events
-			(integration_id, provider_event_id, source, kind, ref_token, object_id, provider_payment_id, amount_minor, currency, livemode,
+			(integration_id, provider_event_id, source, kind, ref_token, object_id, provider_payment_id, link_id, amount_minor, currency, livemode,
 			 body_sha256, occurred_at, received_at, state, next_attempt_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
 			ON CONFLICT (integration_id, provider_event_id) DO NOTHING`,
-			integration, ev.ID, source, ev.Kind, nullString(ev.RefToken), nullString(ev.ObjectID), nullString(ev.PaymentID),
+			integration, ev.ID, source, ev.Kind, nullString(ev.RefToken), nullString(ev.ObjectID), nullString(ev.PaymentID), nullString(ev.LinkID),
 			ev.AmountMinor, ev.Currency, ev.Livemode, hex.EncodeToString(sum[:]), s.stamp(ev.OccurredAt), s.stamp(at), s.stamp(at))
 		if err != nil {
 			return err
@@ -190,6 +194,10 @@ func (s *Store) recordGuarded(ctx context.Context, integration int64, guard *hoo
 			return err
 		} else if n == 0 {
 			result = storedAgain
+		}
+		// last_event_at tells an admin that the provider's webhook arrives: a poll's event says nothing of it.
+		if source == SourcePoll {
+			return nil
 		}
 		return s.touchEvent(ctx, tx, integration, at)
 	})
@@ -423,11 +431,11 @@ func (s *Service) claimEvent(ctx context.Context) (ev StoredEvent, lease int64, 
 			}
 			var occurred, received string
 			err = tx.QueryRowContext(ctx, `SELECT e.id, e.integration_id, i.workspace_id, e.provider_event_id, e.source, e.kind,
-					coalesce(e.ref_token, ''), coalesce(e.object_id, ''), coalesce(e.provider_payment_id, ''),
+					coalesce(e.ref_token, ''), coalesce(e.object_id, ''), coalesce(e.provider_payment_id, ''), coalesce(e.link_id, ''),
 					e.amount_minor, e.currency, e.livemode, e.occurred_at, e.received_at, e.attempts, e.lease
 				FROM integration_events e JOIN integrations i ON i.id = e.integration_id WHERE e.id = ?`, id).
 				Scan(&ev.ID, &ev.IntegrationID, &ev.WorkspaceID, &ev.ProviderEvent, &ev.Source, &ev.Kind,
-					&ev.RefToken, &ev.ObjectID, &ev.PaymentID, &ev.AmountMinor, &ev.Currency, &ev.Livemode, &occurred, &received, &ev.Attempts, &lease)
+					&ev.RefToken, &ev.ObjectID, &ev.PaymentID, &ev.LinkID, &ev.AmountMinor, &ev.Currency, &ev.Livemode, &occurred, &received, &ev.Attempts, &lease)
 			if err != nil {
 				return err
 			}

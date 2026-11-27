@@ -409,6 +409,11 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		if err := acknowledged(breakingChanges(base, checked.Collection, rows, blind), req.Acknowledge); err != nil {
 			return err
 		}
+		// And however acknowledged, no release reads otherwise the money of an invoice whose payment link
+		// may still be paid.
+		if err := paymentMoneyKept(ctx, tx, s.platform.Payments, appID, cur.liveDef, checked); err != nil {
+			return err
+		}
 		raw, err := json.Marshal(checked)
 		if err != nil {
 			return err
@@ -506,6 +511,9 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 			if fields := misfits(target.Definition.Collection, rows); len(fields) > 0 {
 				return &incompatibleError{fields: fields}
 			}
+		}
+		if err := paymentMoneyKept(ctx, tx, s.platform.Payments, appID, cur.liveDef, *target.Definition); err != nil {
+			return err
 		}
 		stamp := now()
 		if _, err := tx.ExecContext(ctx, `

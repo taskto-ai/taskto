@@ -10,7 +10,9 @@ import (
 )
 
 // EntryLink is the link the entry's ref saved, read through q, with no call to anyone (paylink.Opener):
-// what an entry that wrote it to its record and stopped before it was noted done finds again. With none
+// what an entry that wrote it to its record and stopped before it was noted done finds again: the ref
+// the entry made or took over (effect_id), or the record's earlier one it gave again (slot_effect_id,
+// the newest entry that did). With none
 // saved, pending says whether the ref may still hold an object: a key of it whose outcome is unknown or
 // that has an object on record, or a payment that settled it first. Only a ref that has neither (or no
 // ref) made nothing.
@@ -20,7 +22,8 @@ func (s *Service) EntryLink(ctx context.Context, q paylink.Querier, effectID int
 	err := q.QueryRowContext(ctx, `SELECT coalesce(r.provider_object_id, ''), coalesce(r.url, ''), r.amount_minor, r.currency,
 			r.state IN ('paid', 'refunded') OR EXISTS (SELECT 1 FROM integration_ref_attempts k WHERE k.ref_id = r.id
 				AND k.outcome IS NULL AND (k.sends > k.clean_sends OR k.object_id IS NOT NULL))
-		FROM integration_refs r WHERE r.effect_id = ?`, effectID).
+		FROM integration_refs r WHERE r.effect_id = ? OR r.slot_effect_id = ?
+		ORDER BY r.effect_id = ? DESC, r.id DESC LIMIT 1`, effectID, effectID, effectID).
 		Scan(&l.ObjectID, &l.URL, &l.AmountMinor, &l.Currency, &pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return paylink.Link{}, false, nil

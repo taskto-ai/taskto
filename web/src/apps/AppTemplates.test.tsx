@@ -97,6 +97,16 @@ const templates = [
     captures: ['location', 'signature'],
     widgets: ['Inspections'],
   },
+  {
+    id: 'invoicing',
+    version: 1,
+    name: 'Invoicing',
+    description: 'Keep your invoices.',
+    recommended_space: 'private',
+    needs_board: false,
+    captures: [],
+    widgets: ['Invoices'],
+  },
 ]
 
 const boards = (space: number, names: string[]) => ({
@@ -140,6 +150,7 @@ test('the Apps page starts from a template, listing each with what it needs', as
     'Use the template Equipment checkout',
     'Use the template Expense tracker',
     'Use the template Inspection',
+    'Use the template Invoicing',
   ])
   expect(ways.every((b) => !b.className.includes('ui-button-primary'))).toBe(true)
   const inspection = screen.getByRole('button', { name: 'Use the template Inspection' }).closest('li') as HTMLElement
@@ -396,6 +407,7 @@ test('the templates are in Portuguese too', async () => {
   expect(await screen.findByText('Controle de despesas')).toBeTruthy()
   expect(screen.getByText('Retirada de equipamentos')).toBeTruthy()
   expect(screen.getByText('Inspeção')).toBeTruthy()
+  expect(screen.getByText('Faturamento')).toBeTruthy()
 })
 
 test('the apps screens lay out with logical properties, in the screens layer', () => {

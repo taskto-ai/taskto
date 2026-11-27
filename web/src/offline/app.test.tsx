@@ -401,7 +401,7 @@ test('a tab that learns another account signed in shows only that, and nothing o
   await runtime.store.enqueue(queued(), [])
   // Another tab signs in as someone else.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/The account changed/)
   expect(screen.queryByRole('banner')).toBeNull()
@@ -419,7 +419,7 @@ test('another account signed in from another tab ends this page’s session: its
   toast('Something of the account before')
   expect(await screen.findByText('Something of the account before')).toBeTruthy()
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   await screen.findByRole('alertdialog')
   expect(still()).toBe(false)
   expect(screen.queryByText('Something of the account before')).toBeNull()
@@ -554,7 +554,7 @@ test('another account signing in while this tab checks for unsent records before
   logOut()
   // While the tab looks for unsent records, another tab signs in as someone else.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect((await screen.findByRole('alertdialog')).textContent).toMatch(/The account changed/)
   await new Promise((r) => setTimeout(r, 50))
   // The records found don't bring this account's session back.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -40,6 +41,21 @@ import (
 // or neither does. Done, the integrations' step that records the event's outcome, runs last in it,
 // so the outcome commits with them too.
 
+// EventBinding says which integration the slot of the app is bound to when an event may be written
+// to the app now: Binding's check, with the refusals that mean "not now" (the app gone, offline or not
+// published, a contract that isn't approved, an integration that is off or not allowed in the space)
+// answered as ok false (paylink.EventTargetChecker).
+func (s *Service) EventBinding(ctx context.Context, appID int64, slot string) (int64, bool, error) {
+	b, err := s.Binding(ctx, appID, slot)
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOffline), errors.Is(err, ErrNotPublished), errors.Is(err, ErrIntegrationUnapproved):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, err
+	}
+	return b.IntegrationID, true, nil
+}
+
 // WriteEvent writes the event to the record. Its failures are *paylink.Error, except those of
 // w.Settle and w.Done, which are returned as they are.
 func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink.EventResult, error) {
@@ -60,7 +76,7 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 		Actor: SystemActor{Kind: SystemKindIntegration, ID: w.IntegrationID}, SpaceID: spaceID, AppID: w.AppID, RecordID: w.RecordID,
 		Action: w.Event, // the normalized event is the history's action
 		Guard: func(ctx context.Context, tx *sql.Tx) error {
-			b, err := liveBinding(ctx, tx, w.AppID, w.Slot)
+			b, err := eventBinding(ctx, tx, w.AppID, w.Slot, w.IntegrationID)
 			if err != nil {
 				return err
 			}
@@ -130,6 +146,42 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 		return paylink.EventResult{}, eventFailure(err)
 	}
 	return paylink.EventResult{Written: res.Changed, NoHandler: noHandler, ConditionUnmet: unmet}, nil
+}
+
+// eventBinding is the live binding an event of the reference's slot is written through: the slot's,
+// or, when the live release no longer declares that slot (an approved release renamed it), the one
+// slot of the payments kind the live release has bound to the reference's integration. A payment of a
+// link made before the rename is written all the same; when no slot, or more than one, is so bound,
+// nothing says which rules are the app's for it, and it fails for the admins as an unknown slot does.
+func eventBinding(ctx context.Context, q queryer, appID int64, slot string, integrationID int64) (Binding, error) {
+	b, err := liveBinding(ctx, q, appID, slot)
+	if !errors.Is(err, ErrIntegrationUnapproved) {
+		return b, err
+	}
+	var live sql.NullInt64
+	if err := q.QueryRowContext(ctx, `SELECT live_release FROM apps WHERE id = ?`, appID).Scan(&live); err != nil || !live.Valid {
+		return Binding{}, err
+	}
+	rel, rerr := loadRelease(ctx, q, appID, live.Int64, true)
+	if rerr != nil {
+		return Binding{}, rerr
+	}
+	if _, declared := rel.Definition.Integrations[slot]; declared {
+		return Binding{}, err // the slot is there, and isn't approved: as it is
+	}
+	var found []Binding
+	for _, other := range slices.Sorted(maps.Keys(rel.Definition.Integrations)) {
+		ob, oerr := liveBinding(ctx, q, appID, other)
+		if oerr == nil && ob.IntegrationID == integrationID && ob.Kind == KindPayments {
+			found = append(found, ob)
+		} else if oerr != nil && !errors.Is(oerr, ErrIntegrationUnapproved) {
+			return Binding{}, oerr
+		}
+	}
+	if len(found) != 1 {
+		return Binding{}, err
+	}
+	return found[0], nil
 }
 
 // settleError carries the integrations' own failure of Settle through the write unchanged.

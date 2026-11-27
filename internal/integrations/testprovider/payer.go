@@ -83,7 +83,7 @@ func (s *Stripe) intentOf(ss *session, status string) map[string]any {
 
 func (s *Stripe) chargeOf(ss *session, status string) map[string]any {
 	return map[string]any{
-		"id": ss.chargeID, "object": "charge", "amount": ss.AmountTotal,
+		"id": ss.chargeID, "object": "charge", "amount": ss.AmountTotal, "created": ss.chargeCreated,
 		"amount_captured": map[bool]int64{true: ss.AmountTotal}[status == "succeeded"],
 		"amount_refunded": ss.refunded, "currency": ss.Currency, "paid": status == "succeeded",
 		"refunded": ss.refunded >= ss.AmountTotal, "status": status, "payment_intent": ss.piID,
@@ -134,7 +134,7 @@ func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 // payLocked pays an open session by card at time at, and returns the events. The caller holds s.mu.
 func (s *Stripe) payLocked(ss *session, at time.Time) []*Event {
 	evs := s.begin(ss, at)
-	ss.chargeID = "ch_" + randomID(24)
+	ss.chargeID, ss.chargeCreated = "ch_"+randomID(24), at.Unix()
 	ss.receiptURL = "https://pay.stripe.com/receipts/payment/" + randomID(40)
 	ss.Status, ss.PaymentStatus, ss.URL = SessionComplete, PaymentPaid, nil
 	d := s.payer
@@ -262,7 +262,7 @@ func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error
 			s.emit(EventSessionAsyncPaymentFailed, ss.snapshot(), at),
 		}), nil
 	}
-	ss.chargeID = "ch_" + randomID(24)
+	ss.chargeID, ss.chargeCreated = "ch_"+randomID(24), at.Unix()
 	ss.receiptURL = "https://pay.stripe.com/receipts/payment/" + randomID(40)
 	ss.PaymentStatus = PaymentPaid
 	return values([]*Event{
@@ -283,7 +283,7 @@ func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	}
 	evs := s.begin(ss, at)
 	ss.attempts++
-	ss.chargeID = "ch_" + randomID(24) // the intent's latest charge, in the failure events too
+	ss.chargeID, ss.chargeCreated = "ch_"+randomID(24), at.Unix() // the intent's latest charge, in the failure events too
 	failed := s.chargeOf(ss, "failed")
 	failed["failure_code"] = "card_declined"
 	evs = append(evs,

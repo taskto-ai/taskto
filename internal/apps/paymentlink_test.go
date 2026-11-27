@@ -31,6 +31,10 @@ type stubLinks struct {
 	otherMode bool
 }
 
+func (s *stubLinks) PayableMoney(context.Context, paylink.Querier, int64, int64) (map[int64][]paylink.MoneyFields, error) {
+	return nil, nil
+}
+
 func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (paylink.Link, error) {
 	s.mu.Lock()
 	hook := s.onOpen
@@ -424,10 +428,11 @@ func TestAPreviewRefusesAnAmountTheCurrencyCannotHold(t *testing.T) {
 	}
 }
 
-// sendTotal sends the invoice again with another total: another entry for the same record.
-func (p *payFX) sendTotal(operation string, total float64) {
+// sendAgain sends the invoice again for another customer: another entry for the same record. (Its
+// money can't change while the first entry waits to run: paymentMoneyLocked.)
+func (p *payFX) sendAgain(operation, customer string) {
 	p.e.t.Helper()
-	a := action(p.fresh(p.alice, p.shared, p.app), "send", map[string]any{"id": p.invoice, "status": "sent", "total": total})
+	a := action(p.fresh(p.alice, p.shared, p.app), "send", map[string]any{"id": p.invoice, "status": "sent", "customer": customer})
 	a.Operation = operation
 	expect(p.e.t, p.alice.do(http.MethodPost, appPath(p.shared, p.app.ID, "/actions"), a), http.StatusOK)
 }
@@ -450,14 +455,14 @@ func (p *payFX) effectIDs() (ids []int64) {
 }
 
 // An entry that is tried again after a newer one for the same record has written its link must not
-// put its own, for an earlier amount, over it.
+// put its own, an earlier one, over it.
 func TestAnOlderEntryTriedAgainNeverReplacesTheNewerLink(t *testing.T) {
 	p := newPay(t)
 	p.links.fail = &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
 	p.send(p.alice, "op-send-0001")
 	p.work() // the first entry fails for now and waits to be tried again
 	p.links.fail = nil
-	p.sendTotal("op-send-0002", 50)
+	p.sendAgain("op-send-0002", "Other")
 	p.work() // the newer entry is the only one due: it makes its link
 	ids := p.effectIDs()
 	if len(ids) != 2 {
@@ -498,7 +503,7 @@ func TestANewerEntryQueuedWhileTheOlderAsksTheProviderWins(t *testing.T) {
 	p.links.onOpen = func(req paylink.Request) {
 		if req.EffectID == first && !queued {
 			queued = true
-			p.sendTotal("op-send-0002", 50)
+			p.sendAgain("op-send-0002", "Other")
 		}
 	}
 	p.work()
@@ -808,7 +813,7 @@ func TestAnOlderEntryIsStillSupersededOnceTheNewerOneIsCleanedUp(t *testing.T) {
 	p.send(p.alice, "op-send-0001")
 	p.work()
 	p.links.fail = nil
-	p.sendTotal("op-send-0002", 50)
+	p.sendAgain("op-send-0002", "Other")
 	p.work()
 	ids := p.effectIDs()
 	data, rev, _ := p.row()

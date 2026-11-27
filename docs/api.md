@@ -234,6 +234,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_link_attempt_changed` | 409 | An admin's confirmation that no payment link exists, refused because it names another attempt than the one that waits now, or another call went out under that attempt since the list showed it (the entry was retried): what the admin checked at the provider may not be all there is. They read the list again and check the provider again. |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
+| `integration_link_still_open` | — | A failed `create_payment_link` entry: the record's earlier payment link may still take payment (it is open, still being made, or its outcome is unknown) and isn't one this entry can give again: it asks another amount or currency, it reads the same money from other fields of the record than this entry, or the record has more than one such link (left by an older server). No second link is made: a record has one payable link at a time, whatever field it is written to. Once that link has expired at the provider, run the action again. |
+| `integration_amount_changed` | — | A failed `create_payment_link` entry: the record's amount or currency is no longer what the entry was queued with (it failed before it made anything, and was retried after the record changed). Nothing was made; run the action again to ask for the record's money as it is now. |
 | `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
 | `integration_event_integration_changed` | — | A failed payment event: the app's slot is bound to another integration than the one whose payment this is. |
 | `integration_event_app_offline` | — | A failed payment event: the app is offline or not published, or its space is archived. |
@@ -283,6 +285,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_field_not_signature` | 422 | The value of `field`, a signature field, isn't the id of one attachment. |
 | `app_field_not_barcode` | 422 | The value of `field`, a barcode field, isn't the text of a code (no control characters, within `max_length`), or isn't valid for the `format` the field reads. |
 | `app_field_locked` | 422 | `field` holds a captured location or a signature, which no later change may alter or clear unless the field says `editable`. |
+| `app_payment_link_open` | 422 | `field` is the amount or the currency a `create_payment_link` effect of the app reads, and the record's payment link may still be paid: an entry of the effect waits to run, or the link is open, still being made or of unknown outcome. Refused for every write of the record (a person's, an action's, the agent's `run_app_action`, which answers 422 with this code too, and an integration event's handler), and for a publish or a rollback whose release would read that field's money otherwise (another type, other currencies). The change is refused whole; it can be made once the link has expired ([integrations.md](integrations.md#payment-links)). |
 | `app_signature_type` | 400 | The picture uploaded for a signature field isn't a PNG; the upload is removed. |
 | `offline_downloads_disabled` | 403 | An admin turned off downloading this space's apps for offline use. |
 | `session_account_changed` | 409 | The request names (`X-Taskto-Expected-User`) another account than the session's: a queue made by one account is being sent with another's session. Nothing was done. |
@@ -703,8 +706,10 @@ cookie:
 
 ### `POST /api/logout`
 
-Revokes the session the request carries. `204`, also without a session. It never expires the
-browser's session cookie: by the time the answer arrives, another tab may have signed in and
+Revokes the session the request carries. `204`, also without a session, unless the request names
+its account (`X-Taskto-Expected-User`, as the web app's does): that header's rules, the same on
+every `/api` route, come first, so without a session it is `401`, and with another account's
+session `409 session_account_changed`. It never expires the browser's session cookie: by the time the answer arrives, another tab may have signed in and
 replaced it, and an expiring cookie can't be limited to the session it was for. The revoked token
 is refused like any unknown one (`401`, which doesn't touch the cookie either), and the next login
 replaces it.
@@ -719,8 +724,9 @@ The session is then revoked only if it is the one the request carries. If the re
 another login that is still going on, nothing is revoked and the answer is
 `409 session_account_changed`: a sign-out tried again after its first answer was
 lost, from a page whose browser has signed in again since (the same account in another tab), never
-ends that newer login. A request whose login is over already (revoked, expired) has nothing to end,
-and is answered `204` whatever it names. The web app always names it.
+ends that newer login. A request whose login is over already (revoked, expired) has nothing to end:
+without the header it is answered `204` whatever it names; with it, `401`. The web app always names
+both the login and the account, and takes either answer as a sign-out done.
 
 ### `GET /api/me`
 
@@ -3860,7 +3866,7 @@ an unfinished reference's entry fails with `integration_account_changed` (so doe
 account's other mode, test or live), and a reference made under another integration than the slot's,
 finished or not, is not used (`integration_changed`). An object of a key that was paid fails the entry
 with `integration_link_already_paid`. A newer entry for the same record and fields
-supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. The link and its
+supersedes an older one (the newest entry of each field is kept apart from the entries, which are cleaned up, and sharing either of the two fields is enough), which ends done with `result.superseded` and writes nothing. A record has one payable link at a time, whatever field, slot or integration it was made for: an entry with no reference of its own first reads every earlier reference of the record that may still be paid, gives the open one again if the provider says it can still be paid (and fails with `integration_link_still_open` if it asks other money, reads it from other fields, or there is more than one), takes over a reference still being made or of unknown outcome, and makes a new link only once each earlier one expired or was paid ([integrations.md](integrations.md#payment-links)). The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
 again changes nothing. A Checkout Session expires by itself within the provider's default of 24
@@ -3874,8 +3880,8 @@ the payment; the link is a Stripe Checkout Session (the entry's `id_field` gets 
 expires within 24 hours. Without one the link is made all the same, and the payer stays on a
 confirmation page Stripe hosts after paying: the link is a Stripe Payment Link (`plink_…` id) that
 takes one payment and doesn't expire by itself, and the server's own pages are not used. Webhooks
-can't reach a server with no public URL, so there the paid status is to come from the server asking
-Stripe (reconciliation polling, not built yet); until then the record is not marked paid by itself.
+can't reach a server with no public URL, so there the paid status comes from the server asking
+Stripe ([reconciliation polling](integrations.md#reconciliation-polling), always on).
 
 **Other failures**: `integration_credentials_refused` (the provider didn't accept the key),
 `integration_provider_refused` (it refused the request, for good) and

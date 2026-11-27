@@ -91,11 +91,21 @@ function refuse(on: boolean) {
     .catch(() => {})
 }
 
-export function lastUser(): LastUser | null {
+// The marker's value (as stored) read as an account, or null: offline starts refused here, nothing
+// stored, or something that isn't one.
+function markerOf(raw: string | null): LastUser | null {
   if (refusedNow()) return null
   try {
-    const v = JSON.parse(window.localStorage.getItem(LAST) ?? 'null') as Partial<LastUser> | null
+    const v = JSON.parse(raw ?? 'null') as Partial<LastUser> | null
     return v && Number.isInteger(v.id) && typeof v.name === 'string' ? (v as LastUser) : null
+  } catch {
+    return null
+  }
+}
+
+export function lastUser(): LastUser | null {
+  try {
+    return markerOf(window.localStorage.getItem(LAST))
   } catch {
     return null
   }
@@ -151,7 +161,9 @@ export function watchAccount() {
   window.addEventListener('storage', (e: StorageEvent) => {
     // `key` is null when the whole storage was cleared.
     if (e.key !== null && e.key !== LAST) return
-    notify(lastUser()?.id ?? null)
+    // The change as it was made, not the marker as it is when this is handled: a tab that was
+    // frozen across a sign-out and the next sign-in hears both, "nobody" first, in order.
+    notify(e.key === null ? null : (markerOf(e.newValue)?.id ?? null))
   })
 }
 
