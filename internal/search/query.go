@@ -16,6 +16,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/providers"
 )
 
 const (
@@ -28,9 +29,10 @@ const (
 )
 
 type Query struct {
-	Text   string
-	Limit  int
-	Offset int
+	Text         string
+	Limit        int
+	Offset       int
+	FullTextOnly bool
 }
 
 type Segment struct {
@@ -196,9 +198,12 @@ func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []acc
 
 	res := Results{Results: []Result{}, Mode: ModeFullText}
 	var qv []float32
-	e, ep, err := x.embeddings(ctx, workspaceID)
+	e, ep, err := Embeddings{}, providers.Endpoint{}, errNoEmbeddings
 	var embeddable bool
-	if err == nil {
+	if !q.FullTextOnly {
+		e, ep, err = x.embeddings(ctx, workspaceID)
+	}
+	if !q.FullTextOnly && err == nil {
 		if x.afterQueryEndpoint != nil {
 			x.afterQueryEndpoint()
 		}
@@ -207,31 +212,33 @@ func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []acc
 			WHERE sp.id IN (`+scopeSQL+`) AND e.account_id = ? AND e.model = ? AND `+embeddableAtSQL+`)`,
 			in, e.Account, e.Model, ep.BaseURL).Scan(&embeddable)
 	}
-	switch {
-	case errors.Is(err, errNoEmbeddings):
-		res.note(Notice{Code: NoticeOff}, noticeOff)
-	case err != nil:
-		return Results{}, err
-	case !embeddable:
-		res.note(Notice{Code: NoticeNoConsent}, noticeNoConsent)
-	default:
-		ectx, cancel := context.WithTimeout(ctx, queryTimeout)
-		vs, err := x.embed(ectx, ep, e.Model, []string{q.Text})
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return Results{}, ctx.Err()
-			}
-			x.log.Warn("search: embedding a query failed; full text only", "err", err)
-			res.note(Notice{Code: NoticeFailed}, noticeFailed)
-			if errors.Is(err, egress.ErrRefused) {
-				res.note(Notice{Code: NoticeRefused}, noticeRefused)
-			}
-		} else {
-			qv = vs[0]
-			res.Mode = ModeHybrid
-			if x.afterQueryEmbedded != nil {
-				x.afterQueryEmbedded()
+	if !q.FullTextOnly {
+		switch {
+		case errors.Is(err, errNoEmbeddings):
+			res.note(Notice{Code: NoticeOff}, noticeOff)
+		case err != nil:
+			return Results{}, err
+		case !embeddable:
+			res.note(Notice{Code: NoticeNoConsent}, noticeNoConsent)
+		default:
+			ectx, cancel := context.WithTimeout(ctx, queryTimeout)
+			vs, err := x.embed(ectx, ep, e.Model, []string{q.Text})
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return Results{}, ctx.Err()
+				}
+				x.log.Warn("search: embedding a query failed; full text only", "err", err)
+				res.note(Notice{Code: NoticeFailed}, noticeFailed)
+				if errors.Is(err, egress.ErrRefused) {
+					res.note(Notice{Code: NoticeRefused}, noticeRefused)
+				}
+			} else {
+				qv = vs[0]
+				res.Mode = ModeHybrid
+				if x.afterQueryEmbedded != nil {
+					x.afterQueryEmbedded()
+				}
 			}
 		}
 	}

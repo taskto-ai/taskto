@@ -13,6 +13,7 @@ import (
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/updatestatus"
 )
 
@@ -77,5 +78,6 @@ func Roots() []Root {
 
 		root[updatestatus.Report]("UpdateReport"),
 		root[updatestatus.Requested]("UpdateRequested"),
+		root[search.PaletteResults]("SearchPalette"),
 	}
 }

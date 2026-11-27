@@ -2174,6 +2174,35 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
 Any member. The same, across the apps of every space of the workspace the caller can read.
 Both routes also take an access token.
 
+### `GET /api/workspaces/{workspace}/search/palette`
+
+Any workspace member with a session. Access tokens are not accepted. Query: required `q`
+(up to 500 bytes) and optional `limit` (5 by default, at most 10). Returns matching spaces,
+apps, boards, documents, cards, records and the caller's own conversations in one reply.
+Name matches ignore case and accents, rank names that start with the query first, then
+shorter names. Private space labels are supplied by the web app and are not searched here.
+Document search is full text only, so typing in the palette never sends a query to an
+embeddings endpoint. `incomplete` is true when card, record or conversation indexing is
+still catching up.
+
+```json
+{
+  "places": {
+    "spaces": [{"id": 3, "name": "Operations", "kind": "shared"}],
+    "apps": [{"space_id": 3, "space_name": "Operations", "app_id": 9, "name": "Expenses"}],
+    "boards": [{"space_id": 3, "space_name": "Operations", "board_id": 4, "name": "Roadmap", "kind": "team"}]
+  },
+  "docs": [],
+  "cards": [],
+  "records": [],
+  "conversations": [],
+  "incomplete": false
+}
+```
+
+Each kind is limited independently by `limit`; document, card, record and conversation
+results use the same access checks as their individual search routes.
+
 ### Searching conversations
 
 A person's own conversations with the agent are searched apart too, by full text only: a
