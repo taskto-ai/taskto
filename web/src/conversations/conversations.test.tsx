@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
-import { parseRoute, usePath } from '../router'
+import { navigate, parseRoute, usePath } from '../router'
 import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { wholeText } from '../test/text'
@@ -939,4 +939,62 @@ test('when the model cannot be read back after a switching send, the picker show
   fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) two' } })
   fireEvent.keyDown(box, { key: 'Enter' })
   await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+})
+
+test('a send with no agent token does not read the model back', async () => {
+  const { calls } = await openWith({
+    ...agentCatalog,
+    'POST /api/workspaces/1/conversations/7/messages': { status: 202, body: { submission_id: 12 } },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+  const reads = () => calls.filter((c) => c.method === 'GET' && c.path.endsWith('/conversations/7/model')).length
+  const before = reads()
+
+  fireEvent.change(box, { target: { value: 'no mention here' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(box.value).toBe(''))
+  await act(async () => {})
+  expect(reads()).toBe(before)
+})
+
+test('a model read back for a conversation left meanwhile does not reach the next one', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let reads = 0
+  await openWith({
+    ...agentCatalog,
+    'GET /api/workspaces/1/conversations/7/model': async () => {
+      reads++
+      if (reads > 1) await held
+      return {
+        body: reads > 1 ? { provider: 'cli-codex', model_id: 'default' } : { provider: 'script', model_id: 'script-1' },
+      }
+    },
+    'GET /api/workspaces/1/conversations/8': { body: conversation(8, 'Other') },
+    'GET /api/workspaces/1/conversations/8/model': { body: { provider: 'script', model_id: 'script-1' } },
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(reads).toBe(2))
+
+  act(() => navigate('/w/1/conversations/8'))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/conversations/8'))
+  await act(async () => {
+    release()
+    await held
+  })
+  const next = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(next.value).toBe(JSON.stringify(['script', 'script-1'])))
 })
