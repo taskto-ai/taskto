@@ -1527,8 +1527,12 @@ never emptied after its copy failed. If v0.1.0 is from before
 [account homes](#upgrading-to-account-homes) and the CLI workers run in container mode, the older
 worker must start on a new, empty `cli-homes` volume: an older worker reads directories by user
 number and must never see the homes. Set `HOMES=1` for that (in container mode only): the script
-then takes a backup of the upgraded server (`after-v0.2.0.tar.gz`, checked with `gzip -t`: the
-script stops if it is empty or damaged; it writes to a temporary name beside the final one and renames it only once checked, and a backup that already exists is never written over: a rerun writes `after-v0.2.0-<time>.tar.gz` beside it) while it still runs, stops the whole deployment, the CLI
+then takes a backup of the upgraded server (`after-v0.2.0.tar.gz`) while it still runs. If that
+file already exists, the script stops before it changes anything and tells you: it never writes
+over a backup, and never picks a second name, so move the old one away first. Otherwise it writes
+`after-v0.2.0.tar.gz.partial`, checks it (`test -s`, `gzip -t`: the script stops if it is empty or
+damaged), and renames it into place, stopping if the rename did nothing. It then stops the whole
+deployment, the CLI
 worker container too (`--profile cli`, whether or not `COMPOSE_PROFILES` names it), with the
 upgraded version's own `compose.yaml`, and only then checks out the old one. It keeps the
 upgraded volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`,
@@ -1542,11 +1546,12 @@ bash -euo pipefail -s "$HOMES" <<'EOF'
 if [ "$1" = 1 ]; then PROFILE="--profile cli"; else PROFILE=""; fi
 if [ "$1" = 1 ]; then
   AFTER=after-v0.2.0.tar.gz
-  if [ -e "$AFTER" ]; then AFTER="after-v0.2.0-$(date +%Y%m%d%H%M%S).tar.gz"; fi
+  if [ -e "$AFTER" ]; then echo "$AFTER already exists: move it away first" >&2; exit 1; fi
   docker compose exec -T taskto taskto backup - > "$AFTER.partial" </dev/null
   test -s "$AFTER.partial"
   gzip -t "$AFTER.partial"
   mv -n "$AFTER.partial" "$AFTER"
+  test ! -e "$AFTER.partial"
 fi
 docker compose $PROFILE down </dev/null
 git checkout v0.1.0
@@ -1566,8 +1571,8 @@ EOF
 `HOMES=1` is for container mode only. Upgrading the rolled-back data again doesn't bring the kept
 volume back: that data gets new account identities and a new installation, which the kept homes
 don't have ([Upgrading to account homes](#upgrading-to-account-homes)). The kept volume goes back
-only with the upgraded server's own backup, `after-v0.2.0.tar.gz`, which the script took right
-before the rollback. In local mode,
+only with the upgraded server's own backup, `after-v0.2.0.tar.gz`, the one file the script took
+right before the rollback. In local mode,
 leave the restored `<data>/cli` as it is, with `HOMES=0`: the backup from before the upgrade
 holds it as the older version left it, matched to its database, so people keep their CLI
 sign-ins and files from then.

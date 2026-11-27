@@ -22,72 +22,19 @@ func rollbackScript(t *testing.T) string {
 	return strings.Replace(guide[start:start+end+len("\nEOF\n")], "HOMES=0", "HOMES=1", 1)
 }
 
-func TestARolledBackUpgradeNeverTruncatesItsVerifiedBackupOnARerun(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("needs bash")
-	}
-	if _, err := exec.LookPath("gzip"); err != nil {
-		t.Skip("needs gzip")
-	}
-	script := rollbackScript(t)
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin")
-	if err := os.Mkdir(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fake := `#!/bin/sh
-case "$*" in
-*'taskto backup -'*)
-  if [ -e "$FAKE_STATE/down" ]; then exit 2; fi
-  echo upgraded-data | gzip -c
-  ;;
-*' down'*) touch "$FAKE_STATE/down" ;;
-*' build'*) exit 3 ;;
-esac
-exit 0
-`
-	for _, prog := range []string{"docker", "git"} {
-		if err := os.WriteFile(filepath.Join(bin, prog), []byte(fake), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "before-v0.2.0.tar.gz"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run := func() error {
-		cmd := exec.Command("bash", "-c", script)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_STATE="+dir)
-		out, err := cmd.CombinedOutput()
-		t.Logf("%s", out)
-		return err
-	}
-	backup := filepath.Join(dir, "after-v0.2.0.tar.gz")
-	if err := run(); err == nil {
-		t.Fatal("the first run succeeded though the build failed")
-	}
-	first, err := os.ReadFile(backup)
-	if err != nil || len(first) == 0 {
-		t.Fatalf("the first run left no verified backup (%v, %d bytes)", err, len(first))
-	}
-	if err := run(); err == nil {
-		t.Fatal("the rerun succeeded against a stopped deployment")
-	}
-	again, err := os.ReadFile(backup)
-	if err != nil || string(again) != string(first) {
-		t.Fatalf("the rerun changed the verified backup (%v): %d bytes, was %d", err, len(again), len(first))
-	}
-	if err := exec.Command("gzip", "-t", backup).Run(); err != nil {
-		t.Errorf("the kept backup is damaged: %v", err)
-	}
+type rollbackRun struct {
+	dir   string
+	calls string
+	out   string
+	err   error
 }
 
-func TestARolledBackUpgradeRerunWithTheServerUpWritesBesideTheKeptBackup(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("needs bash")
-	}
-	if _, err := exec.LookPath("gzip"); err != nil {
-		t.Skip("needs gzip")
+func runRollback(t *testing.T, backupCommand string, files map[string]string) rollbackRun {
+	t.Helper()
+	for _, prog := range []string{"bash", "gzip"} {
+		if _, err := exec.LookPath(prog); err != nil {
+			t.Skip("needs " + prog)
+		}
 	}
 	script := rollbackScript(t)
 	dir := t.TempDir()
@@ -95,35 +42,94 @@ func TestARolledBackUpgradeRerunWithTheServerUpWritesBesideTheKeptBackup(t *test
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fake := "#!/bin/sh\ncase \"$*\" in *'taskto backup -'*) echo newer-data | gzip -c ;; esac\nexit 0\n"
+	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_STATE/calls\"\ncase \"$*\" in\n*'taskto backup -'*)\n" + backupCommand + "\n;;\nesac\nexit 0\n"
 	for _, prog := range []string{"docker", "git"} {
 		if err := os.WriteFile(filepath.Join(bin, prog), []byte(fake), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	kept := []byte("kept-verified-backup")
-	for name, body := range map[string][]byte{"after-v0.2.0.tar.gz": kept, "before-v0.2.0.tar.gz": nil} {
-		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+	files["before-v0.2.0.tar.gz"] = ""
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_STATE="+dir)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	return rollbackRun{dir: dir, calls: string(calls), out: string(out), err: err}
+}
+
+func (r rollbackRun) mustStopBeforeTeardown(t *testing.T) {
+	t.Helper()
+	if r.err == nil {
+		t.Fatal("the script went on")
 	}
-	if got, _ := os.ReadFile(filepath.Join(dir, "after-v0.2.0.tar.gz")); string(got) != string(kept) {
-		t.Errorf("the kept backup was written over: %q", got)
+	if strings.Contains(r.calls, "volume rm") {
+		t.Errorf("the data volume was removed:\n%s", r.calls)
 	}
-	beside, _ := filepath.Glob(filepath.Join(dir, "after-v0.2.0-*.tar.gz"))
-	if len(beside) != 1 {
-		t.Fatalf("the new backup beside the kept one = %v", beside)
+	if strings.Contains(r.calls, " down") {
+		t.Errorf("the deployment was stopped:\n%s", r.calls)
 	}
-	if err := exec.Command("gzip", "-t", beside[0]).Run(); err != nil {
-		t.Errorf("the new backup is damaged: %v", err)
+}
+
+func TestARollbackStopsBeforeChangingAnythingWhenTheUpgradedBackupExists(t *testing.T) {
+	kept := "kept-verified-backup"
+	r := runRollback(t, "echo newer-data | gzip -c", map[string]string{"after-v0.2.0.tar.gz": kept})
+	r.mustStopBeforeTeardown(t)
+	if strings.Contains(r.calls, "taskto backup") {
+		t.Errorf("the script took a backup though one exists:\n%s", r.calls)
 	}
-	if left, _ := filepath.Glob(filepath.Join(dir, "*.partial")); len(left) != 0 {
+	if got, _ := os.ReadFile(filepath.Join(r.dir, "after-v0.2.0.tar.gz")); string(got) != kept {
+		t.Errorf("the existing backup changed: %q", got)
+	}
+	if !strings.Contains(r.out, "already exists") {
+		t.Errorf("the script didn't tell the operator: %q", r.out)
+	}
+	if others, _ := filepath.Glob(filepath.Join(r.dir, "after-v0.2.0*")); len(others) != 1 {
+		t.Errorf("the script made another file: %v", others)
+	}
+}
+
+func TestARollbackStopsWhenTheBackupCommandWritesInvalidGzip(t *testing.T) {
+	r := runRollback(t, "echo not-gzip", map[string]string{})
+	r.mustStopBeforeTeardown(t)
+	if _, err := os.Stat(filepath.Join(r.dir, "after-v0.2.0.tar.gz")); err == nil {
+		t.Error("an invalid backup was put in place")
+	}
+}
+
+func TestARollbackStopsWhenTheBackupCommandWritesNothing(t *testing.T) {
+	r := runRollback(t, "exit 0", map[string]string{})
+	r.mustStopBeforeTeardown(t)
+	if _, err := os.Stat(filepath.Join(r.dir, "after-v0.2.0.tar.gz")); err == nil {
+		t.Error("an empty backup was put in place")
+	}
+}
+
+func TestARollbackStopsWhenTheRenameIntoPlaceDidNothing(t *testing.T) {
+	r := runRollback(t, "echo newer-data | gzip -c; echo appeared-meanwhile > after-v0.2.0.tar.gz", map[string]string{})
+	r.mustStopBeforeTeardown(t)
+	if got, _ := os.ReadFile(filepath.Join(r.dir, "after-v0.2.0.tar.gz")); string(got) != "appeared-meanwhile\n" {
+		t.Errorf("the file that appeared meanwhile changed: %q", got)
+	}
+}
+
+func TestARollbackWithAValidBackupPublishesItAndGoesOn(t *testing.T) {
+	r := runRollback(t, "echo newer-data | gzip -c", map[string]string{})
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if err := exec.Command("gzip", "-t", filepath.Join(r.dir, "after-v0.2.0.tar.gz")).Run(); err != nil {
+		t.Errorf("the backup is damaged: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.dir, "*.partial")); len(left) != 0 {
 		t.Errorf("a temporary file is left: %v", left)
+	}
+	if !strings.Contains(r.calls, "volume rm") {
+		t.Errorf("the rollback didn't go on:\n%s", r.calls)
 	}
 }

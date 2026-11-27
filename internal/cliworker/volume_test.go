@@ -312,6 +312,27 @@ func TestAPurgeStoppedAfterTheMoveIsFinishedBeforeTheNextOneSucceeds(t *testing.
 	}
 }
 
+func TestAPurgeThatCannotReadTheTrashDirectoryFailsInsteadOfReportingCleaned(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	h.w.SetDetachHookForTest(func() error { return errors.New("the worker stopped here") })
+	if err := h.w.Forget(ctx, acct(1)); err == nil || !strings.Contains(err.Error(), "the worker stopped here") {
+		t.Fatalf("fixture: the purge didn't stop where the test stops it: %v", err)
+	}
+	h.w.SetDetachHookForTest(nil)
+	trash := filepath.Join(h.layout.Root, ".worker", "trash")
+	if err := os.RemoveAll(trash); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trash, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Forget(ctx, acct(1)); err == nil {
+		t.Fatal("the purge reported the account cleaned though it could not read the trash directory")
+	}
+}
+
 func TestAPurgeRetryFindsWhatItLeftInARootWithGlobCharacters(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) {
 		c.Layout.Root = c.Layout.Root + "[worker]"
