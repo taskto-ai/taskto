@@ -343,7 +343,6 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
-	user, _ := caller(r)
 	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
 }
