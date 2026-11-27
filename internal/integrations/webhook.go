@@ -141,9 +141,13 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 	// writes check again that the integration is the one that was verified against.
 	guard := &hookGuard{mode: sub.target.mode, revision: sub.revision}
 	ev, ok := sub.provider.Normalize(body)
-	if !ok || ev.Livemode != (sub.target.mode == ModeLive) {
-		// A type the server doesn't act on, or an event of the other mode than the integration's
-		// (which a secret of one mode can't sign: a refusal worth nothing more than ignoring).
+	if !ok {
+		// A type the server doesn't act on.
+		//
+		// An event of the other mode than the integration's is stored all the same: the mode that
+		// counts is the ref's (apply.go checks the event against the mode its ref was made in), and a
+		// key replaced by one of the other mode after a payer paid, before the event came, leaves a ref
+		// of the old mode whose payment must still be recorded, never acknowledged and dropped.
 		if err := s.store.noteEvent(ctx, sub.target.id, guard); err != nil {
 			s.hookWriteFailed(w, r, err)
 			return

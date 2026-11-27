@@ -98,8 +98,8 @@ money**.
   from one to the other, revoke its approval, ask again and approve it with the live integration.
   Don't swap a test key for a live one in the same integration: an invoice whose link was still
   being made stops with an error, because the link can't be followed into the other mode, and a
-  payment event of the other mode is ignored on purpose (money of one mode never marks a record of
-  the other).
+  payment event of the other mode than a link's is ignored on purpose (money of one mode never marks
+  a record of the other). A payment on a link made before the swap is still recorded against it.
 - Never paste a live key anywhere but here, and never use one to try the software out.
 
 ### 4. Install the invoicing app and approve it
@@ -975,7 +975,10 @@ provider said and changes what an app holds, so it believes little:
   (`integration_refs`) belongs to one integration, which must be the event's (another's token
   names nothing: `integration_event_ref_unknown`, ignored), and to one mode of the provider's
   account, which must be the mode of the event (`livemode`): money of the other mode is ignored
-  (`integration_event_mode_mismatch`).
+  (`integration_event_mode_mismatch`). The mode compared is the ref's, never the integration's
+  now: the webhook route stores every signed event whatever mode the integration has, so a payment
+  made on a live link before an admin replaced the key with a test one is still recorded against its
+  live ref.
 - **A refund carries no token of ours.** It is mapped through the payment (the payment intent)
   that the ref learned from the verified event that paid it, in the event's own integration.
   Stripe tells events in no set order, so a full refund can arrive before the payment it undoes. A
