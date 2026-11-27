@@ -175,6 +175,12 @@ test('a column with a key the table does not know is refused, so nothing is draw
   expect(screen.queryByText('Pay rent')).toBeNull()
 })
 
+test('a table with a prop it does not take is refused, as the server refuses it, so nothing is drawn', async () => {
+  render(app(tableSurface(tableItems, { variant: 'dense' })))
+  await waitFor(() => expect(screen.queryByRole('table')).toBeNull())
+  expect(screen.queryByText('Pay rent')).toBeNull()
+})
+
 test('the 200 rows shown are the first 200 after sorting, not the first 200 received', async () => {
   const many = Array.from({ length: 250 }, (_, i) => ({ id: i + 1, _revision: 1, n: i + 1 }))
   render(
