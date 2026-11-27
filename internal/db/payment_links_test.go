@@ -184,10 +184,10 @@ func TestIntegrationRefsAreOnePerEntryAndSurviveItsCleanup(t *testing.T) {
 	}
 }
 
-// A reference made before it kept its field takes the field from its entry, while the entry is kept,
-// and one whose entry was cleaned up keeps ” (which the lookup of a record's links counts as any
-// field of the record).
-func TestIntegrationRefsTakeTheirFieldFromTheirEntry(t *testing.T) {
+// A reference made before it kept its money's fields takes them from its entry, while the entry is
+// kept, and one whose entry was cleaned up keeps ” (which locks every field any release of its app
+// read money from).
+func TestIntegrationRefsTakeTheirMoneyFieldsFromTheirEntry(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
 	if _, err := migrate(ctx, sqlDB, migrationsBefore(t, "_integration_ref_field.sql")); err != nil {
@@ -201,7 +201,7 @@ func TestIntegrationRefsTakeTheirFieldFromTheirEntry(t *testing.T) {
 		`INSERT INTO app_rows (id, app_id, data, created_by) VALUES (1, 1, '{}', 1)`,
 		`INSERT INTO app_operations (id, app_id, user_id, operation, action, request_hash, record_id) VALUES (1, 1, 1, 'op-0000001', 'send', 'h', 1)`,
 		`INSERT INTO app_effects (id, app_id, operation_id, position, kind, record_id, record_revision, user_id, action_kind, payload, next_attempt_at)
-			VALUES (7, 1, 1, 0, 'create_payment_link', 1, 1, 1, 'update', '{"url_field":"pay_url","id_field":"payment_id"}', '2026-01-01T00:00:00.000Z')`,
+			VALUES (7, 1, 1, 0, 'create_payment_link', 1, 1, 1, 'update', '{"url_field":"pay_url","id_field":"payment_id","amount_field":"total","currency_field":"currency"}', '2026-01-01T00:00:00.000Z')`,
 		`INSERT INTO integrations (id, workspace_id, public_id, provider, name, display_name, mode, max_amount_minor, currencies)
 			VALUES (1, 1, lower(hex(randomblob(16))), 'stripe', 'main', 'main', 'test', 1000, '["EUR"]')`,
 		`INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency)
@@ -216,10 +216,10 @@ func TestIntegrationRefsTakeTheirFieldFromTheirEntry(t *testing.T) {
 	if _, err := Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
-	for token, want := range map[string]string{"test-token-not-real-000000000001": "pay_url", "test-token-not-real-000000000002": ""} {
-		var field string
-		if err := sqlDB.QueryRowContext(ctx, `SELECT url_field FROM integration_refs WHERE token = ?`, token).Scan(&field); err != nil || field != want {
-			t.Fatalf("the field of %s = %q, %v; want %q", token, field, err, want)
+	for token, want := range map[string]string{"test-token-not-real-000000000001": "total:currency", "test-token-not-real-000000000002": ":"} {
+		var fields string
+		if err := sqlDB.QueryRowContext(ctx, `SELECT amount_field || ':' || currency_field FROM integration_refs WHERE token = ?`, token).Scan(&fields); err != nil || fields != want {
+			t.Fatalf("the fields of %s = %q, %v; want %q", token, fields, err, want)
 		}
 	}
 }

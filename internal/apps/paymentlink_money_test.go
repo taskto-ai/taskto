@@ -17,8 +17,8 @@ type payable struct {
 	fields []paylink.MoneyFields
 }
 
-func (p payable) MayBePaid(context.Context, paylink.Querier, int64, int64) (bool, []paylink.MoneyFields, error) {
-	return true, p.fields, nil
+func (p payable) PayableMoney(_ context.Context, _ paylink.Querier, _, record int64) (map[int64][]paylink.MoneyFields, error) {
+	return map[int64][]paylink.MoneyFields{record: p.fields}, nil
 }
 
 // The money a payable link was made from stays as it is, whatever the field's type is now: a release

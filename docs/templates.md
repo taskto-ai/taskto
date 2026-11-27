@@ -73,7 +73,9 @@ Invoices with a number, a customer, an amount, a currency (EUR, USD, GBP or BRL)
 *Draft*, *Sent*, *Paid* or *Refunded*. Screens: the list with the count waiting for payment, a form,
 and an invoice's detail. **Send invoice** makes a payment page at the payment provider and puts its
 address on the invoice; when the customer pays, the invoice becomes *Paid* with the date, and when
-the payment is refunded in full, *Refunded*. A sent invoice offers **Replace an expired link**, which
+the payment is refunded in full, *Refunded*. A payment is recorded whatever the invoice's status was
+edited to meanwhile: an invoice put back to *Draft* while its link could still be paid, and then
+paid, shows *Paid* with the date, since the money arrived. A sent invoice offers **Replace an expired link**, which
 makes a new page only once the old one has expired at the provider (until then it puts the same
 address back). Editing an invoice in the records view never asks for a link: the template has an edit
 action without effects, which the records view uses. While an invoice's link may still be paid (or
@@ -85,7 +87,7 @@ It is the one template that reaches outside TaskTo.AI, and it does so without na
 definition declares a **slot** called `payments` of the kind `payments` ([integrations.md](integrations.md#apps-and-approval)),
 two actions with a `create_payment_link` effect on that slot (sending, and replacing an expired link,
 both only for a *Sent* invoice), and what a payment may write (the status
-and the date, only when the invoice is *Sent*; *Refunded*, only when it is *Paid*). It holds no
+and the date; *Refunded* for a refund in full), whatever the invoice's status. It holds no
 provider, no address, no account, no key and no limit, which are the admin's. So:
 
 - **Installing it binds nothing.** The draft opens with the slot unapproved. Until a workspace admin

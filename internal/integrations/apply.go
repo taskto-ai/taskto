@@ -262,6 +262,13 @@ func (a *eventApplier) classify(ctx context.Context, ev StoredEvent, r ref, tr t
 	// would leave a ref that can no longer note the link, so it waits for what the lookup finds; only a
 	// payment, which is real money, applies to such a ref.
 	if r.objectID == "" && ev.Kind != EventPaymentSucceeded && ev.Kind != EventPaymentRefunded {
+		if ev.Kind == EventPaymentExpired {
+			// It does say what became of the key whose token it carries, though: that key's object
+			// expired, and it is no longer one a payer may use (expiredKeyOfEvent).
+			if err := a.svc.expiredKeyOfEvent(ctx, r, ev); err != nil {
+				return err
+			}
+		}
 		return Ignore(apierr.CodeIntegrationEventLate)
 	}
 	// An end that isn't money, told of an object that isn't the ref's link, is an earlier key's (the
@@ -383,8 +390,8 @@ func (s *Service) settleRef(ctx context.Context, tx *sql.Tx, r ref, ev StoredEve
 	args := []any{tr.to, at}
 	set := `state = ?, settled_at = coalesce(settled_at, ?)`
 	if tr.to == "paid" {
-		set += `, paid_object_id = ?, payment_id = ?`
-		args = append(args, nullString(ev.ObjectID), nullString(ev.PaymentID))
+		set += `, paid_object_id = ?, payment_id = ?, paid_link_id = ?`
+		args = append(args, nullString(ev.ObjectID), nullString(ev.PaymentID), nullString(ev.LinkID))
 		// A payment is the answer to a call whose outcome was unknown: the link was made, and a payer
 		// used it. The ref that has no object yet (its call's answer never came, and the entry only
 		// looks for it) learns it from the event, if the event names it and no other ref has it. The key
@@ -419,6 +426,24 @@ func (s *Service) settleRef(ctx context.Context, tx *sql.Tx, r ref, ev StoredEve
 		return s.settleAttemptOfEvent(ctx, tx, r, ev)
 	}
 	return nil
+}
+
+// expiredKeyOfEvent notes, for a verified expiry of an object that carries the token of a key of a
+// ref with no link (the key's call was answered with nothing the server could read, and its outcome
+// is unknown), that the key's object expired: the key is accounted for, and left nothing a payer can
+// use. Only that key, and only a Checkout Session the server asked for itself (the ref's calls make
+// sessions, since it has pages of ours): a session opened from a Stripe Payment Link expires while
+// its link stays payable, and says nothing of the link. A key that has an outcome, or has another
+// object on record, is left as it is. The ref is left as it is too: its entry, or a newer one of the
+// record, moves on from it (nextAttempt, takeEarlier).
+func (s *Service) expiredKeyOfEvent(ctx context.Context, r ref, ev StoredEvent) error {
+	if ev.ObjectID == "" || ev.LinkID != "" || r.successURL == "" || ev.RefToken == "" {
+		return nil
+	}
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'expired', object_id = ?
+		WHERE ref_id = ? AND token = ? AND outcome IS NULL AND (object_id IS NULL OR object_id = ?)`,
+		ev.ObjectID, r.id, ev.RefToken, ev.ObjectID)
+	return err
 }
 
 // settleAttemptOfEvent gives the key the payment came through (the one whose token the event carried)

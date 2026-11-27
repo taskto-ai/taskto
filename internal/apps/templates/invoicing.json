@@ -254,11 +254,9 @@
         "kind": "payments",
         "on": {
           "payment.succeeded": {
-            "only_if": { "field": "status", "op": "eq", "value": "sent" },
             "set": { "status": { "value": "paid" }, "paid_at": { "from": "occurred_at" } }
           },
           "payment.refunded": {
-            "only_if": { "field": "status", "op": "eq", "value": "paid" },
             "set": { "status": { "value": "refunded" } }
           }
         }

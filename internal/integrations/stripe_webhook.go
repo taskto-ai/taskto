@@ -101,6 +101,9 @@ type Event struct {
 	// PaymentID is the provider's id of the payment the object belongs to (a payment intent),
 	// "" when there is none yet.
 	PaymentID string
+	// LinkID is the provider's link the object was opened from, when it was (a Checkout Session of a
+	// Stripe Payment Link names the link): "" otherwise.
+	LinkID string
 	// AmountMinor is in the currency's smallest unit; for a refund, what has been refunded so far.
 	AmountMinor int64
 	// Currency is the ISO 4217 code, upper case.
@@ -294,6 +297,7 @@ type stripeObject struct {
 	PaymentStatus     string  `json:"payment_status"`
 	ClientReferenceID *string `json:"client_reference_id"`
 	PaymentIntent     *string `json:"payment_intent"`
+	PaymentLink       *string `json:"payment_link"`
 	AmountTotal       int64   `json:"amount_total"`
 	AmountRefunded    int64   `json:"amount_refunded"`
 	Currency          string  `json:"currency"`
@@ -347,6 +351,12 @@ func (stripe) Normalize(body []byte) (Event, bool) {
 			return Event{}, false
 		}
 		out.PaymentID = *obj.PaymentIntent
+	}
+	if obj.PaymentLink != nil {
+		if !stripeLinkID.MatchString(*obj.PaymentLink) {
+			return Event{}, false
+		}
+		out.LinkID = *obj.PaymentLink
 	}
 	return out, true
 }

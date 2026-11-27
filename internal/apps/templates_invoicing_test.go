@@ -19,7 +19,7 @@ import (
 // changes when the template sends another field out, writes another field or value, asks in
 // another currency or changes what its action does: that makes every installed copy ask for a new
 // approval, so change it on purpose, in the same commit as the template and its version.
-const invoicingContractHash = "4a3669ad2d9da4680ac7967de72a072bf50694c8a03947134f574407490d2119"
+const invoicingContractHash = "ae2432762ccb930adf45117acd1b6c9475de2b0e1eb68c6f29dd79c2343398a7"
 
 func invoicingTemplate(t *testing.T) Template {
 	t.Helper()
@@ -223,16 +223,17 @@ func TestThePaymentEventsMarkAnInvoicePaidAndThenRefunded(t *testing.T) {
 		t.Fatalf("a refund: %+v, %v, status %v", res, err, status(sent))
 	}
 
-	// An invoice that was never sent isn't paid by a payment, nor refunded by a refund: the rules
-	// hold, and the money is still settled (the integrations' step says so).
+	// A payment is recorded whatever the invoice's status was edited to: an invoice put back to Draft
+	// while its link could be paid, and paid, shows Paid with the date, since the money arrived. (A
+	// refund reaches the app only for a ref that was paid: the integrations' step holds it otherwise.)
 	draft := invoice("INV-2", "draft")
-	if res, err := event(draft, "payment.succeeded"); err != nil || res.Written || !res.ConditionUnmet || status(draft) != "draft" {
-		t.Fatalf("a payment for a draft: %+v, %v, status %v", res, err, status(draft))
+	if res, err := event(draft, "payment.succeeded"); err != nil || !res.Written || res.ConditionUnmet {
+		t.Fatalf("a payment for a draft: %+v, %v", res, err)
+	}
+	if d := i.rowData(a, draft); d["status"] != "paid" || d["paid_at"] != "2026-11-26" {
+		t.Fatalf("a paid draft: %v", d)
 	}
 	open := invoice("INV-3", "sent")
-	if res, err := event(open, "payment.refunded"); err != nil || res.Written || !res.ConditionUnmet || status(open) != "sent" {
-		t.Fatalf("a refund of an unpaid invoice: %+v, %v, status %v", res, err, status(open))
-	}
 	// An expiry is not handled: the invoice stays as it is, and the next send makes a new link.
 	if res, err := event(open, "payment.expired"); err != nil || res.Written || !res.NoHandler || status(open) != "sent" {
 		t.Fatalf("an expiry: %+v, %v, status %v", res, err, status(open))
