@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-//
-// The contract in words: every line of it is its own item, even when two links of one action share
-// all their fields, so React can tell them apart.
 
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'

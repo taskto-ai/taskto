@@ -1,8 +1,3 @@
-// One launched app on the Apps page: its header (its name, the way back to every app, to its records
-// and to editing it with the agent), what the caller may do with it, the app itself (AppStage), what
-// its buttons set going (AppEffects), its records (AppRecords) and, quietly at the end, its use
-// offline (OfflinePanel). An app that is offline says so, and those who may publish it restore it.
-
 import { useId, useRef, useState } from 'react'
 import { type App, api, type Space, ws } from '../api'
 import { useT } from '../i18n'
@@ -38,21 +33,15 @@ export function LaunchedApp({
 }) {
   const base = `${ws(workspace)}/spaces/${space}/apps/${app}`
   const info = useLoad(() => api<App>(base), [base])
-  // Bumped when a record is restored, so the screen is loaded again with it.
   const [restored, setRestored] = useState(0)
-  // How many actions ran on the screen: each may have set effects going.
   const [actions, setActions] = useState(0)
   const [recordsOpen, setRecordsOpen] = useState(false)
   const recordsId = useId()
-  // The header's way to the records, which takes the keyboard back when the panel is closed from inside.
   const recordsToggle = useRef<HTMLButtonElement>(null)
-  // The explorer's way out: while a record in it holds unsaved changes, it asks before the panel
-  // goes (and the changes with it).
   const leaveRecords = useRef<((go: () => void) => void) | null>(null)
   const closeRecords = (fromInside: boolean) => {
     const go = () => {
       setRecordsOpen(false)
-      // Closed from inside the panel, which goes: the keyboard back to the header's way to it.
       if (fromInside) recordsToggle.current?.focus()
     }
     if (leaveRecords.current) leaveRecords.current(go)
@@ -70,7 +59,6 @@ export function LaunchedApp({
   }
   const running = data && !data.archived_at
 
-  // What the caller may do with it, said once under its name.
   const notes = running
     ? [
         !writable && t('apps.viewOnly'),

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// The agent's language: the user's pick, else the browser's, else the workspace's default,
-// else none.
 func TestSendCarriesTheLanguage(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()

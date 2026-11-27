@@ -14,11 +14,8 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// at is the stored text of a time.
 func at(t time.Time) string { return stamp(t) }
 
-// rawInsert adds a row the way damage or a bug would: with the CHECK constraints off, on one
-// connection, so a test can show how the worker treats a row the database would refuse.
 func rawInsert(t *testing.T, w *world, key, runAt string) int64 {
 	t.Helper()
 	ctx := context.Background()
@@ -70,7 +67,6 @@ func TestATimeOutsideTheSupportedYearsIsRefused(t *testing.T) {
 			t.Errorf("reschedule at %s = %v, want ErrInvalid", name, err)
 		}
 	}
-	// The edges of the range are inside it.
 	for _, when := range []time.Time{MinRunAt, MaxRunAt} {
 		j := w.job("edge-"+when.Format("2006"), 0)
 		j.RunAt = when
@@ -106,7 +102,6 @@ func TestTheDatabaseRefusesATimeThatSortsWrongOrDoesNotParse(t *testing.T) {
 func TestARowWithAnUnreadableTimeDoesNotStallTheQueue(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)
-	// Both sort before today's jobs, so the claim query picks them first.
 	bad := rawInsert(t, w, "year-10000", "10000-01-01T00:00:00.000Z")
 	garbled := rawInsert(t, w, "garbled", "0001-01-01 nonsense")
 	w.schedule(w.job("good", 0))
@@ -140,7 +135,6 @@ func TestAnExpiredClaimCantFinishOrAdvanceTheJob(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("claim = %v, %v", ok, err)
 			}
-			// Nobody else has claimed it: the token still matches, but the lease has ended.
 			w.clock.advance(defaultLease)
 			if err := outcome(w.s, j); err != nil {
 				t.Fatal(err)
@@ -149,7 +143,6 @@ func TestAnExpiredClaimCantFinishOrAdvanceTheJob(t *testing.T) {
 			if got.State != StateRunning || got.LastError != "" {
 				t.Fatalf("an expired claim changed the job: %+v", got)
 			}
-			// The recovery of expired leases is what takes it from there, and counts the try.
 			w.run()
 			if h.count() != 1 || h.calls[0].Attempts != 2 {
 				t.Fatalf("calls = %d, attempts %v; want the job taken again, as the second try", h.count(), h.calls)
@@ -243,12 +236,10 @@ func TestRearmingAFinishedJobCountsAgainstTheBound(t *testing.T) {
 		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
 		SELECT ?, ?, ?, 'k' || i, ?, ?, ? FROM n`,
 		MaxPerUser-1, string(remind), w.alice, w.ws, at(start.Add(time.Hour)), at(start), at(start))
-	// A finished job and a failed one: not counted while they are.
 	for _, st := range []string{StateDone, StateFailed} {
 		exec(t, w.db, `INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, state, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, string(remind), w.alice, w.ws, st, at(start), st, at(start), at(start))
 	}
-	// One more takes the owner to the bound.
 	w.schedule(w.job("last", time.Hour))
 	for _, key := range []string{StateDone, StateFailed} {
 		if _, err := w.s.Reschedule(ctx, w.db, w.job(key, time.Hour)); !errors.Is(err, ErrTooMany) {
@@ -258,7 +249,6 @@ func TestRearmingAFinishedJobCountsAgainstTheBound(t *testing.T) {
 			t.Fatalf("the refused re-arm changed the job to %q", st)
 		}
 	}
-	// Room again: it goes through, and counts.
 	exec(t, w.db, `DELETE FROM scheduled_jobs WHERE dedupe_key = 'k1'`)
 	if created, err := w.s.Reschedule(ctx, w.db, w.job(StateDone, time.Hour)); err != nil || created {
 		t.Fatalf("re-arm with room = %v, %v", created, err)
@@ -266,13 +256,11 @@ func TestRearmingAFinishedJobCountsAgainstTheBound(t *testing.T) {
 	if _, err := w.s.Reschedule(ctx, w.db, w.job(StateFailed, time.Hour)); !errors.Is(err, ErrTooMany) {
 		t.Fatalf("the re-arm that filled the bound didn't count: %v", err)
 	}
-	// A job that is active already can always be changed at the bound.
 	if _, err := w.s.Reschedule(ctx, w.db, w.job("last", 2*time.Hour)); err != nil {
 		t.Fatalf("changing an active job at the bound = %v", err)
 	}
 }
 
-// concurrently runs n calls at once, released together, and returns how many of each outcome.
 func concurrently(n int, f func(i int) error) (ok, tooMany int, other []error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -367,7 +355,6 @@ func TestTheBoundHoldsForConcurrentCallers(t *testing.T) {
 
 func TestNextOccurrenceNeverOverflowsOrLeavesTheRange(t *testing.T) {
 	anchor := func(y int) time.Time { return time.Date(y, 3, 4, 5, 6, 7, 8_000_000, time.UTC) }
-	// The case from the review: an anchor in 1700 and a one-minute interval used to land in 1407.
 	if got, ok := nextOccurrence(anchor(1700), time.Minute, start); ok {
 		t.Errorf("an anchor in 1700 has a next occurrence, %v", got)
 	}
@@ -376,7 +363,7 @@ func TestNextOccurrenceNeverOverflowsOrLeavesTheRange(t *testing.T) {
 		prev  time.Time
 		every time.Duration
 		now   time.Time
-		none  bool // there is no occurrence inside the range
+		none  bool
 	}{
 		{"a minute from 2000", MinRunAt, time.Minute, start, false},
 		{"an hour, now far ahead", anchor(2001), time.Hour, anchor(8000), false},
@@ -402,7 +389,6 @@ func TestNextOccurrenceNeverOverflowsOrLeavesTheRange(t *testing.T) {
 		if !got.After(tc.now) || !got.After(tc.prev) {
 			t.Errorf("%s: next %v is not after now %v and prev %v", tc.name, got, tc.now, tc.prev)
 		}
-		// On the grid, in whole milliseconds (a Duration can't hold the span of 6,000 years).
 		if d := got.UnixMilli() - tc.prev.UnixMilli(); d%tc.every.Milliseconds() != 0 {
 			t.Errorf("%s: next %v is off the grid (%d ms from prev)", tc.name, got, d)
 		}
@@ -419,7 +405,6 @@ func TestARecurringJobWithNoLaterOccurrenceIsDone(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)
 	j := w.job("k", 0)
-	// Ten minutes before the end, every ten minutes: the next one is past it.
 	j.RunAt, j.Every = time.Date(8999, 12, 31, 23, 50, 0, 0, time.UTC), 10*time.Minute
 	w.schedule(j)
 	w.clock.t = j.RunAt
@@ -448,12 +433,10 @@ func TestARecurringJobFarBehindStaysOnItsGrid(t *testing.T) {
 	}
 }
 
-// stepClock is a clock whose reads come from a script, so a test can step it backwards between two
-// reads of one operation.
 type stepClock struct {
 	mu    sync.Mutex
-	reads []time.Time // the first reads
-	then  time.Time   // every read after them
+	reads []time.Time
+	then  time.Time
 }
 
 func (c *stepClock) now() time.Time {
@@ -470,7 +453,6 @@ func (c *stepClock) now() time.Time {
 func TestABackwardClockStepDoesNotDispatchTheNextOccurrenceEarly(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)
-	// A recurring job whose worker died on its last try, and another that is due in five minutes.
 	a := w.job("a", 0)
 	a.Every = time.Hour
 	w.schedule(a)
@@ -478,9 +460,8 @@ func TestABackwardClockStepDoesNotDispatchTheNextOccurrenceEarly(t *testing.T) {
 	exec(t, w.db, `UPDATE scheduled_jobs SET state = 'running', attempts = ?, lease_until = ? WHERE dedupe_key = 'a'`,
 		defaultMaxAttempts, at(start.Add(time.Minute)))
 
-	// The worker reads a late time (the recovery of a is due), then the clock steps back to start.
 	late := start.Add(10 * time.Minute)
-	c := &stepClock{reads: []time.Time{late, late}, then: start} // the look; the first round; then back
+	c := &stepClock{reads: []time.Time{late, late}, then: start}
 	w.s.clock = c.now
 	w.run()
 	if h.count() != 0 {
@@ -501,7 +482,7 @@ func TestAHandlerThatReturnsNilAfterItsDeadlineHasFailedTheTry(t *testing.T) {
 	var cooperative atomic.Int32
 	w.s.handlers[remind] = func(ctx context.Context, _ Job) error {
 		cooperative.Add(1)
-		<-ctx.Done() // cut short, and says nothing about it
+		<-ctx.Done()
 		return nil
 	}
 	w.schedule(w.job("k", 0))
@@ -535,7 +516,7 @@ func TestStoppingDoesNotWaitForeverForAHandlerThatIgnoresItsContext(t *testing.T
 	var once sync.Once
 	if err := s.Register(remind, func(context.Context, Job) error {
 		once.Do(func() { close(started) })
-		<-release // deaf to the context
+		<-release
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -562,7 +543,7 @@ func TestStoppingDoesNotWaitForeverForAHandlerThatIgnoresItsContext(t *testing.T
 		t.Fatalf("job = %+v, %v; want it left running for its lease to end", j, err)
 	}
 	close(release)
-	time.Sleep(50 * time.Millisecond) // the worker goroutine unwinds without noting an outcome
+	time.Sleep(50 * time.Millisecond)
 	if j, _ := s.Find(context.Background(), sqlDB, 1, remind, "k"); j.State != StateRunning {
 		t.Fatalf("a handler that returned after the stop settled the job: %+v", j)
 	}
@@ -580,8 +561,8 @@ func TestACleanupGetsATurnWhileTheQueueIsAlwaysDue(t *testing.T) {
 	var ran atomic.Int32
 	var purgedBeforeTheEnd atomic.Bool
 	w.s.handlers[remind] = func(context.Context, Job) error {
-		time.Sleep(5 * time.Millisecond) // the queue stays busy well past a tidy tick
-		if ran.Load() == jobs-1 {        // the last one: noted before it is counted, which is what the test waits for
+		time.Sleep(5 * time.Millisecond)
+		if ran.Load() == jobs-1 {
 			_, err := w.s.Find(context.Background(), w.db, w.alice, remind, "old")
 			purgedBeforeTheEnd.Store(errors.Is(err, ErrNotFound))
 		}
@@ -666,8 +647,6 @@ func TestTheBackoffStaysAtItsCeilingForManyTries(t *testing.T) {
 	}
 }
 
-// A write whose context ends inside its transaction is rolled back before write returns, so no
-// connection is left busy for the next writer or for closing the database.
 func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) {
 	w := newWorld(t)
 	for range 200 {
@@ -686,7 +665,6 @@ func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) 
 	}
 }
 
-// A write whose caller gave up after its last statement is rolled back, not committed.
 func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
 	w := newWorld(t)
 	ctx, cancel := context.WithCancel(context.Background())

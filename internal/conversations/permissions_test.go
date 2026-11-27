@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// fakeQuestions is the CLI workers' side: one question in one user's conversation.
 type fakeQuestions struct {
 	mu         sync.Mutex
 	user, conv int64
@@ -43,7 +42,6 @@ func TestCLIPermissions(t *testing.T) {
 	conv := owner.create(ws, nil)
 	one := path(ws, fmt.Sprintf("/%d", conv.ID))
 
-	// The setting: ask by default, allow_all only when the owner says so.
 	if conv.CLIPermissions != "ask" {
 		t.Fatalf("a new conversation has cli_permissions %q", conv.CLIPermissions)
 	}
@@ -61,7 +59,6 @@ func TestCLIPermissions(t *testing.T) {
 		t.Fatalf("back to ask: %+v", got)
 	}
 
-	// Without CLI workers there are no questions.
 	if r := decode[map[string][]cliworker.PermissionRequest](t, owner.expect(http.StatusOK, http.MethodGet, one+"/cli-permissions", nil)); len(r["requests"]) != 0 {
 		t.Fatalf("questions without workers: %+v", r)
 	}
@@ -81,7 +78,6 @@ func TestCLIPermissions(t *testing.T) {
 	}
 	owner.expect(http.StatusNotFound, http.MethodPost, one+"/cli-permissions/q1", map[string]any{"allow": true})
 
-	// Another member of the workspace sees and answers nothing of it.
 	member := e.invite(owner, ws, "member@example.com")
 	member.expect(http.StatusNotFound, http.MethodGet, one+"/cli-permissions", nil)
 	member.expect(http.StatusNotFound, http.MethodPost, one+"/cli-permissions/q1", map[string]any{"allow": true})

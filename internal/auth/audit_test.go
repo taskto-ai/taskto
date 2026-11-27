@@ -14,7 +14,6 @@ import (
 	"taskto.ai/taskto/internal/audit/audittest"
 )
 
-// events returns the audit events of action, oldest first.
 func (e *env) events(action string) []audit.Row {
 	e.t.Helper()
 	rows, err := audit.List(context.Background(), e.db, audit.Filter{Action: action, Limit: 1000})
@@ -27,7 +26,6 @@ func (e *env) events(action string) []audit.Row {
 	return rows
 }
 
-// one returns the only event of action, failing if there isn't exactly one.
 func (e *env) one(action string) audit.Row {
 	e.t.Helper()
 	rows := e.events(action)
@@ -47,7 +45,6 @@ func wantID(t *testing.T, what string, got *int64, want int64) {
 	}
 }
 
-// want checks who did it, in which workspace, to what.
 func wantEvent(t *testing.T, r audit.Row, workspace, actor int64, targetType string, target int64) {
 	t.Helper()
 	wantID(t, r.Action+" workspace", r.WorkspaceID, workspace)
@@ -74,7 +71,6 @@ func TestAuditSetupLoginLogout(t *testing.T) {
 
 	wantEvent(t, e.one(audit.SetupCompleted), ws, ownerID, audit.TargetWorkspace, ws)
 
-	// A login.
 	c, code := e.login("owner@example.com", ownerPassword)
 	if code != http.StatusOK {
 		t.Fatalf("login = %d", code)
@@ -85,8 +81,6 @@ func TestAuditSetupLoginLogout(t *testing.T) {
 		t.Errorf("details = %v", ok.Details)
 	}
 
-	// Failures: a wrong password for a known account is the account's; an unknown address has no
-	// actor, and the address typed is nowhere in the log.
 	if _, code := e.login("owner@example.com", "not-the-password"); code != http.StatusUnauthorized {
 		t.Fatalf("wrong password = %d", code)
 	}
@@ -97,7 +91,6 @@ func TestAuditSetupLoginLogout(t *testing.T) {
 	if len(failed) != 2 {
 		t.Fatalf("login_failed = %d events, want 2", len(failed))
 	}
-	// The owner is the target, not the actor: whoever typed the password isn't known to be them.
 	wantEvent(t, failed[0], 0, 0, audit.TargetUser, ownerID)
 	if failed[0].Details["reason"] != "wrong_password" {
 		t.Errorf("details = %v", failed[0].Details)
@@ -107,10 +100,8 @@ func TestAuditSetupLoginLogout(t *testing.T) {
 		t.Errorf("details = %v", failed[1].Details)
 	}
 
-	// Logout.
 	expect(t, c.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
 	wantEvent(t, e.one(audit.Logout), 0, ownerID, audit.TargetUser, ownerID)
-	// Logging out again, with no session, is no event.
 	expect(t, c.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
 	if n := len(e.events(audit.Logout)); n != 1 {
 		t.Fatalf("logout events = %d, want 1", n)
@@ -123,7 +114,6 @@ func TestAuditRefusedLoginsFillNoLog(t *testing.T) {
 	for i := 0; i < accountAndIPAttempts+5; i++ {
 		e.login("owner@example.com", "not-the-password")
 	}
-	// The limiter turns the later attempts away before they are weighed: they leave no event.
 	if n := len(e.events(audit.LoginFailed)); n != accountAndIPAttempts {
 		t.Fatalf("login_failed = %d events, want %d", n, accountAndIPAttempts)
 	}
@@ -136,7 +126,6 @@ func TestAuditPasswordChangeAndReset(t *testing.T) {
 	member, mi := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 	memberID := mi.User.ID
 
-	// Changing one's own password: a wrong current one, then a right one.
 	expect(t, member.do(http.MethodPost, "/api/me/password",
 		map[string]string{"current_password": "wrong-current", "new_password": newPassword}), http.StatusForbidden)
 	wantEvent(t, e.one(audit.PasswordChangeFailed), 0, memberID, audit.TargetUser, memberID)
@@ -144,16 +133,13 @@ func TestAuditPasswordChangeAndReset(t *testing.T) {
 		map[string]string{"current_password": otherPassword, "new_password": newPassword}), http.StatusNoContent)
 	wantEvent(t, e.one(audit.PasswordChanged), 0, memberID, audit.TargetUser, memberID)
 
-	// An admin makes a reset link for the member: the event is the workspace's, the admin's.
 	token := e.reset(owner, ws, memberID)
 	wantEvent(t, e.one(audit.PasswordResetCreated), ws, ownerID, audit.TargetUser, memberID)
 
-	// The member uses it, anonymously: the actor is the user whose password it set.
 	anon := e.client()
 	expect(t, anon.do(http.MethodPost, "/api/password-reset", map[string]string{"token": token, "password": "fake-third-password"}), http.StatusOK)
 	wantEvent(t, e.one(audit.PasswordResetUsed), 0, memberID, audit.TargetUser, memberID)
 
-	// A link that no longer works leaves no event.
 	expect(t, anon.do(http.MethodPost, "/api/password-reset", map[string]string{"token": token, "password": "fake-fourth-password"}), http.StatusNotFound)
 	if n := len(e.events(audit.PasswordResetUsed)); n != 1 {
 		t.Fatalf("password_reset_used = %d events, want 1", n)
@@ -165,7 +151,6 @@ func TestAuditInvitesMembersAndWorkspace(t *testing.T) {
 	owner, ws := e.setup()
 	ownerID := e.userID(owner)
 
-	// Create, then accept as a new person.
 	token := e.invite(owner, ws, "member@example.com", RoleMember)
 	created := e.one(audit.InviteCreated)
 	wantEvent(t, created, ws, ownerID, audit.TargetInvite, *created.TargetID)
@@ -180,7 +165,6 @@ func TestAuditInvitesMembersAndWorkspace(t *testing.T) {
 		t.Errorf("details = %v", accepted.Details)
 	}
 
-	// Withdraw one.
 	rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws), map[string]string{"email": "late@example.com", "role": "admin"})
 	expect(t, rec, http.StatusCreated)
 	lateID := decode[Invite](t, rec).ID
@@ -190,13 +174,11 @@ func TestAuditInvitesMembersAndWorkspace(t *testing.T) {
 	if revoked.Details["email"] != "late@example.com" || revoked.Details["role"] != "admin" {
 		t.Errorf("details = %v", revoked.Details)
 	}
-	// Withdrawing it again is an error, and no event.
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/invites/%d", ws, lateID), nil), http.StatusNotFound)
 	if n := len(e.events(audit.InviteRevoked)); n != 1 {
 		t.Fatalf("invite_revoked = %d events, want 1", n)
 	}
 
-	// Accepting as a logged-in existing user.
 	second := e.addWorkspace(ownerID, "Second")
 	inv := directInvite(t, e, second, "member@example.com")
 	member, _ := e.login("member@example.com", otherPassword)
@@ -209,14 +191,12 @@ func TestAuditInvitesMembersAndWorkspace(t *testing.T) {
 	}
 	wantEvent(t, existing, second, memberID, audit.TargetInvite, *existing.TargetID)
 
-	// A role change and a removal.
 	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, memberID), map[string]string{"role": "admin"}), http.StatusNoContent)
 	role := e.one(audit.MemberRoleChanged)
 	wantEvent(t, role, ws, ownerID, audit.TargetUser, memberID)
 	if role.Details["from"] != "member" || role.Details["to"] != "admin" {
 		t.Errorf("details = %v", role.Details)
 	}
-	// The same role again changes nothing, so it records nothing.
 	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, memberID), map[string]string{"role": "admin"}), http.StatusNoContent)
 	if n := len(e.events(audit.MemberRoleChanged)); n != 1 {
 		t.Fatalf("member_role_changed = %d events, want 1", n)
@@ -228,13 +208,11 @@ func TestAuditInvitesMembersAndWorkspace(t *testing.T) {
 		t.Errorf("details = %v", removed.Details)
 	}
 
-	// The last admin can't leave: the refusal records nothing.
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, ownerID), nil), http.StatusConflict)
 	if n := len(e.events(audit.MemberRemoved)); n != 1 {
 		t.Fatalf("member_removed = %d events, want 1", n)
 	}
 
-	// A workspace setting.
 	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d", ws), map[string]string{"locale": "pt-BR"}), http.StatusOK)
 	upd := e.one(audit.WorkspaceUpdated)
 	wantEvent(t, upd, ws, ownerID, audit.TargetWorkspace, ws)
@@ -243,8 +221,6 @@ func TestAuditInvitesMembersAndWorkspace(t *testing.T) {
 	}
 }
 
-// directInvite makes an invite of workspace to email directly, for a workspace no client of the
-// test administers, and returns its token.
 func directInvite(t *testing.T, e *env, workspace int64, email string) string {
 	t.Helper()
 	token, hash := newToken()
@@ -282,7 +258,6 @@ func TestAuditSSO(t *testing.T) {
 	owner, ws := s.setup()
 	ownerID := s.userID(owner)
 
-	// An existing account is linked by its verified address.
 	b := s.browser()
 	rec := s.signIn(b, "", verified("owner@example.com"))
 	s.wantLogin(b, rec, "/", "owner@example.com")
@@ -293,7 +268,6 @@ func TestAuditSSO(t *testing.T) {
 	}
 	wantEvent(t, s.one(audit.SSOLoginSucceeded), 0, ownerID, audit.TargetUser, ownerID)
 
-	// A second login links nothing, and is a login.
 	s.signIn(s.browser(), "", verified("owner@example.com"))
 	if n := len(s.events(audit.SSOIdentityLinked)); n != 1 {
 		t.Fatalf("sso_identity_linked = %d events, want 1", n)
@@ -302,7 +276,6 @@ func TestAuditSSO(t *testing.T) {
 		t.Fatalf("sso_login_succeeded = %d events, want 2", n)
 	}
 
-	// An invited newcomer: the account is made, linked and joined to the workspace.
 	s.invite(owner, ws, "new@example.com", RoleMember)
 	rec = s.signIn(s.browser(), "/invite", map[string]any{"email": "new@example.com", "email_verified": true, "sub": "sub-2"})
 	if rec.Code != http.StatusSeeOther {
@@ -327,7 +300,6 @@ func TestAuditSSO(t *testing.T) {
 	}
 	wantID(t, "invite_accepted actor", joined.ActorID, newID)
 
-	// A refusal: a person with no account and no invite.
 	b3 := s.browser()
 	s.wantFailure(s.signIn(b3, "", map[string]any{"email": "stranger@example.com", "email_verified": true, "sub": "sub-9"}), "sso_no_account")
 	failed := s.one(audit.SSOLoginFailed)
@@ -340,8 +312,6 @@ func TestAuditSSO(t *testing.T) {
 	}
 }
 
-// TestAuditHoldsNoSecret runs the account flows with known secret values and checks that none
-// of them is in any column of any audit row.
 func TestAuditHoldsNoSecret(t *testing.T) {
 	const wrongPassword = "fake-wrong-password-9f2c"
 	e := newEnv(t, Options{})
@@ -370,13 +340,11 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 	expect(t, e.client().do(http.MethodPost, "/api/password-reset",
 		map[string]string{"token": secrets["reset token"], "password": newPassword}), http.StatusOK)
 
-	// Hashes of them count too: what the database keeps for a token isn't a thing to copy.
 	for name, value := range map[string]string{"invite": inviteToken, "reset": secrets["reset token"], "access": secrets["access token"]} {
 		secrets[name+" token hash"] = hashToken(value)
 	}
 	audittest.NoSecrets(t, e.db, secrets)
 
-	// The log isn't empty: the check above looked at something.
 	rows, err := audit.List(context.Background(), e.db, audit.Filter{Limit: 1000})
 	if err != nil || len(rows) < 9 {
 		t.Fatalf("%d audit events, %v", len(rows), err)
@@ -396,7 +364,6 @@ func TestAuditCarriesTheClientBehindATrustedProxy(t *testing.T) {
 }
 
 func TestAuditDetailsAreNotTheCallers(t *testing.T) {
-	// The query string of an SSO callback, with its code, is never part of an event.
 	s := newSSOEnv(t)
 	s.setup()
 	b := s.browser()
@@ -415,7 +382,6 @@ func TestAuditATokenNameIsNeverRecorded(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
 	first := e.accessToken(owner, ws)
-	// A token pasted into the name box, as people do.
 	rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]string{"name": first})
 	expect(t, rec, http.StatusCreated)
 	id := decode[Token](t, rec).ID
@@ -442,7 +408,6 @@ func TestAuditTokenUseIsRecordedWhenLastUsedAdvances(t *testing.T) {
 
 	use()
 	wantEvent(t, e.one(audit.AccessTokenUsed), ws, ownerID, audit.TargetAccessToken, id)
-	// Many requests in the same minute are one use, as last_used_at has it.
 	for range 5 {
 		e.advance(5 * time.Second)
 		use()
@@ -455,7 +420,6 @@ func TestAuditTokenUseIsRecordedWhenLastUsedAdvances(t *testing.T) {
 	if n := len(e.events(audit.AccessTokenUsed)); n != 2 {
 		t.Fatalf("access_token_used = %d events a minute later, want 2", n)
 	}
-	// The event and last_used_at are the same fact.
 	var last string
 	if err := e.db.QueryRow(`SELECT last_used_at FROM access_tokens WHERE id = ?`, id).Scan(&last); err != nil {
 		t.Fatal(err)
@@ -463,7 +427,6 @@ func TestAuditTokenUseIsRecordedWhenLastUsedAdvances(t *testing.T) {
 	if rows := e.events(audit.AccessTokenUsed); rows[1].At == "" || last != stamp(e.now) {
 		t.Fatalf("last_used_at = %s, events = %+v", last, rows)
 	}
-	// A refused token (wrong, or its owner removed) is no use.
 	if _, _, err := e.svc.TokenUser(ctx, "ttp_not-a-token-of-anyone"); err == nil {
 		t.Fatal("an unknown token was accepted")
 	}
@@ -473,8 +436,6 @@ func TestAuditTokenUseIsRecordedWhenLastUsedAdvances(t *testing.T) {
 	audittest.NoSecrets(t, e.db, map[string]string{"the token": raw})
 }
 
-// An id can be reused once a token is revoked, so a request that authenticated with the old
-// token must not touch, or record a use of, the token that took its id.
 func TestAuditTokenUseIgnoresAReusedID(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -484,8 +445,6 @@ func TestAuditTokenUseIgnoresAReusedID(t *testing.T) {
 	if err := e.db.QueryRow(`SELECT id, workspace_id, created_at FROM access_tokens`).Scan(&old.ID, &old.WorkspaceID, &old.CreatedAt); err != nil {
 		t.Fatal(err)
 	}
-	// The token is revoked while a request that authenticated with it is in flight, and a
-	// new token takes its id.
 	if _, err := e.db.Exec(`DELETE FROM access_tokens WHERE id = ?`, old.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +472,6 @@ func TestAuditRemovingAMemberRecordsWhatGoesWithThem(t *testing.T) {
 	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 	memberID := e.userID(member)
 
-	// Two tokens, a seat in a shared space, and, in another workspace, things that stay.
 	t1, t2 := e.accessToken(member, ws), e.accessToken(member, ws)
 	_, _ = t1, t2
 	var space int64
@@ -547,7 +505,6 @@ func TestAuditRemovingAMemberRecordsWhatGoesWithThem(t *testing.T) {
 		left[0].Details["user_id"] != float64(memberID) || *left[0].WorkspaceID != ws {
 		t.Fatalf("space_member_removed = %+v", left)
 	}
-	// What the schema deleted is what was recorded: the other workspace's token is still there.
 	if n := e.count(`SELECT count(*) FROM access_tokens WHERE user_id = ?`, memberID); n != 1 {
 		t.Fatalf("%d tokens left for the member, want the other workspace's one", n)
 	}
@@ -566,7 +523,6 @@ func TestAuditLogoutOfAnExpiredSessionRecordsNothing(t *testing.T) {
 	if n := len(e.events(audit.Logout)); n != 0 {
 		t.Fatalf("logout events = %d for a session that had expired", n)
 	}
-	// The expired row is gone all the same.
 	if n := e.count(`SELECT count(*) FROM sessions`); n != before-1 {
 		t.Fatalf("%d sessions left of %d", n, before)
 	}

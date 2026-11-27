@@ -8,14 +8,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// The agent's board tools (docs/boards-agent-tools.md) call the methods below. The agent
-// works for one user at a time, in that user's conversation, and has exactly that user's
-// access: each method checks a.UserID's access to the space through package access, as
-// RequireSpace does for a request. A space, board or card the user can't read is
-// ErrNotFound; a change they can't make is ErrReadOnly or ErrBoardArchived. Changes are
-// recorded as a.UserID's, marked as the agent's when a.Agent is set.
-
-// space returns spaceID as a's user sees it, or ErrNotFound.
 func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Space, error) {
 	sp, err := s.access.Check(ctx, a.UserID, spaceID)
 	if errors.Is(err, access.ErrNotFound) {
@@ -24,8 +16,6 @@ func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Spa
 	return sp, err
 }
 
-// ListBoards lists a space's boards that aren't archived: its personal board, or its team
-// boards, by name. ListAllBoards includes the archived ones.
 func (s *Service) ListBoards(ctx context.Context, a Actor, spaceID int64) ([]Board, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -34,7 +24,6 @@ func (s *Service) ListBoards(ctx context.Context, a Actor, spaceID int64) ([]Boa
 	return s.listBoards(ctx, sp, false)
 }
 
-// ListAllBoards lists a space's boards with the archived ones, which come last.
 func (s *Service) ListAllBoards(ctx context.Context, a Actor, spaceID int64) ([]Board, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -43,7 +32,6 @@ func (s *Service) ListAllBoards(ctx context.Context, a Actor, spaceID int64) ([]
 	return s.listBoards(ctx, sp, true)
 }
 
-// CreateBoard adds a team board to a shared space.
 func (s *Service) CreateBoard(ctx context.Context, a Actor, spaceID int64, name string) (Board, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -52,8 +40,6 @@ func (s *Service) CreateBoard(ctx context.Context, a Actor, spaceID int64, name 
 	return s.createBoard(ctx, sp, a, name)
 }
 
-// UpdateBoard renames, archives or unarchives a board: ch.Version must be its current
-// version, or ErrStale.
 func (s *Service) UpdateBoard(ctx context.Context, a Actor, spaceID, boardID int64, ch BoardChanges) (Board, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -62,8 +48,6 @@ func (s *Service) UpdateBoard(ctx context.Context, a Actor, spaceID, boardID int
 	return s.updateBoard(ctx, sp, a, boardID, ch)
 }
 
-// ArchiveCard moves a card to the archive, remembering its column: version must be the
-// card's current version, or ErrStale.
 func (s *Service) ArchiveCard(ctx context.Context, a Actor, spaceID, boardID, cardID, version int64) (Card, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -72,8 +56,6 @@ func (s *Service) ArchiveCard(ctx context.Context, a Actor, spaceID, boardID, ca
 	return s.archiveCard(ctx, sp, a, boardID, cardID, version)
 }
 
-// RestoreCard puts an archived card back, last in column, or in the column it was
-// archived from if column is "": version must be the card's current version, or ErrStale.
 func (s *Service) RestoreCard(ctx context.Context, a Actor, spaceID, boardID, cardID, version int64, column Column) (Card, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -82,7 +64,6 @@ func (s *Service) RestoreCard(ctx context.Context, a Actor, spaceID, boardID, ca
 	return s.restoreCard(ctx, sp, a, boardID, cardID, version, column)
 }
 
-// ListCards lists the cards of a board that f selects, in board order.
 func (s *Service) ListCards(ctx context.Context, a Actor, spaceID, boardID int64, f Filter) ([]Card, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -91,7 +72,6 @@ func (s *Service) ListCards(ctx context.Context, a Actor, spaceID, boardID int64
 	return s.listCards(ctx, sp, boardID, f)
 }
 
-// ShowCard returns a card with its thread.
 func (s *Service) ShowCard(ctx context.Context, a Actor, spaceID, boardID, cardID int64) (Thread, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -100,7 +80,6 @@ func (s *Service) ShowCard(ctx context.Context, a Actor, spaceID, boardID, cardI
 	return s.getThread(ctx, sp, a, boardID, cardID)
 }
 
-// CreateCard adds a card to a board.
 func (s *Service) CreateCard(ctx context.Context, a Actor, spaceID, boardID int64, nc NewCard) (Card, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -109,7 +88,6 @@ func (s *Service) CreateCard(ctx context.Context, a Actor, spaceID, boardID int6
 	return s.createCard(ctx, sp, a, boardID, nc)
 }
 
-// UpdateCard edits a card: ch.Version must be its current version, or ErrStale.
 func (s *Service) UpdateCard(ctx context.Context, a Actor, spaceID, boardID, cardID int64, ch CardChanges) (Card, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -118,8 +96,6 @@ func (s *Service) UpdateCard(ctx context.Context, a Actor, spaceID, boardID, car
 	return s.updateCard(ctx, sp, a, boardID, cardID, ch)
 }
 
-// MoveCard moves a card to a column and position: m.Version must be its current
-// version, or ErrStale.
 func (s *Service) MoveCard(ctx context.Context, a Actor, spaceID, boardID, cardID int64, m Move) (Card, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -128,11 +104,6 @@ func (s *Service) MoveCard(ctx context.Context, a Actor, spaceID, boardID, cardI
 	return s.moveCard(ctx, sp, a, boardID, cardID, m)
 }
 
-// MoveCardIf is the move the app effects make: it puts the card in column as the card is when the
-// write lock is held (whatever its version), after guard, which runs in the same transaction with
-// the card as it is and says whether to go on. What guard writes is committed with the move, or
-// without one if it says not to or the card is already there; an archived card is never moved
-// (guard sees it and may refuse). moved says whether the card changed.
 func (s *Service) MoveCardIf(ctx context.Context, a Actor, spaceID, boardID, cardID int64, column Column,
 	guard func(tx *sql.Tx, c Card) (bool, error),
 ) (Card, bool, error) {
@@ -143,7 +114,6 @@ func (s *Service) MoveCardIf(ctx context.Context, a Actor, spaceID, boardID, car
 	return s.moveCardIf(ctx, sp, a, boardID, cardID, column, guard)
 }
 
-// Comment adds a comment to a card's thread. It doesn't change the card's version.
 func (s *Service) Comment(ctx context.Context, a Actor, spaceID, boardID, cardID int64, body string) (Comment, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -152,9 +122,6 @@ func (s *Service) Comment(ctx context.Context, a Actor, spaceID, boardID, cardID
 	return s.comment(ctx, sp, a, boardID, cardID, body)
 }
 
-// SetBlocked sets why a card is blocked and the cards it waits for (of the same board):
-// a nil reason and no cards unblock it. version must be the card's current version, or
-// ErrStale.
 func (s *Service) SetBlocked(ctx context.Context, a Actor, spaceID, boardID, cardID, version int64, reason *string, by []int64) (Card, error) {
 	if by == nil {
 		by = []int64{}

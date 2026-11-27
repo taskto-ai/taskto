@@ -17,7 +17,6 @@ func auditPath(ws int64, query string) string {
 	return p
 }
 
-// eventIDs lists the ids of a reply's events, newest first.
 func eventIDs(t *testing.T, body map[string]any) []int64 {
 	t.Helper()
 	list, ok := body["events"].([]any)
@@ -33,8 +32,6 @@ func eventIDs(t *testing.T, body map[string]any) []int64 {
 
 func TestAuditLogIsTheAdminsOwnWorkspacesOnly(t *testing.T) {
 	s := newStack(t)
-	// Alice administers both workspaces. Each has an event of its own, and one belongs to no
-	// workspace (a login), which is nobody's to read as a workspace log.
 	s.exec(`INSERT INTO audit_events (workspace_id, actor_id, action) VALUES (?, ?, 'workspace_updated')`, s.two, s.alice.id)
 	secondOnly := s.scalar(`SELECT max(id) FROM audit_events`)
 	s.exec(`INSERT INTO audit_events (workspace_id, actor_id, action, target_type, target_id) VALUES (NULL, ?, 'login_succeeded', 'user', ?)`, s.bob.id, s.bob.id)
@@ -62,8 +59,6 @@ func TestAuditLogIsTheAdminsOwnWorkspacesOnly(t *testing.T) {
 	}
 
 	code, body = s.browser(s.alice.cookie, http.MethodGet, auditPath(s.two, ""), nil)
-	// Its own log: the event of its creation (the stack makes it through the API, and the event
-	// belongs to the new workspace) and the one added above, and nothing of workspace one.
 	if got := eventIDs(t, body); code != http.StatusOK || len(got) != 2 || !slices.Contains(got, secondOnly) {
 		t.Fatalf("workspace two: %d %v", code, body)
 	}
@@ -73,8 +68,6 @@ func TestAuditLogIsTheAdminsOwnWorkspacesOnly(t *testing.T) {
 		}
 	}
 
-	// No parameter widens it: the workspace is the one the caller administers, whatever else the
-	// request names.
 	for _, q := range []string{"workspace=" + fmt.Sprint(s.two), "workspace_id=" + fmt.Sprint(s.two), "workspace_id=0", "workspace=0", "actor=" + fmt.Sprint(s.bob.id) + "&workspace_id=0"} {
 		code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, q+"&limit=200"), nil)
 		if code != http.StatusOK && code != http.StatusBadRequest {
@@ -92,7 +85,6 @@ func TestAuditLogIsTheAdminsOwnWorkspacesOnly(t *testing.T) {
 
 func TestAuditLogRefusesMembersOutsidersAndTokens(t *testing.T) {
 	s := newStack(t)
-	// bob is a member of one, not an admin; he isn't in two at all.
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, auditPath(s.one, ""), nil); code != http.StatusForbidden || body["code"] != "admin_only" || body["events"] != nil {
 		t.Fatalf("member: %d %v", code, body)
 	}
@@ -102,12 +94,10 @@ func TestAuditLogRefusesMembersOutsidersAndTokens(t *testing.T) {
 	if code, body := s.browser("", http.MethodGet, auditPath(s.one, ""), nil); code != http.StatusUnauthorized || body["events"] != nil {
 		t.Fatalf("no session: %d %v", code, body)
 	}
-	// An admin's access token doesn't read the log: it is a browser's view.
 	token, _ := s.newToken(s.alice.cookie, s.one, "ci")
 	if code, body := s.api(token, http.MethodGet, auditPath(s.one, ""), nil); code != http.StatusForbidden || body["events"] != nil {
 		t.Fatalf("token: %d %v", code, body)
 	}
-	// An admin of one who is a plain member of the other, after a demotion.
 	s.exec(`UPDATE memberships SET role = 'member' WHERE workspace_id = ? AND user_id = ?`, s.two, s.alice.id)
 	if code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.two, ""), nil); code != http.StatusForbidden || body["events"] != nil {
 		t.Fatalf("demoted: %d %v", code, body)
@@ -116,7 +106,6 @@ func TestAuditLogRefusesMembersOutsidersAndTokens(t *testing.T) {
 
 func TestAuditLogFiltersAndPagesAndNamesWhoDidIt(t *testing.T) {
 	s := newStack(t)
-	// The setup already made events: alice invited bob and carol, and made two shared spaces.
 	code, all := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, "limit=200"), nil)
 	if code != http.StatusOK {
 		t.Fatalf("%d %v", code, all)
@@ -131,7 +120,6 @@ func TestAuditLogFiltersAndPagesAndNamesWhoDidIt(t *testing.T) {
 	if first["action"] != "space_created" || first["actor_id"] != float64(s.alice.id) || first["target_type"] != "space" {
 		t.Fatalf("event = %v", first)
 	}
-	// The names are read now: the actor, and the space the event is about.
 	if actor, _ := first["actor"].(map[string]any); actor["name"] != "Alice" || actor["email"] != "alice@example.com" {
 		t.Fatalf("actor = %v", first["actor"])
 	}
@@ -158,7 +146,6 @@ func TestAuditLogFiltersAndPagesAndNamesWhoDidIt(t *testing.T) {
 		t.Fatalf("to: %d %v", code, body)
 	}
 
-	// Pages follow each other without gaps or repeats, and the last has no cursor.
 	var paged []int64
 	cursor := ""
 	for range total + 1 {
@@ -196,7 +183,6 @@ func TestAuditLogRefusesWhatItDoesNotKnow(t *testing.T) {
 
 func TestAuditLogDoesNotNameWhoLeft(t *testing.T) {
 	s := newStack(t)
-	// carol is removed: her events stay, her name is no longer shown, her id is.
 	if code, body := s.browser(s.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", s.one, s.carol.id), nil); code != http.StatusNoContent {
 		t.Fatalf("remove = %d %v", code, body)
 	}
@@ -214,22 +200,19 @@ func TestAuditLogDoesNotNameWhoLeft(t *testing.T) {
 	}
 }
 
-// The log keeps times as text with a four-digit year, so a bound outside the years 1000 to 9999
-// compares wrongly, and the year 1 is the zero time, which would silently drop the bound.
 func TestAuditListRefusesTimeBoundsOutsideTheYears(t *testing.T) {
 	s := newStack(t)
 	for _, q := range []string{
 		"to=" + url.QueryEscape("0001-01-01T00:00:00Z"),
 		"from=" + url.QueryEscape("0001-01-01T00:00:00Z"),
 		"from=" + url.QueryEscape("0999-12-31T23:59:59Z"),
-		"from=" + url.QueryEscape("9999-12-31T23:59:59-05:00"), // 10000-01-01 in UTC
+		"from=" + url.QueryEscape("9999-12-31T23:59:59-05:00"),
 	} {
 		code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, q), nil)
 		if code != http.StatusBadRequest || body["code"] != "audit_time_invalid" {
 			t.Errorf("%s: %d %v", q, code, body)
 		}
 	}
-	// A five-digit year isn't RFC 3339 at all.
 	if code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, "to="+url.QueryEscape("10000-01-01T00:00:00Z")), nil); code != http.StatusBadRequest {
 		t.Errorf("year 10000: %d %v", code, body)
 	}

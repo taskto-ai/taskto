@@ -197,7 +197,6 @@ test('a release that needs manual steps says so, and a version that is not on re
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect(await screen.findByText(/A new release needs steps by hand/)).toBeTruthy()
   expect(screen.getByText('taskto-update --to VERSION').tagName).toBe('CODE')
-  // The sentence wraps in a notice, never in a pill that would cut it off; the badge is short.
   const sentence = screen.getByText(/This is not the version the install records/)
   expect(sentence.closest('.ui-badge')).toBeNull()
   expect(sentence.closest('.ui-notice')?.getAttribute('data-tone')).toBe('warning')
@@ -293,7 +292,6 @@ test('an operator confirms Update now, and the request carries nothing', async (
   })
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
-  // It says what happens before it does anything.
   expect(screen.getByText(/after a backup\. The server restarts/)).toBeTruthy()
   expect(calls.filter((c) => c.method === 'POST')).toEqual([])
   fireEvent.click(screen.getByRole('button', { name: 'Yes, update now' }))
@@ -314,7 +312,6 @@ test('while an update runs the page says so, and the failed reads of its restart
   expect(await screen.findByText(/Updating\. The server restarts during this/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
   answer = { status: 502, body: { error: 'bad gateway' } }
-  // The page asks again by itself.
   await act(async () => {
     await new Promise((r) => setTimeout(r, 3300))
   })
@@ -383,7 +380,6 @@ test("Update now's refusals are said in words, with the way on for the host", as
   expect(await screen.findByText(/Update now is off while automatic updates are off/)).toBeTruthy()
   cleanup()
 
-  // A press the server turns away is an error in the user's language, and the page reloads.
   fakeFetch({
     ...noBackups,
     'GET /api/workspaces/1/updates': { body: updates() },
@@ -431,7 +427,6 @@ test('a request the host never took says so after a while, instead of waiting fo
   expect(screen.queryByText(/Update requested\. Waiting/)).toBeNull()
   cleanup()
 
-  // A fresh one is still waited for.
   fakeFetch({
     ...noBackups,
     'GET /api/workspaces/1/updates': {

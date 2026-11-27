@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 
-// The two pages a link from outside the app opens: a push's /notification/{id} and an email's
-// confirmation link. For a signed-in person they are pages of the frame (the sidebar, the skip
-// link, <main>); someone signed out gets the sign-in screen alone, as for any address.
-
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -30,7 +26,6 @@ afterEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-// The frame around a page, as a screen reader finds it.
 function frame() {
   return {
     nav: screen.queryByRole('navigation', { name: 'Sections' }),
@@ -53,7 +48,6 @@ test('signed in, a notification’s link is a page of the frame, its address kep
       .getByRole('link', { name: /Notifications/ })
       .getAttribute('aria-current'),
   ).toBe('page')
-  // The frame doesn't take the address for an unknown route and rewrite it.
   expect(window.location.pathname).toBe('/notification/9')
 })
 
@@ -111,7 +105,6 @@ test('the frame stays with its page’s workspace when another tab chooses anoth
   const two = { ...me, workspaces: [...me.workspaces, { id: 4, name: 'Team', role: 'member' }] } as Me
   render(<Shell me={two} onLogout={() => {}} />)
   await screen.findByRole('alert')
-  // Another tab uses Team now; this frame is drawn again (its menu opened), its page unchanged.
   localStorage.setItem('taskto.workspace', '4')
   fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
   expect(screen.getByRole('button', { name: 'Workspace: Home' })).toBeTruthy()
@@ -135,7 +128,6 @@ test('going from one notification’s link to another closes the phone’s menu,
   expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy()
 })
 
-// The confirming requests sent so far.
 const confirms = (calls: { method: string; path: string }[]) =>
   calls.filter((c) => c.method === 'POST' && c.path === EMAIL_CONFIRM_API)
 
@@ -149,8 +141,6 @@ test('the confirmation is asked once under StrictMode, and once across the shell
   )
   await screen.findByText(/Your address is confirmed/)
   expect(confirms(calls)).toHaveLength(1)
-  // The shell drawn again with a new me (the address without its token now): no second request, and
-  // the page still says what happened, not that there is nothing to confirm.
   rerender(
     <StrictMode>
       <Shell me={{ ...me, user: { ...me.user, name: 'Owner again' } }} onLogout={() => {}} />
@@ -182,7 +172,6 @@ test('back on the confirmation page after the token left, nothing is sent and no
   })
   render(<Shell me={me} onLogout={() => {}} />)
   await screen.findByText(/Your address is confirmed/)
-  // Away to a section, then Back: the page opens again, its address without the token.
   act(() => navigate('/w/1/conversations'))
   await screen.findByRole('heading', { level: 1, name: 'Conversations' })
   act(() => navigate(EMAIL_CONFIRM_PATH))

@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
 
-// The transcript's structure, by what a reader (and a screen reader) finds in it: one article per
-// message, in order, each saying whose it is, with the agent's text as Markdown, the person's as
-// typed, each tool as a line, a CLI's output as plain text, an app as a link, and an error.
-// These hold whatever the transcript looks like, so a change to its markup or its parts keeps them.
-
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { appPath } from '../apps/route'
@@ -63,7 +58,6 @@ test("the recorded stream is one message from the person and the agent's reply, 
   expect(screen.getByRole('status').textContent).toBe('The agent replied.')
 })
 
-// Every kind of entry, from entries the server keeps and the live run.
 const entries = [
   { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'Plan the **week**' }] },
   {
@@ -144,27 +138,21 @@ test('every kind of entry shows as its own part, in order', async () => {
   ])
   const [mine, plan, cli, failed, again, pending] = list
 
-  // The person's text as typed, never Markdown.
   expect(within(mine).getByText('Plan the **week**')).toBeTruthy()
 
-  // The agent's text as Markdown, and the app it saved as a line linking to the app.
   expect(within(plan).getByText('the plan').tagName).toBe('STRONG')
-  // The tool's line says what it used, the tool's name in the mono face.
   expect(within(plan).getByText(wholeText('Used create_app'))).toBeTruthy()
   expect(within(plan).getByText('create_app').tagName).toBe('CODE')
   expect(within(plan).getByRole('link', { name: 'Open the app' }).getAttribute('href')).toBe(appPath(1, 2, 5))
 
-  // A CLI's turn as its work, its output as plain text, never markup.
   expect(within(cli).getByText('Claude Code worked')).toBeTruthy()
   expect(within(cli).getByText(/<b>ok<\/b>/).tagName).toBe('PRE')
   expect(cli.querySelector('b')).toBeNull()
 
-  // A turn that failed says what failed.
   expect(within(failed).getByText('rate limited')).toBeTruthy()
 
   expect(within(again).getByText('And now?')).toBeTruthy()
 
-  // The reply being written is busy, with no text yet, and the run is announced once.
   expect(pending.getAttribute('aria-busy')).toBe('true')
   expect(within(pending).getByText('…')).toBeTruthy()
   expect(screen.getByRole('status').textContent).toBe('The agent is working.')

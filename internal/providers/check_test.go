@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// modelServer is an OpenAI-compatible endpoint that lists models, for keyed requests only.
-// Its error replies quote the key it was sent, as careless servers do.
 type modelServer struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -32,7 +30,7 @@ func newModelServer(t *testing.T, models ...string) *modelServer {
 			http.NotFound(w, r)
 		case key != testKey:
 			w.WriteHeader(http.StatusUnauthorized)
-			fmt.Fprintf(w, `{"error": "invalid key %s"}`, key) //nolint:gosec // G705: a test server, echoing on purpose
+			fmt.Fprintf(w, `{"error": "invalid key %s"}`, key)
 		default:
 			var data []string
 			for _, id := range models {
@@ -62,7 +60,6 @@ func TestTestingAnAccount(t *testing.T) {
 	id := decode[Account](t, rec).ID
 	test := wsPath(ws, fmt.Sprintf("providers/%d/test", id))
 
-	// The endpoint answers with its key, and lists one of the account's two models.
 	rec = owner.do(http.MethodPost, test, nil)
 	expect(t, rec, http.StatusOK)
 	if got := decode[Check](t, rec); !got.OK || got.Error != "" || strings.Join(got.Missing, ",") != "model-b" {
@@ -72,7 +69,6 @@ func TestTestingAnAccount(t *testing.T) {
 		t.Fatalf("the endpoint was sent %q", keys)
 	}
 
-	// A wrong key: the status, never what the endpoint said (which quotes the key).
 	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("providers/%d", id)), map[string]any{"api_key": otherKey}), http.StatusOK)
 	rec = owner.do(http.MethodPost, test, nil)
 	expect(t, rec, http.StatusOK)
@@ -80,7 +76,6 @@ func TestTestingAnAccount(t *testing.T) {
 		t.Fatalf("check with a wrong key = %+v", got)
 	}
 
-	// A member can't test the workspace's accounts; someone outside it can't tell it exists.
 	expect(t, member.do(http.MethodPost, test, nil), http.StatusForbidden)
 	expect(t, owner.do(http.MethodDelete, wsPath(ws, fmt.Sprintf("members/%d", member.id)), nil), http.StatusNoContent)
 	expect(t, member.do(http.MethodPost, test, nil), http.StatusNotFound)
@@ -88,7 +83,6 @@ func TestTestingAnAccount(t *testing.T) {
 		t.Fatalf("the endpoint was called %d times, want 2", n)
 	}
 
-	// A redirect is reported, not followed with the key.
 	rec = owner.do(http.MethodPost, "/api/me/providers", account("moved", srv.URL+"/elsewhere/v1", nil))
 	expect(t, rec, http.StatusCreated)
 	moved := decode[Account](t, rec).ID
@@ -98,7 +92,6 @@ func TestTestingAnAccount(t *testing.T) {
 		t.Fatalf("check of a redirect = %+v", got)
 	}
 
-	// No answer at all.
 	srv.Close()
 	rec = owner.do(http.MethodPost, test, nil)
 	if got := decode[Check](t, rec); got.OK || got.Error != "no answer from the endpoint" {
@@ -115,7 +108,6 @@ func TestTestingAnAccount(t *testing.T) {
 	}
 }
 
-// A personal account is tested by its owner only.
 func TestTestingAPersonalAccount(t *testing.T) {
 	e := newEnv(t)
 	owner, ws := e.setup()

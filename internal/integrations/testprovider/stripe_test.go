@@ -17,13 +17,10 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// api is a client of the fake the way the adapter will be: form bodies, a bearer key, the pinned
-// version.
 type api struct {
-	t   *testing.T
-	f   *testprovider.Stripe
-	key string
-	// header changes the request's headers before it is sent.
+	t      *testing.T
+	f      *testprovider.Stripe
+	key    string
 	header func(http.Header)
 	client *http.Client
 }
@@ -169,7 +166,6 @@ func TestCreateAndRetrieveASession(t *testing.T) {
 	if ans.header.Get("Stripe-Version") != testprovider.DefaultAPIVersion || !strings.HasPrefix(ans.header.Get("Request-Id"), "req_") {
 		t.Errorf("headers: %v", ans.header)
 	}
-	// The raw answer has the keys Stripe's object has, including the ones that are null.
 	var keys map[string]json.RawMessage
 	ans.into(t, &keys)
 	for _, k := range []string{"id", "object", "amount_total", "client_reference_id", "customer_details", "expires_at",
@@ -220,7 +216,7 @@ func TestKeysVersionsAndBodies(t *testing.T) {
 	}
 
 	a.key = f.APIKey()
-	a.header = func(h http.Header) { // basic auth: the key as the user name
+	a.header = func(h http.Header) {
 		h.Del("Authorization")
 		req := &http.Request{Header: h}
 		req.SetBasicAuth(f.APIKey(), "")
@@ -327,7 +323,6 @@ func TestTheFakeRefusesWhatStripeRefuses(t *testing.T) {
 			}
 		})
 	}
-	// What is allowed.
 	form := sessionForm(12000, "jpy", "r")
 	form.Set("expires_at", strconv.FormatInt(clock.Now().Add(time.Hour).Unix(), 10))
 	form.Set("metadata[ref]", "")
@@ -361,13 +356,11 @@ func TestIdempotencyKeys(t *testing.T) {
 		t.Errorf("a retry made a second session: %d", n)
 	}
 
-	// The same key with other parameters is Stripe's conflict, and makes nothing.
 	other := sessionForm(13000, "eur", "r1")
 	conflict := a.post("/v1/checkout/sessions", other, "key-1")
 	if typ, _ := conflict.errorCode(); conflict.status != http.StatusBadRequest || typ != "idempotency_error" {
 		t.Errorf("other parameters: %d %s", conflict.status, conflict.raw)
 	}
-	// ... and so is the same key on another endpoint.
 	if ans := a.post("/v1/payment_links", other, "key-1"); ans.status != http.StatusBadRequest {
 		t.Errorf("another endpoint: %d", ans.status)
 	} else if typ, _ := ans.errorCode(); typ != "idempotency_error" {
@@ -377,7 +370,6 @@ func TestIdempotencyKeys(t *testing.T) {
 		t.Errorf("sessions = %d", n)
 	}
 
-	// A request refused before it began leaves nothing under its key: the corrected one runs.
 	bad := sessionForm(10, "eur", "r2")
 	if ans := a.post("/v1/checkout/sessions", bad, "key-2"); ans.status != http.StatusBadRequest {
 		t.Fatalf("too small: %d", ans.status)
@@ -387,14 +379,12 @@ func TestIdempotencyKeys(t *testing.T) {
 		t.Errorf("the corrected request under the same key: %d %s", ans.status, ans.raw)
 	}
 
-	// No key, no idempotency.
 	a.post("/v1/checkout/sessions", form, "")
 	a.post("/v1/checkout/sessions", form, "")
 	if n := len(f.Sessions()); n != 4 {
 		t.Errorf("sessions = %d, want 4 (two with keys, two without)", n)
 	}
 
-	// Keys are forgotten after 24 hours: the same key then makes a new object.
 	clock.Advance(24*time.Hour + time.Minute)
 	later := a.post("/v1/checkout/sessions", form, "key-1")
 	if later.status != http.StatusOK || later.header.Get("Idempotent-Replayed") != "" || string(later.raw) == string(first.raw) {
@@ -497,8 +487,6 @@ func TestFailuresOnDemand(t *testing.T) {
 	})
 }
 
-// The case that matters: the provider did the work and the client never heard. A retry under the
-// same idempotency key must find the object, and the payee must not get two links.
 func TestAFailureAfterTheWorkWasDone(t *testing.T) {
 	short := func(t *testing.T) (*testprovider.Stripe, *api) {
 		f, _, a := newFake(t)
@@ -543,16 +531,12 @@ func TestAFailureAfterTheWorkWasDone(t *testing.T) {
 		if n := len(f.Sessions()); n != 1 {
 			t.Fatalf("sessions = %d", n)
 		}
-		// The way out is to find the object that was made, not to ask again with a new key.
 		if s := f.Sessions()[0]; s.ClientReferenceID == nil || *s.ClientReferenceID != "r" {
 			t.Errorf("the session made: %+v", s)
 		}
 	})
 }
 
-// A failure kept under the key before anything was made (execution began and failed) is answered
-// again to the same key, and nothing is ever made under it; a key in use and a lock timeout are refused
-// before anything ran, and keep nothing.
 func TestAFailureKeptUnderTheKeyMakesNothing(t *testing.T) {
 	f, _, a := newFake(t)
 	form := sessionForm(12000, "eur", "r")
@@ -652,7 +636,6 @@ func TestASessionThroughItsStates(t *testing.T) {
 		t.Errorf("expiring a paid session: %d", ans.status)
 	}
 
-	// Time expires a session by itself, and says so in an event, at the time it expired.
 	timed := a.newSession(12000, "eur", "expired-by-time")
 	clock.Advance(24*time.Hour + time.Second)
 	if s := retrieve(timed.ID); s.Status != "expired" || s.URL != nil {
@@ -767,7 +750,6 @@ func TestListingPaymentLinksAndSessionsByCreation(t *testing.T) {
 		}
 	}
 
-	// Sessions are listed by the time they were created.
 	var sessions []string
 	var times []int64
 	for i := range 3 {
@@ -824,7 +806,6 @@ func TestPaymentLinks(t *testing.T) {
 	if got := a.get("/v1/payment_links/"+l.ID, nil); string(got.raw) != string(ans.raw) {
 		t.Errorf("retrieve differs")
 	}
-	// A link takes no client reference, and never expires by itself.
 	withRef := url.Values{}
 	for k, v := range form {
 		withRef[k] = v
@@ -843,9 +824,8 @@ func TestPaymentLinks(t *testing.T) {
 		t.Errorf("an expiry on a link: %d", ans.status)
 	}
 
-	// Deactivating is the way to stop a link taking payments.
 	up := a.post("/v1/payment_links/"+l.ID, url.Values{"active": {"false"}, "metadata[note]": {"stopped"}}, "")
-	var updated testprovider.PaymentLink // a fresh value: what the answer leaves out must show
+	var updated testprovider.PaymentLink
 	up.into(t, &updated)
 	if up.status != 200 || updated.Active || updated.Metadata["note"] != "stopped" || updated.Metadata["ref"] != "ref_link" {
 		t.Errorf("update: %d %+v", up.status, updated)
@@ -879,7 +859,6 @@ func TestEventsOfOnePayment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One card payment, five events: Stripe sends several for one payment, in no promised order.
 	want(t, evs, "payment_intent.created", "charge.succeeded", "payment_intent.succeeded", "charge.updated", "checkout.session.completed")
 	for _, e := range evs {
 		if !strings.HasPrefix(e.ID, "evt_") || e.Object != "event" || e.APIVersion != testprovider.DefaultAPIVersion || e.Livemode {
@@ -937,7 +916,6 @@ func TestEventsOfOnePayment(t *testing.T) {
 	exp, _ := f.Expire(e.ID)
 	want(t, exp, "checkout.session.expired")
 
-	// Refunds: partial, then the rest; more than is left is refused.
 	r1, err := f.Refund(s.ID, 5000)
 	if err != nil {
 		t.Fatal(err)
@@ -1025,7 +1003,6 @@ func TestListingEventsLikeThePollingWillNeed(t *testing.T) {
 		t.Errorf("unknown event: %d", ans.status)
 	}
 
-	// Events older than 30 days are gone, as at Stripe.
 	clock.Advance(31 * 24 * time.Hour)
 	a.get("/v1/events", nil).into(t, &l)
 	if len(l.Data) != 0 {
@@ -1071,9 +1048,6 @@ func TestTheRequestLogHoldsNoKey(t *testing.T) {
 	}
 }
 
-// The fake is meant to be called by the adapter's Client. That client refuses every host the
-// adapter doesn't own and sends to a test endpoint only by an option, so this proves the fake
-// is reachable the way the adapter will reach it, and that the pinned version is the adapter's.
 func TestTheRealClientReachesTheFake(t *testing.T) {
 	f, _, _ := newFake(t)
 	stripe := integrations.Lookup("stripe")

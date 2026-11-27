@@ -17,22 +17,24 @@ import (
 	"time"
 )
 
-// The test binary is also a fake Chromium: with TASKTO_FAKE_CHROMIUM set it answers DevTools
-// commands on fds 3 and 4, takes a while to shut down after Browser.close (as a real one
-// does while it writes its profile), and logs when it starts and exits.
 func TestMain(m *testing.M) {
 	switch os.Getenv("TASKTO_FAKE_PROGRAM") {
 	case "chromium":
 		fakeChromium(os.Getenv("TASKTO_FAKE_LOG"))
 		return
 	case "xvfb":
-		// The display number on -displayfd, then run until stopped.
 		_, _ = os.NewFile(3, "displayfd").WriteString("7\n")
-		select {}
+		runUntilStopped()
 	case "x11vnc":
-		select {}
+		runUntilStopped()
 	}
 	os.Exit(m.Run())
+}
+
+func runUntilStopped() {
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func fakeChromium(logPath string) {
@@ -69,7 +71,6 @@ func fakeChromium(logPath string) {
 	}
 }
 
-// fakeHost starts the fake programs. vnc, if set, is the display's side of each live view.
 type fakeHost struct {
 	log string
 	vnc func(io.ReadWriteCloser)
@@ -82,7 +83,7 @@ func (h *fakeHost) Start(_ int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, e
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(exe) //nolint:noctx // stopped as a group by the Manager
+	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(), "TASKTO_FAKE_PROGRAM="+string(spec.Program), "TASKTO_FAKE_LOG="+h.log)
 	cmd.ExtraFiles = extra
 	NewGroup(cmd)
@@ -102,8 +103,6 @@ func (h *fakeHost) Clean(int64) error { return nil }
 
 func (h *fakeHost) Purge(int64) error { return nil }
 
-// A browser stopped for being idle may still be writing its profile when the next request
-// comes: the new one starts only once the old one is gone, so they never share the profile.
 func TestRestartWaitsForTheOldBrowser(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "log")
 	m := NewManager(Config{Host: &fakeHost{log: log}, Idle: 50 * time.Millisecond, Tick: 10 * time.Millisecond})
@@ -123,7 +122,6 @@ func TestRestartWaitsForTheOldBrowser(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	// Stopped for the caller; the fake is still shutting down.
 	if err := m.Start(ctx, 1, Testing); err != nil {
 		t.Fatal(err)
 	}

@@ -22,9 +22,6 @@ func writeUpdateStatus(t *testing.T, dir, content string) {
 	}
 }
 
-// The updater's status is for the server's operators only: a member, a stranger and an admin
-// of a workspace they made themselves get nothing of it, and the server only reads: it makes
-// no file in the updater's directory.
 func TestUpdateStatusIsForAdmins(t *testing.T) {
 	dir := t.TempDir()
 	s := newStackWith(t, func(o *Options) {
@@ -33,7 +30,6 @@ func TestUpdateStatusIsForAdmins(t *testing.T) {
 	})
 	path := func(ws int64) string { return fmt.Sprintf("/api/workspaces/%d/updates", ws) }
 
-	// The updater hasn't written anything yet.
 	code, body := s.browser(s.alice.cookie, http.MethodGet, path(s.one), nil)
 	if code != http.StatusOK || body["configured"] != true || body["status"] != nil || body["running_version"] == "" {
 		t.Fatalf("before any run: %d %v", code, body)
@@ -52,7 +48,6 @@ func TestUpdateStatusIsForAdmins(t *testing.T) {
 		run["result"] != "blocked" || run["to"] != "v0.4.0" || run["code"] != "stopped" {
 		t.Fatalf("operator: %d %v", code, body)
 	}
-	// Only the structure is sent on: not the paths a file may carry.
 	if raw := fmt.Sprint(body); strings.Contains(raw, "/var/backups") || strings.Contains(raw, "restore ") {
 		t.Fatalf("a text of the file reached the page: %v", body)
 	}
@@ -60,14 +55,12 @@ func TestUpdateStatusIsForAdmins(t *testing.T) {
 		t.Fatalf("operator, in another workspace: %d", code)
 	}
 
-	// An admin of a workspace someone made later runs no server: they don't see it.
 	bobs := s.createWorkspace(s.bob.cookie, "Bob's")
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, path(bobs), nil); code != http.StatusForbidden || body["code"] != "operator_only" ||
 		body["status"] != nil || body["running_version"] != nil {
 		t.Fatalf("an admin of a workspace they made: %d %v", code, body)
 	}
 
-	// bob is a member of one, not an admin; he isn't in two at all.
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, path(s.one), nil); code != http.StatusForbidden || body["status"] != nil {
 		t.Fatalf("member: %d %v", code, body)
 	}
@@ -77,12 +70,10 @@ func TestUpdateStatusIsForAdmins(t *testing.T) {
 	if code, _ := s.browser("", http.MethodGet, path(s.one), nil); code != http.StatusUnauthorized {
 		t.Fatalf("no login: %d", code)
 	}
-	// An admin's access token doesn't reach it: it's for the browser.
 	token, _ := s.newToken(s.alice.cookie, s.one, "monitor")
 	if code, body := s.api(token, http.MethodGet, path(s.one), nil); code == http.StatusOK || body["status"] != nil {
 		t.Fatalf("access token: %d %v", code, body)
 	}
-	// Only a GET: the server can't be made to run or change anything through it.
 	if code, _ := s.browser(s.alice.cookie, http.MethodPost, path(s.one), map[string]any{}); code == http.StatusOK {
 		t.Fatalf("a POST: %d", code)
 	}
@@ -101,14 +92,12 @@ func TestUpdateStatusStaleUnreadableAndNotConfigured(t *testing.T) {
 	if code, body := s.browser(s.alice.cookie, http.MethodGet, path, nil); code != http.StatusOK || body["stale"] != true {
 		t.Fatalf("stale: %d %v", code, body)
 	}
-	// A file that isn't a status is an error that tells nothing of it.
 	writeUpdateStatus(t, dir, "{ secret-looking")
 	code, body := s.browser(s.alice.cookie, http.MethodGet, path, nil)
 	if code != http.StatusInternalServerError || strings.Contains(fmt.Sprint(body), "secret-looking") {
 		t.Fatalf("unreadable: %d %v", code, body)
 	}
 
-	// A release whose updater wrote nothing says the status is expected; a development build doesn't.
 	empty := t.TempDir()
 	for version, want := range map[string]bool{"v0.9.0": true, "0123456789abcdef0123456789abcdef01234567": true, "dev": false, "test": false} {
 		rec := httptest.NewRecorder()
@@ -121,13 +110,11 @@ func TestUpdateStatusStaleUnreadableAndNotConfigured(t *testing.T) {
 			t.Errorf("version %q with no status: expects_status = %v, want %v (%v)", version, got, want, reply)
 		}
 	}
-	// A directory that isn't set up doesn't expect one.
 	rec := httptest.NewRecorder()
 	updateStatus("v0.9.0", "", "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/updates", nil))
 	if strings.Contains(rec.Body.String(), "expects_status") {
 		t.Errorf("not configured but expected: %s", rec.Body)
 	}
-	// No directory set: not configured, still an answer.
 	none := newStack(t)
 	code, body = none.browser(none.alice.cookie, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/updates", none.one), nil)
 	if code != http.StatusOK || body["configured"] != false || body["status"] != nil {
@@ -135,7 +122,6 @@ func TestUpdateStatusStaleUnreadableAndNotConfigured(t *testing.T) {
 	}
 }
 
-// requestStatus is a status of an updater that can take a request.
 func requestStatus(channel, extra string) string {
 	now := time.Now().UTC().Format(time.RFC3339)
 	return `{"version":1,"checked":"` + now + `","channel":"` + channel + `","recorded_version":"v0.3.0","last_run":null,"last_change":null,
@@ -146,9 +132,6 @@ func (s *stack) auditCount(action string) int64 {
 	return s.scalar(`SELECT count(*) FROM audit_events WHERE action = ?`, action)
 }
 
-// "Update now" is the server's operators' alone, a browser session's, and a refused request
-// writes no file and records no event; an accepted one writes one small file of a fixed shape,
-// atomically, and one event with the channel and nothing else.
 func TestUpdateRequestIsForOperatorsAndIsAudited(t *testing.T) {
 	statusDir, reqDir := t.TempDir(), t.TempDir()
 	s := newStackWith(t, func(o *Options) {
@@ -167,7 +150,6 @@ func TestUpdateRequestIsForOperatorsAndIsAudited(t *testing.T) {
 		}
 	}
 
-	// A member, an outsider, an admin of a workspace they made themselves, no login, an access token.
 	if code, body := s.browser(s.bob.cookie, http.MethodPost, path(s.one), map[string]any{}); code != http.StatusForbidden {
 		t.Fatalf("member: %d %v", code, body)
 	}
@@ -187,7 +169,6 @@ func TestUpdateRequestIsForOperatorsAndIsAudited(t *testing.T) {
 	}
 	noRequest("refused requests")
 
-	// The operator may; the request is a file of a fixed shape and nothing else is left.
 	before := time.Now().UTC().Add(-time.Second)
 	code, body := s.browser(s.alice.cookie, http.MethodPost, path(s.one), map[string]any{})
 	if code != http.StatusAccepted {
@@ -214,7 +195,6 @@ func TestUpdateRequestIsForOperatorsAndIsAudited(t *testing.T) {
 		t.Fatalf("event: %q (%v)", details, err)
 	}
 
-	// The page sees it pending, and a second press is refused with no second event.
 	code, body = s.browser(s.alice.cookie, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/updates", s.one), nil)
 	req, _ := body["request"].(map[string]any)
 	if code != http.StatusOK || req["available"] != false || req["reason"] != "pending" || req["pending_since"] == nil {
@@ -226,7 +206,6 @@ func TestUpdateRequestIsForOperatorsAndIsAudited(t *testing.T) {
 	if n := s.auditCount("server_update_requested"); n != 1 {
 		t.Fatalf("%d events after a refused second press, want 1", n)
 	}
-	// A request nobody took for hours doesn't block the button for good.
 	old := time.Now().Add(-updatestatus.ExpireAfter - time.Minute)
 	if err := os.Chtimes(filepath.Join(reqDir, updatestatus.RequestFile), old, old); err != nil {
 		t.Fatal(err)
@@ -236,9 +215,6 @@ func TestUpdateRequestIsForOperatorsAndIsAudited(t *testing.T) {
 	}
 }
 
-// What the host says decides whether the button works: a run in progress, the channel off, an
-// updater that can't take requests, and a server without the directory are each refused with their
-// own code, with nothing written and nothing recorded.
 func TestUpdateRequestRefusals(t *testing.T) {
 	statusDir, reqDir := t.TempDir(), t.TempDir()
 	s := newStackWith(t, func(o *Options) { o.UpdateStatusDir, o.UpdateRequestDir = statusDir, reqDir })
@@ -261,7 +237,6 @@ func TestUpdateRequestRefusals(t *testing.T) {
 			t.Errorf("%s: %d %v, want 409 %s", name, code, body, tc.code)
 		}
 	}
-	// A run that was killed leaves its note: after a few hours it isn't believed.
 	long := time.Now().Add(-updatestatus.RunningMaxAge - time.Hour).UTC().Format(time.RFC3339)
 	writeUpdateStatus(t, statusDir, requestStatus("release", `,"running":{"since":"`+long+`"}`))
 	if code, body := s.browser(s.alice.cookie, http.MethodPost, path, map[string]any{}); code != http.StatusAccepted {
@@ -274,7 +249,6 @@ func TestUpdateRequestRefusals(t *testing.T) {
 		t.Errorf("%d events, want the one accepted", n)
 	}
 
-	// No directory configured, one that isn't there, and one the server can't write.
 	for name, dir := range map[string]string{"not configured": "", "missing": filepath.Join(t.TempDir(), "gone")} {
 		s := newStackWith(t, func(o *Options) { o.UpdateStatusDir, o.UpdateRequestDir = statusDir, dir })
 		writeUpdateStatus(t, statusDir, requestStatus("release", ""))
@@ -292,8 +266,6 @@ func TestUpdateRequestRefusals(t *testing.T) {
 	}
 }
 
-// A failed audit write or commit cannot expose the prepared file to the host. A commit can
-// fail after the insert succeeded, for example when a deferred foreign key is invalid.
 func TestUpdateRequestAuditFailureDoesNotPublish(t *testing.T) {
 	for _, stage := range []string{"record", "commit"} {
 		t.Run(stage, func(t *testing.T) {

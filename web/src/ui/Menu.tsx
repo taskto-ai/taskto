@@ -1,24 +1,3 @@
-// A menu of actions behind a button: the "more" menu of a row, a card, a document.
-//
-//   <Menu>
-//     <MenuButton label={moreLabel} />
-//     <MenuList>
-//       <MenuItem icon="edit" onSelect={rename}>{renameLabel}</MenuItem>
-//       <MenuSeparator />
-//       <MenuItem tone="danger" onSelect={remove}>{deleteLabel}</MenuItem>
-//     </MenuList>
-//   </Menu>
-//
-// or <MoreMenu> with the items, for the usual icon button. The list is a popover (the browser's
-// top layer, so no scrolling or clipped ancestor cuts it, and it is above a drawer), placed by
-// place.ts inside the window, aligned to the button's end in the writing direction.
-//
-// Keyboard (the WAI-ARIA menu button): Enter, Space or ArrowDown open it on the first item,
-// ArrowUp on the last; ArrowDown and ArrowUp move (round), Home and End, a letter moves to the
-// next item that starts with it; Enter or Space chooses; Escape closes it and Tab leaves it. A
-// click outside closes it. Closing it by Escape or by choosing gives the focus back to the
-// button.
-
 import {
   createContext,
   type KeyboardEvent,
@@ -44,10 +23,8 @@ import './Menu.css'
 
 interface MenuState {
   open: boolean
-  // Where the focus goes when the list opens.
   start: 'first' | 'last'
   openMenu: (start: 'first' | 'last') => void
-  // Close; give the focus back to the button when `refocus`.
   closeMenu: (refocus: boolean) => void
   button: RefObject<HTMLButtonElement | null>
   list: RefObject<HTMLDivElement | null>
@@ -66,7 +43,6 @@ function useMenu(part: string): MenuState {
 
 export interface MenuProps {
   children: ReactNode
-  // Which of the button's edges the list lines up with, in the writing direction.
   align?: 'start' | 'end'
 }
 
@@ -108,13 +84,9 @@ export function Menu({ children, align = 'end' }: MenuProps) {
 }
 
 export interface MenuButtonProps extends Omit<ButtonProps, 'onClick' | 'children'> {
-  // The button's name. With no `children`, it is an icon button and this is its tooltip.
   label: string
   icon?: IconName
-  // Text on the button, which then shows a chevron after it.
   children?: ReactNode
-  // The sign after the text: a chevron down (the default), another icon (`chevron-updown` for a
-  // switcher), or none (`null`), for a button whose text already says what it opens.
   indicator?: IconName | null
 }
 
@@ -129,8 +101,6 @@ export function MenuButton({
 }: MenuButtonProps) {
   const menu = useMenu('MenuButton')
   const t = useT()
-  // A press on the button while the list is open closes it (the click outside does), and the
-  // click that follows must not open it again.
   const wasOpen = useRef(false)
 
   const common = {
@@ -160,8 +130,6 @@ export function MenuButton({
     return <IconButton {...rest} {...common} icon={icon} label={label} size={size} />
   }
   return (
-    // Its name is what it chooses, then what it shows: "Sort by: Newest first". The words you see
-    // stay in the name (a voice command says them), and the label says what they are.
     <Button
       {...rest}
       {...common}
@@ -189,7 +157,6 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
   const { open, start, list, button, closeMenu, align } = menu
   const typed = useRef({ text: '', at: 0 })
 
-  // Show it in the top layer, place it, and focus the first or the last item.
   useLayoutEffect(() => {
     const el = list.current
     if (!el || !open) return
@@ -198,8 +165,6 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       const anchor = button.current
       if (!anchor) return
       const a = anchor.getBoundingClientRect()
-      // Measured at its full height, its height limit off for a moment: the browser would reset
-      // a long menu's scroll then, so it is kept and given back.
       const scrolled = el.scrollTop
       el.style.maxBlockSize = ''
       const box = el.getBoundingClientRect()
@@ -209,7 +174,6 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
         { width: document.documentElement.clientWidth, height: window.innerHeight },
         { dir: getComputedStyle(anchor).direction === 'rtl' ? 'rtl' : 'ltr', align, gap: 4, margin: 8 },
       )
-      // The window's own coordinates (place() has taken the writing direction into account).
       el.style.top = `${p.top}px`
       el.style.left = `${p.left}px`
       el.style.maxBlockSize = `${p.maxHeight}px`
@@ -218,13 +182,9 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
     }
     position()
     const items = el.querySelectorAll<HTMLElement>(ITEM)
-    // A menu with no items takes the focus itself, so its keys (Escape) are still its own and
-    // don't reach a drawer under it.
     ;(items[start === 'first' ? 0 : items.length - 1] ?? el).focus()
 
-    // Keep it beside the button while the page scrolls or the window changes size.
     let frame = 0
-    // A button scrolled out of sight takes its menu with it.
     const follow = () => {
       if (button.current && scrolledAway(button.current)) closeMenu(false)
       else position()
@@ -233,8 +193,6 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(position)
     }
-    // The menu's own scrolling (a long one, inside the window) moves nothing: placing it again
-    // would take its height limit off for a moment, and the browser would reset its scroll.
     const scrolled = (e: Event) => {
       if (e.target instanceof Node && el.contains(e.target)) return
       cancelAnimationFrame(frame)
@@ -250,7 +208,6 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
     }
   }, [open, start, list, button, align, closeMenu])
 
-  // A press outside the list and the button closes it, and the focus stays where it went.
   useEffect(() => {
     if (!open) return
     const outside = (e: PointerEvent) => {
@@ -279,9 +236,7 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       case 'End':
         return go(items.length - 1)
       case 'Escape':
-        // A tooltip that could be seen took this one (Tooltip.tsx): the next is the menu's.
         if (e.defaultPrevented) return
-        // Handled here: a drawer or a dialog under the menu stays open.
         e.preventDefault()
         e.stopPropagation()
         return closeMenu(true)
@@ -292,11 +247,8 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       const now = Date.now()
       const typedSoFar = (now - typed.current.at < 600 ? typed.current.text : '') + e.key.toLocaleLowerCase()
       typed.current = { text: typedSoFar, at: now }
-      // One letter again and again ("r r r") goes round the items that start with it; letters
-      // that spell more ("re") look for an item that starts with them all.
       const repeated = [...typedSoFar].every((c) => c === typedSoFar[0])
       const text = repeated ? typedSoFar[0] : typedSoFar
-      // From the item after this one (the same one when the letters go on), round the list.
       const from = text.length > 1 ? at : at + 1
       for (let n = 0; n < items.length; n++) {
         const item = items[(from + n + items.length) % items.length]
@@ -326,11 +278,8 @@ export interface MenuItemProps {
   children: ReactNode
   onSelect: () => void
   icon?: IconName
-  // A destructive action: in the danger colour, and last, after a separator.
   tone?: 'danger'
   disabled?: boolean
-  // One choice of several (a theme, a language): a radio item, checked or not, with a check mark
-  // on the one that is. Put the choices in a MenuGroup that names them.
   checked?: boolean
 }
 
@@ -369,8 +318,6 @@ export function MenuItem({ children, onSelect, icon, tone, disabled, checked }: 
   )
 }
 
-// An item that goes somewhere: a real link, so it opens in a new tab or is copied as any link is,
-// drawn as an item. Enter follows it, as it does any link, and so does Space, as for the other items.
 export function MenuLink({ href, children, icon }: { href: string; children: ReactNode; icon?: IconName }) {
   const menu = useMenu('MenuLink')
   return (
@@ -393,26 +340,22 @@ export function MenuLink({ href, children, icon }: { href: string; children: Rea
   )
 }
 
-// A named group of items: the choices of one setting, with its name above them.
 export function MenuGroup({ label, children }: { label: string; children: ReactNode }) {
   const id = useId()
   return (
-    // biome-ignore lint/a11y/useSemanticElements: a group of a menu's items is role="group" inside role="menu"; a <fieldset> is a form's.
-    <div role="group" aria-labelledby={id} className="ui-menu-group">
+    <fieldset aria-labelledby={id} className="ui-menu-group">
       <div id={id} role="presentation" className="ui-menu-group-label">
         {label}
       </div>
       {children}
-    </div>
+    </fieldset>
   )
 }
 
 export function MenuSeparator() {
-  // An <hr> in a menu is its separator.
   return <hr className="ui-menu-separator" />
 }
 
-// The usual "more" menu: an icon button named "More actions" (or `label`) and the items.
 export function MoreMenu({ children, label, align }: { children: ReactNode; label?: string; align?: 'start' | 'end' }) {
   const t = useT()
   return (

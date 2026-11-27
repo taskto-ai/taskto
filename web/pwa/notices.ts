@@ -1,23 +1,8 @@
-// The licence notices of the code and fonts that are shipped inside the built app, written next to
-// it as /assets/THIRD_PARTY_NOTICES.txt (docs/pwa.md, "Device capabilities in apps").
-//
-// The fonts are Inter, Bricolage Grotesque and JetBrains Mono (SIL Open Font License 1.1), as the
-// Fontsource packages carry them (docs/design.md). The OFL asks that its notice and the copyright line go with copies of the
-// font, which the packages' LICENSE files hold, so they are written here from the installed packages.
-//
-// What a user's browser downloads to scan a code is a decoder: zxing-wasm (MIT) is ZXing-C++
-// (Apache-2.0) compiled to WebAssembly, behind the BarcodeDetector API by the barcode-detector
-// package (MIT). All three licences ask that their notice goes with copies of the code, in source or
-// binary form, so the text of each is written here from the installed packages themselves (their
-// LICENSE files, and the versions they say they are) and the Apache-2.0 text kept in licenses/.
-
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Plugin } from 'vite'
 
-// The packages whose code is in the build and whose licence has a file of its own to ship.
 export const PACKAGES = ['barcode-detector', 'zxing-wasm'] as const
-// The packages whose font files are in the build.
 export const FONT_PACKAGES = [
   '@fontsource-variable/inter',
   '@fontsource-variable/bricolage-grotesque',
@@ -71,7 +56,6 @@ ${readFileSync(join(root, 'licenses/Apache-2.0.txt'), 'utf8').trim()}
   return parts.join('\n')
 }
 
-// Writes the notices into the build, in assets/ with the fonts and the decoder's .wasm.
 export function notices(root: string): Plugin {
   return {
     name: 'taskto-notices',

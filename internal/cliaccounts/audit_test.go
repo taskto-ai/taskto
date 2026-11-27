@@ -93,8 +93,6 @@ func TestAuditSharedCLIAccountRefusalsRecordNothing(t *testing.T) {
 	}
 }
 
-// staleShared returns a shared account of ws as a handler read it, and then makes it gone and
-// gives its id to an account of another workspace, as a concurrent delete and create would.
 func staleShared(t *testing.T, e *env, admin *client, ws, other int64) (sharedRow, int64) {
 	t.Helper()
 	a := admin.addShared(ws, cliworker.Claude, newProvider(t).URL)
@@ -164,7 +162,6 @@ func TestAuditTwoDeletesOfOneSharedAccountMakeOneRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Both deletes read the row before either wrote: the second finds it gone.
 	codes := []int{}
 	for range 2 {
 		rec := httptest.NewRecorder()
@@ -185,8 +182,6 @@ func TestAuditCLIModesThatChangeNothingRecordNothing(t *testing.T) {
 	member := e.invite(admin, ws, "member@example.com")
 	path := sharedPath(ws) + "/modes"
 
-	// Empty, and a request that sets what already is (the default, and a member with no mode of
-	// their own given the default again).
 	expect(t, admin.do(http.MethodPatch, path, map[string]any{}), http.StatusOK)
 	expect(t, admin.do(http.MethodPatch, path, map[string]any{"default_mode": "own_else_shared", "members": map[string]any{itoa(member.id): nil}}), http.StatusOK)
 	if got := len(e.events(ws, audit.CLIModesChanged)); got != 0 {
@@ -199,7 +194,6 @@ func TestAuditCLIModesThatChangeNothingRecordNothing(t *testing.T) {
 	if len(got) != 1 || got[0].Details["default_mode"] != "own" || got[0].Details["members_changed"] != float64(1) {
 		t.Fatalf("modes = %+v, want one event for the first request", got)
 	}
-	// Only the member changes: no default_mode in the event.
 	expect(t, admin.do(http.MethodPatch, path, map[string]any{"default_mode": "own", "members": map[string]any{itoa(member.id): nil}}), http.StatusOK)
 	got = e.events(ws, audit.CLIModesChanged)
 	if len(got) != 2 || got[0].Details["default_mode"] != nil || got[0].Details["members_changed"] != float64(1) {

@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// fakeBrowser answers DevTools commands on a pipe, as Chromium does on --remote-debugging-pipe.
 func fakeBrowser(t *testing.T, answer func(method string, params json.RawMessage) (any, *cdpError)) *cdp {
 	t.Helper()
 	toBrowserR, toBrowserW := io.Pipe()
@@ -37,7 +36,6 @@ func fakeBrowser(t *testing.T, answer func(method string, params json.RawMessage
 				t.Errorf("not JSON: %q", msg)
 				return
 			}
-			// An event first: the client must skip it.
 			_, _ = fromBrowserW.Write([]byte(`{"method":"Target.targetInfoChanged","params":{}}` + "\x00"))
 			res, cerr := answer(m.Method, m.Params)
 			out := map[string]any{"id": m.ID}
@@ -82,7 +80,6 @@ func TestCDPCall(t *testing.T) {
 	if err := c.Call(ctx, "", "Nope", nil, nil); !errors.As(err, &ce) || ce.Code != -32601 {
 		t.Fatalf("unknown method: %v", err)
 	}
-	// Once the browser is gone, every call says so instead of waiting.
 	_ = c.Close()
 	select {
 	case <-c.Done():
@@ -177,7 +174,6 @@ func TestPrepare(t *testing.T) {
 	if info, err := os.Stat(p.Xauthority()); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("cookie file: %v %v", info, err)
 	}
-	// FamilyWild, empty address and display, MIT-MAGIC-COOKIE-1, 16 random bytes.
 	if binary.BigEndian.Uint16(b) != 0xffff || !strings.Contains(string(b), "MIT-MAGIC-COOKIE-1") || len(b) != 2+2+2+2+18+2+16 {
 		t.Errorf("cookie file = %x", b)
 	}
@@ -189,7 +185,6 @@ func TestPrepare(t *testing.T) {
 		t.Error("the cookie didn't change on a new start")
 	}
 
-	// A stale profile lock goes; the rest of the profile stays.
 	if err := os.MkdirAll(p.Profile(), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +204,6 @@ func TestPrepare(t *testing.T) {
 		t.Error("the profile wasn't kept")
 	}
 
-	// The testing profile starts empty every time.
 	if err := os.MkdirAll(p.Testing(), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +228,6 @@ func TestCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Join(argv, " ")
-	// Only the Unix socket: no TCP port, over IPv4 or IPv6.
 	for _, want := range []string{"-unixsock /homes/u1/browser/run/vnc.sock", "-rfbport 0", "-rfbportv6 -1", "-noipv6", "-display :3", "-auth /homes/u1/browser/run/xauthority"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("x11vnc lacks %q: %s", want, line)
@@ -255,7 +248,6 @@ func TestCommand(t *testing.T) {
 	for _, kind := range []Kind{Personal, Testing} {
 		argv, env, _ := Command(p, ProcSpec{Program: Chromium, Kind: kind, Display: 3}, "/usr/bin/chromium", "/usr/bin")
 		line := strings.Join(argv, " ")
-		// DevTools only on the pipe, never a port; nothing that hides automation.
 		if !strings.Contains(line, "--remote-debugging-pipe") || strings.Contains(line, "remote-debugging-port") ||
 			strings.Contains(line, "AutomationControlled") || strings.Contains(line, "--no-sandbox") {
 			t.Errorf("%s: %s", kind, line)
@@ -284,7 +276,6 @@ func TestCutText(t *testing.T) {
 	}
 }
 
-// Chromium's errors are told apart by their messages, not too loosely.
 func TestErrorClassification(t *testing.T) {
 	if err := noTab(&cdpError{Code: -32000, Message: "No target with given id found"}); !errors.Is(err, ErrNoTab) {
 		t.Errorf("no target: %v", err)
@@ -308,7 +299,6 @@ func TestErrorClassification(t *testing.T) {
 	}
 }
 
-// Listing the tabs forgets what was kept for tabs that are gone (closed by the user, crashed).
 func TestTabsPrunesClosedTabs(t *testing.T) {
 	c := fakeBrowser(t, func(method string, _ json.RawMessage) (any, *cdpError) {
 		return map[string]any{"targetInfos": []map[string]string{{"targetId": "A", "type": "page", "title": "a", "url": "about:blank"}}}, nil

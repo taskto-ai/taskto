@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// The outside services an app's draft asks for, in the panel before a publish: what each asks in plain
-// words, where its approval stands, the request a publisher makes, the gate on publishing, and the
-// admin's one step, approve and publish.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -105,8 +101,6 @@ test('the panel says what the app asks of an outside service in words, and where
   expect(within(section).getByText('Not asked for yet')).toBeTruthy()
   expect(section.textContent).toContain('it asks for a payment link for the amount in “total”, in EUR')
   expect(section.textContent).toContain('sets “status” to “paid”')
-  // What the contract binds besides the amount: who may trigger the action, the text it sends, and
-  // what each field involved may hold. An admin approves all of it, so all of it is said.
   expect(section.textContent).toContain('When the action “send” (it changes a record) runs')
   expect(section.textContent).toContain('The description it sends names “customer”, “number”, and the record’s number.')
   expect(section.textContent).toContain('“total”: number, required, at least 1, at most 100,000.')
@@ -115,7 +109,6 @@ test('the panel says what the app asks of an outside service in words, and where
   expect(section.textContent).toContain(
     '“receipt”: photos, required when status is “paid”, up to 2 files, each up to 5 MB.',
   )
-  // The effect is told with the others, and nothing says the app can reach nothing else.
   expect(
     screen.getByText(
       'Asks the “payments” integration for a link to pay total in EUR, and puts the link in pay_url and its id in payment_id.',
@@ -142,7 +135,6 @@ test('a publisher asks for the approval of the contract they read, and publishin
     },
   })
   panel(appOf())
-  // Until it is approved the app can't be published from here: no publish button, and why.
   expect(
     await screen.findByText('Publishing waits for an admin to approve what this app asks of payments.'),
   ).toBeTruthy()
@@ -153,7 +145,6 @@ test('a publisher asks for the approval of the contract they read, and publishin
   expect(await screen.findByText('Waiting for an admin')).toBeTruthy()
   expect(screen.getByText(/An admin will see this request in Settings/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Ask an admin to approve' })).toBeNull()
-  // A member never reaches the admin's routes.
   expect(adminCalls(calls)).toEqual([])
 })
 
@@ -259,10 +250,8 @@ test('an admin approves and publishes in one step: request, approval, then the p
     'POST /api/x/publish': { body: { id: 9, live: { number: 1 } } },
   })
   const changed = panel(appOf(), team, true)
-  // The admin has no separate "ask": their step is this one.
   fireEvent.click(await screen.findByRole('button', { name: 'Approve and publish…' }))
   const dialog = await screen.findByRole('dialog', { name: 'Approve and publish' })
-  // The contract is in front of them, with their consent said, and who it goes to.
   expect(within(dialog).getByText(/it asks for a payment link for the amount in “total”/)).toBeTruthy()
   expect(
     within(dialog).getByText('By continuing you approve exactly what is listed above, for this app, and publish it.'),
@@ -271,7 +260,6 @@ test('an admin approves and publishes in one step: request, approval, then the p
   const confirm = within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement
   await waitFor(() => expect(confirm.disabled).toBe(false))
   expect(within(dialog).queryByText(/also allows the integration/)).toBeNull()
-  // Nothing was sent before the button.
   expect(calls.filter((c) => c.method === 'POST')).toEqual([])
   fireEvent.click(confirm)
   await waitFor(() => expect(sent(calls, 'POST', '/api/x/publish')).toHaveLength(1))
@@ -305,7 +293,6 @@ test('a request that already waits is approved as it is, and an integration not 
   expect(within(dialog).getByText(/This also allows the integration in Private/)).toBeTruthy()
   fireEvent.click(confirm)
   await waitFor(() => expect(sent(calls, 'POST', '/api/x/publish')).toHaveLength(1))
-  // No second request, and the approval is of the one that waited.
   expect(calls.filter((c) => c.path.endsWith('/request'))).toEqual([])
   expect(sent(calls, 'POST', '/api/workspaces/1/integration-approvals/4/approve')[0]).toEqual({
     integration_id: 7,
@@ -344,7 +331,6 @@ test('a refused approval stops the publish and is said in the dialog', async () 
   fireEvent.click(confirm)
   expect(await within(dialog).findByText('This integration is switched off.')).toBeTruthy()
   expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
-  // The slots are read again, so a retry starts from what the server holds now.
   await waitFor(() => expect(calls.filter((c) => c.path === '/api/x/integrations')).toHaveLength(2))
 })
 
@@ -374,8 +360,6 @@ test('an admin who may not publish the app is offered no approve and publish', a
   expect(await screen.findByText('Not asked for yet')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Approve and publish…' })).toBeNull()
 })
-
-// ----- the admin's step when something goes wrong part of the way -----
 
 const approvedShop = { id: 7, name: 'shop', display_name: 'Shop', usable: true }
 const billing = () => slot({ slot: 'billing', contract_hash: 'b'.repeat(64) })
@@ -413,7 +397,6 @@ test('a contract that changed under the admin closes the dialog, reads the app a
   expect(changed).toHaveBeenCalled()
   await waitFor(() => expect(slotReads()).toBeGreaterThan(before))
   expect(screen.getByText(/The draft changed while you were reviewing it/)).toBeTruthy()
-  // The first slot was approved before the second was refused: that stands, and is said.
   expect(await screen.findByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
   expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
 })
@@ -447,7 +430,6 @@ test('approvals that stand after a contract change are said even when the panel 
   const first = await openApproveAndPublish()
   fireEvent.click(first.confirm)
   expect(await screen.findByText(/Published as release 1|release 1/)).toBeTruthy()
-  // The draft changes, asks for a second service, and the admin starts again: the second is refused.
   phase = 'second'
   view.rerender(element(appOf({ version: 3 })))
   const second = await openApproveAndPublish()
@@ -529,11 +511,9 @@ test('a refusal that arrives after the dialog was closed does not close the one 
   const { confirm } = await openApproveAndPublish()
   fireEvent.click(confirm)
   await waitFor(() => expect(refuse).toBeDefined())
-  // The draft changes under the first attempt, which closes; the admin opens a new dialog.
   view.rerender(element(appOf({ version: 3 })))
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
   await openApproveAndPublish()
-  // Now the first attempt's refusal arrives: the new dialog stays.
   refuse?.()
   await new Promise((r) => setTimeout(r, 30))
   expect(screen.getByRole('dialog', { name: 'Approve and publish' })).toBeTruthy()
@@ -568,11 +548,9 @@ test('an approval made by an attempt the draft superseded is still said to stay 
   const { confirm } = await openApproveAndPublish()
   fireEvent.click(confirm)
   await waitFor(() => expect(release).toBeDefined())
-  // The draft changes while the first approval is in flight: the dialog closes and says so.
   view.rerender(element(appOf({ version: 3 })))
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
   expect(screen.queryByText(/These approvals went through/)).toBeNull()
-  // The approval goes through after that, and the second request is refused: the admin is still told.
   release?.()
   expect(await screen.findByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
 })
@@ -672,7 +650,6 @@ test('when a later slot is refused, the dialog says the earlier approvals went t
       return { body: { id: 4 } }
     },
     'POST /api/workspaces/1/integration-approvals/5/approve': () => {
-      // Refused the first time, accepted the second.
       if (!refusedOnce) {
         refusedOnce = true
         return { status: 409, body: { error: 'x', code: 'app_integration_disabled' } }
@@ -688,7 +665,6 @@ test('when a later slot is refused, the dialog says the earlier approvals went t
   expect(await within(dialog).findByText('This integration is switched off.')).toBeTruthy()
   expect(within(dialog).getByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
   expect(sent(calls, 'POST', '/api/x/publish')).toEqual([])
-  // Only the slot that is left is offered again, and approving it does not touch the first.
   await waitFor(() => expect(within(dialog).queryByRole('region', { name: 'Service “payments”' })).toBeNull())
   expect(within(dialog).getByRole('region', { name: 'Service “billing”' })).toBeTruthy()
   const again = within(dialog).getByRole('button', { name: 'Approve and publish' }) as HTMLButtonElement
@@ -715,7 +691,6 @@ test('when the publish is refused after every approval, the dialog says they wen
   const { dialog, confirm } = await openApproveAndPublish()
   fireEvent.click(confirm)
   expect(await within(dialog).findByText(/These approvals went through and stay active: payments\./)).toBeTruthy()
-  // No empty dialog with a live button: it says why there is nothing to approve, and the button is off.
   expect(
     await within(dialog).findByText(/Everything this app asks of outside services is approved already/),
   ).toBeTruthy()
@@ -749,7 +724,6 @@ test('a draft that changed while the approvals were made is not published at the
   const { confirm } = await openApproveAndPublish()
   fireEvent.click(confirm)
   await waitFor(() => expect(release).toBeDefined())
-  // Someone changes the draft while the approval is on its way.
   view.rerender(render1(appOf({ version: 3 })))
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve and publish' })).toBeNull())
   release?.()
@@ -797,7 +771,6 @@ test('a preview says the payment link it would ask for as a sum, and never as an
   expect(item.textContent).toContain('Simulated')
   expect(item.textContent).toContain('€120.00')
   cleanup()
-  // No amount, or no currency: the preview says where the amount comes from, never a sum, a title or nothing.
   for (const detail of [{}, { currency: 'EUR' }, { amount: '120.00' }, { title: 'Invoice A-1', currency: 'EUR' }]) {
     render(<EffectItems effects={[effect(detail)]} label="Preview" />)
     const only = within(screen.getByRole('list', { name: 'Preview' })).getByRole('listitem')

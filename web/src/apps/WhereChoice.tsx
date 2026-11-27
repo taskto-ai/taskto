@@ -1,7 +1,3 @@
-// Where a new app lives, for the builder's start and a template's install: the person's private
-// space unless they choose a shared one, with what each means. Only spaces the person may write are
-// offered; the server checks the one chosen again.
-
 import type { ReactNode } from 'react'
 import type { Space } from '../api'
 import { useT } from '../i18n'
@@ -14,7 +10,6 @@ import './Apps.css'
 
 export type Where = 'private' | 'shared'
 
-// The spaces a new app may go to: the person's private one, and the shared ones they may write.
 export function writableSpaces(spaces: Space[] | undefined) {
   const writable = (spaces ?? []).filter((s) => s.access === 'write' && !s.archived_at)
   return { mine: writable.find((s) => s.kind === 'private'), shared: writable.filter((s) => s.kind === 'shared') }
@@ -31,10 +26,8 @@ export function WhereChoice({
   spaces: Space[] | undefined
   where: Where
   onWhere: (where: Where) => void
-  // The chosen shared space's id, as a string ('' for none yet).
   shared: string
   onShared: (id: string) => void
-  // More to say under the choice (a template's roles, a better place for it).
   children?: ReactNode
 }) {
   const t = useT()
@@ -52,8 +45,6 @@ export function WhereChoice({
   return (
     <div className="apps-where">
       {narrow ? (
-        // On a phone the two choices are a select: the pill of a segmented control can't wrap, and
-        // its labels are wider than a narrow dialog in some languages.
         <Field label={label}>
           <Select value={where} onChange={(e) => choose(e.target.value as Where)}>
             {options.map((o) => (
@@ -65,7 +56,6 @@ export function WhereChoice({
         </Field>
       ) : (
         <>
-          {/* The group is named by its own label; this is the same words, seen. */}
           <span className="apps-where-label" aria-hidden="true">
             {label}
           </span>

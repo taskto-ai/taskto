@@ -4,13 +4,6 @@ import { INBOX_CHANGED, inboxPath } from './api'
 
 const POLL_MS = 60_000
 
-/**
- * How many notifications the person hasn't read in a workspace, for the badge. Asked when the app
- * opens, when it comes back to the foreground, when the inbox changed here, when a push reached
- * the service worker, and once a minute while it is shown: the inbox is what is true, and a push
- * is only one more reason to ask. A failed ask keeps the last number; the badge is a convenience
- * and never an error.
- */
 export function useUnread(workspace: number): number {
   const [unread, setUnread] = useState(0)
   const ask = useCallback(() => {

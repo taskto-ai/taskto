@@ -24,7 +24,6 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// logBuffer collects the server's log lines, safe for concurrent use.
 type logBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -42,7 +41,6 @@ func (b *logBuffer) String() string {
 	return b.buf.String()
 }
 
-// captureLog sends slog's output to a buffer for the rest of the test.
 func captureLog(t *testing.T) *logBuffer {
 	t.Helper()
 	logs := &logBuffer{}
@@ -73,7 +71,6 @@ func postSetup(t *testing.T, addr, token string) int {
 	return resp.StatusCode
 }
 
-// A fresh server prints a setup token, and setup needs it; a set-up server prints none.
 func TestFirstRunSetupToken(t *testing.T) {
 	logs := captureLog(t)
 	cfg := config.Default()
@@ -108,8 +105,6 @@ func TestFirstRunSetupToken(t *testing.T) {
 	}
 }
 
-// taskto backup and taskto restore, as an operator runs them: back up a server's data
-// directory while it runs, restore it elsewhere, and start a server on the copy.
 func TestBackupAndRestoreCommands(t *testing.T) {
 	ctx := context.Background()
 	serverLogs := captureLog(t)
@@ -117,8 +112,6 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 	cfg.Addr = "127.0.0.1:0"
 	cfg.DataDir = t.TempDir()
 	addr, stop := startRun(t, cfg)
-	// The server key the server made on its first start: without it, the provider keys in
-	// the database can't be read.
 	serverKey, err := os.ReadFile(filepath.Join(cfg.DataDir, serverkey.FileName))
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +142,6 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 		t.Fatalf("taskto backup said %q, want the databases named", &stderr)
 	}
 
-	// Refusals: the file exists; the file is inside the data directory.
 	if err := runBackup(ctx, []string{archive}, env, nil, &stderr); err == nil || !strings.Contains(err.Error(), "exists") {
 		t.Fatalf("backup over an existing file = %v, want refused", err)
 	}
@@ -160,7 +152,6 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 		t.Fatal("backup without a FILE succeeded")
 	}
 
-	// Standard output, and restore from standard input, with -data-dir over the environment.
 	var piped bytes.Buffer
 	if err := runBackup(ctx, []string{"-"}, env, &piped, &stderr); err != nil {
 		t.Fatalf("taskto backup -: %v", err)
@@ -169,7 +160,6 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 	if err := runRestore(ctx, []string{"-data-dir", restored, "-"}, env, &piped, &stderr); err != nil {
 		t.Fatalf("taskto restore -: %v\n%s", err, &stderr)
 	}
-	// And from the file, into a fresh directory; the occupied one is refused.
 	if err := runRestore(ctx, []string{"-data-dir", restored, archive}, env, nil, &stderr); err == nil {
 		t.Fatal("restore into a data directory with data succeeded")
 	}
@@ -192,7 +182,6 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 		if err != nil || n != 1 {
 			t.Fatalf("restored users = %d, %v; want the owner", n, err)
 		}
-		// A server starts on the restored data, already set up: no setup token.
 		logs := captureLog(t)
 		restoredCfg := cfg
 		restoredCfg.DataDir = d
@@ -209,8 +198,6 @@ func TestBackupAndRestoreCommands(t *testing.T) {
 	}
 }
 
-// apiCall makes one request as a browser would, with the session cookie it holds ("" for
-// none), and returns the status and the session cookie the answer set ("" if none).
 func apiCall(t *testing.T, addr, method, path, cookie string, body any) (int, string) {
 	t.Helper()
 	var rd io.Reader
@@ -229,7 +216,6 @@ func apiCall(t *testing.T, addr, method, path, cookie string, body any) (int, st
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if cookie != "" {
-		// #nosec G124 -- a request cookie, sent by a test to a plain-http server.
 		req.AddCookie(&http.Cookie{Name: "taskto_session", Value: cookie})
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -246,15 +232,12 @@ func apiCall(t *testing.T, addr, method, path, cookie string, body any) (int, st
 	return resp.StatusCode, set
 }
 
-// A restore never brings a login back: a browser that kept its cookie after its session was
-// ended (a password change signed it out, and a refused session's 401 leaves the cookie)
-// is not signed in again by restoring a backup made before.
 func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
 	cfg.Addr = "127.0.0.1:0"
 	cfg.DataDir = t.TempDir()
-	cfg.InsecureCookies = true // the test talks plain http
+	cfg.InsecureCookies = true
 	logs := captureLog(t)
 	addr, stop := startRun(t, cfg)
 	token := setupTokenLine.FindStringSubmatch(logs.String())
@@ -275,7 +258,6 @@ func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
 	}
 	first, second := login(addr), login(addr)
 
-	// The backup has both sessions active.
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "taskto.tar.gz")
 	env := func(k string) string { return map[string]string{"TASKTO_DATA_DIR": cfg.DataDir}[k] }
@@ -284,7 +266,6 @@ func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
 		t.Fatalf("taskto backup: %v\n%s", err, &stderr)
 	}
 
-	// The password changes in the first browser: the second one's session ends.
 	if code, _ := apiCall(t, addr, http.MethodPost, "/api/me/password", first,
 		map[string]string{"current_password": oldPassword, "new_password": newPassword}); code != http.StatusNoContent {
 		t.Fatalf("change password = %d", code)
@@ -296,7 +277,6 @@ func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Restore the older backup, as an operator does, and start a server on it.
 	restored := filepath.Join(dir, "restored")
 	if err := runRestore(ctx, []string{"-data-dir", restored, archive}, env, nil, &stderr); err != nil {
 		t.Fatalf("taskto restore: %v\n%s", err, &stderr)
@@ -309,7 +289,6 @@ func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
 			t.Errorf("%s: /api/me after the restore = %d, want 401", name, code)
 		}
 	}
-	// The data is the backup's, and signing in again works with its password.
 	if c := login(addr); c == "" {
 		t.Fatal("no session after signing in again")
 	} else if code, _ := apiCall(t, addr, http.MethodGet, "/api/me", c, nil); code != http.StatusOK {
@@ -317,8 +296,6 @@ func TestRestoreDoesNotReviveEndedSessions(t *testing.T) {
 	}
 }
 
-// /dev/null is a character device, but a backup written to it (a smoke test, a cron dry
-// run) isn't one written to a terminal.
 func TestDevNullIsNotATerminal(t *testing.T) {
 	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -330,8 +307,6 @@ func TestDevNullIsNotATerminal(t *testing.T) {
 	}
 }
 
-// Where hard links aren't available, the backup is copied into a file created exclusively:
-// it lands complete, and an existing file is still never replaced.
 func TestCopyExclusive(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
@@ -339,7 +314,12 @@ func TestCopyExclusive(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(dir, "dst")
-	if err := copyExclusive(src, dst); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := copyExclusive(root, "src", "dst"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(dst); string(got) != "backup bytes" {
@@ -348,7 +328,7 @@ func TestCopyExclusive(t *testing.T) {
 	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode %o, want 600", fi.Mode().Perm())
 	}
-	if err := copyExclusive(src, dst); !errors.Is(err, fs.ErrExist) {
+	if err := copyExclusive(root, "src", "dst"); !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("second copy: err = %v, want it to refuse the existing file", err)
 	}
 }

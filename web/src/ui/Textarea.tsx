@@ -1,6 +1,3 @@
-// A text field of several lines, which the person can make taller. Like Input, it takes its id,
-// description, validity and requirement from the Field it is in.
-
 import type { ComponentPropsWithRef } from 'react'
 import { useFieldControl } from './Field'
 import './Input.css'

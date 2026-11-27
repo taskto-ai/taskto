@@ -1,8 +1,5 @@
 package agentrt
 
-// Integration tests of model providers: the real sidecar against a local fake OpenAI-compatible
-// server (httptest, loopback only). Gated by TASKTO_AGENT_IT=1 like sidecar_test.go.
-
 import (
 	"encoding/json"
 	"errors"
@@ -18,20 +15,16 @@ import (
 	"testing"
 )
 
-// Obviously fake keys. The fake server accepts only fileKey; envKey is wrong, and the server
-// echoes it back in its 401, the way some real servers quote what they were given.
 const (
 	fileKey = "fake-file-key-for-tests-not-real"
 	envKey  = "fake-env-key-for-tests-not-real"
 	keyEnv  = "TASKTO_TEST_FAKE_PROVIDER_KEY"
 )
 
-// fakeOpenAI serves POST /v1/chat/completions as a streamed chat completion that answers
-// "<model> heard: <last user text>".
 type fakeOpenAI struct {
 	*httptest.Server
 	mu   sync.Mutex
-	keys []string // the bearer token of every request
+	keys []string
 }
 
 func newFakeOpenAI(t *testing.T) *fakeOpenAI {
@@ -105,7 +98,6 @@ func (f *fakeOpenAI) sawKey(want string) bool {
 	return false
 }
 
-// contentText reads an OpenAI message content: a string or a list of text parts.
 func contentText(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -130,8 +122,6 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
-// writeProviders writes a key file and a providers file for the fake server, and returns the
-// environment that points the sidecar at them.
 func writeProviders(t *testing.T, server *fakeOpenAI) []string {
 	t.Helper()
 	dir := t.TempDir()
@@ -191,7 +181,6 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 		t.Fatalf("models = %+v", catalog)
 	}
 
-	// The first configured model is the default, and a full answer streams back through it.
 	conv, err := s.client.CreateConversation(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +198,6 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 		t.Fatal("the fake server never received the key from the key file")
 	}
 
-	// Switch the same conversation to another model, then to another provider.
 	large := ModelRef{Provider: "fake", ModelID: "fake-large"}
 	if err := s.client.SetModel(ctx, conv, large); err != nil {
 		t.Fatal(err)
@@ -229,7 +217,6 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 		t.Fatalf("answer from the scripted model = %q", got)
 	}
 
-	// A conversation can start on a chosen model.
 	chosen, err := s.client.CreateConversationOn(ctx, large)
 	if err != nil {
 		t.Fatal(err)
@@ -238,12 +225,11 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 		t.Fatalf("model of a conversation created on %+v = %+v, %v", large, got, err)
 	}
 
-	// Models that aren't configured are refused, both to start with and to switch to.
 	for _, bad := range []ModelRef{
 		{Provider: "fake", ModelID: "nope"},
 		{Provider: "nope", ModelID: "fake-small"},
-		{Provider: "openai", ModelID: "gpt-4o"}, // built into pi-ai, but not configured here
-		{Provider: "fake"},                      // not the zero ModelRef, so not "the default"
+		{Provider: "openai", ModelID: "gpt-4o"},
+		{Provider: "fake"},
 	} {
 		if _, err := s.client.CreateConversationOn(ctx, bad); statusCode(err) != http.StatusBadRequest {
 			t.Errorf("create on %+v: err = %v, want a 400", bad, err)
@@ -252,7 +238,6 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 		if statusCode(err) != http.StatusBadRequest {
 			t.Errorf("switch to %+v: err = %v, want a 400", bad, err)
 		}
-		// The reason the server gives its own error code (internal/conversations).
 		if se := (*StatusError)(nil); errors.As(err, &se) && se.Reason != "unknown_model" {
 			t.Errorf("switch to %+v: reason = %q, want unknown_model", bad, se.Reason)
 		}
@@ -273,7 +258,6 @@ func statusCode(err error) int {
 	return 0
 }
 
-// recorder keeps a copy of every response body the client reads.
 type recorder struct {
 	next http.RoundTripper
 	out  *lockedBuffer
@@ -308,7 +292,6 @@ func TestAPIKeysNeverLeave(t *testing.T) {
 	ask(t, s.client, good, "hi")
 	lastAssistant(t, s.client, good)
 
-	// The wrong key gets a 401 that quotes it: the error must reach us without the key.
 	bad, err := s.client.CreateConversationOn(ctx, ModelRef{Provider: "wrong-key", ModelID: "fake-small"})
 	if err != nil {
 		t.Fatal(err)
@@ -325,13 +308,13 @@ func TestAPIKeysNeverLeave(t *testing.T) {
 	if !server.sawKey(envKey) {
 		t.Fatal("the fake server never received the env key, so the test proves nothing")
 	}
-	waitForOps(t, w, "Incorrect API key provided") // the failure, as watchers see it
+	waitForOps(t, w, "Incorrect API key provided")
 	if _, err := s.client.Messages(ctx, bad); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("wait with a wrong key: %+v", settled)
 
-	s.stop() // flush everything the sidecar would log, shutdown included
+	s.stop()
 	for name, text := range map[string]string{"a response": responses.String(), "the sidecar's output": s.output.String()} {
 		for _, key := range []string{fileKey, envKey} {
 			if strings.Contains(text, key) {
@@ -344,7 +327,6 @@ func TestAPIKeysNeverLeave(t *testing.T) {
 	}
 }
 
-// A bad providers file stops the sidecar with exit 2 and a message that never quotes a value.
 func TestBadProvidersConfig(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
@@ -400,8 +382,6 @@ func TestBadProvidersConfig(t *testing.T) {
 	}
 }
 
-// A key file that disappears while the sidecar runs fails that run, not the sidecar; putting
-// the file back makes the next run work, since keys are read on every request.
 func TestKeyFileRemovedWhileRunning(t *testing.T) {
 	server := newFakeOpenAI(t)
 	env := writeProviders(t, server)
@@ -450,7 +430,6 @@ func TestKeyFileRemovedWhileRunning(t *testing.T) {
 	}
 }
 
-// The model route returns only the reference, never the resolved model's base URL or settings.
 func TestModelRouteReturnsOnlyTheReference(t *testing.T) {
 	server := newFakeOpenAI(t)
 	s := startSidecar(t, writeProviders(t, server)...)

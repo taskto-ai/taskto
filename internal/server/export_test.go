@@ -25,10 +25,9 @@ import (
 
 func exportPath(ws int64) string { return fmt.Sprintf("/api/workspaces/%d/export", ws) }
 
-// entriesRuntime is an agent runtime that has only conversations' entries, by the agent's ID.
 type entriesRuntime struct {
 	conversations.Runtime
-	entries map[int64][]string // the entries' text, oldest first; entry IDs are 1, 2, 3…
+	entries map[int64][]string
 }
 
 func (e entriesRuntime) Entries(_ context.Context, conv, before int64, limit int) (json.RawMessage, error) {
@@ -59,7 +58,6 @@ func (e entriesRuntime) Entries(_ context.Context, conv, before int64, limit int
 	return json.Marshal(page)
 }
 
-// exportStack is a stack whose conversations have a runtime with the entries of the agents' IDs.
 func exportStack(t *testing.T, entries map[int64][]string, mod func(*Options)) *stack {
 	t.Helper()
 	return newStackDB(t, func(o *Options, sqlDB *sql.DB) {
@@ -77,7 +75,6 @@ func (s *stack) conversation(ws, owner, agent int64, title string) int64 {
 	return s.scalar(`INSERT INTO conversations (workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, ?) RETURNING id`, ws, owner, agent, title)
 }
 
-// put writes a document's text.
 func (s *stack) put(cookie string, ws, space int64, name, content string) {
 	s.t.Helper()
 	if code, body := s.browser(cookie, http.MethodPut, s.docs(ws, space)+"/"+name, map[string]any{"content": content}); code != http.StatusCreated {
@@ -85,7 +82,6 @@ func (s *stack) put(cookie string, ws, space int64, name, content string) {
 	}
 }
 
-// putFile writes a document's bytes, as a browser uploads a file.
 func (s *stack) putFile(cookie string, ws, space int64, name string, content []byte) {
 	s.t.Helper()
 	r := httptest.NewRequest(http.MethodPut, s.docs(ws, space)+"/"+name, bytes.NewReader(content))
@@ -98,7 +94,6 @@ func (s *stack) putFile(cookie string, ws, space int64, name string, content []b
 	}
 }
 
-// card makes a card on the board of a space, with a comment, and returns it.
 func (s *stack) card(cookie string, ws, space, board int64, title, comment string) map[string]any {
 	s.t.Helper()
 	base := fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards/%d/cards", ws, space, board)
@@ -116,7 +111,6 @@ func (s *stack) boardOf(space int64) int64 {
 	return s.scalar(`SELECT id FROM boards WHERE space_id = ?`, space)
 }
 
-// unzip reads a response's zip into its entries' bytes by name.
 func unzip(t *testing.T, rec *httptest.ResponseRecorder) map[string][]byte {
 	t.Helper()
 	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
@@ -142,13 +136,11 @@ func unzip(t *testing.T, rec *httptest.ResponseRecorder) map[string][]byte {
 	return out
 }
 
-// startExport is the POST that starts an export.
 func (s *stack) startExport(cookie string, ws int64) *httptest.ResponseRecorder {
 	s.t.Helper()
 	return s.request(http.MethodPost, exportPath(ws), map[string]any{}, sameOrigin(cookie))
 }
 
-// downloadOf is the address a start gave.
 func downloadOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var got struct {
@@ -164,7 +156,6 @@ func downloadOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return got.Download
 }
 
-// export starts an export and downloads it. What the start refuses is returned as it is.
 func (s *stack) export(cookie string, ws int64) *httptest.ResponseRecorder {
 	s.t.Helper()
 	start := s.startExport(cookie, ws)
@@ -174,7 +165,6 @@ func (s *stack) export(cookie string, ws int64) *httptest.ResponseRecorder {
 	return s.request(http.MethodGet, downloadOf(s.t, start), nil, sameOrigin(cookie))
 }
 
-// downloadRequest starts an export and returns the request that downloads it.
 func (s *stack) downloadRequest(cookie string, ws int64) *http.Request {
 	s.t.Helper()
 	r := httptest.NewRequest(http.MethodGet, downloadOf(s.t, s.startExport(cookie, ws)), nil)
@@ -182,8 +172,6 @@ func (s *stack) downloadRequest(cookie string, ws int64) *http.Request {
 	return r
 }
 
-// A person's export holds what they own in the workspace and nothing else: not other people's
-// private spaces, not shared spaces, not their own data in another workspace.
 func TestExportHoldsOnlyWhatThePersonOwns(t *testing.T) {
 	s := exportStack(t, map[int64][]string{
 		1: {"alice-chat one", "alice-chat two"},
@@ -197,10 +185,9 @@ func TestExportHoldsOnlyWhatThePersonOwns(t *testing.T) {
 	archived := s.conversation(s.one, s.alice.id, 4, "Old one")
 	s.exec(`UPDATE conversations SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, archived)
 
-	// Alice's own: documents (one with a name that is trouble in a zip), a large file, cards, an app.
 	s.put(s.alice.cookie, s.one, s.alice.private, "notes/plan.md", "# alice-plan\n")
 	s.put(s.alice.cookie, s.one, s.alice.private, "notes/a:b*c.md", "alice-colon")
-	media := bytes.Repeat([]byte("0123456789abcdef"), 1<<18) // 4 MiB: audio and video are never versioned
+	media := bytes.Repeat([]byte("0123456789abcdef"), 1<<18)
 	s.putFile(s.alice.cookie, s.one, s.alice.private, "media/clip.mp4", media)
 	live := s.card(s.alice.cookie, s.one, s.alice.private, s.alicePersonalBoard, "alice-card", "alice-comment")
 	gone := s.card(s.alice.cookie, s.one, s.alice.private, s.alicePersonalBoard, "alice-archived-card", "alice-old-comment")
@@ -210,22 +197,19 @@ func TestExportHoldsOnlyWhatThePersonOwns(t *testing.T) {
 	}
 	s.app(s.alice.cookie, s.alice.private, "alice-expense")
 
-	// What is not hers: others' private spaces, shared spaces she is in (Team) and isn't in
-	// (Secret), and her own data in the other workspace.
 	for _, other := range []struct {
 		cookie string
 		ws, sp int64
 	}{{s.bob.cookie, s.one, s.bob.private}, {s.carol.cookie, s.one, s.carol.private}, {s.carol.cookie, s.one, s.secret}, {s.bob.cookie, s.one, s.team}, {s.alice.cookie, s.two, s.alicePrivate2}} {
 		s.put(other.cookie, other.ws, other.sp, "hidden.md", "stranger-secret in "+strconv.FormatInt(other.sp, 10))
-		if other.sp != s.team && other.sp != s.secret { // a shared space has no board until someone makes one
+		if other.sp != s.team && other.sp != s.secret {
 			s.card(other.cookie, other.ws, other.sp, s.boardOf(other.sp), "stranger-card", "stranger-comment")
 		}
-		if other.ws == s.one { // the example app helper works in workspace one
+		if other.ws == s.one {
 			s.app(other.cookie, other.sp, "stranger-expense")
 		}
 	}
 
-	// Alice is a member of Team, which has a board with a card in it: shared content isn't hers to take.
 	code, tb := s.browser(s.bob.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards", s.one, s.team), map[string]any{"name": "Team board"})
 	if code != http.StatusCreated {
 		t.Fatalf("team board = %d %v", code, tb)
@@ -247,7 +231,6 @@ func TestExportHoldsOnlyWhatThePersonOwns(t *testing.T) {
 	}
 	files := unzip(t, rec)
 
-	// Everything, as the person wrote it.
 	if got := string(files["documents/notes/plan.md"]); got != "# alice-plan\n" {
 		t.Errorf("plan.md = %q", got)
 	}
@@ -343,7 +326,6 @@ func TestExportHoldsOnlyWhatThePersonOwns(t *testing.T) {
 		t.Errorf("manifest = %+v", mf)
 	}
 
-	// Not one byte of anyone else's, or of her own in another workspace.
 	for name, b := range files {
 		for _, secret := range []string{"stranger", "bob-secret", "two-secret", "carol", "bob@", "Bob's chat", "Alice's chat in two"} {
 			if bytes.Contains(b, []byte(secret)) || strings.Contains(name, secret) {
@@ -357,13 +339,11 @@ func TestExportHoldsOnlyWhatThePersonOwns(t *testing.T) {
 		}
 	}
 
-	// It is on the audit log: who took their data out of which workspace.
 	if n := s.scalar(`SELECT count(*) FROM audit_events WHERE action = 'data_export_started' AND actor_id = ? AND workspace_id = ? AND target_id = ?`,
 		s.alice.id, s.one, s.alice.id); n != 1 {
 		t.Errorf("%d data_export_started events for alice's export, want 1", n)
 	}
 
-	// The other workspace's export is that workspace's alone.
 	two := unzip(t, s.export(s.alice.cookie, s.two))
 	for name, b := range two {
 		if bytes.Contains(b, []byte("alice-plan")) || bytes.Contains(b, []byte("alice-expense")) || bytes.Contains(b, []byte("alice-chat")) {
@@ -383,7 +363,6 @@ func names(files map[string][]byte) []string {
 	return out
 }
 
-// Someone else's export is theirs: it names no one's data but their own, whoever asks.
 func TestExportOfAnotherPersonHasNoneOfTheFirstsData(t *testing.T) {
 	s := exportStack(t, map[int64][]string{1: {"alice-chat"}}, nil)
 	s.conversation(s.one, s.alice.id, 1, "Alice's chat")
@@ -416,7 +395,6 @@ func TestExportNeedsAMemberWithASessionNotAToken(t *testing.T) {
 	if rec := s.request(http.MethodPost, exportPath(s.one), map[string]any{}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no session = %d, want 401", rec.Code)
 	}
-	// Bob isn't in workspace two.
 	if rec := s.export(s.bob.cookie, s.two); rec.Code != http.StatusNotFound {
 		t.Errorf("a non-member = %d, want 404", rec.Code)
 	} else if bytes.HasPrefix(rec.Body.Bytes(), []byte("PK")) {
@@ -431,8 +409,6 @@ func TestExportNeedsAMemberWithASessionNotAToken(t *testing.T) {
 	}
 }
 
-// A GET changes nothing, so a link, a cross-site navigation or a prefetch can't start an export, use
-// up the person's hour of exports or write to the audit log: only the CSRF-guarded POST does.
 func TestExportIsNotStartedByAGet(t *testing.T) {
 	s := exportStack(t, nil, nil)
 	cross := func(r *http.Request) {
@@ -445,11 +421,9 @@ func TestExportIsNotStartedByAGet(t *testing.T) {
 			t.Errorf("%s of the start route = %d, want 405 or 404 and no zip", method, rec.Code)
 		}
 	}
-	// Guessing a download address is no use, and starts nothing either.
 	if rec := s.request(http.MethodGet, exportPath(s.one)+"/guess", nil, cross); rec.Code != http.StatusNotFound {
 		t.Errorf("GET of an unknown address = %d, want 404", rec.Code)
 	}
-	// The POST is guarded against other sites and needs JSON.
 	if rec := s.request(http.MethodPost, exportPath(s.one), map[string]any{}, cross); rec.Code != http.StatusForbidden {
 		t.Errorf("a cross-site POST = %d, want 403", rec.Code)
 	}
@@ -462,7 +436,6 @@ func TestExportIsNotStartedByAGet(t *testing.T) {
 	if n := s.scalar(`SELECT count(*) FROM audit_events WHERE action = 'data_export_started'`); n != 0 {
 		t.Errorf("%d exports recorded for requests that started none", n)
 	}
-	// None of that used a slot: a real export still works, three times (the hour's limit).
 	for i := range 3 {
 		if rec := s.export(s.alice.cookie, s.one); rec.Code != http.StatusOK {
 			t.Fatalf("export %d = %d %s", i+1, rec.Code, rec.Body)
@@ -470,16 +443,13 @@ func TestExportIsNotStartedByAGet(t *testing.T) {
 	}
 }
 
-// The download address is for one person, one session, one use and a short time.
 func TestExportDownloadAddressIsSingleUseAndBound(t *testing.T) {
 	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1} })
 	addr := downloadOf(t, s.startExport(s.alice.cookie, s.one))
 
-	// Another person, with the address, gets nothing, and the address stays good for its owner.
 	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(s.bob.cookie)); rec.Code != http.StatusNotFound {
 		t.Errorf("bob with alice's address = %d, want 404", rec.Code)
 	}
-	// So does the same person from another login: the address is bound to the session.
 	login := s.request(http.MethodPost, "/api/login", map[string]any{"email": "alice@example.com", "password": fakePassword})
 	other := sessionCookie(login)
 	if other == "" || other == s.alice.cookie {
@@ -488,7 +458,6 @@ func TestExportDownloadAddressIsSingleUseAndBound(t *testing.T) {
 	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(other)); rec.Code != http.StatusNotFound {
 		t.Errorf("alice's other session = %d, want 404", rec.Code)
 	}
-	// A HEAD isn't a download, and doesn't use the address.
 	if rec := s.request(http.MethodHead, addr, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("HEAD = %d, want 405", rec.Code)
 	}
@@ -497,11 +466,9 @@ func TestExportDownloadAddressIsSingleUseAndBound(t *testing.T) {
 		t.Fatalf("the owner's download = %d %s", rec.Code, rec.Body)
 	}
 	unzip(t, rec)
-	// Once: a second download of the same address is gone.
 	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusNotFound {
 		t.Errorf("second download = %d, want 404", rec.Code)
 	}
-	// Another workspace's path doesn't take the address either.
 	addr2 := downloadOf(t, s.startExport(s.alice.cookie, s.one))
 	elsewhere := strings.Replace(addr2, fmt.Sprintf("/workspaces/%d/", s.one), fmt.Sprintf("/workspaces/%d/", s.two), 1)
 	if rec := s.request(http.MethodGet, elsewhere, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusNotFound {
@@ -509,7 +476,6 @@ func TestExportDownloadAddressIsSingleUseAndBound(t *testing.T) {
 	}
 }
 
-// A person who starts an export and never downloads it doesn't hold their slot for ever.
 func TestExportUnusedAddressFreesTheSlot(t *testing.T) {
 	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1, TicketTTL: 1500 * time.Millisecond} })
 	addr := downloadOf(t, s.startExport(s.alice.cookie, s.one))
@@ -542,20 +508,16 @@ func TestExportIsRateLimited(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), `"export_rate_limited"`) || rec.Header().Get("Retry-After") == "" {
 		t.Errorf("third export = %d %s %v, want 429 export_rate_limited with Retry-After", rec.Code, rec.Body, rec.Header())
 	}
-	// A turned away export isn't one that began: only the two that did are on the audit log.
 	if n := s.scalar(`SELECT count(*) FROM audit_events WHERE action = 'data_export_started' AND actor_id = ?`, s.alice.id); n != 2 {
 		t.Errorf("%d data_export_started events, want 2", n)
 	}
-	// Bob has his own share.
 	if rec := s.export(s.bob.cookie, s.one); rec.Code != http.StatusOK {
 		t.Errorf("bob's export = %d, want 200: the limit is per person", rec.Code)
 	}
 }
 
-// Without the agent runtime a conversation's history can't be read: the export says so, and still
-// holds the rest.
 func TestExportSaysWhenAHistoryIsMissing(t *testing.T) {
-	s := newStack(t) // its conversations have no agent runtime
+	s := newStack(t)
 	cid := s.conversation(s.one, s.alice.id, 1, "Chat")
 	s.put(s.alice.cookie, s.one, s.alice.private, "plan.md", "alice-plan")
 
@@ -578,7 +540,6 @@ func TestExportSaysWhenAHistoryIsMissing(t *testing.T) {
 	}
 }
 
-// discard is a response writer that keeps nothing, counting what it is given.
 type discard struct {
 	h    http.Header
 	code int
@@ -592,11 +553,10 @@ func (d *discard) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// A large file is copied through, not held: exporting 48 MiB takes a small fraction of that.
 func TestExportStreamsLargeFiles(t *testing.T) {
 	s := exportStack(t, nil, nil)
 	const size = 48 << 20
-	chunk := bytes.Repeat([]byte("taskto"), 1<<16) // 384 KiB
+	chunk := bytes.Repeat([]byte("taskto"), 1<<16)
 	var big bytes.Buffer
 	for big.Len() < size {
 		big.Write(chunk)
@@ -619,8 +579,6 @@ func TestExportStreamsLargeFiles(t *testing.T) {
 	}
 }
 
-// cancelOnWrite cancels a request's context as soon as the first bytes are written to it, as a person
-// closing the download does.
 type cancelOnWrite struct {
 	*httptest.ResponseRecorder
 	cancel context.CancelFunc
@@ -631,13 +589,12 @@ func (c *cancelOnWrite) Write(p []byte) (int, error) {
 	return c.ResponseRecorder.Write(p)
 }
 
-// A person who goes away stops the export: the zip is left without its end, and the connection is cut.
 func TestExportStopsWhenThePersonGoes(t *testing.T) {
 	s := exportStack(t, nil, nil)
 	rnd := rand.NewChaCha8([32]byte{1})
 	for i := range 4 {
 		b := make([]byte, 300<<10)
-		_, _ = rnd.Read(b) // incompressible, so the zip's first bytes go out early
+		_, _ = rnd.Read(b)
 		s.putFile(s.alice.cookie, s.one, s.alice.private, fmt.Sprintf("media/%d.mp4", i), b)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -655,14 +612,11 @@ func TestExportStopsWhenThePersonGoes(t *testing.T) {
 	if _, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len())); err == nil {
 		t.Error("a cancelled export left a whole zip")
 	}
-	// The slot is free again: the person can export at once.
 	if rec := s.export(s.alice.cookie, s.one); rec.Code != http.StatusOK {
 		t.Errorf("export after a cancelled one = %d", rec.Code)
 	}
 }
 
-// stalled is a connection that stops taking bytes: a write waits for the write deadline the server
-// set, and fails when it passes. Without a deadline it waits as long as the test lets it.
 type stalled struct {
 	h        http.Header
 	deadline time.Time
@@ -686,7 +640,6 @@ func (s *stalled) Write([]byte) (int, error) {
 	return 0, os.ErrDeadlineExceeded
 }
 
-// A download whose connection stalls is ended by the idle deadline, and frees the person's slot.
 func TestExportEndsWhenTheConnectionStalls(t *testing.T) {
 	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{IdleTimeout: 150 * time.Millisecond} })
 	s.put(s.alice.cookie, s.one, s.alice.private, "plan.md", "alice-plan")

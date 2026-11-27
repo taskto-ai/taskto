@@ -24,7 +24,6 @@ func TestAuditSpaces(t *testing.T) {
 	owner, ws := e.setup()
 	alice := e.join(owner, ws, "Alice", auth.RoleMember)
 
-	// Creating a space.
 	s := e.createShared(owner, ws, "Team")
 	rows := e.events(ws, audit.SpaceCreated)
 	if len(rows) != 1 {
@@ -35,7 +34,6 @@ func TestAuditSpaces(t *testing.T) {
 		t.Fatalf("space_created = %+v", r)
 	}
 
-	// Adding a member, changing their role, removing them.
 	e.addMember(owner, s, alice, RoleViewer)
 	added := e.events(ws, audit.SpaceMemberAdded)
 	if len(added) != 1 || *added[0].ActorID != owner.id || *added[0].TargetID != s.ID ||
@@ -54,7 +52,6 @@ func TestAuditSpaces(t *testing.T) {
 		t.Fatalf("space_member_removed = %+v", removed)
 	}
 
-	// Changing the space: the fields are named, and the values are the non-secret ones.
 	expect(t, owner.do(http.MethodPatch, spacePath(s, ""), map[string]any{"name": "Crew", "archived": true, "offline_downloads": true}), http.StatusOK)
 	updated := e.events(ws, audit.SpaceUpdated)
 	if len(updated) != 1 {
@@ -73,12 +70,10 @@ func TestAuditSpaceRefusalsRecordNothing(t *testing.T) {
 	bob := e.join(owner, ws, "Bob", auth.RoleMember)
 	s := e.createShared(owner, ws, "Team")
 
-	// A member who isn't an admin changes nothing.
 	expect(t, alice.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces", ws), map[string]string{"name": "Mine"}), http.StatusForbidden)
 	expect(t, alice.do(http.MethodPatch, spacePath(s, ""), map[string]any{"name": "Mine"}), http.StatusForbidden)
 	expect(t, alice.do(http.MethodPost, spacePath(s, "/members"), map[string]any{"user_id": alice.id, "role": RoleEditor}), http.StatusForbidden)
 
-	// An admin of another workspace can't reach this one's space.
 	stranger := e.join(owner, ws, "Stranger", auth.RoleMember)
 	other := e.addWorkspace(stranger, "Elsewhere")
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, stranger.id), nil), http.StatusNoContent)
@@ -86,7 +81,6 @@ func TestAuditSpaceRefusalsRecordNothing(t *testing.T) {
 	expect(t, stranger.do(http.MethodPatch, spacePath(in(other, s), ""), map[string]any{"name": "Taken"}), http.StatusNotFound)
 	expect(t, stranger.do(http.MethodPost, spacePath(in(other, s), "/members"), map[string]any{"user_id": stranger.id, "role": RoleEditor}), http.StatusNotFound)
 
-	// A failed change: a member twice, and one who isn't in the workspace.
 	e.addMember(owner, s, bob, RoleViewer)
 	afterFirst := len(e.events(0, ""))
 	expect(t, owner.do(http.MethodPost, spacePath(s, "/members"), map[string]any{"user_id": bob.id, "role": RoleViewer}), http.StatusConflict)
@@ -99,7 +93,6 @@ func TestAuditSpaceRefusalsRecordNothing(t *testing.T) {
 		t.Fatalf("one member added: %d events, want %d", afterFirst, before+1)
 	}
 
-	// The other workspace's log has none of this workspace's events, and the reverse.
 	for _, r := range e.events(other, "") {
 		if r.Action == audit.SpaceUpdated || r.Action == audit.SpaceMemberAdded {
 			t.Fatalf("the other workspace's log holds %+v", r)

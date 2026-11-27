@@ -1,13 +1,3 @@
-// The conversations page in a real browser with no server: a fake API and a replayed events
-// stream, for looking at the page and capturing it where the agent runtime can't run (see
-// capture.mjs). Development only: the Vite dev server serves it at /e2e/conversation/, and no
-// build includes it. Sample data only.
-//
-// ?s= picks the scenario: chat (default), running, cli, cli-allow (a question with "allow all"
-// on), browser (the agent asks to take over a running browser), long (many messages), flaky (the
-// first read of the conversation fails with a 502), list, empty, failed. ?lang=pt-BR or ?dir=rtl
-// to check another language or the right-to-left layout.
-
 import '@fontsource-variable/bricolage-grotesque/wght.css'
 import '@fontsource-variable/inter/wght.css'
 import '@fontsource-variable/jetbrains-mono/wght.css'
@@ -46,7 +36,6 @@ const list = [
   conv(4, 'Onboarding checklist copy', 60 * 24 * 5),
 ]
 
-// Entries of the conversation as the agent runtime keeps them.
 let n = 100
 const user = (text: string) => ({ id: n++, kind: 'pi.user', model: [{ role: 'user', content: text }] })
 const said = (text: string, calls: { name: string; args?: unknown }[] = []) => ({
@@ -77,7 +66,6 @@ const result = (call: string, name: string, text: string, details?: unknown) => 
     },
   ],
 })
-// An assistant entry that calls one tool, and its result.
 const tool = (name: string, text: string, args: unknown = {}, details?: unknown) => {
   const call = said('', [{ name, args }])
   const id = (call.model[0].content[0] as { id: string }).id
@@ -162,7 +150,6 @@ const cliView = {
   },
 }
 
-// Sixteen messages, for a transcript longer than the window.
 function longEntries() {
   const out: unknown[] = []
   for (let i = 1; i <= 8; i++) {
@@ -300,7 +287,6 @@ let failedOnce = false
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), window.location.origin)
   const method = init?.method ?? 'GET'
-  // The flaky scenario's first read of the conversation fails, as a restarting server's would.
   if (scenario === 'flaky' && method === 'GET' && url.pathname === '/api/workspaces/1/conversations/7' && !failedOnce) {
     failedOnce = true
     return new Response(JSON.stringify({ error: 'bad gateway' }), {
@@ -316,7 +302,6 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   })
 }
 
-// The stream: opens at once and sends the scenario's view; a failed conversation never opens.
 const streams: EventSourceFactory = () => {
   const es = {
     readyState: 0,
@@ -341,7 +326,6 @@ const streams: EventSourceFactory = () => {
 }
 
 await initLocale()
-// After the language, which sets the direction of its own.
 if (params.get('dir') === 'rtl') document.documentElement.dir = 'rtl'
 const open = scenario === 'list' || scenario === 'empty' ? undefined : '7'
 history.replaceState(null, '', `/w/1/conversations${open ? `/${open}` : ''}${window.location.search}`)

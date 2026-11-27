@@ -13,26 +13,21 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// The Stripe adapter against the adapter contract suite (contract_test.go), with the fake Stripe.
-
 func TestStripeMeetsThePaymentsContract(t *testing.T) {
 	runPaymentsContract(t, stripeFixture)
 }
 
-// stripeFixture is the fixture of the Stripe adapter: its real client (pointed at the fake by the test
-// endpoint, which only a constructor option can do), the fake's key and signing secret, and the fake's
-// payer, expiry and refund.
 func stripeFixture(t *testing.T) *paymentsFixture {
 	t.Helper()
-	fake := testprovider.NewStripe(t)
-	sign := func(body []byte, secret string, at time.Time) http.Header {
-		return http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}
+	clock := testprovider.NewManualClock(time.Now().UTC())
+	fake := testprovider.NewStripe(t, testprovider.WithClock(clock))
+	sign := func(body []byte, secret string, at time.Time) signedDelivery {
+		return signedDelivery{Header: http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}, Body: body}
 	}
 	deliver := func(evs []testprovider.Event) []signedDelivery {
 		out := make([]signedDelivery, len(evs))
 		for i, e := range evs {
-			body := e.Body()
-			out[i] = signedDelivery{Header: sign(body, testprovider.TestWebhookSecret, fake.Clock().Now()), Body: body}
+			out[i] = sign(e.Body(), testprovider.TestWebhookSecret, fake.Clock().Now())
 		}
 		return out
 	}
@@ -45,16 +40,14 @@ func stripeFixture(t *testing.T) *paymentsFixture {
 		Client:   NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(fake.Host()), WithoutConnectionReuse()),
 		Creds:    Credentials{Provider: "stripe", Mode: ModeTest, APIKey: Secret(fake.APIKey()), WebhookSecret: Secret(testprovider.TestWebhookSecret)},
 		Shapes: []linkShape{
-			// The server has a public address: a Checkout Session that returns the payer to its pages.
 			{Name: "checkout session", Pages: true, PaymentCarriesToken: true, CanExpire: true},
-			// It hasn't: a Payment Link with Stripe's own confirmation, which takes one payment and doesn't expire.
 			{Name: "payment link", Pages: false},
 		},
-		Now:         fake.Clock().Now,
-		Tolerance:   StripeTolerance,
-		OtherSecret: testprovider.OtherWebhookSecret,
-		PayerHosts:  []string{stripeCheckoutHost, stripeLinkHost},
-		// The fake answers a key it doesn't know as Stripe does.
+		Now:          fake.Clock().Now,
+		Later:        clock.Advance,
+		Tolerance:    StripeTolerance,
+		OtherSecret:  testprovider.OtherWebhookSecret,
+		PayerHosts:   []string{stripeCheckoutHost, stripeLinkHost},
 		RefusalWords: []string{"Invalid API Key"},
 		PayerWords:   []string{payer.Email, payer.Name},
 		Objects:      func() int { return len(fake.Sessions()) + len(fake.Links()) },
@@ -89,19 +82,27 @@ func stripeFixture(t *testing.T) *paymentsFixture {
 	}
 }
 
-// ----- the suite has teeth -----
-
-// brokenStripe is the Stripe adapter with one fault, each of which a contract case must catch.
 type brokenStripe struct {
 	stripe
-	// freshKeys asks for each call under a new token, so a retry makes a second link.
-	freshKeys bool
-	// acceptsAnything verifies every delivery.
-	acceptsAnything bool
-	// ignoresTime verifies a delivery whatever its signature's time.
-	ignoresTime bool
-	// leaksPayer puts what the payer typed into the event.
-	leaksPayer string
+	freshKeys            bool
+	acceptsAnything      bool
+	ignoresTime          bool
+	leaksPayer           string
+	datesByRead, undated bool
+	now                  func() time.Time
+}
+
+func (b brokenStripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error) {
+	obs, err := b.stripe.ReadPayment(ctx, creds, c, hosted, objectID)
+	for i := range obs.Payments {
+		switch {
+		case b.datesByRead:
+			obs.Payments[i].PaidAt = b.now().Truncate(time.Second)
+		case b.undated:
+			obs.Payments[i].PaidAt = time.Time{}
+		}
+	}
+	return obs, err
 }
 
 func (b brokenStripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error) {
@@ -146,13 +147,10 @@ func caseNamed(t *testing.T, prefix string) contractCase {
 	return contractCase{}
 }
 
-// An adapter that breaks what the server relies on fails the suite: the cases are worth having only if
-// a fault they are about makes them fail.
 func TestTheContractSuiteNoticesABrokenAdapter(t *testing.T) {
 	payer := testprovider.DefaultPayer()
 	for name, tc := range map[string]struct {
-		fault brokenStripe
-		// failing is the prefix of the case that must fail.
+		fault   brokenStripe
 		failing string
 	}{
 		"a call under a new key each time":        {brokenStripe{freshKeys: true}, "a link is made once"},
@@ -161,10 +159,14 @@ func TestTheContractSuiteNoticesABrokenAdapter(t *testing.T) {
 		"a payer's email in the event":            {brokenStripe{leaksPayer: payer.Email}, "a payment is one succeeded event"},
 		"a payer's name in the event":             {brokenStripe{leaksPayer: payer.Name}, "a payment is one succeeded event"},
 		"a signature of the wrong secret passing": {brokenStripe{acceptsAnything: true}, "the previous secret verifies"},
+		"a payment dated by its read":             {brokenStripe{datesByRead: true}, "a payment read back is dated"},
+		"a payment read with no time":             {brokenStripe{undated: true}, "a payment read back is dated"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fx := stripeFixture(t)
-			fx.Provider = tc.fault
+			fault := tc.fault
+			fault.now = fx.Now
+			fx.Provider = fault
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := caseNamed(t, tc.failing).run(ctx, fx); err == nil {
@@ -173,8 +175,6 @@ func TestTheContractSuiteNoticesABrokenAdapter(t *testing.T) {
 		})
 	}
 
-	// The fixture alone is sound: the same cases pass the real adapter (TestStripeMeetsThePaymentsContract),
-	// and the payer's words are in what the provider sends, so the check for them can fail.
 	fx := stripeFixture(t)
 	l, _, err := fx.made(context.Background(), fx.Shapes[0])
 	if err != nil {

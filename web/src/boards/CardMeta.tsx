@@ -5,8 +5,6 @@ import { Menu, MenuButton, MenuItem, MenuList } from '../ui/Menu'
 import { COLUMN_LABELS, COLUMNS } from './columns'
 import { StatusDot } from './StatusDot'
 
-// A row of the open card's properties: its name, and its value with the control that changes it.
-// The row is a focus group: when a control in it goes, the focus stays in the row (focus.ts).
 export function Prop({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="ui-board-prop" data-focus-group>
@@ -16,8 +14,6 @@ export function Prop({ label, children }: { label: string; children: ReactNode }
   )
 }
 
-// The card's status, its column: a writer moves it with the menu, as a drag does on the board.
-// An archived card is restored from the card's menu, not moved.
 export function Status({
   card,
   canWrite,

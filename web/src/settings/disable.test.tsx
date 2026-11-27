@@ -55,20 +55,17 @@ test('an admin disables a member after a question, sees them marked, and enables
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
   const row = async () => (await screen.findByText('alice@example.com')).closest('tr') as HTMLElement
 
-  // Not for yourself.
   await screen.findByText('owner@example.com')
   expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
 
   await row()
   chooseFromMenu('More actions for Alice', 'Disable')
-  // Nothing is sent before the answer, and the question says what it does.
   expect(sent(calls, 'POST', '/api/workspaces/1/members/2/disable')).toBe(0)
   within(await screen.findByRole('alertdialog', { name: 'Disable Alice' })).getByText(/signed out everywhere/)
   await answer('Yes, disable')
   await within(await row()).findByText('Disabled')
   expect(sent(calls, 'POST', '/api/workspaces/1/members/2/disable')).toBe(1)
 
-  // A disabled member offers Enable, which acts at once: it gives access back.
   fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
   expect(screen.queryByRole('menuitem', { name: 'Disable' })).toBeNull()
   fireEvent.click(screen.getByRole('menuitem', { name: 'Enable' }))

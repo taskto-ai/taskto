@@ -7,7 +7,6 @@ import { CLOSE_DELAY_MS, OPEN_DELAY_MS, Tooltip } from './Tooltip'
 
 beforeEach(() => {
   vi.useFakeTimers()
-  // Each test starts from the keyboard: the last input is heard across the page.
   fireEvent.keyDown(document, { key: 'Tab' })
 })
 afterEach(() => {
@@ -76,7 +75,6 @@ describe('Tooltip', () => {
     fireEvent.pointerLeave(tip(), { pointerType: 'mouse', relatedTarget: b })
     act(() => vi.advanceTimersByTime(CLOSE_DELAY_MS * 3))
     expect(isOpen()).toBe(true)
-    // Leaving both closes it.
     fireEvent.pointerLeave(b, { pointerType: 'mouse' })
     act(() => vi.advanceTimersByTime(CLOSE_DELAY_MS))
     expect(isOpen()).toBe(false)
@@ -104,7 +102,6 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(true)
     fireEvent.keyDown(b, { key: 'Escape' })
     expect(isOpen()).toBe(false)
-    // The focus stays where it was.
     expect(document.activeElement).toBe(b)
   })
 
@@ -133,7 +130,6 @@ describe('Tooltip', () => {
       </Tooltip>,
     )
     const field = screen.getByRole('textbox', { name: 'Email' })
-    // A text field is :focus-visible on every focus, a click's too: the last input decides.
     fireEvent.pointerDown(field, { pointerType: 'mouse' })
     act(() => field.focus())
     expect(isOpen()).toBe(false)
@@ -186,7 +182,6 @@ describe('Tooltip', () => {
     act(() => b.focus())
     fireEvent.keyDown(b, { key: 'Escape' })
     expect(isOpen()).toBe(false)
-    // The control still has the focus; the pointer comes, and the focus leaves before the delay.
     fireEvent.pointerEnter(b, { pointerType: 'mouse' })
     act(() => b.blur())
     act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
@@ -201,7 +196,6 @@ describe('Tooltip', () => {
     )
     const { rerender } = render(draw('Short'))
     const b = screen.getByRole('button', { name: 'Share' })
-    // At the window's end (jsdom's window is 1024 wide).
     b.getBoundingClientRect = () => ({
       top: 200,
       bottom: 236,
@@ -286,8 +280,6 @@ describe('Tooltip', () => {
     }
     const ltr = draw('ltr')
     expect(ltr.dataset.side).toBe('inline-end')
-    // jsdom lays nothing out: the tooltip is 0 wide, so its start is the gap (--space-2, 8px) after
-    // the control's end, at 52px.
     expect(ltr.style.left).toBe('60px')
     cleanup()
     const rtl = draw('rtl')
@@ -360,7 +352,6 @@ describe('Tooltip without content', () => {
     fireEvent.focus(b)
     expect(isOpen()).toBe(false)
 
-    // Its words come (the name is cut now): the same button, which now opens it.
     rerender(
       <Tooltip content="A long name, in full">
         <button type="button">A long name</button>
@@ -373,7 +364,6 @@ describe('Tooltip without content', () => {
     act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
     expect(isOpen()).toBe(true)
 
-    // They go while it is open: it closes.
     rerender(
       <Tooltip content="">
         <button type="button">A long name</button>

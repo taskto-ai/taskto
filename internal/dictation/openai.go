@@ -10,31 +10,24 @@ import (
 	"strings"
 )
 
-// apiEngine is a hosted speech-to-text API that speaks OpenAI's
-// POST {base_url}/audio/transcriptions: OpenAI, Groq, a LiteLLM proxy, speaches, ….
 type apiEngine struct {
 	client  *http.Client
 	baseURL string
 	model   string
-	key     string // "" sends no Authorization header
+	key     string
 }
 
-// String keeps the key out of logs and errors.
 func (e apiEngine) String() string { return "api " + e.baseURL }
 
-// maxReply bounds the API's answer: ten minutes of speech is well under it.
 const maxReply = 4 << 20
 
-// apiError is the API's refusal. It names the status only: a body could echo the request.
 type apiError struct{ status int }
 
 func (e apiError) Error() string {
 	return fmt.Sprintf("the speech-to-text API answered %d %s", e.status, http.StatusText(e.status))
 }
 
-// Transcribe sends the audio as a WAV file. Glossary terms aren't sent (see docs/dictation.md).
 func (e apiEngine) Transcribe(ctx context.Context, audio Audio, opts Options) (string, error) {
-	// The form is written as it is sent, so the WAV isn't copied into a buffer too.
 	body, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	go func() {
@@ -68,7 +61,6 @@ func (e apiEngine) Transcribe(ctx context.Context, audio Audio, opts Options) (s
 	return strings.TrimSpace(*reply.Text), nil
 }
 
-// writeForm writes the transcription request's form: the WAV, then the fields.
 func writeForm(mw *multipart.Writer, audio Audio, model, language string) error {
 	fw, err := mw.CreateFormFile("file", "dictation.wav")
 	if err != nil {

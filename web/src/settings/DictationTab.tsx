@@ -1,9 +1,3 @@
-// Dictation: how the chat box's microphone turns speech into text (docs/dictation.md).
-// Admins choose the engine: the operator's local model (the default: local first), a hosted
-// API with the workspace's key (write-only: the server only says whether one is set; a key
-// alone never switches to it), or an add-on the operator installed, whose notice they must
-// confirm first. Members see what is in use.
-
 import { type FormEvent, useState } from 'react'
 import { api, codeText, type DictationAddon, type DictationStatus, dictationPath } from '../api'
 import { type Key, t as translate, useFormat, useT } from '../i18n'
@@ -23,10 +17,8 @@ const LOCAL_MODELS: Record<string, Key> = {
   whistle: 'settings.dictation.models.whistle',
 }
 
-// A local model's name and languages; one the app doesn't know by its ID.
 const localModel = (model: string) => (LOCAL_MODELS[model] ? translate(LOCAL_MODELS[model]) : model)
 
-// The engine, as "Dictation uses {engine}." names it.
 export function engineName(status: DictationStatus, engine: string): string {
   if (engine === 'api') return translate('settings.dictation.engines.api')
   if (engine === 'local') {
@@ -109,12 +101,8 @@ function Current({
           )}
         </div>
         {status.engine === 'local' && local?.state === 'unavailable' ? (
-          // The local model is chosen but this server's platform has no build of it: it never will be
-          // ready here.
           <Badge tone="neutral">{t('settings.dictation.unavailableBadge')}</Badge>
         ) : status.engine === 'local' && local && local.state !== 'ready' ? (
-          // The local model is chosen but can't take a dictation yet (not downloaded, downloading,
-          // failed): not "On", which would promise what the microphone can't do.
           <Badge tone="warning">{t('settings.dictation.notReadyBadge')}</Badge>
         ) : status.engine ? (
           <Badge tone="success" dot>
@@ -208,10 +196,9 @@ function DictationForm({
               value={engine}
               onChange={(e) => {
                 setEngine(e.target.value)
-                setAccepted(false) // a confirmation is for one add-on's notice
+                setAccepted(false)
               }}
             >
-              {/* Local is the default, so it is listed even where the operator turned it off. */}
               <option value="local" disabled={!status.local && s.engine !== 'local'}>
                 {status.local ? t('settings.dictation.localOption') : t('settings.dictation.localOffOption')}
               </option>
@@ -226,7 +213,6 @@ function DictationForm({
           {addon && (
             <div role="note" aria-label={t('settings.dictation.notice', { name: addon.name })}>
               <Notice tone="warning" title={t('settings.dictation.notice', { name: addon.name })}>
-                {/* The add-on's own notice, as its vendor wrote it. */}
                 <p className="settings-text">{addon.notice}</p>
                 <p className="settings-muted">
                   {t.rich('settings.dictation.licence', {

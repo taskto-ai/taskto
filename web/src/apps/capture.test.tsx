@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-//
-// Location, signature and barcode inputs, and dictation beside text fields: each says what it can't do
-// and offers the way round it (typing the coordinates, typing the name or the code, the keyboard's own
-// dictation), a location is read once and never watched, and the signature pad draws without taking
-// the page's scrolling away.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -43,7 +38,6 @@ function stubNavigator(key: string, value: unknown) {
   Object.defineProperty(navigator, key, { configurable: true, value })
 }
 
-// A geolocation that answers once, or fails with a code (1 denied, 2 unavailable, 3 timeout).
 function stubGeolocation(answer: { code: number } | { latitude: number; longitude: number; accuracy: number }) {
   const geo = {
     getCurrentPosition: vi.fn((ok: PositionCallback, fail?: PositionErrorCallback, _options?: PositionOptions) => {
@@ -64,8 +58,6 @@ const device: Location = {
   captured_at: '2026-11-20T10:00:00.000Z',
   source: 'device',
 }
-
-// ---- location -------------------------------------------------------------------------------------
 
 function Where({
   onValue,
@@ -98,7 +90,7 @@ test('a location is read once, on the button, and never watched', async () => {
   const geo = stubGeolocation({ latitude: 38.7223, longitude: -9.1393, accuracy: 12.34 })
   const changed = vi.fn()
   render(<Where onValue={changed} />)
-  expect(geo.getCurrentPosition).not.toHaveBeenCalled() // not on its own: only when asked
+  expect(geo.getCurrentPosition).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Capture location' }))
   await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
   expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
@@ -106,9 +98,7 @@ test('a location is read once, on the button, and never watched', async () => {
   const loc = changed.mock.calls[0][0] as Location
   expect(loc).toMatchObject({ lat: 38.7223, lon: -9.1393, accuracy_m: 12.3, source: 'device' })
   expect(new Date(loc.captured_at).getTime()).toBeLessThanOrEqual(Date.now())
-  // The browser was asked for a fresh reading, not an old one.
   expect(geo.getCurrentPosition.mock.calls[0][2]).toMatchObject({ maximumAge: 0 })
-  // What was captured is shown with its accuracy, its time and where it came from.
   expect(await screen.findByText(/accurate to about 12 m/)).toBeTruthy()
   expect(screen.getByText(/from this device/)).toBeTruthy()
   expect(screen.getByText(/never tracked in the background/)).toBeTruthy()
@@ -120,7 +110,6 @@ test('a denied location says so and the coordinates can be typed, marked as type
   render(<Where onValue={changed} />)
   fireEvent.click(screen.getByRole('button', { name: 'Capture location' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/Location permission was denied/)
-  // The fallback is open already: type the coordinates (a comma works as the decimal mark).
   fireEvent.change(screen.getByLabelText('Latitude'), { target: { value: '38,7223' } })
   fireEvent.change(screen.getByLabelText('Longitude'), { target: { value: '-9.1393' } })
   fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }))
@@ -144,7 +133,7 @@ test('every way a position can fail has its own words', async () => {
     render(<Where />)
     fireEvent.click(screen.getByRole('button', { name: 'Capture location' }))
     expect((await screen.findByRole('alert')).textContent).toMatch(words)
-    expect(screen.getByLabelText('Latitude')).toBeTruthy() // the typed way is there every time
+    expect(screen.getByLabelText('Latitude')).toBeTruthy()
   }
 })
 
@@ -173,7 +162,6 @@ test('typed coordinates out of range show a message and store nothing', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }))
   expect(screen.getByRole('alert').textContent).toMatch(/latitude from −90 to 90/)
   expect(changed).not.toHaveBeenCalled()
-  // Both inputs are described by the message, so it is read again when either is focused.
   for (const name of ['Latitude', 'Longitude']) {
     const input = screen.getByLabelText(name)
     const described = (input.getAttribute('aria-describedby') ?? '')
@@ -201,13 +189,11 @@ test('a location taken at submit is read when the form is submitted, once', asyn
   )
   expect(screen.getByText(/when you submit this form/)).toBeTruthy()
   expect(geo.getCurrentPosition).not.toHaveBeenCalled()
-  // An action whose context doesn't pass the field doesn't read it.
   expect((await captures.apply({ name: 'add', context: { other: 1 } })).context).toEqual({ other: 1 })
   expect(geo.getCurrentPosition).not.toHaveBeenCalled()
   const sent = await captures.apply({ name: 'add', context: { place: undefined, title: 'x' } })
   expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
   expect(sent.context).toMatchObject({ title: 'x', place: { lat: 41.15, lon: -8.61, source: 'device' } })
-  // A second submit keeps the one the form has.
   await waitFor(() => expect(changed).toHaveBeenCalled())
   await captures.apply({ name: 'add', context: { place: {} } })
   expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
@@ -225,7 +211,6 @@ test('a location refused at submit blocks a form that needs it and not one that 
   const blocked = await captures.apply({ name: 'add', context: { place: undefined } })
   expect(blocked.block).toMatch(/This form needs a location/)
   expect(blocked.context).toBeUndefined()
-  // The reason is on the field too, and the typed way is open.
   expect((await screen.findByRole('alert')).textContent).toMatch(/denied/)
   expect(screen.getByLabelText('Latitude')).toBeTruthy()
   rerender(
@@ -237,8 +222,6 @@ test('a location refused at submit blocks a form that needs it and not one that 
   expect(open.block).toBeUndefined()
   expect(open.context).toEqual({ place: undefined })
 })
-
-// ---- signature ------------------------------------------------------------------------------------
 
 function stubCanvas() {
   const ctx = {
@@ -320,11 +303,9 @@ test('the pad stops touch scrolling on itself only, so the page scrolls elsewher
   stubCanvas()
   render(<Sign />)
   expect(pad().style.touchAction).toBe('none')
-  // Nothing around it, up to the document, takes touches away.
   for (let el: HTMLElement | null = pad().parentElement; el; el = el.parentElement) {
     expect(el.style.touchAction, el.tagName).toBe('')
   }
-  // The buttons, the name field and the rest of the component keep the default.
   for (const control of screen.getAllByRole('button')) expect(control.style.touchAction).toBe('')
 })
 
@@ -335,7 +316,6 @@ test('touch-action: none is set on the signature pad and nowhere else in the app
       const path = join(dir, name)
       if (statSync(path).isDirectory()) walk(path)
       else if (/\.(tsx?|css)$/.test(name) && !/\.test\.tsx?$/.test(name)) {
-        // Comments say it too; only declarations count.
         const code = readFileSync(path, 'utf8')
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '')
@@ -344,7 +324,6 @@ test('touch-action: none is set on the signature pad and nowhere else in the app
     }
   }
   walk(join(import.meta.dirname, '..'))
-  // The stylesheet rule for the pad's class, and the pad's own inline style.
   expect(found.sort()).toEqual(['apps/SignaturePad.tsx', 'apps/capture.css'])
   for (const file of found.filter((f) => f.endsWith('.css'))) {
     const css = readFileSync(join(import.meta.dirname, '..', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
@@ -360,13 +339,13 @@ test('drawing keeps the strokes, undo and clear take them back, and saving uploa
   const changed = vi.fn()
   render(<Sign onValue={changed} />)
   const save = () => screen.getByRole('button', { name: 'Save signature' }) as HTMLButtonElement
-  expect(save().disabled).toBe(true) // nothing drawn yet
+  expect(save().disabled).toBe(true)
   drawStroke(pad(), 1)
   drawStroke(pad(), 2)
   expect(save().disabled).toBe(false)
   expect(ctx.lineTo).toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-  expect(save().disabled).toBe(false) // one stroke is left
+  expect(save().disabled).toBe(false)
   fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
   expect(save().disabled).toBe(true)
   drawStroke(pad())
@@ -375,7 +354,6 @@ test('drawing keeps the strokes, undo and clear take them back, and saving uploa
   drawStroke(pad())
   fireEvent.click(save())
   await waitFor(() => expect(changed).toHaveBeenCalledWith(id))
-  // The picture went through the photo upload: create, the bytes, finalize, for the signature field.
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
     `POST ${base}/uploads`,
     `PUT ${base}/uploads/${id}?offset=0`,
@@ -383,7 +361,6 @@ test('drawing keeps the strokes, undo and clear take them back, and saving uploa
   ])
   expect(calls[0].body).toEqual({ field: 'signed', size: 8 })
   expect(blobs).toEqual(['image/png'])
-  // The saved signature is shown from the server's own route, and can be done again.
   const img = await screen.findByRole('img', { name: 'The saved signature' })
   expect(img.getAttribute('src')).toBe(`${base}/attachments/${id}/thumbnail`)
   expect(screen.getByRole('button', { name: 'Sign again' })).toBeTruthy()
@@ -397,7 +374,6 @@ test('a second finger or another pointer doesn’t draw into the stroke', () => 
   fireEvent.pointerUp(pad(), { pointerId: 2 })
   fireEvent.pointerUp(pad(), { pointerId: 1 })
   fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-  // Two pointers made one stroke, not two: one undo empties the pad.
   expect((screen.getByRole('button', { name: 'Save signature' }) as HTMLButtonElement).disabled).toBe(true)
 })
 
@@ -420,7 +396,7 @@ test('a name typed and confirmed is a signature too, for the keyboard', async ()
   const save = screen.getByRole('button', { name: 'Save signature' }) as HTMLButtonElement
   expect(save.disabled).toBe(true)
   fireEvent.change(screen.getByLabelText('Your full name'), { target: { value: 'Ada Lovelace' } })
-  expect(save.disabled).toBe(true) // the name alone isn't enough: it is confirmed too
+  expect(save.disabled).toBe(true)
   fireEvent.click(screen.getByLabelText(/typing my name here is my signature/))
   expect(save.disabled).toBe(false)
   fireEvent.click(save)
@@ -474,19 +450,15 @@ test('offline, a signature is staged on the device like a photo and nothing is u
   drawStroke(pad())
   fireEvent.click(screen.getByRole('button', { name: 'Save signature' }))
   await waitFor(() => expect(changed).toHaveBeenCalledWith('c'.repeat(32)))
-  expect(calls.length).toBe(0) // no connection is needed
+  expect(calls.length).toBe(0)
   expect(blobs.length).toBeGreaterThan(0)
   expect(staged[0].type).toBe('image/png')
-  // It is shown from the device, with no link to a server that doesn't have it yet.
   expect(screen.getByRole('img', { name: 'The saved signature' }).getAttribute('src')).toBe('blob:signature')
   expect(screen.queryByRole('link')).toBeNull()
-  // Signing again lets the staged picture go.
   fireEvent.click(screen.getByRole('button', { name: 'Sign again' }))
   expect(local.forget).toHaveBeenCalledWith('c'.repeat(32))
   expect(changed).toHaveBeenLastCalledWith(undefined)
 })
-
-// ---- barcode --------------------------------------------------------------------------------------
 
 function Code({ info, onValue }: { info?: { format?: string }; onValue?: (v: string) => void }) {
   const [value, setValue] = useState('')
@@ -521,7 +493,6 @@ test('a blocked camera is told and typing still works', async () => {
   render(<Code onValue={changed} />)
   fireEvent.click(screen.getByRole('button', { name: 'Scan with the camera' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/camera is blocked for this site/)
-  // Scanning stopped, the button is back, and the typed field is as it was.
   expect(screen.getByRole('button', { name: 'Scan with the camera' })).toBeTruthy()
   fireEvent.change(screen.getByLabelText(/Code \(type it/), { target: { value: 'ABC-1' } })
   expect(changed).toHaveBeenLastCalledWith('ABC-1')
@@ -557,7 +528,6 @@ test('the browser’s own BarcodeDetector reads a code when it has one', async (
   await waitFor(() => expect(changed).toHaveBeenCalledWith('4006381333931'))
   expect(options).toEqual([{ formats: ['ean_13'] }])
   expect(await screen.findByText('Scanned: 4006381333931')).toBeTruthy()
-  // The camera is let go as soon as a code is read.
   expect(track.stop).toHaveBeenCalled()
   expect(screen.getByText(/Reads EAN-13 codes/)).toBeTruthy()
 })
@@ -567,7 +537,6 @@ test('a decoder that can’t start turns the camera off and leaves the typed fie
   stubNavigator('mediaDevices', { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) })
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
   Object.defineProperty(HTMLMediaElement.prototype, 'readyState', { configurable: true, get: () => 4 })
-  // The detector is there but can't run: every frame says so.
   const detect = vi.fn().mockRejectedValue(new DOMException('no decoder', 'NotSupportedError'))
   vi.stubGlobal(
     'BarcodeDetector',
@@ -580,8 +549,6 @@ test('a decoder that can’t start turns the camera off and leaves the typed fie
   render(<Code onValue={changed} />)
   fireEvent.click(screen.getByRole('button', { name: 'Scan with the camera' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/code reader isn’t working in this browser/)
-  // Not scanning any more: the camera was let go (by the effect's cleanup, which can run just
-  // after the message is drawn), the frames stopped coming, the button is back.
   await waitFor(() => expect(track.stop).toHaveBeenCalled())
   const frames = detect.mock.calls.length
   await new Promise((r) => setTimeout(r, 450))
@@ -593,12 +560,10 @@ test('a decoder that can’t start turns the camera off and leaves the typed fie
 
 test('a decoder that fails every frame from the start is no decoder, but one frame’s miss is a miss', async () => {
   const video = { readyState: 4 } as HTMLVideoElement
-  // Failing from the start, with whatever error: after a few frames it is given up.
   const broken = { detect: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) }
   const session = scan(video, broken, 1)
   await expect(session.result).rejects.toBeInstanceOf(DecoderError)
   expect(broken.detect.mock.calls.length).toBe(START_FAILURES)
-  // One that worked and then missed a frame goes on, and finds the code.
   const flaky = {
     detect: vi
       .fn()
@@ -631,8 +596,6 @@ test('where the browser has no BarcodeDetector the bundled decoder reads the cod
   await waitFor(() => expect(changed).toHaveBeenCalledWith('FALLBACK-77'))
 })
 
-// ---- dictation ------------------------------------------------------------------------------------
-
 const status = (over: Record<string, unknown> = {}) => ({ engine: 'local', max_seconds: 600, ...over })
 
 test('dictation beside a field says it needs a connection, and is off when there is none', async () => {
@@ -660,7 +623,6 @@ test('the microphone is the same button online and offline: the library’s, nev
   const { unmount } = render(<FieldDictation workspace={1} field="Notes" onText={() => {}} />)
   const online = await screen.findByRole('button', { name: 'Dictate into Notes' })
   expect(online.className).toContain('ui-icon-button')
-  // Every class it has is the library's: nothing of an old stylesheet's reaches it.
   expect(
     online.className
       .split(/\s+/)
@@ -708,8 +670,6 @@ test('dictated text goes in at the cursor, as typing, and the field is told', ()
   expect(workspaceOf('/api/workspaces/7/spaces/2/apps/9')).toBe(7)
   expect(workspaceOf(undefined)).toBeNull()
 })
-
-// ---- on a screen ----------------------------------------------------------------------------------
 
 const screenMessages = [
   { version: 'v0.9', createSurface: { surfaceId: 'app-9', catalogId: 'https://taskto.ai/catalogs/apps/v1.json' } },
@@ -788,9 +748,8 @@ test('on a screen the inputs draw, a typed code reaches the action and a submit-
   expect(await screen.findByRole('group', { name: 'Tag' })).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Where' })).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Signed' })).toBeTruthy()
-  expect(screen.getByText(/when you submit this form/)).toBeTruthy() // the field's own setting, from the data model
+  expect(screen.getByText(/when you submit this form/)).toBeTruthy()
   fireEvent.change(screen.getByLabelText(/Code \(type it/), { target: { value: 'TAG-42' } })
-  // The text fields on the screen get a microphone each, through the shared status.
   expect(await screen.findByRole('button', { name: 'Dictate into Notes' })).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -806,7 +765,6 @@ test('on a screen the inputs draw, a typed code reaches the action and a submit-
 test('pressing Save twice while the location is being taken sends one record', async () => {
   stubCanvas()
   stubNavigator('onLine', true)
-  // A position that comes in when the test says: the second press is made while it is awaited.
   let give: PositionCallback = () => {}
   const geo = {
     getCurrentPosition: vi.fn((ok: PositionCallback) => {
@@ -829,7 +787,6 @@ test('pressing Save twice while the location is being taken sends one record', a
   const save = await screen.findByRole('button', { name: 'Save' })
   fireEvent.click(save)
   await waitFor(() => expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1))
-  // While it is pending the button is off, and a press that still gets through is the same submission.
   await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true))
   expect(screen.getByRole('region', { name: 'Inspection' }).getAttribute('aria-busy')).toBe('true')
   fireEvent.click(save)
@@ -850,7 +807,6 @@ test('pressing Save again after an answer that didn’t arrive sends the same lo
   stubNavigator('onLine', true)
   const geo = stubGeolocation({ latitude: 38.7, longitude: -9.1, accuracy: 9 })
   fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
-  // The first request's answer is lost (a gateway's, no code of the server's); the second is made.
   const acted = vi
     .fn()
     .mockRejectedValueOnce(new ApiError(502, 'bad gateway', {}))
@@ -869,7 +825,7 @@ test('pressing Save again after an answer that didn’t arrive sends the same lo
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(acted).toHaveBeenCalledTimes(2))
   const places = acted.mock.calls.map((c) => (c[0] as { context: { place: unknown } }).context.place)
-  expect(places[1]).toEqual(places[0]) // not a second reading, which would be another submission
+  expect(places[1]).toEqual(places[0])
   expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
 })
 
@@ -891,7 +847,6 @@ test('a form that needs its location and can’t get it isn’t sent', async () 
     /This form needs a location/,
   )
   expect(acted).not.toHaveBeenCalled()
-  // The typed way is open on the field.
   expect(screen.getByLabelText('Latitude')).toBeTruthy()
 })
 
@@ -908,10 +863,7 @@ test('a client without the new fields is told to update, not shown a broken scre
   expect(await screen.findByText(/field\.hologram/)).toBeTruthy()
 })
 
-// ---- no watching ----------------------------------------------------------------------------------
-
 test('nothing in the web app or the agent watches the device’s position', () => {
-  // The word is built here so this file isn't its own finding.
   const forbidden = ['watch', 'Position'].join('')
   const hits: string[] = []
   const walk = (dir: string) => {
@@ -942,7 +894,6 @@ test('on a screen, the typed signature’s name field is named by its own label,
     />,
   )
   fireEvent.click(await screen.findByRole('radio', { name: 'Type your name' }))
-  // The screen's label linking runs on what was just drawn.
   await new Promise((r) => setTimeout(r, 0))
   const name = screen.getByRole('textbox', { name: 'Your full name' })
   expect(name.getAttribute('aria-labelledby')).toBeNull()
@@ -955,7 +906,6 @@ test('while a submission is being made, a photo’s buttons are held, and only t
   const geo = { getCurrentPosition: vi.fn(), watchPosition: vi.fn(), clearWatch: vi.fn() }
   stubNavigator('geolocation', geo)
   fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
-  // The screen above, with a photo field holding one photo already.
   const messages = structuredClone(screenMessages) as typeof screenMessages
   const comps = (messages[1] as unknown as { updateComponents: { components: Record<string, unknown>[] } })
     .updateComponents.components
@@ -980,20 +930,16 @@ test('while a submission is being made, a photo’s buttons are held, and only t
   const remove = screen.getByRole('button', { name: 'Remove photo 1' }) as HTMLButtonElement
   const byHand = screen.getByRole('button', { name: 'Enter coordinates by hand' }) as HTMLButtonElement
   expect(remove.disabled).toBe(false)
-  // The location is taken as the form is submitted, and the answer doesn't come: the submission waits.
   fireEvent.click(save)
   await waitFor(() => expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1))
   await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true))
-  // Removing a photo now would delete an upload the request names: held.
   expect(remove.disabled).toBe(true)
-  // The location, part of what is being sent, stays usable.
   expect(byHand.disabled).toBe(false)
 })
 
 test('a submit whose location comes after its person signed out and someone else signed in sends nothing', async () => {
   stubCanvas()
   stubNavigator('onLine', true)
-  // A position that comes in when the test says.
   let give: PositionCallback = () => {}
   stubNavigator('geolocation', {
     getCurrentPosition: vi.fn((ok: PositionCallback) => {
@@ -1016,7 +962,6 @@ test('a submit whose location comes after its person signed out and someone else
   expect(await screen.findByRole('group', { name: 'Where' })).toBeTruthy()
   fireEvent.change(screen.getByLabelText(/Code \(type it/), { target: { value: 'PRIVATE-1' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-  // The first person signs out while the device looks for the location, and the next signs in.
   endSession()
   beginSession(2)
   await act(async () =>
@@ -1028,7 +973,6 @@ test('a submit whose location comes after its person signed out and someone else
 
 test('a signature made into a picture after its session ended is not uploaded', async () => {
   stubCanvas()
-  // The picture is made when the test says.
   let made: () => void = () => {}
   vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((cb) => {
     made = () => cb(new Blob([new Uint8Array(8)], { type: 'image/png' }))

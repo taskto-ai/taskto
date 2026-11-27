@@ -13,28 +13,25 @@ const LABEL = {
   failed: 'browser.live.failed',
 } as const satisfies Record<State, string | null>
 
-// LiveView shows the personal browser's screen as it is (VNC, not screenshots). Until the
-// user takes over (interactive), it only watches: clicks and keys don't reach the browser.
-export function LiveView({
-  interactive,
-  load = loadRFB,
-  onClosed,
-}: {
+type LiveProps = {
   interactive: boolean
   load?: () => Promise<RFBConstructor>
   onClosed?: () => void
-}) {
+}
+
+export function LiveView(props: LiveProps) {
+  const [attempt, setAttempt] = useState(0)
+  return <LiveSession key={attempt} {...props} onReconnect={() => setAttempt((n) => n + 1)} />
+}
+
+function LiveSession({ interactive, load = loadRFB, onClosed, onReconnect }: LiveProps & { onReconnect: () => void }) {
   const t = useT()
   const screen = useRef<HTMLDivElement>(null)
   const rfb = useRef<RFB | null>(null)
   const [state, setState] = useState<State>('loading')
-  // A new attempt connects again, after the server closed the view (the browser stopped, the
-  // connection dropped).
-  const [attempt, setAttempt] = useState(0)
   const closedRef = useRef(onClosed)
   closedRef.current = onClosed
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new attempt connects again
   useEffect(() => {
     let gone = false
     load().then(
@@ -48,7 +45,6 @@ export function LiveView({
         client.background = 'transparent'
         client.addEventListener('connect', () => setState('connected'))
         client.addEventListener('disconnect', () => {
-          // Our own teardown (unmount, a new attempt) disconnects too: not a close to report.
           if (gone) return
           setState('closed')
           closedRef.current?.()
@@ -64,12 +60,10 @@ export function LiveView({
       rfb.current?.disconnect()
       rfb.current = null
     }
-  }, [load, attempt])
+  }, [load])
 
-  // Set again once the client exists (state), and whenever the user takes over or lets go.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: state stands for the client being made
   useEffect(() => {
-    if (!rfb.current) return
+    if (state === 'loading' || state === 'failed' || !rfb.current) return
     rfb.current.viewOnly = !interactive
     rfb.current.focusOnClick = interactive
     if (interactive) rfb.current.focus()
@@ -82,13 +76,7 @@ export function LiveView({
         <p className="ui-browser-note" role="status">
           {t(label)}{' '}
           {(state === 'closed' || state === 'failed') && (
-            <Button
-              size="sm"
-              onClick={() => {
-                setState('loading')
-                setAttempt((n) => n + 1)
-              }}
-            >
+            <Button size="sm" onClick={onReconnect}>
               {t('browser.live.reconnect')}
             </Button>
           )}

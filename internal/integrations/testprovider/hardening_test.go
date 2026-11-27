@@ -75,14 +75,14 @@ func TestEventTypeAndTypesAreExclusive(t *testing.T) {
 
 func TestEventsAreNewestFirstByTheirTime(t *testing.T) {
 	f, clock, a := newFake(t)
-	first := a.newSession(5000, "usd", "first") // expires in 24 hours
+	first := a.newSession(5000, "usd", "first")
 	form := sessionForm(5000, "usd", "second")
 	form.Set("expires_at", strconv.FormatInt(clock.Now().Add(31*time.Minute).Unix(), 10))
 	var second testprovider.Session
 	a.post("/v1/checkout/sessions", form, "").into(t, &second)
 
-	clock.Advance(25 * time.Hour) // both expire, the later-made one first in time
-	f.Sessions()                  // noticed in the order the sessions were made
+	clock.Advance(25 * time.Hour)
+	f.Sessions()
 	var list struct{ Data []testprovider.Event }
 	a.get("/v1/events", url.Values{"type": {"checkout.session.expired"}}).into(t, &list)
 	var ids []string
@@ -126,7 +126,7 @@ func TestPaymentLinkLimitsAndUpdates(t *testing.T) {
 	if ans := a.post("/v1/payment_links", linkForm(21), ""); ans.status != http.StatusBadRequest {
 		t.Errorf("21 lines on a link: %d", ans.status)
 	}
-	big := sessionForm(100, "usd", "r") // a session takes more lines than a link
+	big := sessionForm(100, "usd", "r")
 	for i := 1; i < 21; i++ {
 		for k, v := range linkForm(21) {
 			if strings.HasPrefix(k, "line_items["+strconv.Itoa(i)+"]") {
@@ -151,7 +151,7 @@ func TestPaymentLinkLimitsAndUpdates(t *testing.T) {
 	}
 
 	many := url.Values{"active": {"false"}}
-	for i := range 50 { // with ref, 51 keys
+	for i := range 50 {
 		many.Set("metadata[k"+strconv.Itoa(i)+"]", "v")
 	}
 	for name, form := range map[string]url.Values{
@@ -166,7 +166,6 @@ func TestPaymentLinkLimitsAndUpdates(t *testing.T) {
 		unchanged(t)
 	}
 
-	// An empty `metadata` clears it; keys beside it are set after.
 	var cleared testprovider.PaymentLink
 	ans := a.post(path, url.Values{"metadata": {""}, "metadata[n]": {"1"}}, "")
 	ans.into(t, &cleared)
@@ -189,14 +188,12 @@ func TestAFaultAfterTheWorkWaitsForTheWork(t *testing.T) {
 	}
 
 	f.Fail(testprovider.ServerError().AfterExecuting())
-	// A retry served from the saved answer, and a refused request, run nothing.
 	if ans := a.post("/v1/checkout/sessions", form, "k1"); ans.status != http.StatusOK || ans.header.Get("Idempotent-Replayed") != "true" {
 		t.Errorf("replay: %d replayed %q", ans.status, ans.header.Get("Idempotent-Replayed"))
 	}
 	if ans := a.post("/v1/checkout/sessions", url.Values{}, "k2"); ans.status != http.StatusBadRequest {
 		t.Errorf("refused: %d", ans.status)
 	}
-	// The fault strikes the request that does run.
 	if ans := a.post("/v1/checkout/sessions", sessionForm(6000, "usd", "r2"), "k3"); ans.status != http.StatusInternalServerError {
 		t.Errorf("the fault: %d", ans.status)
 	}
@@ -223,7 +220,6 @@ func TestRequestFraming(t *testing.T) {
 		t.Errorf("a media type with parameters: %d %s", ans.status, ans.raw)
 	}
 
-	// Basic credentials without their separator are not the key.
 	a.header = func(h http.Header) {
 		h.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(f.APIKey())))
 	}
@@ -232,7 +228,6 @@ func TestRequestFraming(t *testing.T) {
 	}
 	a.header = nil
 
-	// A body of more than 1 MiB whose first 1 MiB is a whole form isn't run as that form.
 	n := len(f.Sessions())
 	body := form.Encode() + strings.Repeat("&", 1<<20)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, f.URL()+"/v1/checkout/sessions", strings.NewReader(body))
@@ -257,7 +252,7 @@ type wallClock struct{}
 func (wallClock) Now() time.Time { return time.Now() }
 
 func TestADelayedDeliveryEndsWhenItsContextIsDone(t *testing.T) {
-	clock := wallClock{} // a clock that can't be advanced: the delay is a real wait
+	clock := wallClock{}
 	h := newHook(clock)
 	sender := testprovider.NewHandlerSender(h, "/hook", testprovider.WithSenderClock(clock))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -272,7 +267,7 @@ func TestADelayedDeliveryEndsWhenItsContextIsDone(t *testing.T) {
 func TestParametersStripeRefusesAtThePinnedVersion(t *testing.T) {
 	_, _, a := newFake(t)
 	card := sessionForm(5000, "usd", "r")
-	card.Set("payment_method_types[0]", "card") // removed from Checkout Session creation
+	card.Set("payment_method_types[0]", "card")
 	if ans := a.post("/v1/checkout/sessions", card, ""); ans.status != http.StatusBadRequest {
 		t.Errorf("payment_method_types: %d %s", ans.status, ans.raw)
 	} else if _, code := ans.errorCode(); code != "parameter_unknown" {
@@ -345,7 +340,7 @@ func TestADeclinedChargeIsTheIntentsLatestInBothEvents(t *testing.T) {
 func TestATruncatedAnswerIsAnErrorAndTheDeliveryIsKept(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", "100")
-		_, _ = w.Write([]byte("short")) // fewer bytes than promised: the server drops the connection
+		_, _ = w.Write([]byte("short"))
 	}))
 	t.Cleanup(srv.Close)
 	clock := testprovider.NewManualClock(time.Time{})
@@ -387,12 +382,12 @@ func TestDeliveriesAreCopies(t *testing.T) {
 
 func TestEventsReadInCreationOrderToo(t *testing.T) {
 	f, clock, a := newFake(t)
-	a.newSession(5000, "usd", "first") // expires in 24 hours
+	a.newSession(5000, "usd", "first")
 	form := sessionForm(5000, "usd", "second")
 	form.Set("expires_at", strconv.FormatInt(clock.Now().Add(31*time.Minute).Unix(), 10))
 	a.post("/v1/checkout/sessions", form, "")
 	clock.Advance(25 * time.Hour)
-	f.Sessions() // both expire when noticed, the one made first being the later in time
+	f.Sessions()
 	var last int64
 	for _, e := range f.Events() {
 		if e.Created < last {
@@ -458,7 +453,7 @@ func TestLinksKeepTheirConfirmationMessageAndHost(t *testing.T) {
 
 func TestAnArrayIndexHasOneSpelling(t *testing.T) {
 	_, _, a := newFake(t)
-	form := sessionForm(100, "usd", "r") // too small to pay on its own
+	form := sessionForm(100, "usd", "r")
 	form.Set("line_items[0][price_data][unit_amount]", "5000")
 	form.Set("line_items[00][price_data][unit_amount]", "200")
 	if ans := a.post("/v1/checkout/sessions", form, ""); ans.status != http.StatusBadRequest {
@@ -466,8 +461,6 @@ func TestAnArrayIndexHasOneSpelling(t *testing.T) {
 	}
 }
 
-// driftClock moves by drift each time it is read once on is set: a clock that doesn't stand still
-// between two readings of one operation.
 type driftClock struct {
 	mu    sync.Mutex
 	now   time.Time
@@ -505,7 +498,7 @@ func TestAPaymentIsOfTheTimeTheSessionWasFoundOpen(t *testing.T) {
 			a.post("/v1/checkout/sessions", form, "").into(t, &n)
 			return n
 		}()
-		clock.set(true) // from here every reading is an hour later than the last
+		clock.set(true)
 		evs, err := pay(s.ID)
 		clock.set(false)
 		if err != nil {

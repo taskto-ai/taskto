@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// The install (the image, the Compose file, the proxy config and the install guide) is
-// what people run in production, so it must never turn on development-only switches.
-// These tests read the files themselves: a change that slips one in fails CI.
-
 func readRepoFile(t *testing.T, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(name)))
@@ -24,8 +20,6 @@ func readRepoFile(t *testing.T, name string) string {
 	return string(raw)
 }
 
-// Plain-http cookies are for development on localhost: the image and the Compose file
-// never set them.
 func TestInstallKeepsSecureCookies(t *testing.T) {
 	for _, name := range []string{"Dockerfile", "compose.yaml"} {
 		if strings.Contains(strings.ToLower(readRepoFile(t, name)), "insecure") {
@@ -34,15 +28,12 @@ func TestInstallKeepsSecureCookies(t *testing.T) {
 	}
 }
 
-// Agents never run with root or sudo (docs/agent-safety.md): the install never sets the
-// development override that lets them, nor local-unsafe CLI workers.
 func TestInstallKeepsAgentsUnprivileged(t *testing.T) {
 	for _, name := range []string{"Dockerfile", "compose.yaml", "deploy/Caddyfile", "deploy/cli-workers.sh"} {
 		if strings.Contains(strings.ToLower(readRepoFile(t, name)), "unsafe") {
 			t.Errorf("%s mentions an unsafe development switch", name)
 		}
 	}
-	// The server, whose user the sidecar runs as: no capabilities, no way to gain any.
 	compose := readRepoFile(t, "compose.yaml")
 	i, j := strings.Index(compose, "\n  taskto:\n"), strings.Index(compose, "\n  cli-worker:\n")
 	if i < 0 || j < i {
@@ -79,8 +70,6 @@ func TestImageIsPinnedAndUnprivileged(t *testing.T) {
 
 	for _, name := range []string{"compose.yaml", "deploy/backup-host/compose.yaml"} {
 		for _, m := range regexp.MustCompile(`(?m)^\s+image:\s*(\S+)`).FindAllStringSubmatch(readRepoFile(t, name), -1) {
-			// Built from this repository's Dockerfile, or published by its images workflow
-			// under TASKTO_IMAGE_PREFIX with immutable tags (.github/scripts/images.sh).
 			ours := strings.TrimPrefix(m[1], "${TASKTO_IMAGE_PREFIX:-}")
 			if built := strings.SplitN(ours, ":", 2)[0]; slices.Contains([]string{"taskto", "taskto-cli-worker", "taskto-backup"}, built) {
 				if name == "compose.yaml" && ours == m[1] {
@@ -95,9 +84,6 @@ func TestImageIsPinnedAndUnprivileged(t *testing.T) {
 	}
 }
 
-// Backups the server can't delete (docs/install.md): the server's side only adds, the
-// backup host's REST server is append-only whatever its settings, and the prune job keeps
-// a time window, the one rule forged snapshots can't game.
 func TestBackupsAreAppendOnly(t *testing.T) {
 	compose := readRepoFile(t, "compose.yaml")
 	for _, want := range []string{"target: backup", "--stdin-from-command", "-uncompressed", "RESTIC_PASSWORD_FILE", "RESTIC_REPOSITORY_FILE"} {
@@ -105,7 +91,6 @@ func TestBackupsAreAppendOnly(t *testing.T) {
 			t.Errorf("compose.yaml's backup service doesn't have %q", want)
 		}
 	}
-	// The nightly schedule is the same image and the same mounts, with taskto as its program.
 	i := strings.Index(compose, "\n  backup-schedule:\n")
 	if i < 0 {
 		t.Fatal("compose.yaml has no backup-schedule service")
@@ -119,7 +104,6 @@ func TestBackupsAreAppendOnly(t *testing.T) {
 			t.Errorf("compose.yaml's backup-schedule service doesn't have %q", want)
 		}
 	}
-	// The server never prunes, and never holds the repository's secrets in the file.
 	for _, banned := range []string{"forget", "--prune", "RESTIC_PASSWORD:", "RESTIC_REPOSITORY:"} {
 		if strings.Contains(compose, banned) {
 			t.Errorf("compose.yaml has %q: the server's side only adds snapshots, and its secrets are files", banned)
@@ -143,9 +127,6 @@ func TestBackupsAreAppendOnly(t *testing.T) {
 	}
 }
 
-// The CLI worker's image installs the CLIs pinned in deploy/cli-workers.json, each checked
-// against its sha256; the drivers' fixtures were recorded from those versions; and the
-// worker runs with only the capabilities it needs, leaving none to the CLIs.
 func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 	var manifest struct {
 		CLIs map[string]struct {
@@ -173,8 +154,6 @@ func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 			}
 		}
 	}
-	// A bump records the fixtures again: the parsers are tested against what the pinned
-	// versions print. (Grok Build's come with a real subscription test; see the PR.)
 	for _, cli := range []string{"claude", "codex"} {
 		name := filepath.Join("..", "..", "internal", "cliworker", "testdata", cli+"-"+manifest.CLIs[cli].Version+"-turn.jsonl")
 		if _, err := os.Stat(name); err != nil {
@@ -188,8 +167,6 @@ func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 			t.Errorf("the Dockerfile doesn't have %q", want)
 		}
 	}
-	// The agent browser's programs are Debian's (Chromium, not Google Chrome: docs/agent-browser.md),
-	// and the X socket directory is root's and sticky, so no user can take it over.
 	for _, want := range []string{"chromium fonts-liberation x11vnc xvfb", "chmod 1777 /tmp/.X11-unix"} {
 		if !strings.Contains(dockerfile, want) {
 			t.Errorf("the Dockerfile doesn't have %q", want)
@@ -198,7 +175,6 @@ func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 	if strings.Contains(dockerfile, "google-chrome") {
 		t.Error("the image installs Google Chrome, whose terms don't allow shipping it")
 	}
-	// The server stays the default target: the last stage.
 	stages := regexp.MustCompile(`(?m)^FROM .*$`).FindAllString(dockerfile, -1)
 	if last := stages[len(stages)-1]; !strings.Contains(last, "distroless") {
 		t.Errorf("the last stage is %q, not the server's", last)
@@ -218,8 +194,6 @@ func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 			t.Errorf("the cli-worker service doesn't have %q", want)
 		}
 	}
-	// Nothing that would loosen the container for Chromium's sandbox (it runs without one,
-	// as the user: docs/agent-browser.md).
 	for _, never := range []string{"privileged", "/var/run/docker.sock", "- data:", "SYS_ADMIN", "seccomp", "apparmor"} {
 		if strings.Contains(service, never) {
 			t.Errorf("the cli-worker service has %q", never)
@@ -227,11 +201,8 @@ func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 	}
 }
 
-// The CI workflows.
 var ciFiles = []string{".github/workflows/ci.yml"}
 
-// The CI job that tests backups downloads the restic the backup image has, and the
-// backup host runs the same restic for pruning: one version everywhere.
 func TestBackupToolVersionsAgree(t *testing.T) {
 	image := regexp.MustCompile(`(?m)^FROM restic/restic:(\S+)@sha256:\S+ AS backup$`).FindStringSubmatch(readRepoFile(t, "Dockerfile"))
 	if image == nil {
@@ -248,10 +219,6 @@ func TestBackupToolVersionsAgree(t *testing.T) {
 	}
 }
 
-// deploy/INSTALL.md is run as is by an agent on a server open to the internet: it puts the
-// CLI workers in container mode, the provider accounts' egress on public addresses, sets
-// up backups the server can't delete and proves a restore, and never writes a development
-// switch.
 func TestInstallRunbookStaysSafe(t *testing.T) {
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	for _, want := range []string{"TASKTO_CLI_WORKERS=container", "TASKTO_PROVIDER_EGRESS_PERSONAL: public", "TASKTO_PROVIDER_EGRESS_WORKSPACE: public"} {
@@ -259,14 +226,9 @@ func TestInstallRunbookStaysSafe(t *testing.T) {
 			t.Errorf("deploy/INSTALL.md doesn't set %s", want)
 		}
 	}
-	// The owner's first password is one the install made, which root on the VM could read: the
-	// runbook has them replace it.
 	if !strings.Contains(runbook, "in **Settings → Password**, change it") {
 		t.Error("deploy/INSTALL.md doesn't tell the owner to change the generated password")
 	}
-	// Backups are a required step: the nightly schedule, checked append-only from the VM,
-	// and a restore drill into a scratch volume and a server cut off from the network. The
-	// server's side never removes a snapshot, and the repository's secrets are never shown.
 	for _, want := range []string{"## Step 15: backups", "## Step 17: the restore drill", "profiles=$profiles,backup-schedule",
 		"backup-schedule -now", "-X DELETE", "dump latest /taskto.tar", "--network none", "restore -",
 		"RESTIC_TLS_CLIENT_CERT: /run/taskto-backup/client.pem", "$cert -X DELETE"} {
@@ -286,9 +248,6 @@ func TestInstallRunbookStaysSafe(t *testing.T) {
 	}
 }
 
-// The CLI worker's network reaches the internet and the per-turn proxy, nothing else
-// (docs/cli-workers.md#the-workers-network). deploy/worker-network-test.sh proves it on a
-// real Docker host, in CI; this keeps the files it proves from drifting.
 func TestCLIWorkerNetwork(t *testing.T) {
 	compose := readRepoFile(t, "compose.yaml")
 	i, j := strings.Index(compose, "\n  cli-worker:\n"), strings.Index(compose, "\n  caddy:\n")
@@ -301,7 +260,6 @@ func TestCLIWorkerNetwork(t *testing.T) {
 			t.Errorf("the cli-worker service doesn't have %q", want)
 		}
 	}
-	// No other service on the worker's network, and the server's proxy on the socket only.
 	if n := strings.Count(compose, "[worker]") + strings.Count(compose, "- worker\n"); n != 1 {
 		t.Errorf("%d services on the worker's network, not just the worker", n)
 	}
@@ -337,10 +295,6 @@ func TestCLIWorkerNetwork(t *testing.T) {
 	}
 }
 
-// TestServerHasTimeToShutDown: Docker kills a container that is still running when its stop grace
-// period ends, and the default is 10 s. The server's own bounded shutdown (requests, emails, the
-// proxy, the scheduler and the agent runtime, shutdownBudget) must fit in it with room to spare,
-// or the drain that keeps the database consistent is cut off.
 func TestServerHasTimeToShutDown(t *testing.T) {
 	compose := readRepoFile(t, "compose.yaml")
 	i, j := strings.Index(compose, "\n  taskto:\n"), strings.Index(compose, "\n  cli-worker:\n")

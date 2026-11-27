@@ -15,38 +15,23 @@ import (
 	"time"
 )
 
-// Restic is the Runner that sends backups to a restic repository, as compose.yaml's
-// backup service does: restic runs `taskto backup -uncompressed -` itself and saves a
-// snapshot only if it exits cleanly. The repository and its password come from restic's
-// own environment (RESTIC_REPOSITORY_FILE, RESTIC_PASSWORD_FILE). It only ever adds:
-// nothing here asks restic to remove a snapshot.
 type Restic struct {
-	// Path is the restic program.
-	Path string
-	// Taskto is this binary, which restic runs for the archive.
-	Taskto string
-	// DataDir is the data directory to back up.
+	Path    string
+	Taskto  string
 	DataDir string
-	// Env is restic's environment; nil is this process's.
-	Env []string
-	// Log receives restic's messages as well, if not nil.
-	Log io.Writer
+	Env     []string
+	Log     io.Writer
 }
 
-// BackupArgs are restic's arguments for one backup of dataDir with the binary taskto.
-// The host name is fixed, so snapshots don't depend on the container's.
 func BackupArgs(taskto, dataDir string) []string {
 	return []string{"backup", "--json", "--host=taskto", "--tag=taskto", "--stdin-filename=taskto.tar",
 		"--stdin-from-command", "--", taskto, "backup", "-uncompressed", "-data-dir", dataDir, "-"}
 }
 
-// Check reads the repository's config file: it answers only if the repository is there,
-// reachable, and opens with the password.
 func (r Restic) Check(ctx context.Context) error {
 	return r.run(ctx, nil, "cat", "config")
 }
 
-// Backup runs one backup and returns the snapshot's ID, from restic's JSON summary.
 func (r Restic) Backup(ctx context.Context) (string, error) {
 	var id string
 	err := r.run(ctx, func(line []byte) {
@@ -64,16 +49,11 @@ func (r Restic) Backup(ctx context.Context) (string, error) {
 	return id, err
 }
 
-// waitDelay is how long restic has to stop (and stop `taskto backup`) once asked, before
-// it is killed.
 const waitDelay = 30 * time.Second
 
-// run runs restic with args, passing each line of its output to line, if not nil. Its
-// error has the last thing restic said.
 func (r Restic) run(ctx context.Context, line func([]byte), args ...string) error {
-	cmd := exec.CommandContext(ctx, r.Path, args...) // #nosec G204 -- the operator's restic, with arguments made here.
+	cmd := exec.CommandContext(ctx, r.Path, args...)
 	cmd.Env = r.Env
-	// restic stops cleanly on an interrupt, stopping the command it runs too.
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = waitDelay
 	tail := &tailWriter{max: 4096}
@@ -95,7 +75,7 @@ func (r Restic) run(ctx context.Context, line func([]byte), args ...string) erro
 			line(sc.Bytes())
 		}
 	}
-	_, _ = io.Copy(io.Discard, stdout) // a line too long for the scanner: drain the rest
+	_, _ = io.Copy(io.Discard, stdout)
 	if err := cmd.Wait(); err != nil {
 		if msg := lastMessage(tail.String()); msg != "" {
 			return fmt.Errorf("restic %s: %s (%w)", args[0], msg, err)
@@ -105,8 +85,6 @@ func (r Restic) run(ctx context.Context, line func([]byte), args ...string) erro
 	return nil
 }
 
-// lastMessage is the last non-empty line restic wrote to its standard error, with the
-// message taken out of a JSON one (restic --json writes errors as JSON).
 func lastMessage(stderr string) string {
 	lines := strings.Split(strings.TrimSpace(stderr), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -133,7 +111,6 @@ func lastMessage(stderr string) string {
 	return ""
 }
 
-// tailWriter keeps the last max bytes written to it.
 type tailWriter struct {
 	mu  sync.Mutex
 	max int

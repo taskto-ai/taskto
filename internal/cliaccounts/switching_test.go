@@ -33,7 +33,6 @@ func TestSwitchingAPI(t *testing.T) {
 	owner.connect(cliworker.Claude)
 	owner.connectAccount("claude-2")
 
-	// Off, with nothing queued, until the user says otherwise.
 	rec := owner.do(http.MethodGet, switchingPath, nil)
 	expect(t, rec, http.StatusOK)
 	st := decode[switchingState](t, rec)
@@ -51,7 +50,6 @@ func TestSwitchingAPI(t *testing.T) {
 		t.Fatalf("queue = %v (%+v)", ids, st)
 	}
 
-	// Only the caller's accounts and their workspaces' shared ones go in it.
 	for _, bad := range []map[string]any{{"account": "codex"}, {"shared": shared.ID + 100}, {"account": "nope"}} {
 		expect(t, owner.do(http.MethodPut, switchingPath, map[string]any{"queue": []map[string]any{bad}}), http.StatusNotFound)
 	}
@@ -61,20 +59,17 @@ func TestSwitchingAPI(t *testing.T) {
 	if st := decode[switchingState](t, other.do(http.MethodGet, switchingPath, nil)); st.Enabled || len(st.Queue) != 0 {
 		t.Fatalf("another user's state = %+v", st)
 	}
-	// Another workspace's shared account isn't available to a user who isn't its member.
 	outsider := e.invite(owner, ws, "outsider@example.com")
 	if _, err := e.db.Exec(`DELETE FROM memberships WHERE user_id = ?`, outsider.id); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, outsider.do(http.MethodPut, switchingPath, map[string]any{"queue": []map[string]any{{"shared": shared.ID}}}), http.StatusNotFound)
 
-	// An account that goes leaves the queue.
 	expect(t, owner.do(http.MethodDelete, base+"/claude-2", nil), http.StatusNoContent)
 	st = decode[switchingState](t, owner.do(http.MethodGet, switchingPath, nil))
 	if len(st.Queue) != 2 || st.Queue[0].Kind != "shared" {
 		t.Fatalf("after a disconnect: %+v", st.Queue)
 	}
-	// Turning it off keeps the queue.
 	if st := owner.setSwitching(map[string]any{"enabled": false}); st.Enabled || len(st.Queue) != 2 {
 		t.Fatalf("off: %+v", st)
 	}
@@ -106,7 +101,6 @@ func TestLimitedUntil(t *testing.T) {
 	}
 }
 
-// modelCalls records the conversation model changes a switch makes.
 type modelCalls struct {
 	mu   sync.Mutex
 	clis []cliworker.CLI
@@ -125,8 +119,6 @@ func (m *modelCalls) list() []cliworker.CLI {
 	return append([]cliworker.CLI(nil), m.clis...)
 }
 
-// switchEnv is a conversation of the owner's with Claude Code (at its limit on its next turn)
-// and Codex connected, and a queue of both.
 func switchEnv(t *testing.T, enabled bool) (*turnEnv, int64, *modelCalls) {
 	t.Helper()
 	e := newTurnEnv(t)
@@ -141,8 +133,6 @@ func switchEnv(t *testing.T, enabled bool) (*turnEnv, int64, *modelCalls) {
 
 var history = []historyEntry{{Role: "user", Text: "remember zup"}, {Role: "assistant", Text: "ok: zup"}}
 
-// A turn whose account reaches its limit goes on with the next account of the queue: a new
-// session there, with the conversation so far and what happened, in one stream.
 func TestSwitchOnALimit(t *testing.T) {
 	e, conv, models := switchEnv(t, true)
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "opus", Prompt: "do it", History: history})
@@ -150,7 +140,6 @@ func TestSwitchOnALimit(t *testing.T) {
 	if d.Status != cliworker.StatusOK || !strings.HasPrefix(d.Text, "echo: ") {
 		t.Fatalf("done = %+v\n%+v", d, events)
 	}
-	// One stream: numbered on, with the switch said.
 	last, notice := 0, ""
 	for _, ev := range events {
 		if ev.Seq != 0 && ev.Seq <= last {
@@ -166,7 +155,6 @@ func TestSwitchOnALimit(t *testing.T) {
 	if notice != "Claude Code reached its usage limit: continuing on Codex" {
 		t.Errorf("notice = %q", notice)
 	}
-	// Codex started fresh, told what happened, with the conversation so far.
 	calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Codex))
 	var turn clitest.Call
 	for _, c := range calls {
@@ -187,7 +175,6 @@ func TestSwitchOnALimit(t *testing.T) {
 	if got := models.list(); len(got) != 1 || got[0] != cliworker.Codex {
 		t.Errorf("model changes = %v", got)
 	}
-	// The limit is Claude's, and the next turn starts on Codex, where the conversation is now.
 	if a := e.owner.account(cliworker.Claude); len(a.Limits) == 0 || a.Limits[0].Status != "rejected" {
 		t.Errorf("Claude's limits = %+v", a.Limits)
 	}
@@ -198,7 +185,6 @@ func TestSwitchOnALimit(t *testing.T) {
 		t.Errorf("Claude ran %d turns: the limited account was tried again", n)
 	}
 
-	// Read again (the sidecar re-attached), the chain is the same, with nothing run twice.
 	again := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "opus", Prompt: "do it", History: history})
 	if done(again).Status != cliworker.StatusOK || done(again).Text != d.Text {
 		t.Fatalf("re-attached = %+v", done(again))
@@ -208,7 +194,6 @@ func TestSwitchOnALimit(t *testing.T) {
 	}
 }
 
-// Off, a limit ends the turn as before.
 func TestNoSwitchWhenOff(t *testing.T) {
 	e, conv, models := switchEnv(t, false)
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
@@ -225,7 +210,6 @@ func TestNoSwitchWhenOff(t *testing.T) {
 	}
 }
 
-// An expired login is a stop too: the account needs a sign-in, and the turn goes on.
 func TestSwitchOnAnExpiredLogin(t *testing.T) {
 	e, conv, _ := switchEnv(t, true)
 	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
@@ -238,8 +222,6 @@ func TestSwitchOnAnExpiredLogin(t *testing.T) {
 	}
 }
 
-// A turn doesn't start on an account known to be at its limit: it starts on the next one for
-// the same CLI, saying so.
 func TestStartPastALimitedAccount(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
@@ -271,8 +253,6 @@ func TestStartPastALimitedAccount(t *testing.T) {
 	}
 }
 
-// The queue orders the user's accounts also while switching is off: the first connected one in
-// it runs the turn.
 func TestQueueOrdersTheAccounts(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Grok)
@@ -285,7 +265,6 @@ func TestQueueOrdersTheAccounts(t *testing.T) {
 	}
 }
 
-// A queue entry of another workspace's shared account is skipped in this workspace's turns.
 func TestSwitchSkipsAnotherWorkspacesAccount(t *testing.T) {
 	e, conv, _ := switchEnv(t, true)
 	p := newProvider(t)
@@ -306,8 +285,6 @@ func TestSwitchSkipsAnotherWorkspacesAccount(t *testing.T) {
 	}
 }
 
-// A stop reaches every turn of a chain, also past one the worker no longer has, and a turn
-// the user stopped switches no more.
 func TestStopEndsTheChain(t *testing.T) {
 	e, conv, _ := switchEnv(t, true)
 	codex := e.layout.User(e.owner.id).Config(cliworker.Codex)
@@ -315,7 +292,6 @@ func TestStopEndsTheChain(t *testing.T) {
 	turnDone := make(chan struct{})
 	go func() {
 		defer close(turnDone)
-		// e.post, not e.turn: t.Fatal belongs to the test's own goroutine.
 		e.post(conv, "/cli/turn", turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"})
 	}()
 	t.Cleanup(func() { <-turnDone })

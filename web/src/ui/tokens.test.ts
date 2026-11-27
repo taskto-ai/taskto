@@ -8,8 +8,6 @@ import { BRANDS, COLOR_ROLES, DEFAULT_BRAND } from './roles'
 
 const dir = __dirname
 const read = (name: string) => readFileSync(join(dir, name), 'utf8')
-// Every stylesheet under src/, by its path there: the screens' files, the base, the shared rules and
-// the design system's, not only styles.css, which only lists the screens' files.
 const sheetPaths = () =>
   readdirSync(join(dir, '..'), { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.css'))
 const allSheets = () => sheetPaths().map((f) => readFileSync(join(dir, '..', f), 'utf8'))
@@ -17,8 +15,6 @@ const themeFiles = readdirSync(join(dir, 'themes')).filter((f) => f.endsWith('.c
 
 const selectorOf = (brand: string) => (brand === DEFAULT_BRAND ? ':root' : `:root[data-brand="${brand}"]`)
 
-// Every property the page has on :root with this brand: the scales, the default brand's roles
-// and then this brand's over them, the old names and the renderer's.
 function pageProps(brand: string): Map<string, string> {
   const all: Rule[] = [
     ...rules(read('tokens.css')),
@@ -33,7 +29,6 @@ function pageProps(brand: string): Map<string, string> {
   return props
 }
 
-// A brand's own roles, from its file alone: nothing inherited from the default.
 function brandRoles(brand: string): Map<string, string> {
   return propsOf(rules(read(`themes/${brand}.css`)), selectorOf(brand))
 }
@@ -49,7 +44,6 @@ function groundOf(ground: Ground, props: Map<string, string>, scheme: Scheme) {
 
 const groundName = (g: Ground) => (typeof g === 'string' ? g : g.join(' over '))
 
-// Every pair of a list that falls under its minimum, as "brand scheme: fg on ground ratio".
 function failures(pairs: readonly PairSet[], brand: string, props: Map<string, string>): string[] {
   const out: string[] = []
   for (const scheme of ['light', 'dark'] as const) {
@@ -79,7 +73,6 @@ describe('the brand themes', () => {
     test(`${brand} is one block in the themes layer that sets every colour role and nothing else`, () => {
       const all = rules(read(`themes/${brand}.css`))
       expect(all.map((r) => [r.selector, r.layer])).toEqual([[selectorOf(brand), 'themes']])
-      // Every declaration, not only the custom properties: `color: red` in a brand is not a role.
       const declared = all[0].declarations
       const expected = COLOR_ROLES.map((r) => `--color-${r}`)
       expect(
@@ -116,7 +109,6 @@ describe('the brand themes', () => {
       expect(changed.length, `${brand} changes no role`).toBeGreaterThan(0)
       expect(changed.filter((k) => !k.startsWith('--color-'))).toEqual([])
       expect([...brandRoles(brand).keys()].sort()).toEqual(COLOR_ROLES.map((r) => `--color-${r}`).sort())
-      // Nor a property that is not a custom one, which props (custom properties only) can't show.
       const roles = COLOR_ROLES.map((r) => `--color-${r}`) as string[]
       const others = rules(read(`themes/${brand}.css`))
         .flatMap((r) => r.declarations)
@@ -160,18 +152,12 @@ describe('the tokens', () => {
   test('the layers are declared once, in order, before anything is imported', () => {
     const index = read('index.css').replace(/\/\*[\s\S]*?\*\//g, '')
     expect(index.trim().split('\n')[0]).toBe('@layer tokens, themes, base, components, screens;')
-    // And the built CSS starts with it only if index.css is the app's first import: Vite writes CSS
-    // in import order, and a component's `@layer components` block coming first would put that
-    // layer below tokens, themes and base.
     const main = readFileSync(join(dir, '../main.tsx'), 'utf8')
     const imports = [...main.matchAll(/^import\s[^\n]*$/gm)].map((m) => m[0])
     expect(imports[0]).toBe("import './ui/index.css'")
   })
 
   test('the page declares the layers’ order before any stylesheet, as index.css does', () => {
-    // A production build links the stylesheets of shared chunks (a component's `@layer components`)
-    // before the entry's, so the order is fixed in the page itself, ahead of every <link> and <style>.
-    // The page as it is: its comments name no element, so they need no stripping.
     const html = readFileSync(join(dir, '../../index.html'), 'utf8')
     const head = html.slice(0, html.indexOf('</head>'))
     const firstStyle = head.search(/<style\b|<link[^>]*rel="stylesheet"/)
@@ -191,8 +177,6 @@ describe('the tokens', () => {
       levels.every((v, i) => Number.isInteger(v) && (i === 0 || v > levels[i - 1])),
       levels.join(' < '),
     ).toBe(true)
-    // A level is a token: no stylesheet writes a z-index as a bare number, so none can climb over the
-    // skip link without saying so in tokens.css.
     const numbers = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(-?\d+)/g)].map((m) => m[0]))
     expect(numbers).toEqual([])
     const used = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*var\((--z-[a-z]+)\)/g)].map((m) => m[1]))
@@ -209,7 +193,6 @@ describe('the tokens', () => {
   })
 })
 
-// The names the stylesheet had before the tokens had two layers. They stay until the screens move.
 const OLD_NAMES = [
   'canvas',
   'surface',
@@ -232,7 +215,6 @@ const OLD_NAMES = [
   'touch',
 ]
 
-// Their values before, resolved, for the colours: an alias must give the same colour.
 const OLD_COLORS: Record<string, [string, string]> = {
   canvas: ['#faf8f4', '#111110'],
   surface: ['#ffffff', '#1b1b19'],
@@ -249,7 +231,6 @@ const OLD_COLORS: Record<string, [string, string]> = {
   'logo-dot': ['#00a86b', '#00a86b'],
 }
 
-// And the others, resolved as they were, light then dark: lengths, shadows, font stacks, the icon.
 const SANS = '"Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
 const OLD_VALUES: Record<string, [string, string]> = {
   font: [SANS, SANS],
@@ -260,7 +241,6 @@ const OLD_VALUES: Record<string, [string, string]> = {
   ],
   radius: ['8px', '8px'],
   touch: ['44px', '44px'],
-  // The values base.css wrote as literals, which it takes from these aliases.
   'text-body': ['15px', '15px'],
   'text-h1': ['1.15rem', '1.15rem'],
   'text-h2': ['1rem', '1rem'],
@@ -303,9 +283,7 @@ describe('the old --tt-* names', () => {
   })
 
   test('every --tt-* name the stylesheets use without a fallback is defined', () => {
-    // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
-    // The screens' files, the base and the shared rules: not only the list that imports them.
     expect(sheetPaths()).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'markdown.legacy.css']))
     const css = allSheets().join('\n')
     const missing = [...css.matchAll(/var\((--tt-[a-z0-9-]+)\s*\)/g)]

@@ -1,6 +1,4 @@
 @layer components {
-  /* The stack: a popover in the top layer, at the window's bottom inline end. It lets clicks
-     through where there is no toast. */
   .ui-toaster {
     position: fixed;
     inset: auto;
@@ -20,14 +18,11 @@
     gap: var(--space-2);
   }
 
-  /* What holds the stack in the page (<body>, or the topmost modal dialog), and the root the first
-     toast() draws one in: no box of their own. */
   .ui-toaster-host,
   .ui-toaster-root {
     display: contents;
   }
 
-  /* The live regions a screen reader hears: out of sight (with ui-visually-hidden). */
   .ui-toaster-announcer {
     pointer-events: none;
   }

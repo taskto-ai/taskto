@@ -12,9 +12,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// memberless is a workspace export of a workspace with only members to list: an admin and, if
-// extra is above 0, that many more, with names that sort the other way from their IDs. It has no
-// space, so the only checks of the admin are the members' and the last one.
 func memberless(t *testing.T, extra int) (*run, *sql.DB, *db.Hooks) {
 	t.Helper()
 	ctx := t.Context()
@@ -51,7 +48,6 @@ func memberless(t *testing.T, extra int) (*run, *sql.DB, *db.Hooks) {
 	return ex, sqlDB, hooks
 }
 
-// armNth runs fn before the nth statement that contains fragment, from now.
 func armNth(h *db.Hooks, fragment string, n int, fn func()) {
 	count := 0
 	var arm func()
@@ -66,11 +62,8 @@ func armNth(h *db.Hooks, fragment string, n int, fn func()) {
 	h.BeforeQuery(fragment, arm)
 }
 
-// The exporter is asked to be an admin before the zip is closed, however little came before: an
-// export that ends after the demotion is not whole.
 func TestWorkspaceExportChecksTheAdminBeforeTheZipIsClosed(t *testing.T) {
 	ex, sqlDB, hooks := memberless(t, 0)
-	// The members' two checks, then the last one: demoted before it.
 	armNth(hooks, "m.role = ? AND u.disabled_at IS NULL", 3, func() {
 		if _, err := sqlDB.Exec(`UPDATE memberships SET role = 'member' WHERE user_id = ?`, ex.user.ID); err != nil {
 			t.Error(err)
@@ -82,11 +75,8 @@ func TestWorkspaceExportChecksTheAdminBeforeTheZipIsClosed(t *testing.T) {
 	}
 }
 
-// Each page of members is read in a snapshot that begins with the check of the admin: one
-// demoted between pages gets no more members.
 func TestWorkspaceExportChecksTheAdminForEachPageOfMembers(t *testing.T) {
 	ex, sqlDB, hooks := memberless(t, membersPage+3)
-	// Checks: the first of members, the first page's, then the second page's: demoted before it.
 	armNth(hooks, "m.role = ? AND u.disabled_at IS NULL", 3, func() {
 		if _, err := sqlDB.Exec(`UPDATE memberships SET role = 'member' WHERE user_id = ?`, ex.user.ID); err != nil {
 			t.Error(err)
@@ -107,7 +97,6 @@ func TestWorkspaceExportChecksTheAdminForEachPageOfMembers(t *testing.T) {
 	}
 }
 
-// An admin whose account is disabled while the export runs is no admin of it any more.
 func TestWorkspaceExportChecksTheAdminAccountIsNotDisabled(t *testing.T) {
 	ex, sqlDB, hooks := memberless(t, 0)
 	armNth(hooks, "m.role = ? AND u.disabled_at IS NULL", 3, func() {

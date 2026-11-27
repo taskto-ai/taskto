@@ -1,8 +1,3 @@
-// Automatic switching (docs/account-switching.md): the user's ordered queue of accounts, their
-// own and their workspaces' shared ones. While it is on, a turn whose account stops (a usage
-// limit, an expired login) goes on with the next one in the queue that can run. It is off until
-// the user turns it on, next to a warning and the providers' terms: plans assume individual use.
-
 import { api, CLI_PRODUCTS, CLI_SWITCHING, type CliName, type CliSwitching, type QueueAccount } from '../api'
 import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -21,8 +16,6 @@ import { SHARED_TERMS } from './SharedCliAccounts'
 const entry = (a: QueueAccount) => (a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) })
 const key = (a: QueueAccount) => `${a.kind}:${a.id}`
 
-// An account's name in the user's language: the CLI, with its label, its number or its
-// workspace. The server's English title is the fallback.
 function queueTitle(t: T, a: QueueAccount): string {
   const name = CLI_PRODUCTS[a.cli] ?? a.cli
   if (a.kind === 'shared') {
@@ -48,8 +41,6 @@ export function SwitchingPanel() {
           body: { ...body, ...(body.queue ? { queue: body.queue.map(entry) } : {}) },
         }),
       )
-      // Read again whatever happened: a refused change (an account gone since) shows the
-      // queue the server has.
       .then(() => state.reload())
   if (!state.data) {
     return (

@@ -1,13 +1,3 @@
-// Personal apps: the apps of every space the user can read, by space, and one launched app
-// with its data. Apps are built by asking the agent; here they are launched, renamed, taken
-// offline and restored, published, rolled back and shared by moving them to a shared space. An app
-// has a draft, which the agent and builders change, and releases: people use the live release, and
-// someone who may publish the app makes the draft the next one, acknowledging the changes that
-// stored rows are affected by, or rolls back to an earlier release. A space's editors change its
-// apps and its viewers launch them; roles in an app narrow that further (a user who may only submit
-// records can't rename, publish or move it), and the server's answer for the app, `access`, says
-// what the caller may do.
-
 import { useState } from 'react'
 import { ApiError, type App, api, errorText, type Space, ws } from '../api'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
@@ -40,11 +30,9 @@ export function AppsPage({
 }: {
   workspace: number
   open?: string
-  // The builder's conversation stream: a test's own.
   streams?: EventSourceFactory
 }) {
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces), [workspace])
-  // Bumped when an app moves, so every space's list shows where it is now.
   const [moves, setMoves] = useState(0)
   const t = useT()
   const continuing = lastBuilderConversation(workspace)
@@ -130,9 +118,6 @@ function SpaceApps({
   const t = useT()
   const headingId = `apps-space-${space.id}`
 
-  // change applies a change to an app, then shows the list as it is now: on a stale version
-  // too, so the next try is made against the current one. It answers what went wrong, if anything,
-  // for the row to show where the person is: in the dialog that asked, or on the page.
   const change = async (app: App, body: { name?: string; archived?: boolean }) => {
     let failed: string | null = null
     try {
@@ -144,8 +129,6 @@ function SpaceApps({
     apps.reload()
     return failed
   }
-  // move moves an app, with its rows, to another space the user may write. The app's row is gone
-  // then, so the focus goes to this space's heading.
   const move = async (app: App, to: number) => {
     try {
       await api<App>(`${base}/${app.id}/move`, { method: 'POST', body: { version: app.version, space_id: to } })
@@ -202,10 +185,6 @@ function SpaceApps({
   )
 }
 
-// After a move the app's row is gone: the focus goes to the heading of the space it left. The
-// move's dialog is still open now, and everything under a modal dialog is inert, so the heading
-// takes the focus once no modal is open: just after, since a closing dialog gives the focus back
-// to what opened it first.
 function focusHeadingWhenUncovered(id: string) {
   const focus = () => document.getElementById(id)?.focus()
   if (!modalOpen()) return focus()
@@ -216,8 +195,6 @@ function focusHeadingWhenUncovered(id: string) {
   })
 }
 
-// A space with no apps: what apps there are for, and the two ways to start one (only where the
-// person may add one).
 function NoApps({ workspace, space }: { workspace: number; space: Space }) {
   const t = useT()
   const writable = space.access === 'write' && !space.archived_at

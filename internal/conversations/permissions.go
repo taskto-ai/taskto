@@ -9,20 +9,11 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// Permission questions (docs/agent-safety.md): a conversation on a CLI worker asks its owner
-// before the CLI runs a command, edits a file or fetches a page. The owner, and only the
-// owner, lists the questions waiting in their conversation and answers them:
-//
-//	GET  /api/workspaces/{workspace}/conversations/{conversation}/cli-permissions      → {"requests": […]}
-//	POST /api/workspaces/{workspace}/conversations/{conversation}/cli-permissions/{id} {allow} → 204
-
-// CLIQuestions is the CLI workers' side of the questions (cliaccounts.Service).
 type CLIQuestions interface {
 	Questions(ctx context.Context, user, conversation int64) ([]cliworker.PermissionRequest, error)
 	Answer(ctx context.Context, user, conversation int64, id string, allow bool) error
 }
 
-// SetCLIQuestions sets where the questions come from; without it a conversation has none.
 func (s *Service) SetCLIQuestions(q CLIQuestions) { s.questions = q }
 
 func (s *Service) handleQuestions(w http.ResponseWriter, r *http.Request) {

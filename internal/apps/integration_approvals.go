@@ -17,125 +17,76 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// The approval of an app's use of an integration (docs/integrations.md).
-//
-// An app declares slots of a kind of outside service (integrations.go); what a slot is connected to
-// is a workspace admin's. The server works out each slot's contract from the draft (contract in
-// integrations.go), and the one who may publish the app asks for it to be approved. An admin sees the
-// contract, the app's name and its space's, and approves it, choosing an integration of the
-// workspace, or turns it down; the approval is of that contract's hash. A publish and a rollback
-// need an approved contract for every slot of the release they make live (unapproved), and the
-// integrations' own code asks again whenever it acts (Binding), so revoking an approval, switching
-// the integration off or taking the space away stops it at once.
-//
-// Nothing here reads the app or its records for the admin: the queue holds what the requester
-// submitted. An app in a private space is approved the same way, which is why it works there.
-
-// The states of an approval.
 const (
 	ApprovalRequested = "requested"
 	ApprovalApproved  = "approved"
 	ApprovalRejected  = "rejected"
 	ApprovalRevoked   = "revoked"
-	// ApprovalNone is the status of a contract nobody has asked to approve.
-	ApprovalNone = "none"
+	ApprovalNone      = "none"
 )
 
 var approvalStates = []string{ApprovalRequested, ApprovalApproved, ApprovalRejected, ApprovalRevoked}
 
-// BoundIntegration is the integration an approval connects a slot to.
 type BoundIntegration struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
-	// Usable is whether the integration is switched on and allowed in the app's space now.
-	Usable bool `json:"usable"`
+	Usable      bool   `json:"usable"`
 }
 
-// SlotLive is how the app's live release stands for a slot.
 type SlotLive struct {
 	ContractHash string `json:"contract_hash"`
-	// Status is that of the live release's contract: approved, or the state of the last request
-	// for it, or none.
-	Status string `json:"status"`
-	// Usable is whether the live release may use the integration now: approved, the integration
-	// switched on, and the space allowed.
-	Usable bool `json:"usable"`
+	Status       string `json:"status"`
+	Usable       bool   `json:"usable"`
 }
 
-// SlotStatus is a slot of the draft: its contract, and where the approval of it stands.
 type SlotStatus struct {
-	Slot         string   `json:"slot"`
-	Kind         string   `json:"kind"`
-	Contract     Contract `json:"contract"`
-	ContractHash string   `json:"contract_hash"`
-	// Status is the state of the approval of the draft's contract for the slot: none, requested,
-	// approved, rejected or revoked. A change to the contract is a new one, to ask for again.
-	Status string `json:"status"`
-	// ApprovalID is the approval's id, once one was asked for.
-	ApprovalID *int64 `json:"approval_id"`
-	// Integration is what an approved slot is connected to.
-	Integration *BoundIntegration `json:"integration"`
-	// Live is how the live release stands, if it declares the slot.
-	Live *SlotLive `json:"live"`
+	Slot         string            `json:"slot"`
+	Kind         string            `json:"kind"`
+	Contract     Contract          `json:"contract"`
+	ContractHash string            `json:"contract_hash"`
+	Status       string            `json:"status"`
+	ApprovalID   *int64            `json:"approval_id"`
+	Integration  *BoundIntegration `json:"integration"`
+	Live         *SlotLive         `json:"live"`
 }
 
-// IntegrationStatus is the integrations an app declares and the approval of each.
 type IntegrationStatus struct {
 	Slots []SlotStatus `json:"slots" apitypes:"nonnull"`
 }
 
-// IntegrationApproval is a request for the approval of one contract, as the admin's queue and the
-// one who asked see it. It holds what the requester submitted: no part of the app or its records.
 type IntegrationApproval struct {
-	ID           int64    `json:"id"`
-	AppID        int64    `json:"app_id"`
-	AppName      string   `json:"app_name"`
-	SpaceID      int64    `json:"space_id"`
-	SpaceName    string   `json:"space_name"`
-	SpaceKind    string   `json:"space_kind"`
-	Slot         string   `json:"slot"`
-	Kind         string   `json:"kind"`
-	Contract     Contract `json:"contract"`
-	ContractHash string   `json:"contract_hash"`
-	Status       string   `json:"status"`
-	// Live is whether the contract is the app's live release's: an admin who revokes it stops the
-	// app's integration at once.
-	Live        bool              `json:"live"`
-	Integration *BoundIntegration `json:"integration"`
-	// SpaceGrant is whether the approval's own space has a grant for the integration it is bound to
-	// now, and who made it: "none" (no integration is bound, or its space isn't allowed), "approval"
-	// (the approval allowed the space, so it ends with the last approval that needs it) or
-	// "settings" (an admin allowed it in the integration's settings, which an approval never takes
-	// away). It says nothing of any other space: an admin who can't open someone's private space
-	// reads this one fact of it, about the space they are deciding on.
-	SpaceGrant  string  `json:"space_grant"`
-	RequestedBy *Author `json:"requested_by"`
-	RequestedAt string  `json:"requested_at"`
-	DecidedBy   *Author `json:"decided_by"`
-	DecidedAt   *string `json:"decided_at"`
+	ID           int64             `json:"id"`
+	AppID        int64             `json:"app_id"`
+	AppName      string            `json:"app_name"`
+	SpaceID      int64             `json:"space_id"`
+	SpaceName    string            `json:"space_name"`
+	SpaceKind    string            `json:"space_kind"`
+	Slot         string            `json:"slot"`
+	Kind         string            `json:"kind"`
+	Contract     Contract          `json:"contract"`
+	ContractHash string            `json:"contract_hash"`
+	Status       string            `json:"status"`
+	Live         bool              `json:"live"`
+	Integration  *BoundIntegration `json:"integration"`
+	SpaceGrant   string            `json:"space_grant"`
+	RequestedBy  *Author           `json:"requested_by"`
+	RequestedAt  string            `json:"requested_at"`
+	DecidedBy    *Author           `json:"decided_by"`
+	DecidedAt    *string           `json:"decided_at"`
 }
 
-// ApprovalList is a page of the admin's queue, newest first.
 type ApprovalList struct {
-	Approvals []IntegrationApproval `json:"approvals" apitypes:"nonnull"`
-	// NextCursor, when there are older requests, is the cursor of the next page.
-	NextCursor *string `json:"next_cursor"`
+	Approvals  []IntegrationApproval `json:"approvals" apitypes:"nonnull"`
+	NextCursor *string               `json:"next_cursor"`
 }
 
-// Decision is what an admin answers a request with.
 type Decision struct {
-	// IntegrationID is the integration to connect the slot to (approving).
 	IntegrationID int64 `json:"integration_id"`
-	// AllowSpace also allows the integration in the app's space, if it isn't yet: an admin can't
-	// open another person's private space to allow it there, and approving is how they consent to
-	// the app using the integration.
-	AllowSpace bool `json:"allow_space"`
+	AllowSpace    bool  `json:"allow_space"`
 }
 
 var (
-	// ErrIntegrationUnapproved is for an integration the app's live release may not use: its
-	// contract has no approval, the integration is switched off, or the space isn't allowed it.
 	ErrIntegrationUnapproved = errors.New("the app's use of this integration isn't approved")
 
 	errApprovalNotFound = apierr.New(http.StatusNotFound, apierr.CodeAppIntegrationNotFound, "approval not found")
@@ -147,7 +98,6 @@ func unapproved(slot string) error {
 		apierr.Params{"slot": slot})
 }
 
-// approvalRow is one row of app_integration_approvals, with what is read through it.
 type approvalRow struct {
 	id, appID, spaceID, workspaceID    int64
 	appName, spaceName, spaceKind      string
@@ -188,7 +138,6 @@ func scanApproval(row scanner) (approvalRow, error) {
 	return r, err
 }
 
-// view is the row as the API shows it.
 func (r approvalRow) view() IntegrationApproval {
 	v := IntegrationApproval{ID: r.id, AppID: r.appID, AppName: r.appName, SpaceID: r.spaceID, SpaceName: r.spaceName, SpaceKind: r.spaceKind,
 		Slot: r.slot, Kind: r.kind, ContractHash: r.hash, Status: r.status, Live: r.live, Integration: r.bound(), SpaceGrant: r.spaceGrant,
@@ -198,7 +147,7 @@ func (r approvalRow) view() IntegrationApproval {
 		v.DecidedAt = &r.decidedAt.String
 	}
 	if err := json.Unmarshal([]byte(r.contract), &v.Contract); err != nil {
-		v.Contract = Contract{} // stored from a Contract, so only a hand-edited row fails
+		v.Contract = Contract{}
 	}
 	v.Contract.normalize()
 	return v
@@ -211,7 +160,6 @@ func (r approvalRow) bound() *BoundIntegration {
 	return &BoundIntegration{ID: r.integrationID.Int64, Name: r.integrationName.String, DisplayName: r.integrationLabel.String, Usable: r.usable}
 }
 
-// normalize makes the contract's lists non-nil, as a stored one may have none.
 func (c *Contract) normalize() {
 	if c.Operations == nil {
 		c.Operations = []string{}
@@ -242,7 +190,6 @@ func (c *Contract) normalize() {
 	}
 }
 
-// approvalsOf loads the approvals of an app, newest first.
 func approvalsOf(ctx context.Context, q queryer, appID int64) ([]approvalRow, error) {
 	rows, err := q.QueryContext(ctx, approvalSelect+` WHERE a.app_id = ? ORDER BY a.id DESC`, appID)
 	if err != nil {
@@ -260,8 +207,6 @@ func approvalsOf(ctx context.Context, q queryer, appID int64) ([]approvalRow, er
 	return out, rows.Err()
 }
 
-// findApproval returns the approval of the slot's contract hash that counts: the one waiting or
-// approved, or else the latest one decided. rows are newest first.
 func findApproval(rows []approvalRow, slot, hash string) (approvalRow, bool) {
 	var latest approvalRow
 	found := false
@@ -279,12 +224,6 @@ func findApproval(rows []approvalRow, slot, hash string) (approvalRow, bool) {
 	return latest, found
 }
 
-// ----- the gate -----
-
-// checkApprovals is the gate of a publish and a rollback: every slot of def, the definition that
-// would become the live release, has an approved contract whose integration is switched on and
-// allowed in the app's space. It reads inside the caller's transaction, under the write lock, so
-// what it found holds when the release is written.
 func (s *Service) checkApprovals(ctx context.Context, q queryer, appID int64, def Definition) error {
 	if len(def.Integrations) == 0 {
 		return nil
@@ -302,7 +241,6 @@ func (s *Service) checkApprovals(ctx context.Context, q queryer, appID int64, de
 	return nil
 }
 
-// Binding is what an approved slot of an app's live release is connected to.
 type Binding struct {
 	IntegrationID int64
 	Kind          string
@@ -310,14 +248,7 @@ type Binding struct {
 	Contract      Contract
 }
 
-// Binding is the check the integrations' code makes whenever it acts for an app (an effect
-// asking for a payment link, a worker applying an event): the app is online, its live release
-// declares the slot, that release's contract is approved, and the integration it was bound to is
-// switched on and allowed in the app's space. Anything less is ErrIntegrationUnapproved (or
-// ErrOffline, ErrNotPublished), so revoking, switching off and taking the space away work at once.
 func (s *Service) Binding(ctx context.Context, appID int64, slot string) (out Binding, err error) {
-	// The app, its live release and its approvals are read in one transaction: they are one
-	// moment's state, and a publish or a decision can't land between them.
 	err = s.snapshot(ctx, func(q queryer) error {
 		out, err = liveBinding(ctx, q, appID, slot)
 		return err
@@ -325,7 +256,6 @@ func (s *Service) Binding(ctx context.Context, appID int64, slot string) (out Bi
 	return out, err
 }
 
-// snapshot runs fn in one read transaction, so what fn reads is the state of one moment.
 func (s *Service) snapshot(ctx context.Context, fn func(q queryer) error) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -335,7 +265,6 @@ func (s *Service) snapshot(ctx context.Context, fn func(q queryer) error) error 
 	return fn(tx)
 }
 
-// liveBinding is Binding's reading, through q.
 func liveBinding(ctx context.Context, q queryer, appID int64, slot string) (Binding, error) {
 	var archived sql.NullString
 	var live sql.NullInt64
@@ -370,10 +299,6 @@ func liveBinding(ctx context.Context, q queryer, appID int64, slot string) (Bind
 	return Binding{IntegrationID: r.integrationID.Int64, Kind: contract.Kind, ContractHash: r.hash, Contract: contract}, nil
 }
 
-// ----- the slots of an app -----
-
-// integrationStatus tells the one who designs or publishes the app which integrations it declares
-// and where the approval of each stands.
 func (s *Service) integrationStatus(ctx context.Context, sp access.Space, a Actor, appID int64) (IntegrationStatus, error) {
 	if err := may(sp, access.Read); err != nil {
 		return IntegrationStatus{}, err
@@ -385,8 +310,6 @@ func (s *Service) integrationStatus(ctx context.Context, sp access.Space, a Acto
 	if !acc.Has(access.CapDesign) && !acc.Has(access.CapPublish) {
 		return IntegrationStatus{}, forbidden(string(access.CapDesign))
 	}
-	// The draft, the live release and the approvals are read in one transaction: the status shows
-	// one moment's state, never an approval of a release that was no longer live when it was read.
 	var cur App
 	var rows []approvalRow
 	if err := s.snapshot(ctx, func(q queryer) (err error) {
@@ -419,10 +342,6 @@ func (s *Service) integrationStatus(ctx context.Context, sp access.Space, a Acto
 	return out, nil
 }
 
-// requestApproval asks for the approval of the draft's contract for a slot, which the caller names
-// by the hash they saw: a draft that changed since is refused, so what an admin approves is what
-// the requester read. Asking again for a contract already asked for, or approved, changes nothing;
-// asking again for one that was turned down or revoked asks anew, as a new request.
 func (s *Service) requestApproval(ctx context.Context, sp access.Space, a Actor, appID int64, slot, hash string) (IntegrationApproval, error) {
 	if err := may(sp, access.Write); err != nil {
 		return IntegrationApproval{}, err
@@ -457,9 +376,6 @@ func (s *Service) requestApproval(ctx context.Context, sp access.Space, a Actor,
 		if err != nil {
 			return err
 		}
-		// A request still waiting, or already approved, is the one asked for again. After a rejection
-		// or a revocation the contract is asked for anew: a new row, with its own id and its own place
-		// in the queue, so a decision on the old id never reaches it. The old row keeps its decision.
 		existing, found := findApproval(rows, slot, hash)
 		var id int64
 		if found && (existing.status == ApprovalRequested || existing.status == ApprovalApproved) {
@@ -481,7 +397,6 @@ func (s *Service) requestApproval(ctx context.Context, sp access.Space, a Actor,
 	return out, err
 }
 
-// approvalView reads an approval of the workspace as the API shows it.
 func approvalView(ctx context.Context, q queryer, workspace, id int64) (IntegrationApproval, error) {
 	r, err := scanApproval(q.QueryRowContext(ctx, approvalSelect+` WHERE a.id = ? AND sp.workspace_id = ?`, id, workspace))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -497,12 +412,11 @@ func approvalView(ctx context.Context, q queryer, workspace, id int64) (Integrat
 	return r.view(), nil
 }
 
-// isLive reports whether the approval's contract is the one of the app's live release.
 func isLive(ctx context.Context, q queryer, r approvalRow) (bool, error) {
 	var number sql.NullInt64
 	if err := q.QueryRowContext(ctx, `SELECT live_release FROM apps WHERE id = ?`, r.appID).Scan(&number); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil // an app deleted meanwhile has no live release
+			return false, nil
 		}
 		return false, err
 	}
@@ -519,14 +433,8 @@ func isLive(ctx context.Context, q queryer, r approvalRow) (bool, error) {
 	return rel.Definition.contract(r.slot).Hash() == r.hash, nil
 }
 
-// ----- the admin's queue -----
-
-// maxApprovals bounds the queue's page.
 const maxApprovals = 200
 
-// listApprovals is a page of the admin's queue of the workspace's requests, newest first: status
-// is one of the states, or "" for those still waiting; cursor, from the last page's next_cursor,
-// goes on after it. It reads only what the requesters submitted.
 func (s *Service) listApprovals(ctx context.Context, workspace int64, status, cursor string) (ApprovalList, error) {
 	if status == "" {
 		status = ApprovalRequested
@@ -543,8 +451,6 @@ func (s *Service) listApprovals(ctx context.Context, workspace int64, status, cu
 		before = n
 	}
 	var out ApprovalList
-	// The page and the live state of each approval are one moment's, so an app deleted or a release
-	// made meanwhile can't put the two at odds.
 	err := s.snapshot(ctx, func(q queryer) error {
 		rows, err := q.QueryContext(ctx, approvalSelect+` WHERE sp.workspace_id = ? AND (? = 'all' OR a.status = ?) AND a.id < ? ORDER BY a.id DESC LIMIT ?`,
 			workspace, status, status, before, maxApprovals+1)
@@ -566,7 +472,7 @@ func (s *Service) listApprovals(ctx context.Context, workspace int64, status, cu
 		}
 		_ = rows.Close()
 		out = ApprovalList{Approvals: make([]IntegrationApproval, 0, len(all))}
-		if len(all) > maxApprovals { // one more than a page: there are older ones
+		if len(all) > maxApprovals {
 			all = all[:maxApprovals]
 			next := strconv.FormatInt(all[len(all)-1].id, 10)
 			out.NextCursor = &next
@@ -582,7 +488,6 @@ func (s *Service) listApprovals(ctx context.Context, workspace int64, status, cu
 	return out, err
 }
 
-// decide loads the workspace's approval inside tx, for an admin to decide on.
 func decide(ctx context.Context, tx *sql.Tx, workspace, id int64) (approvalRow, error) {
 	r, err := scanApproval(tx.QueryRowContext(ctx, approvalSelect+` WHERE a.id = ? AND sp.workspace_id = ?`, id, workspace))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -595,9 +500,6 @@ func notPending() error {
 	return apierr.New(http.StatusConflict, apierr.CodeAppIntegrationNotPending, "this request was already decided")
 }
 
-// ensureDecider is what a decision asks first in its transaction, which holds the write lock: that
-// the admin is still enabled and still an admin of the workspace. RequireAdmin checks once, before
-// the transaction; a demotion or a removal that lands after it must change nothing.
 func ensureDecider(ctx context.Context, tx *sql.Tx, workspace, admin int64) error {
 	if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
 		return err
@@ -613,11 +515,9 @@ func ensureDecider(ctx context.Context, tx *sql.Tx, workspace, admin int64) erro
 	return nil
 }
 
-// approve connects the slot to an integration of the workspace, for the contract of the request.
 func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Decision) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// An admin disabled or demoted after RequireAdmin let the request in decides nothing.
 		if err := ensureDecider(ctx, tx, workspace, admin); err != nil {
 			return err
 		}
@@ -678,11 +578,9 @@ func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Dec
 	return out, err
 }
 
-// reject turns a request down.
 func (s *Service) reject(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// An admin disabled or demoted after RequireAdmin let the request in decides nothing.
 		if err := ensureDecider(ctx, tx, workspace, admin); err != nil {
 			return err
 		}
@@ -707,12 +605,9 @@ func (s *Service) reject(ctx context.Context, workspace, admin, id int64) (Integ
 	return out, err
 }
 
-// revoke withdraws an approval: the app stops using the integration at once, and can't be published
-// or rolled back to with that contract until it is approved again.
 func (s *Service) revoke(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// An admin disabled or demoted after RequireAdmin let the request in decides nothing.
 		if err := ensureDecider(ctx, tx, workspace, admin); err != nil {
 			return err
 		}
@@ -733,7 +628,6 @@ func (s *Service) revoke(ctx context.Context, workspace, admin, id int64) (Integ
 		if err != nil {
 			return err
 		}
-		// A trigger takes back the space an approval allowed, when no other approval needs it.
 		if _, err := tx.ExecContext(ctx, `UPDATE app_integration_approvals
 			SET status = 'revoked', integration_id = NULL, decided_by = ?, decided_at = ? WHERE id = ?`, admin, now(), id); err != nil {
 			return err
@@ -758,11 +652,6 @@ func (s *Service) revoke(ctx context.Context, workspace, admin, id int64) (Integ
 	return out, err
 }
 
-// ----- routes -----
-
-// ApprovalRoutes mounts the admin's side of the approvals, behind auth.Service.RequireAdmin, which
-// takes sessions only: an access token, and with it MCP, is refused. The routes of one app's slots
-// are Routes'.
 func (s *Service) ApprovalRoutes(mux *http.ServeMux, a *auth.Service) {
 	admin := func(h http.HandlerFunc) http.Handler { return a.RequireAdmin(h) }
 	const base = "/api/workspaces/{workspace}/integration-approvals"
@@ -828,7 +717,6 @@ func (s *Service) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	s.decided(w, r, s.revoke)
 }
 
-// decided is the handler of a decision that takes no body but {}.
 func (s *Service) decided(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error)) {
 	id, ok := approvalID(w, r)
 	if !ok {

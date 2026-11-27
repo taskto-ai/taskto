@@ -7,8 +7,6 @@ import (
 	"taskto.ai/taskto/internal/apitypes/nonnull"
 )
 
-// A card's lists are told to the web app as lists, never null (apitypes:"nonnull"): so a card
-// with nothing in them, made or changed any way, still sends [] for each.
 func TestCardListsAreNeverNil(t *testing.T) {
 	w := newWorld(t)
 	c := w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "Bare"})
@@ -19,7 +17,6 @@ func TestCardListsAreNeverNil(t *testing.T) {
 		nonnull.Require(t, got)
 	}
 
-	// Edits that empty the lists, and the other changes a card goes through.
 	path := cardPath(w.shared, c.BoardID, c.ID, "")
 	rec := w.alice.do(http.MethodPatch, path, map[string]any{
 		"version": c.Version, "blocked_by": []int64{}, "docs": []string{}, "conversations": []string{}, "labels": []string{},
@@ -40,7 +37,6 @@ func TestCardListsAreNeverNil(t *testing.T) {
 	expect(t, rec, http.StatusOK)
 	nonnull.Require(t, decode[Card](t, rec))
 
-	// A card with a comment, and the thread the tools give.
 	rec = w.alice.do(http.MethodPost, path+"/comments", map[string]string{"body": "hello"})
 	expect(t, rec, http.StatusCreated)
 	nonnull.Require(t, decode[Comment](t, rec))

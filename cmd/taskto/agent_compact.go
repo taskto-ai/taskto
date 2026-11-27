@@ -14,11 +14,6 @@ import (
 
 const agentCompactUsage = "usage: taskto agent-compact [-config file] [-data-dir dir]"
 
-// runAgentCompact compacts the agent runtime's database by hand (agentrt.Compact), for one too
-// large for the sidecar to compact at its start. It takes the data directory's lock, as restore
-// does, so it refuses while a server runs, and the runtime's own, so it refuses a sidecar left
-// running; a reader without a lock (a backup's snapshot) is found by the log it holds, and then
-// nothing is recorded.
 func runAgentCompact(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("taskto agent-compact", flag.ContinueOnError)
 	fs.SetOutput(stderr)

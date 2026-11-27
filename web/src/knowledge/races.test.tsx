@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 
-// Answers that arrive late, and drafts that must not be lost: each test holds a response open
-// (or edits while one is on its way) and checks that nothing from the past is shown or done.
-// The fake fetch ends an aborted request as a real one does, so an abort is exercised too.
-
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { navigate } from '../router'
@@ -19,7 +15,6 @@ afterEach(() => {
 
 const S = '/api/workspaces/1/spaces/3'
 const S4 = '/api/workspaces/1/spaces/4'
-// The list of a space's documents, as it is asked for.
 const LIST = `${S}/docs?limit=1000`
 const LIST4 = `${S4}/docs?limit=1000`
 const V1 = 'a'.repeat(40)
@@ -44,7 +39,6 @@ const commit = (id: string, change: 'create' | 'update' | 'delete', extra: Recor
   ...extra,
 })
 
-// A response held until the test lets it go.
 function gate<T>() {
   let release!: (value: T) => void
   const answer = new Promise<T>((resolve) => {
@@ -53,8 +47,6 @@ function gate<T>() {
   return { answer, release }
 }
 
-// The app has read a late answer, and what follows from it has run: so a check that nothing came
-// of it is a check of an answer that was delivered, not of one still on its way.
 async function delivered(calls: Call[], method: string, path: string) {
   const call = calls.find((c) => c.method === method && c.path === path)
   expect(call, `${method} ${path} was never made`).toBeDefined()
@@ -77,8 +69,6 @@ function kb(extra: Parameters<typeof fakeFetch>[0] = {}) {
   })
 }
 
-// The documents are a tree: a document's folders are opened (if they are closed), then it. Each
-// is found by its exact path (the tree's own data on its rows), never by a pattern made from it.
 async function open(name = 'notes/plan.md') {
   const list = await screen.findByRole('list', { name: 'Documents' })
   const parts = name.split('/')
@@ -94,7 +84,6 @@ async function open(name = 'notes/plan.md') {
   fireEvent.click(inList(name))
   return screen.findByRole('article', { name })
 }
-// A document in the tree: by its exact path, or a pattern written in the test.
 const inList = (path: string | RegExp) => {
   const item = [...screen.getByRole('list', { name: 'Documents' }).querySelectorAll<HTMLElement>('[data-path]')].find(
     (b) => (typeof path === 'string' ? b.dataset.path === path : path.test(b.dataset.path ?? '')),
@@ -103,13 +92,11 @@ const inList = (path: string | RegExp) => {
   return item
 }
 
-// One of the document's actions in its "More actions" menu.
 function fromMenu(doc: HTMLElement, name: string) {
   fireEvent.click(within(doc).getByRole('button', { name: 'More actions' }))
   fireEvent.click(within(doc).getByRole('menuitem', { name }))
 }
 
-// The delete question of a document, answered yes.
 async function confirmDelete(doc: HTMLElement) {
   await within(doc).findByRole('button', { name: 'More actions' })
   fromMenu(doc, 'Delete')
@@ -118,7 +105,6 @@ async function confirmDelete(doc: HTMLElement) {
   )
 }
 
-// The move dialog of a document, sent with a new name.
 async function move(doc: HTMLElement, to: string) {
   await within(doc).findByRole('button', { name: 'More actions' })
   fromMenu(doc, 'Move')
@@ -127,7 +113,6 @@ async function move(doc: HTMLElement, to: string) {
   fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
 }
 
-// A draft in the editor of the open document.
 async function draft(doc: HTMLElement, text = 'Mine.') {
   fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
   fireEvent.change(await within(doc).findByLabelText('Text'), { target: { value: text } })
@@ -135,7 +120,6 @@ async function draft(doc: HTMLElement, text = 'Mine.') {
 }
 const asked = () => screen.queryByRole('alertdialog', { name: 'Discard your changes' })
 
-// Restoring a version asks first: answered yes.
 async function restoreVersion(doc: HTMLElement) {
   fireEvent.click(await within(doc).findByRole('button', { name: 'Restore this version' }))
   const ask = screen.getByRole('alertdialog', { name: 'Restore this version?' })
@@ -158,7 +142,6 @@ test('a delete that finishes in another space leaves that space alone', async ()
     [`GET ${S}/docs`]: { body: { docs: [plan] } },
     [`GET ${S}/docs/notes/plan.md`]: { body: { ...plan, content: '# Plan\n' } },
     [`DELETE ${S}/docs/notes/plan.md`]: () => held.answer,
-    // The other space has a file of the same name.
     [`GET ${S4}/docs`]: { body: { docs: [plan] } },
     [`GET ${S4}/docs/notes/plan.md`]: { body: { ...plan, content: 'The other one.' } },
     [`GET ${S4}/history/notes/plan.md`]: { body: { commits: [commit('x2', 'update', { version: V1 })] } },
@@ -168,14 +151,12 @@ test('a delete that finishes in another space leaves that space alone', async ()
   await confirmDelete(doc)
   await waitFor(() => expect(made(calls, 'DELETE')).toBe(true))
 
-  // The person goes to the other space and opens its file of that name; then the delete ends.
   fireEvent.change(await screen.findByLabelText('Space'), { target: { value: '4' } })
   const there = await open()
   await within(there).findByText('The other one.')
   held.release({ body: { commit: 'c3' } })
   await delivered(calls, 'DELETE', `${S}/docs/notes/plan.md`)
 
-  // No notice, so no Restore that could act on this space's file; its document stays open.
   expect(screen.queryByText(/Deleted notes\/plan\.md/)).toBeNull()
   expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull()
   expect(screen.getByRole('article', { name: 'notes/plan.md' })).toBeTruthy()
@@ -191,7 +172,6 @@ test('a delete that finishes beside another open document of its space keeps tha
   fireEvent.click(inList(/notes\/other\.md/))
   await screen.findByRole('article', { name: 'notes/other.md' })
   held.release({ body: { commit: 'c3' } })
-  // The notice names the document it was made for, and the one being read is still there.
   await screen.findByText(/Deleted notes\/plan\.md/)
   await delivered(calls, 'DELETE', `${S}/docs/notes/plan.md`)
   expect(screen.getByRole('article', { name: 'notes/other.md' })).toBeTruthy()
@@ -211,7 +191,6 @@ test('a restore that finishes after Edit was opened keeps the draft', async () =
   await restoreVersion(doc)
   await waitFor(() => expect(made(calls, 'POST')).toBe(true))
 
-  // From the history back to the document, and on to Edit.
   fireEvent.click(within(doc).getByRole('button', { name: 'Document' }))
   fireEvent.click(within(doc).getByRole('button', { name: 'Edit' }))
   fireEvent.change(await within(doc).findByLabelText('Text'), { target: { value: 'My new draft.' } })
@@ -227,13 +206,11 @@ test('Cancel, Back and opening another document ask before a changed draft is th
   const doc = await open()
   const text = await draft(doc)
 
-  // Cancel asks; keeping the draft leaves it as it was.
   fireEvent.click(within(doc).getByRole('button', { name: 'Cancel' }))
   fireEvent.click(within(within(doc).getByRole('alertdialog')).getByRole('button', { name: 'Keep editing' }))
   expect(asked()).toBeNull()
   expect(text.value).toBe('Mine.')
 
-  // Back asks too, and so does opening another document from the list.
   fireEvent.click(within(doc).getByRole('button', { name: 'Back to the documents' }))
   expect(asked()).toBeTruthy()
   fireEvent.click(within(doc).getByRole('button', { name: 'Keep editing' }))
@@ -242,7 +219,6 @@ test('Cancel, Back and opening another document ask before a changed draft is th
   expect(screen.getByRole('article', { name: 'notes/plan.md' })).toBeTruthy()
   expect(text.value).toBe('Mine.')
 
-  // Saying yes does what was asked.
   fireEvent.click(within(doc).getByRole('button', { name: 'Discard my changes' }))
   await screen.findByRole('article', { name: 'notes/other.md' })
   expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
@@ -263,7 +239,6 @@ test('Cancel and Back go at once when the draft has not changed', async () => {
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
   fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
-  // Typing and undoing it is no change.
   const text = within(doc).getByLabelText('Text')
   fireEvent.change(text, { target: { value: 'x' } })
   fireEvent.change(text, { target: { value: '# Plan\n' } })
@@ -310,14 +285,12 @@ test('the space picker, a search result and a form that opens its document each 
   const doc = await open()
   const text = await draft(doc)
 
-  // The space picker.
   fireEvent.change(screen.getByLabelText('Space'), { target: { value: '4' } })
   expect(asked()).toBeTruthy()
   expect(text.value).toBe('Mine.')
   fireEvent.click(within(doc).getByRole('button', { name: 'Keep editing' }))
   expect(screen.getByRole('article', { name: 'notes/plan.md' })).toBeTruthy()
 
-  // A search result.
   fireEvent.change(screen.getByLabelText('Search the knowledge base'), { target: { value: 'other' } })
   fireEvent.click(screen.getByRole('button', { name: 'Search' }))
   fireEvent.click(await screen.findByRole('button', { name: /Other note/ }))
@@ -325,7 +298,6 @@ test('the space picker, a search result and a form that opens its document each 
   expect(screen.getByRole('article', { name: 'notes/plan.md' })).toBeTruthy()
   fireEvent.click(within(doc).getByRole('button', { name: 'Keep editing' }))
 
-  // A new document is made and the list read again, but it opens only when the draft is let go.
   fireEvent.click(screen.getByRole('button', { name: 'New' }))
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'fresh' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create' }))
@@ -349,7 +321,6 @@ test('the question is in view, has the focus, and Keep editing (or Escape) gives
 
     fireEvent.click(within(doc).getByRole('button', { name: 'Cancel' }))
     const question = within(doc).getByRole('alertdialog', { name: 'Discard your changes' })
-    // In view: a modal dialog, over the page wherever it is scrolled.
     expect((question as HTMLDialogElement).open).toBe(true)
     expect(question.dataset.modal).toBe('')
     expect(document.activeElement).toBe(within(question).getByRole('button', { name: 'Keep editing' }))
@@ -359,7 +330,6 @@ test('the question is in view, has the focus, and Keep editing (or Escape) gives
     expect(document.activeElement).toBe(text)
     expect([text.selectionStart, text.selectionEnd]).toEqual([5, 9])
 
-    // Escape means the same.
     text.setSelectionRange(2, 2)
     fireEvent.click(inList(/notes\/other\.md/))
     expect(asked()).toBeTruthy()
@@ -383,7 +353,6 @@ test('a save in flight is waited for, not asked about; one that fails then asks'
   fireEvent.click(within(doc).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(made(calls, 'PUT')).toBe(true))
 
-  // Going elsewhere while it saves asks nothing and waits: the text is being kept.
   fireEvent.click(inList(/notes\/other\.md/))
   expect(asked()).toBeNull()
   expect(screen.getByRole('article', { name: 'notes/plan.md' })).toBeTruthy()
@@ -403,7 +372,6 @@ test('Discard is not offered while a save lands anyway: a save that fails asks t
   fireEvent.click(inList(/notes\/other\.md/))
   held.release({ status: 409, body: { error: 'conflict' } })
 
-  // The draft is still there, so now it is asked, and nothing was discarded meanwhile.
   await within(doc).findByRole('alertdialog', { name: 'Discard your changes' })
   expect(text.value).toBe('Mine.')
   expect(screen.getByRole('article', { name: 'notes/plan.md' })).toBeTruthy()
@@ -417,7 +385,6 @@ test('a question asked after the person saves is dropped, and what they were doi
   await draft(doc)
   fireEvent.click(inList(/notes\/other\.md/))
   expect(asked()).toBeTruthy()
-  // Saving instead of answering is an answer: the question goes, and the save is not undone by one.
   fireEvent.click(within(doc).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(made(calls, 'PUT')).toBe(true))
   expect(asked()).toBeNull()
@@ -439,7 +406,6 @@ test('leaving the page asks through the browser, and a link of the app asks in t
     window.dispatchEvent(e)
     return e.defaultPrevented
   }
-  // Nothing changed: nothing is asked.
   fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
   expect(unload()).toBe(false)
   fireEvent.change(within(doc).getByLabelText('Text'), { target: { value: 'Mine.' } })
@@ -458,7 +424,6 @@ test('a delete that lands while the document is being edited says why it asks', 
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
   await confirmDelete(doc)
-  // Cancel doesn't stop the delete; the person goes on to edit the document.
   fireEvent.click(within(doc).getByRole('button', { name: 'Cancel' }))
   const text = await draft(doc)
   held.release({ body: { commit: 'c3' } })
@@ -478,7 +443,6 @@ test('a move that lands after Edit was opened asks, saying the document was move
   const doc = await open()
   await move(doc, 'archive/plan.md')
   await waitFor(() => expect(made(calls, 'PATCH')).toBe(true))
-  // The move goes on when its dialog is closed, and the page behind it is the person's again.
   fireEvent.click(
     within(within(doc).getByRole('dialog', { name: 'Move the document' })).getByRole('button', { name: 'Cancel' }),
   )
@@ -500,7 +464,6 @@ test('a move that lands after the person went to another document opens nothing'
   const doc = await open()
   await move(doc, 'archive/plan.md')
   await waitFor(() => expect(made(calls, 'PATCH')).toBe(true))
-  // The move goes on when its dialog is closed, and the page behind it is the person's again.
   fireEvent.click(
     within(within(doc).getByRole('dialog', { name: 'Move the document' })).getByRole('button', { name: 'Cancel' }),
   )
@@ -512,7 +475,6 @@ test('a move that lands after the person went to another document opens nothing'
   expect(reads(calls, LIST)).toBe(2)
 })
 
-// Starts an upload of logo.png whose request is held, and returns it.
 async function startUpload(calls: Call[]) {
   fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
   const form = screen.getByRole('dialog', { name: 'Upload a file' })
@@ -537,7 +499,6 @@ test('Cancel stops an upload, reads the list again, and nothing opens', async ()
 
   fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }))
   expect(put.signal?.aborted).toBe(true)
-  // The server may have finished all the same: the list says what is there.
   await waitFor(() => expect(reads(calls, LIST)).toBe(2))
   expect(screen.queryByRole('article')).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
@@ -552,7 +513,6 @@ test('an upload goes on when its form goes away: it finishes, the list is read a
   render(<KnowledgePage workspace={1} />)
   const { put } = await startUpload(calls)
 
-  // The person opens a document of the list: the form closes, and the upload is not stopped.
   await open('notes/other.md')
   expect(screen.queryByRole('form', { name: 'Upload a file' })).toBeNull()
   expect(put.signal?.aborted).toBe(false)
@@ -581,7 +541,6 @@ test('an upload goes on when the person opens New, or goes to another space', as
   await waitFor(() => expect(reads(calls, LIST4)).toBe(1))
   held.release(uploaded)
   await delivered(calls, 'PUT', `${S}/docs/logo.png`)
-  // The other space's list is not the one that changed; nothing opened in it.
   expect(reads(calls, LIST4)).toBe(1)
   expect(screen.queryByRole('article')).toBeNull()
 })
@@ -608,9 +567,7 @@ test('removing old versions while an older page loads shows no error, and Older 
   fireEvent.click(within(doc).getByRole('button', { name: 'Remove old versions' }))
   await within(doc).findByText('n3')
 
-  // The page that was loading was ended by the list being made again: not a failure to show.
   expect(within(doc).queryByRole('alert')).toBeNull()
-  // And the new list loads its own older page: nothing says one is still loading.
   fireEvent.click(await within(doc).findByRole('button', { name: 'Older' }))
   await within(doc).findByText('n2')
   expect(within(doc).queryByRole('alert')).toBeNull()
@@ -637,16 +594,12 @@ test('the history is not offered for viewing while it loads again after a remova
   fireEvent.click(within(doc).getByRole('button', { name: 'Remove old versions' }))
   await within(doc).findByText('Removed 1 old version from the history.')
 
-  // c2's commit no longer exists: until the new list is here, there is nothing to click.
   await waitFor(() => expect(within(doc).queryByRole('button', { name: 'View' })).toBeNull())
   held.release({ body: { commits: [commit('n3', 'update', { version: V1 })] } })
   await within(doc).findByText('n3')
   expect(within(doc).getAllByRole('button', { name: 'View' })).toHaveLength(1)
 })
 
-// The server answers a history page that starts after a commit the history no longer has with a
-// 404 (and a request made on a document that changed meanwhile with a 409): Reload is offered
-// for either, and loads the history again, not the document.
 test.each([404, 409])(
   'when older history fails with a %i, Reload loads the history again, not the document',
   async (status) => {
@@ -702,7 +655,6 @@ test('after a restore conflict, Reload loads the document and its history', asyn
   await waitFor(() => expect(reads(calls, `${S}/docs/notes/plan.md`)).toBe(2))
 })
 
-// A deleted document's notice, with its Restore button, after `history` was answered.
 async function deletedNotice(extra: Parameters<typeof fakeFetch>[0]) {
   const calls = kb({ [`DELETE ${S}/docs/notes/plan.md`]: { body: { commit: 'c30' } }, ...extra })
   render(<KnowledgePage workspace={1} />)
@@ -714,7 +666,6 @@ test('restoring a deleted document finds the version however far back it is', as
   const kept = (id: string) => commit(id, 'update', { version: V1 })
   const removed = (id: string) => commit(id, 'update', { version: V2, versioned: false })
   const { calls, restore } = await deletedNotice({
-    // The newest entries are the delete and a run of versions that were removed from history.
     [`GET ${S}/history/notes/plan.md`]: {
       body: {
         commits: [commit('c30', 'delete'), ...Array.from({ length: 12 }, (_, i) => removed(`r${i}`))],
@@ -753,14 +704,12 @@ test('a restore that finishes after the notice was left reads the list again and
   await waitFor(() => expect(made(calls, 'POST')).toBe(true))
   expect(reads(calls, LIST)).toBe(2)
 
-  // The person opens another document: the notice goes, and the restore ends after that.
   fireEvent.click(inList(/notes\/other\.md/))
   await screen.findByRole('article', { name: 'notes/other.md' })
   held.release({ body: { commit: 'c31', doc: plan } })
   await delivered(calls, 'POST', `${S}/restore/notes/plan.md`)
   expect(screen.getByRole('article', { name: 'notes/other.md' })).toBeTruthy()
   expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
-  // The restored document is in the list, though it was not opened.
   expect(reads(calls, LIST)).toBe(3)
 })
 
@@ -779,13 +728,10 @@ test('a restore whose history is still being searched is sent all the same when 
   await waitFor(() => expect(made(calls, 'POST')).toBe(true))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ commit: 'c2' })
   await delivered(calls, 'POST', `${S}/restore/notes/plan.md`)
-  // Opened nothing, but the list has the document again.
   expect(screen.getByRole('article', { name: 'notes/other.md' })).toBeTruthy()
   expect(reads(calls, LIST)).toBe(3)
 })
 
-// What waits for a save goes on when the save lands, and only then: not when the editor goes
-// away for another reason, which would undo a later choice of the person.
 test('what waits for a save goes on after it lands, and is dropped when the editor goes away instead', () => {
   const guard = () => {
     const h = renderHook(() => useGuard())
@@ -808,7 +754,6 @@ test('what waits for a save goes on after it lands, and is dropped when the edit
   expect(stale).not.toHaveBeenCalled()
   expect(gone.h.result.current.asking).toBeNull()
 
-  // A save that fails with the draft still there asks; one that leaves nothing to lose goes on.
   const failed = guard()
   const later = vi.fn()
   failed.call((g) => g.report('a', true, true))
@@ -845,7 +790,6 @@ test('another section or workspace (the switcher, the router) asks first over a 
   window.history.replaceState(null, '', '/w/1/knowledge')
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
-  // Nothing changed: the move goes at once.
   act(() => navigate('/w/1/knowledge/x'))
   expect(window.location.pathname).toBe('/w/1/knowledge/x')
   fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
@@ -855,12 +799,9 @@ test('another section or workspace (the switcher, the router) asks first over a 
   expect(window.location.pathname).toBe('/w/1/knowledge/x')
   fireEvent.click(within(doc).getByRole('button', { name: 'Discard my changes' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/2/boards'))
-  // Asked once, not again by the router after the page said go.
   expect(asked()).toBeNull()
 })
 
-// jsdom moves through the history in a task of its own, then fires popstate; an undone move then
-// fires its own.
 async function back() {
   await act(async () => {
     const done = new Promise((r) => window.addEventListener('popstate', () => setTimeout(r, 0), { once: true }))
@@ -912,14 +853,11 @@ test('a discard leaves the draft the editor’s until it is gone: the move it le
   const h = renderHook(() => useGuard())
   const call = (f: (g: Guard) => void) => act(() => f(h.result.current))
   call((g) => g.report('a', true, false))
-  // The move the person agreed to raises the same question on its way (a link asks the router,
-  // which asks the page): it goes, unasked.
   const inner = vi.fn()
   call((g) => g.ask(() => h.result.current.ask(inner)))
   expect(h.result.current.asking).toBe('leave')
   call((g) => g.discard())
   expect(inner).toHaveBeenCalledOnce()
-  // The editor is still there (nothing closed it): its draft is still guarded.
   const unload = new Event('beforeunload', { cancelable: true })
   window.dispatchEvent(unload)
   expect(unload.defaultPrevented).toBe(true)
@@ -927,7 +865,6 @@ test('a discard leaves the draft the editor’s until it is gone: the move it le
   call((g) => g.ask(later))
   expect(later).not.toHaveBeenCalled()
   expect(h.result.current.asking).toBe('leave')
-  // Gone: nothing is left to ask about.
   call((g) => g.dispose('a'))
   const after = vi.fn()
   call((g) => g.ask(after))

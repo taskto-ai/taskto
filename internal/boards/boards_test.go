@@ -23,13 +23,11 @@ func TestEveryMemberHasAPersonalBoard(t *testing.T) {
 			t.Errorf("user %d's private space has boards %+v, want one personal board", u.id, got)
 		}
 	}
-	// A newcomer gets one when they join.
 	carol := w.e.join(w.owner, w.ws, "Carol", auth.RoleMember)
 	if got := w.boards(carol, w.e.private(carol, w.ws)); len(got) != 1 || got[0].Kind != Personal {
 		t.Errorf("a new member's boards: %+v", got)
 	}
 
-	// A private space has only that board, which can be renamed but not archived.
 	p := w.alicePersonal
 	rec := w.alice.do(http.MethodPost, spacePath(w.alicePrivate, "/boards"), map[string]string{"name": "Second"})
 	expect(t, rec, http.StatusBadRequest)
@@ -41,7 +39,6 @@ func TestEveryMemberHasAPersonalBoard(t *testing.T) {
 		t.Errorf("renamed personal board: %+v", got)
 	}
 
-	// The schema holds the rules too.
 	extra := w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "x"})
 	refused := []struct {
 		name  string
@@ -79,7 +76,6 @@ func TestTeamBoards(t *testing.T) {
 	rec := w.bob.do(http.MethodGet, boardPath(w.shared, b.ID, ""), nil)
 	expect(t, rec, http.StatusOK)
 
-	// Rename: needs the version, and refuses an old one.
 	path := boardPath(w.shared, b.ID, "")
 	expect(t, w.alice.do(http.MethodPatch, path, map[string]any{"name": "x"}), http.StatusBadRequest)
 	expect(t, w.alice.do(http.MethodPatch, path, map[string]any{"version": 1}), http.StatusBadRequest)
@@ -95,7 +91,6 @@ func TestTeamBoards(t *testing.T) {
 		t.Errorf("409 carries %+v, want board_changed and the current board", reply)
 	}
 
-	// Archive: it leaves the list, stays readable, and refuses changes to its cards.
 	c := w.createCard(w.alice, w.shared, b, map[string]any{"title": "Card"})
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": b.Version, "archived": true})
 	expect(t, rec, http.StatusOK)
@@ -120,15 +115,12 @@ func TestTeamBoards(t *testing.T) {
 	}
 	expect(t, w.alice.do(http.MethodPatch, cardPath(w.shared, b.ID, c.ID, ""), map[string]any{"version": 1, "title": "x"}), http.StatusForbidden)
 	expect(t, w.alice.do(http.MethodPost, cardPath(w.shared, b.ID, c.ID, "/comments"), map[string]any{"body": "x"}), http.StatusForbidden)
-	// The board itself is read-only too: no rename while archived, but renaming while
-	// unarchiving is fine.
 	expect(t, w.alice.do(http.MethodPatch, path, map[string]any{"version": b.Version, "name": "Renamed"}), http.StatusForbidden)
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": b.Version, "archived": false, "name": "Plan again"})
 	expect(t, rec, http.StatusOK)
 	if got := decode[Board](t, rec); got.ArchivedAt != nil || got.Name != "Plan again" {
 		t.Errorf("unarchived and renamed: %+v", got)
 	}
-	// Unarchived, it takes changes again.
 	expect(t, w.alice.do(http.MethodPost, boardPath(w.shared, b.ID, "/cards"), map[string]string{"title": "x"}), http.StatusCreated)
 }
 
@@ -164,7 +156,6 @@ func TestCardLifecycle(t *testing.T) {
 		t.Fatalf("created %+v", c)
 	}
 
-	// Edit: only what is sent changes; null clears.
 	path := cardPath(w.shared, w.team.ID, c.ID, "")
 	rec = w.owner.do(http.MethodPatch, path, map[string]any{
 		"version": 1, "body": "Done drafting.", "assignee": map[string]string{"kind": "agent"},
@@ -187,7 +178,6 @@ func TestCardLifecycle(t *testing.T) {
 		t.Errorf("unassigned card has assignee %+v", c.Assignee)
 	}
 
-	// Comments: the thread, oldest first; they don't change the card's version.
 	for _, who := range []*user{w.alice, w.owner} {
 		rec = who.do(http.MethodPost, cardPath(w.shared, w.team.ID, c.ID, "/comments"), map[string]string{"body": "from " + fmt.Sprint(who.id)})
 		expect(t, rec, http.StatusCreated)
@@ -201,7 +191,6 @@ func TestCardLifecycle(t *testing.T) {
 		t.Errorf("thread %+v", th)
 	}
 
-	// Archive and restore: the card leaves the board and comes back to its column.
 	rec = w.alice.do(http.MethodPost, cardPath(w.shared, w.team.ID, c.ID, "/archive"), map[string]any{"version": c.Version})
 	expect(t, rec, http.StatusOK)
 	c = decode[Card](t, rec)
@@ -222,7 +211,6 @@ func TestCardLifecycle(t *testing.T) {
 		t.Errorf("restored %+v", c)
 	}
 	expect(t, w.alice.do(http.MethodPost, cardPath(w.shared, w.team.ID, c.ID, "/restore"), map[string]any{"version": c.Version}), http.StatusBadRequest)
-	// Restore to another column.
 	c = decode[Card](t, w.alice.do(http.MethodPost, cardPath(w.shared, w.team.ID, c.ID, "/archive"), map[string]any{"version": c.Version}))
 	rec = w.alice.do(http.MethodPost, cardPath(w.shared, w.team.ID, c.ID, "/restore"), map[string]any{"version": c.Version, "column": "done"})
 	expect(t, rec, http.StatusOK)
@@ -230,7 +218,6 @@ func TestCardLifecycle(t *testing.T) {
 		t.Errorf("restored to done: %+v", got)
 	}
 
-	// Validation.
 	bad := []map[string]any{
 		{},
 		{"title": " "},
@@ -288,7 +275,6 @@ func TestMovesAndOrder(t *testing.T) {
 		expect(t, rec, http.StatusOK)
 		return decode[Card](t, rec)
 	}
-	// Within a column; the position doesn't count the card itself.
 	a = move(a, Backlog, 0)
 	if got := column(Backlog); !slices.Equal(got, []string{"a", "first", "second", "b", "c", "last"}) {
 		t.Errorf("after moving a to the top: %v", got)
@@ -297,7 +283,6 @@ func TestMovesAndOrder(t *testing.T) {
 	if got := column(Backlog); !slices.Equal(got, []string{"first", "second", "b", "a", "c", "last"}) {
 		t.Errorf("after moving a to 3: %v", got)
 	}
-	// To another column, at a place and at the end.
 	a = move(a, Todo, 0)
 	if got := column(Todo); !slices.Equal(got, []string{"a", "t1"}) {
 		t.Errorf("todo = %v", got)
@@ -306,7 +291,6 @@ func TestMovesAndOrder(t *testing.T) {
 		t.Errorf("moved card %+v", a)
 	}
 	a = move(a, Doing, nil)
-	// A move writes one row: the others keep their ranks.
 	var n int
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM cards WHERE board_id = ? AND version > 1`, b.ID).Scan(&n); err != nil {
 		t.Fatal(err)
@@ -315,12 +299,10 @@ func TestMovesAndOrder(t *testing.T) {
 		t.Errorf("%d cards changed by moving one", n)
 	}
 
-	// The whole board, in board order.
 	if got := titles(w.cards(w.bob, w.shared, b, "")); !slices.Equal(got, []string{"first", "second", "b", "c", "last", "t1", "a"}) {
 		t.Errorf("board = %v", got)
 	}
 
-	// Many moves to the same spot keep a stable, total order.
 	cards := w.cards(w.alice, w.shared, b, "?column=backlog")
 	for i := range 30 {
 		c := cards[i%len(cards)]
@@ -350,21 +332,18 @@ func TestBlocked(t *testing.T) {
 	path := cardPath(w.shared, w.team.ID, w.teamCard.ID, "")
 	c := w.teamCard
 
-	// Blocked by cards only, with no reason, is blocked.
 	rec := w.alice.do(http.MethodPatch, path, map[string]any{"version": c.Version, "blocked_by": []int64{other.ID}})
 	expect(t, rec, http.StatusOK)
 	c = decode[Card](t, rec)
 	if !c.Blocked || c.BlockedReason != nil || !slices.Equal(c.BlockedBy, []int64{other.ID}) {
 		t.Errorf("blocked by a card: %+v", c)
 	}
-	// A reason alone too.
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": c.Version, "blocked_by": []int64{}, "blocked_reason": "legal review"})
 	expect(t, rec, http.StatusOK)
 	c = decode[Card](t, rec)
 	if !c.Blocked || *c.BlockedReason != "legal review" || len(c.BlockedBy) != 0 {
 		t.Errorf("blocked with a reason: %+v", c)
 	}
-	// Changing the reason keeps the blockers, and the other way round.
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": c.Version, "blocked_by": []int64{other.ID}})
 	expect(t, rec, http.StatusOK)
 	c = decode[Card](t, rec)
@@ -377,7 +356,6 @@ func TestBlocked(t *testing.T) {
 		t.Errorf("unblocked: %+v", c)
 	}
 
-	// Blockers are other cards of the same board; a refused change changes nothing.
 	for _, ids := range [][]int64{{c.ID}, {w.team2Card.ID}, {w.oldCard.ID}, {w.aliceCard.ID}, {9999}, {other.ID, w.team2Card.ID}} {
 		expect(t, w.alice.do(http.MethodPatch, path, map[string]any{"version": c.Version, "blocked_by": ids}), http.StatusBadRequest)
 	}
@@ -465,18 +443,14 @@ func TestAssignees(t *testing.T) {
 			}
 		})
 	}
-	// On create too.
 	expect(t, w.alice.do(http.MethodPost, boardPath(w.shared, w.team.ID, "/cards"),
 		map[string]any{"title": "x", "assignee": user(w.mallory)}), http.StatusBadRequest)
 }
 
-// TestConcurrentEdits checks that of several updates made against the same version,
-// one wins and the others get 409 with the current card.
 func TestConcurrentEdits(t *testing.T) {
 	w := newWorld(t)
 	path := cardPath(w.shared, w.team.ID, w.teamCard.ID, "")
 
-	// One after the other: the second still names version 1.
 	expect(t, w.alice.do(http.MethodPatch, path, map[string]any{"version": 1, "title": "Alice's title"}), http.StatusOK)
 	rec := w.owner.do(http.MethodPatch, path, map[string]any{"version": 1, "title": "Owner's title"})
 	expect(t, rec, http.StatusConflict)
@@ -492,7 +466,6 @@ func TestConcurrentEdits(t *testing.T) {
 		http.StatusConflict)
 	expect(t, w.owner.do(http.MethodPost, cardPath(w.shared, w.team.ID, w.teamCard.ID, "/archive"), map[string]any{"version": 1}), http.StatusConflict)
 
-	// At the same time.
 	const n = 8
 	codes := make([]int, n)
 	var wg sync.WaitGroup
@@ -521,8 +494,6 @@ func TestConcurrentEdits(t *testing.T) {
 	}
 }
 
-// TestErrorCodes checks that the errors people can cause carry the code and params the web
-// app says them with, and that the rest are bad_request.
 func TestErrorCodes(t *testing.T) {
 	w := newWorld(t)
 	cards := boardPath(w.shared, w.team.ID, "/cards")

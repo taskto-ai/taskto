@@ -11,8 +11,6 @@ const (
 	shaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-// What the updater found to install next is read like the rest: a version, a commit, a time, a
-// yes or no and a repository, each checked again.
 func TestReadAvailable(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, `{"version":1,"channel":"release","recorded_version":"v0.3.0","looked":"2026-11-26T06:15:00Z",
@@ -86,7 +84,6 @@ func TestBuildReportLinksTheNotes(t *testing.T) {
 	if !strings.HasSuffix(rep.NotesURL, "/compare/"+shaA+"..."+shaB) || rep.Status.Available == nil {
 		t.Fatalf("report = %+v", rep)
 	}
-	// A notes_url in the file is not the server's: only the server builds the link.
 	write(t, dir, `{"version":1,"checked":"2026-11-26T06:15:00Z","channel":"release","recorded_version":"v0.3.0","notes_url":"https://evil.example/"}`)
 	if rep, err := BuildReport("v0.3.0", dir, "", time.Now()); err != nil || rep.NotesURL != "" {
 		t.Fatalf("report = %+v, %v", rep, err)

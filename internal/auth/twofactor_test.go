@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// RFC 6238's SHA-1 test secret and times, with the codes cut to six digits.
 func TestTOTPVectors(t *testing.T) {
 	secret := []byte("12345678901234567890")
 	for _, v := range []struct {
@@ -37,7 +36,6 @@ func TestMatchTOTPWindowAndReplay(t *testing.T) {
 			t.Errorf("step %+d: matched %v (step %d), want %v", delta, matched, got, ok)
 		}
 	}
-	// A step that was used, or an earlier one, is refused.
 	if _, ok := matchTOTP(secret, totpCode(secret, step), now, step); ok {
 		t.Error("the step last used was accepted again")
 	}
@@ -80,17 +78,12 @@ func TestTOTPURI(t *testing.T) {
 	}
 }
 
-// --- the routes ---
-
-// codeNow is the authenticator app's code at the environment's time.
 func (e *env) codeNow(secret []byte) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return totpCode(secret, totpStep(e.now.Unix()))
 }
 
-// nextStep moves the clock to the next 30-second step, where a code that was used is
-// no longer fresh.
 func (e *env) nextStep() { e.advance(totpPeriod * time.Second) }
 
 type tfa struct {
@@ -98,8 +91,6 @@ type tfa struct {
 	codes  []string
 }
 
-// turnOn turns two-factor login on for the logged-in c, with its password, and moves the
-// clock on a step, as a person would take a moment to use the app again.
 func (e *env) turnOn(c *client, password string) tfa {
 	e.t.Helper()
 	rec := c.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": password})
@@ -135,7 +126,6 @@ type challengeReply struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// challenge logs in with a password and returns the challenge a user with two-factor login gets.
 func (c *client) challenge(email, password string) string {
 	c.e.t.Helper()
 	rec := c.login(email, password)
@@ -168,10 +158,8 @@ func TestTwoFactorEnrolment(t *testing.T) {
 		t.Fatalf("status = %v", got)
 	}
 
-	// The password comes first, and a wrong one is a failed attempt.
 	expect(t, owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": "fake-wrong-password"}), http.StatusForbidden)
 	expect(t, owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{}), http.StatusBadRequest)
-	// Nothing to confirm yet.
 	rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": "123456"})
 	expect(t, rec, http.StatusConflict)
 	if got := errCode(t, rec); got != "two_factor_not_started" {
@@ -181,7 +169,6 @@ func TestTwoFactorEnrolment(t *testing.T) {
 	rec = owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": ownerPassword})
 	expect(t, rec, http.StatusOK)
 	first := decode[struct{ Secret string }](t, rec).Secret
-	// Asking again before confirming replaces the secret.
 	rec = owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": ownerPassword})
 	expect(t, rec, http.StatusOK)
 	second := decode[struct{ Enrolment, Secret string }](t, rec)
@@ -190,9 +177,7 @@ func TestTwoFactorEnrolment(t *testing.T) {
 		t.Fatalf("the second secret is the first: %v", err)
 	}
 
-	// Until it's confirmed, two-factor login is off: the login asks for no code.
 	expectSession(t, e.client(), "owner@example.com", ownerPassword)
-	// A code of the replaced secret, or a wrong one, confirms nothing.
 	oldCode := totpCode([]byte(mustBase32(t, first)), totpStep(e.now.Unix()))
 	for _, code := range []string{wrongCode, "12345", "", oldCode} {
 		rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"enrolment": second.Enrolment, "code": code})
@@ -218,7 +203,6 @@ func TestTwoFactorEnrolment(t *testing.T) {
 		t.Fatalf("status = %v", got)
 	}
 
-	// Once on, enrolling again is refused and changes nothing.
 	rec = owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": ownerPassword})
 	expect(t, rec, http.StatusConflict)
 	if got := errCode(t, rec); got != "two_factor_already_on" {
@@ -227,7 +211,6 @@ func TestTwoFactorEnrolment(t *testing.T) {
 	rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": e.codeNow(secret)})
 	expect(t, rec, http.StatusConflict)
 
-	// What is stored: the secret sealed, the recovery codes hashed, the old column gone.
 	var sealed []byte
 	if err := e.db.QueryRow(`SELECT secret FROM user_totp`).Scan(&sealed); err != nil {
 		t.Fatal(err)
@@ -270,14 +253,12 @@ func TestLoginAsksForACodeOnlyWithTwoFactorOn(t *testing.T) {
 	e.join(token, "Member")
 	two := e.turnOn(owner, ownerPassword)
 
-	// A user without it logs in as before.
 	rec := e.client().login("member@example.com", otherPassword)
 	expect(t, rec, http.StatusOK)
 	if got := decode[me](t, rec); got.User.Email != "member@example.com" {
 		t.Fatalf("login = %+v", got)
 	}
 
-	// With it on, the right password makes no session.
 	c := e.client()
 	rec = c.login("owner@example.com", ownerPassword)
 	expect(t, rec, http.StatusOK)
@@ -291,12 +272,10 @@ func TestLoginAsksForACodeOnlyWithTwoFactorOn(t *testing.T) {
 	if strings.Contains(rec.Body.String(), `"user"`) {
 		t.Fatalf("the half-done login reply holds the user: %s", rec.Body.String())
 	}
-	// A wrong password gets no challenge, as before.
 	expect(t, e.client().login("owner@example.com", "fake-wrong-password"), http.StatusUnauthorized)
 
-	// The half-done state reaches no route: not as a cookie, not as a token.
 	for _, name := range []string{"__Host-taskto_session", "taskto_session"} {
-		half := &client{e: e, ip: c.ip, cookie: &http.Cookie{Name: name, Value: got.Challenge}} // #nosec G124 -- a request cookie in a test
+		half := &client{e: e, ip: c.ip, cookie: &http.Cookie{Name: name, Value: got.Challenge}}
 		expect(t, half.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 		expect(t, half.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/members", ws), nil), http.StatusUnauthorized)
 		expect(t, half.do(http.MethodGet, "/api/me/two-factor", nil), http.StatusUnauthorized)
@@ -311,7 +290,6 @@ func TestLoginAsksForACodeOnlyWithTwoFactorOn(t *testing.T) {
 		t.Fatal("the challenge is stored in clear")
 	}
 
-	// A wrong code gives no session and the challenge survives for a right one.
 	rec = c.second(got.Challenge, wrongCode)
 	expect(t, rec, http.StatusUnauthorized)
 	if code := errCode(t, rec); code != "wrong_two_factor_code" {
@@ -327,7 +305,6 @@ func TestLoginAsksForACodeOnlyWithTwoFactorOn(t *testing.T) {
 	}
 	expect(t, c.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// The challenge works once.
 	rec = e.client().second(got.Challenge, e.codeNow(two.secret))
 	expect(t, rec, http.StatusUnauthorized)
 	if code := errCode(t, rec); code != "two_factor_challenge_invalid" {
@@ -341,11 +318,10 @@ func TestSecondStepBrowserKeepsItsSessionUntilItPasses(t *testing.T) {
 	two := e.turnOn(owner, ownerPassword)
 	before := owner.cookie
 	challenge := owner.challenge("owner@example.com", ownerPassword)
-	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK) // the old session still works
+	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	expect(t, owner.second(challenge, wrongCode), http.StatusUnauthorized)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	expect(t, owner.second(challenge, e.codeNow(two.secret)), http.StatusOK)
-	// Passing replaces the browser's session, as a login does.
 	stale := &client{e: e, ip: owner.ip, cookie: before}
 	expect(t, stale.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 }
@@ -358,25 +334,20 @@ func TestTOTPCodeWorksOnce(t *testing.T) {
 	code := e.codeNow(two.secret)
 	expect(t, e.client().second(e.client().challenge("owner@example.com", ownerPassword), code), http.StatusOK)
 
-	// The same code, a moment later and still inside its step, from a second login.
 	c := e.client()
 	rec := c.second(c.challenge("owner@example.com", ownerPassword), code)
 	expect(t, rec, http.StatusUnauthorized)
 	if got := errCode(t, rec); got != "wrong_two_factor_code" {
 		t.Fatalf("code = %s", got)
 	}
-	// A code of an earlier step in the window is a replay as well.
 	earlier := totpCode(two.secret, totpStep(e.now.Unix())-1)
 	c = e.client()
 	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), earlier), http.StatusUnauthorized)
-	// The next step's code is fresh, and may be given early (a fast clock).
 	later := totpCode(two.secret, totpStep(e.now.Unix())+1)
 	c = e.client()
 	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), later), http.StatusOK)
-	// ...which spends the step before it: the app's own code of this step is then a replay.
 	c = e.client()
 	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), e.codeNow(two.secret)), http.StatusUnauthorized)
-	// Two steps away is no code.
 	c = e.client()
 	e.advance(2 * totpPeriod * time.Second)
 	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), totpCode(two.secret, totpStep(e.now.Unix())-3)), http.StatusUnauthorized)
@@ -412,7 +383,6 @@ func TestRecoveryCodesWorkOnce(t *testing.T) {
 		c := e.client()
 		return c.second(c.challenge("owner@example.com", ownerPassword), code)
 	}
-	// As shown, in capitals and without dashes: typing is forgiving.
 	expect(t, use(two.codes[0]), http.StatusOK)
 	rec := use(two.codes[0])
 	expect(t, rec, http.StatusUnauthorized)
@@ -423,7 +393,6 @@ func TestRecoveryCodesWorkOnce(t *testing.T) {
 	expect(t, use(strings.ToUpper(strings.ReplaceAll(two.codes[1], "-", " "))), http.StatusOK)
 	expect(t, use(two.codes[1]), http.StatusUnauthorized)
 
-	// A recovery code needs no fresh TOTP step, and spends no step.
 	expect(t, use(two.codes[2]), http.StatusOK)
 	expect(t, use(e.codeNow(two.secret)), http.StatusOK)
 
@@ -431,7 +400,6 @@ func TestRecoveryCodesWorkOnce(t *testing.T) {
 	if got := decode[map[string]any](t, rec); got["recovery_codes_left"] != float64(recoveryCodeCount-3) {
 		t.Fatalf("status = %v", got)
 	}
-	// Made-up codes, of the right length or not, don't work.
 	for _, code := range []string{"0000-0000-0000", "zzzz-zzzz-zzzz", "abc", strings.Repeat("a", 65)} {
 		expect(t, use(code), map[bool]int{true: http.StatusBadRequest, false: http.StatusUnauthorized}[len(code) > 64])
 	}
@@ -441,7 +409,6 @@ func TestRecoveryCodesDontConfirmEnrolment(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
 	two := e.turnOn(owner, ownerPassword)
-	// Two-factor login is on already: confirming again, with a recovery code or any other, is refused.
 	expect(t, owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": two.codes[0]}), http.StatusConflict)
 }
 
@@ -458,13 +425,11 @@ func TestSecondStepChallengeExpiresAndTakesFewAttempts(t *testing.T) {
 	if got := errCode(t, rec); got != "two_factor_challenge_invalid" {
 		t.Fatalf("expired challenge: %s", got)
 	}
-	// An expired one is swept by the next login.
 	_ = c.challenge("owner@example.com", ownerPassword)
 	if n := e.count(`SELECT count(*) FROM login_challenges`); n != 1 {
 		t.Fatalf("challenges = %d, want the new one only", n)
 	}
 
-	// A challenge takes challengeAttempts wrong codes, and then not even a right one.
 	ch = c.challenge("owner@example.com", ownerPassword)
 	for i := range challengeAttempts {
 		rec := c.second(ch, wrongCode)
@@ -478,7 +443,6 @@ func TestSecondStepChallengeExpiresAndTakesFewAttempts(t *testing.T) {
 	if got := errCode(t, rec); got != "two_factor_challenge_invalid" {
 		t.Fatalf("used-up challenge: %s", got)
 	}
-	// An unknown or missing challenge is the same answer.
 	for _, ch := range []string{"", "made-up", strings.Repeat("x", 200)} {
 		rec = c.second(ch, "123456")
 		expect(t, rec, http.StatusUnauthorized)
@@ -494,7 +458,6 @@ func TestSecondStepRateLimit(t *testing.T) {
 	owner, _ := e.setup()
 	two := e.turnOn(owner, ownerPassword)
 
-	// Wrong codes from one address and for one account add up across challenges.
 	c := e.client()
 	ch := c.challenge("owner@example.com", ownerPassword)
 	for i := range codeAccountAndIPAttempts {
@@ -504,16 +467,14 @@ func TestSecondStepRateLimit(t *testing.T) {
 		expect(t, c.second(ch, wrongCode), http.StatusUnauthorized)
 	}
 	ch = c.challenge("owner@example.com", ownerPassword)
-	rec := c.second(ch, e.codeNow(two.secret)) // a right code, too late
+	rec := c.second(ch, e.codeNow(two.secret))
 	expect(t, rec, http.StatusTooManyRequests)
-	// The window began when the first code was tried, in the enrolment, half a minute before.
 	if ra := rec.Header().Get("Retry-After"); ra != "870" {
 		t.Fatalf("Retry-After = %q, want 870", ra)
 	}
 	if got := errCode(t, rec); got != "too_many_two_factor_codes" {
 		t.Fatalf("code = %s", got)
 	}
-	// Another address isn't locked out by it, and the window ends.
 	other := e.client()
 	other.ip = "198.51.100.7:1"
 	expect(t, other.second(other.challenge("owner@example.com", ownerPassword), e.codeNow(two.secret)), http.StatusOK)
@@ -528,7 +489,6 @@ func TestSecondStepRateLimitPerAddressAndAccount(t *testing.T) {
 	owner, _ := e.setup()
 	e.turnOn(owner, ownerPassword)
 
-	// Challenges nobody has still count for the address.
 	c := e.client()
 	for range codeIPAttempts {
 		expect(t, c.second("made-up", "123456"), http.StatusUnauthorized)
@@ -539,7 +499,6 @@ func TestSecondStepRateLimitPerAddressAndAccount(t *testing.T) {
 		t.Fatal("no Retry-After")
 	}
 
-	// Failures from many addresses add up for the account.
 	e.advance(attemptWindow)
 	for i := range codeAccountAttempts {
 		c := e.client()
@@ -572,7 +531,6 @@ func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
 		}
 		expect(t, f(ownerPassword, ""), http.StatusForbidden)
 	}
-	// A wrong password didn't spend the code: it is still good.
 	rec := regen(ownerPassword, e.codeNow(two.secret))
 	expect(t, rec, http.StatusOK)
 	fresh := decode[struct {
@@ -581,10 +539,8 @@ func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
 	if len(fresh) != recoveryCodeCount || fresh[0] == two.codes[0] {
 		t.Fatalf("new recovery codes = %v", fresh)
 	}
-	// The same step's code is spent now.
 	expect(t, disable(ownerPassword, e.codeNow(two.secret)), http.StatusForbidden)
 
-	// The old recovery codes are dead and the new ones work, once.
 	c := e.client()
 	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), two.codes[0]), http.StatusUnauthorized)
 	c = e.client()
@@ -593,7 +549,6 @@ func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
 		t.Fatalf("recovery codes stored = %d", n)
 	}
 
-	// A recovery code can turn it off in place of the app (a lost phone).
 	expect(t, disable(ownerPassword, fresh[1]), http.StatusNoContent)
 	for _, table := range []string{"user_totp", "user_recovery_codes", "login_challenges"} {
 		if n := e.count(`SELECT count(*) FROM ` + table); n != 0 {
@@ -608,7 +563,6 @@ func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
 	}
 	expect(t, regen(ownerPassword, e.codeNow(two.secret)), http.StatusConflict)
 
-	// And on again, with a new secret.
 	again := e.turnOn(owner, ownerPassword)
 	if bytes.Equal(again.secret, two.secret) {
 		t.Fatal("the secret came back")
@@ -636,8 +590,6 @@ func TestTwoFactorOfOneUserIsNotAnotherUsers(t *testing.T) {
 	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 	ownerTwo := e.turnOn(owner, ownerPassword)
 
-	// The member's own status, and their attempts to turn off or change the owner's, touch
-	// nothing of the owner's: every route acts on the caller.
 	rec := member.do(http.MethodGet, "/api/me/two-factor", nil)
 	if got := decode[map[string]any](t, rec); got["enabled"] != false {
 		t.Fatalf("member's status = %v", got)
@@ -646,13 +598,11 @@ func TestTwoFactorOfOneUserIsNotAnotherUsers(t *testing.T) {
 		rec = member.do(http.MethodPost, "/api/me/two-factor/"+path, map[string]string{"password": otherPassword, "code": e.codeNow(ownerTwo.secret)})
 		expect(t, rec, http.StatusConflict)
 		rec = member.do(http.MethodPost, "/api/me/two-factor/"+path, map[string]string{"password": ownerPassword, "code": e.codeNow(ownerTwo.secret)})
-		expect(t, rec, http.StatusForbidden) // the owner's password isn't the member's
+		expect(t, rec, http.StatusForbidden)
 	}
-	// Nor with a user in the body: there is no such field.
 	expect(t, member.do(http.MethodPost, "/api/me/two-factor/disable", map[string]any{"user_id": 1, "password": otherPassword, "code": "123456"}), http.StatusBadRequest)
 	expect(t, member.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": e.codeNow(ownerTwo.secret)}), http.StatusConflict)
 
-	// The member enrolling leaves the owner's secret alone, and the owner's code means nothing to them.
 	memberTwo := e.turnOn(member, otherPassword)
 	if bytes.Equal(memberTwo.secret, ownerTwo.secret) {
 		t.Fatal("two users got one secret")
@@ -660,7 +610,6 @@ func TestTwoFactorOfOneUserIsNotAnotherUsers(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE enabled_at IS NOT NULL`); n != 2 {
 		t.Fatalf("users with it on = %d", n)
 	}
-	// A challenge is for its user: the other user's code (and recovery code) doesn't pass it.
 	c := e.client()
 	ch := c.challenge("owner@example.com", ownerPassword)
 	expect(t, c.second(ch, e.codeNow(memberTwo.secret)), http.StatusUnauthorized)
@@ -668,7 +617,6 @@ func TestTwoFactorOfOneUserIsNotAnotherUsers(t *testing.T) {
 	expect(t, c.second(ch, e.codeNow(ownerTwo.secret)), http.StatusOK)
 	expect(t, owner.do(http.MethodGet, "/api/me/two-factor", nil), http.StatusOK)
 
-	// Both can turn theirs off, apart.
 	expect(t, member.do(http.MethodPost, "/api/me/two-factor/disable", map[string]string{"password": otherPassword, "code": memberTwo.codes[0]}), http.StatusNoContent)
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE enabled_at IS NOT NULL`); n != 1 {
 		t.Fatalf("users with it on = %d, want the owner's", n)
@@ -691,7 +639,6 @@ func TestSignedOutAndTokensCantUseTwoFactorRoutes(t *testing.T) {
 		expect(t, anon.do(r.method, r.path, mapOrNil(r.method, body)), http.StatusUnauthorized)
 	}
 
-	// Access tokens keep working without a code, on what they reach, and reach none of this.
 	rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]string{"name": "cli"})
 	expect(t, rec, http.StatusCreated)
 	raw := decode[struct{ Token string }](t, rec).Token
@@ -715,15 +662,13 @@ func mapOrNil(method string, body map[string]string) any {
 
 func TestSSOLoginHasNoSecondStep(t *testing.T) {
 	s := newSSOEnv(t)
-	owner, _ := s.setup() // owner@example.com, with a password
+	owner, _ := s.setup()
 	s.turnOn(owner, ownerPassword)
 
-	// The password login asks for a code...
 	expect(t, s.client().login("owner@example.com", ownerPassword), http.StatusOK)
 	if got := decode[challengeReply](t, s.client().login("owner@example.com", ownerPassword)); !got.Required {
 		t.Fatal("the password login of a user with two-factor login on asks for no code")
 	}
-	// ...the provider's sign-in is the provider's to secure: no code, a session at once.
 	b := s.browser()
 	s.wantLogin(b, s.signIn(b, "/boards", verified("owner@example.com")), "/boards", "owner@example.com")
 }
@@ -731,7 +676,6 @@ func TestSSOLoginHasNoSecondStep(t *testing.T) {
 func TestTwoFactorNeedsAPasswordLogin(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
-	// An account made by a provider has no password, and no password login to protect.
 	if _, err := e.db.Exec(`UPDATE users SET password_hash = ''`); err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +685,6 @@ func TestTwoFactorNeedsAPasswordLogin(t *testing.T) {
 		t.Fatalf("code = %s", got)
 	}
 
-	// With passwords off, turning it on is refused too.
 	off := newEnv(t, Options{DisablePasswordLogin: true, SSO: []SSOProvider{{ID: "p", Name: "P", Issuer: "https://idp.example.com", ClientID: "c", ClientSecret: "s"}}, PublicURL: testPublicURL})
 	c, _ := off.setup()
 	rec = c.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": ownerPassword})
@@ -761,8 +704,6 @@ func TestWithoutAServerKeyTwoFactorIsRefused(t *testing.T) {
 	}
 }
 
-// --- an admin clearing a member's ---
-
 func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -772,7 +713,6 @@ func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 		return c.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d/two-factor", workspace, user), nil)
 	}
 
-	// Nothing to clear.
 	rec := clear(owner, ws, memberID)
 	expect(t, rec, http.StatusConflict)
 	if got := errCode(t, rec); got != "two_factor_not_on" {
@@ -780,7 +720,6 @@ func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 	}
 
 	two := e.turnOn(member, otherPassword)
-	// Only admins see who has it on.
 	type list struct {
 		Members []struct {
 			Email     string `json:"email"`
@@ -804,14 +743,12 @@ func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 		}
 	}
 
-	// A member can't, and nor can anyone with no part in the workspace.
 	expect(t, clear(member, ws, memberID), http.StatusForbidden)
 	stranger, _ := newEnvWithSecondWorkspaceAdmin(e, "stranger@example.com")
 	expect(t, clear(stranger, ws, memberID), http.StatusNotFound)
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE enabled_at IS NOT NULL`); n != 1 {
 		t.Fatal("a refused clear cleared it")
 	}
-	// Not your own: that is Settings, with your password.
 	e.turnOn(owner, ownerPassword)
 	rec = clear(owner, ws, 1)
 	expect(t, rec, http.StatusBadRequest)
@@ -821,7 +758,6 @@ func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 	expect(t, clear(owner, ws, 9999), http.StatusNotFound)
 	expect(t, clear(owner, 9999, memberID), http.StatusNotFound)
 
-	// A half-done login and a session of the member's die with it.
 	pending := e.client().challenge("member@example.com", otherPassword)
 	expect(t, clear(owner, ws, memberID), http.StatusNoContent)
 	expect(t, member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
@@ -835,7 +771,6 @@ func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 	if got := decode[me](t, rec); got.User.Email != "member@example.com" {
 		t.Fatalf("login after the clear = %s", rec.Body.String())
 	}
-	// The owner's, and the others', are untouched.
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE enabled_at IS NOT NULL`); n != 1 {
 		t.Fatalf("users with it on = %d, want the owner's", n)
 	}
@@ -846,8 +781,6 @@ func TestAdminClearsAMembersTwoFactor(t *testing.T) {
 	}
 }
 
-// newEnvWithSecondWorkspaceAdmin adds a user who administers a workspace of their own and
-// has no part in the first, and returns their client.
 func newEnvWithSecondWorkspaceAdmin(e *env, email string) (*client, int64) {
 	e.t.Helper()
 	id := e.addMember(email, e.addWorkspaceID())
@@ -869,7 +802,6 @@ func (e *env) addWorkspaceID() int64 {
 	return id
 }
 
-// The rule for a reset link: an admin of a member's every workspace, and no other admin.
 func TestAdminClearsOnlyWhereTheyAdministerEveryWorkspaceOfTheMember(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws1 := e.setup()
@@ -877,7 +809,6 @@ func TestAdminClearsOnlyWhereTheyAdministerEveryWorkspaceOfTheMember(t *testing.
 	memberID := memberMe.User.ID
 	e.turnOn(member, otherPassword)
 
-	// The member also belongs to a workspace the owner has no part in.
 	ws2 := e.addWorkspaceID()
 	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, ws2, memberID); err != nil {
 		t.Fatal(err)
@@ -888,14 +819,12 @@ func TestAdminClearsOnlyWhereTheyAdministerEveryWorkspaceOfTheMember(t *testing.
 	if got := errCode(t, rec); got != "two_factor_clear_elsewhere" {
 		t.Fatalf("code = %s", got)
 	}
-	// The same rule as the reset link: both refuse the same admin.
 	expect(t, owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/password-reset", ws1, memberID), nil), http.StatusForbidden)
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE user_id = ?`, memberID); n != 1 {
 		t.Fatal("a refused clear removed the secret")
 	}
 	expect(t, member.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// An admin of the other one too still isn't enough for either of them alone.
 	other := e.addMember("admin2@example.com", ws2)
 	if _, err := e.db.Exec(`UPDATE memberships SET role = 'admin' WHERE user_id = ? AND workspace_id = ?`, other, ws2); err != nil {
 		t.Fatal(err)
@@ -904,7 +833,6 @@ func TestAdminClearsOnlyWhereTheyAdministerEveryWorkspaceOfTheMember(t *testing.
 	expect(t, admin2.login("admin2@example.com", otherPassword), http.StatusOK)
 	expect(t, admin2.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d/two-factor", ws2, memberID), nil), http.StatusForbidden)
 
-	// An admin of both may.
 	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, 1, 'admin')`, ws2); err != nil {
 		t.Fatal(err)
 	}
@@ -932,8 +860,7 @@ func TestClearTwoFactorRefusesTokensAndSignedOut(t *testing.T) {
 	}
 }
 
-// A fake password, for the one test that changes the owner's.
-const renewedPassword = "fake-renewed-owner-password" //nolint:gosec // G101: a fake, for a test
+const renewedPassword = "fake-renewed-owner-password"
 
 func TestChangingThePasswordEndsHalfDoneLogins(t *testing.T) {
 	e := newEnv(t, Options{})
@@ -947,7 +874,6 @@ func TestChangingThePasswordEndsHalfDoneLogins(t *testing.T) {
 	if got := errCode(t, rec); got != "two_factor_challenge_invalid" {
 		t.Fatalf("code = %s", got)
 	}
-	// The new password asks for the code as before.
 	c := e.client()
 	expect(t, c.second(c.challenge("owner@example.com", renewedPassword), e.codeNow(two.secret)), http.StatusOK)
 }

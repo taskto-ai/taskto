@@ -15,7 +15,6 @@ import (
 	"taskto.ai/taskto/internal/lockfile"
 )
 
-// The agent runtime's database of a data directory, with a table in it.
 func agentDB(t *testing.T) (dataDir string) {
 	t.Helper()
 	dataDir = t.TempDir()
@@ -37,8 +36,6 @@ func agentDB(t *testing.T) (dataDir string) {
 	return dataDir
 }
 
-// While a server holds the data directory, it refuses and leaves the database as it is; then it
-// compacts and says so.
 func TestAgentCompactRefusesARunningServer(t *testing.T) {
 	dataDir := agentDB(t)
 	getenv := func(string) string { return "" }

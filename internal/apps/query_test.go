@@ -14,8 +14,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// tasksDef is an app with a field of every type: a string, a number, a boolean, a date, a time and
-// a choice. It adds, edits and removes records.
 func tasksDef(t *testing.T) Definition {
 	t.Helper()
 	raw := func(items ...string) []json.RawMessage {
@@ -50,7 +48,6 @@ func tasksDef(t *testing.T) Definition {
 	return def
 }
 
-// tasks creates and publishes the tasks app as u in s.
 func (w *world) tasks(u *user, s access.Space) App {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Tasks", "definition": tasksDef(w.e.t)})
@@ -58,7 +55,6 @@ func (w *world) tasks(u *user, s access.Space) App {
 	return w.publish(u, s, decode[App](w.e.t, rec))
 }
 
-// addTask adds a record as u and returns its id.
 func (w *world) addTask(u *user, s access.Space, a App, ctx map[string]any) int64 {
 	w.e.t.Helper()
 	expect(w.e.t, u.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add", ctx)), http.StatusOK)
@@ -89,7 +85,6 @@ func (p page) ids() []int64 {
 	return out
 }
 
-// queryURL is the route's address for params, given as key, value pairs (a key may repeat).
 func queryURL(s access.Space, a App, params ...string) string {
 	v := url.Values{}
 	for i := 0; i+1 < len(params); i += 2 {
@@ -105,7 +100,6 @@ func (w *world) query(u *user, s access.Space, a App, params ...string) page {
 	return decode[page](w.e.t, rec)
 }
 
-// walk reads every page of a query as u, calling between after each page but the last.
 func (w *world) walk(u *user, s access.Space, a App, size int, between func(n int, served []int64), params ...string) []int64 {
 	w.e.t.Helper()
 	var served []int64
@@ -132,8 +126,6 @@ func (w *world) walk(u *user, s access.Space, a App, size int, between func(n in
 	}
 }
 
-// Paging by keyset never repeats a record and never skips one that is still there, in any order
-// the explorer offers, even with records added and deleted between the pages.
 func TestQueryPagingNeitherSkipsNorRepeatsUnderChanges(t *testing.T) {
 	orders := []struct {
 		name   string
@@ -156,12 +148,11 @@ func TestQueryPagingNeitherSkipsNorRepeatsUnderChanges(t *testing.T) {
 			var ids []int64
 			for i := 0; i < 23; i++ {
 				ctx := map[string]any{"title": fmt.Sprintf("task %02d", (i*7)%23), "due": fmt.Sprintf("2026-01-%02d", 1+i%4), "urgent": i%3 == 0}
-				if i%5 != 0 { // some have no number
-					ctx["qty"] = i % 4 // ties
+				if i%5 != 0 {
+					ctx["qty"] = i % 4
 				}
 				ids = append(ids, w.addTask(w.alice, s, a, ctx))
 			}
-			// What the order is, read in one page: the baseline to hold the pages to.
 			baseline := w.query(w.alice, s, a, append(slices.Clone(o.params), "limit", "200")...).ids()
 			if len(baseline) != len(ids) {
 				t.Fatalf("baseline = %v", baseline)
@@ -169,7 +160,6 @@ func TestQueryPagingNeitherSkipsNorRepeatsUnderChanges(t *testing.T) {
 
 			var deleted []int64
 			served := w.walk(w.alice, s, a, 4, func(n int, served []int64) {
-				// Between pages: add records, and delete one that was served and one that wasn't.
 				w.addTask(w.alice, s, a, map[string]any{"title": fmt.Sprintf("late %d", n), "qty": 2})
 				if n == 2 || n == 3 {
 					var unseen int64
@@ -197,7 +187,6 @@ func TestQueryPagingNeitherSkipsNorRepeatsUnderChanges(t *testing.T) {
 				}
 				seen[id] = true
 			}
-			// Every record that was there throughout, and wasn't deleted before its page, is served once.
 			var stable []int64
 			for _, id := range baseline {
 				if !slices.Contains(deleted, id) {
@@ -215,7 +204,6 @@ func TestQueryPagingNeitherSkipsNorRepeatsUnderChanges(t *testing.T) {
 					t.Fatalf("record %d was skipped; served %v, baseline %v", id, served, baseline)
 				}
 			}
-			// And in the order of the baseline.
 			var want []int64
 			for _, id := range baseline {
 				if seen[id] {
@@ -229,8 +217,6 @@ func TestQueryPagingNeitherSkipsNorRepeatsUnderChanges(t *testing.T) {
 	}
 }
 
-// The order is total: the sort key, then the id, in the same direction, and the records without a
-// value of the key come last either way.
 func TestQueryOrderIsSortKeyThenIDWithNothingLast(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -248,7 +234,6 @@ func TestQueryOrderIsSortKeyThenIDWithNothingLast(t *testing.T) {
 	}
 }
 
-// A total and an aggregate are of every record that matches, not of the page.
 func TestQueryTotalsAreOfAllMatchingRecordsNotThePage(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -296,13 +281,11 @@ func TestQueryTotalsAreOfAllMatchingRecordsNotThePage(t *testing.T) {
 	check("min:qty", lo, count-1)
 	check("max:qty", hi, count-1)
 	check("min:due", "2026-03-01", count-1)
-	check("max:due", "2026-03-29", count-1) // the bugs are not every third: 29 is the last of them
-	// The same totals on any page, and on one with a cursor.
+	check("max:due", "2026-03-29", count-1)
 	p2 := w.query(w.alice, s, a, append([]string{"filter", "kind:eq:bug", "limit", "3", "cursor", *p.NextCursor}, aggs...)...)
 	if p2.Total != p.Total || fmt.Sprint(p2.Aggregates) != fmt.Sprint(p.Aggregates) {
 		t.Fatalf("the second page's totals are %d %v, the first's %d %v", p2.Total, p2.Aggregates, p.Total, p.Aggregates)
 	}
-	// Nothing matching: counts are 0, a sum is 0, and the rest have no value.
 	none := w.query(w.alice, s, a, "filter", "title:eq:nothing", "aggregate", "sum:qty", "aggregate", "min:qty", "aggregate", "avg:qty")
 	if none.Total != 0 || len(none.Records) != 0 || none.NextCursor != nil ||
 		none.Aggregates[0].Value != 0.0 || none.Aggregates[1].Value != nil || none.Aggregates[2].Value != nil {
@@ -310,14 +293,13 @@ func TestQueryTotalsAreOfAllMatchingRecordsNotThePage(t *testing.T) {
 	}
 }
 
-// The server's sum is the one a summary shows.
 func TestQuerySumAgreesWithSummaries(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
 	for i := 1; i <= 7; i++ {
 		w.add(w.alice, s, w.sharedApp, fmt.Sprintf("e%d", i), fmt.Sprint(i*3))
 	}
-	want := 3.0 + 3*28 // the team-lunch row, and 3, 6, … 21
+	want := 3.0 + 3*28
 	p := w.query(w.alice, s, w.sharedApp, "aggregate", "sum:amount")
 	if p.Aggregates[0].Value != want {
 		t.Fatalf("sum = %v, want %v", p.Aggregates[0].Value, want)
@@ -327,8 +309,6 @@ func TestQuerySumAgreesWithSummaries(t *testing.T) {
 	}
 }
 
-// Each person's queries, totals and aggregates cover the records their role reads, and nothing
-// else, however the query is asked.
 func TestQueryReadScopeAppliesToPagesTotalsAndAggregates(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -355,7 +335,6 @@ func TestQueryReadScopeAppliesToPagesTotalsAndAggregates(t *testing.T) {
 	if all.Total != 8 || all.Aggregates[0].Value != 3050.0 {
 		t.Fatalf("the data manager gets %+v", all)
 	}
-	// Searching, filtering and sorting for what isn't theirs finds nothing, and counts nothing.
 	for _, params := range [][]string{
 		{"q", "alice"}, {"filter", "title:contains:alice"}, {"filter", "qty:eq:10"}, {"sort", "qty", "filter", "qty:lt:100"}, {"state", "deleted"},
 	} {
@@ -363,7 +342,6 @@ func TestQueryReadScopeAppliesToPagesTotalsAndAggregates(t *testing.T) {
 			t.Fatalf("%v: the user who reads their own gets %+v", params, p)
 		}
 	}
-	// A deleted record is in the deleted ones of whoever could read it, and no other's.
 	id := w.addTask(w.owner, s, a, map[string]any{"title": "owner gone", "qty": 7})
 	w.removeTask(w.owner, s, a, id)
 	if d := w.query(w.owner, s, a, "state", "deleted", "aggregate", "sum:qty"); d.Total != 1 || d.Aggregates[0].Value != 7.0 || d.Records[0].ID != id {
@@ -372,14 +350,11 @@ func TestQueryReadScopeAppliesToPagesTotalsAndAggregates(t *testing.T) {
 	if d := w.query(w.alice, s, a, "state", "deleted"); d.Total != 1 {
 		t.Fatalf("the data manager's deleted = %+v", d)
 	}
-	// Someone the app names no role for, and someone whose role reads no record, get nothing.
 	expect(t, w.bob.do(http.MethodGet, queryURL(s, a), nil), http.StatusNotFound)
 	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppBuilder), grant(w.alice.id, access.AppRoles...))
 	expectForbidden(t, w.owner.do(http.MethodGet, queryURL(s, a), nil), "read_records")
 }
 
-// The scope is asked again with every page: a cursor is only a position, and can't be used to read
-// what its holder may not.
 func TestQueryCursorsNeverWidenAccess(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -392,7 +367,6 @@ func TestQueryCursorsNeverWidenAccess(t *testing.T) {
 
 	first := w.query(w.alice, s, a, "limit", "2", "sort", "qty")
 	mine := w.query(w.owner, s, a, "limit", "2", "sort", "qty")
-	// Another person's cursor, another query's, a made-up one and a tampered one are refused.
 	for name, cursor := range map[string]string{
 		"a data manager's cursor, used by the user who reads their own": *first.NextCursor,
 		"nonsense":   "not a cursor",
@@ -406,13 +380,10 @@ func TestQueryCursorsNeverWidenAccess(t *testing.T) {
 			t.Fatalf("%s: %s", name, rec.Body)
 		}
 	}
-	// A cursor of another query isn't taken for this one.
 	rec := w.owner.do(http.MethodGet, queryURL(s, a, "limit", "2", "sort", "title", "cursor", *mine.NextCursor), nil)
 	if errorCode(t, rec) != "app_query_cursor" {
 		t.Fatalf("a cursor of another sort: %s", rec.Body)
 	}
-	// One a person makes for themselves, with the right fingerprint, can put them anywhere in the
-	// order, and only there: what they read is still their own.
 	v := visibility{scope: access.ScopeOwn, user: w.owner.id}
 	def := tasksDef(t)
 	p, err := Query{Sort: "qty"}.plan(def, v, a.ID)
@@ -436,7 +407,6 @@ func TestQueryCursorsNeverWidenAccess(t *testing.T) {
 	}
 }
 
-// tamper changes one character of an opaque cursor.
 func tamper(c string) string {
 	b := []byte(c)
 	i := len(b) / 2
@@ -448,8 +418,6 @@ func tamper(c string) string {
 	return string(b)
 }
 
-// What a release no longer declares, and a value that isn't of its field's type, are in no
-// filter, search, sort or total; a deleted record is in none of the live ones.
 func TestQueryLeavesOutHiddenDeletedAndWrongTypedValues(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -461,13 +429,12 @@ func TestQueryLeavesOutHiddenDeletedAndWrongTypedValues(t *testing.T) {
 	}{{"one", 1}, {"two", 2}, {"three", 3}, {"four", 4}, {"five", 5}, {"six", 6}} {
 		ids[r.title] = w.addTask(w.alice, s, a, map[string]any{"title": r.title, "qty": r.qty, "kind": "bug"})
 	}
-	// Stored values that are not numbers, as a retyped field leaves behind (a row is never rewritten).
 	for title, v := range map[string]string{"two": `"12"`, "three": `true`, "four": `"abc"`, "five": `null`} {
 		if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.qty', json(?)) WHERE id = ?`, v, ids[title]); err != nil {
 			t.Fatal(err)
 		}
 	}
-	w.removeTask(w.alice, s, a, ids["six"]) // 6, deleted
+	w.removeTask(w.alice, s, a, ids["six"])
 
 	p := w.query(w.alice, s, a, "aggregate", "sum:qty", "aggregate", "count:qty", "aggregate", "max:qty", "aggregate", "avg:qty")
 	if p.Total != 5 || p.Aggregates[0].Value != 1.0 || p.Aggregates[1].Value != 1.0 || p.Aggregates[2].Value != 1.0 || p.Aggregates[3].Value != 1.0 {
@@ -476,11 +443,9 @@ func TestQueryLeavesOutHiddenDeletedAndWrongTypedValues(t *testing.T) {
 	if got := w.query(w.alice, s, a, "filter", "qty:gte:0").ids(); len(got) != 1 || got[0] != ids["one"] {
 		t.Fatalf("qty >= 0 matches %v", got)
 	}
-	// A record without a number is not-equal to any: it is there for ne, and not for the rest.
 	if got := w.query(w.alice, s, a, "filter", "qty:ne:1"); got.Total != 4 {
 		t.Fatalf("qty != 1 matches %d", got.Total)
 	}
-	// The sort puts the ones without a number last, by id.
 	if got := w.query(w.alice, s, a, "sort", "qty").ids(); got[0] != ids["one"] || len(got) != 5 {
 		t.Fatalf("by qty = %v", got)
 	}
@@ -488,8 +453,6 @@ func TestQueryLeavesOutHiddenDeletedAndWrongTypedValues(t *testing.T) {
 		t.Fatalf("the deleted = %+v", d)
 	}
 
-	// A field the live release removed is in nothing, though the rows still hold it, and the
-	// draft's fields are not the live release's.
 	cur := w.view(w.alice, s, a)
 	cur = w.mustPatchDraft(w.alice, s, cur, without(*cur.Draft, "kind"))
 	for _, params := range [][]string{{"filter", "kind:eq:bug"}, {"sort", "kind"}, {"aggregate", "count:kind"}} {
@@ -516,8 +479,6 @@ func TestQueryLeavesOutHiddenDeletedAndWrongTypedValues(t *testing.T) {
 	}
 }
 
-// What the SQL counts as a value of a field is what Go does: of the field's type, as JSON holds it,
-// and valid.
 func TestQueryTypedValuesAgreeWithTheGoRules(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -602,7 +563,7 @@ func TestQueryFiltersAndSearch(t *testing.T) {
 		{[]string{"q", "printer"}, []string{"Fix the printer", "Buy printer ink"}},
 		{[]string{"q", "printer ink"}, []string{"Buy printer ink"}},
 		{[]string{"q", "INK printer"}, []string{"Buy printer ink"}},
-		{[]string{"q", "chore"}, []string{"AÇÃO de limpeza", "Buy printer ink"}}, // choices are searched too
+		{[]string{"q", "chore"}, []string{"AÇÃO de limpeza", "Buy printer ink"}},
 		{[]string{"q", "limpeza", "filter", "kind:eq:bug"}, nil},
 		{[]string{"q", "nothing at all"}, nil},
 	} {
@@ -651,7 +612,6 @@ func TestQueryRefusesBadQueries(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400 %s", c.name, rec.Code, rec.Body, c.code)
 		}
 	}
-	// The default and the largest page.
 	for i := 0; i < 60; i++ {
 		w.addTask(w.alice, s, a, map[string]any{"title": fmt.Sprint(i)})
 	}
@@ -663,8 +623,6 @@ func TestQueryRefusesBadQueries(t *testing.T) {
 	}
 }
 
-// The query asks for no more of an app than the history does: an outsider is told nothing, and a
-// viewer reads (a space's viewers read every record).
 func TestQueryRouteChecksAccess(t *testing.T) {
 	w := newWorld(t)
 	for _, c := range []struct {
@@ -684,19 +642,15 @@ func TestQueryRouteChecksAccess(t *testing.T) {
 			t.Errorf("%d, want %d: %s", rec.Code, c.status, rec.Body)
 		}
 	}
-	// An app can't be read through a space it isn't in, and a number that isn't an app is no app.
 	expect(t, w.alice.do(http.MethodGet, queryURL(w.alicePrivate, w.sharedApp), nil), http.StatusNotFound)
 	expect(t, w.alice.do(http.MethodGet, appPath(w.shared, 0, "/records/query"), nil), http.StatusNotFound)
 	expect(t, w.alice.do(http.MethodGet, appsPath(w.shared, "/x/records/query"), nil), http.StatusNotFound)
-	// A draft that was never published has no records to show.
 	d := w.draft(w.alice, w.alicePrivate, "Unpublished")
 	if p := w.query(w.alice, w.alicePrivate, d); p.Total != 0 || len(p.Records) != 0 {
 		t.Fatalf("an unpublished app's query = %+v", p)
 	}
 }
 
-// Ordering of equal times: ids settle it, so paging is stable even when records change at the
-// same moment.
 func TestQueryRecordsChangedAtTheSameTimeKeepAStableOrder(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -712,7 +666,7 @@ func TestQueryRecordsChangedAtTheSameTimeKeepAStableOrder(t *testing.T) {
 		got := w.walk(w.alice, s, a, 2, nil, order...)
 		want := slices.Clone(ids)
 		if order == nil {
-			slices.Reverse(want) // newest first: the ids, from the largest
+			slices.Reverse(want)
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("%v: paged %v, want %v", order, got, want)
@@ -720,8 +674,6 @@ func TestQueryRecordsChangedAtTheSameTimeKeepAStableOrder(t *testing.T) {
 	}
 }
 
-// A text sort key of any length keeps paging going: the cursor holds only the key's first
-// characters, and every record is reached once.
 func TestQueryPagesPastLongTextKeys(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -730,8 +682,6 @@ func TestQueryPagesPastLongTextKeys(t *testing.T) {
 	for _, title := range []string{"a", "m", "z"} {
 		want = append(want, w.addTask(w.alice, s, a, map[string]any{"title": title}))
 	}
-	// Stored as an older release or a longer field could have left it: far past what a cursor
-	// held before, and full of characters JSON escapes.
 	long := strings.Repeat("m<", 3000)
 	if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.title', ?) WHERE id = ?`, long, want[1]); err != nil {
 		t.Fatal(err)
@@ -741,7 +691,6 @@ func TestQueryPagesPastLongTextKeys(t *testing.T) {
 	}
 }
 
-// An integer sort key is carried exactly, even past what a float64 holds, so paging moves on.
 func TestQueryCursorKeepsLargeIntegersExact(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -759,8 +708,6 @@ func TestQueryCursorKeepsLargeIntegersExact(t *testing.T) {
 	}
 }
 
-// A query asks nothing of a field that holds files or evidence: a photo, a signature or a location
-// is refused with the query's own code, by the route, never reaching the database to fail there.
 func TestQueryRefusesFieldsThatHoldFilesAndEvidence(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -802,6 +749,5 @@ func TestQueryRefusesFieldsThatHoldFilesAndEvidence(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400 %s", c.name, rec.Code, rec.Body, c.code)
 		}
 	}
-	// What can be asked still can.
 	expect(t, w.alice.do(http.MethodGet, queryURL(s, a, "filter", "title:eq:x"), nil), http.StatusOK)
 }

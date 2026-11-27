@@ -9,7 +9,6 @@ import (
 	"testing/fstest"
 )
 
-// app looks like Vite's output.
 var app = fstest.MapFS{
 	"index.html":                {Data: []byte("<!doctype html><title>app</title>")},
 	"favicon.svg":               {Data: []byte("<svg></svg>")},
@@ -48,8 +47,6 @@ func TestFiles(t *testing.T) {
 		{"/", "text/html", "<title>app</title>", "no-cache"},
 		{"/index.html", "text/html", "<title>app</title>", "no-cache"},
 		{"/favicon.svg", "image/svg+xml", "<svg>", "no-cache"},
-		// A manifest is JSON of its own type; the service worker is JavaScript, and neither
-		// is cached: an installed app learns of a new version by fetching them.
 		{"/manifest.webmanifest", "application/manifest+json", `{"name"`, "no-cache"},
 		{"/sw.js", "text/javascript", "self.skipWaiting", "no-cache"},
 		{"/icons/icon-192.png", "image/png", "PNG", "no-cache"},
@@ -134,7 +131,6 @@ func TestPick(t *testing.T) {
 	if fsys, built := pick(app, placeholder); !built || fsys == nil {
 		t.Error("a built app wasn't picked")
 	}
-	// What dist/ holds when the web app hasn't been copied in.
 	if fsys, built := pick(fstest.MapFS{".gitkeep": {}}, placeholder); built {
 		t.Error("an empty dist was taken for a built app")
 	} else if data, _ := fs.ReadFile(fsys, "index.html"); string(data) != "placeholder" {
@@ -142,7 +138,6 @@ func TestPick(t *testing.T) {
 	}
 }
 
-// TestEmbedded checks the real embedded files, with or without a built web app.
 func TestEmbedded(t *testing.T) {
 	fsys, built := FS()
 	rec := serve(t, newHandler(t, fsys), http.MethodGet, "/")

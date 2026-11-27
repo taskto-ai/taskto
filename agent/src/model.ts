@@ -1,20 +1,8 @@
-// A scripted offline model for development and the spike tests: no keys, no network,
-// and the same answer for the same context, also after a restart.
-//
-//   "tool:<name>:<ms>"  → the model calls tool <name> with { ms }
-//   "tool:<name> <json>" → the model calls tool <name> with the JSON object as its arguments
-//   after tool results  → "finished <tool>: <result text>"
-//   "system"            → "system: <the system prompt's sections, as they stand>"
-//   anything else       → "echo: <text>"
 import type { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
 export const SCRIPT_MODEL_ID = 'script-1'
 
-// How fast the model writes, in tokens per second: slow enough to see partial answers stream.
-// Every answer to a tool's result repeats the result, so a test that only checks what the tools
-// returned (a large one, such as the app catalog, takes minutes at this pace) sets this to 0, which
-// is no pacing at all, in the environment it starts the sidecar with.
 export const TOKENS_PER_SECOND_ENV = 'TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND'
 const DEFAULT_TOKENS_PER_SECOND = 40
 
@@ -43,8 +31,6 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
     tokensPerSecond: tokensPerSecond(),
   })
   const answer = (context: { messages: Message[] }) => {
-    // Pi Durable puts the system prompt's sections in positional system messages, a changed
-    // one after the input that changed it: the instruction is the last other message.
     const last = context.messages.findLast((m) => m.role !== 'system')
     if (last?.role === 'toolResult') {
       return fauxAssistantMessage(fauxText(`finished ${last.toolName}: ${textOf(last.content)}`))
@@ -71,8 +57,6 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
     }
     return fauxAssistantMessage(fauxText(`echo: ${text}`))
   }
-  // A factory per request keeps the script stateless, so a restarted process answers the same way.
-  // The faux provider takes a finite list, so one process answers at most 10,000 requests.
   const steps = Array.from({ length: 10_000 }, () => answer)
   faux.setResponses(steps as never)
   models.setProvider(faux.provider)

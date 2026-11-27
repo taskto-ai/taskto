@@ -10,8 +10,6 @@ import './Browser.css'
 import { LiveView } from './LiveView'
 import type { RFBConstructor } from './novnc'
 
-// BrowserPanel is the user's own browser, beside a conversation: whether it runs, its live
-// view, and the controls to take over, start it or stop it.
 export function BrowserPanel({
   status,
   interactive,
@@ -77,7 +75,6 @@ export function BrowserPanel({
       )}
       {personal?.running && (
         <>
-          {/* Part of the panel, not news: the live view's own status line is the one that comes and goes. */}
           {interactive && <Notice tone="neutral">{t('browser.youHaveIt')}</Notice>}
           <LiveView interactive={interactive} load={load} onClosed={status.reload} />
         </>

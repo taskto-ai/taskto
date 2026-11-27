@@ -1,18 +1,9 @@
-/* Markdown, as markdown.tsx renders it: documents, cards, comments and the chat.
-
-   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
-   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
-   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
-
-/* A person mentioned in a comment: their name, set apart from the words around it. */
 .tt-mention {
   padding: 0 0.2em;
   border-radius: 0.25em;
   background: var(--tt-accent-soft);
   font-weight: 600;
 }
-
-/* Markdown, as previews show it. */
 
 .tt-markdown {
   overflow-wrap: anywhere;
@@ -70,7 +61,6 @@
   color: var(--tt-muted);
 }
 
-/* A task list item: the box, then its words, in the place of the bullet. Read-only. */
 .tt-task-item {
   list-style: none;
   margin-inline-start: -1.4rem;
@@ -96,8 +86,6 @@
 .tt-markdown a {
   color: var(--tt-link);
 }
-
-/* Markdown tables (GitHub's), which scroll sideways rather than widen the page. */
 
 .tt-markdown .tt-md-table {
   margin: 0 0 0.75rem;

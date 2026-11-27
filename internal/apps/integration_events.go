@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -14,40 +15,22 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// Applying a verified event of an integration to a record (docs/integrations.md#applying-events).
-//
-// The integrations' event worker has already mapped the event to a record, through the reference the
-// server issued, and checked its money. What it asks the apps is to write what the app declared for
-// the event, and nothing else. Its whole authority is the live release's approved contract, read in
-// the transaction that writes (so an approval revoked a moment ago, a release published or the app
-// taken offline is seen):
-//
-//   - the app is online, its live release declares the slot, that release's contract is approved,
-//     and the integration it was bound to is switched on and allowed in the app's space
-//     (liveBinding), and it is the integration the reference was made under;
-//   - the fields written are the ones the contract's handler for the event lists, with its literals
-//     and the sources it names, never anything the event says as text (EventWrite holds none);
-//   - the handler's only_if rule, which the contract holds too, is checked against the record as it
-//     is then: when it doesn't hold nothing is written, and the reference is settled all the same,
-//     since the money did arrive;
-//   - the record still has to fit the collection (Collection.Fits), and a write that wouldn't is
-//     refused with nothing changed;
-//   - the history's actor is the integration (SystemWrite), and no effect is queued: effects run as
-//     the user who acted, and there is none.
-//
-// Settle, the integrations' step that moves the reference to its new state, runs in that same
-// transaction after the checks and before the write, so the state and the record change together
-// or neither does. Done, the integrations' step that records the event's outcome, runs last in it,
-// so the outcome commits with them too.
+func (s *Service) EventBinding(ctx context.Context, appID int64, slot string) (int64, bool, error) {
+	b, err := s.Binding(ctx, appID, slot)
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOffline), errors.Is(err, ErrNotPublished), errors.Is(err, ErrIntegrationUnapproved):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, err
+	}
+	return b.IntegrationID, true, nil
+}
 
-// WriteEvent writes the event to the record. Its failures are *paylink.Error, except those of
-// w.Settle and w.Done, which are returned as they are.
 func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink.EventResult, error) {
 	var spaceID, workspaceID int64
 	err := s.db.QueryRowContext(ctx, `SELECT a.space_id, sp.workspace_id FROM apps a JOIN spaces sp ON sp.id = a.space_id WHERE a.id = ?`, w.AppID).
 		Scan(&spaceID, &workspaceID)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && workspaceID != w.WorkspaceID {
-		// An app that is gone, or in another workspace than the integration's: nothing of it is touched.
 		return paylink.EventResult{}, eventFailure(ErrNotFound)
 	}
 	if err != nil {
@@ -58,9 +41,9 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 	var noHandler, unmet bool
 	write := SystemWrite{
 		Actor: SystemActor{Kind: SystemKindIntegration, ID: w.IntegrationID}, SpaceID: spaceID, AppID: w.AppID, RecordID: w.RecordID,
-		Action: w.Event, // the normalized event is the history's action
+		Action: w.Event,
 		Guard: func(ctx context.Context, tx *sql.Tx) error {
-			b, err := liveBinding(ctx, tx, w.AppID, w.Slot)
+			b, err := eventBinding(ctx, tx, w.AppID, w.Slot, w.IntegrationID)
 			if err != nil {
 				return err
 			}
@@ -104,7 +87,7 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 			}
 		}
 		if len(d.set) == 0 {
-			return systemDecision{skip: true}, nil // every source it names is one the event doesn't have
+			return systemDecision{skip: true}, nil
 		}
 		return d, nil
 	}
@@ -132,13 +115,42 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 	return paylink.EventResult{Written: res.Changed, NoHandler: noHandler, ConditionUnmet: unmet}, nil
 }
 
-// settleError carries the integrations' own failure of Settle through the write unchanged.
+func eventBinding(ctx context.Context, q queryer, appID int64, slot string, integrationID int64) (Binding, error) {
+	b, err := liveBinding(ctx, q, appID, slot)
+	if !errors.Is(err, ErrIntegrationUnapproved) {
+		return b, err
+	}
+	var live sql.NullInt64
+	if err := q.QueryRowContext(ctx, `SELECT live_release FROM apps WHERE id = ?`, appID).Scan(&live); err != nil || !live.Valid {
+		return Binding{}, err
+	}
+	rel, rerr := loadRelease(ctx, q, appID, live.Int64, true)
+	if rerr != nil {
+		return Binding{}, rerr
+	}
+	if _, declared := rel.Definition.Integrations[slot]; declared {
+		return Binding{}, err
+	}
+	var found []Binding
+	for _, other := range slices.Sorted(maps.Keys(rel.Definition.Integrations)) {
+		ob, oerr := liveBinding(ctx, q, appID, other)
+		if oerr == nil && ob.IntegrationID == integrationID && ob.Kind == KindPayments {
+			found = append(found, ob)
+		} else if oerr != nil && !errors.Is(oerr, ErrIntegrationUnapproved) {
+			return Binding{}, oerr
+		}
+	}
+	if len(found) != 1 {
+		return Binding{}, err
+	}
+	return found[0], nil
+}
+
 type settleError struct{ err error }
 
 func (e *settleError) Error() string { return e.err.Error() }
 func (e *settleError) Unwrap() error { return e.err }
 
-// eventFailure turns what a write of an event refused with into the code the admins are told.
 func eventFailure(err error) error {
 	var pe *paylink.Error
 	switch {
@@ -151,15 +163,11 @@ func eventFailure(err error) error {
 	case errors.Is(err, ErrIntegrationUnapproved):
 		return &paylink.Error{Code: apierr.CodeIntegrationEventUnavailable}
 	case errors.Is(err, ErrSystemField), errors.Is(err, ErrInvalid), errors.Is(err, ErrFull):
-		// The record, as the event would leave it, doesn't fit the app, or the contract names what a
-		// system write may not set.
 		return &paylink.Error{Code: apierr.CodeIntegrationEventRecordRefused}
 	}
 	return err
 }
 
-// eventValue is what the handler's set puts in the field, for the event. ok is false for a source
-// the event doesn't have: it is left out, as the rest of the event is still true.
 func eventValue(f Field, set ContractSet, w paylink.EventWrite) (value any, ok bool, err error) {
 	if set.From == "" {
 		var v any
@@ -187,7 +195,5 @@ func eventValue(f Field, set ContractSet, w paylink.EventWrite) (value any, ok b
 	case SourcePaymentID:
 		return w.PaymentID, w.PaymentID != "", nil
 	}
-	// receipt_url: Stripe's checkout events don't carry one, and the adapter keeps no text a
-	// payer's side could have written.
 	return nil, false, nil
 }

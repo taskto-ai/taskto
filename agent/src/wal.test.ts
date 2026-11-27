@@ -25,8 +25,6 @@ describe('truncateWal', () => {
     }
   }
 
-  // A database that keeps what was said in the log, with a reader pinned on the state before the
-  // deletion, as a watch or a harness's read is.
   const fixture = () => {
     const writer = new DatabaseSync(path, { timeout: 100 })
     writer.exec('PRAGMA journal_mode = WAL')

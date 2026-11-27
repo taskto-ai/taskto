@@ -1,21 +1,10 @@
-// Reading the token files without a browser, for the tests: the custom properties each rule
-// declares, a value resolved through var() and light-dark() for one side, and the contrast of two
-// colours. It reads only what the token files write (hex and rgb()/rgba() colours); anything else
-// is an error, so a theme can't slip past a check by writing a colour this doesn't understand.
-
 export interface Rule {
   selector: string
-  // The @layer the rule is in, if any.
   layer: string | undefined
-  // The custom properties it declares, with their values.
   props: Map<string, string>
-  // The name of every declaration in it, in order, custom property or not (`color`,
-  // `accent-color`): what a rule may not set is checked against this, not against props.
   declarations: string[]
 }
 
-// The rules of a stylesheet with the custom properties they declare. Comments are skipped; a
-// string is kept as it is.
 export function rules(css: string): Rule[] {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
   const out: Rule[] = []
@@ -66,13 +55,12 @@ export function rules(css: string): Rule[] {
       stack.pop()
     } else if (c === ';') {
       if (stack.at(-1)?.rule) declare()
-      else buf = '' // an at-rule statement: @import, @layer a, b;
+      else buf = ''
     } else buf += c
   }
   return out
 }
 
-// The custom properties of all rules with this selector, later ones winning.
 export function propsOf(all: Rule[], selector: string): Map<string, string> {
   const props = new Map<string, string>()
   for (const r of all) if (r.selector === selector) for (const [k, v] of r.props) props.set(k, v)
@@ -81,7 +69,6 @@ export function propsOf(all: Rule[], selector: string): Map<string, string> {
 
 export type Scheme = 'light' | 'dark'
 
-// Splits "a, b(c, d), e" at its top-level commas.
 function args(text: string): string[] {
   const out: string[] = []
   let depth = 0
@@ -98,8 +85,6 @@ function args(text: string): string[] {
   return out
 }
 
-// A value with every var() replaced from props and every light-dark() reduced to the scheme's
-// side. Throws on a var() that props don't have (and that gives no fallback), or on a loop.
 export function resolve(value: string, props: Map<string, string>, scheme: Scheme, seen: string[] = []): string {
   let out = value.trim()
   for (;;) {
@@ -133,7 +118,6 @@ export function resolve(value: string, props: Map<string, string>, scheme: Schem
 
 export type RGBA = [number, number, number, number]
 
-// A colour as the token files write it: #rgb, #rrggbb, #rrggbbaa, rgb() or rgba().
 export function parseColor(text: string): RGBA {
   const t = text.trim().toLowerCase()
   let m = /^#([0-9a-f]{3})$/.exec(t)
@@ -153,8 +137,6 @@ export function parseColor(text: string): RGBA {
       const [r, g, b] = parts.slice(0, 3).map(Number)
       const a =
         parts[3] === undefined ? 1 : parts[3].endsWith('%') ? Number.parseFloat(parts[3]) / 100 : Number(parts[3])
-      // In range, as the browser would show them: a channel past 255 would be clamped there, and
-      // the contrast computed from the unclamped number would be wrong.
       const channel = (v: number) => Number.isFinite(v) && v >= 0 && v <= 255
       if ([r, g, b].every(channel) && Number.isFinite(a) && a >= 0 && a <= 1) return [r, g, b, a]
     }
@@ -162,8 +144,6 @@ export function parseColor(text: string): RGBA {
   throw new Error(`not a colour the tokens may use: ${text}`)
 }
 
-// Colours laid one over another, top first, flattened to one opaque colour. The last must be
-// opaque: a ground has to end on something.
 export function flatten(stack: RGBA[]): RGBA {
   const bottom = stack.at(-1)
   if (bottom?.[3] !== 1) throw new Error('a ground must end on an opaque colour')
@@ -185,8 +165,6 @@ function luminance([r, g, b]: RGBA): number {
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
 }
 
-// The WCAG 2.x contrast ratio of a colour (laid over the ground if it is translucent) on an opaque
-// ground.
 export function contrast(fg: RGBA, ground: RGBA): number {
   const top = flatten([fg, ground])
   const [a, b] = [luminance(top), luminance(ground)].sort((x, y) => y - x)

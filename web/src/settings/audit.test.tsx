@@ -80,10 +80,9 @@ test('admins read the log: actions translated, names, dates in their format, and
   expect(log().getByText('Member removed')).toBeTruthy()
   expect(screen.getAllByText('By Owner').length).toBe(2)
   expect(screen.getByText('Shared space: Team')).toBeTruthy()
-  // A member who has left has no name in the reply: the number is shown.
   expect(screen.getByText('Member number 9')).toBeTruthy()
   expect(screen.getByText('Role')).toBeTruthy()
-  expect(log().getByText('Member')).toBeTruthy() // the role's value, translated, not `member`
+  expect(log().getByText('Member')).toBeTruthy()
   expect(screen.getAllByText('203.0.113.9').length).toBe(2)
   const time = screen.getAllByRole('time')[0]
   expect(time.getAttribute('datetime')).toBe('2026-03-05T14:30:00.000Z')
@@ -108,7 +107,7 @@ test('filters go to the server, and older events are asked for with the cursor',
   render(<SettingsPage me={me} workspace={admin} tab="audit" />)
   fireEvent.click(await screen.findByRole('button', { name: 'Show older events' }))
   expect(await log().findByText('Invite sent')).toBeTruthy()
-  expect(log().getByText('Shared space made')).toBeTruthy() // the first page stays
+  expect(log().getByText('Shared space made')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Show older events' })).toBeNull()
 
   await screen.findByRole('option', { name: 'Bea' })
@@ -202,7 +201,6 @@ test('the tab and the events are in the admin language', async () => {
   await act(() => setPreferences({ user: null }))
 })
 
-// The server's lists, read from its source: a new action, target or detail there needs a label here.
 function goNames(file: string, pattern: RegExp): string[] {
   const src = readFileSync(resolve(__dirname, '../../../internal/audit', file), 'utf8')
   return [...src.matchAll(pattern)].map((m) => m[1])

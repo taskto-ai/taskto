@@ -8,47 +8,35 @@ import (
 	"strings"
 )
 
-// The local models: each a runtime (a program run per dictation) and its model files, all
-// pinned by URL and sha256. Nothing here is in the repository or the image: the files are
-// downloaded on first use (docs/dictation.md). Updating a pin means checking the new
-// files' licences and hashes, and running the opt-in test (TASKTO_DICTATION_IT=1).
-
-// The values of the dictation_local setting besides "off".
 const (
 	ModelParakeet = "parakeet-v3"
 	ModelWhistle  = "whistle"
 )
 
-// How a runtime is run.
 const (
-	runSherpa = "sherpa-onnx" // sherpa-onnx-offline: every piece in one run, a JSON line each
-	runCactus = "cactus"      // cactus --audio: a run per piece, a JSON object each
+	runSherpa = "sherpa-onnx"
+	runCactus = "cactus"
 )
 
-// Models are the local models the operator may choose, the default first.
 var Models = []string{ModelParakeet, ModelWhistle}
 
-// download is a file to fetch. An archive's members are extracted (as dest => member path,
-// relative to the archive's top folder); a plain file is saved as dest.
 type download struct {
 	url     string
 	sha256  string
 	size    int64
-	dest    string            // a plain file's name in the model's folder
-	members map[string]string // an archive's: dest => path inside it, after its top folder
+	dest    string
+	members map[string]string
 }
 
-// spec is a local model: per platform (GOOS/GOARCH) the runtime's files, and the model's.
 type spec struct {
 	id       string
-	kind     string // how it is run: runSherpa or runCactus
+	kind     string
 	runtime  map[string][]download
 	model    []download
-	maxPiece int // seconds of audio per piece the runtime is given
+	maxPiece int
 	credits  []Credit
 }
 
-// files are s's downloads on this platform, or nil if it has none here.
 func (s spec) files(platform string) []download {
 	rt, ok := s.runtime[platform]
 	if !ok {
@@ -57,7 +45,6 @@ func (s spec) files(platform string) []download {
 	return slices.Concat(rt, s.model)
 }
 
-// fingerprint names a set of files: a ready folder whose fingerprint differs is fetched again.
 func fingerprint(files []download) string {
 	h := sha256.New()
 	for _, f := range files {
@@ -68,8 +55,6 @@ func fingerprint(files []download) string {
 
 func platform() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
-// sherpa-onnx 2.0.2's offline recognizer (Apache-2.0, with ONNX Runtime, MIT), from its
-// GitHub release: the shared builds are the small ones.
 func sherpaOnnx(asset, sha string, size int64, lib string) []download {
 	return []download{{
 		url:    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.2/sherpa-onnx-v2.0.2-" + asset + ".tar.bz2",
@@ -81,8 +66,6 @@ func sherpaOnnx(asset, sha string, size int64, lib string) []download {
 	}}
 }
 
-// parakeetFile is a file of the int8 ONNX export of Parakeet TDT 0.6B v3 that sherpa-onnx
-// publishes, at a fixed commit.
 func parakeetFile(name, sha string, size int64) download {
 	return download{
 		url:    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/" + name,
@@ -90,8 +73,6 @@ func parakeetFile(name, sha string, size int64) download {
 	}
 }
 
-// cactusRuntime is the Cactus 4.0.0 runtime's command-line program (Apache-2.0, binaries
-// included), at a fixed commit of its release repository.
 func cactusRuntime(folder, sha string, size int64) []download {
 	return []download{{
 		url:    "https://huggingface.co/Cactus-Compute/cactus/resolve/1a028f5a3972b67dd8d8752f882113d475e7ec4c/releases/4.0.0/" + folder + "/cactus",
@@ -113,7 +94,6 @@ var specs = map[string]spec{
 			parakeetFile("joiner.int8.onnx", "cbd02f3696e9944970111fb439d9c3fd365a80374565f13f2b9c7007d253fc98", 6355277),
 			parakeetFile("tokens.txt", "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d", 93939),
 		},
-		// The encoder's memory grows with the square of the length: keep pieces short.
 		maxPiece: 30,
 		credits: []Credit{
 			{
@@ -139,8 +119,6 @@ var specs = map[string]spec{
 			url:    "https://huggingface.co/Cactus-Compute/whistle/resolve/88cb00eeb8928ddbcd410b491584f938ba030b07/whistle.cact",
 			sha256: "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb", size: 16919407, dest: "whistle.cact",
 		}},
-		// Whistle's encoder takes up to 30 s, but on 30 s pieces it dropped sentences in the
-		// real test; 20 s pieces kept every one.
 		maxPiece: 20,
 		credits: []Credit{
 			{
@@ -157,5 +135,4 @@ var specs = map[string]spec{
 	},
 }
 
-// whistleLanguages are the languages Whistle knows; for another, it is left to detect.
 var whistleLanguages = strings.Fields("en de fr es it nl pl")

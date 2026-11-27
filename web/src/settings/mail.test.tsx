@@ -46,9 +46,7 @@ test('admins see where the server sends email through, and send a test to their 
   expect(screen.getByText(/The test goes to your own address, owner@example.com/)).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Send a test email' }))
-  // Said in a toast.
   expect(await screen.findByText(/Test email sent to owner@example.com/)).toBeTruthy()
-  // The request names no recipient: the server sends to the caller.
   expect(calls.filter((c) => c.method === 'POST').map((c) => [c.path, c.body])).toEqual([
     ['/api/workspaces/1/mail/test', {}],
   ])
@@ -129,7 +127,6 @@ test('a test email sent after the session ended, the tab still showing, is not s
   beginSession(1)
   render(<SettingsPage me={me} workspace={admin} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Send a test email' }))
-  // Signing out has begun: the session is over though the shell is not gone yet.
   endSession()
   await act(async () => answer())
   await new Promise((r) => setTimeout(r, 20))

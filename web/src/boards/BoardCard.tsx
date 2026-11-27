@@ -12,12 +12,6 @@ import { type DueState, dueState } from './due'
 import { dropPosition } from './move'
 import { assigneeLabel } from './text'
 
-// A card on the board: a button that opens it (its title, due date, labels, whether it is
-// blocked, and who it is for), draggable by a writer with a mouse, a place to drop another card
-// before it, and a writer's Move menu, which moves it by keyboard or on touch: to the top or the
-// bottom of its column, or to another column (last there, as a drop on the column puts it). A
-// screen reader hears a short name: its title, whether it is blocked, and when it is due; the
-// reason and the labels are the open card's to say.
 export function BoardCard({
   card: c,
   all,
@@ -35,14 +29,11 @@ export function BoardCard({
 }: {
   card: Card
   all: Card[]
-  // The cards of its column the filters show, in order.
   shownInColumn: Card[]
   canWrite: boolean
-  // Whether it is the open card.
   current: boolean
   dragged: boolean
   today: string
-  // The board's formats, made once for all its cards.
   f: Format
   onDragStart: (e: DragEvent) => void
   onDragEnd: () => void
@@ -112,22 +103,18 @@ export function BoardCard({
   )
 }
 
-// A due date in words: "Overdue: Mar 1", "Due today", "Due tomorrow", "Due Mar 9".
 export function dueWords(t: T, state: DueState, due: string, today: string, f: Format): string {
   if (state === 'overdue') return t('boards.overdueOn', { date: f.calendarDate(due) })
   if (state === 'soon') return t(due === today ? 'boards.dueToday' : 'boards.dueTomorrow')
   return t('boards.dueOn', { date: f.calendarDate(due) })
 }
 
-// The same, as part of the card's name for a screen reader: "overdue since Mar 1", "due today".
 function dueName(t: T, state: DueState, due: string, today: string, f: Format): string {
   if (state === 'overdue') return t('boards.nameOverdue', { date: f.calendarDate(due) })
   if (state === 'soon') return t(due === today ? 'boards.nameDueToday' : 'boards.nameDueTomorrow')
   return t('boards.nameDue', { date: f.calendarDate(due) })
 }
 
-// A due date as the board shows it: overdue in the danger tone, due soon in the warning tone,
-// later ones quiet. The words say which, the colour only helps.
 export function DueBadge({ state, text }: { state: 'overdue' | 'soon' | 'later'; text: string }) {
   if (state === 'later')
     return (
@@ -143,10 +130,6 @@ export function DueBadge({ state, text }: { state: 'overdue' | 'soon' | 'later';
   )
 }
 
-// The places a card can move to without a mouse: the top and the bottom of its column (each when
-// it isn't there already), and the other columns. Each goes the way a drop there would: the top
-// is a drop on the first card shown (with a filter on, cards it hides may stay above it), the
-// bottom or another column a drop on the column.
 function MoveMenu({
   card: c,
   all,

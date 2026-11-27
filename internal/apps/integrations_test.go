@@ -20,8 +20,6 @@ import (
 	"taskto.ai/taskto/internal/integrations"
 )
 
-// invoiceJSON is an invoicing app that declares a slot of payments: sending an invoice asks for a
-// payment link, and a payment sets the status and the date. Each test starts from it.
 const invoiceJSON = `{
   "components": [{"id":"root","component":"Text","text":"Invoices"}],
   "collection": {"fields": [
@@ -56,7 +54,6 @@ func invoices(t *testing.T) Definition {
 	return d
 }
 
-// changed returns the invoices' JSON with one text replaced, decoded and checked.
 func changed(t *testing.T, from, to string) (Definition, error) {
 	t.Helper()
 	if !strings.Contains(invoiceJSON, from) {
@@ -83,9 +80,6 @@ func TestTheInvoiceDeclarationIsValid(t *testing.T) {
 	}
 }
 
-// A definition holds a slot of a kind and what its events set, and nothing a service could be
-// reached or paid through: every key that isn't the format's is refused, and so is anything that
-// doesn't fit the collection.
 func TestTheDeclarationIsStrict(t *testing.T) {
 	for name, tc := range map[string]struct{ from, to string }{
 		"a provider in a slot":      {`"kind": "payments", "on"`, `"kind": "payments", "provider": "stripe", "on"`},
@@ -176,11 +170,9 @@ func TestTheContractHashIsStableAndCoversWhatIsApproved(t *testing.T) {
 		t.Fatalf("writes = %v, want %v", writes, want)
 	}
 
-	// The wording a person reads is not in it: changing it needs no new approval.
 	if got, _ := changed(t, "Invoice {{number}} for {{customer}}", "Please pay invoice {{number}}, {{customer}}"); hash(got) != h {
 		t.Fatal("the description's wording changed the contract")
 	}
-	// What is sent out, written, or let through is.
 	for name, tc := range map[string]struct{ from, to string }{
 		"a field sent out":      {"Invoice {{number}} for {{customer}}", "Invoice {{number}} for {{customer}} {{status}}"},
 		"a currency field":      {`"currency": "EUR"`, `"currency_field": "currency"`},
@@ -200,9 +192,6 @@ func TestTheContractHashIsStableAndCoversWhatIsApproved(t *testing.T) {
 	}
 }
 
-// ----- approvals -----
-
-// inv is a workspace with an invoicing app in the shared space, and two integrations of the workspace.
 type inv struct {
 	*world
 	app    App
@@ -226,7 +215,6 @@ func newInv(t *testing.T) *inv {
 	return i
 }
 
-// integration makes an integration of a workspace, switched on, with no space allowed.
 func (i *inv) integration(workspace int64, provider, name string) int64 {
 	i.e.t.Helper()
 	var id int64
@@ -285,12 +273,10 @@ func (i *inv) queue(u *user, workspace int64, query string) *httptest.ResponseRe
 	return u.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/integration-approvals%s", workspace, query), nil)
 }
 
-// code is the error code of a response.
 func code(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var e struct {
-		Code string `json:"code"`
-		// Params carries what the message needs.
+		Code   string         `json:"code"`
 		Params map[string]any `json:"params"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
@@ -311,14 +297,12 @@ func TestAnAppCannotBePublishedBeforeItsContractIsApproved(t *testing.T) {
 		t.Fatalf("an unapproved publish: %s", rec.Body.String())
 	}
 
-	// Asking is not approval.
 	req := i.mustRequest(i.alice, i.shared, i.app)
 	if req.Status != ApprovalRequested || req.Slot != "payments" || req.Kind != KindPayments || req.Integration != nil {
 		t.Fatalf("the request: %+v", req)
 	}
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusConflict)
 
-	// An approval is of an integration of the workspace, by an admin.
 	approved := decode[IntegrationApproval](t, func() *httptest.ResponseRecorder {
 		rec := i.approve(i.owner, req.ID, i.stripe)
 		expect(t, rec, http.StatusOK)
@@ -340,13 +324,11 @@ func TestAChangedContractNeedsANewApproval(t *testing.T) {
 	expect(t, i.approve(i.owner, i.mustRequest(i.alice, i.shared, i.app).ID, i.stripe), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
 
-	// The wording is free.
 	d, _ := changed(t, "Invoice {{number}} for {{customer}}", "Pay invoice {{number}} of {{customer}}")
 	app := i.fresh(i.alice, i.shared, i.app)
 	expect(t, i.alice.do(http.MethodPatch, appPath(i.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.shared, i.fresh(i.alice, i.shared, i.app)), http.StatusOK)
 
-	// What the integration may write is not.
 	d, _ = changed(t, `"payment.expired": {"set": {"status": {"value": "sent"}}}`, `"payment.expired": {"set": {"status": {"value": "paid"}}}`)
 	app = i.fresh(i.alice, i.shared, i.app)
 	expect(t, i.alice.do(http.MethodPatch, appPath(i.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
@@ -357,7 +339,6 @@ func TestAChangedContractNeedsANewApproval(t *testing.T) {
 	rec := i.tryPublish(i.alice, i.shared, i.fresh(i.alice, i.shared, i.app))
 	expect(t, rec, http.StatusConflict)
 
-	// A request for the contract the person read, not another.
 	stale := st.Slots[0].ContractHash
 	d, _ = changed(t, `"payment.expired": {"set": {"status": {"value": "sent"}}}`, `"payment.expired": {"set": {"status": {"value": "overdue"}}}`)
 	app = i.fresh(i.alice, i.shared, i.app)
@@ -386,7 +367,6 @@ func TestRequestsAreRepeatableAndDecisionsFinal(t *testing.T) {
 		t.Fatalf("the queue: %s", n)
 	}
 
-	// Turned down, it is not pending any more, and can be asked for again.
 	expect(t, i.decide(i.owner, i.ws, first.ID, "reject", nil), http.StatusOK)
 	rec := i.approve(i.owner, first.ID, i.stripe)
 	expect(t, rec, http.StatusConflict)
@@ -398,7 +378,6 @@ func TestRequestsAreRepeatableAndDecisionsFinal(t *testing.T) {
 	if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalRejected {
 		t.Fatalf("status = %s", st.Slots[0].Status)
 	}
-	// Asking again after a rejection is a new request: the old one keeps its decision.
 	again := i.mustRequest(i.alice, i.shared, i.app)
 	if again.ID == first.ID || again.Status != ApprovalRequested || again.DecidedBy != nil {
 		t.Fatalf("asking again after a rejection: %+v", again)
@@ -407,7 +386,6 @@ func TestRequestsAreRepeatableAndDecisionsFinal(t *testing.T) {
 		t.Fatalf("a retry of the pending renewal made another request: %d and %d", again.ID, retry.ID)
 	}
 
-	// Only an approval can be revoked.
 	rec = i.decide(i.owner, i.ws, again.ID, "revoke", nil)
 	expect(t, rec, http.StatusConflict)
 	if code(t, rec) != string(apierr.CodeAppIntegrationNotApproved) {
@@ -419,8 +397,6 @@ func TestRequestsAreRepeatableAndDecisionsFinal(t *testing.T) {
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusConflict)
 }
 
-// An admin disabled after RequireAdmin let their request in decides nothing: each decision reads
-// their account again in its transaction, and the answer is account_disabled.
 func TestDecisionsOfAnAdminDisabledMeanwhile(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
@@ -453,20 +429,17 @@ func TestApprovingChecksTheIntegration(t *testing.T) {
 	i := newInv(t)
 	req := i.mustRequest(i.alice, i.shared, i.app)
 
-	// The space isn't allowed: the admin says so, or the approval is refused.
 	rec := i.approve(i.owner, req.ID, i.stripe)
 	expect(t, rec, http.StatusConflict)
 	if code(t, rec) != string(apierr.CodeAppIntegrationSpaceNotAllowed) {
 		t.Fatalf("a space that isn't allowed: %s", rec.Body.String())
 	}
 
-	// Another workspace's integration is not found, whoever asks.
 	foreign := i.integration(i.other, "stripe", "theirs")
 	expect(t, i.approve(i.owner, req.ID, foreign), http.StatusNotFound)
 	expect(t, i.approve(i.owner, req.ID, 99999), http.StatusNotFound)
 	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{}), http.StatusBadRequest)
 
-	// A provider that does not do the kind.
 	square := i.integration(i.ws, "other", "other")
 	i.allow(square, i.shared)
 	rec = i.approve(i.owner, req.ID, square)
@@ -475,7 +448,6 @@ func TestApprovingChecksTheIntegration(t *testing.T) {
 		t.Fatalf("a provider of another kind: %s", rec.Body.String())
 	}
 
-	// Switched off.
 	i.allow(i.stripe, i.shared)
 	if _, err := i.e.db.Exec(`UPDATE integrations SET disabled_at = CURRENT_TIMESTAMP WHERE id = ?`, i.stripe); err != nil {
 		t.Fatal(err)
@@ -489,7 +461,6 @@ func TestApprovingChecksTheIntegration(t *testing.T) {
 		t.Fatalf("the refused approvals changed the request: %+v", st.Slots[0])
 	}
 
-	// Allowing the space is part of approving, when the admin says so.
 	if _, err := i.e.db.Exec(`UPDATE integrations SET disabled_at = NULL WHERE id = ?`, i.stripe); err != nil {
 		t.Fatal(err)
 	}
@@ -511,8 +482,6 @@ func (i *inv) count(query string, args ...any) (n int) {
 	return n
 }
 
-// Revoking, switching the integration off and taking the space away each stop the live release's
-// use at once, and a rollback needs the approval of the release it returns to.
 func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
@@ -521,7 +490,6 @@ func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
 	one := i.fresh(i.alice, i.shared, i.app).Live.Number
 
-	// A second release with another contract, approved.
 	d, _ := changed(t, `"payment.expired": {"set": {"status": {"value": "sent"}}}`, `"payment.expired": {"set": {"status": {"value": "overdue"}}}`)
 	app := i.fresh(i.alice, i.shared, i.app)
 	expect(t, i.alice.do(http.MethodPatch, appPath(i.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
@@ -532,13 +500,10 @@ func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 	expect(t, i.approve(i.owner, second.ID, i.stripe), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.shared, i.fresh(i.alice, i.shared, i.app)), http.StatusOK)
 
-	// The first release's contract is still approved, so the app can go back to it.
 	live := func() int64 { return i.fresh(i.alice, i.shared, i.app).Live.Number }
 	if live() == one {
 		t.Fatal("still on the first release")
 	}
-	// Revoking the first approval: the live release (the second) is unaffected, and a rollback to
-	// the first is refused.
 	expect(t, i.decide(i.owner, i.ws, first.ID, "revoke", nil), http.StatusOK)
 	rec := i.tryRollback(i.alice, i.shared, i.fresh(i.alice, i.shared, i.app), one)
 	expect(t, rec, http.StatusConflict)
@@ -549,8 +514,7 @@ func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 		t.Fatalf("the live release lost its binding: %v", err)
 	}
 
-	// Approved again, the rollback works, and the binding is the first approval's.
-	again := i.mustRequest(i.alice, i.shared, i.app) // the draft is the second contract: already approved
+	again := i.mustRequest(i.alice, i.shared, i.app)
 	_ = again
 	d1 := invoices(t)
 	app = i.fresh(i.alice, i.shared, i.app)
@@ -566,7 +530,6 @@ func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 		t.Fatalf("an undeclared slot: %v", err)
 	}
 
-	// Each of these stops the live release at once, and the state is told.
 	stop := func(name, undo string, do func()) {
 		t.Helper()
 		do()
@@ -594,7 +557,6 @@ func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 		}
 	})
 
-	// An app taken offline uses nothing, and a revoked approval is the last of them.
 	expect(t, i.alice.do(http.MethodPatch, appPath(i.shared, i.app.ID, ""),
 		map[string]any{"version": i.fresh(i.alice, i.shared, i.app).Version, "archived": true}), http.StatusOK)
 	if _, err := i.e.s.Binding(i.ctx(), i.app.ID, "payments"); !errors.Is(err, ErrOffline) {
@@ -604,8 +566,6 @@ func TestTheGateHoldsForPublishRollbackAndWhatIsLive(t *testing.T) {
 
 func (i *inv) ctx() context.Context { return context.Background() }
 
-// A switched-off integration, or a space taken away, also refuses a publish of a contract that
-// was approved.
 func TestPublishNeedsAnIntegrationThatIsUsable(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
@@ -625,14 +585,11 @@ func TestPublishNeedsAnIntegrationThatIsUsable(t *testing.T) {
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
 }
 
-// ----- who may do what -----
-
 func TestTheApprovalRoutesAreForTheRightPeople(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
 	req := i.mustRequest(i.alice, i.shared, i.app)
 
-	// The slots and the request are for those who design or publish the app, in a space they can read.
 	expect(t, i.bob.do(http.MethodGet, appPath(i.shared, i.app.ID, "/integrations"), nil), http.StatusForbidden)
 	expect(t, i.bob.do(http.MethodPost, appPath(i.shared, i.app.ID, "/integrations/payments/request"),
 		map[string]any{"contract_hash": req.ContractHash}), http.StatusForbidden)
@@ -641,24 +598,19 @@ func TestTheApprovalRoutesAreForTheRightPeople(t *testing.T) {
 		expect(t, u.do(http.MethodPost, appPath(i.shared, i.app.ID, "/integrations/payments/request"),
 			map[string]any{"contract_hash": req.ContractHash}), http.StatusNotFound)
 	}
-	// Nobody reads another person's private space's app, an admin included.
 	expect(t, i.owner.do(http.MethodGet, appPath(i.alicePrivate, i.aliceApp.ID, "/integrations"), nil), http.StatusNotFound)
 	expect(t, i.bob.do(http.MethodGet, appPath(i.alicePrivate, i.aliceApp.ID, "/integrations"), nil), http.StatusNotFound)
 
-	// The queue and the decisions are an admin's: a member of the workspace is refused, and so is
-	// the one who asked.
 	for _, u := range []*user{i.alice, i.bob, i.mallory} {
 		expect(t, i.queue(u, i.ws, ""), http.StatusForbidden)
 		expect(t, i.approve(u, req.ID, i.stripe), http.StatusForbidden)
 		expect(t, i.decide(u, i.ws, req.ID, "reject", nil), http.StatusForbidden)
 		expect(t, i.decide(u, i.ws, req.ID, "revoke", nil), http.StatusForbidden)
 	}
-	// A person with no session is no one.
 	anon := &user{e: i.e}
 	expect(t, i.queue(anon, i.ws, ""), http.StatusUnauthorized)
 	expect(t, i.approve(anon, req.ID, i.stripe), http.StatusUnauthorized)
 
-	// Another workspace's admin has no part in this workspace's queue, and their own never holds it.
 	expect(t, i.queue(i.stranger, i.ws, ""), http.StatusNotFound)
 	expect(t, i.approve(i.stranger, req.ID, i.stripe), http.StatusNotFound)
 	expect(t, i.decide(i.stranger, i.ws, req.ID, "reject", nil), http.StatusNotFound)
@@ -669,7 +621,6 @@ func TestTheApprovalRoutesAreForTheRightPeople(t *testing.T) {
 	if got := decode[ApprovalList](t, rec); len(got.Approvals) != 0 {
 		t.Fatalf("another workspace's queue holds %+v", got)
 	}
-	// Nor does the approval's id mean anything through another workspace's URL.
 	expect(t, i.approve(i.stranger, req.ID, theirs), http.StatusNotFound)
 	rec = i.decide(i.stranger, i.other, req.ID, "approve", map[string]any{"integration_id": theirs})
 	expect(t, rec, http.StatusNotFound)
@@ -678,15 +629,12 @@ func TestTheApprovalRoutesAreForTheRightPeople(t *testing.T) {
 	}
 }
 
-// The queue holds what the requester submitted, and nothing from the app or its records: an app in
-// a private space is approved the same way, though no admin can open it.
 func TestAnAppInAPrivateSpaceIsApprovedThroughTheQueue(t *testing.T) {
 	i := newInv(t)
 	rec := i.alice.do(http.MethodPost, appsPath(i.alicePrivate, ""), map[string]any{"name": "My invoices", "definition": invoices(t)})
 	expect(t, rec, http.StatusCreated)
 	app := decode[App](t, rec)
 
-	// The admin can't open it, and doesn't need to.
 	expect(t, i.owner.do(http.MethodGet, appPath(i.alicePrivate, app.ID, ""), nil), http.StatusNotFound)
 	req := i.mustRequest(i.alice, i.alicePrivate, app)
 	expect(t, i.tryPublish(i.alice, i.alicePrivate, app), http.StatusConflict)
@@ -698,9 +646,8 @@ func TestAnAppInAPrivateSpaceIsApprovedThroughTheQueue(t *testing.T) {
 		list.Approvals[0].SpaceKind != string(access.Private) || list.Approvals[0].RequestedBy == nil || list.Approvals[0].RequestedBy.ID != i.alice.id {
 		t.Fatalf("the queue: %+v", list)
 	}
-	// The queue is the contract and names. No component, no collection, no record.
 	for _, word := range []string{"components", "Invoices", "paid_at"} {
-		if word == "paid_at" { // a field NAME is in the contract: it is what the admin approves
+		if word == "paid_at" {
 			continue
 		}
 		if strings.Contains(rec.Body.String(), `"`+word+`"`) {
@@ -708,12 +655,9 @@ func TestAnAppInAPrivateSpaceIsApprovedThroughTheQueue(t *testing.T) {
 		}
 	}
 
-	// Approving is the admin's consent for the space too: they can't open another person's private
-	// space to allow it, and so say so with the approval.
 	expect(t, i.approve(i.owner, req.ID, i.stripe), http.StatusConflict)
 	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.alicePrivate, app), http.StatusOK)
-	// Another person's private space is no one else's to publish into, approval or not.
 	expect(t, i.bob.do(http.MethodPost, appPath(i.alicePrivate, app.ID, "/publish"), map[string]any{"version": app.Version}), http.StatusNotFound)
 }
 
@@ -741,8 +685,6 @@ func TestTheQueueShowsNoRecords(t *testing.T) {
 	}
 }
 
-// ----- copies, moves, one person -----
-
 func TestACopyCarriesNoApproval(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
@@ -764,12 +706,10 @@ func TestACopyCarriesNoApproval(t *testing.T) {
 	if code(t, rec) != string(apierr.CodeAppIntegrationUnapproved) {
 		t.Fatalf("publishing a copy: %s", rec.Body.String())
 	}
-	// It is approved on its own, by the same contract's hash, as a request of its own.
 	req := i.mustRequest(i.alice, i.shared, cp)
 	if req.ContractHash != i.status(i.alice, i.shared, i.app).Slots[0].ContractHash || req.ID == 0 {
 		t.Fatalf("the copy's request: %+v", req)
 	}
-	// An approval is of an app, not of a definition: the original's is untouched.
 	if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalApproved {
 		t.Fatalf("the original's status: %+v", st.Slots[0])
 	}
@@ -789,7 +729,6 @@ func TestMovingAnAppDropsItsApprovals(t *testing.T) {
 	if _, err := i.e.s.Binding(i.ctx(), app.ID, "payments"); !errors.Is(err, ErrIntegrationUnapproved) {
 		t.Fatalf("a moved app's binding: %v", err)
 	}
-	// And the integration can be removed again: nothing names it.
 	if n := i.count(`SELECT count(*) FROM app_integration_approvals WHERE integration_id = ?`, i.stripe); n != 0 {
 		t.Fatalf("%d approvals still name the integration", n)
 	}
@@ -802,7 +741,6 @@ func TestAnApprovedIntegrationCannotBeDeleted(t *testing.T) {
 	if _, err := i.e.db.Exec(`DELETE FROM integrations WHERE id = ?`, i.stripe); err == nil {
 		t.Fatal("an integration with an approval was deleted")
 	}
-	// A decided approval holds nothing.
 	rows, _ := i.e.db.Query(`SELECT id FROM app_integration_approvals`)
 	var id int64
 	for rows.Next() {
@@ -827,8 +765,6 @@ func TestTheApprovalCannotBeBoundAcrossWorkspaces(t *testing.T) {
 	}
 }
 
-// In a one-person install the publisher is the admin: the same calls, by the same person, are the
-// "approve and publish" step.
 func TestOnePersonApprovesAndPublishes(t *testing.T) {
 	i := newInv(t)
 	rec := i.owner.do(http.MethodPost, appsPath(i.shared, ""), map[string]any{"name": "Mine", "definition": invoices(t)})
@@ -848,12 +784,9 @@ func TestAnAppWithNoIntegrationsPublishesAsAlways(t *testing.T) {
 	expect(t, w.tryPublish(w.alice, w.shared, app), http.StatusOK)
 }
 
-// ----- audit -----
-
 func TestEveryDecisionIsAudited(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
-	// A slot named unlike its kind, so the details can be checked for the name on its own.
 	till := strings.NewReplacer(`"integration": "payments"`, `"integration": "till"`, `"integrations": {"payments"`, `"integrations": {"till"`).Replace(invoiceJSON)
 	rec := i.alice.do(http.MethodPost, appsPath(i.shared, ""), map[string]any{"name": "Till", "definition": json.RawMessage(till)})
 	expect(t, rec, http.StatusCreated)
@@ -868,7 +801,6 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 		return decode[IntegrationApproval](t, rec)
 	}
 	req := ask()
-	// A member's decision is refused and leaves no audit event, nor changes the request.
 	audited := func() int { return i.count(`SELECT count(*) FROM audit_events WHERE action LIKE 'app_integration_%'`) }
 	before := audited()
 	expect(t, i.approve(i.bob, req.ID, i.stripe), http.StatusForbidden)
@@ -906,7 +838,6 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 		if actor != want {
 			t.Errorf("%s by %d, want %d", action, actor, want)
 		}
-		// The slot's name is the builder's text and a secret is nobody's here.
 		if strings.Contains(details, "till") {
 			t.Errorf("%s details name the slot: %s", action, details)
 		}
@@ -917,9 +848,6 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 	}
 }
 
-// ----- review follow-ups -----
-
-// variant decodes the invoices' JSON with the pairs (old, new, old, new, …) replaced and checks it.
 func variant(t *testing.T, pairs ...string) (Definition, error) {
 	t.Helper()
 	raw := invoiceJSON
@@ -1001,7 +929,6 @@ func TestMovingAWriteToAnotherEventIsAnotherContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The values swap events: what each field may hold overall is the same, what each event does is not.
 	raw := strings.NewReplacer(`{"value": "paid"}`, `{"value": "sent"}`, `{"value": "sent"}`, `{"value": "paid"}`).Replace(invoiceJSON)
 	var d Definition
 	if err := json.Unmarshal([]byte(raw), &d); err != nil {
@@ -1066,7 +993,6 @@ func TestTheQueueIsPagedAndReachesTheOldest(t *testing.T) {
 	if len(seen) != total || pages != 2 {
 		t.Errorf("reached %d approvals in %d pages, want %d in 2", len(seen), pages, total)
 	}
-	// The same cursor on the other statuses: all of these are rejected, none requested.
 	rec := i.queue(i.owner, i.ws, "?status=rejected&cursor=1")
 	if got := decode[ApprovalList](t, rec); len(got.Approvals) != 0 {
 		t.Errorf("a cursor of the oldest id: %d approvals", len(got.Approvals))
@@ -1080,7 +1006,6 @@ func TestDecisionsOfAnAdminDemotedMeanwhile(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
 	req := i.mustRequest(i.alice, i.shared, i.app)
-	// A second admin, so the demotion of the first is allowed.
 	if _, err := i.e.db.Exec(`UPDATE memberships SET role = 'admin' WHERE user_id = ? AND workspace_id = ?`, i.bob.id, i.ws); err != nil {
 		t.Fatal(err)
 	}
@@ -1116,7 +1041,6 @@ func TestAnApprovalIdIsNeverGivenAgain(t *testing.T) {
 	if second.ID == first.ID {
 		t.Errorf("the request after the deleted one got its id, %d", first.ID)
 	}
-	// A decision still on its way for the old id finds nothing.
 	rec := i.approve(i.owner, first.ID, i.stripe)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("approving the deleted request's id: %d %s", rec.Code, rec.Body.String())
@@ -1125,7 +1049,6 @@ func TestAnApprovalIdIsNeverGivenAgain(t *testing.T) {
 
 func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
 	hash := func(d Definition) string { return d.contract("payments").Hash() }
-	// Two actions ask for a link, in two currencies.
 	twoActions := []string{`"add": {"kind": "insert"},`, `"add": {"kind": "insert"},
     "resend": {"kind": "update", "effects": [{"kind": "create_payment_link", "integration": "payments", "amount_field": "total",
       "currency": "USD", "description": "Reminder {{number}}", "url_field": "pay_url", "id_field": "payment_id"}]},`}
@@ -1133,7 +1056,6 @@ func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The currencies swap between the actions: the same ones are asked in, by other actions.
 	swapped, err := variant(t, append(slices.Clone(twoActions), `"currency": "EUR"`, `"currency": "USD"`, `"currency": "USD"`, `"currency": "EUR"`)...)
 	if err != nil {
 		t.Fatal(err)
@@ -1144,7 +1066,6 @@ func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
 	if hash(base) == hash(swapped) {
 		t.Error("swapping the currencies of two actions left the hash as it was")
 	}
-	// The fields a link's description names are bound to the link, not only to the slot.
 	swappedText, err := variant(t, append(slices.Clone(twoActions), `"Invoice {{number}} for {{customer}}"`, `"Reminder {{number}}"`, `"Reminder {{number}}"`, `"Invoice {{number}} for {{customer}}"`)...)
 	if err != nil {
 		t.Fatal(err)
@@ -1155,7 +1076,6 @@ func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
 	if hash(base) == hash(swappedText) {
 		t.Error("swapping the descriptions' fields between two actions left the hash as it was")
 	}
-	// The condition on the link is part of what was approved: dropping it needs a new approval.
 	restricted, err := variant(t, `"kind": "create_payment_link", "integration": "payments"`,
 		`"kind": "create_payment_link", "when": {"field": "status", "op": "eq", "value": "draft"}, "integration": "payments"`)
 	if err != nil {
@@ -1165,7 +1085,6 @@ func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
 	if hash(restricted) == hash(plain) {
 		t.Error("a link's when is not in the contract")
 	}
-	// Wording stays out of it.
 	reworded, err := variant(t, `"Invoice {{number}} for {{customer}}"`, `"Pay {{customer}}, {{number}}"`)
 	if err != nil {
 		t.Fatal(err)
@@ -1189,46 +1108,34 @@ func TestTheQueueSurvivesAnAppDeletedBetweenReads(t *testing.T) {
 	}
 }
 
-// ----- review fixes: the contract covers what an edit can change -----
-
-// received is the invoices with a number field the payment's verified amount is written to.
 var received = []string{
 	`{"name": "total", "type": "number", "required": true},`, `{"name": "total", "type": "number", "required": true},
     {"name": "received", "type": "number", "max": 1000},`,
 	`"paid_at": {"from": "occurred_at"}`, `"paid_at": {"from": "occurred_at"}, "received": {"from": "amount"}`,
 }
 
-// withSKU names a barcode of a stated format in the payment's description.
 var withSKU = []string{
 	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string"},
     {"name": "sku", "type": "barcode", "format": "ean_13", "max_length": 13},`,
 	`for {{customer}}"`, `for {{customer}} {{sku}}"`,
 }
 
-// withQuantity makes the description's customer required by a rule over a quantity that the
-// integration itself never reads.
 var withQuantity = []string{
 	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string", "required_when": {"field": "quantity", "op": "gt", "value": 50}},
     {"name": "quantity", "type": "number", "max": 100},`,
 }
 
-// withChain is the same one step further: the quantity's own requirement reads the batch.
 var withChain = []string{
 	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string", "required_when": {"field": "quantity", "op": "gt", "value": 50}},
     {"name": "quantity", "type": "number", "required_when": {"field": "batch", "op": "gt", "value": 5}},
     {"name": "batch", "type": "number", "max": 100},`,
 }
 
-// withReceiptNote adds a field the integration never names, required once the invoice is paid: a
-// system write validates the whole row, so a sent invoice without a note refuses the integration's
-// move to paid.
 var withReceiptNote = []string{
 	`{"name": "customer", "type": "string"},`, `{"name": "customer", "type": "string"},
     {"name": "receipt_note", "type": "string", "required_when": {"field": "status", "op": "eq", "value": "paid"}},`,
 }
 
-// Each of these edits changes what the integration may do or who can trigger it, so its approval
-// must not carry over.
 func TestAnEditThatChangesWhatTheIntegrationMayDoNeedsAFreshApproval(t *testing.T) {
 	for name, tc := range map[string]struct{ base, edit []string }{
 		"the record's id in the description":                   {nil, []string{"Invoice {{number}} for {{customer}}", "Invoice {{number}} for {{customer}} {{id}}"}},
@@ -1279,8 +1186,6 @@ func TestAnEditThatChangesWhatTheIntegrationMayDoNeedsAFreshApproval(t *testing.
 	}
 }
 
-// What is not an integration's business stays free: the wording of a field's options and of the
-// description, and the constraints of a field it never touches.
 func TestWordingAndOtherFieldsDoNotChangeTheContract(t *testing.T) {
 	hash := func(d Definition, err error) string {
 		t.Helper()
@@ -1301,8 +1206,6 @@ func TestWordingAndOtherFieldsDoNotChangeTheContract(t *testing.T) {
 	}
 }
 
-// ----- review fixes: renewing a request -----
-
 func TestARenewedRequestIsANewOneAndAStaleDecisionNeverReachesIt(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
@@ -1316,7 +1219,6 @@ func TestARenewedRequestIsANewOneAndAStaleDecisionNeverReachesIt(t *testing.T) {
 	}
 	expect(t, i.approve(i.owner, renewed.ID, i.stripe), http.StatusOK)
 
-	// A revoke still on its way for the first id is refused and leaves the new approval.
 	rec := i.decide(i.owner, i.ws, first.ID, "revoke", nil)
 	expect(t, rec, http.StatusConflict)
 	if code(t, rec) != string(apierr.CodeAppIntegrationNotApproved) {
@@ -1331,7 +1233,6 @@ func TestARenewedRequestIsANewOneAndAStaleDecisionNeverReachesIt(t *testing.T) {
 	}
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
 
-	// The old row keeps its decision.
 	list := decode[ApprovalList](t, i.queue(i.owner, i.ws, "?status=revoked"))
 	if len(list.Approvals) != 1 || list.Approvals[0].ID != first.ID {
 		t.Fatalf("the revoked ones: %+v", list.Approvals)
@@ -1343,7 +1244,6 @@ func TestARenewedRequestQueuesByWhenItWasMade(t *testing.T) {
 	first := i.mustRequest(i.alice, i.shared, i.app)
 	expect(t, i.decide(i.owner, i.ws, first.ID, "reject", nil), http.StatusOK)
 
-	// Another app asks while the first's request is turned down.
 	rec := i.alice.do(http.MethodPost, appsPath(i.shared, ""), map[string]any{"name": "Other", "definition": invoices(t)})
 	expect(t, rec, http.StatusCreated)
 	other := i.mustRequest(i.alice, i.shared, decode[App](t, rec))
@@ -1354,8 +1254,6 @@ func TestARenewedRequestQueuesByWhenItWasMade(t *testing.T) {
 		t.Fatalf("the queue, newest first: %+v (renewed %d, other %d)", list.Approvals, renewed.ID, other.ID)
 	}
 }
-
-// ----- review fixes: the space an approval allowed goes with it -----
 
 func (i *inv) grants(integration int64) []int64 {
 	i.e.t.Helper()
@@ -1402,7 +1300,6 @@ func TestRevokingAnApprovalTakesBackTheSpaceItAllowed(t *testing.T) {
 	if _, err := i.e.s.Binding(i.ctx(), app.ID, "payments"); !errors.Is(err, ErrIntegrationUnapproved) {
 		t.Fatalf("the app still has its binding: %v", err)
 	}
-	// Approving again, without allow_space, can't use the space: the admin has to say so again.
 	renewed := i.mustRequest(i.alice, i.alicePrivate, i.fresh(i.alice, i.alicePrivate, app))
 	rec := i.approve(i.owner, renewed.ID, i.stripe)
 	expect(t, rec, http.StatusConflict)
@@ -1413,7 +1310,7 @@ func TestRevokingAnApprovalTakesBackTheSpaceItAllowed(t *testing.T) {
 
 func TestRevokingAnApprovalLeavesASpaceAnAdminAllowed(t *testing.T) {
 	i := newInv(t)
-	i.allow(i.stripe, i.shared) // the admin's own grant, made in the integration's settings
+	i.allow(i.stripe, i.shared)
 	req := i.mustRequest(i.alice, i.shared, i.app)
 	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
 	expect(t, i.decide(i.owner, i.ws, req.ID, "revoke", nil), http.StatusOK)
@@ -1462,10 +1359,6 @@ func TestMovingOrDeletingAnAppTakesBackTheSpaceItsApprovalAllowed(t *testing.T) 
 	}
 }
 
-// ----- review fixes: saving an integration's spaces never adopts an approval's grant -----
-
-// approvedFromApproval has the admin approve the shared app's contract and allow its space in the
-// same decision, so the grant is the approval's.
 func (i *inv) approvedFromApproval() int64 {
 	i.e.t.Helper()
 	req := i.mustRequest(i.alice, i.shared, i.app)
@@ -1509,7 +1402,6 @@ func TestSavingTheSettingsUnchangedLeavesAnApprovalsGrantTheApprovals(t *testing
 	req := i.approvedFromApproval()
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
 
-	// The settings form sends every checked space, the approval's included: nothing is adopted.
 	rec := i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}})
 	expect(t, rec, http.StatusOK)
 	if got := decode[integrations.Integration](t, rec); !slices.Equal(got.ApprovalSpaces, []int64{i.shared.ID}) {
@@ -1522,7 +1414,6 @@ func TestSavingTheSettingsUnchangedLeavesAnApprovalsGrantTheApprovals(t *testing
 		t.Fatalf("%d adoption events for a save that adopted nothing", n)
 	}
 
-	// So revoking the approval still takes the space back.
 	expect(t, i.decide(i.owner, i.ws, req, "revoke", nil), http.StatusOK)
 	if got := i.grants(i.stripe); len(got) != 0 {
 		t.Fatalf("a grant is left after the revoke: %v", got)
@@ -1533,7 +1424,6 @@ func TestKeepingAnApprovalsSpaceIsExplicitAndAudited(t *testing.T) {
 	i := newInv(t)
 	req := i.approvedFromApproval()
 
-	// keep names only spaces the list holds.
 	expect(t, i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{}, "keep": []int64{i.shared.ID}}), http.StatusBadRequest)
 	if got := i.fromApproval(); !slices.Equal(got, []int64{i.shared.ID}) {
 		t.Fatalf("a refused request changed the grant: %v", got)
@@ -1550,13 +1440,11 @@ func TestKeepingAnApprovalsSpaceIsExplicitAndAudited(t *testing.T) {
 	if n := i.keptEvents(); n != 1 {
 		t.Fatalf("%d adoption events, want 1", n)
 	}
-	// Asking again changes nothing and records nothing.
 	expect(t, i.owner.do(http.MethodPut, i.spacesPath(), map[string]any{"spaces": []int64{i.shared.ID}, "keep": []int64{i.shared.ID}}), http.StatusOK)
 	if n := i.keptEvents(); n != 1 {
 		t.Fatalf("%d adoption events after asking again, want 1", n)
 	}
 
-	// The approval ending leaves the admin's own grant.
 	expect(t, i.decide(i.owner, i.ws, req, "revoke", nil), http.StatusOK)
 	if got := i.grants(i.stripe); !slices.Equal(got, []int64{i.shared.ID}) {
 		t.Fatalf("the kept grant after the revoke = %v", got)
@@ -1572,8 +1460,6 @@ func TestOnlyAnAdminMayKeepAnApprovalsSpace(t *testing.T) {
 	}
 }
 
-// The builder's preview says what a payment link would ask for, from the sample record, and does
-// nothing else: no entry queued, no approval needed, no row written.
 func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 	i := newInv(t)
 	s := i.shared
@@ -1582,7 +1468,6 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 	send := &ClientAction{Name: "send", SurfaceID: SurfaceID(i.app.ID), Context: map[string]any{"id": float64(1)}}
 	before := everythingStored(t, i.e)
 
-	// Nothing is approved, and the preview works all the same.
 	reply := i.mustPreview(i.alice, s, i.app, PreviewRequest{Rows: rows, Action: send})
 	if len(reply.Effects) != 1 {
 		t.Fatalf("effects = %+v", reply.Effects)
@@ -1592,7 +1477,6 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 		e.Detail.Amount != "120.00" {
 		t.Fatalf("the simulated link = %+v", e)
 	}
-	// The same through the endpoint that only simulates the effects.
 	rec := i.alice.do(http.MethodPost, appPath(s, i.app.ID, "/actions/preview"), map[string]any{
 		"name": "send", "surfaceId": SurfaceID(i.app.ID), "context": map[string]any{"id": float64(1)}, "rows": rows})
 	expect(t, rec, http.StatusOK)
@@ -1605,7 +1489,6 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 		t.Fatalf("the simulated link through the actions route = %+v", e)
 	}
 
-	// It made nothing real and queued nothing.
 	if got := everythingStored(t, i.e); got != before {
 		t.Fatalf("the preview changed what is stored:\n%s\n--- now\n%s", before, got)
 	}
@@ -1613,15 +1496,10 @@ func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
 		t.Fatalf("a preview queued %d effects", n)
 	}
 
-	// Only those who may design or publish the app preview it: another member of the space, and
-	// someone outside it, are refused as before.
 	expect(t, i.bob.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusForbidden)
 	expect(t, i.mallory.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusNotFound)
 }
 
-// ----- review fixes: the queue says, for an approval's own space only, how the space is allowed -----
-
-// queued is the approval with this id as the admin's queue shows it, read from the raw reply.
 func (i *inv) queued(id int64) map[string]any {
 	i.e.t.Helper()
 	rec := i.queue(i.owner, i.ws, "?status=all")
@@ -1651,31 +1529,25 @@ func TestTheQueueSaysHowAnApprovalsSpaceIsAllowed(t *testing.T) {
 	i := newInv(t)
 	private := i.privateApp()
 
-	// Waiting: nothing is bound, so there is no grant to speak of, even when an integration is allowed.
 	waiting := i.mustRequest(i.alice, i.alicePrivate, private)
 	if got := i.spaceGrant(waiting.ID); got != "none" {
 		t.Fatalf("a waiting request: space_grant = %q", got)
 	}
 
-	// Approved with the space allowed by the approval itself (another person's private space, which
-	// the admin can't open): the grant is the approval's.
 	expect(t, i.decide(i.owner, i.ws, waiting.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
 	if got := i.spaceGrant(waiting.ID); got != "approval" {
 		t.Fatalf("approved with allow_space: space_grant = %q", got)
 	}
-	// Approved in a space the admin had allowed in the settings: an approval never takes that away.
 	i.allow(i.stripe, i.shared)
 	shared := i.mustRequest(i.alice, i.shared, i.app)
 	expect(t, i.approve(i.owner, shared.ID, i.stripe), http.StatusOK)
 	if got := i.spaceGrant(shared.ID); got != "settings" {
 		t.Fatalf("approved in a space the admin allowed: space_grant = %q", got)
 	}
-	// Each approval says it of its own space: the private one is still the approval's.
 	if got := i.spaceGrant(waiting.ID); got != "approval" {
 		t.Fatalf("the private space's approval after the shared one: space_grant = %q", got)
 	}
 
-	// An approval whose space an admin took the grant away from (the integration's settings) says none.
 	if _, err := i.e.db.Exec(`DELETE FROM integration_spaces WHERE integration_id = ? AND space_id = ?`, i.stripe, i.shared.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1683,28 +1555,23 @@ func TestTheQueueSaysHowAnApprovalsSpaceIsAllowed(t *testing.T) {
 		t.Fatalf("approved, the space no longer allowed: space_grant = %q", got)
 	}
 
-	// Another integration allowed in the space is not this approval's: it reads the one it is bound to.
 	other := i.integration(i.ws, "stripe", "second")
 	i.allow(other, i.shared)
 	if got := i.spaceGrant(shared.ID); got != "none" {
 		t.Fatalf("another integration allowed in the space: space_grant = %q", got)
 	}
 
-	// Revoked: unbound, and the grant it made is gone.
 	expect(t, i.decide(i.owner, i.ws, waiting.ID, "revoke", nil), http.StatusOK)
 	if got := i.spaceGrant(waiting.ID); got != "none" {
 		t.Fatalf("revoked: space_grant = %q", got)
 	}
 }
 
-// The queue's reply carries the one fact about the approval's own space, and nothing about any
-// other: the keys are the approval's, and the decision's reply and the requester's carry the same.
 func TestTheQueueRevealsNothingAboutOtherSpaces(t *testing.T) {
 	i := newInv(t)
 	private := i.privateApp()
 	mine := i.mustRequest(i.alice, i.alicePrivate, private)
 	expect(t, i.decide(i.owner, i.ws, mine.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
-	// The integration is also allowed in other spaces, which no approval of this queue is in.
 	i.allow(i.stripe, i.shared)
 
 	got := i.queued(mine.ID)
@@ -1722,7 +1589,6 @@ func TestTheQueueRevealsNothingAboutOtherSpaces(t *testing.T) {
 		t.Fatalf("the approval = %v", got)
 	}
 
-	// The decision's own reply says the grant, too.
 	again := i.mustRequest(i.alice, i.shared, i.app)
 	rec := i.approve(i.owner, again.ID, i.stripe)
 	expect(t, rec, http.StatusOK)
@@ -1731,17 +1597,13 @@ func TestTheQueueRevealsNothingAboutOtherSpaces(t *testing.T) {
 	}
 }
 
-// A preview says the amount a payment link would ask for, exactly as the money rules read the sample
-// record's number (decimal text with the currency's decimals), and in the currency the record chose or
-// else the effect's own. It never guesses one: no amount is shown for a record with none, a null, text
-// that reads like a number, or a number that isn't finite.
 func TestThePreviewedLinkNeverGuessesAnAmount(t *testing.T) {
 	def := invoices(t)
 	e := def.Actions["send"].Effects[0]
 	e.CurrencyField, e.Currency = "currency", "USD"
 	for name, tc := range map[string]struct {
 		data     map[string]any
-		amount   string // "" for none shown
+		amount   string
 		currency string
 	}{
 		"a number":                  {map[string]any{"total": 12.5, "currency": "EUR"}, "12.50", "EUR"},
@@ -1771,8 +1633,6 @@ func TestThePreviewedLinkNeverGuessesAnAmount(t *testing.T) {
 	}
 }
 
-// A payment link simulated for a record an insert is making says "new", with no record number, as
-// the other effects of an insert do: the record has no number yet.
 func TestAPreviewedLinkOfAnInsertHasNoRecordNumberAndOfAnUpdateHasIt(t *testing.T) {
 	i := newInv(t)
 	def := invoices(t)
@@ -1792,9 +1652,6 @@ func TestAPreviewedLinkOfAnInsertHasNoRecordNumberAndOfAnUpdateHasIt(t *testing.
 	}
 }
 
-// Asking for an approval is the publisher's: a space editor whose roles in the app let them design it,
-// or only use it, but not publish it, is refused with the capability that is missing. (A viewer of
-// the space is refused earlier, by the space.)
 func TestAnEditorWithoutThePublishCapabilityCannotRequestAnApproval(t *testing.T) {
 	for name, roles := range map[string][]access.AppRole{
 		"a builder (design)": {access.AppBuilder},
@@ -1803,7 +1660,6 @@ func TestAnEditorWithoutThePublishCapabilityCannotRequestAnApproval(t *testing.T
 		t.Run(name, func(t *testing.T) {
 			i := newInv(t)
 			hash := i.status(i.alice, i.shared, i.app).Slots[0].ContractHash
-			// Another editor keeps the management of the roles, so the one under test is left with only hers.
 			i.e.addMember(i.owner, i.shared, i.mallory, access.RoleEditor)
 			i.mustSetRoles(i.mallory, i.shared, i.app, grant(i.alice.id, roles...), grant(i.mallory.id, access.AppBuilder))
 			rec := i.request(i.alice, i.shared, i.app, "payments", hash)
@@ -1811,7 +1667,6 @@ func TestAnEditorWithoutThePublishCapabilityCannotRequestAnApproval(t *testing.T
 			if n := i.count(`SELECT count(*) FROM app_integration_approvals WHERE app_id = ?`, i.app.ID); n != 0 {
 				t.Fatalf("a refused request left %d approvals", n)
 			}
-			// With the publisher role added she can: it is the capability that decides, not the space role.
 			i.mustSetRoles(i.mallory, i.shared, i.app, grant(i.alice.id, append(roles, access.AppPublisher)...), grant(i.mallory.id, access.AppBuilder))
 			expect(t, i.request(i.alice, i.shared, i.app, "payments", hash), http.StatusOK)
 		})

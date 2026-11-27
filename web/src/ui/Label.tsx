@@ -1,7 +1,3 @@
-// A board label: its name in one of six hues. The hue is worked out from the name, so a label has
-// the same colour on every card, for everyone, on every device and in every language, and nothing
-// about it is stored. The hue only helps the eye find the same label again: the name says it.
-
 import type { ReactNode } from 'react'
 import { LABEL_HUES } from './roles'
 import './Label.css'
@@ -17,12 +13,6 @@ const HUE_CLASS = {
   teal: 'ui-hue-teal',
 } as const
 
-// A label's name as the server keeps it (normalizeLabel in internal/boards/validate.go): runs of
-// white space (Unicode's White_Space, Go's unicode.IsSpace) made one space and trimmed, then full
-// case folding between two NFC normalisations. JavaScript has no case folding: each character is
-// taken to upper case and back, twice ("ẞ" → "ß" → "ss"), one at a time so the final sigma stays
-// "σ" as folding has it, except the dotless "ı", which folding leaves alone and the round trip
-// would make "i". Neither step depends on the locale.
 export function normalizeLabelName(name: string): string {
   const spaced = name
     .normalize('NFC')
@@ -35,9 +25,6 @@ export function normalizeLabelName(name: string): string {
   return folded.normalize('NFC')
 }
 
-// The hue of a name: FNV-1a (32 bits) over the UTF-8 bytes of the name as the server keeps it, so
-// "Launch", "launch ", "tech  debt" and a name typed with a combining accent each get the hue of
-// the label they are. Pure: the same in every browser, session and language.
 export function labelHue(name: string): LabelHue {
   const bytes = new TextEncoder().encode(normalizeLabelName(name))
   let h = 0x811c9dc5
@@ -48,14 +35,10 @@ export function labelHue(name: string): LabelHue {
   return LABEL_HUES[h % LABEL_HUES.length]
 }
 
-// The class that colours something in a hue (a label, an avatar).
 export const hueClass = (hue: LabelHue) => HUE_CLASS[hue]
 
 export interface LabelProps {
   name: string
-  // The words shown, when they are not the name itself (a count after it). Words only: the label
-  // is one short line and cuts what doesn't fit, so a control (a remove button) goes beside it,
-  // not in it.
   children?: ReactNode
   className?: string
 }

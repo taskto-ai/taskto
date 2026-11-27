@@ -22,9 +22,6 @@ func decodeQP(t *testing.T, s string) string {
 	return string(b)
 }
 
-// Every language's file is the reference's shape: no message or placeholder English
-// doesn't have, the same placeholders and paragraphs in each message, and a tag the server
-// stores. A translation may leave a message out: it is English until someone translates it.
 func TestLanguagesMatchEnglish(t *testing.T) {
 	c := DefaultCatalog()
 	en := c.langs["en"]
@@ -64,7 +61,6 @@ func TestLanguagesMatchEnglish(t *testing.T) {
 			}
 		}
 	}
-	// This card ships English and Brazilian Portuguese with every message.
 	pt := c.langs["pt-BR"]
 	for name := range en.Messages {
 		if _, ok := pt.Messages[name]; !ok {
@@ -192,8 +188,6 @@ type senderFunc func(Message) error
 
 func (f senderFunc) Send(_ context.Context, m Message) error { return f(m) }
 
-// A link in a message is an absolute http or https URL: the value comes from elsewhere in the
-// server, and javascript:, data: or a path would make a message that attacks its reader.
 func TestRenderOnlyLinksToWebAddresses(t *testing.T) {
 	c := &Catalog{langs: map[string]file{"en": {Footer: "Footer", Messages: map[string]message{
 		"m": {Subject: "Hi", Title: "Title", Paragraphs: []string{"Hello"}, Action: "Open"},

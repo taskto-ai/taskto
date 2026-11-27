@@ -8,17 +8,13 @@ import (
 	"taskto.ai/taskto/internal/boards"
 )
 
-// The agent creates, renames and archives boards, and archives and restores cards, with
-// the user's own access and as their changes marked as the agent's.
 func TestBoardManagementTools(t *testing.T) {
 	w := newWorld(t)
 
-	// A team board in a shared space the user edits.
 	b := w.ok(w.aliceConv, "create_board", map[string]any{"space_id": w.shared, "name": "  Roadmap "})
 	if b["name"] != "Roadmap" || b["kind"] != "team" || b["archived_at"] != nil {
 		t.Fatalf("created board = %v", b)
 	}
-	// Boards record the user, not the agent mark (cards do).
 	if by := b["created_by"].(map[string]any); id(by["id"]) != w.alice {
 		t.Fatalf("created_by = %v", by)
 	}
@@ -33,11 +29,9 @@ func TestBoardManagementTools(t *testing.T) {
 		return out
 	}
 
-	// A private space has one board; names are checked as over HTTP.
 	w.status(http.StatusBadRequest, w.aliceConv, "create_board", map[string]any{"space_id": w.alicePrivate, "name": "Second"})
 	w.status(http.StatusBadRequest, w.aliceConv, "create_board", map[string]any{"space_id": w.shared, "name": "   "})
 
-	// Rename, with versions.
 	b = w.ok(w.aliceConv, "update_board", with(map[string]any{"version": b["version"], "name": "Plan"}))
 	if b["name"] != "Plan" || id(b["version"]) != 2 {
 		t.Fatalf("renamed board = %v", b)
@@ -45,10 +39,8 @@ func TestBoardManagementTools(t *testing.T) {
 	w.status(http.StatusConflict, w.aliceConv, "update_board", with(map[string]any{"version": 1, "name": "Stale"}))
 	w.status(http.StatusBadRequest, w.aliceConv, "update_board", with(map[string]any{"version": b["version"]}))
 
-	// A personal board can't be archived.
 	w.status(http.StatusBadRequest, w.aliceConv, "update_board", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "version": 1, "archived": true})
 
-	// Cards: archive leaves the columns, restore puts it back where it was.
 	card := w.ok(w.aliceConv, "create_card", with(map[string]any{"title": "Ship", "column": "review"}))
 	cref := with(map[string]any{"card_id": id(card["id"])})
 	withCard := func(extra map[string]any) map[string]any {
@@ -60,7 +52,7 @@ func TestBoardManagementTools(t *testing.T) {
 		}
 		return out
 	}
-	w.status(http.StatusBadRequest, w.aliceConv, "restore_card", withCard(map[string]any{"version": card["version"]})) // not archived
+	w.status(http.StatusBadRequest, w.aliceConv, "restore_card", withCard(map[string]any{"version": card["version"]}))
 	card = w.ok(w.aliceConv, "archive_card", withCard(map[string]any{"version": card["version"]}))
 	if card["column"] != "archived" || card["archived_from"] != "review" {
 		t.Fatalf("archived card = %v", card)
@@ -69,7 +61,7 @@ func TestBoardManagementTools(t *testing.T) {
 		t.Fatalf("updated_by = %v", u)
 	}
 	w.status(http.StatusConflict, w.aliceConv, "archive_card", withCard(map[string]any{"version": 1}))
-	w.status(http.StatusBadRequest, w.aliceConv, "archive_card", withCard(map[string]any{"version": card["version"]})) // already
+	w.status(http.StatusBadRequest, w.aliceConv, "archive_card", withCard(map[string]any{"version": card["version"]}))
 	if got := w.ok(w.aliceConv, "list_cards", with(map[string]any{}))["cards"].([]any); len(got) != 0 {
 		t.Fatalf("cards = %v", got)
 	}
@@ -87,7 +79,6 @@ func TestBoardManagementTools(t *testing.T) {
 		t.Fatalf("restored card = %v", card)
 	}
 
-	// An archived board leaves list_boards unless asked for, and is read-only.
 	b = w.ok(w.aliceConv, "update_board", with(map[string]any{"version": b["version"], "archived": true}))
 	if b["archived_at"] == nil {
 		t.Fatalf("archived board = %v", b)
@@ -115,7 +106,6 @@ func TestBoardManagementTools(t *testing.T) {
 		t.Fatalf("boards = %v", got)
 	}
 
-	// A viewer reads the boards, archived ones too, and changes nothing.
 	if got := w.ok(w.bobConv, "list_boards", map[string]any{"space_id": w.shared, "archived": true})["boards"].([]any); len(got) != 1 {
 		t.Fatalf("bob's boards = %v", got)
 	}
@@ -133,8 +123,6 @@ func TestBoardManagementTools(t *testing.T) {
 	}
 }
 
-// Someone else's spaces and boards are "not found" to the new tools, as to the others, and
-// nothing changes.
 func TestBoardManagementToolsCannotReachOtherUsersBoards(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -158,11 +146,9 @@ func TestBoardManagementToolsCannotReachOtherUsersBoards(t *testing.T) {
 			}
 		}
 	}
-	// Bob's board through alice's own space is no way round.
 	w.status(http.StatusNotFound, w.aliceConv, "update_board", map[string]any{"space_id": w.alicePrivate, "board_id": w.bobPersonal, "version": 1, "name": "x"})
 	w.status(http.StatusNotFound, w.aliceConv, "archive_card", map[string]any{"space_id": w.alicePrivate, "board_id": w.bobPersonal, "card_id": bobCard.ID, "version": 1})
 
-	// A conversation of another workspace can't reach this one's shared space.
 	w.status(http.StatusNotFound, w.aliceConv2, "create_board", map[string]any{"space_id": w.shared, "name": "x"})
 
 	card, err := w.tools.o.Boards.ShowCard(ctx, boards.Actor{UserID: w.bob}, w.bobPrivate, w.bobPersonal, bobCard.ID)

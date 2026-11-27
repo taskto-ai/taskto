@@ -259,8 +259,8 @@ isn't trusted every request, the provider's and anyone's, counts against the pro
 and a flood of bad requests can hold back real deliveries.
 
 A server without a public address (a laptop, a home server) works without webhooks: the
-provider's events don't reach it and payments are reconciled by polling the provider, which
-arrives in a later release. A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
+provider's events don't reach it and payments are reconciled by polling the provider, which the
+server always does for open payments ([integrations](integrations.md#reconciliation-polling)). A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
 `POST /hooks/*` to the server gives the same instant updates without opening the server; give
 `-public-url` the tunnel's address.
 
@@ -437,9 +437,10 @@ your password?**, and the invite dialog doesn't offer to email.
 Stripe's payment page, `<public_url>/payment/done` and `/payment/cancelled`, are the server's own and
 are built on it. Without one a [payment link](integrations.md#payment-links) is still made, and the
 payer stays on a confirmation page Stripe hosts; but Stripe can't send webhooks to such a server, so
-paid status is to come from polling Stripe (not built yet). The two pages need no session, so a
-reverse proxy that exposes only what payers must reach forwards those two paths (and `POST /hooks/*`
-once webhooks are used).
+paid status comes from polling Stripe. The two pages need no session, so a
+reverse proxy that exposes only what payers must reach forwards those two paths and `/assets/*`,
+where the web app's scripts, styles and fonts are (the two pages are the web app's, and without them
+the payer sees a blank page), and `POST /hooks/*` once webhooks are used.
 
 | Setting | Flag / environment | |
 |---|---|---|
@@ -866,10 +867,16 @@ A private space's files go under the knowledge base's own lock for that space, w
 photo writes in it held too: a write already under way finishes first, and one that comes after
 is refused as a space that isn't there, so nothing of the space is written again once it is
 removed. A call that had found the space before the purge is told from a space made later with the
-same number (the database can give a purged space's number again) by its creation time, and its row
-is checked once more under the lock, so it can't make the directory again either. The directory is renamed aside in one step and then deleted, so a server that stops in the
+same number (the database can give a purged space's number again) by its generation, and its row
+is checked once more under the lock, so it can't make the directory again either. The generation is
+a number no space has twice: a counter in the database (`space_generations`) gives each new space
+the next one, and never goes down, so it doesn't depend on the clock the way a creation time does.
+The counter is in the database, which a restore brings back together with the data directory, so
+the two are always consistent; spaces made after the backup are gone with it, and their numbers
+may be given again. The directory is renamed aside in one step and then deleted, so a server that stops in the
 middle leaves no half-deleted repository at the space's path; the purge's next try deletes what
-was left.
+was left. A removal that comes late, for a space that is no longer the one with the number, leaves
+the directory alone, since the files there are the new space's.
 
 **What stays: what they made for others.** Cards, comments, documents and app records in shared
 spaces, and the audit log, stay, shown as "Deleted user", and so do the photos of shared apps' records
@@ -1017,6 +1024,14 @@ and refuses a file that exists or one inside the data directory.
 The archive holds password hashes, sessions, and `server.key` next to the provider keys it
 encrypts, so whoever has the archive can read those keys: keep it as private as the server,
 and encrypt it before it leaves the machine.
+
+That includes the keys of [payment integrations](integrations.md#secrets): a payment provider's
+secret key and webhook signing secret are sealed with `server.key`, and the archive holds both.
+After restoring a backup **on another machine**, treat those keys as exposed to whoever handled the
+archive: create new ones at the provider, enter them in Settings → Integrations, and delete the old
+ones. (Restoring on the same machine, from your own backup, is not a reason to rotate.) A restore
+with a `server.key` other than the one that sealed them leaves the keys unreadable: **Check** says
+so, and you enter them again.
 
 A backup is a copy of one moment, and later changes don't reach it. When a file's old
 versions are [taken out of a space's history](api.md#taking-a-files-old-versions-out-of-history),

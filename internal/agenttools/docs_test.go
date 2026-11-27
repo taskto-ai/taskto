@@ -11,12 +11,10 @@ import (
 	"taskto.ai/taskto/internal/knowledge"
 )
 
-// space returns a space as its writer sees it, to read the knowledge base around the tools.
 func (w *world) space(id, workspace int64) access.Space {
 	return access.Space{ID: id, WorkspaceID: workspace, Access: access.Write}
 }
 
-// seed puts a file in a space as alice, without the tools.
 func (w *world) seed(space, workspace int64, name string, content []byte) knowledge.Result {
 	w.t.Helper()
 	res, err := w.kb.Put(context.Background(), w.space(space, workspace), name, content, "",
@@ -32,8 +30,6 @@ func TestDocToolsDefinitions(t *testing.T) {
 	for _, d := range Definitions() {
 		readOnly[d.Name] = d.ReadOnly
 	}
-	// Only the reading ones run without asking the owner: moving, deleting and restoring
-	// ask, like write_doc.
 	for tool, want := range map[string]bool{"read_doc": true, "doc_history": true, "move_doc": false, "delete_doc": false, "restore_doc": false, "write_doc": false} {
 		if got, ok := readOnly[tool]; !ok || got != want {
 			t.Errorf("%s: read_only = %v, defined %v, want %v", tool, got, ok, want)
@@ -41,7 +37,6 @@ func TestDocToolsDefinitions(t *testing.T) {
 	}
 }
 
-// A document is changed, moved, deleted and brought back, and its history says who did what.
 func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -75,7 +70,6 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 	if oldest["commit"] != v1["commit"] || oldest["change"] != "create" {
 		t.Fatalf("oldest commit = %v", oldest)
 	}
-	// Paging: one at a time, with the next page's cursor.
 	page := w.ok(w.aliceConv, "doc_history", with(map[string]any{"path": "plan.md", "limit": 1}))
 	if len(page["commits"].([]any)) != 1 || page["next"] != v2["commit"] {
 		t.Fatalf("first page = %v", page)
@@ -85,7 +79,6 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 		t.Fatalf("second page = %v", page)
 	}
 
-	// The older version is read at its commit; now is the newer.
 	if got := w.ok(w.aliceConv, "read_doc", with(map[string]any{"path": "plan.md", "at": oldest["commit"]})); got["content"] != "first" || got["at"] != oldest["commit"] {
 		t.Fatalf("read at the first commit = %v", got)
 	}
@@ -93,7 +86,6 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 		t.Fatalf("read now = %v", got)
 	}
 
-	// A stale base_version is a conflict, and nothing moves.
 	w.status(http.StatusConflict, w.aliceConv, "move_doc", with(map[string]any{"from": "plan.md", "to": "old/plan.md", "base_version": v1["doc"].(map[string]any)["version"]}))
 	moved := w.ok(w.aliceConv, "move_doc", with(map[string]any{
 		"from": "plan.md", "to": "archive/plan.md", "base_version": v2["doc"].(map[string]any)["version"], "message": "Archive the plan",
@@ -102,18 +94,15 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 		t.Fatalf("move_doc = %v", moved)
 	}
 	w.status(http.StatusNotFound, w.aliceConv, "read_doc", with(map[string]any{"path": "plan.md"}))
-	// The destination must not exist; a document doesn't move into itself.
 	w.ok(w.aliceConv, "write_doc", with(map[string]any{"path": "other.md", "content": "x"}))
 	w.status(http.StatusConflict, w.aliceConv, "move_doc", with(map[string]any{"from": "other.md", "to": "archive/plan.md"}))
 	w.status(http.StatusBadRequest, w.aliceConv, "move_doc", with(map[string]any{"from": "other.md", "to": "other.md"}))
-	// A folder moves whole.
 	w.ok(w.aliceConv, "move_doc", with(map[string]any{"from": "archive", "to": "kept"}))
 	if got := w.ok(w.aliceConv, "read_doc", with(map[string]any{"path": "kept/plan.md"})); got["content"] != "second" {
 		t.Fatalf("read after the folder moved = %v", got)
 	}
 
-	// Delete, and bring it back from the history of its old path.
-	w.status(http.StatusBadRequest, w.aliceConv, "delete_doc", with(map[string]any{"path": "kept"})) // a folder
+	w.status(http.StatusBadRequest, w.aliceConv, "delete_doc", with(map[string]any{"path": "kept"}))
 	w.status(http.StatusConflict, w.aliceConv, "delete_doc", with(map[string]any{"path": "kept/plan.md", "base_version": v1["doc"].(map[string]any)["version"]}))
 	deleted := w.ok(w.aliceConv, "delete_doc", with(map[string]any{"path": "kept/plan.md", "message": "Not needed"}))
 	w.status(http.StatusNotFound, w.aliceConv, "read_doc", with(map[string]any{"path": "kept/plan.md"}))
@@ -131,7 +120,6 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 	w.status(http.StatusBadRequest, w.aliceConv, "restore_doc", with(map[string]any{"path": "plan.md", "commit": "nope"}))
 	w.status(http.StatusNotFound, w.aliceConv, "restore_doc", with(map[string]any{"path": "never.md", "commit": v1["commit"]}))
 
-	// Every change is the user's, made by the agent.
 	all, err := w.kb.History(ctx, w.space(w.shared, w.one), "", "", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +129,6 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 			t.Errorf("commit %+v isn't alice's, made by the agent", c)
 		}
 	}
-	// Without a path, the history is the space's.
 	if got := w.ok(w.aliceConv, "doc_history", sp)["commits"].([]any); len(got) != len(all.Commits) {
 		t.Fatalf("the space's history has %d commits, want %d", len(got), len(all.Commits))
 	}
@@ -150,7 +137,6 @@ func TestDocHistoryMoveDeleteRestore(t *testing.T) {
 	w.status(http.StatusBadRequest, w.aliceConv, "doc_history", with(map[string]any{"purge": true}))
 }
 
-// Plain-text files are read; binaries, large files and unversioned ones are not.
 func TestReadDocTextFiles(t *testing.T) {
 	w := newWorld(t)
 	sp := w.alicePrivate
@@ -176,7 +162,6 @@ func TestReadDocTextFiles(t *testing.T) {
 			t.Errorf("%s: %d %v, want a refusal", name, code, out)
 		}
 	}
-	// Pieces, as for a document.
 	code, out := read("just-over.txt")
 	if code != http.StatusOK || len(out["content"].(string)) != readChunk || out["next_offset"] != float64(readChunk) {
 		t.Fatalf("first piece = %d %v", code, out["next_offset"])
@@ -185,15 +170,12 @@ func TestReadDocTextFiles(t *testing.T) {
 	if out["content"] != strings.Repeat("y", 10) || out["next_offset"] != nil {
 		t.Fatalf("last piece = %v", out)
 	}
-	// A folder, or a file that isn't there.
 	w.status(http.StatusNotFound, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "data"})
 	w.status(http.StatusNotFound, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "nothing.txt"})
-	// A commit that isn't one, and one that doesn't exist.
 	w.status(http.StatusBadRequest, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "src/main.go", "at": "main"})
 	w.status(http.StatusNotFound, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "src/main.go", "at": strings.Repeat("a", 40)})
 }
 
-// An unversioned file's older versions' bytes are gone: restoring one is refused, not a crash.
 func TestRestoreDocUnversionedIsGone(t *testing.T) {
 	w := newWorld(t)
 	first := w.seed(w.alicePrivate, w.one, "song.mp3", []byte("ID3 first"))
@@ -204,8 +186,6 @@ func TestRestoreDocUnversionedIsGone(t *testing.T) {
 	w.status(http.StatusGone, w.aliceConv, "restore_doc", map[string]any{"space_id": w.alicePrivate, "path": "song.mp3", "commit": first.Commit})
 }
 
-// The new tools reach only what the user may: another person's space, another workspace's, and
-// a space they may only read, are refused, and nothing changes.
 func TestDocToolsAreIsolated(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -213,8 +193,6 @@ func TestDocToolsAreIsolated(t *testing.T) {
 	shared := w.seed(w.shared, w.one, "team.md", []byte("team"))
 	elsewhere := w.seed(w.alicePrivate2, w.two, "elsewhere.md", []byte("two"))
 
-	// Not bob's private space, not a space of another workspace (the conversation's), not one
-	// that doesn't exist: not found, the same for every tool.
 	for _, space := range []int64{w.bobPrivate, w.alicePrivate2, w.alicePrivate2 + 1000} {
 		for tool, args := range map[string]map[string]any{
 			"doc_history": {"path": "secret.md"},
@@ -229,7 +207,6 @@ func TestDocToolsAreIsolated(t *testing.T) {
 			}
 		}
 	}
-	// Alice's conversation in the other workspace can't reach this workspace's shared space.
 	for tool, args := range map[string]map[string]any{
 		"doc_history": {"path": "team.md"},
 		"move_doc":    {"from": "team.md", "to": "x.md"},
@@ -239,11 +216,9 @@ func TestDocToolsAreIsolated(t *testing.T) {
 		args["space_id"] = w.shared
 		w.status(http.StatusNotFound, w.aliceConv2, tool, args)
 	}
-	// And her conversation here can't reach the other workspace's space, though she is a member.
 	w.status(http.StatusNotFound, w.aliceConv, "doc_history", map[string]any{"space_id": w.alicePrivate2})
 	w.status(http.StatusNotFound, w.aliceConv, "restore_doc", map[string]any{"space_id": w.alicePrivate2, "path": "elsewhere.md", "commit": elsewhere.Commit})
 
-	// Bob views the shared space: he reads its history and old versions, and changes nothing.
 	if h := w.ok(w.bobConv, "doc_history", map[string]any{"space_id": w.shared, "path": "team.md"}); len(h["commits"].([]any)) != 1 {
 		t.Fatalf("bob's view of the history = %v", h)
 	}
@@ -258,12 +233,10 @@ func TestDocToolsAreIsolated(t *testing.T) {
 		args["space_id"] = w.shared
 		w.status(http.StatusForbidden, w.bobConv, tool, args)
 	}
-	// An archived space is read-only for its editor too.
 	w.exec(`UPDATE spaces SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.shared)
 	w.status(http.StatusForbidden, w.aliceConv, "delete_doc", map[string]any{"space_id": w.shared, "path": "team.md"})
 	w.exec(`UPDATE spaces SET archived_at = NULL WHERE id = ?`, w.shared)
 
-	// Nothing was changed: each space has the one commit it started with.
 	for _, c := range []struct {
 		id, workspace int64
 		name          string
@@ -276,12 +249,9 @@ func TestDocToolsAreIsolated(t *testing.T) {
 			t.Errorf("space %d: %s: %v", c.id, c.name, err)
 		}
 	}
-	// Purging history is no tool.
 	w.status(http.StatusNotFound, w.aliceConv, "remove_old_versions", map[string]any{"space_id": w.alicePrivate, "path": "x.md"})
 }
 
-// A chunk of characters that JSON writes as six bytes is shortened to fit the reply, and the
-// next piece continues after it, so the whole text is read.
 func TestReadDocEscapedChunkFits(t *testing.T) {
 	w := newWorld(t)
 	text := strings.Repeat("<", readChunk) + "end"
@@ -302,8 +272,6 @@ func TestReadDocEscapedChunkFits(t *testing.T) {
 	}
 }
 
-// The built-in agent asks no one before it deletes, so delete_doc refuses what history can't bring
-// back: an unversioned file's bytes. A document it deletes is kept by its history.
 func TestDeleteDocRefusesUnversionedFiles(t *testing.T) {
 	w := newWorld(t)
 	sp := w.alicePrivate
@@ -325,8 +293,6 @@ func TestDeleteDocRefusesUnversionedFiles(t *testing.T) {
 	w.ok(w.aliceConv, "delete_doc", map[string]any{"space_id": sp, "path": "plan.md"})
 }
 
-// A rename that would turn a versioned file into an unversioned one is refused: it would take the
-// file's older versions out of history.
 func TestMoveDocRefusesAStorageChange(t *testing.T) {
 	w := newWorld(t)
 	sp := w.alicePrivate
@@ -346,8 +312,6 @@ func TestMoveDocRefusesAStorageChange(t *testing.T) {
 	w.ok(w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "draft.md", "to": "draft.txt"})
 }
 
-// A destination that is an existing file's name in another Unicode form is a conflict: the
-// move would overwrite it.
 func TestMoveDocUnicodeEquivalentDestination(t *testing.T) {
 	w := newWorld(t)
 	sp := w.alicePrivate
@@ -359,14 +323,12 @@ func TestMoveDocUnicodeEquivalentDestination(t *testing.T) {
 	}
 }
 
-// read_doc returns the text or refuses: a binary under a Markdown name, and an offset inside a
-// character, would otherwise come back as replacement characters.
 func TestReadDocNeverReturnsCorruptedText(t *testing.T) {
 	w := newWorld(t)
 	sp := w.alicePrivate
 	w.seed(sp, w.one, "blob.bin", []byte("\x89PNG\r\n\x1a\n\x00\xff"))
 	w.status(http.StatusBadRequest, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "blob.bin"})
-	w.ok(w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "blob.bin", "to": "blob.md"}) // both are versioned
+	w.ok(w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "blob.bin", "to": "blob.md"})
 	w.status(http.StatusBadRequest, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "blob.md"})
 
 	w.seed(sp, w.one, "word.txt", []byte("aéb"))
@@ -386,13 +348,11 @@ func TestReadDocNeverReturnsCorruptedText(t *testing.T) {
 	}
 }
 
-// restore_doc, which the built-in agent calls with no one to ask, refuses to replace an
-// unversioned file with different content: the current bytes would be removed for good.
 func TestRestoreDocKeepsUnversionedBytes(t *testing.T) {
 	w := newWorld(t)
 	sp := w.alicePrivate
 	first := w.seed(sp, w.one, "archive.zip", []byte("PK first"))
-	w.seed(sp, w.one, "copy.zip", []byte("PK first")) // keeps the first version's bytes on disk
+	w.seed(sp, w.one, "copy.zip", []byte("PK first"))
 	if _, err := w.kb.Put(context.Background(), w.space(sp, w.one), "archive.zip", []byte("PK second"), first.Doc.Version,
 		knowledge.Author{Name: "Alice", Email: "alice@example.com"}, ""); err != nil {
 		t.Fatal(err)

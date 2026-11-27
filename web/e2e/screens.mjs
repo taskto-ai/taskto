@@ -1,40 +1,3 @@
-// Captures every screen of the web app, for reviews of UI changes (`make screens`,
-// docs/design.md#capturing-the-screens): the built server on an empty temporary data directory,
-// sample data seeded through the HTTP API, and a real Chromium (Playwright) that visits each
-// screen at three sizes in a light and a dark theme.
-//
-//   node web/e2e/screens.mjs [--out DIR] [--only TEXT[,TEXT...]] [--list] [--strict]
-//
-//   --out DIR      where the PNGs go (default web/screens/, which git ignores); TASKTO_SCREENS_OUT
-//   --only TEXT    only the captures whose name (`desktop-light/boards`) contains one of the
-//                  comma-separated texts; TASKTO_SCREENS_ONLY
-//   --list         print the capture names and stop
-//   --strict       also exit non-zero when the browser logged an error or a request failed
-//   --unsafe-agent start the server with -unsafe-privileged-agents when it refuses the agent
-//                  runtime (see below); TASKTO_SCREENS_UNSAFE_AGENT=1
-//
-// The files are named `<size>-<theme>/<screen>.png`, the same on every run, so two runs (before
-// and after a change) can be compared file by file. Whatever the outcome, an interruption (Ctrl-C,
-// SIGTERM, SIGHUP) included, the server is stopped and reaped, the browser closed and the data
-// directory removed. It never runs in CI: it needs a built server (`make build`) and takes
-// minutes; its parts (starting and stopping the server, the cleanup, the HTTP client, the output
-// folder, the capture of one screen) are exported and tested without a browser (screens.test.mjs).
-//
-// A capture is only saved once the screen's own ready check is on the page (a heading, a control
-// or a seeded item that only that screen shows), so a wrong page is a failed capture, never a
-// picture. The script owns only the PNGs it writes, listed in `.screens-manifest.json` in the
-// output folder: it never deletes another file.
-//
-// The agent runtime: a conversation with replies needs the server started with -agent, where a
-// scripted offline model answers. The server refuses that when its user can run sudo without a
-// password (docs/agent-safety.md). Then the script starts the server without the agent, captures
-// the conversation list (empty), skips the conversation detail (it has no replies to show, so
-// no PNG is made of it), and says so. --unsafe-agent (or TASKTO_SCREENS_UNSAFE_AGENT=1) passes
-// -unsafe-privileged-agents, which turns that refusal into a warning: for a development machine
-// only, never a server people use.
-//
-// Everything seeded is invented: example.com addresses and made-up names.
-
 import { spawn } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { constants as osConstants, tmpdir } from 'node:os'
@@ -58,14 +21,9 @@ const owner = {
   workspace: 'Acme Studio',
 }
 
-// The second person of the sample data, who tells the owner of a card.
 const colleague = { name: 'Bruno Costa', password: 'sample-colleague-password-for-screens' }
 const INBOX_CARD = 'Review the launch checklist'
 
-// An app whose one screen uses every component of the renderer the server's catalog allows (the
-// renderer's theme is web/src/ui/a2ui.css): numbers, every kind of field, choices as chips and as
-// boxes, a check box, a slider, dates, tabs, a card, a divider, a list, an icon, a modal and the
-// three kinds of button, one of them disabled until the form is valid.
 const COMPONENTS_APP_NAME = 'Every component'
 const C = (id, component, props = {}) => ({ id, component, ...props })
 const label = (id, text) => C(id, 'Text', { text })
@@ -175,8 +133,6 @@ const COMPONENTS_APP = {
   summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
 }
 
-// An app whose one form holds every capture field taskto.ai's catalog has: photos, a location, a
-// signature and a barcode, each with its own field in the collection.
 const CAPTURE_APP_NAME = 'Every capture field'
 const CAPTURE_APP = {
   screens: [
@@ -221,18 +177,12 @@ const CAPTURE_APP = {
   actions: { add: { kind: 'insert' } },
 }
 
-// What a screen needs, in the order the run goes: before any account exists, with an account and
-// nothing in it, with the sample data, and signed out again.
 export const PHASES = ['first-run', 'empty', 'seeded', 'signed-out']
 
-// What the script looks for on a page, in English (it runs the app in English): a heading by its
-// exact name, or a text that is on the page.
 const heading = (s, name) => s.page.getByRole('heading', { name, exact: true })
-// A board's column: its heading is the name and the number of cards.
 const column = (s, name) => s.page.getByRole('heading', { name: new RegExp(`^${name} \\d+$`) })
 const text = (s, value, exact = false) => s.page.getByText(value, { exact })
 
-// The heading each Settings tab puts at the top of its page, in the order of the side list.
 export const SETTINGS_HEADINGS = {
   general: 'General',
   members: 'Members',
@@ -255,14 +205,6 @@ export const SETTINGS_HEADINGS = {
 }
 export const SETTINGS_TABS = Object.keys(SETTINGS_HEADINGS)
 
-// Each screen: a stable name (the file's), its phase, `show(s)`, which brings the screen up, and
-// `ready(s)`, the locator (or a list of them) that only this screen, with its data, puts on the
-// page: the capture waits for all of them and fails when one never shows, so a stand-in page or a
-// screen that didn't load is never saved as a picture. `s` has `page`, `go(path)`, `ids` (the
-// seeded data), `agent` (whether the agent runtime runs) and `path(section, item)`. A screen that
-// can't find what it clicks throws, so a renamed control fails the run too. `only: 'phone'` limits
-// a screen to one size; `needsAgent` marks a screen that exists only where the agent runtime runs
-// (a conversation can't be made without it).
 export const SCREENS = [
   {
     name: 'setup',
@@ -304,7 +246,6 @@ export const SCREENS = [
     name: 'empty-apps',
     phase: 'empty',
     show: (s) => s.go(s.path('apps')),
-    // Every space is empty and says so: the first one's will do.
     ready: (s) => [heading(s, 'Apps'), text(s, /^No apps in .+ yet$/).first()],
   },
   {
@@ -458,8 +399,6 @@ export const SCREENS = [
     ready: (s) => [heading(s, COMPONENTS_APP_NAME), text(s, 'Submit')],
   },
   {
-    // The same app scrolled to its end: the choices, the check box, the slider, the tabs, the list,
-    // the modal's button and the row of buttons.
     name: 'app-components-end',
     phase: 'seeded',
     show: async (s) => {
@@ -469,7 +408,6 @@ export const SCREENS = [
     ready: (s) => [text(s, 'Submit', true), text(s, 'Safety notes', true)],
   },
   {
-    // Its records, opened from the app's header: the explorer (a table, or rows on a phone).
     name: 'app-records',
     phase: 'seeded',
     show: async (s) => {
@@ -480,7 +418,6 @@ export const SCREENS = [
     ready: (s) => [text(s, 'Riverside depot', true).first(), text(s, /matching records/)],
   },
   {
-    // What its button set going: documents made, and a log the later visits couldn't make.
     name: 'app-effects',
     phase: 'seeded',
     show: async (s) => {
@@ -491,7 +428,6 @@ export const SCREENS = [
     ready: (s) => [s.page.getByRole('list', { name: 'The app’s effects' })],
   },
   {
-    // One record open, with its fields and its history.
     name: 'app-record',
     phase: 'seeded',
     show: async (s) => {
@@ -504,7 +440,6 @@ export const SCREENS = [
     },
     ready: (s) => [heading(s, /^Record \d+$/), text(s, /^History$/)],
   },
-  // The capture fields: a photo, a location, a signature and a barcode, at the form's top and end.
   {
     name: 'app-capture',
     phase: 'seeded',
@@ -543,7 +478,6 @@ export const SCREENS = [
     phase: 'seeded',
     show: async (s) => {
       await s.go(s.path('home'))
-      // On a phone the account is in the sidebar's drawer.
       const drawer = s.page.getByRole('button', { name: 'Open the menu' })
       if (await drawer.isVisible()) await drawer.click()
       await s.page.getByRole('button', { name: `Account: ${owner.name}` }).click()
@@ -565,7 +499,6 @@ export const SCREENS = [
   },
 ]
 
-// Every capture, in the order the run takes them, as `{ id: 'desktop-light/boards', ... }`.
 export function captures() {
   const combos = SIZES.flatMap((size) => THEMES.map((theme) => ({ size, theme, dir: `${size.name}-${theme}` })))
   return PHASES.flatMap((phase) =>
@@ -577,11 +510,6 @@ export function captures() {
   )
 }
 
-// ---------------------------------------------------------------------------------------------
-// Secrets never reach the output. The setup token is in the server's log while no account exists;
-// the session cookie and the sample password are known once they exist. Every text the script
-// prints goes through `redact`, which also knows the values added with `hide`.
-
 const hidden = new Set()
 export const hide = (value) => {
   if (typeof value === 'string' && value.length >= 6) hidden.add(value)
@@ -592,9 +520,6 @@ export const redact = (value) => {
   return out
 }
 
-// Playwright's own debug traces (`DEBUG=pw:channel`) print every call's arguments, the session
-// cookie set on a browser context among them: the script keeps the other debug settings and drops
-// those, and what it keeps (a `*`, say) excludes Playwright's namespaces explicitly.
 export function withoutPlaywrightDebug(debug) {
   const kept = String(debug ?? '')
     .split(/[\s,]+/)
@@ -602,22 +527,15 @@ export function withoutPlaywrightDebug(debug) {
   return kept.length > 0 ? [...kept, '-pw:*'].join(',') : undefined
 }
 
-// ---------------------------------------------------------------------------------------------
-// The cleanup: what the run has to undo (the server, the browser, the data directory), run once,
-// in the reverse order of what was added, by an ordinary end, a failure and a signal alike.
-
 export function createCleanup() {
   const tasks = []
   const exits = []
   let running
   const cleanup = {
     closing: false,
-    // `undo` is awaited by `run`; `now`, optional, is a synchronous last resort for when the
-    // process is about to exit with the work undone.
     add(undo, now) {
       if (now) exits.push(now)
       if (cleanup.closing) {
-        // Added after the cleanup began (a server spawned as the interruption arrived): undo it at once.
         Promise.resolve()
           .then(undo)
           .catch(() => {})
@@ -635,7 +553,6 @@ export function createCleanup() {
       })()
       return running
     },
-    // Runs when the process exits whatever else happened: only what is synchronous can.
     last() {
       for (const now of exits.reverse()) {
         try {
@@ -647,8 +564,6 @@ export function createCleanup() {
   return cleanup
 }
 
-// An interruption goes through the same cleanup as a failure, then the process exits with the
-// conventional code (128 plus the signal's number). Installed before anything is started.
 export function trapSignals(cleanup, { signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], target = process, exit, say } = {}) {
   const leave = exit ?? ((code) => process.exit(code))
   const log = say ?? ((msg) => console.error(msg))
@@ -665,19 +580,10 @@ export function trapSignals(cleanup, { signals = ['SIGINT', 'SIGTERM', 'SIGHUP']
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The server.
-
 const READY_LINE = /taskto listening addr=(\S+).*web_app_built=(\w+)/
 const SETUP_TOKEN = /setup_token=([A-Za-z0-9_-]{43})/
 
-// Starts `bin args` and waits until it listens. Resolves to the server, or rejects with an error
-// that carries it (`err.server.logs()`), after the child has been stopped and reaped: whatever
-// the reason (it exited, it never said it listens, the web app isn't built, a timeout), nothing
-// is left running. `track(server)` is called as soon as the child exists, so a cleanup can reach
-// it while this is still waiting.
 export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_000, track = () => {} }) {
-  // Its own process group, so that a stubborn server and what it started can be killed together.
   const proc = spawn(bin, args, { env, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
   let logs = ''
   const running = () => proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null
@@ -690,8 +596,6 @@ export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_00
       } catch {}
     }
   }
-  // Whether anything of the child's process group is still there: a wrapper script that started
-  // the server without `exec` can exit before the server does.
   const groupAlive = () => {
     try {
       process.kill(-proc.pid, 0)
@@ -704,8 +608,6 @@ export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_00
   const server = {
     proc,
     logs: () => redact(logs),
-    // Stops it and what it started (SIGTERM to the group, then SIGKILL after `killAfterMs`) and
-    // resolves once the child has exited and none of its group is left.
     stop() {
       stopping ??= new Promise((done) => {
         if (proc.pid === undefined || (!running() && !groupAlive())) return done()
@@ -724,7 +626,6 @@ export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_00
       })
       return stopping
     },
-    // Synchronous and not graceful: the last resort when the process is leaving.
     kill() {
       if (running()) signalGroup('SIGKILL')
     },
@@ -756,7 +657,6 @@ export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_00
     })
     proc.on('error', (e) => reject(new Error(`the server did not start: ${e.code ?? 'error'}`)))
     proc.on('exit', (code, signal) => {
-      // Its last words may still be on the way: they say why (the agent runtime refused, say).
       const exited = () => reject(new Error(`the server exited (${code ?? signal})`))
       if (proc.stderr.readableEnded || proc.stderr.destroyed) return exited()
       proc.stderr.once('end', exited)
@@ -766,13 +666,9 @@ export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_00
   })
 }
 
-// The server with the agent runtime when it accepts it. `agent` says what came of that: 'on', or
-// why not.
 async function startServer(dir, { unsafeAgent, cleanup }) {
   const bin = process.env.TASKTO_SCREENS_BIN || join(repo, 'bin/taskto')
   const entry = join(repo, 'agent/dist/index.js')
-  // The server gets its own flags only: a TASKTO_* variable of this machine (a config file, a
-  // data directory, a provider) must not change what is captured.
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('TASKTO_')))
   const start = (flags) => {
     if (cleanup.closing) throw new Error('interrupted')
@@ -796,7 +692,6 @@ async function startServer(dir, { unsafeAgent, cleanup }) {
     const server = await start(agentFlags)
     return Object.assign(server, { agent: unsafeAgent ? 'on (-unsafe-privileged-agents)' : 'on' })
   } catch (err) {
-    // launch has stopped the refused server already.
     const refused = /must not be able to act as root|act as root/.test(err.server?.logs() ?? '')
     if (!refused) throw err
     rmSync(join(dir, 'data'), { recursive: true, force: true })
@@ -807,11 +702,6 @@ async function startServer(dir, { unsafeAgent, cleanup }) {
     })
   }
 }
-
-// ---------------------------------------------------------------------------------------------
-// The script's own HTTP client, for the setup and the sample data. The session cookie is kept in
-// memory and sent back; a failed call is reported as its method, path and the status (or the
-// error's code) and never carries a header, a body or the raw error.
 
 export class ApiFailure extends Error {
   constructor(method, path, status, code) {
@@ -840,7 +730,6 @@ export function createClient(base, { fetchImpl = fetch, timeoutMs = 30_000 } = {
     }
   }
   return {
-    // The cookies as a browser context takes them.
     cookies: () => [...jar].map(([name, value]) => ({ name, value, url: base })),
     async call(method, path, body) {
       let res
@@ -873,16 +762,9 @@ export function createClient(base, { fetchImpl = fetch, timeoutMs = 30_000 } = {
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The output folder. The script writes `<size>-<theme>/<screen>.png` and lists in a manifest what
-// it wrote, so that it knows what is its own: stale captures of an earlier run are pruned from
-// that list, after a run that failed nowhere, and any other file in the folder is left alone.
-
 export const MANIFEST = '.screens-manifest.json'
 const OWN = /^[a-z]+-(?:light|dark)\/[a-z0-9-]+$/
 
-// A symbolic link at the manifest's path is never followed, to read or to write: it is not the
-// list this script wrote.
 const manifestIsLink = (outDir) => lstatSync(join(outDir, MANIFEST), { throwIfNoEntry: false })?.isSymbolicLink()
 
 export function readManifest(outDir) {
@@ -895,10 +777,6 @@ export function readManifest(outDir) {
   }
 }
 
-// `written`: the ids this run saved. `failed`: the selected ones it did not save, failed or
-// skipped (an old picture of one would pass for the current screen, so it goes, in a filtered run
-// too). `prune`: a full run that failed nowhere also removes the earlier run's pictures it didn't
-// write.
 export function recordCaptures({ outDir, written, failed = [], prune = false }) {
   if (manifestIsLink(outDir)) throw new Error(`${MANIFEST} is a symbolic link: not writing through it`)
   const before = readManifest(outDir)
@@ -908,7 +786,6 @@ export function recordCaptures({ outDir, written, failed = [], prune = false }) 
   const next = new Set([...before].filter((id) => !remove.has(id)))
   for (const id of written) next.add(id)
   mkdirSync(outDir, { recursive: true })
-  // A temporary file beside it, renamed over it: the manifest is whole or untouched.
   const temporary = join(outDir, `${MANIFEST}.${process.pid}.tmp`)
   try {
     writeFileSync(temporary, `${JSON.stringify({ captures: [...next].sort() }, null, 2)}\n`, { flag: 'wx' })
@@ -920,16 +797,8 @@ export function recordCaptures({ outDir, written, failed = [], prune = false }) 
   return { removed: [...remove].sort() }
 }
 
-// Whether the run succeeded: nothing failed, and in `--strict` the browser reported nothing. It
-// decides the exit status and, for a full run, whether the earlier run's other pictures are pruned.
 export const runSucceeded = ({ failures, issues, strict }) => failures.length === 0 && !(strict && issues.size > 0)
 
-// The run's one update of the output folder: `record(prune)` writes it the first time it is called
-// and does nothing after. `failedIds` and `skipped` are read when it runs. When the folder can't be
-// updated (the manifest's path is a directory, a read-only disk) the reason goes into `failures`, so
-// the run exits non-zero, and nothing is thrown: the cleanup that follows must still run. The
-// pictures this run made that the manifest couldn't take on (not in `owned`, the earlier manifest)
-// are removed, so that the next run, once the folder is right, doesn't refuse them as foreign.
 export function createRecorder({ outDir, written, owned = new Set(), failedIds, skipped, failures }) {
   let recorded = false
   return (prune) => {
@@ -946,13 +815,8 @@ export function createRecorder({ outDir, written, owned = new Set(), failedIds, 
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// One capture.
-
 export const READY_TIMEOUT = 15_000
 
-// Waits for every locator of the screen's ready check. A screen with no check, or one whose check
-// never shows, throws.
 export async function awaitReady(screen, s, timeout = READY_TIMEOUT) {
   if (typeof screen.ready !== 'function') throw new Error(`${screen.name} has no ready check`)
   const checks = [screen.ready(s)].flat().filter(Boolean)
@@ -964,23 +828,16 @@ export async function awaitReady(screen, s, timeout = READY_TIMEOUT) {
   }
 }
 
-// Brings the screen up, waits for its ready check and the page to settle, and saves the picture.
-// A file already at the picture's path is replaced only when an earlier run wrote it (`owned`, the
-// manifest's captures read before this run); another file there fails the capture and stays.
-// Returns `{ ok: true }` or `{ ok: false, error }`; never throws.
 export async function captureOne(c, s, { outDir, written, owned = new Set(), readyTimeout = READY_TIMEOUT }) {
   try {
     await c.screen.show(s)
     await awaitReady(c.screen, s, readyTimeout)
-    // Fonts, the requests that follow the screen's first render, and two frames for a settled
-    // layout, so two runs match. The requests are best effort: a stream that stays open is no fault.
     await s.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {})
     await s.page.evaluate(() =>
       document.fonts.ready.then(
         () => new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame))),
       ),
     )
-    // The screen is still the screen after settling.
     await awaitReady(c.screen, s, readyTimeout)
     const file = join(outDir, `${c.id}.png`)
     if (!owned.has(c.id) && lstatSync(file, { throwIfNoEntry: false })) {
@@ -995,17 +852,12 @@ export async function captureOne(c, s, { outDir, written, owned = new Set(), rea
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The sample data.
-
 const isoDay = (offset) => {
   const d = new Date()
   d.setDate(d.getDate() + offset)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// The sample data, through the API as the owner. Dates are relative to today, so the labels that
-// depend on them (overdue, soon) read the same on every day. Returns the ids the screens use.
 async function seed({ api, base, workspace, agent, say }) {
   const W = `/api/workspaces/${workspace}`
   const { spaces } = await api('GET', `${W}/spaces`)
@@ -1070,9 +922,6 @@ async function seed({ api, base, workspace, agent, say }) {
   for (const [title, column, extra] of cards.slice(0, 5))
     await api('POST', `${T}/boards/${teamBoard.id}/cards`, { title, column, ...extra })
 
-  // A second person, so that the owner's inbox has something in it (nothing the owner does tells
-  // the owner): Bruno takes up an invite, joins the team space, assigns the owner a card there and
-  // mentions them in a comment on it. A pending invite stays for the Members screen.
   const invite = await api('POST', `${W}/invites`, { email: 'bruno@example.com', role: 'member' })
   hide(invite.token)
   hide(colleague.password)
@@ -1095,8 +944,6 @@ async function seed({ api, base, workspace, agent, say }) {
   await api('POST', `${W}/invites`, { email: 'carla@example.com', role: 'member' })
   await api('POST', `${W}/tokens`, { name: 'laptop' })
 
-  // Apps from the templates that need no board, installed and published; their widgets and pins
-  // on Home.
   const { templates } = await api('GET', `${W}/app-templates`)
   const apps = []
   for (const template of templates.filter((t) => !t.needs_board).slice(0, 3)) {
@@ -1104,11 +951,7 @@ async function seed({ api, base, workspace, agent, say }) {
     await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
     apps.push(app)
   }
-  // An app that uses every component of the renderer an app may (docs/design.md, "The apps
-  // renderer"), with a few records through its own action, for its records and their history.
   {
-    // What its button sets going: a document for each visit, and one log that only the first visit
-    // can make (a document is never written over), so the others' fail, with their retry.
     const effects = [
       { kind: 'create_document', space_id: mine.id, path: 'visits/{{id}}.md', content: 'Site: {{site}}\n' },
       { kind: 'create_document', space_id: mine.id, path: 'visits/log.md', content: 'First visit: {{site}}\n' },
@@ -1136,7 +979,6 @@ async function seed({ api, base, workspace, agent, say }) {
       })
     }
   }
-  // An app whose form holds every capture field.
   {
     const app = await api('POST', `${P}/apps`, { name: CAPTURE_APP_NAME, definition: CAPTURE_APP })
     await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
@@ -1157,8 +999,6 @@ async function seed({ api, base, workspace, agent, say }) {
     if (app.pin) await api('POST', `${W}/home/items`, { kind: 'pin', space_id: app.space_id, app_id: app.app_id })
   }
 
-  // Conversations: one with an exchange when the scripted model is there to answer. Without the
-  // agent runtime the server can't make one.
   let talk
   if (agent.startsWith('on')) {
     talk = await api('POST', `${W}/conversations`, { title: 'Plan the launch week' })
@@ -1198,9 +1038,6 @@ async function seed({ api, base, workspace, agent, say }) {
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The run.
-
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -1229,8 +1066,6 @@ async function main() {
   const started = Date.now()
   const say = (msg) => console.log(msg)
 
-  // Before anything is started: an interruption from here on stops what exists and removes the
-  // data directory, as a failure does.
   const cleanup = createCleanup()
   const untrap = trapSignals(cleanup)
   process.once('exit', () => cleanup.last())
@@ -1244,7 +1079,6 @@ async function main() {
   const removeDir = () => rmSync(dir, { recursive: true, force: true })
   cleanup.add(removeDir, removeDir)
 
-  // The pictures an earlier run wrote: the only files this run may replace.
   const owned = readManifest(outDir)
   const failures = []
   const issues = new Set()
@@ -1254,23 +1088,17 @@ async function main() {
   let server
   let done = 0
 
-  // What a run leaves in the output folder: its own pictures in the manifest, the failed ones
-  // removed, and after a run that failed nowhere the earlier run's others pruned.
   const record = createRecorder({ outDir, written, owned, failedIds, skipped, failures })
   cleanup.add(() => record(false))
 
   try {
-    // Left out of the module's top so that listing and testing the screens needs no browser.
     const { chromium } = await import('playwright')
 
     server = await startServer(dir, { unsafeAgent, cleanup })
     say(`server up (agent runtime ${server.agent})`)
-    // Playwright's own signal handling is off: the script's handlers stop the browser, in order.
     const browser = await chromium.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false })
     cleanup.add(() => browser.close())
 
-    // A capture is a page in a context of its size and theme; the contexts share the owner's
-    // session once there is one.
     const contexts = new Map()
     const contextFor = async ({ size, theme, dir: name }, cookies) => {
       const key = `${name}:${cookies ? 'in' : 'out'}`
@@ -1289,8 +1117,6 @@ async function main() {
       return contexts.get(key)
     }
 
-    // What the browser reported, with the capture it happened in. A signed-out screen's calls
-    // for the account get 401: that is the app asking who is there, not a fault.
     const watch = (page, phase, id) => {
       const quiet = phase === 'first-run' || phase === 'signed-out'
       const note = (text) => issues.add(`${id}: ${redact(text)}`)
@@ -1301,7 +1127,6 @@ async function main() {
       })
       page.on('pageerror', (e) => note(`page error: ${e.message.slice(0, 300)}`))
       page.on('requestfailed', (r) => {
-        // A request cut off by the next navigation, or a stream closed with its page, is no fault.
         if (/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) return
         note(`request failed: ${r.method()} ${new URL(r.url()).pathname} ${r.failure()?.errorText ?? ''}`)
       })
@@ -1337,7 +1162,6 @@ async function main() {
       }
     }
 
-    // Each phase's captures run side by side, one per size and theme.
     const runPhase = async (phase, cookies, ids, workspace) => {
       const todo = plan.filter((c) => c.screen.phase === phase)
       for (const c of todo) if (c.screen.needsAgent && !server.agent.startsWith('on')) skipped.push(c.id)
@@ -1352,7 +1176,6 @@ async function main() {
 
     await runPhase('first-run', undefined)
 
-    // The owner, through the script's own client: the same session goes to every browser context.
     const client = createClient(server.base)
     const api = client.call
     const me = await api('POST', '/api/setup', {
@@ -1378,7 +1201,6 @@ async function main() {
     const log = (server ?? err.server)?.logs?.().trim()
     if (log) console.error(`server log (last lines):\n${log.split('\n').slice(-15).join('\n')}`)
   } finally {
-    // Whatever happened, the browser and the server stop and the data directory goes.
     record(only.length === 0 && runSucceeded({ failures, issues, strict: values.strict }))
     await cleanup.run()
     untrap()

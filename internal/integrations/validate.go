@@ -16,15 +16,11 @@ const (
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// Validation failures are 400s with a code, and never quote a value: a key pasted in the wrong
-// field mustn't come back in an error or a log line.
 var (
 	errUnknownProvider = apierr.New(http.StatusBadRequest, apierr.CodeIntegrationProviderUnknown, "this provider isn't supported")
 	errUnknownSecret   = apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "secrets has a name the provider doesn't use")
 	errBadCurrencies   = apierr.New(http.StatusBadRequest, apierr.CodeIntegrationCurrencyInvalid,
 		"currencies must list 1 to 20 different currency codes the server knows", apierr.Params{"max": maxCurrencies})
-	// errWebhookSecretReused is a webhook secret that another integration already verifies with. It
-	// says no more than that: not whose, nor in which workspace.
 	errWebhookSecretReused = apierr.New(http.StatusConflict, apierr.CodeIntegrationWebhookSecretReused,
 		"this webhook secret is already used by another integration")
 	errBadCeiling = apierr.New(http.StatusBadRequest, apierr.CodeIntegrationLimitInvalid,
@@ -39,7 +35,6 @@ func checkName(name string) error {
 	return nil
 }
 
-// checkDisplayName trims a display name and returns it, or fallback when it is empty.
 func checkDisplayName(display, fallback string) (string, error) {
 	display = strings.TrimSpace(display)
 	if display == "" {
@@ -68,7 +63,6 @@ func checkCeiling(n int64) error {
 	return nil
 }
 
-// newDraft validates the body of a create against the registry.
 func newDraft(req createRequest) (draft, error) {
 	p := Lookup(req.Provider)
 	if p == nil {

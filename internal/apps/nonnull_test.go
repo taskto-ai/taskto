@@ -8,13 +8,10 @@ import (
 	"taskto.ai/taskto/internal/apitypes/nonnull"
 )
 
-// Lists and maps the web app reads are told as such, never null (apitypes:"nonnull"): an app
-// with nothing to list, as the server sends it from each route, has an empty one.
 func TestAppListsAreNeverNil(t *testing.T) {
 	w := newWorld(t)
 	u, s := w.alice, w.alicePrivate
 
-	// An app made from a definition with no requires of its own: Check works them out.
 	def := example(t)
 	def.Requires = nil
 	rec := u.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Bare", "definition": def})
@@ -42,7 +39,6 @@ func TestAppListsAreNeverNil(t *testing.T) {
 	}
 }
 
-// A record's data is an object, never null, however it is read and whatever it holds.
 func TestRecordDataIsNeverNil(t *testing.T) {
 	w := newWorld(t)
 	u, s := w.alice, w.shared
@@ -53,7 +49,6 @@ func TestRecordDataIsNeverNil(t *testing.T) {
 	nonnull.Require(t, decode[Records](t, w.records(u, s, a)))
 	nonnull.Require(t, decode[History](t, w.history(u, s, a, id)))
 
-	// Edited and deleted, then restored.
 	expect(t, w.act(u, s, a, "edit_expense", map[string]any{"id": id, "amount": "2"}, &revision), http.StatusOK)
 	nonnull.Require(t, decode[History](t, w.history(u, s, a, id)))
 	expect(t, w.act(u, s, a, "delete_expense", map[string]any{"id": id}, nil), http.StatusOK)
@@ -66,7 +61,6 @@ func TestRecordDataIsNeverNil(t *testing.T) {
 	nonnull.Require(t, decode[Record](t, w.restore(u, s, a, id, nil)))
 }
 
-// The Home page's lists, a person's own and the apps offered to put there.
 func TestHomeListsAreNeverNil(t *testing.T) {
 	w := newWorld(t)
 	for _, u := range []*user{w.alice, w.bob, w.mallory} {
@@ -77,7 +71,6 @@ func TestHomeListsAreNeverNil(t *testing.T) {
 			nonnull.Require(t, got)
 		}
 	}
-	// With offers, and a place taken.
 	app := w.contribute(w.alice, w.shared, w.sharedApp, offers())
 	w.place(w.alice, w.shared, app, "widget", "spend", http.StatusCreated)
 	nonnull.Require(t, w.home(w.alice))
@@ -88,7 +81,6 @@ func TestHomeListsAreNeverNil(t *testing.T) {
 	}
 }
 
-// Every bundled template, as the list tells it.
 func TestTemplateListsAreNeverNil(t *testing.T) {
 	w := newWorld(t)
 	rec := w.alice.do(http.MethodGet, templatesPath(w.ws), nil)

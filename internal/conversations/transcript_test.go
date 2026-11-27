@@ -11,8 +11,6 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 )
 
-// Transcript is what people and the agent said: their messages, oldest first, and neither the
-// system's own text nor what tools returned.
 func TestTranscriptIsWhatWasSaid(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -35,29 +33,24 @@ func TestTranscriptIsWhatWasSaid(t *testing.T) {
 }
 
 func TestTranscriptSaysWhyItIsNotThere(t *testing.T) {
-	// No agent runtime at all.
 	off := newEnv(t, true)
 	if _, err := off.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || !errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("with the agent runtime off: %v", err)
 	}
 
 	e := newEnv(t, false)
-	// The runtime doesn't answer: it can't say now, for any conversation.
 	e.rt.err = errors.New("broken")
 	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || !errors.Is(err, ErrRuntimeDown) || errors.Is(err, ErrGone) {
 		t.Fatalf("with an agent runtime that doesn't answer: %v", err)
 	}
-	// It answers, and refuses this conversation: its own failure, not the runtime's.
 	e.rt.err = &agentrt.StatusError{Code: http.StatusInternalServerError, Status: "500", Message: "boom"}
 	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || errors.Is(err, ErrRuntimeDown) || errors.Is(err, ErrGone) {
 		t.Fatalf("with a refused conversation: %v", err)
 	}
-	// The runtime doesn't have the conversation: it is gone.
 	e.rt.err = &agentrt.StatusError{Code: http.StatusNotFound, Status: "404 Not Found", Message: "unknown conversation"}
 	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrGone) {
 		t.Fatalf("with an unknown conversation: %v", err)
 	}
-	// Not ready: waited for, then ErrNoTranscript.
 	e.svc.agent = func(context.Context) (Runtime, error) { return nil, errors.New("starting") }
 	e.svc.readyWait = 10 * time.Millisecond
 	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || !errors.Is(err, ErrRuntimeDown) {
@@ -65,9 +58,6 @@ func TestTranscriptSaysWhyItIsNotThere(t *testing.T) {
 	}
 }
 
-// A message marks its conversation updated when it is sent, and again when the agent runtime has
-// dealt with it: what the agent says in reply is in the transcript only then, and the marks are
-// what the search index follows.
 func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -80,7 +70,6 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 		}
 		return at
 	}
-	// An old mark, so a later one is told from it.
 	if _, err := e.db.Exec(`UPDATE conversations SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`, c.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +88,6 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 	e.rt.settle = make(chan struct{})
 	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
 	waitFor(t, "the turn to be waited for", func() bool { return e.rt.waited.Load() == 1 })
-	// Sent: marked, and so queued for the index, at once.
 	if updated() == "2020-01-01T00:00:00.000Z" {
 		t.Fatal("the send didn't mark the conversation")
 	}
@@ -107,13 +95,11 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 		t.Fatalf("queued after the send: revision %d (queued %v), %v: want 1 for the creation, 2 for the test's reset and 3 for the send", queued, inQueue(), err)
 	}
 
-	// The turn ends: marked again, which is a new revision of the queue's entry.
 	close(e.rt.settle)
 	waitFor(t, "the turn's end to mark the conversation", func() bool {
 		return e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c.ID).Scan(&queued) == nil && queued == 4
 	})
 
-	// A turn that never ends marks nothing more, and the server's shutdown stops waiting for it.
 	e.rt.settle = make(chan struct{})
 	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "again"})
 	waitFor(t, "the second turn to be waited for", func() bool { return e.rt.waited.Load() == 2 })
@@ -133,9 +119,6 @@ func revisionOf(t *testing.T, e *env, id int64) int {
 	return rev
 }
 
-// A mark made for a conversation never lands on another that has its ID now: a removed
-// conversation's ID can be taken again, and a turn that settles late must not bump, or queue for
-// indexing, the new one.
 func TestAMarkIsOnlyOfTheConversationItWasFor(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -145,7 +128,6 @@ func TestAMarkIsOnlyOfTheConversationItWasFor(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := revisionOf(t, e, c.ID)
-	// The mark of a conversation that had this ID before, with another agent runtime ID.
 	if err := e.svc.touch(context.Background(), c.ID, agentID+1000); err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +142,6 @@ func TestAMarkIsOnlyOfTheConversationItWasFor(t *testing.T) {
 	}
 }
 
-// A wait that fails (the runtime doesn't have the submission, or doesn't answer) marks nothing:
-// the turn's end isn't known.
 func TestAFailedWaitMarksNothing(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()

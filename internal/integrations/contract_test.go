@@ -14,96 +14,59 @@ import (
 	"time"
 )
 
-// The adapter contract suite: what every payments adapter must do, written once, in terms of the
-// adapter's own interfaces (PaymentProvider and Receiver) and the normalized shapes (Link, LinkState,
-// *CallError, Event), so the behaviour the rest of the server relies on is pinned in one place and not
-// once per provider.
-//
-// A provider's adapter runs the suite by giving a fixture: its adapter, a client that reaches its fake,
-// credentials, and the few things only the fake can do (have a payer pay, expire or refund a link and
-// hand over the provider's signed deliveries for it). The Stripe fixture is contract_stripe_test.go.
-// To run the suite against another adapter:
-//
-//	func TestSquareMeetsThePaymentsContract(t *testing.T) { runPaymentsContract(t, squareFixture) }
-//
-// where squareFixture(t) builds a *paymentsFixture of the Square adapter and its fake. No case reads a
-// provider's own words or ids: a case that needs to would be one that belongs to the adapter's own
-// tests (Stripe's are paymentlink_test.go and stripe_webhook_test.go).
-//
-// Each case returns an error rather than failing a test, so the suite can also be run against an adapter
-// that is broken on purpose, to show that it notices (TestTheContractSuiteNoticesABrokenAdapter).
-
-// contractProvider is an adapter that makes payment links and receives webhooks.
 type contractProvider interface {
 	PaymentProvider
 	Receiver
 }
 
-// linkShape is one of the shapes of link an adapter makes.
 type linkShape struct {
-	Name string
-	// Pages is whether the link is asked with the server's own pages (a public address); false is the
-	// provider's own confirmation page.
-	Pages bool
-	// PaymentCarriesToken says that a payment through this shape's link reaches the webhook with the
-	// ref's token, and is mapped to a ref by it.
+	Name                string
+	Pages               bool
 	PaymentCarriesToken bool
-	// CanExpire says that a link of this shape can expire before it is paid.
-	CanExpire bool
+	CanExpire           bool
 }
 
-// signedDelivery is a webhook delivery as the provider sends it: its headers (with the signature) and
-// the exact body.
 type signedDelivery struct {
 	Header http.Header
 	Body   []byte
 }
 
-// paymentsFixture is what an adapter needs to run the suite.
 type paymentsFixture struct {
-	Name     string
-	Provider contractProvider
-	// Client reaches the adapter's fake, as the server's client reaches the provider.
-	Client *Client
-	// Creds are the integration's: its API key, and the webhook secret the fake signs with.
-	Creds  Credentials
-	Shapes []linkShape
-	// Now is the clock the fake signs and stamps with, and the one verification is told.
-	Now func() time.Time
-	// Tolerance is how far a signature's time may be from now, in either direction.
-	Tolerance time.Duration
-	// OtherSecret is a second webhook secret of the provider's format that isn't the integration's.
-	OtherSecret string
-	// PayerHosts are the provider's own hosts a payer's address may be on (not its API hosts).
-	PayerHosts []string
-	// RefusalWords are words the provider's fake says in its refusal of a key: none may be in an error.
+	Name         string
+	Provider     contractProvider
+	Client       *Client
+	Creds        Credentials
+	Shapes       []linkShape
+	Now          func() time.Time
+	Later        func(d time.Duration)
+	Tolerance    time.Duration
+	Ahead        time.Duration
+	URL          string
+	OtherSecret  string
+	PayerHosts   []string
 	RefusalWords []string
-	// PayerWords are what a payer typed at the provider and the provider sends in its events: none of it
-	// may come out of Normalize.
-	PayerWords []string
-	// Objects is how many payable objects the fake holds.
-	Objects func() int
-	// Pay has a payer pay the link, and returns every delivery the provider sends for the payment, in the
-	// order it sends them. Expire and Refund (the latter of an amount in minor units; the rest of the
-	// payment when 0) are optional: nil skips what needs them.
-	Pay    func(l Link, sh linkShape) ([]signedDelivery, error)
-	Expire func(l Link, sh linkShape) ([]signedDelivery, error)
-	Refund func(l Link, sh linkShape, minor int64) ([]signedDelivery, error)
-	// Unacted is a validly signed delivery of a type the adapter doesn't act on. Foreign is a validly
-	// signed event of a payment that none of the server's links made (it carries no reference of ours).
-	Unacted func() signedDelivery
-	Foreign func() signedDelivery
-	// Sign signs a body as the provider does, with the secret, at the time.
-	Sign func(body []byte, secret string, at time.Time) http.Header
+	PayerWords   []string
+	Objects      func() int
+	Pay          func(l Link, sh linkShape) ([]signedDelivery, error)
+	Expire       func(l Link, sh linkShape) ([]signedDelivery, error)
+	Refund       func(l Link, sh linkShape, minor int64) ([]signedDelivery, error)
+	Unacted      func() signedDelivery
+	Foreign      func() signedDelivery
+	Sign         func(body []byte, secret string, at time.Time) signedDelivery
 }
 
-// contractCase is one thing every adapter must do.
+func (fx *paymentsFixture) ahead() time.Duration {
+	if fx.Ahead > 0 {
+		return fx.Ahead
+	}
+	return fx.Tolerance
+}
+
 type contractCase struct {
 	name string
 	run  func(ctx context.Context, fx *paymentsFixture) error
 }
 
-// runPaymentsContract runs every case against the fixture newFixture makes (a new one for each).
 func runPaymentsContract(t *testing.T, newFixture func(t *testing.T) *paymentsFixture) {
 	t.Helper()
 	for _, c := range paymentsContractCases {
@@ -118,7 +81,6 @@ func runPaymentsContract(t *testing.T, newFixture func(t *testing.T) *paymentsFi
 	}
 }
 
-// failf is an error that reads as a failure of the case.
 func failf(format string, args ...any) error { return fmt.Errorf(format, args...) }
 
 const (
@@ -134,7 +96,6 @@ func (sh linkShape) newLink(token string) NewLink {
 	return l
 }
 
-// made creates a link of the shape and returns it with the terms it was asked with.
 func (fx *paymentsFixture) made(ctx context.Context, sh linkShape) (Link, NewLink, error) {
 	tok, err := newToken()
 	if err != nil {
@@ -148,7 +109,6 @@ func (fx *paymentsFixture) made(ctx context.Context, sh linkShape) (Link, NewLin
 	return l, nl, nil
 }
 
-// carrying is the shapes whose payments reach the webhook with the ref's token.
 func (fx *paymentsFixture) carrying() []linkShape {
 	var out []linkShape
 	for _, sh := range fx.Shapes {
@@ -183,6 +143,7 @@ var paymentsContractCases = []contractCase{
 	{"an expiry is one expired event with the ref's token", contractNormalizeExpired},
 	{"a refund is one refunded event of what has been refunded so far, found through the payment", contractNormalizeRefund},
 	{"what the adapter doesn't act on, and what isn't ours, is not an event", contractNormalizeIgnored},
+	{"a payment read back is dated when it was made, as its webhook event is, not when it was read", contractReadPaidAt},
 	{"a body that isn't an event is not an event", contractNormalizeGarbage},
 }
 
@@ -203,8 +164,6 @@ func contractIdentity(_ context.Context, fx *paymentsFixture) error {
 			return failf("host %q isn't a bare lower-case host name", h)
 		}
 	}
-	// The client refuses any address that isn't the adapter's: no setting or definition can aim a call
-	// (and the credentials in it) at another host.
 	ctx := context.Background()
 	for _, other := range []string{"https://example.invalid/v1/x", "https://" + hosts[0] + ".example.invalid/", "http://" + hosts[0] + "/", "https://user@" + hosts[0] + "/"} {
 		if _, err := fx.Client.NewRequest(ctx, http.MethodGet, other, nil); !errors.Is(err, ErrHostNotOwned) {
@@ -236,7 +195,6 @@ func contractCreateOnce(ctx context.Context, fx *paymentsFixture) error {
 		if !slices.Contains(fx.PayerHosts, u.Hostname()) {
 			return failf("%s: the address %q isn't on the provider's own hosts %v", sh.Name, first.URL, fx.PayerHosts)
 		}
-		// The same key and the same terms again (a retry after a lost answer) is the same link, not a second.
 		for range 2 {
 			again, err := fx.Provider.CreatePaymentLink(ctx, fx.Creds, fx.Client, nl)
 			if err != nil {
@@ -272,7 +230,6 @@ func contractCreateConflict(ctx context.Context, fx *paymentsFixture) error {
 		if n := fx.Objects() - before; n != 0 {
 			return failf("%s: the refused call made %d objects", sh.Name, n)
 		}
-		// What the key made is still what it made.
 		again, err := fx.Provider.CreatePaymentLink(ctx, fx.Creds, fx.Client, nl)
 		if err != nil || again.ObjectID != first.ObjectID {
 			return failf("%s: after a refused call the key's link is %+v, %v, want %+v", sh.Name, again, err, first)
@@ -363,12 +320,10 @@ func contractFindByToken(ctx context.Context, fx *paymentsFixture) error {
 		if err != nil || !found || expired || got.ObjectID != made.ObjectID || got.URL != made.URL {
 			return failf("%s: lookup of the token = %+v, %v, expired %v, %v, want %+v", sh.Name, got, found, expired, err, made)
 		}
-		// The lookup makes nothing.
 		before := fx.Objects()
 		if _, _, _, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, nl, since); err != nil || fx.Objects() != before {
 			return failf("%s: a lookup changed the provider's objects: %v", sh.Name, err)
 		}
-		// A token nothing was made under is not found: no error, no object, and not "expired".
 		other := nl
 		if other.Token, err = newToken(); err != nil {
 			return err
@@ -394,7 +349,6 @@ func contractFindTerms(ctx context.Context, fx *paymentsFixture) error {
 		} {
 			l := nl
 			change(&l)
-			// A refusal names the object it saw (unchecked, for the key to keep), never a link to give.
 			got, found, _, err := fx.Provider.FindPaymentLink(ctx, fx.Creds, fx.Client, l, since)
 			if !isCall(err, CallRefused) || found || got.URL != "" || got.ObjectID != made.ObjectID {
 				return failf("%s: a lookup of %s adopted %+v, %v, %v, want a refusal", sh.Name, what, got, found, err)
@@ -441,9 +395,6 @@ func contractLinkState(ctx context.Context, fx *paymentsFixture) error {
 	return nil
 }
 
-// ----- webhooks -----
-
-// anyDelivery is a genuine delivery of a payment: the first the provider sends for one.
 func (fx *paymentsFixture) anyDelivery(ctx context.Context) (signedDelivery, error) {
 	shapes := fx.carrying()
 	if len(shapes) == 0 {
@@ -461,7 +412,11 @@ func (fx *paymentsFixture) anyDelivery(ctx context.Context) (signedDelivery, err
 }
 
 func (fx *paymentsFixture) secrets() WebhookSecrets {
-	return WebhookSecrets{Current: fx.Creds.WebhookSecret}
+	return fx.with(fx.Creds.WebhookSecret, "")
+}
+
+func (fx *paymentsFixture) with(current, previous Secret) WebhookSecrets {
+	return WebhookSecrets{Current: current, Previous: previous, URL: fx.URL}
 }
 
 func (fx *paymentsFixture) verify(d signedDelivery, s WebhookSecrets, now time.Time) error {
@@ -494,7 +449,7 @@ func contractVerifyForged(ctx context.Context, fx *paymentsFixture) error {
 	}
 	now := fx.Now()
 	forged := map[string]signedDelivery{
-		"another secret": {Header: fx.Sign(d.Body, fx.OtherSecret, now), Body: d.Body},
+		"another secret": fx.Sign(d.Body, fx.OtherSecret, now),
 		"no signature":   {Header: http.Header{}, Body: d.Body},
 		"an empty one":   {Header: http.Header{"X-Nothing": {"1"}}, Body: d.Body},
 		"a tampered body": {Header: d.Header, Body: func() []byte {
@@ -511,11 +466,10 @@ func contractVerifyForged(ctx context.Context, fx *paymentsFixture) error {
 			return failf("a delivery with %s verifies", name)
 		}
 	}
-	// No secret at all verifies nothing, a delivery signed with an empty secret included.
-	if err := fx.verify(d, WebhookSecrets{}, now); err == nil {
+	if err := fx.verify(d, fx.with("", ""), now); err == nil {
 		return failf("a delivery verifies against no secret")
 	}
-	if err := fx.verify(signedDelivery{Header: fx.Sign(d.Body, "", now), Body: d.Body}, WebhookSecrets{}, now); err == nil {
+	if err := fx.verify(fx.Sign(d.Body, "", now), fx.with("", ""), now); err == nil {
 		return failf("a delivery signed with an empty secret verifies against no secret")
 	}
 	return nil
@@ -528,11 +482,11 @@ func contractVerifyTolerance(ctx context.Context, fx *paymentsFixture) error {
 	}
 	now := fx.Now()
 	at := func(delta time.Duration) signedDelivery {
-		return signedDelivery{Header: fx.Sign(d.Body, fx.Creds.WebhookSecret.Reveal(), now.Add(delta)), Body: d.Body}
+		return fx.Sign(d.Body, fx.Creds.WebhookSecret.Reveal(), now.Add(delta))
 	}
 	for name, delta := range map[string]time.Duration{
 		"just inside, in the past":   -(fx.Tolerance - time.Minute),
-		"just inside, in the future": fx.Tolerance - time.Minute,
+		"just inside, in the future": fx.ahead() - time.Minute,
 		"now":                        0,
 	} {
 		if err := fx.verify(at(delta), fx.secrets(), now); err != nil {
@@ -541,15 +495,14 @@ func contractVerifyTolerance(ctx context.Context, fx *paymentsFixture) error {
 	}
 	for name, delta := range map[string]time.Duration{
 		"just outside, in the past":   -(fx.Tolerance + time.Minute),
-		"just outside, in the future": fx.Tolerance + time.Minute,
-		"a day ago":                   -24 * time.Hour,
+		"just outside, in the future": fx.ahead() + time.Minute,
+		"a day past the window":       -(fx.Tolerance + 24*time.Hour),
 		"a year ahead":                365 * 24 * time.Hour,
 	} {
 		if err := fx.verify(at(delta), fx.secrets(), now); err == nil {
 			return failf("a delivery signed %s verifies: the signature is right and the time isn't", name)
 		}
 	}
-	// A recorded delivery replayed later is refused by the window, though its signature never stops being right.
 	if err := fx.verify(d, fx.secrets(), now.Add(fx.Tolerance+time.Minute)); err == nil {
 		return failf("a recorded delivery verifies after the window")
 	}
@@ -563,15 +516,13 @@ func contractVerifyRotation(ctx context.Context, fx *paymentsFixture) error {
 	}
 	now := fx.Now()
 	other := Secret(fx.OtherSecret)
-	// A new secret was set and the replaced one is kept for the overlap: deliveries signed with either verify.
-	if err := fx.verify(d, WebhookSecrets{Current: other, Previous: fx.Creds.WebhookSecret}, now); err != nil {
+	if err := fx.verify(d, fx.with(other, fx.Creds.WebhookSecret), now); err != nil {
 		return failf("a delivery signed with the previous secret doesn't verify during the overlap: %v", err)
 	}
-	if err := fx.verify(d, WebhookSecrets{Current: fx.Creds.WebhookSecret, Previous: other}, now); err != nil {
+	if err := fx.verify(d, fx.with(fx.Creds.WebhookSecret, other), now); err != nil {
 		return failf("a delivery signed with the current secret doesn't verify during the overlap: %v", err)
 	}
-	// After the overlap only the new one does.
-	if err := fx.verify(d, WebhookSecrets{Current: other}, now); err == nil {
+	if err := fx.verify(d, fx.with(other, ""), now); err == nil {
 		return failf("a delivery signed with a replaced secret verifies after the overlap")
 	}
 	return nil
@@ -588,10 +539,10 @@ func contractVerifyQuotesNothing(ctx context.Context, fx *paymentsFixture) error
 		d signedDelivery
 		s WebhookSecrets
 	}{
-		"a wrong secret": {signedDelivery{Header: fx.Sign(d.Body, fx.OtherSecret, now), Body: d.Body}, fx.secrets()},
-		"none":           {d, WebhookSecrets{}},
+		"a wrong secret": {fx.Sign(d.Body, fx.OtherSecret, now), fx.secrets()},
+		"none":           {d, fx.with("", "")},
 		"no header":      {signedDelivery{Header: http.Header{}, Body: d.Body}, fx.secrets()},
-		"a stale one":    {signedDelivery{Header: fx.Sign(d.Body, secrets[0], now.Add(-24*time.Hour)), Body: d.Body}, fx.secrets()},
+		"a stale one":    {fx.Sign(d.Body, secrets[0], now.Add(-(fx.Tolerance + 24*time.Hour))), fx.secrets()},
 	} {
 		err := fx.verify(f.d, f.s, now)
 		if err == nil {
@@ -609,15 +560,11 @@ func contractVerifyQuotesNothing(ctx context.Context, fx *paymentsFixture) error
 	return nil
 }
 
-// ----- events -----
-
 var (
 	contractTokenRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	contractOpaque  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,255}$`)
 )
 
-// normalized reads every delivery and returns the events it makes, in order, with a check that each
-// delivery's verification and its normalization agree on being repeatable.
 func (fx *paymentsFixture) normalized(ds []signedDelivery) ([]Event, error) {
 	var out []Event
 	for i, d := range ds {
@@ -633,8 +580,6 @@ func (fx *paymentsFixture) normalized(ds []signedDelivery) ([]Event, error) {
 	return out, nil
 }
 
-// oneOf returns the only event of the kind among evs, and an error if there are none or several: a
-// payment is told once, however many events the provider sends for it.
 func oneOf(evs []Event, kind string) (Event, error) {
 	var found []Event
 	for _, e := range evs {
@@ -648,8 +593,6 @@ func oneOf(evs []Event, kind string) (Event, error) {
 	return found[0], nil
 }
 
-// closedEvent says whether an event holds only what Normalize may keep: identifiers of the provider's
-// and ours, an amount and a currency, never free text, and none of what a payer typed.
 func (fx *paymentsFixture) closedEvent(e Event) error {
 	for name, v := range map[string]string{"id": e.ID, "object": e.ObjectID, "payment": e.PaymentID} {
 		if v != "" && !contractOpaque.MatchString(v) {
@@ -687,7 +630,6 @@ func contractNormalizePaid(ctx context.Context, fx *paymentsFixture) error {
 		if err != nil {
 			return err
 		}
-		// What the payer typed is in what the provider sends (or the check that it doesn't come out proves nothing).
 		for _, w := range fx.PayerWords {
 			if !slices.ContainsFunc(ds, func(d signedDelivery) bool { return strings.Contains(string(d.Body), w) }) {
 				return failf("%s: the payer's %q isn't in the provider's deliveries of a payment: the fixture proves nothing", sh.Name, w)
@@ -697,7 +639,6 @@ func contractNormalizePaid(ctx context.Context, fx *paymentsFixture) error {
 		if err != nil {
 			return err
 		}
-		// Several events are sent for one payment; one of them is the payment.
 		paid, err := oneOf(evs, EventPaymentSucceeded)
 		if err != nil {
 			return failf("%s: %w", sh.Name, err)
@@ -784,8 +725,6 @@ func contractNormalizeRefund(ctx context.Context, fx *paymentsFixture) error {
 			return failf("%s: the payment's event has no payment id, which is how a refund finds the ref", sh.Name)
 		}
 		part := nl.AmountMinor / 3
-		// The part comes first and the rest after it: the rest is a refund of what is left, which
-		// only exists once the part has been refunded, so these are steps in a fixed order.
 		for _, step := range []struct {
 			name        string
 			minor, want int64
@@ -811,7 +750,6 @@ func contractNormalizeRefund(ctx context.Context, fx *paymentsFixture) error {
 			if err != nil {
 				return failf("%s, %s: %w", sh.Name, name, err)
 			}
-			// What has been refunded so far, in the payment's currency, mapped to the payment by its id.
 			if ev.AmountMinor != want || ev.Currency != nl.Currency || ev.PaymentID != paid.PaymentID {
 				return failf("%s, %s: the refund is %+v, want %d %s of payment %s", sh.Name, name, ev, want, nl.Currency, paid.PaymentID)
 			}
@@ -844,6 +782,65 @@ func contractNormalizeGarbage(_ context.Context, fx *paymentsFixture) error {
 	} {
 		if ev, ok := fx.Provider.Normalize(body); ok {
 			return failf("%s is an event: %+v", name, ev)
+		}
+	}
+	return nil
+}
+
+func (fx *paymentsFixture) poller() (PaymentPoller, bool, error) {
+	p, ok := fx.Provider.(PaymentPoller)
+	if ok && fx.Later == nil {
+		return nil, false, failf("the adapter polls, and the fixture can't move the provider's clock (Later)")
+	}
+	return p, ok, nil
+}
+
+const readGap = 40 * time.Second
+
+func contractReadPaidAt(ctx context.Context, fx *paymentsFixture) error {
+	poller, ok, err := fx.poller()
+	if !ok {
+		return err
+	}
+	for _, sh := range fx.Shapes {
+		l, _, err := fx.made(ctx, sh)
+		if err != nil {
+			return err
+		}
+		fx.Later(time.Minute)
+		paidAt := fx.Now().Truncate(time.Second)
+		ds, err := fx.Pay(l, sh)
+		if err != nil {
+			return err
+		}
+		fx.Later(readGap)
+		obs, err := poller.ReadPayment(ctx, fx.Creds, fx.Client, !sh.Pages, l.ObjectID)
+		if err != nil {
+			return failf("%s: reading a paid link: %w", sh.Name, err)
+		}
+		if len(obs.Payments) != 1 {
+			return failf("%s: a read of a link paid once found %d payments", sh.Name, len(obs.Payments))
+		}
+		got := obs.Payments[0].PaidAt
+		if got.IsZero() {
+			return failf("%s: the read says no time of the payment, though the provider says one", sh.Name)
+		}
+		if !got.Equal(paidAt) {
+			return failf("%s: the payment made at %v and read at %v is dated %v", sh.Name, paidAt, fx.Now(), got)
+		}
+		if !sh.PaymentCarriesToken {
+			continue
+		}
+		evs, err := fx.normalized(ds)
+		if err != nil {
+			return err
+		}
+		paid, err := oneOf(evs, EventPaymentSucceeded)
+		if err != nil {
+			return failf("%s: %w", sh.Name, err)
+		}
+		if !paid.OccurredAt.Equal(got) {
+			return failf("%s: the webhook's event is dated %v, the read %v", sh.Name, paid.OccurredAt, got)
 		}
 	}
 	return nil

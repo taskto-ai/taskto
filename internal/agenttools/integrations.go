@@ -8,33 +8,21 @@ import (
 	"taskto.ai/taskto/internal/integrations"
 )
 
-// integrationView is an integration a space may use, as the agent reads it: what an app is built
-// against, and nothing about the account behind it (no id, no provider, no secret, no limit, no
-// webhook address, no other space).
 type integrationView struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 	Kind        string `json:"kind"`
-	// Status is "active", or "disabled" while an admin has switched the integration off.
-	Status string `json:"status"`
+	Status      string `json:"status"`
 }
 
-// slotView is a slot the app's draft declares, with where the approval of its contract stands.
-// It holds no contract, no hash, no approval or integration id.
 type slotView struct {
-	Slot string `json:"slot"`
-	Kind string `json:"kind"`
-	// Status is that of the draft's contract: none, requested, approved, rejected or revoked.
-	Status string `json:"status"`
-	// LiveStatus is that of the live release's contract, when the live release declares the slot.
+	Slot       string  `json:"slot"`
+	Kind       string  `json:"kind"`
+	Status     string  `json:"status"`
 	LiveStatus *string `json:"live_status"`
-	// LiveUsable is whether the live release may use its integration now.
-	LiveUsable *bool `json:"live_usable"`
+	LiveUsable *bool   `json:"live_usable"`
 }
 
-// listIntegrations tells the agent which integrations may be used in a space, and, for one app,
-// which slots its draft declares and whether an admin has approved them: enough to build against
-// what exists. It reads names, kinds and statuses only, and never the account behind them.
 func (s *Service) listIntegrations(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID int64 `json:"space_id"`

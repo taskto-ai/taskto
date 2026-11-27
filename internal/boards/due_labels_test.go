@@ -20,12 +20,10 @@ func TestDueAndLabelsSetAndClear(t *testing.T) {
 	w := newWorld(t)
 	cards := boardPath(w.shared, w.team.ID, "/cards")
 
-	// A new card has none.
 	if c := w.teamCard; c.Due != nil || c.Labels == nil || len(c.Labels) != 0 {
 		t.Fatalf("a card without due or labels: due %v, labels %#v", c.Due, c.Labels)
 	}
 
-	// Created with both: labels are normalized, deduplicated and sorted.
 	c := w.createCard(w.alice, w.shared, w.team, map[string]any{
 		"title": "Ship it", "due": "2026-03-31", "labels": []string{" Launch ", "bug", "LAUNCH", "two  words"},
 	})
@@ -36,7 +34,6 @@ func TestDueAndLabelsSetAndClear(t *testing.T) {
 		t.Fatalf("read back: %+v", got)
 	}
 
-	// Editing one doesn't touch the other, and the version moves.
 	path := cardPath(w.shared, w.team.ID, c.ID, "")
 	rec := w.alice.do(http.MethodPatch, path, map[string]any{"version": c.Version, "due": "2026-04-01"})
 	expect(t, rec, http.StatusOK)
@@ -51,7 +48,6 @@ func TestDueAndLabelsSetAndClear(t *testing.T) {
 		t.Fatalf("after changing labels: %+v", c)
 	}
 
-	// An update made against an old version changes nothing and says what the card is now.
 	rec = w.owner.do(http.MethodPatch, path, map[string]any{"version": 1, "due": nil, "labels": []string{}})
 	expect(t, rec, http.StatusConflict)
 	reply := decode[struct {
@@ -62,7 +58,6 @@ func TestDueAndLabelsSetAndClear(t *testing.T) {
 		t.Fatalf("409 reply: %+v", reply)
 	}
 
-	// null clears the due date, [] the labels.
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": 3, "due": nil, "labels": []string{}})
 	expect(t, rec, http.StatusOK)
 	c = decode[Card](t, rec)
@@ -70,7 +65,6 @@ func TestDueAndLabelsSetAndClear(t *testing.T) {
 		t.Fatalf("after clearing: due %v, labels %#v", c.Due, c.Labels)
 	}
 
-	// Leaving them out of an update that changes something else keeps them.
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": 4, "due": "2026-05-05", "labels": []string{"a"}})
 	expect(t, rec, http.StatusOK)
 	rec = w.alice.do(http.MethodPatch, path, map[string]any{"version": 5, "title": "Renamed"})
@@ -79,7 +73,6 @@ func TestDueAndLabelsSetAndClear(t *testing.T) {
 		t.Fatalf("after renaming: %+v", c)
 	}
 
-	// Null on creation is no due date.
 	expect(t, w.alice.do(http.MethodPost, cards, map[string]any{"title": "x", "due": nil, "labels": nil}), http.StatusCreated)
 }
 
@@ -116,7 +109,6 @@ func TestDueAndLabelsValidation(t *testing.T) {
 			if reply.Code != tt.code || !reflect.DeepEqual(reply.Params, tt.params) {
 				t.Fatalf("reply = %+v, want %s %v", reply, tt.code, tt.params)
 			}
-			// Creating with the same value fails the same way, and makes no card.
 			body := map[string]any{"title": "new"}
 			for k, v := range tt.body {
 				if k != "version" {
@@ -129,7 +121,6 @@ func TestDueAndLabelsValidation(t *testing.T) {
 	if got := w.cards(w.alice, w.shared, w.team, ""); len(got) != 1 {
 		t.Errorf("rejected creates left cards behind: %v", titles(got))
 	}
-	// Exactly at the limits is fine.
 	ok := make([]string, maxLabels)
 	for i := range ok {
 		ok[i] = strings.Repeat(string(rune('a'+i)), maxLabelLen)
@@ -147,7 +138,6 @@ func TestFilterAndSortByDueAndLabel(t *testing.T) {
 		}
 		w.createCard(w.alice, w.shared, w.team, body)
 	}
-	// w.teamCard "Team card" is in the backlog with neither.
 	mk("late bug", "todo", strp("2026-03-01"), "bug")
 	mk("soon bug urgent", "doing", strp("2026-03-20"), "bug", "urgent")
 	mk("later", "backlog", strp("2026-04-10"), "docs")
@@ -187,8 +177,6 @@ func TestFilterAndSortByDueAndLabel(t *testing.T) {
 		}
 	}
 
-	// Without today, overdue counts from today in UTC: 2026 dates are past or future, but the
-	// far past is always overdue and the far future never.
 	w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "ancient", "due": "2001-01-01"})
 	w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "distant", "due": "2999-12-31"})
 	got := list("?overdue=true")
@@ -196,7 +184,6 @@ func TestFilterAndSortByDueAndLabel(t *testing.T) {
 		t.Errorf("overdue without today = %v", got)
 	}
 
-	// Bad values are 400s, not empty lists.
 	for _, q := range []string{"?due_before=soon", "?due_after=2026-13-01", "?today=x&overdue=true", "?overdue=maybe", "?sort=rank",
 		"?label=" + url.QueryEscape(strings.Repeat("l", maxLabelLen+1)), "?label=%20"} {
 		expect(t, w.alice.do(http.MethodGet, boardPath(w.shared, w.team.ID, "/cards"+q), nil), http.StatusBadRequest)
@@ -212,9 +199,6 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// TestDueAndLabelsAreOnlyForWhoCanSeeTheCard is the cross-user check: nobody who may not
-// read a board reads a card's due date or labels, through the card, the list or a filter,
-// and nobody who may not write sets or clears them.
 func TestDueAndLabelsAreOnlyForWhoCanSeeTheCard(t *testing.T) {
 	w := newWorld(t)
 	secret := w.createCard(w.alice, w.alicePrivate, w.alicePersonal, map[string]any{
@@ -224,25 +208,20 @@ func TestDueAndLabelsAreOnlyForWhoCanSeeTheCard(t *testing.T) {
 
 	for name, who := range map[string]*user{"admin": w.owner, "viewer of shared": w.bob, "member": w.mallory, "other workspace": w.stranger} {
 		t.Run(name, func(t *testing.T) {
-			// Reading the personal board: through its path, a filter, or a card path.
 			for _, q := range []string{"", "?label=secret", "?due_before=2026-12-31", "?overdue=true&today=2027-01-01", "?sort=due"} {
 				expect(t, who.do(http.MethodGet, boardPath(w.alicePrivate, w.alicePersonal.ID, "/cards"+q), nil), http.StatusNotFound)
 			}
 			expect(t, who.do(http.MethodGet, cardPath(w.alicePrivate, w.alicePersonal.ID, secret.ID, ""), nil), http.StatusNotFound)
-			// Setting or clearing on it.
 			expect(t, who.do(http.MethodPatch, cardPath(w.alicePrivate, w.alicePersonal.ID, secret.ID, ""),
 				map[string]any{"version": secret.Version, "due": nil, "labels": []string{"mine"}}), http.StatusNotFound)
-			// Creating one with them on it.
 			expect(t, who.do(http.MethodPost, boardPath(w.alicePrivate, w.alicePersonal.ID, "/cards"),
 				map[string]any{"title": "x", "due": "2026-01-01", "labels": []string{"mine"}}), http.StatusNotFound)
 		})
 	}
-	// Nothing changed.
 	if got := w.card(w.alice, w.alicePrivate, secret); got.Version != secret.Version || *got.Due != "2026-09-09" || !reflect.DeepEqual(got.Labels, []string{"secret"}) {
 		t.Errorf("the private card changed: %+v", got)
 	}
 
-	// Someone who can't see the team space, and a viewer who can see but not write.
 	for _, who := range []*user{w.mallory, w.stranger} {
 		expect(t, who.do(http.MethodGet, boardPath(w.shared, w.team.ID, "/cards?label=team"), nil), http.StatusNotFound)
 		expect(t, who.do(http.MethodPatch, cardPath(w.shared, w.team.ID, shared.ID, ""),
@@ -257,8 +236,6 @@ func TestDueAndLabelsAreOnlyForWhoCanSeeTheCard(t *testing.T) {
 		t.Errorf("the team card changed: %+v", got)
 	}
 
-	// A filter sees the cards of one board only: another board of the space, and a personal
-	// board, don't leak into it through the same label.
 	w.createCard(w.alice, w.shared, w.team2, map[string]any{"title": "ops", "labels": []string{"team"}})
 	if got := w.cards(w.alice, w.shared, w.team, "?label=team"); !reflect.DeepEqual(titles(got), []string{"team plan"}) {
 		t.Errorf("label=team on the team board = %v", titles(got))
@@ -267,7 +244,6 @@ func TestDueAndLabelsAreOnlyForWhoCanSeeTheCard(t *testing.T) {
 		t.Errorf("label=team on the personal board = %v", titles(got))
 	}
 
-	// An archived space is read-only for them too.
 	expect(t, w.alice.do(http.MethodPatch, cardPath(w.archived, w.old.ID, w.oldCard.ID, ""),
 		map[string]any{"version": w.oldCard.Version, "labels": []string{"x"}}), http.StatusForbidden)
 }
@@ -282,7 +258,6 @@ func TestDueMigrationKeepsTheShape(t *testing.T) {
 	if _, err := w.e.db.Exec(`UPDATE cards SET due = '2026-03-01' WHERE id = ?`, w.teamCard.ID); err != nil {
 		t.Error(err)
 	}
-	// Labels go with their card.
 	if _, err := w.e.db.Exec(`INSERT INTO card_labels (card_id, label) VALUES (?, 'x')`, w.teamCard.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +270,6 @@ func TestDueMigrationKeepsTheShape(t *testing.T) {
 	}
 }
 
-// A filtered list never returns a card that fails its filter: the cards and their labels are
-// read in one statement, so a concurrent edit can't show a card selected for a label it had
-// with the labels it has since.
 func TestFilteredListIsOneSnapshot(t *testing.T) {
 	w := newWorld(t)
 	c := w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "flip", "labels": []string{"bug"}})
@@ -344,7 +316,6 @@ func TestFilteredListIsOneSnapshot(t *testing.T) {
 	}
 }
 
-// The limit on filter labels is the store's, so the HTTP API and the agent's tools share it.
 func TestTooManyFilterLabels(t *testing.T) {
 	w := newWorld(t)
 	many := make([]string, maxLabels+1)
@@ -370,8 +341,6 @@ func TestTooManyFilterLabels(t *testing.T) {
 	}
 }
 
-// Labels are normalized once, on the server: composed and decomposed é are one label, and
-// "ΟΣ", "οσ" and "ος" are one, in a card's labels and in a filter.
 func TestLabelsNormalizeUnicode(t *testing.T) {
 	w := newWorld(t)
 	c := w.createCard(w.alice, w.shared, w.team, map[string]any{

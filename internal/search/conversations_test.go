@@ -14,15 +14,13 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 )
 
-// fakeTranscripts is the agent runtime's transcripts, by its conversations' IDs.
 type fakeTranscripts struct {
-	mu    sync.Mutex
-	text  map[int64]string
-	err   error           // what every call answers, when set
-	errOf map[int64]error // what the calls for one conversation answer, when set
-	gone  map[int64]bool
-	calls []int64
-	// during, when set, runs inside a call, after it read the text and before it answers.
+	mu     sync.Mutex
+	text   map[int64]string
+	err    error
+	errOf  map[int64]error
+	gone   map[int64]bool
+	calls  []int64
 	during func(agentID int64)
 }
 
@@ -84,8 +82,6 @@ func (r *conversationsReply) titles() []string {
 
 var nextAgent int64 = 5000
 
-// conversation records a conversation of u in workspace, as the conversations package does, and
-// what the agent runtime has of it.
 func (w *world) conversation(u *user, workspace int64, title, text string, src *fakeTranscripts) int64 {
 	w.e.t.Helper()
 	nextAgent++
@@ -107,7 +103,6 @@ func (w *world) agentID(conversation int64) int64 {
 	return id
 }
 
-// mark is what a message, its reply, a rename or an archive do to a conversation.
 func (w *world) mark(conversation int64) {
 	w.e.t.Helper()
 	if _, err := w.e.db.Exec(`UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, conversation); err != nil {
@@ -136,8 +131,6 @@ func wantConversations(t *testing.T, who string, r *conversationsReply, want ...
 	}
 }
 
-// A conversation is its owner's alone: nobody else finds it, the workspace's admins and the
-// other members of a space included, and not the same person in another workspace.
 func TestConversationSearchIsOnlyOfTheCallersOwn(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -151,7 +144,6 @@ func TestConversationSearchIsOnlyOfTheCallersOwn(t *testing.T) {
 	wantConversations(t, "owner, an admin", w.searchConversations(w.owner, w.ws, "zanzibar"), "Owner's notes")
 	wantConversations(t, "mallory", w.searchConversations(w.mallory, w.ws, "zanzibar"))
 
-	// The same person in another workspace: each workspace has its own conversations.
 	var other int64
 	if err := w.e.db.QueryRow(`INSERT INTO workspaces (name) VALUES ('Elsewhere') RETURNING id`).Scan(&other); err != nil {
 		t.Fatal(err)
@@ -163,18 +155,14 @@ func TestConversationSearchIsOnlyOfTheCallersOwn(t *testing.T) {
 	w.conversation(w.alice, other, "Alice there", "zanzibar elsewhere", src)
 	wantConversations(t, "alice here", w.searchConversations(w.alice, w.ws, "zanzibar"), "Alice's trip")
 	wantConversations(t, "alice there", w.searchConversations(w.alice, other, "zanzibar"), "Alice there")
-	// Another member of that workspace doesn't find hers, and one who isn't a member gets 404.
 	wantConversations(t, "mallory there", w.searchConversations(w.mallory, other, "zanzibar"))
 	expect(t, w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/conversations?q=zanzibar", other), nil), http.StatusNotFound)
-	// Not logged in: no search.
 	expect(t, (&user{e: w.e}).do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/conversations?q=zanzibar", w.ws), nil), http.StatusUnauthorized)
 
-	// Someone who leaves the workspace no longer finds theirs, and finds them again if they return.
 	if _, err := w.e.db.Exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, w.ws, w.bob.id); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/conversations?q=zanzibar", w.ws), nil), http.StatusNotFound)
-	// The statement itself asks for the membership too, whatever route is in front of it.
 	if r, err := w.e.idx.SearchConversations(ctx, w.bob.id, w.ws, Query{Text: "zanzibar"}); err != nil || len(r.Results) != 0 {
 		t.Fatalf("a former member found %+v, %v", r, err)
 	}
@@ -184,9 +172,6 @@ func TestConversationSearchIsOnlyOfTheCallersOwn(t *testing.T) {
 	wantConversations(t, "bob again", w.searchConversations(w.bob, w.ws, "zanzibar"), "Bob's trip")
 }
 
-// The index follows the transcript: what is said later is found once the conversation is marked
-// updated, which a message and the end of its reply both do; and a rename and an archive are
-// seen as they are, with no waiting.
 func TestConversationSearchFollowsTheTranscript(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -203,7 +188,6 @@ func TestConversationSearchFollowsTheTranscript(t *testing.T) {
 		t.Fatalf("result = %+v", r.Results[0])
 	}
 
-	// A rename is found by its title, an archive shows, and neither needs a word of the transcript.
 	if _, err := w.e.db.Exec(`UPDATE conversations SET title = 'Quolls', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, c); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +207,6 @@ func TestConversationSearchFollowsTheTranscript(t *testing.T) {
 		t.Fatalf("an unarchived conversation = %+v", r)
 	}
 
-	// A conversation that is removed takes its index with it.
 	if _, err := w.e.db.Exec(`DELETE FROM conversations WHERE id = ?`, c); err != nil {
 		t.Fatal(err)
 	}
@@ -235,10 +218,6 @@ func TestConversationSearchFollowsTheTranscript(t *testing.T) {
 	}
 }
 
-// Text that may be old is never quoted: a conversation whose transcript can't be read now is
-// left out, and the search says so; it is found when the agent runtime answers again. A
-// conversation marked while its transcript was being read stays queued, and is not found until
-// the new text is in.
 func TestConversationSearchNeverQuotesWhatMayBeOld(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -255,8 +234,6 @@ func TestConversationSearchNeverQuotesWhatMayBeOld(t *testing.T) {
 		t.Fatalf("with it back = %+v", r)
 	}
 
-	// A message arrives while the transcript is read: what was read is written, and the
-	// conversation stays queued for the message.
 	agent := w.agentID(c)
 	src.set(agent, "first words about quokkas\nthen words about numbats")
 	src.during = func(id int64) {
@@ -275,7 +252,6 @@ func TestConversationSearchNeverQuotesWhatMayBeOld(t *testing.T) {
 	}
 }
 
-// A conversation the agent runtime no longer has is no longer found by what was said in it.
 func TestConversationSearchDropsConversationsTheAgentRuntimeLost(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -291,8 +267,6 @@ func TestConversationSearchDropsConversationsTheAgentRuntimeLost(t *testing.T) {
 	wantConversations(t, "its title", w.searchConversations(w.alice, w.ws, "trip"))
 }
 
-// A title that matches every word comes before text that does, and the others by when they
-// changed; the search pages.
 func TestConversationSearchOrderAndPages(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -318,12 +292,9 @@ func TestConversationSearchOrderAndPages(t *testing.T) {
 	expect(t, w.alice.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/conversations", w.ws), nil), http.StatusBadRequest)
 }
 
-// Only the newest part of a very long conversation is searched, and a server with no agent
-// runtime to read from finds nothing.
 func TestConversationSearchLimitsAndAbsence(t *testing.T) {
 	w := newWorld(t)
 	w.conversation(w.alice, w.ws, "Trip", "quokkas", newFakeTranscripts())
-	// No source: nothing is searched, and nothing is "incomplete" either.
 	if r := w.searchConversations(w.alice, w.ws, "quokkas"); len(r.Results) != 0 || r.Incomplete {
 		t.Fatalf("with no agent runtime = %+v", r)
 	}
@@ -341,8 +312,6 @@ func TestConversationSearchLimitsAndAbsence(t *testing.T) {
 	wantConversations(t, "the oldest", w.searchConversations(w.alice, w.ws, "oldest-word-here"))
 }
 
-// The background sync reads every queued conversation, so a search finds them already
-// indexed, and an agent runtime that isn't there is no failure.
 func TestConversationsAreIndexedInTheBackground(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -358,13 +327,11 @@ func TestConversationsAreIndexedInTheBackground(t *testing.T) {
 	if got := src.called() - before; got != 2 {
 		t.Fatalf("the background sync read %d transcripts, want 2", got)
 	}
-	// Nothing is left to read when someone searches.
 	before = src.called()
 	wantConversations(t, "alice", w.searchConversations(w.alice, w.ws, "quokkas"), "Trip")
 	if src.called() != before {
 		t.Fatalf("the search read %d transcripts again", src.called()-before)
 	}
-	// Restarting queues only the conversations marked in the last day, and the never indexed.
 	if err := w.e.idx.queueConversations(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -389,10 +356,6 @@ func TestConversationsAreIndexedInTheBackground(t *testing.T) {
 	}
 }
 
-// An older read never replaces a newer one's text: two syncs read the same conversation, a mark
-// comes between, the newer sync writes the text after it and takes the conversation off the
-// queue, and only then does the older one finish: its text is dropped, the index keeps the newer
-// text, and nothing is left in the queue to say otherwise.
 func TestAnOlderTranscriptReadNeverReplacesANewerOne(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -400,8 +363,6 @@ func TestAnOlderTranscriptReadNeverReplacesANewerOne(t *testing.T) {
 	c := w.conversation(w.alice, w.ws, "Trip", "old words about quokkas", src)
 	agent := w.agentID(c)
 
-	// The first sync reads the old text and is held, while a mark comes and a second sync reads
-	// the new text and finishes; then the first goes on with what it read.
 	held := &holdingSource{fakeTranscripts: src, text: "old words about quokkas"}
 	held.during = func() {
 		src.set(agent, "new words about numbats")
@@ -421,12 +382,10 @@ func TestAnOlderTranscriptReadNeverReplacesANewerOne(t *testing.T) {
 	}
 }
 
-// holdingSource answers with a fixed text it read before running during, as a read that is
-// slow, and finishes late.
 type holdingSource struct {
 	*fakeTranscripts
 	text   string
-	err    error // what the read answers instead of text, when set
+	err    error
 	during func()
 	once   sync.Once
 }
@@ -437,8 +396,6 @@ func (h *holdingSource) Transcript(_ context.Context, _ int64) (string, error) {
 	return text, err
 }
 
-// reuseID removes conversation c, which is being read, and gives its ID to a new conversation of
-// bob's (as the table does once the highest ID is gone), whose agent runtime conversation has text.
 func (w *world) reuseID(c int64, src *fakeTranscripts, text string) int64 {
 	w.e.t.Helper()
 	if _, err := w.e.db.Exec(`DELETE FROM conversations WHERE id = ?`, c); err != nil {
@@ -453,8 +410,6 @@ func (w *world) reuseID(c int64, src *fakeTranscripts, text string) int64 {
 	return nextAgent
 }
 
-// A read of a conversation that is removed meanwhile is never written onto another conversation
-// that has taken its ID: not its text, and not its being gone.
 func TestConversationIDsReusedNeverTakeAnotherOnesTranscript(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -471,7 +426,6 @@ func TestConversationIDsReusedNeverTakeAnotherOnesTranscript(t *testing.T) {
 			if _, err := w.e.idx.syncConversations(ctx, held, w.alice.id, w.ws, 0); err != nil {
 				t.Fatal(err)
 			}
-			// Bob's conversation is still waiting to be indexed from his own transcript.
 			var queued int
 			if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue WHERE conversation_id = ?`, c).Scan(&queued); err != nil || queued != 1 {
 				t.Fatalf("bob's conversation queued = %d, %v", queued, err)
@@ -487,8 +441,6 @@ func TestConversationIDsReusedNeverTakeAnotherOnesTranscript(t *testing.T) {
 	}
 }
 
-// A disabled account finds nothing of its conversations, as every route to them refuses it, and
-// finds them again when it is enabled.
 func TestConversationSearchRefusesADisabledAccount(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -508,8 +460,6 @@ func TestConversationSearchRefusesADisabledAccount(t *testing.T) {
 	wantConversations(t, "alice, enabled again", w.searchConversations(w.alice, w.ws, "zanzibar"), "Alice's trip")
 }
 
-// A mark of a conversation always has a number nobody had before, also after the queue's entry
-// was taken off: an older read can't take for its own a mark that came later.
 func TestConversationMarksAreNeverReused(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -536,8 +486,6 @@ func TestConversationMarksAreNeverReused(t *testing.T) {
 	}
 }
 
-// A conversation that only its title matches has no snippet: the start of its text would be
-// quoted as if it had matched.
 func TestConversationSnippetIsOnlyOfWhatMatched(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -571,8 +519,6 @@ func anyMatch(segs []Segment) bool {
 	return false
 }
 
-// A text write is for a conversation still waiting: one that another sync already dealt with, at
-// the same revision, is left alone.
 func TestConversationIndexSkipsAConversationNoLongerQueued(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -585,7 +531,6 @@ func TestConversationIndexSkipsAConversationNoLongerQueued(t *testing.T) {
 	if err := w.e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c).Scan(&revision); err != nil {
 		t.Fatal(err)
 	}
-	// A slower sync of the same revision brings other text, and finds the queue empty.
 	err := w.e.idx.write(ctx, func(tx *sql.Tx) error {
 		return indexConversation(ctx, tx, queuedConversation{id: c, agentID: w.agentID(c), revision: revision}, "words about numbats", false)
 	})
@@ -596,8 +541,6 @@ func TestConversationIndexSkipsAConversationNoLongerQueued(t *testing.T) {
 	wantConversations(t, "the slower sync's text", w.searchConversations(w.alice, w.ws, "numbats"))
 }
 
-// The skip list of a long drain holds only conversations still queued after being read: with every
-// conversation taken off the queue as it is read, it stays empty however many there are.
 func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -612,7 +555,6 @@ func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue`).Scan(&queued); err != nil || queued != 0 {
 		t.Fatalf("queued after the drain = %d, %v", queued, err)
 	}
-	// One marked while it is read stays queued, and is not read twice by the same drain.
 	c := w.conversation(w.alice, w.ws, "Marked", "words", src)
 	agent := w.agentID(c)
 	before := src.called()
@@ -629,8 +571,6 @@ func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
 	}
 }
 
-// One conversation whose transcript can't be read leaves it queued and the others are indexed; it
-// is the agent runtime's own failure only after several in a row, which stops the sync.
 func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -650,8 +590,6 @@ func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
 		t.Fatalf("the failed one is left out and the search says so: %+v", r)
 	}
 
-	// The agent runtime as a whole not answering stops the sync at the first: the others would not
-	// be answered either.
 	src.errOf = nil
 	src.err = fmt.Errorf("%w: %w", conversations.ErrNoTranscript, conversations.ErrRuntimeDown)
 	for i := range 5 {
@@ -665,7 +603,6 @@ func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
 		t.Fatalf("the sync read %d transcripts after the agent runtime went away, want 1", reads)
 	}
 
-	// Failures of each conversation alone don't stop it: all of them are tried, and left queued.
 	src.err = nil
 	src.errOf = map[int64]error{}
 	var later []int64
@@ -688,13 +625,11 @@ func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
 	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0); err == nil {
 		t.Fatal("no error")
 	}
-	// Each of them, and the one that failed before, once.
 	if reads := src.called() - before; reads != len(later)+1 {
 		t.Fatalf("the sync read %d transcripts, want each of the %d that failed alone, once", reads, len(later)+1)
 	}
 }
 
-// One search has one allowance of transcripts to read, however many times it looks again.
 func TestConversationSearchSharesItsAllowanceAcrossAttempts(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -712,9 +647,6 @@ func TestConversationSearchSharesItsAllowanceAcrossAttempts(t *testing.T) {
 	}
 }
 
-// A pass of the background sync reads a bounded number of transcripts and says more are left, so
-// a large backlog is worked through pass by pass; the loop runs it on a goroutine of its own, so
-// the sync of documents and records never waits for it.
 func TestConversationBackgroundSyncIsBoundedPerPass(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -742,8 +674,6 @@ func TestConversationBackgroundSyncIsBoundedPerPass(t *testing.T) {
 	wantConversations(t, "alice", w.searchConversations(w.alice, w.ws, "quokkas"), "Trip 4", "Trip 3", "Trip 2", "Trip 1", "Trip 0")
 }
 
-// A query whose words are split between a conversation's title and its text still shows the
-// passage of the text where its words are.
 func TestConversationSnippetOfAQuerySplitAcrossTitleAndText(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()
@@ -758,8 +688,6 @@ func TestConversationSnippetOfAQuerySplitAcrossTitleAndText(t *testing.T) {
 	}
 }
 
-// A search's sync reads the transcripts of the conversations the search's own condition allows
-// and no others: not a disabled account's, not a former member's.
 func TestConversationSyncOfOneUserFollowsTheOwnershipCondition(t *testing.T) {
 	w := newWorld(t)
 	src := newFakeTranscripts()

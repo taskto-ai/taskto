@@ -20,10 +20,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// verifyStripe is the check Stripe documents for verifying a webhook by hand, written from the
-// documentation and not from the sender's code: split the header, keep t and every v1, ignore
-// the rest (v0 and the debug entries), HMAC "<t>.<body>" with SHA-256, compare in constant time
-// against every v1, then check the timestamp's age.
 func verifyStripe(header string, body []byte, secrets []string, now time.Time, tolerance time.Duration) error {
 	if header == "" {
 		return errors.New("no signature header")
@@ -65,14 +61,12 @@ func verifyStripe(header string, body []byte, secrets []string, now time.Time, t
 	return errors.New("no signature matches")
 }
 
-// hook is a webhook handler written the way Stripe's documentation asks, with the dedupe of
-// event ids: the test's stand-in for the real hook handler.
 type hook struct {
 	secrets []string
 	clock   testprovider.Clock
 
 	mu      sync.Mutex
-	applied []string // the event ids applied, once each
+	applied []string
 	seen    map[string]int
 	refused int
 }
@@ -121,7 +115,6 @@ func someEvent(clock testprovider.Clock) testprovider.Event {
 	return testprovider.NewEvent("checkout.session.completed", map[string]any{"id": "cs_test_x", "object": "checkout.session"}, clock.Now())
 }
 
-// Both ways of delivering: to a handler in the process and to a server over HTTP.
 func senders(t *testing.T, h http.Handler, clock testprovider.Clock, opts ...testprovider.SenderOption) map[string]*testprovider.Sender {
 	t.Helper()
 	srv := httptest.NewServer(h)
@@ -144,10 +137,8 @@ func TestSignatureFormat(t *testing.T) {
 	if err := verifyStripe(got, body, []string{testprovider.TestWebhookSecret}, at, testprovider.Tolerance); err != nil {
 		t.Errorf("the reference verifier refuses it: %v", err)
 	}
-	// The signed string is "<t>.<body>": any change to the secret, the time or the body breaks it.
 	for name, header := range map[string]string{
 		"another secret": testprovider.Sign(testprovider.OtherWebhookSecret, at, body),
-		// The time is part of what is signed: a header whose t was changed afterwards is refused.
 		"a changed time": strings.Replace(got, "t="+strconv.FormatInt(at.Unix(), 10), "t="+strconv.FormatInt(at.Unix()+1, 10), 1),
 		"another body":   testprovider.Sign(testprovider.TestWebhookSecret, at, append(body, ' ')),
 	} {
@@ -158,7 +149,6 @@ func TestSignatureFormat(t *testing.T) {
 			t.Errorf("%s verifies", name)
 		}
 	}
-	// The key is the secret's text as it is: a verifier that strips whsec_ or decodes it refuses.
 	h := hmac.New(sha256.New, []byte(strings.TrimPrefix(testprovider.TestWebhookSecret, "whsec_")))
 	h.Write([]byte(strconv.FormatInt(at.Unix(), 10) + "." + string(body)))
 	if strings.HasSuffix(got, hex.EncodeToString(h.Sum(nil))) {
@@ -205,7 +195,6 @@ func TestSignedDeliveriesAreAcceptedAndBadOnesAreNot(t *testing.T) {
 				}
 			}
 			applied, refused := h.count()
-			// Two senders, one delivery each.
 			if tt.ok && (applied != 2 || refused != 0) || !tt.ok && (applied != 0 || refused != 2) {
 				t.Errorf("applied %d refused %d", applied, refused)
 			}
@@ -213,8 +202,6 @@ func TestSignedDeliveriesAreAcceptedAndBadOnesAreNot(t *testing.T) {
 	}
 }
 
-// The header's name is Stripe's, written out here and not read from the package's constant, so a
-// wrong constant can't pass: a handler reading "Stripe-Signature" sees the signature, over HTTP too.
 func TestTheSignatureIsInTheHeaderStripeUses(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
 	var got []string
@@ -237,8 +224,6 @@ func TestTheSignatureIsInTheHeaderStripeUses(t *testing.T) {
 	}
 }
 
-// Stripe sends v0 only for sandbox events, and as another scheme: the sender doesn't repeat the
-// valid v1 digest as v0, which would hide a verifier that accepts v0.
 func TestV0IsNotTheV1DigestAndOnlyComesWhenAsked(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
 	h := newHook(clock)
@@ -264,9 +249,6 @@ func TestV0IsNotTheV1DigestAndOnlyComesWhenAsked(t *testing.T) {
 	}
 }
 
-// The header an attacker can make without the secret: a v1 that doesn't match and a v0 that does.
-// A correct verifier ignores v0 and refuses it; one that accepts a match in any scheme (the
-// control, written the wrong way on purpose) takes it, which is what makes the case a real trap.
 func TestAnInvalidV1BesideAMatchingV0IsRefused(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
 	h := newHook(clock)
@@ -294,8 +276,6 @@ func TestAnInvalidV1BesideAMatchingV0IsRefused(t *testing.T) {
 	}
 }
 
-// acceptsAnyScheme is the mistake Stripe's documentation warns about (downgrade): a match in any
-// v-entry is taken for a signature.
 func acceptsAnyScheme(header string, body []byte, secret string) bool {
 	var t string
 	var sigs []string
@@ -320,8 +300,6 @@ func acceptsAnyScheme(header string, body []byte, secret string) bool {
 
 func TestARolledSecretIsAcceptedUntilItExpires(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
-	// Stripe signs once per active secret while a rolled one is still valid: a handler that
-	// knows only the old secret must accept it, and one that knows only the new one too.
 	oldOnly := newHook(clock, testprovider.OtherWebhookSecret)
 	newOnly := newHook(clock, testprovider.TestWebhookSecret)
 	for kind, s := range senders(t, oldOnly, clock, testprovider.WithSigningSecret(testprovider.TestWebhookSecret)) {
@@ -336,7 +314,6 @@ func TestARolledSecretIsAcceptedUntilItExpires(t *testing.T) {
 			t.Errorf("%s: a handler with the new secret: %d", kind, d.Status)
 		}
 	}
-	// After the overlap there is one signature, and the old secret's handler refuses it.
 	d, _ := testprovider.NewHandlerSender(oldOnly, "/h", testprovider.WithSenderClock(clock)).Send(context.Background(), someEvent(clock))
 	if d.OK() {
 		t.Error("the old secret accepted a signature of the new one only")
@@ -356,7 +333,6 @@ func TestDuplicatesAreTheSameEventDeliveredAgain(t *testing.T) {
 			if !d.OK() || d.EventID != ev.ID || string(d.Body) != string(ds[0].Body) {
 				t.Errorf("%s: delivery %d: %+v", kind, i, d)
 			}
-			// A retry is signed again, with its own timestamp.
 			if i > 0 && d.Signature == ds[i-1].Signature {
 				t.Errorf("%s: delivery %d has the signature of the one before", kind, i)
 			}
@@ -443,9 +419,8 @@ func TestOutOfOrderDelivery(t *testing.T) {
 		t.Error("shuffling one event or none")
 	}
 	same := []testprovider.Event{evs[0], evs[0]}
-	_ = testprovider.Shuffled(same, 1) // must end
+	_ = testprovider.Shuffled(same, 1)
 
-	// Delivered to a handler in the order given, all of them.
 	h := newHook(clock)
 	s := testprovider.NewHandlerSender(h, "/h", testprovider.WithSenderClock(clock))
 	ds, err := s.SendAll(context.Background(), rev)
@@ -474,7 +449,6 @@ func TestOddBodies(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
 	h := newHook(clock)
 	s := testprovider.NewHandlerSender(h, "/h", testprovider.WithSenderClock(clock))
-	// A signed body that isn't JSON passes the signature and is the handler's to refuse.
 	d, err := s.SendBody(context.Background(), "", "broken", []byte(`{"id": `))
 	if err != nil || d.Status != http.StatusBadRequest {
 		t.Errorf("broken JSON: %v %d", err, d.Status)
@@ -482,7 +456,6 @@ func TestOddBodies(t *testing.T) {
 	if _, refused := h.count(); refused != 0 {
 		t.Errorf("the signature of a broken body was refused: %d", refused)
 	}
-	// A body past the handler's cap is for it to cut; the sender sends what it is told.
 	big := []byte(`{"id":"evt_big","pad":"` + strings.Repeat("x", 600<<10) + `"}`)
 	d, err = s.SendBody(context.Background(), "evt_big", "big", big)
 	if err != nil || len(d.Body) != len(big) {
@@ -503,8 +476,6 @@ func TestADeliveryFailureIsAnError(t *testing.T) {
 	}
 }
 
-// What the fake makes and what the sender sends are meant for each other: every event of a
-// payment, signed, to a handler that verifies as Stripe documents.
 func TestTheFakesEventsReachAHandlerSigned(t *testing.T) {
 	clock := testprovider.NewManualClock(time.Time{})
 	f := testprovider.NewStripe(t, testprovider.WithClock(clock))
@@ -534,7 +505,6 @@ func TestTheFakesEventsReachAHandlerSigned(t *testing.T) {
 	if applied, refused := h.count(); applied != len(f.Events()) || refused != 0 {
 		t.Errorf("applied %d of %d, refused %d", applied, len(f.Events()), refused)
 	}
-	// An event of a type the integration doesn't act on still arrives well formed.
 	odd := testprovider.NewEvent("customer.created", map[string]any{"id": "cus_x", "object": "customer"}, clock.Now())
 	if d, _ := s.Send(context.Background(), odd); !d.OK() || !strings.Contains(string(d.Body), `"type": "customer.created"`) {
 		t.Errorf("an unrelated event: %d", d.Status)

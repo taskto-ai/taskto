@@ -1,5 +1,3 @@
-// The purge against a database Pi Durable wrote itself: what the unit tests' fixture stands in for
-// (purge.test.ts) is checked here against the real thing, so the two can't drift apart.
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -16,7 +14,6 @@ import { compactOnce, openHarnessStorage } from './storage.js'
 
 const context = BACKGROUND_CONTEXT
 
-// A document whose earlier revisions Pi Durable deletes as it writes new ones (history: latest).
 const Notes = defineDoc<{ text: string }>({
   kind: 'taskto.test.notes',
   version: 1,
@@ -27,8 +24,6 @@ const Notes = defineDoc<{ text: string }>({
   checkpointWhen: () => true,
 })
 
-// Markers in what the notes say, one per write: short ones, and long ones that SQLite keeps in
-// overflow pages, which it frees when they are deleted.
 const markers = Array.from({ length: 5 }, (_, i) => `withdrawn-marker-${i}-6f1c`)
 const notes = markers.map((m, i) => (i % 2 === 0 ? m : `${m} ${'w'.repeat(6000)}`))
 
@@ -41,8 +36,6 @@ describe('the purge on a database Pi Durable wrote', () => {
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-  // The harness as the sidecar opens it (openHarnessStorage), or as a version before this one did
-  // (Pi Durable's own opener, without secure_delete).
   const open = async (storage: 'sidecar' | 'older' = 'sidecar') => {
     const models = createModels()
     const catalog = installProviders(models, loadProviders(undefined))
@@ -54,10 +47,6 @@ describe('the purge on a database Pi Durable wrote', () => {
     return { harness, model: catalog.default }
   }
 
-  // As the sidecar does: a conversation with its lifecycle document, then retired. Before that, the
-  // notes are written to a document one after another: Pi Durable keeps the latest revision and
-  // deletes the one before at each write, on its own connection, as it does with a queue of input
-  // whose items are withdrawn.
   const retired = async (notes: string[] = [], storage: 'sidecar' | 'older' = 'sidecar') => {
     const { harness, model } = await open(storage)
     const conv = await harness.createConversation(
@@ -96,9 +85,6 @@ describe('the purge on a database Pi Durable wrote', () => {
     }
   })
 
-  // The reviewer's sequence: the purge stops after its first short transaction (a crash, a
-  // deploy), and the sidecar starts again. The conversation is still retired, so it takes no input
-  // and the next purge carries on; that one ends it.
   it('leaves a conversation retired when it stops after its first transaction', async () => {
     const id = await retired()
     const stop = new Error('stopped')
@@ -127,27 +113,21 @@ describe('the purge on a database Pi Durable wrote', () => {
     }
   })
 
-  // How many times each marker is in the database's file and its log, byte for byte. Read with
-  // every connection closed (closing a descriptor of the file drops a process's locks on it).
   const remnants = () => {
     const bytes = [path, `${path}-wal`].filter(existsSync).map((p) => readFileSync(p).toString('latin1'))
     return markers.map((m) => bytes.reduce((n, b) => n + b.split(m).length - 1, 0))
   }
 
-  // What Pi Durable deleted on its own connection before the purge (the earlier revisions) is gone
-  // from the file too, not only what the purge deletes: the harness's connection sets secure_delete.
   it('leaves nothing of what was deleted before the purge in the file or the log', async () => {
     const id = await retired(notes)
     purgeRecords(path, id, 5000)
     expect(remnants()).toEqual(markers.map(() => 0))
   })
 
-  // A database a version before this one wrote holds such remnants; compacting it once at start
-  // leaves none, and isn't done again.
   it('compacts a database from before once, and leaves nothing of what was deleted then', async () => {
     const id = await retired(notes, 'older')
-    expect(remnants().some((n) => n > 0)).toBe(true) // the older version left them
-    expect(compactOnce(path, 1)).toBe('too-large') // bounded: a larger one is left for later
+    expect(remnants().some((n) => n > 0)).toBe(true)
+    expect(compactOnce(path, 1)).toBe('too-large')
     expect(remnants().some((n) => n > 0)).toBe(true)
     expect(compactOnce(path)).toBe('compacted')
     expect(compactOnce(path)).toBe('done-before')
@@ -168,8 +148,6 @@ describe('the purge on a database Pi Durable wrote', () => {
     }
   }
 
-  // A reader (a backup's snapshot) holds the log while the sidecar starts: the rewrite can't be
-  // emptied out of the log, so the compaction isn't recorded done; it is at a start without one.
   it('defers the compaction while a reader holds the log', async () => {
     await retired(notes, 'older')
     const reader = new DatabaseSync(path)
@@ -183,17 +161,12 @@ describe('the purge on a database Pi Durable wrote', () => {
       reader.close()
     }
     expect(compactOnce(path)).toBe('compacted')
-    // Only the latest note is left: the document still holds it, the earlier ones were deleted.
     expect(remnants()).toEqual(markers.map((_, i) => (i === markers.length - 1 ? 1 : 0)))
   })
 
-  // After a hard stop the log can be large: finding the compaction done before doesn't checkpoint
-  // it (a read-write connection's closing would, and the start would wait for it).
   it('looks for the compaction without checkpointing the log', async () => {
     await retired()
     expect(compactOnce(path)).toBe('compacted')
-    // A log left as a hard stop leaves it: written, and its writer gone without checkpointing it
-    // (another connection was open when it closed, and that one only reads).
     const keep = new DatabaseSync(path, { readOnly: true })
     keep.prepare('SELECT count(*) FROM documents').get()
     const writer = new DatabaseSync(path)
@@ -211,11 +184,9 @@ describe('the purge on a database Pi Durable wrote', () => {
     expect(statSync(`${path}-wal`).size).toBe(before)
   })
 
-  // SQLite failing as it compacts (the disk full, the file read-only) defers it: the sidecar starts.
   it('defers the compaction when SQLite fails, rather than not starting', async () => {
-    if (process.getuid?.() === 0) return // root writes a read-only file all the same
+    if (process.getuid?.() === 0) return
     await retired(notes, 'older')
-    // SQLite makes the log and its index with the file's mode, so all three are given it back.
     const files = () => [path, `${path}-wal`, `${path}-shm`].filter(existsSync)
     chmodSync(path, 0o444)
     try {
@@ -226,8 +197,6 @@ describe('the purge on a database Pi Durable wrote', () => {
     expect(compactOnce(path)).toBe('compacted')
   })
 
-  // The look at whether a compaction is due fails too (a file SQLite can't read as a database):
-  // that is a deferral, logged, and the sidecar starts all the same.
   it('defers the compaction when the look before it fails', () => {
     const broken = join(dirname(path), 'broken.db')
     writeFileSync(broken, Buffer.alloc(8192, 7))

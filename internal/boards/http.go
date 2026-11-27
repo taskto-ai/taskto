@@ -14,8 +14,6 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// Routes mounts the board endpoints on mux, each behind access.Checker.RequireSpace.
-// docs/api.md describes them.
 func (s *Service) Routes(mux *http.ServeMux) {
 	read := func(h http.HandlerFunc) http.Handler { return auth.AcceptTokens(s.access.RequireSpace(access.Read, h)) }
 	write := func(h http.HandlerFunc) http.Handler {
@@ -43,8 +41,6 @@ const (
 	maxQueryLen = 200
 )
 
-// request is what every board handler starts from: the space RequireSpace checked, the
-// caller, and the board and card in the path, if the route has them.
 type request struct {
 	space access.Space
 	actor Actor
@@ -52,14 +48,11 @@ type request struct {
 	card  int64
 }
 
-// parse reads the request's space and caller, and the path IDs it names, answering 404
-// for a path ID that isn't a number.
 func parse(w http.ResponseWriter, r *http.Request, ids ...string) (request, bool) {
 	sp, _ := access.SpaceFrom(r.Context())
 	u, _ := auth.UserFrom(r.Context())
 	req := request{space: sp, actor: Actor{UserID: u.ID}}
 	if t, ok := auth.TokenFrom(r.Context()); ok {
-		// Changes made with an access token are marked like the agent's, with its name.
 		req.actor.Agent, req.actor.Via = true, t.Name
 	}
 	for _, name := range ids {
@@ -293,8 +286,6 @@ func (s *Service) handleComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, cm)
 }
 
-// cardResult answers a change to a card: the card, or for ErrStale a 409 with the card as
-// it is now, or the error's status.
 func (s *Service) cardResult(w http.ResponseWriter, r *http.Request, req request, c Card, err error) {
 	switch {
 	case errors.Is(err, ErrStale):
@@ -307,8 +298,6 @@ func (s *Service) cardResult(w http.ResponseWriter, r *http.Request, req request
 	}
 }
 
-// stale answers 409 for an update made against an old version, with code and the current
-// state so the client can redo it; lookupErr is the error of reading that state.
 func stale(w http.ResponseWriter, r *http.Request, code apierr.Code, current any, lookupErr error) {
 	if lookupErr != nil {
 		fail(w, r, lookupErr)
@@ -317,7 +306,6 @@ func stale(w http.ResponseWriter, r *http.Request, code apierr.Code, current any
 	writeJSON(w, http.StatusConflict, map[string]any{"error": ErrStale.Error(), "code": code, "current": current})
 }
 
-// fail answers with the status for one of the package's errors, or 500.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var bad *invalidError
 	switch {
@@ -330,7 +318,6 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrBoardArchived):
 		writeError(w, http.StatusForbidden, apierr.CodeBoardArchived, err.Error())
 	case errors.Is(err, ErrStale):
-		// Not reached: changes go through stale, which sends the current state too.
 		writeError(w, http.StatusConflict, apierr.CodeCardChanged, err.Error())
 	case errors.As(err, &bad):
 		writeError(w, http.StatusBadRequest, bad.code, bad.msg, bad.params)
@@ -338,15 +325,13 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, err.Error())
 	default:
 		if r.Context().Err() != nil {
-			return // the client went away
+			return
 		}
 		slog.Error("boards: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		apierr.Internal(w)
 	}
 }
 
-// boolParam reads an optional "true" or "false" query parameter, answering 400 for
-// anything else.
 func boolParam(w http.ResponseWriter, r *http.Request, name string) (*bool, bool) {
 	switch r.URL.Query().Get(name) {
 	case "":
@@ -362,8 +347,6 @@ func boolParam(w http.ResponseWriter, r *http.Request, name string) (*bool, bool
 	return nil, false
 }
 
-// readJSON decodes the request body into v, strictly: unknown fields and trailing data
-// are errors. It answers 400 and returns false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
@@ -378,8 +361,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
-// with a broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

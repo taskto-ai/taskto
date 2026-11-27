@@ -27,14 +27,11 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Client is a browser's push subscription keys, for tests: the side that decrypts what a push
-// carries, written from RFC 8291 section 3.4 and independent of encrypt.
 type Client struct {
 	Private *ecdh.PrivateKey
 	Auth    []byte
 }
 
-// NewClient makes a browser's keys.
 func NewClient(t testing.TB) *Client {
 	t.Helper()
 	priv, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -48,13 +45,10 @@ func NewClient(t testing.TB) *Client {
 	return &Client{Private: priv, Auth: secret}
 }
 
-// Public is the key as a browser reports it (p256dh), base64url.
 func (c *Client) Public() string { return b64.EncodeToString(c.Private.PublicKey().Bytes()) }
 
-// AuthSecret is the auth secret as a browser reports it, base64url.
 func (c *Client) AuthSecret() string { return b64.EncodeToString(c.Auth) }
 
-// Decrypt reads the body of a push: the message encrypted to the client, or an error.
 func (c *Client) Decrypt(body []byte) ([]byte, error) {
 	if len(body) < headerSize+16 {
 		return nil, errors.New("too short")
@@ -87,7 +81,6 @@ func (c *Client) Decrypt(body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The last record ends in 0x02 after any zero padding.
 	end := len(plain)
 	for end > 0 && plain[end-1] == 0 {
 		end--
@@ -107,7 +100,6 @@ func mustB64(t *testing.T, s string) []byte {
 	return out
 }
 
-// RFC 8291 appendix A: the standard's own example, byte for byte.
 func TestEncryptionMatchesRFC8291Example(t *testing.T) {
 	uaPublic := mustB64(t, "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4")
 	authSecret := mustB64(t, "BTBZMqHH6r4Tts7J_aSIgg")
@@ -134,14 +126,13 @@ func TestEncryptedMessageDecryptsAtTheBrowser(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(body) > recordSize+16 { // a record, and nothing past the standard's single one
+		if len(body) > recordSize+16 {
 			t.Fatalf("a %d byte message became %d bytes", len(msg), len(body))
 		}
 		got, err := c.Decrypt(body)
 		if err != nil || string(got) != msg {
 			t.Fatalf("decrypted = %q, %v; want %q", got, err, msg)
 		}
-		// Another browser, with other keys, can't read it, and a tampered message isn't read.
 		if _, err := NewClient(t).Decrypt(body); err == nil {
 			t.Fatal("another browser read the message")
 		}
@@ -176,8 +167,6 @@ func openTestDB(t *testing.T) (*serverkey.Key, *vapidKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Made once: a second start reads the same pair back, and a key that isn't the server's
-	// can't open it.
 	again, err := loadVAPID(t.Context(), sqlDB, key)
 	if err != nil || !bytes.Equal(again.public, first.public) || !again.private.Equal(first.private) {
 		t.Fatalf("the key pair changed on a second start: %v", err)
@@ -235,7 +224,6 @@ func TestVAPIDAuthorizationIsAValidES256Token(t *testing.T) {
 		claims.Exp != now.Add(12*time.Hour).Unix() {
 		t.Fatalf("claims = %+v", claims)
 	}
-	// Verified as a push service would: the raw r||s signature, with the public key in the header.
 	sig := mustB64(t, parts[2])
 	if len(sig) != 64 {
 		t.Fatalf("signature is %d bytes, want 64", len(sig))
@@ -254,13 +242,10 @@ func TestVAPIDAuthorizationIsAValidES256Token(t *testing.T) {
 	}
 }
 
-// Purge is the retention the worker runs every hour, for the external tests.
 func (s *Service) Purge(ctx context.Context) error { return s.purge(ctx) }
 
-// Tidy is what the worker does on its own schedule, once, for the external tests.
 func (s *Service) Tidy(ctx context.Context) { s.tidy(ctx) }
 
-// TidyEvery sets how often the worker tidies, for the external tests.
 func (s *Service) TidyEvery(d time.Duration) { s.tidyEvery = d }
 
 func TestVAPIDAudienceIsTheSerializedOrigin(t *testing.T) {

@@ -17,12 +17,7 @@ import (
 	"taskto.ai/taskto/internal/config"
 )
 
-// In container mode the worker's network can't reach the server (docs/cli-workers.md), so
-// the shared accounts' proxy listens on a socket in the volume both mount, and the worker
-// relays the CLIs' connections to it from 127.0.0.1. The server may start before the worker
-// has made the socket's directory: it waits for it.
 func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
-	// Short: a Unix socket's path has a length limit, and macOS's temporary directory is long.
 	base, err := os.MkdirTemp("/tmp", "taskto-proxy-")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +42,6 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 		}
 	}()
 
-	// The worker starts later: it makes the directory, the server's, and starts its relay.
 	if err := prepareProxyDir(dir, os.Getuid(), os.Getgid()); err != nil {
 		t.Fatal(err)
 	}
@@ -61,12 +55,11 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 	defer relay.Close()
 	go relayProxy(relay, socket)
 
-	// A request without a token, through the relay, gets the proxy's own refusal.
 	url := "http://" + relay.Addr().String()
 	var status int
 	var body string
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		resp, err := http.Get(url + "/cli-proxy/v1/models") //nolint:noctx // a test
+		resp, err := http.Get(url + "/cli-proxy/v1/models")
 		if err != nil {
 			continue
 		}
@@ -81,8 +74,7 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 	if info, err := os.Stat(socket); err != nil || info.Mode().Perm() != 0o666 {
 		t.Errorf("the socket: %v %v", info, err)
 	}
-	// Only the proxy's routes.
-	resp, err := http.Get(url + "/api/setup") //nolint:noctx // a test
+	resp, err := http.Get(url + "/api/setup")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +83,6 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 		t.Errorf("/api/setup through the relay: %d", resp.StatusCode)
 	}
 
-	// A restarted server replaces the socket the last one left.
 	if err := stop(); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
@@ -105,7 +96,7 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 		}
 	}()
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		resp, err := http.Get(url + "/cli-proxy/v1/models") //nolint:noctx // a test
+		resp, err := http.Get(url + "/cli-proxy/v1/models")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusUnauthorized {
@@ -118,8 +109,6 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 	}
 }
 
-// The relay doesn't make up an answer when the server isn't there: the CLI sees the
-// connection close, and retries as it would any network error.
 func TestCLIProxyRelayWithoutTheServer(t *testing.T) {
 	relay, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -127,7 +116,7 @@ func TestCLIProxyRelayWithoutTheServer(t *testing.T) {
 	}
 	defer relay.Close()
 	go relayProxy(relay, filepath.Join(t.TempDir(), "none.sock"))
-	resp, err := http.Get("http://" + relay.Addr().String() + "/cli-proxy/v1/models") //nolint:noctx // a test
+	resp, err := http.Get("http://" + relay.Addr().String() + "/cli-proxy/v1/models")
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Errorf("an answer with no server behind the relay: %d", resp.StatusCode)
@@ -143,7 +132,6 @@ func TestPrepareProxyDir(t *testing.T) {
 	if err := prepareProxyDir(file, os.Getuid(), os.Getgid()); err == nil {
 		t.Error("a file taken for the directory")
 	}
-	// Again on the directory it made: nothing to change.
 	dir := filepath.Join(base, "proxy")
 	for range 2 {
 		if err := prepareProxyDir(dir, os.Getuid(), os.Getgid()); err != nil {
@@ -151,7 +139,6 @@ func TestPrepareProxyDir(t *testing.T) {
 		}
 	}
 	if os.Getuid() != 0 {
-		// Someone else's directory: not root's, and not the server's.
 		if err := prepareProxyDir(dir, os.Getuid()+1, os.Getgid()); err == nil {
 			t.Error("a directory of another user's accepted")
 		}

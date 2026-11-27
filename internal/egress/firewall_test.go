@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// deploy/worker-firewall.sh closes every IPv4 address that isn't public to the CLI worker
-// (docs/cli-workers.md#the-workers-network): the same list as this package's.
 func TestWorkerFirewallHasTheSpecialRanges(t *testing.T) {
 	raw, err := os.ReadFile("../../deploy/worker-firewall.sh")
 	if err != nil {

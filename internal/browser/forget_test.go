@@ -18,24 +18,20 @@ import (
 	"time"
 )
 
-// profileHost is a fakeHost whose users have a browser directory with a profile on disk, made
-// when their browser starts, as the real hosts do. It records every process it started, and
-// what Purge saw.
 type profileHost struct {
 	fakeHost
 	root string
 
-	mu    sync.Mutex
-	procs map[int64][]*exec.Cmd
-	// browsers is the Chromium processes alone: the fake display's programs may end on their own.
-	browsers map[int64][]*exec.Cmd
-	// aliveAtPurge is the processes of the user still running when Purge was called.
+	mu           sync.Mutex
+	procs        map[int64][]*exec.Cmd
+	browsers     map[int64][]*exec.Cmd
 	aliveAtPurge map[int64]int
-	// failPurge makes the next Purge calls fail, one each.
-	failPurge int
-	// inPurge, if set, is told when Purge is called, which then waits for release.
-	inPurge chan int64
-	release chan struct{}
+	failPurge    int
+	inPurge      chan int64
+	release      chan struct{}
+	inClean      chan struct{}
+	releaseClean chan struct{}
+	purges       int
 }
 
 func newProfileHost(t *testing.T) *profileHost {
@@ -74,8 +70,6 @@ func (h *profileHost) Start(user int64, spec ProcSpec, extra []*os.File) (*exec.
 	return cmd, err
 }
 
-// alive counts user's processes that still run. A process the Manager has waited for is gone from
-// the table, so signal 0 finds no such process.
 func (h *profileHost) alive(user int64) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -88,7 +82,6 @@ func (h *profileHost) alive(user int64) int {
 	return n
 }
 
-// browsersAlive counts user's Chromium processes that still run.
 func (h *profileHost) browsersAlive(user int64) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -109,6 +102,7 @@ func (h *profileHost) Purge(user int64) error {
 			h.aliveAtPurge[user]++
 		}
 	}
+	h.purges++
 	fail := h.failPurge > 0
 	if fail {
 		h.failPurge--
@@ -124,6 +118,24 @@ func (h *profileHost) Purge(user int64) error {
 	return os.RemoveAll(h.dir(user))
 }
 
+func (h *profileHost) Clean(int64) error {
+	h.mu.Lock()
+	in := h.inClean
+	h.inClean = nil
+	h.mu.Unlock()
+	if in != nil {
+		close(in)
+		<-h.releaseClean
+	}
+	return nil
+}
+
+func (h *profileHost) purged() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.purges
+}
+
 func (h *profileHost) exists(user int64) bool {
 	_, err := os.Stat(h.profile(user))
 	return err == nil
@@ -135,14 +147,11 @@ func (h *profileHost) alivePurge(user int64) int {
 	return h.aliveAtPurge[user]
 }
 
-// echoView is the display's side of a live view: it reads what the viewer sends until the view
-// is closed.
 func echoView(c io.ReadWriteCloser) {
 	defer c.Close()
 	_, _ = io.Copy(io.Discard, c)
 }
 
-// waitEnded reads from c until it ends, which it must do soon (a banner may come first).
 func waitEnded(t *testing.T, c io.Reader) {
 	t.Helper()
 	done := make(chan struct{})
@@ -157,11 +166,8 @@ func waitEnded(t *testing.T, c io.Reader) {
 	}
 }
 
-// serveRemote serves m's API on a Unix socket, as the CLI worker does, and returns the client.
 func serveRemote(t *testing.T, m *Manager) *Remote {
 	t.Helper()
-	// A short directory: a Unix socket path is limited to about 104 bytes on macOS, which
-	// t.TempDir() with a long test name can exceed.
 	dir, err := os.MkdirTemp("", "w")
 	if err != nil {
 		t.Fatal(err)
@@ -189,8 +195,6 @@ func startAll(t *testing.T, m *Manager, user int64) {
 	}
 }
 
-// A deleted account's browsers are stopped, with their live views, and waited for before the
-// profile is removed; another user's browsers, live views and files are not touched.
 func TestForgetStopsTheBrowsersAndRemovesTheProfile(t *testing.T) {
 	h := newProfileHost(t)
 	h.vnc = echoView
@@ -234,10 +238,8 @@ func TestForgetStopsTheBrowsersAndRemovesTheProfile(t *testing.T) {
 	if st[Personal].Running || st[Testing].Running {
 		t.Errorf("status after: %+v", st)
 	}
-	// The live view was closed: its stream ends.
 	waitEnded(t, gone)
 
-	// The other user's browsers, view and files are as they were.
 	st2, _ := m.Status(ctx, 2)
 	if !st2[Personal].Running || !st2[Testing].Running || !st2[Personal].Live {
 		t.Errorf("user 2's status: %+v", st2)
@@ -253,8 +255,6 @@ func TestForgetStopsTheBrowsersAndRemovesTheProfile(t *testing.T) {
 	}
 }
 
-// While an account's browsers are being forgotten, and after, no browser of theirs starts,
-// whatever the kind or the way in; others' do.
 func TestForgetRefusesStartsWhileItRuns(t *testing.T) {
 	h := newProfileHost(t)
 	h.vnc = echoView
@@ -268,7 +268,6 @@ func TestForgetRefusesStartsWhileItRuns(t *testing.T) {
 	startAll(t, m, 1)
 	errc := make(chan error, 1)
 	go func() { errc <- m.Forget(ctx, 1) }()
-	// Forget has stopped the browsers and is removing the files.
 	select {
 	case u := <-h.inPurge:
 		if u != 1 {
@@ -293,7 +292,6 @@ func TestForgetRefusesStartsWhileItRuns(t *testing.T) {
 		t.Errorf("%d processes of the user run during the purge", h.alive(1))
 	}
 
-	// Another user's start is not held up by it (their own Purge is never called here).
 	if err := m.Start(ctx, 2, Testing); err != nil {
 		t.Errorf("another user's start during the purge: %v", err)
 	}
@@ -305,7 +303,6 @@ func TestForgetRefusesStartsWhileItRuns(t *testing.T) {
 	if h.exists(1) {
 		t.Error("the profile is still there")
 	}
-	// Ids are never given again: the refusal outlasts the call, and nothing of theirs is made.
 	if err := m.Start(ctx, 1, Personal); !errors.Is(err, ErrAccountClosing) {
 		t.Errorf("a start after the purge: %v", err)
 	}
@@ -314,8 +311,6 @@ func TestForgetRefusesStartsWhileItRuns(t *testing.T) {
 	}
 }
 
-// A browser still starting when its account is forgotten is waited for and stopped, so no
-// process is left to write under the profile that is removed.
 func TestForgetStopsABrowserStillStarting(t *testing.T) {
 	h := newProfileHost(t)
 	m := NewManager(Config{Host: h})
@@ -325,14 +320,13 @@ func TestForgetStopsABrowserStillStarting(t *testing.T) {
 
 	started := make(chan struct{})
 	go func() { _ = m.Start(ctx, 1, Personal); close(started) }()
-	// Forget as soon as the start has begun: either it is found starting or already running.
 	for h.alive(1) == 0 {
 		time.Sleep(time.Millisecond)
 	}
 	if err := m.Forget(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	<-started // started or refused: either way no process is left
+	<-started
 	if n := h.alivePurge(1); n != 0 {
 		t.Errorf("%d processes ran when the files were removed", n)
 	}
@@ -341,8 +335,6 @@ func TestForgetStopsABrowserStillStarting(t *testing.T) {
 	}
 }
 
-// A purge that couldn't remove the files says so, and is tried again to the end; the browsers
-// stay off meanwhile.
 func TestForgetIsRetryable(t *testing.T) {
 	h := newProfileHost(t)
 	h.failPurge = 1
@@ -364,7 +356,6 @@ func TestForgetIsRetryable(t *testing.T) {
 	if h.exists(1) {
 		t.Error("the profile is still there")
 	}
-	// Nothing to stop and nothing to remove is done, not an error.
 	if err := m.Forget(ctx, 1); err != nil {
 		t.Fatalf("a third try: %v", err)
 	}
@@ -373,8 +364,6 @@ func TestForgetIsRetryable(t *testing.T) {
 	}
 }
 
-// Forget gives up when its context ends before the browsers are gone, and says so: the files
-// are not removed under a process that still runs.
 func TestForgetWaitsForTheProcesses(t *testing.T) {
 	h := newProfileHost(t)
 	m := NewManager(Config{Host: h, StopGrace: 10 * time.Second})
@@ -390,7 +379,6 @@ func TestForgetWaitsForTheProcesses(t *testing.T) {
 	if !h.exists(1) {
 		t.Fatal("the files were removed before the processes were gone")
 	}
-	// And a later try, with time, finishes.
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel2()
 	if err := m.Forget(ctx2, 1); err != nil {
@@ -401,7 +389,6 @@ func TestForgetWaitsForTheProcesses(t *testing.T) {
 	}
 }
 
-// The worker's API: the forget route answers for the user in its path alone.
 func TestRemoteForget(t *testing.T) {
 	h := newProfileHost(t)
 	m := NewManager(Config{Host: h, Max: 8})
@@ -426,7 +413,6 @@ func TestRemoteForget(t *testing.T) {
 	}
 }
 
-// ErrAccountClosing crosses the worker's socket as itself.
 func TestRemoteAccountClosing(t *testing.T) {
 	h := newProfileHost(t)
 	h.inPurge = make(chan int64)
@@ -452,40 +438,53 @@ func TestRemoteAccountClosing(t *testing.T) {
 	}
 }
 
-// A browser still stopping when a newer one gave up waiting for it (its start timed out) is still
-// waited for by Forget: the newer one, which never ran, doesn't take its place.
 func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	h := newProfileHost(t)
-	m := NewManager(Config{Host: h, StartTimeout: 100 * time.Millisecond})
+	inClean := make(chan struct{})
+	h.inClean = inClean
+	h.releaseClean = make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(h.releaseClean)
+		}
+	}
+	m := NewManager(Config{Host: h, StartTimeout: 3 * time.Second})
 	t.Cleanup(m.Close)
+	t.Cleanup(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	if err := m.Start(ctx, 1, Testing); err != nil {
 		t.Fatal(err)
 	}
-	// The fake takes 700 ms to exit after it is told to close.
 	stopped := make(chan struct{})
 	go func() { _ = m.Stop(ctx, 1, Testing); close(stopped) }()
-	for {
-		st, _ := m.Status(ctx, 1)
-		if !st[Testing].Running {
-			break
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-inClean:
+	case <-ctx.Done():
+		t.Fatal("the old browser's stop didn't reach its last step")
 	}
-	// The start waits 100 ms for the old browser, then gives up.
 	if err := m.Start(ctx, 1, Testing); err == nil {
 		t.Fatal("a start while the old browser was still stopping succeeded")
 	}
-	if h.alive(1) == 0 {
-		t.Skip("the old browser was already gone: nothing to wait for")
+	forgot := make(chan error, 1)
+	go func() { forgot <- m.Forget(ctx, 1) }()
+	select {
+	case err := <-forgot:
+		t.Fatalf("Forget returned (%v) while the old browser was still stopping", err)
+	case <-time.After(200 * time.Millisecond):
 	}
-	if err := m.Forget(ctx, 1); err != nil {
+	if n := h.purged(); n != 0 {
+		t.Fatalf("the files were removed while the old browser was still stopping (%d purges)", n)
+	}
+	release()
+	if err := <-forgot; err != nil {
 		t.Fatal(err)
 	}
-	if n := h.alivePurge(1); n != 0 {
-		t.Errorf("the files were removed with %d processes still running", n)
+	if n := h.alivePurge(1); n != 0 || h.purged() != 1 {
+		t.Errorf("the files were removed with %d processes still running (%d purges)", n, h.purged())
 	}
 	<-stopped
 }

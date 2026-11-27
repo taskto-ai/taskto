@@ -24,7 +24,7 @@ func TestRequestBuilderRefusesHostsTheAdapterDoesNotOwn(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	for name, url := range map[string]string{ //nolint:gosec // G101: URLs with credentials in them, which must be refused
+	for name, url := range map[string]string{
 		"another host":              "https://example.com/v1/balance",
 		"a sibling host":            "https://files.stripe.com/v1/balance",
 		"a look-alike":              "https://api.stripe.com.example.com/",
@@ -53,8 +53,6 @@ func TestRequestBuilderRefusesHostsTheAdapterDoesNotOwn(t *testing.T) {
 	}
 }
 
-// Unicode case mapping must never make a look-alike equal an adapter's host: the dialer encodes
-// the look-alike as IDNA and connects to another domain.
 func TestRequestBuilderRefusesNonASCIIHosts(t *testing.T) {
 	stripeClient := NewClient(Lookup("stripe"), nil, egress.MustParse("public"))
 	for name, url := range map[string]string{
@@ -73,7 +71,6 @@ func TestRequestBuilderRefusesNonASCIIHosts(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// The same holds for the tests' own endpoint, where the old comparison folded case by Unicode.
 	c := NewClient(Lookup("stripe"), nil, egress.MustParse("any"), WithTestEndpoint("kfake.test:8080"))
 	for name, url := range map[string]string{
 		"the endpoint":      "http://kfake.test:8080/",
@@ -86,7 +83,6 @@ func TestRequestBuilderRefusesNonASCIIHosts(t *testing.T) {
 	if _, err := c.NewRequest(context.Background(), http.MethodGet, "http://\u212afake.test:8080/", nil); !errors.Is(err, ErrHostNotOwned) {
 		t.Errorf("a Kelvin sign for k at the test endpoint: err = %v", err)
 	}
-	// An endpoint that isn't ASCII is never set.
 	odd := NewClient(Lookup("stripe"), nil, egress.MustParse("any"), WithTestEndpoint("\u212afake.test:8080"))
 	if odd.testHost != "" {
 		t.Errorf("a non-ASCII test endpoint was kept: %q", odd.testHost)
@@ -104,7 +100,6 @@ func TestASCIILower(t *testing.T) {
 	}
 }
 
-// A request that wasn't made by NewRequest is checked again where it is sent, as completely.
 func TestDoChecksWhatTheBuilderChecks(t *testing.T) {
 	c := NewClient(Lookup("stripe"), nil, egress.MustParse("any"))
 	ok, err := c.NewRequest(context.Background(), http.MethodGet, "https://api.stripe.com/v1/balance", nil)
@@ -139,7 +134,6 @@ func TestDoChecksWhatTheBuilderChecks(t *testing.T) {
 	}
 }
 
-// A request that wasn't made by NewRequest is checked again where it is sent.
 func TestDoRefusesARequestNotMadeByTheBuilder(t *testing.T) {
 	c := NewClient(Lookup("stripe"), nil, egress.MustParse("any"))
 	req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
@@ -155,7 +149,6 @@ func TestDoRefusesARequestNotMadeByTheBuilder(t *testing.T) {
 	}
 }
 
-// Square's hosts follow its environment, a choice: a sandbox integration never reaches production.
 func TestSquareHostsFollowTheEnvironment(t *testing.T) {
 	sq := Lookup("square")
 	sandbox := NewClient(sq, map[string]string{"environment": "sandbox"}, egress.MustParse("public"))
@@ -199,9 +192,6 @@ func TestEveryProviderOwnsAFixedHost(t *testing.T) {
 	}
 }
 
-// The tests reach a fake provider on loopback only through the constructor option, with the
-// policy that allows it; the server's default policy refuses the address, and a redirect is an
-// answer, never followed.
 func TestClientReachesAFakeProviderAndStopsAtRedirects(t *testing.T) {
 	var hits int
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +229,6 @@ func TestClientReachesAFakeProviderAndStopsAtRedirects(t *testing.T) {
 		t.Fatalf("a redirect was followed: status %d, %d hits", resp.StatusCode, hits)
 	}
 
-	// The default policy refuses the loopback address at the dialer, even for an allowed host.
 	strict := NewClient(Lookup("stripe"), nil, egress.MustParse("public"), WithTestEndpoint(host))
 	req, _ = strict.NewRequest(context.Background(), http.MethodGet, fake.URL+"/ok", nil)
 	before := hits
@@ -253,14 +242,12 @@ func TestClientReachesAFakeProviderAndStopsAtRedirects(t *testing.T) {
 		t.Fatal("the fake provider was reached")
 	}
 
-	// Without the option, nothing but the adapter's hosts is allowed, the fake's address included.
 	plain := NewClient(Lookup("stripe"), nil, egress.MustParse("any"))
 	if _, err := plain.NewRequest(context.Background(), http.MethodGet, fake.URL+"/ok", nil); !errors.Is(err, ErrHostNotOwned) {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// A service built with no policy uses "public".
 func TestServiceClientDefaultsToThePublicPolicy(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer fake.Close()

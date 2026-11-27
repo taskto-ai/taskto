@@ -9,8 +9,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// The server notes each kind of worker it runs, once: off notes nothing, local and local-unsafe
-// are the same kind, and a row stays from the first start.
 func TestRecordWorkerNotesEachKindOnce(t *testing.T) {
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))

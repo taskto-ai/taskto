@@ -1,12 +1,3 @@
-// The apps a person pinned (and those a shared space pins for its members), listed in the
-// navigation in a group of their own, after the platform's pages: a pin is only ever one more link
-// to launch an app, whatever it says, so it can't stand in for or hide a platform page. Its label is
-// drawn as plain text, beside a small avatar of it. Unavailable pins (the app is offline or was
-// never published) aren't listed.
-//
-// Loading and drawing them can't take the navigation down: a failed load shows nothing, and the
-// shell wraps this in an error boundary for an answer that is malformed.
-
 import { useId } from 'react'
 import { api, type HomeView, ws } from '../api'
 import { appPath } from '../apps/route'
@@ -24,8 +15,6 @@ export function PinnedNav({ workspace, path }: { workspace: number; path: string
   const pins = (home.data?.pins ?? []).filter((p) => p.state === 'ready')
   if (pins.length === 0) return null
   const labels = pins.map((p) => p.label || p.app_name)
-  // In the rail a pin is its avatar alone, and a touch screen shows no tooltip: each pin's letters
-  // are its own, so two apps whose names start alike don't differ by their hue only.
   const letters = initialsAmong(labels)
   return (
     <section className="ui-shell-pins" aria-labelledby={title}>

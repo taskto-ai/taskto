@@ -2,9 +2,6 @@
 
 package agentrt
 
-// The supervisor with the real sidecar (agent/dist). Like sidecar_test.go, it only runs
-// with TASKTO_AGENT_IT=1 (make agent-it).
-
 import (
 	"log/slog"
 	"os"
@@ -18,11 +15,10 @@ func TestSupervisorRestartsTheRealSidecar(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	entry, err := filepath.Abs(testEntry) // with the pause tools the scripted model calls
+	entry, err := filepath.Abs(testEntry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A short directory: Unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "taskto-agent-")
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +47,6 @@ func TestSupervisorRestartsTheRealSidecar(t *testing.T) {
 		t.Fatalf("socket mode = %o, want 600", perm)
 	}
 
-	// One answered submission, and one killed in the middle of a replay-safe tool call.
 	conv, err := c.CreateConversation(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +81,6 @@ func TestSupervisorRestartsTheRealSidecar(t *testing.T) {
 		t.Fatalf("the killed sidecar %d is still there", pid)
 	}
 
-	// The same client reaches the new process, which has the conversation and finishes the
-	// interrupted call.
 	if settled, err := c.Wait(ctx, second); err != nil || settled.Status != "done" {
 		t.Fatalf("after restart: wait = %+v, %v; want done", settled, err)
 	}

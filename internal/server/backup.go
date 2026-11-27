@@ -10,12 +10,6 @@ import (
 	"taskto.ai/taskto/internal/backup"
 )
 
-// backupHealth is /healthz/backup, for outside monitoring: whether this server's
-// scheduled backups are on time (docs/install.md#backups). It answers 200 while they are
-// (ok; pending, before the first; failing, while a failed night's retries still have
-// time) and 503 when a night was missed (late) or no schedule has run (none). It says
-// when the last backup succeeded and when the next is due, never why one failed: the
-// error can name the backup host, and this route needs no login.
 func backupHealth(dataDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reply := struct {
@@ -42,10 +36,6 @@ func backupHealth(dataDir string) http.Handler {
 	})
 }
 
-// backupStatus is GET /api/workspaces/{workspace}/backup, for the server's operators
-// (Settings → About): the schedule's whole status, with its health. The server's backups
-// are the whole server's, and the status can name the backup host, so the admins of a
-// workspace someone else made don't see it (auth.Service.RequireOperator).
 func backupStatus(dataDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		st, ok, err := readBackupStatus(dataDir)

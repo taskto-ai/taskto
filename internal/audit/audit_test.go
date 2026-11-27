@@ -129,7 +129,6 @@ func TestRecordRefusesWhatCouldHoldASecret(t *testing.T) {
 		t.Fatalf("%d events were stored: %+v", len(rows), rows)
 	}
 
-	// A boolean may carry a secret's name: it says the key changed, not what it is.
 	if err := audit.Record(context.Background(), d, audit.Event{Action: audit.ProviderAccountUpdated,
 		Details: audit.Details{"api_key_changed": true}}); err != nil {
 		t.Fatal(err)
@@ -139,7 +138,6 @@ func TestRecordRefusesWhatCouldHoldASecret(t *testing.T) {
 func TestEveryActionHasASchemaWithNoSecretText(t *testing.T) {
 	d := open(t)
 	for _, action := range audit.Actions() {
-		// An empty set of details is valid for every action: an action without a schema isn't.
 		if err := audit.Record(context.Background(), d, audit.Event{Action: action}); err != nil {
 			t.Errorf("%s: %v", action, err)
 		}
@@ -159,7 +157,6 @@ func TestTheValuesOfATextKindAreChecked(t *testing.T) {
 		{Action: audit.InviteCreated, Details: audit.Details{"email": "someone+tag@example.com", "role": "admin"}},
 		{Action: audit.SSOLoginFailed, Details: audit.Details{"provider": "google", "reason": "sso_no_account"}},
 		{Action: audit.ProviderAccountCreated, Details: audit.Details{"base_host": "llm.example.com:8443", "kind": "openai-compatible"}},
-		// The longest address an invite accepts is kept whole.
 		{Action: audit.InviteRevoked, Details: audit.Details{"email": strings.Repeat("a", 64) + "@" + strings.Repeat("b", 189), "role": "member"}},
 		{Action: audit.SpaceUpdated, Details: audit.Details{"fields": []string{"name"}}},
 		{Action: audit.SpaceMemberAdded, Details: audit.Details{"user_id": 7, "role": "editor"}},
@@ -190,7 +187,6 @@ func TestAFailedChangeTakesItsEventWithIt(t *testing.T) {
 
 func TestLogSwallowsItsFailure(t *testing.T) {
 	d := open(t)
-	// Not a valid action: Record fails, Log doesn't.
 	audit.Log(context.Background(), d, audit.Event{Action: "NOT VALID"})
 	if rows, _ := audit.List(context.Background(), d, audit.Filter{}); len(rows) != 0 {
 		t.Fatalf("events = %+v", rows)
@@ -215,7 +211,6 @@ func TestAWorkspacesEventsGoWithIt(t *testing.T) {
 	if rows, _ := audit.List(context.Background(), d, audit.Filter{}); len(rows) != 2 {
 		t.Fatalf("%d events left, want 2: %+v", len(rows), rows)
 	}
-	// A deleted actor leaves the events, without an actor.
 	exec(t, d, `DELETE FROM users WHERE id = ?`, user)
 	rows, _ := audit.List(context.Background(), d, audit.Filter{})
 	if len(rows) != 2 || rows[0].ActorID != nil || rows[1].ActorID != nil {
@@ -342,7 +337,6 @@ func TestHost(t *testing.T) {
 	}
 }
 
-// probe records what the helper reports.
 type probe struct {
 	testing.TB
 	errors []string
@@ -383,7 +377,6 @@ func TestAnEventKnowsWhichObjectItIsAbout(t *testing.T) {
 	if err := audit.Record(ctx, d, audit.Event{Action: audit.LoginSucceeded, TargetType: audit.TargetUser, Target: first}); err != nil {
 		t.Fatal(err)
 	}
-	// The highest row's id is handed to the next row inserted: the event keeps whose it was.
 	exec(t, d, `DELETE FROM users WHERE id = ?`, first)
 	second := exec(t, d, `INSERT INTO users (email, name, password_hash, created_at) VALUES ('b@example.com', 'B', '', '2026-03-04T00:00:00.000Z')`)
 	if second != first {
@@ -392,7 +385,6 @@ func TestAnEventKnowsWhichObjectItIsAbout(t *testing.T) {
 	if err := audit.Record(ctx, d, audit.Event{Action: audit.LoginSucceeded, TargetType: audit.TargetUser, Target: second}); err != nil {
 		t.Fatal(err)
 	}
-	// A target already deleted: the caller gives its creation time.
 	if err := audit.Record(ctx, d, audit.Event{Action: audit.InviteRevoked, TargetType: audit.TargetInvite, Target: 9,
 		TargetCreated: "2026-05-06T00:00:00.000Z"}); err != nil {
 		t.Fatal(err)
@@ -413,7 +405,6 @@ func TestAnEventKnowsWhichObjectItIsAbout(t *testing.T) {
 
 func TestNoSecretsSeesThroughJSONEscaping(t *testing.T) {
 	d := open(t)
-	// An address may hold characters JSON writes as escapes (the & is \u0026 in the column).
 	if _, err := d.Exec(`INSERT INTO audit_events (action, details) VALUES ('invite_created', ?)`,
 		`{"email":"fake\u0026secret-value@example.com"}`); err != nil {
 		t.Fatal(err)
@@ -429,7 +420,7 @@ func TestEveryTargetTypeHasATableWithCreationTimes(t *testing.T) {
 	d := open(t)
 	for _, typ := range audit.TargetTypes() {
 		table := audit.TargetTable(typ)
-		if _, err := d.Exec(`SELECT created_at FROM ` + table + ` WHERE id = 0`); err != nil { //nolint:gosec // a table of the package's fixed list
+		if _, err := d.Exec(`SELECT created_at FROM ` + table + ` WHERE id = 0`); err != nil {
 			t.Errorf("%s: %v", typ, err)
 		}
 	}

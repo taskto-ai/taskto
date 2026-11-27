@@ -1,10 +1,4 @@
-// Publishing an app's draft, for the Apps page and the builder: the server's refusals said in the
-// user's language, the acknowledgement of the schema changes a publish may need (a dialog that says
-// what changes for stored records), and a panel that says before anything goes live who will be
-// able to use the app and what it can read and change. The server decides every one of these (the app's roles, the space's, what
-// must be acknowledged); nothing here widens what it allows.
-
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import {
   ApiError,
   type App,
@@ -17,6 +11,7 @@ import {
   type Space,
   type SpaceMember,
 } from '../api'
+import { byPlace } from '../byPlace'
 import { has, type Key, t as translate, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { spaceLabel } from '../spaces'
@@ -32,9 +27,6 @@ import { ApproveAndPublishDialog, SlotsSection, undecided, usable, useSlots } fr
 import { useIsAdmin } from './admin'
 import { effectLines } from './effectLines'
 
-// What went wrong with a change to an app, for people. A role that doesn't allow it names what is
-// missing (the capability the server says: design, publish, …), and a stale version says the app
-// moved on; anything else is the server's code, translated, as everywhere.
 export function appError(e: unknown, name?: string): string {
   if (e instanceof ApiError) {
     const capability = e.params?.capability
@@ -47,9 +39,6 @@ export function appError(e: unknown, name?: string): string {
   return errorText(e)
 }
 
-// The result of asking the server to publish the draft at version, the one the person saw: the
-// app, or the schema changes it wants acknowledged first (nothing is published then). A draft
-// that has moved on is the server's `app_changed`, thrown like any other refusal.
 export async function publishDraft(
   base: string,
   version: number,
@@ -67,8 +56,6 @@ export async function publishDraft(
   }
 }
 
-// The changes of the data's schema a publish waits for the person to acknowledge, in a dialog: each
-// said in words, and the publish only once they have said they understand.
 export function MigrationDialog({
   changes,
   busy,
@@ -78,7 +65,6 @@ export function MigrationDialog({
 }: {
   changes: SchemaChange[]
   busy: boolean
-  // What went wrong with the last try: the dialog stays, for another.
   error?: string | null
   onPublish: () => void
   onCancel: () => void
@@ -89,7 +75,6 @@ export function MigrationDialog({
     <Dialog
       open
       onClose={onCancel}
-      // While it saves, Escape and the close button do nothing (the library's guard).
       dismissible={!busy}
       title={t('apps.migration.title')}
       description={t('apps.migration.intro')}
@@ -126,8 +111,6 @@ export function MigrationDialog({
 
 const ROLE_ORDER: AppRole[] = ['builder', 'publisher', 'user', 'data_manager', 'reader']
 
-// Who will be able to use the app once it is live, from what the server says: the space it is in
-// and, when roles are set and the caller may read them, the people who hold them.
 function Audience({ app, space, spaceBase, base }: { app: App; space: Space; spaceBase: string; base: string }) {
   const t = useT()
   const named = space.kind === 'shared' && app.access.restricted && app.access.manage_roles
@@ -145,7 +128,6 @@ function Audience({ app, space, spaceBase, base }: { app: App; space: Space; spa
   if (!app.access.restricted) return <p>{t('apps.builder.audience.space', { space: spaceLabel(space) })}</p>
   if (!roles.data) {
     if (!named || roles.error) return <p>{t('apps.builder.audience.restricted')}</p>
-    // Who may use it is still on its way: the shape of the line, and a word for screen readers.
     return (
       <div role="status" aria-busy="true">
         <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
@@ -183,15 +165,9 @@ const CHANGES: Partial<Record<AppActionKind, Key>> = {
   delete: 'apps.builder.can.delete',
 }
 
-// What the app can read and change, from its draft: the fields of its records, what its buttons do
-// to them and what their effects do outside them (a card on a board, a document, a place to open),
-// each said with where it goes. Only when it has no effects does it say that it reaches nothing else:
-// an app runs nothing but those, so it never reaches another app or an account.
 function Capabilities({ app }: { app: App }) {
   const t = useT()
   const f = useFormat()
-  // Without the draft (the caller may not design or publish the app) there is nothing to say: an empty
-  // list of effects would read as an app that reaches nothing else.
   if (!app.draft) return <p className="apps-note">{t('apps.templates.noReview')}</p>
   const fields = app.draft?.collection?.fields ?? []
   const kinds = new Set(Object.values(app.draft?.actions ?? {}).map((a) => a.kind))
@@ -221,9 +197,8 @@ function Capabilities({ app }: { app: App }) {
         <>
           <p>{t('apps.builder.can.effectsIntro')}</p>
           <ul className="apps-list">
-            {effects.map((line, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the lines are the draft's effects in their order
-              <li key={i}>{line}</li>
+            {byPlace(effects).map(({ key, item: line }) => (
+              <li key={key}>{line}</li>
             ))}
           </ul>
           <p className="apps-note">{t('apps.builder.can.effectsAudit')}</p>
@@ -235,12 +210,6 @@ function Capabilities({ app }: { app: App }) {
   )
 }
 
-// Publishing, from the builder, an installed draft or the Apps page. What goes live is said first:
-// who will use it and what it can read and change. In a private space publishing is one step; in a
-// shared one a dialog names who it goes to first, and only someone with the publisher role has it
-// at all. A publish that changes how stored records are treated asks for that in a dialog too.
-// inDialog: the panel is itself the body of a dialog (the Apps page's), so its confirmation is
-// drawn in it rather than in a second one.
 export function PublishPanel({
   base,
   spaceBase,
@@ -250,15 +219,12 @@ export function PublishPanel({
   inDialog = false,
   headingLevel = 3,
 }: {
-  // …/spaces/{space}/apps/{app}, and …/spaces/{space}
   base: string
   spaceBase: string
   app: App
   space: Space
-  // The app changed (published, or someone else changed it): the caller reads it again.
   onChanged: () => void
   inDialog?: boolean
-  // Where the panel's heading sits in the page's outline.
   headingLevel?: 2 | 3
 }) {
   const t = useT()
@@ -266,64 +232,46 @@ export function PublishPanel({
   const admin = useIsAdmin()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // The outside services the draft asks for: a release can't be made of it until each is approved.
   const slots = useSlots(base, app)
   const declares = Object.keys(app.draft?.integrations ?? {}).length > 0
   const blocked = (slots.data?.slots ?? []).filter((s) => !usable(s))
   const toApprove = blocked.filter(undecided)
-  // Approved, but the integration was switched off or taken out of the space since: an approval can't
-  // mend that, an admin does in Settings.
   const broken = blocked.filter((s) => !undecided(s))
   const gated = declares && (blocked.length > 0 || slots.data === undefined)
-  // The draft's version an admin is approving and publishing at once, as `reviewed` is for a review.
   const [approving, setApproving] = useState<number | null>(null)
-  // The draft's version the person is confirming, which a publish names: the draft they were
-  // shown, never a newer one that arrived while the confirmation was open.
   const [reviewed, setReviewed] = useState<number | null>(null)
   const confirming = reviewed !== null
   const [migration, setMigration] = useState<{ changes: SchemaChange[]; version: number } | null>(null)
   const [published, setPublished] = useState<number | null>(null)
-  // The draft changed under a confirmation: it was closed, and the person confirms again.
   const [moved, setMoved] = useState(false)
-  // The slots an admin approved in "approve and publish" that stand although the step did not end in a
-  // publish (a later slot or the publish was refused, or the draft changed): said, so they are not a
-  // surprise later.
   const [granted, setGranted] = useState<string[]>([])
-  // The approvals an earlier step made that are still approvals: one an admin has revoked since is not
-  // said to stand.
   const standing = granted.filter((name) =>
     (slots.data?.slots ?? []).some((s) => s.slot === name && s.status === 'approved'),
   )
   const seen = useRef(app.version)
-  // The draft's version now, for a step that was started on an older one.
   const current = useRef(app.version)
   current.current = app.version
-  // The step's main button, and the inline confirmation's: focus goes there when what it was on
-  // goes away (a cancelled schema dialog, a review that became its confirmation).
   const actionButton = useRef<HTMLButtonElement>(null)
   const [refocus, setRefocus] = useState(0)
   useEffect(() => {
     if (refocus > 0) actionButton.current?.focus()
   }, [refocus])
   const confirmTextId = useId()
-  // biome-ignore lint/correctness/useExhaustiveDependencies: when the draft's version changes
-  useEffect(() => {
-    if (seen.current === app.version) return
-    seen.current = app.version
+  const draftVersionSeen = useEffectEvent((version: number) => {
+    if (seen.current === version) return
+    seen.current = version
     if (reviewed !== null || migration !== null || approving !== null) {
       setReviewed(null)
       setMigration(null)
       setApproving(null)
       setMoved(true)
     }
-  }, [app.version])
+  })
+  useEffect(() => draftVersionSeen(app.version), [app.version])
   const personal = space.kind === 'private'
   const mayPublish = space.access === 'write' && app.access.publish
   const nothing = app.live !== null && !app.unpublished_changes
 
-  // version is the draft the person reviewed (a personal app has no review: the one on screen).
-  // Resolves with what the publish was refused with, or null when it went through (or waits for the
-  // schema changes to be acknowledged).
   const run = async (version: number, acknowledge: SchemaChange[]): Promise<string | null> => {
     setBusy(true)
     setError(null)
@@ -343,8 +291,6 @@ export function PublishPanel({
     } catch (e) {
       const message = appError(e, app.name)
       setError(message)
-      // A refusal after the acknowledgement keeps the schema dialog open, with the error in it, for
-      // another try; any other closes the step.
       if (acknowledge.length === 0) {
         setReviewed(null)
         setMigration(null)
@@ -383,8 +329,6 @@ export function PublishPanel({
   else if (migration) action = null
   else if (nothing) action = published === null && <p className="apps-note">{t('apps.builder.publish.nothing')}</p>
   else if (gated)
-    // What is asked of an outside service has no approval yet: publishing is refused until it has.
-    // An admin approves and publishes in one step; anyone else waits for one (the section above asks).
     action =
       blocked.length === 0 ? null : admin && broken.length === 0 ? (
         <div className="apps-actions">
@@ -408,7 +352,6 @@ export function PublishPanel({
       </div>
     )
   else if (confirming && inDialog)
-    // Already in a dialog: the confirmation is its next step, in place.
     action = (
       <div className="apps-stack">
         <p id={confirmTextId}>{confirmText}</p>
@@ -436,7 +379,6 @@ export function PublishPanel({
           onClick={() => {
             setMoved(false)
             setReviewed(app.version)
-            // In a dialog, the button gives way to the confirmation, which takes the focus.
             if (inDialog) setRefocus((n) => n + 1)
           }}
         >
@@ -512,8 +454,6 @@ export function PublishPanel({
             setRefocus((n) => n + 1)
           }}
           onApproval={(slot) => {
-            // Kept here, not in the dialog: an approval made by a dialog that was closed meanwhile (the
-            // draft changed under it) still stands, and the notice must say so.
             setGranted((g) => (g.includes(slot) ? g : [...g, slot]))
             slots.reload()
           }}
@@ -522,8 +462,6 @@ export function PublishPanel({
             setGranted(done)
           }}
           onContractChanged={(done) => {
-            // What the admin approved is not what the draft asks now: nothing is published, the app and
-            // its slots are read again, and the person reviews it anew.
             setApproving(null)
             setMoved(true)
             setGranted(done)
@@ -534,14 +472,10 @@ export function PublishPanel({
           onApproved={async (done) => {
             const version = approving
             slots.reload()
-            // The draft changed while the approvals were made: the step was closed and said so, and the
-            // version it started on is not published.
             if (current.current !== version) {
               setGranted(done)
               return null
             }
-            // Said from here on, whatever the publish does: refused, waiting for the schema changes to be
-            // acknowledged or done (which clears it).
             setGranted(done)
             const refused = await run(version, [])
             slots.reload()

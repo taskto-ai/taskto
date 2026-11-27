@@ -31,7 +31,6 @@ func TestFirstRunCreatesAnOwnerOnlyKey(t *testing.T) {
 		t.Fatalf("key file: mode %o, %d bytes; want 600 and %d", info.Mode().Perm(), info.Size(), keySize)
 	}
 
-	// The next start reads the same key: what it sealed still opens.
 	sealed, err := k.Seal([]byte(fakeValue), []byte("row 1"))
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +56,6 @@ func TestRoundTrip(t *testing.T) {
 			t.Fatalf("round trip of %d bytes = %d bytes, %v", len(plain), len(got), err)
 		}
 	}
-	// A fresh nonce every time: sealing the same value twice gives different bytes.
 	a, _ := k.Seal([]byte(fakeValue), nil)
 	b, _ := k.Seal([]byte(fakeValue), nil)
 	if bytes.Equal(a, b) {
@@ -72,7 +70,6 @@ func TestTamperingIsDetected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Every single bit flipped, in the version, nonce, ciphertext and tag alike.
 	for i := range sealed {
 		for bit := range 8 {
 			bad := bytes.Clone(sealed)
@@ -109,7 +106,7 @@ func TestBadKeyFilesAreRefused(t *testing.T) {
 		if err := os.WriteFile(path, content, mode); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(path, mode); err != nil { // whatever the umask
+		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
 		}
 		return dir
@@ -145,7 +142,6 @@ func TestBadKeyFilesAreRefused(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Load = %v, want an error containing %q", err, tc.want)
 			}
-			// Nothing in the message comes from the file's contents.
 			if strings.Contains(err.Error(), "\x07") {
 				t.Fatalf("the error quotes the key file: %q", err)
 			}
@@ -160,14 +156,12 @@ func TestMAC(t *testing.T) {
 	if len(mac) != 32 {
 		t.Fatalf("MAC is %d bytes, want 32", len(mac))
 	}
-	// The same key, loaded again, makes the same MAC: a restart doesn't invalidate them.
 	if again := load(t, dir).MAC("purpose", []byte("7")); !bytes.Equal(mac, again) {
 		t.Fatal("the MAC changed after reloading the key")
 	}
 	for name, other := range map[string][]byte{
-		"another message": k.MAC("purpose", []byte("8")),
-		"another purpose": k.MAC("purpose2", []byte("7")),
-		// Purpose and message are kept apart: moving bytes between them changes the MAC.
+		"another message":    k.MAC("purpose", []byte("8")),
+		"another purpose":    k.MAC("purpose2", []byte("7")),
 		"a shifted boundary": k.MAC("purpose7", nil),
 		"another key":        load(t, t.TempDir()).MAC("purpose", []byte("7")),
 	} {

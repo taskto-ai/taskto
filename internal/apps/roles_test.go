@@ -12,8 +12,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// grant is a role assignment for user id; fallback is the default's, for every member without
-// roles of their own.
 func grant(id int64, roles ...access.AppRole) access.AppGrant {
 	return access.AppGrant{UserID: &id, Roles: roles}
 }
@@ -22,7 +20,6 @@ func fallback(roles ...access.AppRole) access.AppGrant { return access.AppGrant{
 
 func rolesPath(s access.Space, a App) string { return appPath(s, a.ID, "/roles") }
 
-// setRoles has u replace the roles of a.
 func (w *world) setRoles(u *user, s access.Space, a App, grants ...access.AppGrant) *httptest.ResponseRecorder {
 	w.e.t.Helper()
 	if grants == nil {
@@ -36,7 +33,6 @@ func (w *world) mustSetRoles(u *user, s access.Space, a App, grants ...access.Ap
 	expect(w.e.t, w.setRoles(u, s, a, grants...), http.StatusOK)
 }
 
-// view is the app as u sees it.
 func (w *world) view(u *user, s access.Space, a App) App {
 	w.e.t.Helper()
 	rec := u.do(http.MethodGet, appPath(s, a.ID, ""), nil)
@@ -44,7 +40,6 @@ func (w *world) view(u *user, s access.Space, a App) App {
 	return decode[App](w.e.t, rec)
 }
 
-// expectForbidden checks rec is the 403 of a role: app_forbidden, naming the capability.
 func expectForbidden(t *testing.T, rec *httptest.ResponseRecorder, capability string) {
 	t.Helper()
 	expect(t, rec, http.StatusForbidden)
@@ -71,8 +66,6 @@ func (w *world) add2(u *user, s access.Space, a App, description string) *httpte
 		action(a, "add_expense", map[string]any{"description": description, "amount": "10"}))
 }
 
-// An app with no roles is what every app was: the space's editors do everything, over every
-// record, and its viewers read every record and change nothing.
 func TestAppWithoutRolesIsAsTheSpaceAllows(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
@@ -89,7 +82,6 @@ func TestAppWithoutRolesIsAsTheSpaceAllows(t *testing.T) {
 	if editor.Rows != 1 || viewer.Rows != 1 {
 		t.Fatalf("rows %d and %d, want 1 and 1", editor.Rows, viewer.Rows)
 	}
-	// The owner of a private space is every role in it; an archived space takes the writing.
 	if got := w.view(w.alice, w.alicePrivate, w.aliceApp).Access; !got.Design || !got.Submit || got.ReadRecords != access.ScopeAll {
 		t.Fatalf("a private space's owner = %+v", got)
 	}
@@ -98,11 +90,8 @@ func TestAppWithoutRolesIsAsTheSpaceAllows(t *testing.T) {
 	}
 }
 
-// A user can submit records without being able to redesign the app, and reads only their own.
 func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	w := newWorld(t)
-	// A workspace admin always manages the roles of an app in a shared space, so the plain user
-	// here is an editor who isn't one.
 	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor)
 	s, a := w.shared, w.sharedApp
 	w.mustSetRoles(w.alice, s, a, grant(w.mallory.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
@@ -112,12 +101,10 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 		x.ReadRecords != access.ScopeOwn || x.ModifyRecords != access.ScopeOwn {
 		t.Fatalf("the user's access = %+v", x)
 	}
-	// The row alice added is not theirs: not in the count either.
 	if got.Rows != 0 || w.view(w.alice, s, a).Rows != 1 {
 		t.Fatalf("rows the user counts = %d", got.Rows)
 	}
 
-	// They submit, and the answer shows their record and the summary over it alone.
 	rec := w.add2(w.mallory, s, a, "owner-lunch")
 	expect(t, rec, http.StatusOK)
 	if body := rec.Body.String(); !strings.Contains(body, "owner-lunch") || strings.Contains(body, "team-lunch") || !strings.Contains(body, `"total":"10.00"`) {
@@ -126,7 +113,6 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	if rows := w.rowsOf(w.mallory, s, a); len(rows) != 1 || rows[0] != "owner-lunch" {
 		t.Fatalf("the user reads %v", rows)
 	}
-	// The launched screen's summary too, and the list's count.
 	rec = w.mallory.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil)
 	expect(t, rec, http.StatusOK)
 	if !strings.Contains(rec.Body.String(), `"total":"10.00"`) || strings.Contains(rec.Body.String(), "team-lunch") {
@@ -136,7 +122,6 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	if len(list) != 1 || list[0].Rows != 1 || list[0].Access.ReadRecords != access.ScopeOwn {
 		t.Fatalf("the user's list = %+v", list)
 	}
-	// Everyone with a wider role still sees both: the total is 13.
 	if rows := w.rowsOf(w.alice, s, a); len(rows) != 2 {
 		t.Fatalf("alice reads %v", rows)
 	}
@@ -150,7 +135,6 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 		t.Fatalf("alice's total counts every record: %s", rec.Body)
 	}
 
-	// But not redesign: not the definition, the name, taking it offline, moving it, or roles.
 	mine := w.e.private(w.mallory, w.ws)
 	expectForbidden(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "name": "Mine now"}), "design")
 	expectForbidden(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": example(t)}), "design")
@@ -162,7 +146,6 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 		t.Fatalf("the app changed: %+v", got)
 	}
 
-	// Changing another's record is as if it weren't there; their own they may delete.
 	var theirs float64
 	for _, it := range w.items(w.alice, s, a) {
 		if it["description"] == "team-lunch" {
@@ -184,11 +167,9 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	}
 }
 
-// A record's own creator is the rule for "own": updates reach only theirs.
 func TestOwnRecordsAreTheOnesTheUserCreated(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
-	// An app with an update action, which the example doesn't have.
 	def := example(t)
 	def.Actions["edit_expense"] = Action{Kind: ActionUpdate}
 	rec := w.alice.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Editable", "definition": def})
@@ -221,7 +202,6 @@ func TestOwnRecordsAreTheOnesTheUserCreated(t *testing.T) {
 		}
 	}
 
-	// A record whose creator's account is gone belongs to no one: only readers of all see it.
 	if _, err := w.e.db.Exec(`UPDATE app_rows SET created_by = NULL WHERE app_id = ? AND data LIKE '%owner-row%'`, a.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -234,8 +214,6 @@ func TestOwnRecordsAreTheOnesTheUserCreated(t *testing.T) {
 	}
 }
 
-// Building, publishing and data access are separate: a builder who isn't also given data
-// access reads no records, and can't submit.
 func TestBuilderPublisherAndDataManagerAreSeparate(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
@@ -243,7 +221,6 @@ func TestBuilderPublisherAndDataManagerAreSeparate(t *testing.T) {
 		grant(w.alice.id, access.AppBuilder, access.AppPublisher),
 		grant(w.owner.id, access.AppDataManager))
 
-	// The builder rebuilds the app but sees no data, and adds none.
 	b := w.view(w.alice, s, a)
 	if b.Rows != 0 || b.Access.ReadRecords != access.ScopeNone || b.Access.Submit {
 		t.Fatalf("builder's view = %+v", b)
@@ -256,15 +233,12 @@ func TestBuilderPublisherAndDataManagerAreSeparate(t *testing.T) {
 	}
 	expectForbidden(t, w.add2(w.alice, s, a, "x"), "submit")
 	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "name": "Renamed"}), http.StatusOK)
-	// The publisher takes it offline and back, which the data manager can't, nor rename it.
 	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 2, "archived": true}), http.StatusOK)
 	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 3, "archived": false}), http.StatusOK)
 	expectForbidden(t, w.owner.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 4, "archived": true}), "publish")
 	expectForbidden(t, w.owner.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 4, "name": "No"}), "design")
-	// A rename together with taking it offline needs both.
 	expectForbidden(t, w.owner.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 4, "name": "No", "archived": true}), "design")
 
-	// The data manager reads, adds and changes everyone's.
 	w.add(w.owner, s, a, "managed", "2")
 	if rows := w.rowsOf(w.owner, s, a); len(rows) != 2 {
 		t.Fatalf("the data manager reads %v", rows)
@@ -277,7 +251,6 @@ func TestBuilderPublisherAndDataManagerAreSeparate(t *testing.T) {
 	}
 	expect(t, w.owner.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": theirs})), http.StatusOK)
 
-	// A reader reads everything and changes nothing, though the space lets them write.
 	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder), grant(w.owner.id, access.AppReader))
 	if rows := w.rowsOf(w.owner, s, a); len(rows) != 1 {
 		t.Fatalf("the reader reads %v", rows)
@@ -286,11 +259,9 @@ func TestBuilderPublisherAndDataManagerAreSeparate(t *testing.T) {
 	expectForbidden(t, w.owner.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": 1})), "modify_records")
 }
 
-// App roles never widen what the space allows.
 func TestAppRolesOnlyNarrowTheSpace(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
-	// Bob views the space: every role there is gives him no more than reading.
 	w.mustSetRoles(w.alice, s, a, grant(w.bob.id, access.AppBuilder, access.AppPublisher, access.AppDataManager, access.AppUser), grant(w.alice.id, access.AppRoles...))
 	got := w.view(w.bob, s, a)
 	if x := got.Access; !x.View || x.Design || x.Publish || x.Submit || x.ManageRoles || x.ModifyRecords != access.ScopeNone || x.ReadRecords != access.ScopeAll {
@@ -305,7 +276,6 @@ func TestAppRolesOnlyNarrowTheSpace(t *testing.T) {
 	expect(t, w.setRoles(w.bob, s, a, grant(w.bob.id, access.AppBuilder)), http.StatusForbidden)
 	expect(t, w.bob.do(http.MethodGet, rolesPath(s, a), nil), http.StatusForbidden)
 
-	// A default of "user" meets his reading: only his own records, of which he has none.
 	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder, access.AppDataManager), fallback(access.AppUser))
 	if rows := w.rowsOf(w.owner, s, a); len(rows) != 0 {
 		t.Fatalf("a member under the default reads %v", rows)
@@ -317,7 +287,6 @@ func TestAppRolesOnlyNarrowTheSpace(t *testing.T) {
 		t.Fatalf("alice's own assignment reads %v", rows)
 	}
 
-	// An archived space takes every right to write, whatever the roles.
 	w.mustSetRoles(w.alice, s, a, fallback(access.AppUser, access.AppBuilder, access.AppPublisher))
 	if _, err := w.e.db.Exec(`UPDATE spaces SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, s.ID); err != nil {
 		t.Fatal(err)
@@ -335,7 +304,6 @@ func TestSettingRoles(t *testing.T) {
 		return decode[struct{ Code string }](t, rec).Code
 	}
 
-	// Only people who may read the space can have a role in it.
 	rec := w.setRoles(w.alice, s, a, grant(w.mallory.id, access.AppUser))
 	expect(t, rec, http.StatusBadRequest)
 	if body(rec) != "app_roles_not_member" {
@@ -343,7 +311,6 @@ func TestSettingRoles(t *testing.T) {
 	}
 	rec = w.setRoles(w.alice, s, a, grant(w.alicePrivate.ID+9999, access.AppUser))
 	expect(t, rec, http.StatusBadRequest)
-	// Unknown roles, no roles, a user twice, two defaults.
 	for name, grants := range map[string][]access.AppGrant{
 		"unknown":   {grant(w.alice.id, "admin")},
 		"none":      {grant(w.alice.id)},
@@ -357,24 +324,21 @@ func TestSettingRoles(t *testing.T) {
 			t.Fatalf("%s: body %s", name, rec.Body)
 		}
 	}
-	// Nothing was set by the refused ones.
 	if got := w.view(w.owner, s, a).Access; got.Restricted {
 		t.Fatalf("a refused change restricted the app: %+v", got)
 	}
 
-	// Whoever sets roles keeps the right to: no locking oneself out.
 	rec = w.setRoles(w.alice, s, a, grant(w.alice.id, access.AppReader))
 	expect(t, rec, http.StatusBadRequest)
 	if body(rec) != "app_roles_lockout" {
 		t.Fatalf("body %s", rec.Body)
 	}
 	rec = w.setRoles(w.alice, s, a, fallback(access.AppUser))
-	expect(t, rec, http.StatusBadRequest) // the default would take hers
+	expect(t, rec, http.StatusBadRequest)
 	if body(rec) != "app_roles_lockout" {
 		t.Fatalf("body %s", rec.Body)
 	}
 
-	// Set, read back, and cleared: an empty list makes the app unrestricted again.
 	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser, access.AppReader), fallback(access.AppReader), grant(w.alice.id, access.AppBuilder))
 	rec = w.alice.do(http.MethodGet, rolesPath(s, a), nil)
 	expect(t, rec, http.StatusOK)
@@ -392,20 +356,16 @@ func TestSettingRoles(t *testing.T) {
 	if got := w.view(w.owner, s, a).Access; got.Restricted || !got.Design {
 		t.Fatalf("after clearing: %+v", got)
 	}
-	// Roles are no change of the app: its version stays.
 	if v := w.view(w.alice, s, a).Version; v != 1 {
 		t.Fatalf("version = %d", v)
 	}
 }
 
-// Roles can't be reached from another space or workspace, and don't outlive their app.
 func TestAppRolesStayInTheirApp(t *testing.T) {
 	w := newWorld(t)
 	w.mustSetRoles(w.alice, w.shared, w.sharedApp, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
-	// Alice manages the team app, but not through her private space's address.
 	expect(t, w.setRoles(w.alice, w.alicePrivate, w.sharedApp), http.StatusNotFound)
 	expect(t, w.alice.do(http.MethodGet, rolesPath(w.alicePrivate, w.sharedApp), nil), http.StatusNotFound)
-	// Roles go with their app.
 	if _, err := w.e.db.Exec(`DELETE FROM apps WHERE id = ?`, w.sharedApp.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -415,14 +375,12 @@ func TestAppRolesStayInTheirApp(t *testing.T) {
 	}
 }
 
-// Every write checks the caller's roles again under the write lock, as it does the space's.
 func TestRolesAreCheckedAgainUnderTheWriteLock(t *testing.T) {
 	w := newWorld(t)
-	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor) // not an admin: an admin keeps the roles
+	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor)
 	ctx := context.Background()
 	s, a := w.shared, w.sharedApp
 	owner := Actor{UserID: w.mallory.id}
-	// The owner's request was checked while the app was unrestricted; then roles narrow them.
 	snapshot, err := w.e.s.access.Check(ctx, w.mallory.id, s.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -448,7 +406,6 @@ func TestRolesAreCheckedAgainUnderTheWriteLock(t *testing.T) {
 	}
 }
 
-// The agent has its user's roles and no more.
 func TestAgentActsWithItsUsersRoles(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -457,12 +414,10 @@ func TestAgentActsWithItsUsersRoles(t *testing.T) {
 	w.add(w.owner, s, a, "owner-row", "2")
 
 	agent := func(u *user) Actor { return Actor{UserID: u.id, Agent: true} }
-	// The user's agent reads their records only.
 	rows, err := w.e.s.ListRows(ctx, agent(w.owner), s.ID, a.ID)
 	if err != nil || len(rows) != 1 || rows[0]["description"] != "owner-row" {
 		t.Fatalf("the user's agent reads %v, %v", rows, err)
 	}
-	// And can't change the app, though the space would let an editor.
 	name := "By the agent"
 	if _, err := w.e.s.UpdateApp(ctx, agent(w.owner), s.ID, a.ID, Changes{Version: 1, Name: &name}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("update by a user's agent = %v, want ErrForbidden", err)
@@ -471,34 +426,28 @@ func TestAgentActsWithItsUsersRoles(t *testing.T) {
 	if err != nil || shown.Rows != 1 || shown.Access.Design {
 		t.Fatalf("show_app for the user's agent = %+v, %v", shown, err)
 	}
-	// The builder's agent can, and reads no records.
 	if _, err := w.e.s.UpdateApp(ctx, agent(w.alice), s.ID, a.ID, Changes{Version: 1, Name: &name}); err != nil {
 		t.Fatal(err)
 	}
 	if rows, err := w.e.s.ListRows(ctx, agent(w.alice), s.ID, a.ID); err != nil || len(rows) != 0 {
 		t.Fatalf("the builder's agent reads %v, %v", rows, err)
 	}
-	// Others' apps and spaces stay out of reach, whatever the roles.
 	if _, err := w.e.s.ListRows(ctx, agent(w.mallory), s.ID, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a non-member's agent = %v, want ErrNotFound", err)
 	}
 	if _, err := w.e.s.ListRows(ctx, agent(w.alice), w.alicePrivate.ID, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an app through another space = %v, want ErrNotFound", err)
 	}
-	// A definition holds no roles: an app can't carry its own.
 	def := map[string]any{"name": "Sneaky", "definition": map[string]any{}}
 	raw := example(t)
 	def["definition"] = map[string]any{"components": raw.Components, "collection": raw.Collection, "actions": raw.Actions, "roles": []string{"builder"}}
 	expect(t, w.alice.do(http.MethodPost, appsPath(s, ""), def), http.StatusBadRequest)
 }
 
-// Restricting an app restricts it for everyone: a member it names nowhere, with no default,
-// holds no role and doesn't see the app, rather than keeping every role.
 func TestUnnamedMembersOfARestrictedAppSeeNothing(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
 	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder), grant(w.owner.id, access.AppUser))
-	// Bob reads the space but is named nowhere: the app is as unseen as one of another space.
 	expect(t, w.bob.do(http.MethodGet, appPath(s, a.ID, ""), nil), http.StatusNotFound)
 	expect(t, w.bob.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil), http.StatusNotFound)
 	rec := w.bob.do(http.MethodGet, appsPath(s, ""), nil)
@@ -508,14 +457,12 @@ func TestUnnamedMembersOfARestrictedAppSeeNothing(t *testing.T) {
 			t.Fatalf("bob's list shows the app: %s", rec.Body)
 		}
 	}
-	// A default brings unnamed members back, with its roles only.
 	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder), fallback(access.AppReader))
 	if got := w.view(w.bob, s, a).Access; !got.View || got.ReadRecords != access.ScopeAll || got.Submit {
 		t.Fatalf("bob with the default = %+v", got)
 	}
 }
 
-// withMax is def with the amount field bounded by max.
 func withMax(def Definition, max float64) *Definition {
 	def.Collection.Fields = append([]Field(nil), def.Collection.Fields...)
 	for i := range def.Collection.Fields {
@@ -526,10 +473,6 @@ func withMax(def Definition, max float64) *Definition {
 	return &def
 }
 
-// A builder and publisher who can't read the records can still change the collection of the
-// draft and publish it, and what they are told of the rows is nothing: a bound that some row
-// breaks and one that none does get the same answer, so a bound tightened again and again reads
-// no value out. Someone who reads every row is told only of the changes a row is affected by.
 func TestPublisherWithoutDataIsToldOfNoRows(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
@@ -537,7 +480,6 @@ func TestPublisherWithoutDataIsToldOfNoRows(t *testing.T) {
 	if got := w.view(w.alice, s, a).Access.ReadRecords; got != access.ScopeNone {
 		t.Fatalf("builder reads %s", got)
 	}
-	// "team-lunch" has amount 3: a max of 1 doesn't fit it, a max of 1000 fits every row.
 	refusal := func(u *user, max float64) *httptest.ResponseRecorder {
 		cur := w.view(u, s, a)
 		rec := u.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": cur.Version, "definition": withMax(*cur.Draft, max)})
@@ -565,8 +507,6 @@ func TestPublisherWithoutDataIsToldOfNoRows(t *testing.T) {
 		t.Fatalf("the rows decide the answer:\n%s\n%s", tight.Body, loose.Body)
 	}
 
-	// Acknowledged, it publishes; rolling back to the first release, whose collection isn't
-	// the live one's, would tell whether the rows fit it, so it needs every row read.
 	cur := w.view(w.alice, s, a)
 	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/publish"),
 		map[string]any{"version": cur.Version, "acknowledge": []SchemaChange{{ChangeFieldNarrowed, "amount"}}}), http.StatusOK)
@@ -574,14 +514,11 @@ func TestPublisherWithoutDataIsToldOfNoRows(t *testing.T) {
 	rec := w.alice.do(http.MethodPost, appPath(s, a.ID, "/rollback"), map[string]any{"version": cur.Version, "release": 1})
 	expectForbidden(t, rec, "read_records")
 
-	// Reading every row, the same loose bound is a change no row is affected by.
 	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder, access.AppPublisher, access.AppDataManager))
 	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/rollback"), map[string]any{"version": w.view(w.alice, s, a).Version, "release": 1}), http.StatusOK)
 	expect(t, refusal(w.alice, 1000), http.StatusOK)
 }
 
-// Roles are for members of the app's space: leaving it drops them, so rejoining, or the app
-// moving to a space where they are, gives back nothing; and a moved app leaves its roles.
 func TestRolesDontOutliveTheSpaceTheyWereSetIn(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
@@ -598,11 +535,9 @@ func TestRolesDontOutliveTheSpaceTheyWereSetIn(t *testing.T) {
 	if n := roleRows(); n != 0 {
 		t.Fatalf("Mallory kept %d roles after leaving the space", n)
 	}
-	// Back as a viewer: no role of his own, and the app is restricted, so he doesn't see it.
 	w.e.addMember(w.owner, s, w.mallory, access.RoleViewer)
 	expect(t, w.mallory.do(http.MethodGet, appPath(s, a.ID, ""), nil), http.StatusNotFound)
 
-	// A moved app leaves its roles behind; the new space's access decides.
 	dest := w.e.createShared(w.owner, w.ws, "Elsewhere team")
 	w.e.addMember(w.owner, dest, w.alice, access.RoleEditor)
 	w.e.addMember(w.owner, dest, w.mallory, access.RoleViewer)

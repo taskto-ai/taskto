@@ -15,7 +15,6 @@
     block-size: var(--space-4);
   }
 
-  /* Without motion it holds still: the open ring still reads as "working". */
   @media (prefers-reduced-motion: reduce) {
     .ui-spinner {
       animation: none;

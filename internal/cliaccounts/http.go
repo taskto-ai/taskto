@@ -17,9 +17,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// Routes mounts /api/me/cli-accounts on mux. Every route is the signed-in user's own: it acts
-// on their logins only, whatever the path says. {account} is an account's handle: the CLI for
-// the first ("claude"), "<cli>-<n>" for the others ("claude-2").
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	me := func(h http.HandlerFunc) http.Handler { return a.RequireUser(h) }
 	const base = "/api/me/cli-accounts"
@@ -40,7 +37,6 @@ func caller(r *http.Request) int64 {
 
 type accountHandler func(w http.ResponseWriter, r *http.Request, user int64, a ref)
 
-// withAccount checks the account in the path, and that CLI workers may be used now, before h.
 func (s *Service) withAccount(h accountHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a, ok := parseHandle(r.PathValue("account"))
@@ -60,7 +56,6 @@ func (s *Service) withAccount(h accountHandler) http.HandlerFunc {
 	}
 }
 
-// usable answers 409 with the reason when CLI workers can't be used now.
 func (s *Service) usable(w http.ResponseWriter, r *http.Request) bool {
 	err := s.Usable(r.Context())
 	switch {
@@ -74,10 +69,7 @@ func (s *Service) usable(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// list is GET /api/me/cli-accounts.
 type list struct {
-	// Enabled says whether CLI workers can be used now; Reason says why not, and ReasonCode
-	// is its code, for the web app to translate (apierr).
 	Enabled    bool        `json:"enabled"`
 	Mode       string      `json:"mode"`
 	Reason     string      `json:"reason,omitempty"`
@@ -117,13 +109,8 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// recentLogin is how long an account whose login hasn't connected stays listed: a little
-// longer than a login lasts on the worker.
 const recentLogin = 20 * time.Minute
 
-// listed returns the accounts user's list shows, by CLI and slot: the first of each CLI
-// (connected or not), every other one that is connected or needs a new sign-in, and one whose
-// login started lately.
 func (s *Service) listed(ctx context.Context, user int64) ([]ref, error) {
 	rows, err := s.own(ctx, user, "")
 	if err != nil {
@@ -202,15 +189,12 @@ func (s *Service) handleCancel(w http.ResponseWriter, _ *http.Request, user int6
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCheck asks the CLI whether the login still works, and records the answer.
 func (s *Service) handleCheck(w http.ResponseWriter, r *http.Request, user int64, a ref) {
 	st, err := s.worker.Status(r.Context(), user, a.cli, a.slot)
 	if err != nil {
 		workerError(w, r, a, err)
 		return
 	}
-	// Under the account's lock, like recording a login: a check can't bring back an account
-	// a concurrent disconnect removed.
 	unlock := s.lockAccount(watchKey{user, a})
 	if st.LoggedIn {
 		err = s.setConnectedIfKnown(r.Context(), user, a, st.Method)
@@ -234,10 +218,8 @@ func (s *Service) handleCheck(w http.ResponseWriter, r *http.Request, user int64
 	writeJSON(w, http.StatusOK, acct)
 }
 
-// maxLabel bounds an account's label, in characters.
 const maxLabel = 40
 
-// handleUpdate sets an account's label.
 func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request, user int64, a ref) {
 	var req struct {
 		Label *string `json:"label"`
@@ -272,9 +254,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request, user int6
 	writeJSON(w, http.StatusOK, acct)
 }
 
-// handleDisconnect signs the CLI out of the account and forgets it, with its sessions.
 func (s *Service) handleDisconnect(w http.ResponseWriter, r *http.Request, user int64, a ref) {
-	// Carried on if the client goes away: half done, the login could be gone with the row kept.
 	ctx := context.WithoutCancel(r.Context())
 	if err := s.worker.Logout(ctx, user, a.cli, a.slot); err != nil {
 		workerError(w, r, a, err)
@@ -283,7 +263,6 @@ func (s *Service) handleDisconnect(w http.ResponseWriter, r *http.Request, user 
 	key := watchKey{user, a}
 	unlock := s.lockAccount(key)
 	defer unlock()
-	// The login that connected it is done with: it must never connect it again.
 	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
 	s.forget(key, info, ok)
 	s.mu.Lock()
@@ -297,7 +276,6 @@ func (s *Service) handleDisconnect(w http.ResponseWriter, r *http.Request, user 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// workerError answers for a refusal or failure of the worker, about account a.
 func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 	switch {
 	case errors.Is(err, cliworker.ErrNoLogin):
@@ -321,10 +299,8 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 	}
 }
 
-// maxLoginCode is the longest code a sign-in takes, as cliworker.ErrBadCode says.
 const maxLoginCode = 512
 
-// unusableCode is the code of Usable's refusal: ErrOff or ErrNoBoundary.
 func unusableCode(err error) apierr.Code {
 	if errors.Is(err, ErrNoBoundary) {
 		return apierr.CodeCLIWorkersNoBoundary
@@ -338,8 +314,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return readJSONLimit(w, r, v, maxBody)
 }
 
-// readJSONLimit decodes the body into v, strictly (unknown fields and trailing data are
-// errors), reading at most limit bytes. It answers 400 and returns false on failure.
 func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()

@@ -53,7 +53,6 @@ describe('Dialog', () => {
     render(<Harness />)
     open()
     expect(dialog().open).toBe(true)
-    // showModal, not show: the polyfill marks a modal one.
     expect(dialog().dataset.modal).toBe('')
     expect(screen.getByRole('dialog', { name: 'Rename the app' })).toBe(dialog())
     expect(dialog().getAttribute('aria-describedby')).toBe(
@@ -129,7 +128,6 @@ test('stays open under StrictMode, whose second mount follows a close', async ()
     </StrictMode>,
   )
   open()
-  // The close event of the first mount's cleanup arrives in a later task.
   await act(() => closesDelivered())
   expect(onClose).not.toHaveBeenCalled()
   expect(dialog()?.open).toBe(true)
@@ -189,7 +187,6 @@ describe('ConfirmDialog', () => {
   })
 })
 
-// A screen that keeps its confirmation open while the action runs, and to show what went wrong.
 function BusyScreen() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -217,8 +214,6 @@ function BusyScreen() {
 }
 
 const pressEscape = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-// Waits until the dialog is open again with the focus inside, however long the browser's close
-// event and the dialog's reopening take: not a count of tasks, which a loaded machine outruns.
 const openAgain = () =>
   waitFor(() => {
     expect(dialog()?.open).toBe(true)
@@ -230,8 +225,6 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
     render(<BusyScreen />)
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete the app' }))
-    // The first Escape the page may refuse; the next ones without a press in between it can't,
-    // and the browser closes it each time.
     let closed = 0
     for (let i = 0; i < 3; i++) {
       pressEscape()
@@ -275,13 +268,10 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
       </Dialog>,
     )
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
-    // The first Escape is refused; the second the browser carries out, closing it under the
-    // screen, and it opens again.
     pressEscape()
     expect(dialog().open).toBe(true)
     pressEscape()
     expect(dialog().open).toBe(false)
-    // The browser took the focus out with it; opening again puts it back inside.
     expect(dialog().contains(document.activeElement)).toBe(false)
     await act(() => closesDelivered())
     await openAgain()
@@ -305,8 +295,6 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
         }
       />,
     )
-    // A real browser that reopens a dialog focuses its first button, here the destructive one;
-    // jsdom moves no focus, so the test puts it there.
     screen.getByRole('button', { name: 'Discard them' }).focus()
     await act(async () => {
       dialog().close()
@@ -339,8 +327,6 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
         <p>Some words to select</p>
       </Dialog>,
     )
-    // Selecting the words: pressed on them, released outside the box. The click goes to the
-    // <dialog>, the nearest element both are in, at the release's place.
     fireEvent.mouseDown(screen.getByText('Some words to select'), { clientX: 0, clientY: 0 })
     fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
     expect(onClose).not.toHaveBeenCalled()
@@ -348,7 +334,6 @@ describe('a dialog the browser closes while the screen keeps it open', () => {
   })
 })
 
-// A screen that asks, and says what it was told.
 function Asker({ onAnswer, ask }: { onAnswer: (yes: boolean) => void; ask: number }) {
   const [confirmDialog, confirm] = useConfirm()
   return (
@@ -387,7 +372,6 @@ describe('useConfirm', () => {
   })
 })
 
-// A screen that asks one question, then another before the first is answered.
 function TwoQuestions({ answers }: { answers: boolean[] }) {
   const [confirmDialog, confirm] = useConfirm()
   return (

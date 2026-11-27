@@ -11,13 +11,11 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// A plus sign on the 24 by 24 view box, and a check mark.
 const (
 	plusPath  = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"
 	checkPath = "M3 13l3-3 4 4 8-8 3 3-11 11z"
 )
 
-// iconScreen is a one-screen app around components, with an add action for its buttons.
 func iconScreen(components ...string) Definition {
 	raw := []json.RawMessage{json.RawMessage(`{"id":"root","component":"Column","children":["icon"]}`)}
 	for _, c := range components {
@@ -55,8 +53,6 @@ func TestIconPathAcceptsPathData(t *testing.T) {
 	}
 }
 
-// Everything that isn't path data is refused, with the code the web app translates and the
-// component it is in.
 func TestIconPathRefusesAnythingElse(t *testing.T) {
 	bad := map[string]string{
 		"empty":                  "",
@@ -94,7 +90,6 @@ func TestIconPathRefusesAnythingElse(t *testing.T) {
 			}
 		})
 	}
-	// A svgPath that isn't text, or another key beside it: the same code, said as what it is.
 	for name, tc := range map[string]struct{ icon, says string }{
 		"a number":    {`{"id":"icon","component":"Icon","name":{"svgPath":5}}`, "must be text, not a number"},
 		"null":        {`{"id":"icon","component":"Icon","name":{"svgPath":null}}`, "must be text, not null"},
@@ -107,11 +102,9 @@ func TestIconPathRefusesAnythingElse(t *testing.T) {
 			t.Errorf("%s: err = %v (code %q), want %s saying %q", name, err, code, apierr.CodeAppIconPath, tc.says)
 		}
 	}
-	// A character outside the grammar is named as a character, not a stray byte.
 	if _, err := iconScreen(pathIcon("M0 0 L1 1\u00a0")).Check(); err == nil || !strings.Contains(err.Error(), `'\u00a0'`) {
 		t.Errorf("non-ASCII: err = %v", err)
 	}
-	// Not an icon's prop, and not an icon's name: refused, and the message names no source file.
 	for name, icon := range map[string]string{
 		"a style beside":  `{"id":"icon","component":"Icon","name":{"svgPath":"M0 0"},"style":"color:red"}`,
 		"an unknown name": `{"id":"icon","component":"Icon","name":"receipt"}`,
@@ -122,9 +115,6 @@ func TestIconPathRefusesAnythingElse(t *testing.T) {
 	}
 }
 
-// An icon given by name stays valid, so apps saved with one still save and publish, and needs no
-// new capability. One bound to data stays valid too, but needs the capability: the bound value
-// could be a path, which only a client that checks paths may draw.
 func TestIconByNameStaysValid(t *testing.T) {
 	bound, err := iconScreen(`{"id":"icon","component":"Icon","name":{"path":"/icon"}}`).Check()
 	if err != nil || !slices.Contains(bound.Requires, IconPathCapability) {
@@ -142,15 +132,12 @@ func TestIconByNameStaysValid(t *testing.T) {
 			t.Errorf("%s: requires %s", icon, IconPathCapability)
 		}
 	}
-	// In a button with nothing else, too: a name draws nothing, so the label rule is for paths.
 	if _, err := iconScreen(`{"id":"icon","component":"Button","child":"star","action":{"event":{"name":"add"}}}`,
 		`{"id":"star","component":"Icon","name":"star"}`).Check(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// A path icon that is all of a button, or a modal's trigger, needs a name of its own; beside a
-// label it doesn't.
 func TestIconAloneNeedsAName(t *testing.T) {
 	button := `{"id":"icon","component":"Button","child":"plus","action":{"event":{"name":"add"}}}`
 	labelled := `{"id":"plus","component":"Icon","name":{"svgPath":"` + plusPath + `"},"accessibility":{"label":"Add"}}`
@@ -206,7 +193,6 @@ func TestIconAloneNeedsAName(t *testing.T) {
 	}
 }
 
-// The definition's own size limit is what caps how many paths an app holds.
 func TestIconPathsCountTowardTheDefinitionSize(t *testing.T) {
 	long := "M" + strings.Repeat("1 ", (MaxIconPathLen-1)/2)
 	children := []string{}
@@ -224,13 +210,12 @@ func TestIconPathsCountTowardTheDefinitionSize(t *testing.T) {
 	}
 }
 
-// The three bundled starter templates draw icons, as paths.
 func TestTemplatesHaveIcons(t *testing.T) {
 	all, err := Templates()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 3 {
+	if len(all) != 4 {
 		t.Fatalf("%d templates", len(all))
 	}
 	for _, tpl := range all {
@@ -240,8 +225,6 @@ func TestTemplatesHaveIcons(t *testing.T) {
 	}
 }
 
-// References that fan out (each of four rows naming the next one 200 times) are looked at once
-// each: the check stays fast and still finds the unlabelled icon at the bottom.
 func TestIconLabelsDoNotMultiplyFanOut(t *testing.T) {
 	fan := func(next string) string {
 		refs := make([]string, maxListLen)
@@ -260,8 +243,6 @@ func TestIconLabelsDoNotMultiplyFanOut(t *testing.T) {
 	if code, params := codeOf(err); code != apierr.CodeAppIconLabel || params["component"] != "plus" {
 		t.Fatalf("err = %v, want %s for plus", err, apierr.CodeAppIconLabel)
 	}
-	// The walk itself, counted: each component once per depth, each of its children once from
-	// there. Without the memo it would be 200 to the fourth.
 	byID := map[string]map[string]any{}
 	for _, c := range comps {
 		obj, err := decodeObject(json.RawMessage(c))
@@ -279,13 +260,10 @@ func TestIconLabelsDoNotMultiplyFanOut(t *testing.T) {
 	}
 }
 
-// A copy of someone's live release saved before the label rule is made as it is: the copier didn't
-// write it and can't change the source. The rule holds again when the copy is published.
 func TestACopyOfAnOldReleaseIsNotHeldToTheLabelRule(t *testing.T) {
 	w := newWorld(t)
 	s := w.crew()
 	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "expense-tracker", nil))
-	// As it could have been saved before: the "New expense" button shows only its plus icon.
 	var def map[string]any
 	var raw string
 	if err := w.e.db.QueryRow(`SELECT definition FROM app_releases WHERE app_id = ? AND number = 1`, a.ID).Scan(&raw); err != nil {
@@ -300,7 +278,6 @@ func TestACopyOfAnOldReleaseIsNotHeldToTheLabelRule(t *testing.T) {
 		}
 	}
 	old, _ := json.Marshal(def)
-	// Releases can't be changed: it goes in as the next one, made live.
 	if _, err := w.e.db.Exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
 		SELECT app_id, 2, ?, definition_version, requires FROM app_releases WHERE app_id = ? AND number = 1`, string(old), a.ID); err != nil {
 		t.Fatal(err)

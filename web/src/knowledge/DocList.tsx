@@ -1,8 +1,4 @@
-// The space's documents as a tree of folders, built from their paths: a folder opens and closes,
-// and a closed one says how many documents it holds; the open document is marked, and the folders
-// it is in open themselves. A name the column cuts shows in full in a tooltip.
-
-import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Doc } from '../api'
 import { useFormat, useLocale, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -14,9 +10,6 @@ import { useLoadingStatus } from './loading'
 
 export type Folder = { name: string; path: string; folders: Folder[]; files: Doc[]; count: number }
 
-// Every document once, under the folders its path names (a folder and a document may share a
-// name: "a" and "a/b.md" are a document and a folder). Folders first, then documents, each in
-// the order of the person's language, with numbers in order ("q2" before "q10").
 export function buildTree(docs: Doc[], collator = new Intl.Collator(undefined, { numeric: true })): Folder {
   const root: Folder = { name: '', path: '', folders: [], files: [], count: 0 }
   const folders = new Map<string, Folder>([['', root]])
@@ -45,7 +38,6 @@ export function buildTree(docs: Doc[], collator = new Intl.Collator(undefined, {
   return root
 }
 
-// The folders a path is in: "a/b/c.md" is in "a" and "a/b".
 const foldersOf = (path: string) =>
   path
     .split('/')
@@ -54,22 +46,26 @@ const foldersOf = (path: string) =>
 
 const baseName = (path: string) => path.split('/').pop() ?? path
 
-// How deep the indent goes: past it, levels line up, so a name always has room in the column.
+const withFoldersOf = (path: string) => (was: ReadonlySet<string>) => {
+  const missing = foldersOf(path).filter((f) => !was.has(f))
+  return missing.length === 0 ? was : new Set([...was, ...missing])
+}
+
+export type Reveal = { path: string }
+
 const MAX_INDENT = 6
 
-// loading: the list is still on its way (or the space is); docs is undefined until it comes.
 export function DocList({
   docs,
   loading,
   current,
-  reveal = 0,
+  reveal = null,
   onOpen,
 }: {
   docs: Doc[] | undefined
   loading: boolean
   current: string | undefined
-  // Counts the openings from outside the tree: each shows the open document in it again.
-  reveal?: number
+  reveal?: Reveal | null
   onOpen: (path: string) => void
 }) {
   const t = useT()
@@ -80,16 +76,12 @@ export function DocList({
     [docs, locale],
   )
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(current ? foldersOf(current) : []))
-  // A document opened from elsewhere (a link, a search) shows where it is, also when it is the one
-  // already open in a folder the person closed.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reveal is the reason to run again
   useEffect(() => {
-    if (!current) return
-    setOpen((was) => {
-      const missing = foldersOf(current).filter((f) => !was.has(f))
-      return missing.length === 0 ? was : new Set([...was, ...missing])
-    })
-  }, [current, reveal])
+    if (current) setOpen(withFoldersOf(current))
+  }, [current])
+  useEffect(() => {
+    if (reveal) setOpen(withFoldersOf(reveal.path))
+  }, [reveal])
   const toggle = (path: string) =>
     setOpen((was) => {
       const next = new Set(was)
@@ -97,35 +89,32 @@ export function DocList({
       return next
     })
 
-  // The names the column cuts, by the key of their row: measured when the tree or the column's
-  // width changes, so only those get a tooltip.
   const list = useRef<HTMLUListElement>(null)
   const [cut, setCut] = useState<ReadonlySet<string>>(new Set())
-  // biome-ignore lint/correctness/useExhaustiveDependencies: measured again whenever what is drawn changes
-  useLayoutEffect(() => {
+  const measure = useCallback(() => {
     const el = list.current
     if (!el) return
-    const measure = () => {
-      const now = new Set<string>()
-      for (const name of el.querySelectorAll<HTMLElement>('[data-name-of]')) {
-        if (name.scrollWidth > name.clientWidth) now.add(name.dataset.nameOf ?? '')
-      }
-      setCut((was) => (was.size === now.size && [...now].every((k) => was.has(k)) ? was : now))
+    const now = new Set<string>()
+    for (const name of el.querySelectorAll<HTMLElement>('[data-name-of]')) {
+      if (name.scrollWidth > name.clientWidth) now.add(name.dataset.nameOf ?? '')
     }
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
+    setCut((was) => (was.size === now.size && [...now].every((k) => was.has(k)) ? was : now))
+  }, [])
+  useLayoutEffect(measure)
+  const shown = !loading && tree !== null && tree.count > 0
+  useLayoutEffect(() => {
+    const el = list.current
+    if (!shown || !el || typeof ResizeObserver === 'undefined') return
     const watch = new ResizeObserver(measure)
     watch.observe(el)
     return () => watch.disconnect()
-    // The open document's name is drawn heavier, which can cut it: measured again when it changes.
-  }, [tree, open, current])
+  }, [shown, measure])
 
   if (loading) {
     return (
       <div className="kb-tree-loading">
-        {['60%', '45%', '75%', '55%', '40%', '65%'].map((width, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place
-          <Skeleton key={i} width={width} />
+        {['60%', '45%', '75%', '55%', '40%', '65%'].map((width) => (
+          <Skeleton key={width} width={width} />
         ))}
       </div>
     )
@@ -217,7 +206,6 @@ function Level({
                 aria-current={d.path === current || undefined}
                 onClick={() => onOpen(d.path)}
               >
-                {/* The chevron's room, so names line up with their folders'. */}
                 <span className="kb-tree-spacer" />
                 <Icon name="file" size={16} />
                 <span className="kb-tree-name" data-name-of={key}>

@@ -1,5 +1,3 @@
-/* The records explorer (AppExplorer) and one record in its drawer (RecordDetail). */
-
 @layer screens {
   .ui-explorer {
     display: grid;
@@ -27,7 +25,6 @@
     border-radius: var(--radius-sm);
   }
 
-  /* Search, then the filter's three controls and its button, in one line that wraps. */
   .ui-explorer-search,
   .ui-explorer-filter-form,
   .ui-explorer-sort {
@@ -93,7 +90,6 @@
     overflow-wrap: anywhere;
   }
 
-  /* The foot: how many, the pages, then the totals. */
   .ui-explorer-foot {
     display: flex;
     flex-wrap: wrap;
@@ -130,7 +126,6 @@
     margin: 0;
   }
 
-  /* One record, in the drawer. */
   .ui-record {
     display: grid;
     gap: var(--space-4);
@@ -148,7 +143,6 @@
     margin: 0;
   }
 
-  /* A field shown as it is, not edited: Field's label over its value. */
   .ui-record-readonly {
     display: grid;
     gap: var(--space-2);
@@ -174,8 +168,6 @@
     gap: var(--space-2);
   }
 
-  /* After a conflict: each field that differs, what was typed beside the record as it is now on a
-     wide screen, one under the other on a phone. */
   .ui-conflict-fields {
     display: grid;
     gap: var(--space-3);
@@ -215,7 +207,6 @@
     }
   }
 
-  /* A record's history: a timeline, newest first, a node on a line for each version. */
   .ui-timeline {
     display: grid;
     gap: var(--space-4);

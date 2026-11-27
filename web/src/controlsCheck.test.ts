@@ -5,8 +5,6 @@ import { dirname, join, resolve } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
 import { ALLOWED, check, controls } from '../scripts/controls-check.mjs'
 
-// scripts/controls-check.mjs: a screen draws its controls with the components of src/ui/, so a
-// button, a select, an input or a textarea written by hand anywhere else is caught here.
 const web = resolve(__dirname, '..')
 const script = join(web, 'scripts/controls-check.mjs')
 
@@ -15,7 +13,6 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-// A web directory with these modules under src/, and what the script says of it.
 function run(files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), 'controls-check-'))
   dirs.push(root)

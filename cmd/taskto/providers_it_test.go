@@ -2,11 +2,6 @@
 
 package main
 
-// A provider account added through the API reaches the running agent runtime, without
-// restarting it or the server. The model behind it is a fake OpenAI-compatible server on
-// loopback (as in internal/agentrt/providers_test.go), so nothing reaches a real provider.
-// Gated by TASKTO_AGENT_IT=1 like the other integration tests.
-
 import (
 	"bytes"
 	"context"
@@ -27,13 +22,11 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 )
 
-// Obviously fake keys: the fake server takes either, and reports which one it got.
 const (
 	firstKey   = "fake-first-key-for-tests-not-real"
 	rotatedKey = "fake-rotated-key-for-tests-not-real"
 )
 
-// fakeModel answers every chat completion with "<key name> says hi", streamed.
 type fakeModel struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -70,7 +63,6 @@ func newFakeModel(t *testing.T) *fakeModel {
 	return f
 }
 
-// api is a logged-in client of the server's API.
 type api struct {
 	t    *testing.T
 	base string
@@ -129,7 +121,6 @@ func TestProviderAccountReachesTheAgentRuntime(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	dataDir := filepath.Join(dir, "data")
-	// insecure-cookies: the test talks plain http to the server on loopback.
 	server, addr := startServer(t, bin, "-addr", "127.0.0.1:0", "-data-dir", dataDir, "-agent", "-agent-entry", entry, "-insecure-cookies")
 	_, socketDir, _ := agentPaths(dataDir)
 	sidecar := agentrt.New(filepath.Join(socketDir, "agent.sock"))
@@ -150,7 +141,6 @@ func TestProviderAccountReachesTheAgentRuntime(t *testing.T) {
 			ID int64 `json:"id"`
 		} `json:"workspaces"`
 	}
-	// The setup token, from the server's log, as an operator reads it.
 	token := setupTokenLine.FindStringSubmatch(server.output.String())
 	if token == nil {
 		t.Fatal("the server logged no setup token")
@@ -176,7 +166,6 @@ func TestProviderAccountReachesTheAgentRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The sidecar has it now, without a restart.
 	catalog, err := sidecar.Models(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +178,6 @@ func TestProviderAccountReachesTheAgentRuntime(t *testing.T) {
 		t.Fatalf("sidecar after adding the account: %+v, %v; want the same process %d", h, err, before.PID)
 	}
 
-	// And a conversation runs on it, with the key from its key file.
 	ask := func(conv int64, content, want string) {
 		t.Helper()
 		sub, err := sidecar.Submit(ctx, conv, agentrt.Input{Content: content})
@@ -210,12 +198,10 @@ func TestProviderAccountReachesTheAgentRuntime(t *testing.T) {
 	}
 	ask(conv, "hello", "first says hi")
 
-	// A new key takes effect from the next request.
 	one := fmt.Sprintf("/api/workspaces/%d/providers/%d", ws, created.ID)
 	owner.expect(http.StatusOK, http.MethodPatch, one, map[string]any{"api_key": rotatedKey})
 	ask(conv, "again", "rotated says hi")
 
-	// Deleted, it leaves the sidecar, which is still the same process.
 	owner.expect(http.StatusNoContent, http.MethodDelete, one, nil)
 	if catalog, err = sidecar.Models(ctx); err != nil || len(catalog.Providers) != 1 {
 		t.Fatalf("the sidecar's models after the delete = %+v, %v", catalog, err)

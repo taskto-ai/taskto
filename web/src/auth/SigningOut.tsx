@@ -1,8 +1,3 @@
-// Signing out, once it is certain: the shell is gone at once (nothing of it can be pressed while
-// the sign-out finishes), and this says what is happening. A sign-out the server didn't confirm (no
-// answer, or its own error) leaves the person signed in: they are told so, and can try again or go
-// back to the app.
-
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -16,9 +11,7 @@ export function SigningOut({
   onRetry,
   onBack,
 }: {
-  // What went wrong, when the server didn't confirm the sign-out.
   failed?: string
-  // Back is asking who is signed in: it says so, and neither button can be pressed meanwhile.
   busy?: boolean
   onRetry: () => void
   onBack: () => void

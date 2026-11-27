@@ -1,9 +1,3 @@
-// The roles of one app: who may build it, publish it, add records to it and read or change
-// its records, among the members of its space. Roles only narrow what a member's role in the
-// space allows. An app with no roles set is unrestricted, as it was before roles existed.
-// Shown to whoever may manage the app's roles, in a dialog the Apps page opens; the server checks
-// it again on every change.
-
 import { useState } from 'react'
 import { type AppGrant, type AppRole, api, errorText, type SpaceMember } from '../api'
 import { useT } from '../i18n'
@@ -20,7 +14,6 @@ import './Apps.css'
 const ROLES: AppRole[] = ['builder', 'publisher', 'user', 'data_manager', 'reader']
 const DEFAULT = 'default'
 
-// Who the roles are for: a member of the space, or everyone without roles of their own.
 type Who = { key: string; name: string }
 
 export function AppRoles({ base, spaceBase }: { base: string; spaceBase: string }) {
@@ -61,7 +54,6 @@ function RolesForm({ base, grants, members }: { base: string; grants: AppGrant[]
   const save = async () => {
     setBusy(true)
     const body = {
-      // In the order shown: the default first, then the members.
       grants: who
         .filter((w) => (chosen[w.key] ?? []).length > 0)
         .map((w) => ({ user_id: w.key === DEFAULT ? null : Number(w.key), roles: chosen[w.key] })),

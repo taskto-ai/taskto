@@ -21,11 +21,6 @@ import { Due, Labels } from './Planning'
 import { usePeople } from './people'
 import { Composer, Thread } from './Thread'
 
-// The open card, in a drawer over the board (on a phone, over the whole screen): its title, its
-// properties as rows, each changed in place, its description, its thread and the box for a new
-// comment, and archiving or restoring it in its menu. useCard in card.ts says how a change is
-// sent, and what a conflict does. While it holds something unsaved (drafts.ts), closing it (Escape,
-// its close button) or opening another card asks first; `leave` is that question, for the board.
 export function CardView({
   url,
   workspace,
@@ -45,8 +40,6 @@ export function CardView({
   moved: Card | null
   onChanged: () => void
   onClose: () => void
-  // Set to the card's question before it goes: true when it may (nothing unsaved, or the person
-  // chose to discard it).
   leave: RefObject<(() => Promise<boolean>) | null>
 }) {
   const {
@@ -67,7 +60,6 @@ export function CardView({
   const people = usePeople(workspace, space, canWrite)
   const t = useT()
   useFocusKeeper('.ui-drawer')
-  // A change can't start while one is being sent, or while a conflict waits for the writer.
   const held = busy || conflict !== null
   const drafts = useMemo(makeDrafts, [])
   const [confirmDialog, confirm] = useConfirm()
@@ -91,14 +83,10 @@ export function CardView({
   const close = async () => {
     if (await mayLeave()) onClose()
   }
-  // Leaving the page (another section, another workspace, the browser's Back) asks the same, while
-  // a description or a comment is being written. With nothing unsaved the answer is at once, so the
-  // router lets a Back go as one move (an answer later undoes it and does it again).
   useBeforeLeave((go) => {
     if (!drafts.any()) return go()
     void mayLeave().then((ok) => ok && go())
   })
-  // Closing the tab or reloading it over a draft: the browser's own question.
   useEffect(() => {
     const unload = (e: BeforeUnloadEvent) => {
       if (!drafts.any()) return
@@ -237,7 +225,6 @@ export function CardView({
   )
 }
 
-// The card's shape while it loads: its rows, then its description.
 function CardSkeleton() {
   const t = useT()
   return (

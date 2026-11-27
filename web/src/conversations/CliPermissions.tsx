@@ -1,17 +1,13 @@
-// A CLI's questions to the conversation's owner (docs/agent-safety.md), and the owner's choice to
-// let it act without asking in this conversation.
-
 import { useEffect, useState } from 'react'
 import { api, CLI_PRODUCTS, type CliName, type CliQuestion, type Conversation, errorText } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { useChanged } from '../memo'
 import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { Notice } from '../ui/Notice'
 import { Switch } from '../ui/Switch'
 
-// The CLI's questions waiting for the owner's answer (docs/agent-safety.md): what it wants to
-// run, edit or fetch, as plain text, with Allow and Deny. The CLI waits meanwhile.
 export const QUESTIONS_POLL_MS = 10_000
 
 export function CliQuestions({
@@ -28,16 +24,13 @@ export function CliQuestions({
   const t = useT()
   const questions = useLoad(() => api<{ requests: CliQuestion[] }>(`${url}/cli-permissions`), [url])
   const reload = questions.reload
-  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when the trigger changes
-  useEffect(() => reload(), [trigger])
-  // And now and then while the CLI works, in case a question's line didn't come through (a
-  // restart in between): reload is stable, so this is one timer per running turn.
+  const triggered = useChanged(trigger)
+  if (triggered) reload()
   useEffect(() => {
     if (!running) return
     const timer = window.setInterval(reload, QUESTIONS_POLL_MS)
     return () => window.clearInterval(timer)
   }, [running, reload])
-  // The answer on its way, so its own button shows it and both wait.
   const [busy, setBusy] = useState<{ id: string; allow: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const answer = async (q: CliQuestion, allow: boolean) => {
@@ -92,7 +85,6 @@ export function CliQuestions({
               </span>
             }
           >
-            {/* What the CLI wants to do, as plain text: never Markdown, never HTML. */}
             {q.input && <pre className="ui-chat-output">{q.input}</pre>}
           </Notice>
         </section>
@@ -101,8 +93,6 @@ export function CliQuestions({
   )
 }
 
-// Whether the CLI asks before it acts in this conversation. Turning the questions off is the
-// owner's choice for this conversation alone, and says what it means first.
 export function CliPermissionsSwitch({
   conversation,
   url,
@@ -120,7 +110,6 @@ export function CliPermissionsSwitch({
   const [confirmDialog, confirm] = useConfirm()
   const allowAll = conversation.cli_permissions === 'allow_all'
   const set = async (on: boolean) => {
-    // Turning the questions off says what it means first; turning them back on needs no question.
     if (
       on &&
       !(await confirm({

@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 
-// What the conversation's view adds to the parts: the stream's state in words, the menu of the
-// less used actions, a composer that says why it is off, and ids of its own when the view is on
-// a page twice.
-
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { fakeFetch, fakeStreams } from '../test/fakes'
@@ -80,7 +76,6 @@ for (const status of [403, 404]) {
     const why = document.getElementById(box().getAttribute('aria-describedby') ?? '')
     expect(why?.textContent).toBe("This conversation can't be read, so nothing can be sent to it.")
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
-    // Nor can its model be changed; and there is nothing to try again.
     expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   })
@@ -100,7 +95,6 @@ test('a first read that fails for another reason leaves the composer usable, and
   expect(box().getAttribute('aria-describedby')).toBeNull()
   expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).disabled).toBe(false)
 
-  // The server is back: the stream connects, and the conversation is read again by itself.
   fail = false
   await waitFor(() => expect(sources).toHaveLength(1))
   act(() => sources[0].open())
@@ -133,7 +127,6 @@ test('a failed read again keeps the conversation shown and the composer usable',
   })
   render(view(7, fakeStreams().factory))
   await screen.findByRole('heading', { name: 'Talk 7' })
-  // A rename, then its read again fails.
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy()
@@ -164,12 +157,10 @@ test('two views on one page each have their own fields', async () => {
 test("a refusal that answers a read since superseded doesn't turn the composer off", async () => {
   let refuse7: (a: { status: number; body: unknown }) => void = () => {}
   fakeFetch({
-    // Conversation 7's answer comes late, after the view moved on to 8.
     'GET /api/workspaces/1/conversations/7': () =>
       new Promise((done) => {
         refuse7 = done
       }),
-    // And 8's read fails for a reason that is no refusal: its composer stays usable.
     'GET /api/workspaces/1/conversations/8': { status: 502, body: { error: 'bad gateway' } },
   })
   const { factory } = fakeStreams()

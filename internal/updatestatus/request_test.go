@@ -18,7 +18,6 @@ func TestRequestWritesOneSmallFileOfAFixedShape(t *testing.T) {
 	if err := Request(dir, now); err != nil {
 		t.Fatal(err)
 	}
-	// The request and nothing else: no temporary file is left.
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 || entries[0].Name() != RequestFile {
 		t.Fatalf("the directory has %v (%v)", entries, err)
@@ -30,14 +29,12 @@ func TestRequestWritesOneSmallFileOfAFixedShape(t *testing.T) {
 	if len(b) > 64 {
 		t.Errorf("the request is %d bytes", len(b))
 	}
-	// No second one while it waits; the first stays as it was.
 	if err := Request(dir, now.Add(time.Second)); !errors.Is(err, ErrPending) {
 		t.Fatalf("a second request: %v", err)
 	}
 	if again, _ := os.ReadFile(filepath.Join(dir, RequestFile)); string(again) != string(b) {
 		t.Errorf("the pending request changed: %q", again)
 	}
-	// The host takes it: another may be made, with another nonce.
 	if err := os.Remove(filepath.Join(dir, RequestFile)); err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +95,6 @@ func TestRequestNeedsADirectoryTheServerCanWrite(t *testing.T) {
 	}
 }
 
-// Whatever sits at the request's name counts as one waiting, and is never replaced or followed:
-// the host removes it, and ignores it if it isn't a small file.
 func TestRequestPendingCountsAnythingAtItsName(t *testing.T) {
 	now := time.Now()
 	for name, setup := range map[string]func(path string) error{
@@ -159,7 +154,6 @@ func TestReportSaysWhetherTheButtonCanBePressed(t *testing.T) {
 		"old updater": {`{"version":1,"checked":"` + stamp + `","channel":"release"}`, ReasonUnsupported},
 		"running":     {`{"version":1,"checked":"` + stamp + `","channel":"release","requests":{"supported":true,"last":null},"running":{"since":"` + stamp + `"}}`, ReasonRunning},
 		"stale":       {`{"version":1,"checked":"2020-01-01T00:00:00Z","channel":"release","requests":{"supported":true,"last":null}}`, ReasonUnsupported},
-		// A run that was killed leaves its note; it is believed for a few hours only.
 		"an old running note": {`{"version":1,"checked":"` + stamp + `","channel":"release","requests":{"supported":true,"last":null},"running":{"since":"` +
 			now.Add(-RunningMaxAge-time.Minute).Format(time.RFC3339) + `"}}`, ""},
 	}
@@ -184,7 +178,6 @@ func TestReportSaysWhetherTheButtonCanBePressed(t *testing.T) {
 	}
 }
 
-// What the host writes about a request is words of a closed list, whatever the file holds.
 func TestReadChecksWhatTheHostSaysOfRequests(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, `{"version":1,"checked":"2026-11-20T03:10:00Z","channel":"release",
@@ -210,8 +203,6 @@ func TestReadChecksWhatTheHostSaysOfRequests(t *testing.T) {
 	}
 }
 
-// A prepared request is not there for the host until it is published, so the caller can record it
-// first; a discarded one leaves nothing.
 func TestPreparedRequestIsHiddenUntilPublished(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -245,7 +236,6 @@ func TestPreparedRequestIsHiddenUntilPublished(t *testing.T) {
 		t.Errorf("a discarded request left %v", entries)
 	}
 
-	// Another request published in between: the second to publish is refused, the first stands.
 	dir = t.TempDir()
 	a, _ := Prepare(dir, now)
 	b, _ := Prepare(dir, now)

@@ -12,10 +12,6 @@ import (
 	"testing"
 )
 
-// The updater's Compose inputs, the whole of the data mount, the images the containers are made
-// from, the stop of a stack, and the clearing of one: each with a test that fails without it.
-
-// composeCalls are the `docker compose` calls the fake saw, flags included.
 func (e *updEnv) composeCalls() []string {
 	b, _ := os.ReadFile(filepath.Join(e.fake, "calls-raw"))
 	var out []string
@@ -27,8 +23,6 @@ func (e *updEnv) composeCalls() []string {
 	return out
 }
 
-// composeArgs are the `docker compose` calls the fake saw as lists of arguments, each one
-// string, whatever it holds (a path with a space in it included).
 func (e *updEnv) composeArgs() [][]string {
 	e.t.Helper()
 	b, _ := os.ReadFile(filepath.Join(e.fake, "calls-json"))
@@ -45,7 +39,6 @@ func (e *updEnv) composeArgs() [][]string {
 	return out
 }
 
-// wantNothingStarted: nothing was made, started or stopped, and nothing but the checks ran.
 func (e *updEnv) wantNothingStarted() {
 	e.t.Helper()
 	if n := e.count(`^compose (create|start|up|stop)|^update |^rm `); n != 0 {
@@ -53,19 +46,18 @@ func (e *updEnv) wantNothingStarted() {
 	}
 }
 
-// Every `docker compose` call, the updater's and the safety script's, names its project, its
-// .env and exactly the files of the install (compose.yaml, and compose.override.yaml when there
-// is one), whether it is on the install or on the staged copy of the new settings.
 func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		override bool
-		dir      string // the install's directory, under the test's
+		dir      string
 	}{
 		"with an override":          {override: true, dir: "env"},
 		"without one":               {dir: "env"},
 		"in a path with a space in": {override: true, dir: "an install"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnvIn(t, filepath.Join(t.TempDir(), tc.dir))
 			if !tc.override {
 				if err := os.Remove(filepath.Join(e.srv, "compose.override.yaml")); err != nil {
@@ -82,8 +74,6 @@ func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
 			}
 			sawLive, sawStaged := false, false
 			for _, c := range calls {
-				// Compose's inputs come first, one argument each: the project's directory, its name,
-				// its .env and the files, in this order.
 				if len(c) < 7 || c[0] != "--project-directory" || c[2] != "--project-name" || c[3] != "taskto" || c[4] != "--env-file" || c[6] != "-f" {
 					t.Errorf("a compose call without its explicit inputs: %q", c)
 					continue
@@ -105,7 +95,6 @@ func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
 				} else {
 					sawStaged = true
 				}
-				// What starts the stack is what was rendered: create and start have the install's list.
 				if slices.Contains(c, "create") || slices.Contains(c, "start") {
 					if dir != e.srv {
 						t.Errorf("the stack was made or started from other inputs: %q", c)
@@ -119,12 +108,12 @@ func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
 	}
 }
 
-// A Compose file Compose would discover by itself, or COMPOSE_FILE, is a layout the updater
-// doesn't render: it refuses, before anything, with zero create or start calls.
 func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
+	t.Parallel()
 	unsafe := "services:\n  cli-worker:\n    privileged: true\n    volumes:\n      - /:/host\n"
 	for _, name := range []string{"compose.override.yml", "docker-compose.override.yaml", "docker-compose.override.yml", "docker-compose.yml", "docker-compose.yaml", "compose.yml"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("srv/"+name, unsafe)
@@ -144,6 +133,7 @@ func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
 		"COMPOSE_FILE in the environment": func(e *updEnv) { e.extra = []string{"COMPOSE_FILE=compose.yaml:evil.yaml"} },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)
@@ -159,13 +149,11 @@ func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
 	}
 }
 
-// The data is mounted in each of taskto's services exactly as the running server has it: the
-// volume, its subpath and whether it is read-only, the backup services' included, though their
-// profiles are off; and the new settings make no volume: every one they use exists, none is anonymous.
 func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		edit, editBackup string
-		subpath, ro      bool // the running server's mount
+		subpath, ro      bool
 		missing          string
 		reason           string
 	}{
@@ -184,6 +172,7 @@ func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
 		"a candidate with an anonymous volume": {edit: `.services.taskto.volumes += [{type: "volume", target: "/scratch", volume: {}}]`, reason: "an anonymous volume"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.edit != "" {
@@ -215,7 +204,6 @@ func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
 			}
 		})
 	}
-	// The backup services are rendered with their profiles on, in this install and in the new settings.
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -232,9 +220,8 @@ func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
 	}
 }
 
-// What the report and the runbook say about the data volume is the recorded one, never a name
-// assumed.
 func TestUpdateReportsAndRunbookUseTheRecordedDataVolume(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/volname", "acme_data")
@@ -264,11 +251,8 @@ func TestUpdateReportsAndRunbookUseTheRecordedDataVolume(t *testing.T) {
 	}
 }
 
-// A tag can move between the last check and the start. The containers are made first, each is
-// checked to have the verified image, and only then started: a container with another image is
-// removed and the old version put back.
 func TestUpdateChecksTheImagesOfTheContainersBeforeStartingThem(t *testing.T) {
-	// Forward: a tag moves after the final check, before `create`.
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/retag-on-create", "ghcr.io/taskto-ai/taskto-cli-worker:"+updNew+"\n")
@@ -293,7 +277,6 @@ func TestUpdateChecksTheImagesOfTheContainersBeforeStartingThem(t *testing.T) {
 		t.Error("the stack was stopped, though nothing of the new version ran")
 	}
 
-	// The way back is checked the same way, against the old ids: a moved old tag is never started.
 	e = newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.failCalls(`^compose start .* @` + updNew + `$`)
@@ -311,9 +294,8 @@ func TestUpdateChecksTheImagesOfTheContainersBeforeStartingThem(t *testing.T) {
 	}
 }
 
-// After the new server has started, restart policies are turned off before the stop, the stop
-// is confirmed, and when it can't be the result says so.
 func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -338,14 +320,14 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 		reasonPart string
 		notIn      string
 	}{
-		"the stop fails":                   {fail: []string{`^compose stop`}, result: "stop-failed", reasonPart: "could NOT be confirmed stopped", notIn: "The stack is stopped"},
-		"the stop does nothing":            {noop: true, result: "stop-failed", reasonPart: "could NOT be confirmed stopped", notIn: "The stack is stopped"},
-		"the policies can't be turned off": {fail: []string{`^update `}, result: "stopped", reasonPart: "restart policies of its containers couldn't be turned off", notIn: "restart policies are turned off"},
-		// The first look at the containers fails: the stop is attempted, and its result is what counts.
+		"the stop fails":                                            {fail: []string{`^compose stop`}, result: "stop-failed", reasonPart: "could NOT be confirmed stopped", notIn: "The stack is stopped"},
+		"the stop does nothing":                                     {noop: true, result: "stop-failed", reasonPart: "could NOT be confirmed stopped", notIn: "The stack is stopped"},
+		"the policies can't be turned off":                          {fail: []string{`^update `}, result: "stopped", reasonPart: "restart policies of its containers couldn't be turned off", notIn: "restart policies are turned off"},
 		"the containers can't be listed":                            {fail: []string{`^ps -aq --filter label=com.docker.compose.project=taskto @`}, result: "stopped", reasonPart: "containers couldn't be listed", notIn: "restart policies are turned off"},
 		"the containers can't be listed, and the stop does nothing": {fail: []string{`^ps -aq --filter label=com.docker.compose.project=taskto @`}, noop: true, result: "stop-failed", reasonPart: "could NOT be confirmed stopped"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("etc/update-notify-url", e.server.URL+"/notify/x\n")
@@ -363,30 +345,24 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 			if tc.notIn != "" && strings.Contains(fmt.Sprint(st["reason"]), tc.notIn) {
 				t.Errorf("the report says %q: %v", tc.notIn, st["reason"])
 			}
-			// The stop was tried, whatever the look at the containers said.
 			if n := e.count(`^compose stop`); n != 1 {
 				t.Errorf("%d stops, want 1\n%s", n, strings.Join(e.calls(), "\n"))
 			}
-			// Either way it blocks, the release isn't tried again, the backup is named, a person is told;
-			// and the record is in the phase of the result, so that the next runs say the same.
 			if tx := e.transaction(); tx["phase"] != tc.result || !e.exists("state/blocked") || !strings.Contains(e.read("state/failed"), updNew+"\n") {
 				t.Errorf("the record = %v", tx)
 			}
 			if b, _ := st["backup"].(string); b == "" || !strings.Contains(fmt.Sprint(st["reason"]), "restore the backup "+b) {
 				t.Errorf("the report doesn't name the backup: %v", st)
 			}
-			e.gh.mu.Lock()
-			notified := len(e.gh.notifications) == 1 && e.gh.notifications[0].Body["result"] == tc.result
-			e.gh.mu.Unlock()
-			if !notified {
-				t.Errorf("the alert doesn't say %s: %+v", tc.result, e.gh.notifications)
+			var sent []notification
+			e.gh.locked(func() { sent = append(sent, e.gh.notifications...) })
+			if len(sent) != 1 || sent[0].Body["result"] != tc.result {
+				t.Errorf("the alert doesn't say %s: %+v", tc.result, sent)
 			}
 			code, out := e.run()
 			if code != 1 || !strings.Contains(out, "blocked") {
 				t.Errorf("the next run: exit %d\n%s", code, out)
 			}
-			// A stack that couldn't be confirmed stopped is still said to be one, in the journal and in
-			// the alert, until a person has seen to it.
 			e.gh.mu.Lock()
 			defer e.gh.mu.Unlock()
 			if len(e.gh.notifications) != 2 {
@@ -400,8 +376,8 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 	}
 }
 
-// Every curl the updater runs starts with -q: root's .curlrc changes nothing.
 func TestUpdateCurlIgnoresTheCurlrc(t *testing.T) {
+	t.Parallel()
 	script := readRepoFile(t, "deploy/taskto-update.sh")
 	n := 0
 	for _, m := range regexp.MustCompile(`"\$CURL"( [^\n]{0,6})?`).FindAllStringSubmatch(script, -1) {
@@ -431,12 +407,11 @@ func TestUpdateCurlIgnoresTheCurlrc(t *testing.T) {
 	}
 }
 
-// An install on a version that predates the safety script can't be updated: the message points
-// at the runbook's Updates section by its anchor.
 func TestUpdateRefusesAVersionWithoutSafetyRulesAndPointsAtTheRunbook(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	delete(e.gh.files[shaOf(updOld)], "deploy/safety-check.sh")
+	e.gh.locked(func() { delete(e.gh.files[shaOf(updOld)], "deploy/safety-check.sh") })
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
@@ -445,16 +420,14 @@ func TestUpdateRefusesAVersionWithoutSafetyRulesAndPointsAtTheRunbook(t *testing
 	e.wantNothingStarted()
 }
 
-// Clearing a stop checks what the update checks of a running install: the firewall's rules and
-// the safety rules, in the running containers, with the rules of the version that runs.
 func TestClearBlockChecksTheFirewallAndTheSafetyRules(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
 	if code, _ := e.run(); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
-	// A person has put the old version back, by hand.
 	e.setVersion(updOld)
 	e.setInstallVersion(updOld)
 	e.setRunning(updOld)
@@ -477,8 +450,6 @@ func TestClearBlockChecksTheFirewallAndTheSafetyRules(t *testing.T) {
 		}
 		tc.undo()
 	}
-	// Only what the clearing itself asks for counts: the failed update's own preflight fetched
-	// that file already.
 	before := e.requests()
 	if code, out := e.run("--clear-block"); code != 0 {
 		t.Fatalf("clear-block with everything in place: exit %d\n%s", code, out)
@@ -486,7 +457,6 @@ func TestClearBlockChecksTheFirewallAndTheSafetyRules(t *testing.T) {
 	if e.exists("state/transaction") || e.exists("state/blocked") {
 		t.Error("the stop wasn't cleared")
 	}
-	// The safety rules it ran are the running version's own, from its commit.
 	e.gh.mu.Lock()
 	defer e.gh.mu.Unlock()
 	found := false
@@ -498,8 +468,8 @@ func TestClearBlockChecksTheFirewallAndTheSafetyRules(t *testing.T) {
 	}
 }
 
-// The docs say what the rollback tags protect the old images from, and what they don't.
 func TestDocsSayWhatTheRollbackTagsProtect(t *testing.T) {
+	t.Parallel()
 	install := readRepoFile(t, "docs/install.md")
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	script := readRepoFile(t, "deploy/taskto-update.sh")
@@ -516,16 +486,13 @@ func TestDocsSayWhatTheRollbackTagsProtect(t *testing.T) {
 	if !strings.Contains(install, "`docker image prune -a`") || !strings.Contains(install, "an image no container uses is removed whatever its tags") {
 		t.Error("docs/install.md doesn't say that prune -a takes tagged images too")
 	}
-	// The main channel has no gate, and the docs say so where the channels are chosen.
 	if !strings.Contains(install, "`main` ignores releases and the `manual-upgrade: true` marker") || !strings.Contains(install, "every merge") {
 		t.Error("docs/install.md doesn't say that the main channel ignores the manual-upgrade markers and takes every merge")
 	}
 }
 
-// The environment rule is about names: a value that is the path of a file
-// (TASKTO_SSO_PROVIDERS=/run/secrets/sso.json) is not a secret in it, in the new settings or in
-// the running containers; a name that says secret still is one.
 func TestSafetyRulesLookAtEnvironmentNamesNotValues(t *testing.T) {
+	t.Parallel()
 	const providers = "TASKTO_SSO_PROVIDERS"
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -536,7 +503,6 @@ func TestSafetyRulesLookAtEnvironmentNamesNotValues(t *testing.T) {
 	}
 	e.wantStatus("updated", "")
 
-	// The names are still refused: before the start in the settings, after it in the container.
 	e = newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/config-edit", `.services.taskto.environment.SSO_CLIENT_SECRET = "x"`)
@@ -556,12 +522,8 @@ func TestSafetyRulesLookAtEnvironmentNamesNotValues(t *testing.T) {
 	}
 }
 
-// The server's outgoing email (docs/install.md#email) gives its container the variable
-// TASKTO_SMTP_PASSWORD_FILE, which Compose renders as an empty string when email is off. The
-// environment rule lets exactly that name through, on the server and with a path or nothing as
-// its value: an update with email off or on isn't refused, and the worker's, or a value that
-// isn't a path, still are.
 func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
+	t.Parallel()
 	const name = "TASKTO_SMTP_PASSWORD_FILE"
 	for _, tc := range []struct {
 		desc, value string
@@ -570,6 +532,7 @@ func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
 		{"email on (a file's path)", "/etc/taskto/smtp/password"},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("fake/server-env", name+"="+tc.value+"\n")
@@ -591,6 +554,7 @@ func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
 	}
 	for desc, tc := range refused {
 		t.Run(desc, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			wantCode := 1
@@ -610,8 +574,8 @@ func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
 	}
 }
 
-// A status that can't be written whole leaves the last one as it was (a full disk is /dev/full).
 func TestStatusSurvivesAWriteThatFails(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/full"); err != nil {
 		t.Skip("no /dev/full")
 	}
@@ -640,9 +604,8 @@ func TestStatusSurvivesAWriteThatFails(t *testing.T) {
 	}
 }
 
-// --to takes a version: an empty one is a usage error, and never reads as "no --to", which would
-// update, or with --clear-block clear a stop it wasn't asked to.
 func TestUpdateRefusesAnEmptyTo(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"--to", ""}, {"--clear-block", "--to", ""}, {"--dry-run", "--to", ""}} {
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
@@ -660,9 +623,8 @@ func TestUpdateRefusesAnEmptyTo(t *testing.T) {
 	}
 }
 
-// Mounts are compared by their fields, never by the text a message makes of them: a writable
-// mount of the subpath "x) (read-only" isn't a read-only mount of "x", though both read the same.
 func TestUpdateComparesMountFieldsNotTheirDescription(t *testing.T) {
+	t.Parallel()
 	const asRunning = `.services |= with_entries(if (.key | IN("taskto", "backup", "backup-schedule")) then .value.volumes[0] |= (.volume.subpath = "x" | .read_only = true) else . end)`
 	for name, tc := range map[string]struct {
 		edit string
@@ -672,6 +634,7 @@ func TestUpdateComparesMountFieldsNotTheirDescription(t *testing.T) {
 		"another subpath and mode that read same": {edit: asRunning + ` | .services.taskto.volumes[0] |= (.volume.subpath = "x) (read-only" | .read_only = false)`, code: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("fake/running-subpath", "x")
@@ -692,11 +655,11 @@ func TestUpdateComparesMountFieldsNotTheirDescription(t *testing.T) {
 	}
 }
 
-// The nightly backup (and the backup job) the settings have must mount /data: one that doesn't
-// would back up what its image has there.
 func TestUpdateRequiresTheBackupServicesToMountTheData(t *testing.T) {
+	t.Parallel()
 	for _, svc := range []string{"backup-schedule", "backup"} {
 		t.Run(svc, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("fake/config-edit-backup", `.services["`+svc+`"].volumes |= map(select(.target != "/data"))`)
@@ -710,8 +673,8 @@ func TestUpdateRequiresTheBackupServicesToMountTheData(t *testing.T) {
 	}
 }
 
-// The fixture takes the options of `docker compose create` and no others (--no-deps is `up`'s).
 func TestFakeDockerCreateRejectsWhatComposeCreateDoesNotTake(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	for _, tc := range []struct {
 		args []string
@@ -730,7 +693,6 @@ func TestFakeDockerCreateRejectsWhatComposeCreateDoesNotTake(t *testing.T) {
 			t.Errorf("compose create %v: %v, want ok = %v", tc.args, err, tc.ok)
 		}
 	}
-	// A create of Caddy replaces Caddy and its server, and leaves the worker as it is.
 	e.write("fake/created", "cli-worker sha256:made-before\n")
 	cmd := exec.Command(filepath.Join(e.dir, "bin/docker"), "compose", "--project-directory", e.srv, "create", "--force-recreate", "caddy")
 	cmd.Dir = e.srv
@@ -744,9 +706,8 @@ func TestFakeDockerCreateRejectsWhatComposeCreateDoesNotTake(t *testing.T) {
 	}
 }
 
-// A failed list of failed releases is never replaced by half of one: if it can't be rewritten whole
-// (a full disk is /dev/full), clearing the stop refuses, and the list and the record stay.
 func TestClearBlockKeepsTheFailedListWhenItCantBeRewritten(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/full"); err != nil {
 		t.Skip("no /dev/full")
 	}
@@ -756,7 +717,6 @@ func TestClearBlockKeepsTheFailedListWhenItCantBeRewritten(t *testing.T) {
 	if code, _ := e.run(); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
-	// A person finishes the update by hand: the new version runs.
 	_ = os.Remove(filepath.Join(e.fake, "health-bad"))
 	e.setRunning(updNew)
 	e.write("state/failed", "v0.1.0\n"+updNew+"\n")
@@ -781,9 +741,8 @@ func TestClearBlockKeepsTheFailedListWhenItCantBeRewritten(t *testing.T) {
 	}
 }
 
-// A data volume that is a subdirectory of a volume is recorded, and the report says so: the
-// rollback restores into it, and never removes the volume.
 func TestUpdateRecordsTheSubpathOfTheDataVolume(t *testing.T) {
+	t.Parallel()
 	const sub = `.services |= with_entries(if (.key | IN("taskto", "backup", "backup-schedule")) then .value.volumes[0] |= (.volume.subpath = "kept") else . end)`
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -803,8 +762,8 @@ func TestUpdateRecordsTheSubpathOfTheDataVolume(t *testing.T) {
 	}
 }
 
-// The runbook's rollback and the release guide say what the code does.
 func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
+	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	rollback := runbook[strings.Index(runbook, "\n## Rollback\n"):strings.Index(runbook, "\n## Backups\n")]
 	if strings.Contains(rollback, "docker volume rm") {
@@ -815,7 +774,6 @@ func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
 			t.Errorf("the Rollback doesn't have %q", want)
 		}
 	}
-	// A rollback with no record still has a volume: the one the server has.
 	if i, j := strings.Index(rollback, `RECORDED=`), strings.Index(rollback, `[ -z "$VOLUME" ]`); i < 0 || j < i {
 		t.Error("the Rollback doesn't take the recorded volume first, and the server's own when there is none")
 	}

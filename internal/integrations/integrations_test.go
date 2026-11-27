@@ -31,8 +31,6 @@ var setupToken = auth.NewSetupToken()
 
 const password = "fake-password-for-tests"
 
-// The test credentials are made of parts, so no file holds a whole key-shaped string for a secret
-// scanner to find. They are obviously fake.
 var (
 	stripeTestKey  = "sk_" + "test_" + strings.Repeat("Fake", 6)
 	stripeOtherKey = "sk_" + "test_" + strings.Repeat("Rota", 6)
@@ -77,7 +75,6 @@ func newEnv(t *testing.T, publicURL string) *env {
 	return newEnvWith(t, Options{PublicURL: publicURL})
 }
 
-// newEnvWith is newEnv with the service's options, for a test that moves the clock.
 func newEnvWith(t *testing.T, opts Options) *env {
 	t.Helper()
 	ctx := context.Background()
@@ -153,7 +150,6 @@ func (c *client) do(method, path string, body any) *httptest.ResponseRecorder {
 	return rec
 }
 
-// raw sends body as it is, which do can't: it always marshals.
 func (c *client) raw(method, path, body string) *httptest.ResponseRecorder {
 	c.e.t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -167,7 +163,6 @@ func (c *client) raw(method, path, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// mustDraft is the validated draft of a create body.
 func mustDraft(t *testing.T, body map[string]any) draft {
 	t.Helper()
 	raw, err := json.Marshal(body)
@@ -192,7 +187,6 @@ func expect(t *testing.T, rec *httptest.ResponseRecorder, status int) {
 	}
 }
 
-// expectCodeNonFatal is expectCode that reports and goes on, for a loop over cases.
 func expectCodeNonFatal(t *testing.T, rec *httptest.ResponseRecorder, status int, code, label string) {
 	t.Helper()
 	var body struct {
@@ -230,7 +224,6 @@ type me struct {
 	} `json:"workspaces"`
 }
 
-// setup makes the owner (an operator: admin of the workspace setup made) and returns them and it.
 func (e *env) setup() (*client, int64) {
 	e.t.Helper()
 	c := &client{e: e}
@@ -257,13 +250,10 @@ func (e *env) invite(admin *client, ws int64, email, role string) *client {
 	return c
 }
 
-// otherWorkspace is a second workspace with its own admin, who is not an operator: another
-// person's server-side tenant.
 func (e *env) otherWorkspace(owner *client) (*client, int64) {
 	e.t.Helper()
 	rec := owner.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Second"})
 	expect(e.t, rec, http.StatusCreated)
-	// The owner is that workspace's admin too; a stranger is a different account in it only.
 	return owner, decode[struct {
 		Workspace auth.Membership `json:"workspace"`
 	}](e.t, rec).Workspace.WorkspaceID
@@ -271,8 +261,6 @@ func (e *env) otherWorkspace(owner *client) (*client, int64) {
 
 func wsPath(ws int64, rest string) string { return fmt.Sprintf("/api/workspaces/%d/%s", ws, rest) }
 
-// hookFor is the webhook secret of the test integration called name: no two share one (the server
-// refuses it), so only "main" and "shop", the first of a test, have stripeHook.
 func hookFor(name string) string {
 	if name == "main" || name == "shop" {
 		return stripeHook
@@ -281,7 +269,6 @@ func hookFor(name string) string {
 	return "whsec_" + hex.EncodeToString(sum[:16])
 }
 
-// stripeBody is a valid create of a Stripe integration.
 func stripeBody(name string) map[string]any {
 	return map[string]any{
 		"provider": "stripe", "name": name, "display_name": "Stripe " + name,
@@ -290,8 +277,6 @@ func stripeBody(name string) map[string]any {
 	}
 }
 
-// withHook is body with another webhook secret, for a second integration with the same name in
-// another workspace.
 func withHook(body map[string]any, secret string) map[string]any {
 	secrets := map[string]string{}
 	for k, v := range body["secrets"].(map[string]string) {
@@ -362,7 +347,6 @@ func TestCreateListGetAndLimits(t *testing.T) {
 	if got.ID != in.ID || got.Name != "main" {
 		t.Fatalf("get = %+v", got)
 	}
-	// The webhook address is the public URL's, and null without one.
 	e2 := newEnv(t, "")
 	owner2, ws2 := e2.setup()
 	if got := e2.create(owner2, ws2, stripeBody("main")); got.WebhookURL != nil {
@@ -383,12 +367,10 @@ func TestRegistryIsClosedAndListed(t *testing.T) {
 	expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), map[string]any{
 		"provider": "paypal", "name": "x", "secrets": map[string]string{"api_key": stripeTestKey}, "max_amount_minor": 1, "currencies": []string{"USD"},
 	}), http.StatusBadRequest, "integration_provider_unknown")
-	// A provider id can't be changed afterwards, and the body is strict.
 	in := e.create(owner, ws, stripeBody("main"))
 	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
 	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"provider": "square"}), http.StatusBadRequest, "invalid_json")
 	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"name": "other"}), http.StatusBadRequest, "invalid_json")
-	// Every registered provider is one the audit log can record, and a kind it has.
 	for _, p := range Providers() {
 		if err := audit.Record(context.Background(), e.db, audit.Event{Workspace: ws, Action: audit.IntegrationRemoved,
 			TargetType: audit.TargetIntegration, Details: audit.Details{"provider": p.ID(), "kind": p.Kinds()[0]}}); err != nil {
@@ -434,7 +416,6 @@ func TestValidation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { expectCode(t, post(tc.mutate), tc.status, tc.code) })
 	}
-	// Square needs its settings, as identifiers and choices: never a URL.
 	for name, settings := range map[string]map[string]string{
 		"none":          nil,
 		"no location":   {"environment": "sandbox"},
@@ -449,7 +430,6 @@ func TestValidation(t *testing.T) {
 			expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), body), http.StatusBadRequest, "integration_setting_invalid")
 		})
 	}
-	// A rejected request leaves nothing behind, and no event.
 	var n int
 	if err := e.db.QueryRow(`SELECT count(*) FROM integrations`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("integrations after refused creates = %d, %v", n, err)
@@ -457,7 +437,6 @@ func TestValidation(t *testing.T) {
 	if got := e.events(ws, audit.IntegrationCreated); len(got) != 0 {
 		t.Fatalf("events after refused creates = %+v", got)
 	}
-	// Names are unique per workspace, and the count is limited.
 	e.create(owner, ws, stripeBody("main"))
 	expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), stripeBody("main")), http.StatusConflict, "integration_name_taken")
 	for i := 1; i < maxIntegrations; i++ {
@@ -478,13 +457,11 @@ func TestUpdateReplacesAndRotates(t *testing.T) {
 	if got.DisplayName != "Payments" || got.MaxAmountMinor != 20000 || strings.Join(got.Currencies, ",") != "BRL" || got.Mode != "test" {
 		t.Fatalf("updated = %+v", got)
 	}
-	// Replacing the key with a live one moves the integration to live mode.
 	rec = owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeLiveKey}})
 	expect(t, rec, http.StatusOK)
 	if got := decode[Integration](t, rec); got.Mode != "live" || got.Secrets["api_key"] != "set" {
 		t.Fatalf("after a live key = %+v", got)
 	}
-	// A refused edit changes nothing: the bad key doesn't half-apply the display name.
 	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Half", "secrets": map[string]string{"api_key": "nope"}}),
 		http.StatusBadRequest, "integration_secret_invalid")
 	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"currencies": []string{}}), http.StatusBadRequest, "integration_currency_invalid")
@@ -493,7 +470,6 @@ func TestUpdateReplacesAndRotates(t *testing.T) {
 		t.Fatalf("a refused edit changed the integration: %+v", got)
 	}
 
-	// A new webhook secret keeps the old one as the previous, for the overlap; both open.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
 	creds, err := e.store.credentials(context.Background(), ws, in.ID)
 	if err != nil {
@@ -502,7 +478,6 @@ func TestUpdateReplacesAndRotates(t *testing.T) {
 	if creds.WebhookSecret.Reveal() != stripeHookNew || creds.WebhookSecretPrevious.Reveal() != stripeHook || creds.APIKey.Reveal() != stripeLiveKey {
 		t.Fatal("the credentials aren't the ones set")
 	}
-	// After the overlap the previous secret is gone.
 	e.store.now = func() time.Time { return time.Now().Add(previousOverlap + time.Minute) }
 	creds, err = e.store.credentials(context.Background(), ws, in.ID)
 	if err != nil || creds.WebhookSecretPrevious != "" || creds.WebhookSecret.Reveal() != stripeHookNew {
@@ -510,18 +485,16 @@ func TestUpdateReplacesAndRotates(t *testing.T) {
 	}
 	e.store.now = time.Now
 
-	// Disabling and enabling.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK)
 	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); !got.Disabled || got.DisabledAt == nil {
 		t.Fatalf("disabled = %+v", got)
 	}
-	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK) // already: no event
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK)
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": false}), http.StatusOK)
 	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); got.Disabled {
 		t.Fatalf("enabled = %+v", got)
 	}
 
-	// Square: changing the environment changes the mode, and the settings are replaced whole.
 	sq := e.create(owner, ws, squareBody("shop"))
 	rec = owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", sq.ID)),
 		map[string]any{"settings": map[string]string{"environment": "production", "location_id": "L2"}})
@@ -542,15 +515,12 @@ func TestSecretsNeverLeave(t *testing.T) {
 	owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)
 	owner.do(http.MethodGet, one, nil)
 	owner.do(http.MethodPost, one+"/check", nil)
-	// Refused and invalid writes that carry secrets. badHook is refused for its shape, so an error
-	// that quoted it would be a leak: it is scanned for like the others.
-	const badHook = "not-a-hook-secret-zzzz" //nolint:gosec // G101: obviously fake
+	const badHook = "not-a-hook-secret-zzzz"
 	member.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey}})
 	member.do(http.MethodPost, wsPath(ws, "integrations"), stripeBody("sneaky"))
 	owner.do(http.MethodPost, wsPath(ws, "integrations"), map[string]any{"provider": "stripe", "name": "Bad Name", "secrets": map[string]string{"api_key": stripeOtherKey}})
 	owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": badHook}})
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": stripeHookNew}}), http.StatusOK)
-	// A body that isn't JSON, with a secret in it: the error mustn't quote it.
 	rec := owner.do(http.MethodPatch, one, map[string]any{"secrets": []string{stripeLiveKey}})
 	expect(t, rec, http.StatusBadRequest)
 
@@ -583,12 +553,11 @@ func TestSecretsNeverLeave(t *testing.T) {
 	}
 	audittest.NoSecrets(t, e.db, secrets)
 
-	// The opened credentials print, log and encode as redacted.
 	creds, err := e.store.credentials(context.Background(), ws, in.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(creds) //nolint:gosec // G117: the point of the test: a Credentials never encodes a secret
+	raw, _ := json.Marshal(creds)
 	var out bytes.Buffer
 	l := slog.New(slog.NewTextHandler(&out, nil))
 	l.Info("credentials", "creds", creds, "key", creds.APIKey)
@@ -612,7 +581,6 @@ func TestSealedSecretsAreBoundToTheirRow(t *testing.T) {
 	owner, ws := e.setup()
 	a := e.create(owner, ws, stripeBody("a"))
 	b := e.create(owner, ws, stripeBody("b"))
-	// Copy a's sealed key over b's: it is sealed for a's row, so b's doesn't open.
 	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = (SELECT sealed FROM integration_secrets WHERE integration_id = ? AND name = 'api_key')
 		WHERE integration_id = ? AND name = 'api_key'`, a.ID, b.ID); err != nil {
 		t.Fatal(err)
@@ -625,7 +593,6 @@ func TestSealedSecretsAreBoundToTheirRow(t *testing.T) {
 	if got := decode[CheckResult](t, rec); got.OK || got.Code != "integration_secret_unreadable" || got.Params["secret"] != "api_key" {
 		t.Fatalf("check = %+v", got)
 	}
-	// A key sealed by another server key doesn't open either (a backup restored elsewhere).
 	other, err := serverkey.Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -670,8 +637,6 @@ func TestRemove(t *testing.T) {
 	if before < 3 {
 		t.Fatalf("secrets and an approval = %d rows", before)
 	}
-	// Something that names the integration with ON DELETE RESTRICT (a later migration's
-	// approvals) makes the delete a 409 and keeps everything.
 	if _, err := e.db.Exec(`CREATE TABLE guard (integration_id INTEGER REFERENCES integrations (id) ON DELETE RESTRICT)`); err != nil {
 		t.Fatal(err)
 	}
@@ -744,14 +709,12 @@ func TestSpacesAndUsable(t *testing.T) {
 	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || !ok {
 		t.Fatalf("usable after allowing = %v, %v", ok, err)
 	}
-	// An admin can't allow another person's private space: it is "not found", as it is everywhere.
 	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared, theirs}}), http.StatusNotFound, "space_not_found")
 	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{999999}}), http.StatusNotFound, "space_not_found")
 	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{}), http.StatusBadRequest, "bad_request")
 	if got := decode[Integration](t, owner.do(http.MethodGet, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil)); len(got.Spaces) != 2 {
 		t.Fatalf("a refused change moved the spaces: %v", got.Spaces)
 	}
-	// Disabling stops its use everywhere; removing a space stops it there.
 	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": true}), http.StatusOK)
 	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || ok {
 		t.Fatalf("a disabled integration is usable: %v, %v", ok, err)
@@ -764,7 +727,6 @@ func TestSpacesAndUsable(t *testing.T) {
 	if ok, err := e.store.usable(ctx, ws+1000, in.ID, mine); err != nil || ok {
 		t.Fatalf("an integration is usable by another workspace's id: %v, %v", ok, err)
 	}
-	// The schema keeps a space in the integration's workspace even if code didn't.
 	otherWs, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Other')`)
 	if err != nil {
 		t.Fatal(err)
@@ -806,40 +768,32 @@ func TestSpaceReadersSeeNoSecrets(t *testing.T) {
 			t.Errorf("the space's list shows %q: %s", leak, rec.Body.String())
 		}
 	}
-	// A disabled integration shows as such.
 	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": true}), http.StatusOK)
 	if got := decode[struct {
 		Integrations []SpaceIntegration `json:"integrations"`
 	}](t, member.do(http.MethodGet, path, nil)).Integrations; got[0].Status != "disabled" {
 		t.Fatalf("status = %q", got[0].Status)
 	}
-	// Someone who can't read the space gets what everyone gets for a space they can't open: 404.
 	expectCode(t, outsider.do(http.MethodGet, path, nil), http.StatusNotFound, "space_not_found")
 	expectCode(t, (&client{e: e}).do(http.MethodGet, path, nil), http.StatusUnauthorized, "not_logged_in")
-	// An access token, even a member's own, is refused on this route: only sessions list a space's
-	// integrations, so a token's holder (an agent) never learns an integration's name.
 	rec = member.do(http.MethodPost, wsPath(ws, "tokens"), map[string]any{"name": "t"})
 	expect(t, rec, http.StatusCreated)
 	token := &client{e: e, bearer: decode[auth.TokenCreated](t, rec).Secret}
 	if rec := token.do(http.MethodGet, path, nil); rec.Code != http.StatusForbidden {
 		t.Errorf("an access token on the space route = %d, want 403; body %s", rec.Code, rec.Body.String())
 	}
-	// Another workspace's admin can't read it through their own workspace's id either.
 	_, ws2 := e.otherWorkspace(owner)
 	expectCode(t, owner.do(http.MethodGet, wsPath(ws2, fmt.Sprintf("spaces/%d/integrations", shared)), nil), http.StatusNotFound, "space_not_found")
 }
 
-// Every admin route: who may use it. A member and an outsider are refused, an access token is
-// refused even for an admin, and another workspace's admin sees "not found".
 func TestIsolation(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
 	member := e.invite(owner, ws, "member@example.com", "member")
 	in := e.create(owner, ws, stripeBody("main"))
-	// A second workspace, with an admin who belongs to it only.
 	_, ws2 := e.otherWorkspace(owner)
 	admin2 := e.invite(owner, ws2, "admin2@example.com", "admin")
-	in2 := e.create(owner, ws2, withHook(stripeBody("main"), stripeHookNew)) // the same name: names are per workspace
+	in2 := e.create(owner, ws2, withHook(stripeBody("main"), stripeHookNew))
 
 	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
 	routes := []struct {
@@ -855,7 +809,6 @@ func TestIsolation(t *testing.T) {
 		{http.MethodPut, one + "/spaces", map[string]any{"spaces": []int64{}}},
 		{http.MethodPost, one + "/check", nil},
 	}
-	// An access token of an admin, which every route refuses.
 	rec := owner.do(http.MethodPost, wsPath(ws, "tokens"), map[string]any{"name": "t"})
 	expect(t, rec, http.StatusCreated)
 	token := &client{e: e, bearer: decode[auth.TokenCreated](t, rec).Secret}
@@ -869,12 +822,10 @@ func TestIsolation(t *testing.T) {
 		if rec := (&client{e: e}).do(r.method, r.path, r.body); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s without a session = %d, want 401", label, rec.Code)
 		}
-		// The other workspace's admin, who is no member here.
 		if rec := admin2.do(r.method, r.path, r.body); rec.Code != http.StatusNotFound {
 			t.Errorf("%s as another workspace's admin = %d, want 404", label, rec.Code)
 		}
 	}
-	// Reaching for an integration of this workspace through the other's path is "not found".
 	other := wsPath(ws2, fmt.Sprintf("integrations/%d", in.ID))
 	for _, r := range []struct{ method, path string }{
 		{http.MethodGet, other}, {http.MethodPatch, other}, {http.MethodDelete, other}, {http.MethodPut, other + "/spaces"}, {http.MethodPost, other + "/check"},
@@ -891,40 +842,33 @@ func TestIsolation(t *testing.T) {
 	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); got.DisplayName != "Stripe main" {
 		t.Fatalf("another workspace changed the integration: %+v", got)
 	}
-	// Each workspace lists only its own.
 	list := decode[struct {
 		Integrations []Integration `json:"integrations"`
 	}](t, admin2.do(http.MethodGet, wsPath(ws2, "integrations"), nil)).Integrations
 	if len(list) != 1 || list[0].ID != in2.ID {
 		t.Fatalf("the other workspace's list = %+v", list)
 	}
-	// And can't allow this workspace's spaces for theirs.
 	sharedHere := e.sharedSpace(owner, ws, "Shop")
 	expectCode(t, admin2.do(http.MethodPut, wsPath(ws2, fmt.Sprintf("integrations/%d/spaces", in2.ID)), map[string]any{"spaces": []int64{sharedHere}}),
 		http.StatusNotFound, "space_not_found")
 	if got := e.events(ws2, audit.IntegrationSpacesChanged); len(got) != 0 {
 		t.Fatalf("a refused grant recorded an event in the requested workspace: %+v", got)
 	}
-	// Nothing above changed a thing in the first workspace's log beyond its own creation.
 	for _, action := range []string{audit.IntegrationUpdated, audit.IntegrationSpacesChanged, audit.IntegrationRemoved, audit.IntegrationDisabled} {
 		if got := e.events(ws, action); len(got) != 0 {
 			t.Fatalf("refused requests recorded %s: %+v", action, got)
 		}
 	}
-	// And no creation beyond the one that set the workspace up: a refused create records none.
 	if got := e.events(ws, audit.IntegrationCreated); len(got) != 1 {
 		t.Fatalf("refused creates recorded events: %+v", got)
 	}
 }
 
-// An admin of a workspace that setup didn't make is not an operator, and manages their own
-// workspace's integrations all the same: they belong to the workspace, not to the server.
 func TestAdminsNeedNotBeOperators(t *testing.T) {
 	e := newEnv(t, "")
 	owner, _ := e.setup()
 	_, ws2 := e.otherWorkspace(owner)
 	admin2 := e.invite(owner, ws2, "admin2@example.com", "admin")
-	// The server-wide routes are the operator's, which admin2 isn't; this one isn't.
 	in := e.create(admin2, ws2, stripeBody("main"))
 	expect(t, admin2.do(http.MethodPatch, wsPath(ws2, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"display_name": "Mine"}), http.StatusOK)
 	expect(t, admin2.do(http.MethodDelete, wsPath(ws2, fmt.Sprintf("integrations/%d", in.ID)), nil), http.StatusNoContent)
@@ -957,14 +901,12 @@ func TestAudit(t *testing.T) {
 		u.Details["webhook_secret_changed"] != false || u.Details["mode"] != "live" || u.Details["provider"] != "stripe" {
 		t.Fatalf("updated = %+v", u)
 	}
-	// A reorder of the currencies is a change, and is said to be one; a request that changes nothing
-	// records nothing.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments", "currencies": []string{"USD", "EUR"}}), http.StatusOK)
 	reordered := e.events(ws, audit.IntegrationUpdated)
 	if len(reordered) != 2 || fmt.Sprint(reordered[0].Details["fields"]) != "[currencies]" {
 		t.Fatalf("updated after a reorder = %+v", reordered)
 	}
-	n := len(e.events(ws, audit.IntegrationUpdated)) // the two events checked above
+	n := len(e.events(ws, audit.IntegrationUpdated))
 	for range 2 {
 		expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
 		if got := len(e.events(ws, audit.IntegrationUpdated)); got != n {
@@ -980,7 +922,7 @@ func TestAudit(t *testing.T) {
 
 	shared := e.sharedSpace(owner, ws, "Shop")
 	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}), http.StatusOK)
-	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}), http.StatusOK) // the same: no event
+	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}), http.StatusOK)
 	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}), http.StatusOK)
 	sc := e.events(ws, audit.IntegrationSpacesChanged)
 	if len(sc) != 2 || sc[1].Details["added"] != float64(1) || sc[1].Details["removed"] != float64(0) || sc[0].Details["removed"] != float64(1) {
@@ -993,7 +935,6 @@ func TestAudit(t *testing.T) {
 		*removed[0].TargetCreatedAt != *c.TargetCreatedAt {
 		t.Fatalf("removed = %+v", removed)
 	}
-	// None of it has a name or a secret in it.
 	audittest.NoSecrets(t, e.db, map[string]string{"key": stripeTestKey, "live key": stripeLiveKey, "webhook": stripeHook, "name": "Payments"})
 }
 
@@ -1008,7 +949,6 @@ func TestAuditShowsTheIntegrationByName(t *testing.T) {
 	if len(page.Events) != 1 || page.Events[0].TargetName == nil || *page.Events[0].TargetName != "Stripe main" || *page.Events[0].TargetID != in.ID {
 		t.Fatalf("events = %+v", page.Events)
 	}
-	// Once removed, the name is gone from the log's view, not kept.
 	expect(t, owner.do(http.MethodDelete, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil), http.StatusNoContent)
 	page, err = audit.ListWorkspace(context.Background(), e.db, ws, audit.Query{Action: audit.IntegrationCreated})
 	if err != nil || page.Events[0].TargetName != nil {
@@ -1016,9 +956,6 @@ func TestAuditShowsTheIntegrationByName(t *testing.T) {
 	}
 }
 
-// What a sealed secret is bound to can't be changed by any statement, so a row can't be given
-// another identity: the checks name an existing second workspace, so a refusal is the trigger's
-// and not a foreign key's.
 func TestImmutableColumnsCannotBeUpdated(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1029,26 +966,23 @@ func TestImmutableColumnsCannotBeUpdated(t *testing.T) {
 		"name = 'x'", "provider = 'square'", "public_id = '" + strings.Repeat("a", 32) + "'",
 		fmt.Sprintf("workspace_id = %d", ws2), fmt.Sprintf("id = %d", in.ID+1000), "created_at = '2000-01-01T00:00:00.000Z'",
 	} {
-		if _, err := e.db.Exec(`UPDATE integrations SET `+set+` WHERE id = ?`, in.ID); err == nil || !strings.Contains(err.Error(), "never change") { //nolint:gosec // G202: set is from the list above
+		if _, err := e.db.Exec(`UPDATE integrations SET `+set+` WHERE id = ?`, in.ID); err == nil || !strings.Contains(err.Error(), "never change") {
 			t.Errorf("UPDATE integrations SET %s: %v, want the trigger's refusal", set, err)
 		}
 	}
-	// The other integration's own key is out of the way, so only the trigger can refuse a move.
 	if _, err := e.db.Exec(`DELETE FROM integration_secrets WHERE integration_id = ? AND name = 'api_key'`, other.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, set := range []string{"name = 'webhook_secret_previous'", fmt.Sprintf("integration_id = %d", other.ID)} {
-		if _, err := e.db.Exec(`UPDATE integration_secrets SET `+set+` WHERE integration_id = ? AND name = 'api_key'`, in.ID); err == nil || !strings.Contains(err.Error(), "never") { //nolint:gosec // G202: set is from the list above
+		if _, err := e.db.Exec(`UPDATE integration_secrets SET `+set+` WHERE integration_id = ? AND name = 'api_key'`, in.ID); err == nil || !strings.Contains(err.Error(), "never") {
 			t.Errorf("UPDATE integration_secrets SET %s: %v, want the trigger's refusal", set, err)
 		}
 	}
-	// What may change still does.
 	if _, err := e.db.Exec(`UPDATE integrations SET display_name = 'Renamed', updated_at = updated_at WHERE id = ?`, in.ID); err != nil {
 		t.Errorf("a display name update was refused: %v", err)
 	}
 }
 
-// A sealed value opens only under the workspace, public id, row id and name it was sealed for.
 func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1080,7 +1014,6 @@ func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
 		}
 	}
 
-	// A sealed key copied over the same integration's other secret doesn't open as that one.
 	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = ? WHERE integration_id = ? AND name = 'webhook_secret'`, sealed, in.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1089,9 +1022,7 @@ func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
 		t.Fatalf("a key copied over the webhook secret opened: %v", err)
 	}
 
-	// The same blob under another workspace's integration doesn't open either.
 	_, ws2 := e.otherWorkspace(owner)
-	// (With a webhook secret of its own: the first integration's still has its fingerprint.)
 	other := e.create(owner, ws2, withHook(stripeBody("main"), hookFor("elsewhere")))
 	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = ? WHERE integration_id = ? AND name = 'api_key'`, sealed, other.ID); err != nil {
 		t.Fatal(err)
@@ -1101,8 +1032,6 @@ func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
 	}
 }
 
-// A row id is never reused, so a sealed secret left behind by a deleted integration can't be
-// attached to a new one by id.
 func TestIntegrationIDsAreNeverReused(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1114,9 +1043,6 @@ func TestIntegrationIDsAreNeverReused(t *testing.T) {
 	}
 }
 
-// What an admin sees and changes of an integration's spaces is what they manage: their private
-// space and the shared ones. Another admin's private space is never in a reply, and an admin's
-// change leaves it as it is.
 func TestSpacesAreScopedToTheCaller(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1138,7 +1064,6 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 		t.Fatalf("the other admin's view = %+v", got)
 	}
 
-	// The first admin sees the shared space, and only counts the other admin's private one.
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"get": owner.do(http.MethodGet, one, nil), "put": owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}),
 	} {
@@ -1153,7 +1078,6 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 	if len(list) != 1 || !slices.Equal(list[0].Spaces, []int64{shared}) || list[0].OtherSpaces != 1 {
 		t.Fatalf("the first admin's list = %+v", list)
 	}
-	// The private space's id is in none of what the first admin was sent, in any field.
 	for _, rec := range []*httptest.ResponseRecorder{owner.do(http.MethodGet, one, nil), owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)} {
 		var raw any
 		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
@@ -1164,10 +1088,8 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 		}
 	}
 
-	// Naming the other admin's private space is "not found", and what it was set to stays.
 	expectCode(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared, theirs}}), http.StatusNotFound, "space_not_found")
 
-	// The first admin's changes touch their own subset only: the other admin's space stays.
 	got = decode[Integration](t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{mine}}))
 	if !slices.Equal(got.Spaces, []int64{mine}) || got.OtherSpaces != 1 {
 		t.Fatalf("after replacing the first admin's spaces = %+v", got)
@@ -1185,17 +1107,14 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || ok {
 		t.Fatalf("a shared space the admin took out is still allowed: %v, %v", ok, err)
 	}
-	// And the other admin sees their own and counts the first admin's private space (none now).
 	got = decode[Integration](t, other.do(http.MethodGet, one, nil))
 	if !slices.Equal(got.Spaces, []int64{theirs}) || got.OtherSpaces != 0 {
 		t.Fatalf("the other admin's view after = %+v", got)
 	}
-	// An admin can take their own private space out too.
 	expect(t, other.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}), http.StatusOK)
 	if ok, err := e.store.usable(ctx, ws, in.ID, theirs); err != nil || ok {
 		t.Fatalf("the other admin couldn't remove their own space: %v, %v", ok, err)
 	}
-	// Nothing was added or removed beyond what each admin did: 2 + 1 added, and 1 + 1 + 1 removed.
 	var added, removed float64
 	for _, ev := range e.events(ws, audit.IntegrationSpacesChanged) {
 		added += ev.Details["added"].(float64)
@@ -1206,7 +1125,6 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 	}
 }
 
-// mentions says whether a decoded JSON value holds the number n anywhere.
 func mentions(v any, n float64) bool {
 	switch v := v.(type) {
 	case float64:
@@ -1227,8 +1145,6 @@ func mentions(v any, n float64) bool {
 	return false
 }
 
-// The webhook address is made from the server's public URL when it is shown, never stored, so
-// changing -public-url changes the address and no stale one is left in the database.
 func TestWebhookAddressFollowsThePublicURL(t *testing.T) {
 	e := newEnv(t, "https://old.example.com")
 	owner, ws := e.setup()
@@ -1240,7 +1156,6 @@ func TestWebhookAddressFollowsThePublicURL(t *testing.T) {
 	if err := e.db.QueryRow(`SELECT count(*) FROM pragma_table_info('integrations') WHERE name = 'webhook_url'`).Scan(&stored); err != nil || stored != 0 {
 		t.Fatalf("the address is stored: %d, %v", stored, err)
 	}
-	// The same database behind a server with another public URL.
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
 	a.Routes(mux)
@@ -1251,10 +1166,11 @@ func TestWebhookAddressFollowsThePublicURL(t *testing.T) {
 	if moved.WebhookURL == nil || *moved.WebhookURL != "https://new.example.com"+HookPrefix+strings.TrimPrefix(*in.WebhookURL, "https://old.example.com"+HookPrefix) {
 		t.Fatalf("webhook url after the change = %v", moved.WebhookURL)
 	}
+	if in.WebhookURLChanged || !moved.WebhookURLChanged {
+		t.Fatalf("webhook_url_changed before %v, after %v", in.WebhookURLChanged, moved.WebhookURLChanged)
+	}
 }
 
-// The connect form gets the server's own decimals for each currency, so what the web app shows
-// and what the server checks are the same unit.
 func TestRegistryServesCurrencyExponents(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1273,7 +1189,6 @@ func TestRegistryServesCurrencyExponents(t *testing.T) {
 	}
 }
 
-// The schema keeps a space in the integration's workspace on an update too, not only an insert.
 func TestAllowedSpaceCannotMoveToAnotherWorkspace(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1294,7 +1209,6 @@ func TestAllowedSpaceCannotMoveToAnotherWorkspace(t *testing.T) {
 	}
 }
 
-// A lookup by id never falls into the list's "every integration": 0 and negative ids are not found.
 func TestNonPositiveIDsAreNotFound(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1316,8 +1230,6 @@ func TestNonPositiveIDsAreNotFound(t *testing.T) {
 	}
 }
 
-// Sending the webhook secret that is already current again (a retry whose answer was lost) keeps
-// the secret it replaced valid for its overlap, instead of copying itself over it.
 func TestWebhookSecretRetryKeepsThePrevious(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1325,7 +1237,7 @@ func TestWebhookSecretRetryKeepsThePrevious(t *testing.T) {
 	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
 	rotate := map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}
 	expect(t, owner.do(http.MethodPatch, one, rotate), http.StatusOK)
-	expect(t, owner.do(http.MethodPatch, one, rotate), http.StatusOK) // the retry
+	expect(t, owner.do(http.MethodPatch, one, rotate), http.StatusOK)
 	creds, err := e.store.credentials(context.Background(), ws, in.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1333,7 +1245,6 @@ func TestWebhookSecretRetryKeepsThePrevious(t *testing.T) {
 	if creds.WebhookSecret.Reveal() != stripeHookNew || creds.WebhookSecretPrevious.Reveal() != stripeHook {
 		t.Fatalf("after a retried rotation the current is %q and the previous %q", creds.WebhookSecret, creds.WebhookSecretPrevious)
 	}
-	// A different secret still rotates again: the previous one becomes the one it replaced.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusOK)
 	creds, _ = e.store.credentials(context.Background(), ws, in.ID)
 	if creds.WebhookSecret.Reveal() != stripeHook || creds.WebhookSecretPrevious.Reveal() != stripeHookNew {
@@ -1341,8 +1252,6 @@ func TestWebhookSecretRetryKeepsThePrevious(t *testing.T) {
 	}
 }
 
-// A body that isn't an object is refused: a top-level null decodes into a request as "nothing
-// set", which would answer 200 for a change that wasn't made.
 func TestBodyMustBeAnObject(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1355,11 +1264,9 @@ func TestBodyMustBeAnObject(t *testing.T) {
 			expectCodeNonFatal(t, owner.raw(r.method, r.path, body), http.StatusBadRequest, "invalid_json", r.method+" "+r.path+" with "+body)
 		}
 	}
-	expect(t, owner.do(http.MethodPatch, one, map[string]any{}), http.StatusOK) // {} is still an empty change
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{}), http.StatusOK)
 }
 
-// An admin disabled after RequireAdmin let their request in changes nothing, and answers
-// account_disabled: the write reads their account again.
 func TestWritesOfAnAdminDisabledMeanwhile(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1386,7 +1293,6 @@ func TestWritesOfAnAdminDisabledMeanwhile(t *testing.T) {
 	expectCode(t, rec, http.StatusForbidden, "account_disabled")
 }
 
-// A check of an integration that was removed is "not found", like any other call on it.
 func TestCheckOfARemovedIntegrationIsNotFound(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1396,8 +1302,6 @@ func TestCheckOfARemovedIntegrationIsNotFound(t *testing.T) {
 	expectCode(t, owner.do(http.MethodPost, one+"/check", nil), http.StatusNotFound, "integration_not_found")
 }
 
-// A space an approval allowed is the approval's until an admin who sees it says to keep it: saving
-// the list never does. Another person's private space, which they can't see, is left as it is.
 func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
@@ -1428,7 +1332,6 @@ func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
 	}
 	spaces := wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID))
 
-	// A plain save of the list the admin sees adopts nothing, and says nothing in the audit log.
 	rec := owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}})
 	expect(t, rec, http.StatusOK)
 	if got := decode[Integration](t, rec); !slices.Equal(got.ApprovalSpaces, []int64{shared}) || got.OtherSpaces != 1 {
@@ -1441,7 +1344,6 @@ func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
 		t.Fatalf("adoption events after a plain save: %+v", got)
 	}
 
-	// Keeping a space is explicit: only the named one, only if it is in the list.
 	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{}, "keep": []int64{shared}}), http.StatusBadRequest, "bad_request")
 	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}, "keep": []int64{theirs}}), http.StatusBadRequest, "bad_request")
 	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}, "keep": []int64{shared}}), http.StatusOK)
@@ -1455,7 +1357,6 @@ func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
 	if got := e.events(ws, audit.IntegrationSpacesChanged); len(got) != 0 {
 		t.Fatalf("an adoption recorded as a change of the list: %+v", got)
 	}
-	// A space that isn't an approval's, named again, changes and records nothing.
 	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}, "keep": []int64{shared}}), http.StatusOK)
 	if got := e.events(ws, audit.IntegrationSpacesKept); len(got) != 1 {
 		t.Fatalf("adoption events after naming a kept space again: %+v", got)

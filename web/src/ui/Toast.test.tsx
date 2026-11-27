@@ -110,7 +110,6 @@ describe('Toast', () => {
     act(() => {
       toast({ message: 'Card archived', action: { label: 'Undo', onClick: () => {} } })
     })
-    // From the page into the toast, then its action.
     act(() => archive.focus())
     const undo = shown().getByRole('button', { name: 'Undo' })
     act(() => undo.focus())
@@ -118,8 +117,6 @@ describe('Toast', () => {
     expect(shown().queryByText('Card archived')).toBeNull()
     expect(document.activeElement).toBe(archive)
 
-    // With two toasts, dismissing one goes to the other's Dismiss, not to its action: one more
-    // Enter must not undo something else.
     act(() => {
       toast({ message: 'First', action: { label: 'Undo', onClick: () => {} } })
       toast('Second')
@@ -153,7 +150,6 @@ describe('Toast', () => {
     act(() => vi.advanceTimersByTime(12_000))
     expect(shown().getByText('First')).toBeTruthy()
     expect(document.activeElement).toBe(first)
-    // The focus goes back to the page: the time starts again, and it leaves.
     act(() => archive.focus())
     act(() => vi.advanceTimersByTime(5000))
     expect(shown().queryByText('First')).toBeNull()

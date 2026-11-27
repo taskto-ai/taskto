@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-// A database as a version before secure_delete left it: a deleted row's content still in the
-// file, and in the write-ahead log.
 func legacyDB(t *testing.T) (path string, marker []byte) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "agent.db")
@@ -54,11 +52,10 @@ func mustExec(t *testing.T, db *sql.DB, stmt string, args ...any) {
 	}
 }
 
-// How often marker is in the database file and in its log.
 func markers(t *testing.T, path string, marker []byte) (inDB, inLog int) {
 	t.Helper()
 	count := func(p string) int {
-		b, err := os.ReadFile(p) // #nosec G304 -- the test's own files.
+		b, err := os.ReadFile(p)
 		if errors.Is(err, os.ErrNotExist) {
 			return 0
 		}
@@ -86,9 +83,6 @@ func recorded(t *testing.T, path string) bool {
 	return n == 1
 }
 
-// A reader that holds an old snapshot (a backup's) keeps what was deleted in the log, which the
-// compaction then can't empty: it says so and records nothing. Once the reader is gone it compacts,
-// empties the log and records it, with the deleted content in neither file.
 func TestCompactRecordsOnlyAnEmptiedLog(t *testing.T) {
 	ctx := context.Background()
 	path, marker := legacyDB(t)
@@ -127,7 +121,6 @@ func TestCompactRecordsOnlyAnEmptiedLog(t *testing.T) {
 	}
 }
 
-// It refuses while the agent runtime has the database (its lock), and never makes one.
 func TestCompactRefusesARunningRuntimeAndAMissingDatabase(t *testing.T) {
 	ctx := context.Background()
 	path, _ := legacyDB(t)
@@ -148,7 +141,6 @@ func TestCompactRefusesARunningRuntimeAndAMissingDatabase(t *testing.T) {
 	}
 }
 
-// The record is the one the sidecar reads at its start (agent/src/storage.ts).
 func TestCompactRecordsWhatTheSidecarReads(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "agent", "src", "storage.ts"))
 	if err != nil {

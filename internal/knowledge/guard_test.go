@@ -12,7 +12,6 @@ func TestPutIfRunsItsGuardUnderTheWriteLockAndStopsTheCommit(t *testing.T) {
 	sp := writable(1)
 	stop := errors.New("revoked")
 
-	// A guard that refuses: nothing is committed, and its error is the result.
 	if _, err := s.PutIf(ctx, sp, "a.md", []byte("x"), "", alice, "make a", func() error { return stop }); !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want the guard's", err)
 	}
@@ -20,8 +19,6 @@ func TestPutIfRunsItsGuardUnderTheWriteLockAndStopsTheCommit(t *testing.T) {
 		t.Fatal("a refused change was committed")
 	}
 
-	// While the guard runs, a writer of the same space waits: it is under the write lock, so the
-	// other change is committed first even though that writer started while the guard ran.
 	inGuard := make(chan struct{})
 	var wrote sync.WaitGroup
 	wrote.Add(1)
@@ -56,7 +53,6 @@ func TestFindCommitFindsAChangeByItsMessageWhateverBecameOfTheDocument(t *testin
 	if err != nil || !ok || c.Message != "Created by an app [effect 1/2]" {
 		t.Fatalf("found = %+v, %v, %v", c, ok, err)
 	}
-	// Another entry's, or one a person wrote with the same words, is not it.
 	if _, ok, _ := s.FindCommit(ctx, sp, "Created by an app [effect 1/3]", "taskto app"); ok {
 		t.Fatal("found another entry's commit")
 	}
@@ -64,7 +60,6 @@ func TestFindCommitFindsAChangeByItsMessageWhateverBecameOfTheDocument(t *testin
 	if _, ok, _ := s.FindCommit(ctx, sp, "Created by an app [effect 1/9]", "taskto app"); ok {
 		t.Fatal("found a commit a person made")
 	}
-	// A space without a repository has no commits.
 	if _, ok, err := s.FindCommit(ctx, writable(2), "x", ""); ok || err != nil {
 		t.Fatalf("empty space: %v, %v", ok, err)
 	}

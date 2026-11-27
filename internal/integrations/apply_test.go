@@ -17,10 +17,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// The apps these tests use: an invoicing app whose slot handles the events they are about.
-//
-// invoiceAppRefund also marks a refunded invoice, and invoiceAppNote has a note that a paid invoice
-// requires, so that the write a payment makes doesn't fit the collection.
 const invoiceAppRefund = `{
   "components": [{"id":"root","component":"Text","text":"Invoices"}],
   "collection": {"fields": [
@@ -70,16 +66,12 @@ const invoiceAppNote = `{
       "set": {"status": {"value": "paid"}, "paid_at": {"from": "occurred_at"}}}}}}
 }`
 
-// ----- helpers -----
-
 func (p *pay) hookID() string { return strings.TrimPrefix(*p.in.WebhookURL, publicURL+HookPrefix) }
 
-// sender delivers signed events to the hook route of the integration with the public id.
 func (p *pay) sender(id, secret string) *testprovider.Sender {
 	return testprovider.NewHandlerSender(p.h, HookPrefix+id, testprovider.WithSigningSecret(secret))
 }
 
-// deliver sends the events to the route as Stripe would, each of which must be answered 200.
 func (p *pay) deliver(s *testprovider.Sender, evs []testprovider.Event) {
 	p.t.Helper()
 	ds, err := s.SendAll(context.Background(), evs)
@@ -93,8 +85,6 @@ func (p *pay) deliver(s *testprovider.Sender, evs []testprovider.Event) {
 	}
 }
 
-// pays delivers what Stripe sends for the session being paid to the integration's route, and has the
-// worker apply it.
 func (p *pay) pays(session string) {
 	p.t.Helper()
 	evs, err := p.fake.Pay(session)
@@ -107,7 +97,6 @@ func (p *pay) pays(session string) {
 
 func (p *pay) drain() { p.svc.drainEvents(context.Background()) }
 
-// sentInvoice adds an invoice, sends it and waits for its payment link, whose ref it returns.
 func (p *pay) sentInvoice(total any, cur, operation string) (int64, refRow) {
 	p.t.Helper()
 	if p.stop == nil {
@@ -116,8 +105,6 @@ func (p *pay) sentInvoice(total any, cur, operation string) (int64, refRow) {
 	record := p.invoice(total, cur)
 	p.send(record, operation)
 	var r refRow
-	// The ref is open once the link is noted, and the record holds the link a moment later (its own
-	// write): wait for both, so what a test reads as "before" is the settled record.
 	p.waitFor("the payment link of the invoice", func() bool {
 		for _, x := range p.refs() {
 			if x.record == record && x.state == "open" {
@@ -181,7 +168,6 @@ func (p *pay) eventRows() []eventRow {
 	return out
 }
 
-// lastEvent is the newest event of the kind.
 func (p *pay) lastEvent(kind string) eventRow {
 	p.t.Helper()
 	rows := p.eventRows()
@@ -194,8 +180,6 @@ func (p *pay) lastEvent(kind string) eventRow {
 	return eventRow{}
 }
 
-// put stores a verified event as the route would, for what the fake can't make: the amount of
-// another payment, another mode.
 func (p *pay) put(ev Event) {
 	p.t.Helper()
 	if ev.ID == "" {
@@ -218,8 +202,6 @@ func (p *pay) historyRows(record int64) int {
 	return p.count(`SELECT count(*) FROM app_row_history WHERE row_id = ?`, record)
 }
 
-// adminNotices counts the notifications of integration events, and those that went to someone who
-// isn't an admin of the workspace.
 func (p *pay) adminNotices() (all, toNonAdmins int) {
 	p.t.Helper()
 	all = p.count(`SELECT count(*) FROM notifications WHERE kind = 'integration_event'`)
@@ -234,8 +216,6 @@ func (p *pay) mustEvent(e eventRow, state string, code apierr.Code) {
 		p.t.Fatalf("event %d (%s) is %s with code %q, want %s with %q", e.id, e.kind, e.state, e.code, state, code)
 	}
 }
-
-// ----- a payment marks the right invoice -----
 
 func TestAPaidEventMarksTheRightInvoicePaidAndNothingElse(t *testing.T) {
 	p := newPay(t, publicURL)
@@ -259,8 +239,6 @@ func TestAPaidEventMarksTheRightInvoicePaidAndNothingElse(t *testing.T) {
 	if after["paid_at"] != occurred[:10] {
 		t.Fatalf("paid_at = %v, the event happened %s", after["paid_at"], occurred)
 	}
-	// Only the declared fields changed: the customer, the total, the link and the rest are as they were,
-	// and nothing of what the payer typed at Stripe (the fake's payer has a name and an email) is in it.
 	for k, v := range beforeA {
 		if k != "status" && k != "paid_at" && after[k] != v {
 			t.Errorf("field %s changed from %v to %v", k, v, after[k])
@@ -274,14 +252,12 @@ func TestAPaidEventMarksTheRightInvoicePaidAndNothingElse(t *testing.T) {
 	if raw, _ := p.record(a); strings.Contains(raw, p.fake.Payer().Email) || strings.Contains(raw, p.fake.Payer().Name) {
 		t.Errorf("the payer's details reached the record: %s", raw)
 	}
-	// The other invoice, which has a ref too, was not touched.
 	if got := p.fields(b); fmt.Sprint(got) != fmt.Sprint(beforeB) || p.revision(b) != revB {
 		t.Fatalf("the other invoice changed: %v", got)
 	}
 	if p.revision(a) != revA+1 {
 		t.Fatalf("revision %d, want %d", p.revision(a), revA+1)
 	}
-	// The integration is who changed it, in the record and in its history.
 	system := fmt.Sprintf("integration:%d", p.in.ID)
 	var updatedBy sql.NullInt64
 	var updatedSystem, action string
@@ -295,7 +271,6 @@ func TestAPaidEventMarksTheRightInvoicePaidAndNothingElse(t *testing.T) {
 		actor.Valid || actorSystem != system || histAction != EventPaymentSucceeded {
 		t.Fatalf("history actor %v %q %q, %v", actor, actorSystem, histAction, err)
 	}
-	// The ref is paid by this payment, and the other one still waits.
 	r := p.refOf(a)
 	var object, payment string
 	if err := p.db.QueryRow(`SELECT coalesce(paid_object_id, ''), coalesce(payment_id, '') FROM integration_refs WHERE id = ?`, r.id).Scan(&object, &payment); err != nil {
@@ -307,7 +282,6 @@ func TestAPaidEventMarksTheRightInvoicePaidAndNothingElse(t *testing.T) {
 	if p.refOf(b).state != "open" || p.refOf(b).token != refB.token {
 		t.Fatalf("the other ref moved: %+v", p.refOf(b))
 	}
-	// No effect was queued by a system write: effects run as the user who acted.
 	if n := p.count(`SELECT count(*) FROM app_effects WHERE record_id = ? AND created_at > ?`, a, time.Now().Add(-time.Minute).UTC().Format(timeFormat)); n != 1 {
 		t.Errorf("%d entries for the paid invoice: its own payment link, and no other", n)
 	}
@@ -316,14 +290,12 @@ func TestAPaidEventMarksTheRightInvoicePaidAndNothingElse(t *testing.T) {
 	}
 }
 
-// What names the record is the ref token the server issued: the provider's metadata names nothing.
 func TestOnlyTheRefTokenNamesTheRecordNeverTheProvidersMetadata(t *testing.T) {
 	p := newPay(t, publicURL)
 	a, refA := p.sentInvoice(100, "EUR", "op-a-0001")
 	b, refB := p.sentInvoice(100, "EUR", "op-b-0001")
 	revA := p.revision(a)
 
-	// A payment of B's link whose metadata, description and ids all say A.
 	sess, _ := p.fake.Session(refB.object)
 	obj := map[string]any{
 		"id": "cs_test_" + token(), "object": "checkout.session", "mode": "payment", "payment_status": "paid",
@@ -343,15 +315,11 @@ func TestOnlyTheRefTokenNamesTheRecordNeverTheProvidersMetadata(t *testing.T) {
 	}
 }
 
-// ----- nothing leaves the ref's own integration, app, space and workspace -----
-
 func TestAnEventOfAnotherIntegrationNeverAppliesToThisOnesRef(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	before, rev := p.fields(record), p.revision(record)
 
-	// A second integration of the same workspace, and one of another workspace, each with a webhook of
-	// its own, are sent the first one's payment, token and all.
 	other := stripeBody("other")
 	otherIn := p.create(p.owner, p.ws, other)
 	foreignOwner, foreignWs := p.otherWorkspace(p.owner)
@@ -381,7 +349,6 @@ func TestAnEventOfAnotherIntegrationNeverAppliesToThisOnesRef(t *testing.T) {
 			t.Fatalf("%s: the record or its ref moved", name)
 		}
 	}
-	// Its own integration's event does apply.
 	p.deliver(p.sender(p.hookID(), stripeHook), evs)
 	p.drain()
 	if p.fields(record)["status"] != "paid" {
@@ -392,7 +359,6 @@ func TestAnEventOfAnotherIntegrationNeverAppliesToThisOnesRef(t *testing.T) {
 func TestAnEventOnlyWritesTheAppOfItsRef(t *testing.T) {
 	p := newPay(t, publicURL)
 	first, refFirst := p.sentInvoice(100, "EUR", "op-a-0001")
-	// A second app of the same space, with its own invoice and ref.
 	firstApp := p.app
 	p.app, _ = p.publishApp("Invoices two", invoiceApp)
 	second, refSecond := p.sentInvoice(100, "EUR", "op-b-0001")
@@ -409,7 +375,6 @@ func TestAnEventOnlyWritesTheAppOfItsRef(t *testing.T) {
 	}
 }
 
-// The apps' side refuses an app that isn't in the integration's workspace, whatever the ref said.
 func TestTheRecordWriterRefusesAnotherWorkspacesApp(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -443,7 +408,6 @@ func asPaylinkError(err error, target **paylink.Error) bool {
 	return errors.As(err, target)
 }
 
-// A failing Settle leaves the record exactly as it was: the state and the record change together.
 func TestARecordIsNotWrittenWhenTheRefCannotMove(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -462,20 +426,16 @@ func TestARecordIsNotWrittenWhenTheRefCannotMove(t *testing.T) {
 	}
 }
 
-// ----- the mode of the money -----
-
 func TestATestModeEventNeverAppliesToALiveRefAndLiveToTest(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	before, rev := p.fields(record), p.revision(record)
 
-	// The ref was made with a test key and an event of live money names it.
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: "cs_live_" + token(), PaymentID: "pi_" + token()[:20],
 		AmountMinor: ref.amount, Currency: "EUR", Livemode: true})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventIgnored, apierr.CodeIntegrationEventModeMismatch)
 
-	// And the other way round: a ref made with a live key, and a test-mode event for it.
 	if _, err := p.db.Exec(`UPDATE integration_refs SET account_mode = 'live' WHERE id = ?`, ref.id); err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +447,6 @@ func TestATestModeEventNeverAppliesToALiveRefAndLiveToTest(t *testing.T) {
 	if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) || p.revision(record) != rev || p.refOf(record).state != "open" {
 		t.Fatal("a payment of the other mode was applied")
 	}
-	// The live event, for a live ref, does apply.
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: "cs_live_" + token(), PaymentID: "pi_" + token()[:20],
 		AmountMinor: ref.amount, Currency: "EUR", Livemode: true})
 	p.drain()
@@ -496,8 +455,6 @@ func TestATestModeEventNeverAppliesToALiveRefAndLiveToTest(t *testing.T) {
 		t.Fatalf("record = %v", p.fields(record))
 	}
 }
-
-// ----- the amount and the currency -----
 
 func TestAnAmountOrCurrencyThatIsNotWhatWasAskedIsNotApplied(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -520,11 +477,9 @@ func TestAnAmountOrCurrencyThatIsNotWhatWasAskedIsNotApplied(t *testing.T) {
 			if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) || p.revision(record) != rev || p.refOf(record).state != "open" {
 				t.Fatal("a payment of another amount was applied")
 			}
-			// An admin is told, and only an admin.
 			if all, non := p.adminNotices(); all != 1 || non != 0 {
 				t.Fatalf("notifications: %d, %d to others", all, non)
 			}
-			// The same expired session that Stripe reports with another amount isn't ours either.
 			p.put(Event{Kind: EventPaymentExpired, RefToken: ref.token, ObjectID: ref.object, AmountMinor: tc.amount, Currency: tc.currency})
 			p.drain()
 			p.mustEvent(p.lastEvent(EventPaymentExpired), EventFailed, apierr.CodeIntegrationAmountMismatch)
@@ -535,8 +490,6 @@ func TestAnAmountOrCurrencyThatIsNotWhatWasAskedIsNotApplied(t *testing.T) {
 	}
 }
 
-// ----- duplicates, late events and second payments -----
-
 func TestADuplicateAndALateEventAreIgnoredWithACode(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -545,8 +498,6 @@ func TestADuplicateAndALateEventAreIgnoredWithACode(t *testing.T) {
 	rev, history := p.revision(record), p.historyRows(record)
 	object := p.refOf(record)
 
-	// The same payment told again under another event id (Stripe's retry of another event of the
-	// payment, or the purge having forgotten the first), and an event that ends the link after it was paid.
 	var payment string
 	if err := p.db.QueryRow(`SELECT payment_id FROM integration_refs WHERE id = ?`, object.id).Scan(&payment); err != nil {
 		t.Fatal(err)
@@ -581,12 +532,10 @@ func TestALinkThatExpiredEndsTheRefAndIsNotPaidLater(t *testing.T) {
 	}
 	p.deliver(p.sender(p.hookID(), stripeHook), evs)
 	p.drain()
-	// The app declares nothing for it: the ref moved and the record is as it was.
 	p.mustEvent(p.lastEvent(EventPaymentExpired), EventIgnored, apierr.CodeIntegrationEventNoHandler)
 	if p.refOf(record).state != "expired" || p.fields(record)["status"] != "sent" {
 		t.Fatalf("ref %+v, record %v", p.refOf(record), p.fields(record))
 	}
-	// The same event again is a duplicate.
 	p.put(Event{Kind: EventPaymentExpired, RefToken: ref.token, ObjectID: ref.object, AmountMinor: ref.amount, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentExpired), EventIgnored, apierr.CodeIntegrationEventDuplicate)
@@ -600,7 +549,6 @@ func TestASecondPaymentOnASettledRefIsRecordedForTheAdminsAndNeverAppliedTwice(t
 	p.pays(ref.object)
 	paid, rev, history := p.fields(record), p.revision(record), p.historyRows(record)
 
-	// Another object (a second link made for the same ref) is paid.
 	second := Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: "cs_test_" + token(), PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR"}
 	p.put(second)
 	p.drain()
@@ -615,14 +563,12 @@ func TestASecondPaymentOnASettledRefIsRecordedForTheAdminsAndNeverAppliedTwice(t
 	if all, non := p.adminNotices(); all != 1 || non != 0 {
 		t.Fatalf("notifications: %d, %d to non-admins", all, non)
 	}
-	// Told again (a purge forgot it, the provider retried): recorded once.
 	second.ID = "evt_" + token()
 	p.put(second)
 	p.drain()
 	if n := p.count(`SELECT count(*) FROM integration_ref_duplicates`); n != 1 {
 		t.Fatalf("%d duplicates after a repeat", n)
 	}
-	// What an admin sees: the event, with its code and no record.
 	rec := p.owner.do(http.MethodGet, wsPath(p.ws, fmt.Sprintf("integrations/%d/events?state=ignored", p.in.ID)), nil)
 	expect(t, rec, http.StatusOK)
 	list := decode[EventList](t, rec)
@@ -635,12 +581,9 @@ func TestASecondPaymentOnASettledRefIsRecordedForTheAdminsAndNeverAppliedTwice(t
 	}
 }
 
-// ----- the app's own rule, and the collection -----
-
 func TestAPaymentTheAppsRuleDoesNotAcceptSettlesTheRefLeavesTheRecordAndTellsTheAdmins(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
-	// The invoice was taken back to a draft after the link was sent.
 	if _, err := p.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.status', 'draft') WHERE id = ?`, record); err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +594,6 @@ func TestAPaymentTheAppsRuleDoesNotAcceptSettlesTheRefLeavesTheRecordAndTellsThe
 	if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) || p.revision(record) != rev {
 		t.Fatal("the record was written though the rule didn't hold")
 	}
-	// The money arrived: the ref says so, and the admins are told.
 	if p.refOf(record).state != "paid" {
 		t.Fatalf("ref = %+v", p.refOf(record))
 	}
@@ -666,8 +608,6 @@ func TestAWriteThatDoesNotFitTheCollectionChangesNothingAndLeavesTheRefOpen(t *t
 	before, rev := p.fields(record), p.revision(record)
 	p.pays(ref.object)
 
-	// The note a paid invoice requires is empty: the write is refused, and neither the record nor the
-	// ref changed, since they change together.
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventFailed, apierr.CodeIntegrationEventRecordRefused)
 	if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) || p.revision(record) != rev || p.refOf(record).state != "open" {
 		t.Fatalf("something changed: %v, ref %+v", p.fields(record), p.refOf(record))
@@ -675,7 +615,6 @@ func TestAWriteThatDoesNotFitTheCollectionChangesNothingAndLeavesTheRefOpen(t *t
 	if all, _ := p.adminNotices(); all != 1 {
 		t.Fatalf("%d notifications", all)
 	}
-	// Once the note is there, a retry applies it.
 	if _, err := p.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.note', 'checked') WHERE id = ?`, record); err != nil {
 		t.Fatal(err)
 	}
@@ -686,8 +625,6 @@ func TestAWriteThatDoesNotFitTheCollectionChangesNothingAndLeavesTheRefOpen(t *t
 		t.Fatalf("record %v, ref %+v", p.fields(record), p.refOf(record))
 	}
 }
-
-// ----- what is checked again when the event is applied -----
 
 func TestWhatIsCheckedAgainWhenAnEventIsApplied(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -725,7 +662,6 @@ func TestWhatIsCheckedAgainWhenAnEventIsApplied(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The event is stored (the route took it in), and what it needs changes before the worker gets to it.
 			p.deliver(p.sender(p.hookID(), stripeHook), evs)
 			tc.breakIt(p, record)
 			before, rev := p.fields(record), p.revision(record)
@@ -735,7 +671,6 @@ func TestWhatIsCheckedAgainWhenAnEventIsApplied(t *testing.T) {
 			if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) || p.revision(record) != rev {
 				t.Fatal("the record was written")
 			}
-			// Money that arrived is not lost: the ref still waits for the event, which an admin can retry.
 			if p.refOf(record).state != "open" {
 				t.Fatalf("the ref moved to %s without the record", p.refOf(record).state)
 			}
@@ -759,7 +694,6 @@ func TestAFailedEventIsRetriedOnceWhatWasWrongIsFixed(t *testing.T) {
 	failed := p.lastEvent(EventPaymentSucceeded)
 	p.mustEvent(failed, EventFailed, apierr.CodeIntegrationEventUnavailable)
 
-	// Retrying before the fix fails again, with a notification of its own.
 	p.retry(failed.id, http.StatusOK)
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventFailed, apierr.CodeIntegrationEventUnavailable)
@@ -767,7 +701,6 @@ func TestAFailedEventIsRetriedOnceWhatWasWrongIsFixed(t *testing.T) {
 		t.Fatalf("%d notifications after two failures", all)
 	}
 
-	// The admin approves the contract again; the retry applies the payment.
 	rec := p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/integrations/payments/request", p.app.ID)), map[string]any{"contract_hash": p.approval.ContractHash})
 	expect(t, rec, http.StatusOK)
 	again := decode[apps.IntegrationApproval](t, rec)
@@ -780,8 +713,6 @@ func TestAFailedEventIsRetriedOnceWhatWasWrongIsFixed(t *testing.T) {
 	}
 }
 
-// ----- refunds -----
-
 func TestARefundIsMappedThroughThePaymentTheRefLearnedAndAppliesOnlyForAllOfIt(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppRefund)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -790,7 +721,6 @@ func TestARefundIsMappedThroughThePaymentTheRefLearnedAndAppliesOnlyForAllOfIt(t
 		t.Fatalf("record = %v", p.fields(record))
 	}
 
-	// Part of it: nothing changes.
 	evs, err := p.fake.Refund(ref.object, 2500)
 	if err != nil {
 		t.Fatal(err)
@@ -802,7 +732,6 @@ func TestARefundIsMappedThroughThePaymentTheRefLearnedAndAppliesOnlyForAllOfIt(t
 		t.Fatalf("a partial refund changed %v / %+v", p.fields(record), p.refOf(record))
 	}
 
-	// The rest: the charge has now been refunded in full, and has no token of ours.
 	evs, err = p.fake.Refund(ref.object, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -839,12 +768,10 @@ func TestARefundIsNeverMappedAcrossIntegrationsOrToAPaymentNoRefLearned(t *testi
 			p.t.Fatal(err)
 		}
 	}
-	// A full refund of the first integration's payment, told to another integration.
 	ev := Event{ID: "evt_" + token(), Kind: EventPaymentRefunded, ObjectID: "ch_" + token()[:20], PaymentID: payment, AmountMinor: ref.amount, Currency: "EUR", OccurredAt: time.Now()}
 	if _, err := p.store.record(context.Background(), other.ID, ev, SourceWebhook, []byte(ev.ID)); err != nil {
 		t.Fatal(err)
 	}
-	// And a refund of a payment no ref has been paid by, and none of its events was seen.
 	refund(p.in.ID, "pi_"+token()[:20], ref.amount)
 	p.drain()
 	var codes []string
@@ -865,7 +792,6 @@ func TestARefundIsNeverMappedAcrossIntegrationsOrToAPaymentNoRefLearned(t *testi
 	if p.fields(record)["status"] != "paid" || p.refOf(record).state != "paid" {
 		t.Fatalf("a refund that wasn't the ref's moved it: %v / %+v", p.fields(record), p.refOf(record))
 	}
-	// A refund for more than was paid, or in another currency, is not applied either.
 	refund(p.in.ID, payment, ref.amount+1)
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentRefunded), EventFailed, apierr.CodeIntegrationAmountMismatch)
@@ -878,17 +804,14 @@ func TestARefundOfAPaymentWhoseEventWaitsIsTriedAgain(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppRefund)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	pi := "pi_" + token()[:20]
-	// The payment's event is stored but not applied yet, as when the events arrive out of order.
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: pi, AmountMinor: ref.amount, Currency: "EUR"})
 	p.put(Event{Kind: EventPaymentRefunded, ObjectID: "ch_" + token()[:20], PaymentID: pi, AmountMinor: ref.amount, Currency: "EUR"})
-	// The worker takes events in order, so the payment is applied first and the refund follows at once.
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentRefunded), EventApplied, "")
 	if p.refOf(record).state != "refunded" {
 		t.Fatalf("ref = %+v", p.refOf(record))
 	}
 
-	// With the payment's own event refused (a wrong amount), the refund waits, then fails, and is not dropped.
 	record2, ref2 := p.sentInvoice(50, "EUR", "op-b-0001")
 	pi2 := "pi_" + token()[:20]
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref2.token, ObjectID: ref2.object, PaymentID: pi2, AmountMinor: ref2.amount + 1, Currency: "EUR"})
@@ -903,8 +826,6 @@ func TestARefundOfAPaymentWhoseEventWaitsIsTriedAgain(t *testing.T) {
 	}
 }
 
-// ----- replays -----
-
 func TestAReplayAfterThePurgeIsANoOp(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppRefund)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -916,7 +837,6 @@ func TestAReplayAfterThePurgeIsANoOp(t *testing.T) {
 	p.deliver(sender, evs)
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventApplied, "")
-	// A person changes the invoice afterwards.
 	if _, err := p.apps.SystemWrite(context.Background(), apps.SystemWrite{
 		Actor: apps.SystemActor{Kind: apps.SystemKindIntegration, ID: p.in.ID}, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record,
 		Action: "test.edit", Declared: []string{"status"}, Set: map[string]any{"status": "overdue"},
@@ -926,7 +846,6 @@ func TestAReplayAfterThePurgeIsANoOp(t *testing.T) {
 	settled, rev, history := p.fields(record), p.revision(record), p.historyRows(record)
 	paidRef := p.refOf(record)
 
-	// The purge forgets the events, and Stripe's retry of the payment, signed afresh, is stored again.
 	p.exec(`DELETE FROM integration_events`)
 	p.deliver(sender, evs)
 	if n := len(p.eventRows()); n == 0 {
@@ -941,7 +860,6 @@ func TestAReplayAfterThePurgeIsANoOp(t *testing.T) {
 	if all, _ := p.adminNotices(); all != 0 {
 		t.Fatalf("%d notifications for a replay", all)
 	}
-	// And a refund replayed after its purge: applied once, a no-op after.
 	refunds, err := p.fake.Refund(ref.object, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -965,7 +883,6 @@ func TestAReplayAfterThePurgeIsANoOp(t *testing.T) {
 	}
 }
 
-// An event applied twice at once (a worker whose lease ran out, still working) writes once.
 func TestTheSameEventAppliedTwiceWritesOnce(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -989,8 +906,6 @@ func TestTheSameEventAppliedTwiceWritesOnce(t *testing.T) {
 	}
 }
 
-// ----- the admins' routes -----
-
 func (p *pay) retry(event int64, want int) {
 	p.t.Helper()
 	expect(p.t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", p.in.ID, event)), nil), want)
@@ -1008,7 +923,6 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 	list := wsPath(p.ws, fmt.Sprintf("integrations/%d/events", p.in.ID))
 	retry := list + fmt.Sprintf("/%d/retry", failed.id)
 
-	// The admin lists it, with nothing of the ref, the record or the provider's ids.
 	rec := p.owner.do(http.MethodGet, list, nil)
 	expect(t, rec, http.StatusOK)
 	body := rec.Body.String()
@@ -1021,7 +935,6 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 	if len(got.Events) != 1 || got.Events[0].Code != string(apierr.CodeIntegrationAmountMismatch) || !got.Events[0].Retriable || got.Events[0].State != EventFailed {
 		t.Fatalf("list = %+v", got)
 	}
-	// A member sees and does nothing.
 	for name, c := range map[string]*client{"a member": member} {
 		for _, route := range []struct{ method, path string }{{http.MethodGet, list}, {http.MethodPost, retry}} {
 			if rec := c.do(route.method, route.path, nil); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
@@ -1029,7 +942,6 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 			}
 		}
 	}
-	// Through another workspace's own path (the owner is an admin of both), the integration isn't found.
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, wsPath(foreignWs, fmt.Sprintf("integrations/%d/events", p.in.ID))},
 		{http.MethodPost, wsPath(foreignWs, fmt.Sprintf("integrations/%d/events/%d/retry", p.in.ID, failed.id))},
@@ -1041,7 +953,6 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 	if p.lastEvent(EventPaymentSucceeded).state != EventFailed {
 		t.Fatal("a refused retry changed the event")
 	}
-	// An event of another integration is not found under this one, and an event that didn't fail isn't retried.
 	other := p.create(p.owner, p.ws, stripeBody("other"))
 	expect(t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", other.ID, failed.id)), nil), http.StatusNotFound)
 	rec = p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", p.in.ID, 999999)), nil)
@@ -1055,7 +966,6 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 	if code := decode[map[string]any](t, rec)["code"]; code != string(apierr.CodeIntegrationEventNotRetriable) {
 		t.Fatalf("code = %v", code)
 	}
-	// Paging and the state filter.
 	for i := range 4 {
 		p.put(Event{Kind: EventPaymentExpired, RefToken: ref.token, ObjectID: fmt.Sprintf("cs_test_%d%s", i, token()), AmountMinor: ref.amount, Currency: "EUR"})
 	}
@@ -1074,8 +984,6 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 		expect(t, p.owner.do(http.MethodGet, list+bad, nil), http.StatusBadRequest)
 	}
 }
-
-// ----- what the admins are shown in the inbox -----
 
 func TestTheAdminsNotificationNamesTheIntegrationAndIsForAdminsOnly(t *testing.T) {
 	p := newPay(t, publicURL)
@@ -1108,7 +1016,6 @@ func TestTheAdminsNotificationNamesTheIntegrationAndIsForAdminsOnly(t *testing.T
 	if n := len(inbox(member)); n != 0 {
 		t.Fatalf("a member has %d notifications", n)
 	}
-	// An admin who is made a member is shown nothing of it.
 	p.exec(`UPDATE memberships SET role = 'member' WHERE workspace_id = ?`, p.ws)
 	got = inbox(p.owner)
 	if len(got) != 1 || got[0].Kind != "changed" || len(got[0].Params) != 0 {
@@ -1116,10 +1023,6 @@ func TestTheAdminsNotificationNamesTheIntegrationAndIsForAdminsOnly(t *testing.T
 	}
 }
 
-// ----- a payment on a ref whose link's outcome is unknown -----
-
-// unknownRef is a ref whose first call got a 5xx: the entry waits and looks for the object, the ref is
-// "creating" with no object and a key of unknown outcome.
 func (p *pay) unknownRef(op string) (record int64, r refRow) {
 	p.t.Helper()
 	shape := linkShapes["a checkout session"]
@@ -1136,14 +1039,11 @@ func (p *pay) unknownRef(op string) (record int64, r refRow) {
 	return record, r
 }
 
-// The payer used a link whose creation Stripe never answered: the payment is real money. It is applied
-// to the record, the ref learns the object from the event and its key is settled, no second link is
-// made, and the entry that asked for the link stops with the code that says it was paid.
 func TestAPaymentForARefWhoseOutcomeWasUnknownIsAppliedAndNeverDropped(t *testing.T) {
 	p := newPay(t, publicURL)
 	path := linkShapes["a checkout session"].path
 	record, _ := p.unknownRef("op-unknown-0001")
-	p.appear(path, 0) // Stripe made the link after all, and a payer paid it
+	p.appear(path, 0)
 	calls := len(p.fake.RequestsTo(http.MethodPost, path))
 	session := p.objectID(path)
 	p.pays(session)
@@ -1165,7 +1065,6 @@ func TestAPaymentForARefWhoseOutcomeWasUnknownIsAppliedAndNeverDropped(t *testin
 		t.Fatalf("the key the payment came through = %+v, %d unknown", k, p.unknownKeys())
 	}
 
-	// The entry runs again and finds the invoice paid: it makes no link and writes none over the record.
 	p.later(time.Hour)
 	e := p.settled(apps.StateFailed, apps.StateDone)
 	if e.state != apps.StateFailed || e.code != string(apierr.CodeIntegrationLinkAlreadyPaid) {
@@ -1181,8 +1080,6 @@ func TestAPaymentForARefWhoseOutcomeWasUnknownIsAppliedAndNeverDropped(t *testin
 		t.Fatalf("the record = %v", got)
 	}
 
-	// An admin is not asked whether a link exists: the list is empty, and a confirmation finds nothing to
-	// decide, so no new key is allowed.
 	rec := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
 	expect(t, rec, http.StatusOK)
 	if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 0 {
@@ -1195,14 +1092,11 @@ func TestAPaymentForARefWhoseOutcomeWasUnknownIsAppliedAndNeverDropped(t *testin
 	}](t, rec).Code; got != string(apierr.CodeIntegrationNothingToConfirm) {
 		t.Fatalf("code = %q", got)
 	}
-	// A repeat of the payment's event changes nothing.
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: r.token, ObjectID: session, PaymentID: payment, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventIgnored, apierr.CodeIntegrationEventDuplicate)
 }
 
-// A paid event that names no object still applies, and the ref stays with none: the payment is real
-// whether or not the event can say what it was on, and the admin's list no longer shows it.
 func TestAPaymentThatNamesNoObjectForAnUnknownRefIsStillApplied(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppRefund)
 	record, r := p.unknownRef("op-unknown-0002")
@@ -1224,7 +1118,6 @@ func TestAPaymentThatNamesNoObjectForAnUnknownRefIsStillApplied(t *testing.T) {
 	if k := p.attemptRow(r.id, 0); k.outcome != attemptSettled || p.unknownKeys() != 0 {
 		t.Fatalf("the key = %+v, %d unknown", k, p.unknownKeys())
 	}
-	// Its entry stops without a new link, whatever the wait, and the admin has nothing to confirm.
 	p.later(7 * time.Hour)
 	if e := p.settled(apps.StateFailed); e.code != string(apierr.CodeIntegrationLinkAlreadyPaid) {
 		t.Fatalf("entry = %+v", e)
@@ -1234,7 +1127,6 @@ func TestAPaymentThatNamesNoObjectForAnUnknownRefIsStillApplied(t *testing.T) {
 	}
 	rec := p.owner.do(http.MethodPost, p.confirmPath(0, fmt.Sprintf("%d/confirm-no-link", p.entries()[0].id)), map[string]any{})
 	expect(t, rec, http.StatusConflict)
-	// A refund of all of it then applies through the payment the ref learned.
 	p.put(Event{Kind: EventPaymentRefunded, PaymentID: payment, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
 	if p.refOf(record).state != "refunded" || p.fields(record)["status"] != "refunded" {
@@ -1242,8 +1134,6 @@ func TestAPaymentThatNamesNoObjectForAnUnknownRefIsStillApplied(t *testing.T) {
 	}
 }
 
-// An end that isn't money (expired, failed) for a ref with no object is not applied: the entry still
-// looks for the link and may adopt it, which a ref moved past "creating" could no longer note.
 func TestAnEndForARefWithNoObjectWaitsForTheLookup(t *testing.T) {
 	for _, kind := range []string{EventPaymentExpired, EventPaymentFailed} {
 		t.Run(kind, func(t *testing.T) {
@@ -1259,8 +1149,6 @@ func TestAnEndForARefWithNoObjectWaitsForTheLookup(t *testing.T) {
 	}
 }
 
-// unknownKeys is how many keys have an unknown outcome (a call under them may have made an object
-// nobody has seen) and belong to a ref with no object.
 func (p *pay) unknownKeys() int {
 	return p.count(`SELECT count(*) FROM integration_ref_attempts k JOIN integration_refs r ON r.id = k.ref_id
 		WHERE k.outcome IS NULL AND k.sends > k.clean_sends AND r.provider_object_id IS NULL`)
@@ -1268,7 +1156,6 @@ func (p *pay) unknownKeys() int {
 
 type attemptState struct{ outcome, object string }
 
-// attemptRow is key seq of the ref.
 func (p *pay) attemptRow(ref int64, seq int) attemptState {
 	p.t.Helper()
 	var k attemptState
@@ -1279,13 +1166,8 @@ func (p *pay) attemptRow(ref int64, seq int) attemptState {
 	return k
 }
 
-// ----- a ref's payment is found through any of its keys' tokens -----
-
 const sessionsPath = "/v1/checkout/sessions"
 
-// keyedRef makes a ref whose key 0's session expired and whose key 1's call got a 5xx that made nothing
-// (yet): the ref has two keys, the entry waits, and the ref has no object. It returns the record, the
-// request of its entry and key 0's session.
 func (p *pay) keyedRef(op string) (record int64, req paylink.Request, first string) {
 	p.t.Helper()
 	ctx := context.Background()
@@ -1311,14 +1193,11 @@ func (p *pay) keyedRef(op string) (record int64, req paylink.Request, first stri
 	return record, req, first
 }
 
-// A payment made through a later key echoes that key's token, not the ref's: it finds the ref, is
-// applied once, and the key it came through stops being unknown. The ref is paid, so the entry makes
-// nothing and an admin has nothing to confirm.
 func TestAPaymentThroughALaterKeysTokenAppliesOnceAndSettlesThatKey(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
 	record, req, first := p.keyedRef("op-later-0001")
-	p.appear(sessionsPath, len(p.posts())-1) // key 1's call made its session after all, and a payer paid it
+	p.appear(sessionsPath, len(p.posts())-1)
 	posts := len(p.posts())
 	var second string
 	for _, s := range p.fake.Sessions() {
@@ -1356,7 +1235,6 @@ func TestAPaymentThroughALaterKeysTokenAppliesOnceAndSettlesThatKey(t *testing.T
 	}
 	rev, history := p.revision(record), p.historyRows(record)
 
-	// The same payment told again, whichever token it carries, changes nothing.
 	for _, token := range []string{token1, r.token} {
 		p.put(Event{Kind: EventPaymentSucceeded, RefToken: token, ObjectID: second, PaymentID: e.paymentI, AmountMinor: 1000, Currency: "EUR"})
 		p.drain()
@@ -1366,7 +1244,6 @@ func TestAPaymentThroughALaterKeysTokenAppliesOnceAndSettlesThatKey(t *testing.T
 		t.Fatal("the payment was applied twice")
 	}
 
-	// The entry stops with the paid code and makes no call.
 	_, err := p.svc.OpenPaymentLink(ctx, req)
 	var pe *paylink.Error
 	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkAlreadyPaid {
@@ -1377,10 +1254,6 @@ func TestAPaymentThroughALaterKeysTokenAppliesOnceAndSettlesThatKey(t *testing.T
 	}
 }
 
-// A payment through the token of an earlier key (an object an admin's confirmation had given up on,
-// which a payer used all the same) is applied to the ref, and the ref's later key, whose outcome is
-// unknown, is nobody's to confirm: the ref is paid, so the list is empty, a confirmation refuses and
-// no key is taken, even when the event names no object to learn.
 func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -1401,7 +1274,6 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	if err := p.svc.ConfirmNoPaymentLink(ctx, p.ws, p.owner.id, p.in.ID, req.EffectID, spaces); err != nil {
 		t.Fatal(err)
 	}
-	// Key 1's call gets a 5xx too: the ref waits on its outcome.
 	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, sessionsPath))
 	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
 		t.Fatal("key 1's 500 was no error")
@@ -1412,7 +1284,6 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	}
 	token0 := p.keyToken(0)
 
-	// Key 0's call made its session after all, and the payer paid it: the event names only the payment.
 	payment := "pi_" + token()[:20]
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: token0, PaymentID: payment, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
@@ -1431,8 +1302,6 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 		t.Fatalf("key 1 = %+v: the payment said nothing of it", k)
 	}
 
-	// Nothing is left for an admin: the entry is failed for an unknown outcome as it was, and the ref
-	// is paid.
 	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), req.EffectID)
 	rec := p.owner.do(http.MethodGet, p.confirmPath(req.EffectID, "unresolved"), nil)
 	expect(t, rec, http.StatusOK)
@@ -1454,8 +1323,6 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	}
 }
 
-// A payment for a token the server never issued maps to nothing, whatever else the event says: not the
-// ref's object, not its payment, not a token of the same shape.
 func TestAPaymentForATokenTheServerNeverIssuedIsIgnored(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, r := p.sentInvoice(100, "EUR", "op-unissued-0001")
@@ -1463,7 +1330,7 @@ func TestAPaymentForATokenTheServerNeverIssuedIsIgnored(t *testing.T) {
 	for name, ref := range map[string]string{
 		"a made-up token":            strings.Repeat("e", 32),
 		"the ref's, upcase":          strings.ToUpper(r.token),
-		"a token of the right shape": strings.Repeat("0a", 16), // 32 lowercase hex, built here so no literal looks like a key
+		"a token of the right shape": strings.Repeat("0a", 16),
 	} {
 		p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref, ObjectID: r.object, PaymentID: "pi_" + token()[:20], AmountMinor: r.amount, Currency: "EUR"})
 		p.drain()
@@ -1479,8 +1346,6 @@ func TestAPaymentForATokenTheServerNeverIssuedIsIgnored(t *testing.T) {
 	}
 }
 
-// An expired session of an earlier key says nothing of the link the ref has now: the ref stays open.
-// The later key's own expiry ends it.
 func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -1504,7 +1369,6 @@ func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 		t.Fatalf("ref = %+v", r)
 	}
 
-	// Stripe tells of the first session's expiry, with the first key's token.
 	p.deliver(p.sender(p.hookID(), stripeHook), evs)
 	p.drain()
 	if e := p.lastEvent(EventPaymentExpired); e.token != p.keyToken(0) {
@@ -1516,7 +1380,6 @@ func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 		t.Fatalf("an old key's expiry ended the ref: %+v", now)
 	}
 
-	// The live link's own expiry, with its own key's token, does.
 	p.put(Event{Kind: EventPaymentExpired, RefToken: p.keyToken(1), ObjectID: link.ObjectID, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentExpired), EventIgnored, apierr.CodeIntegrationEventNoHandler)
@@ -1525,11 +1388,6 @@ func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 	}
 }
 
-// ----- events told out of order, and a worker that stops -----
-
-// Stripe tells events in no set order: a full refund can arrive before the payment it undoes. It
-// waits for that payment, using up none of its tries, and once the payment applies, the refund
-// follows: the invoice ends refunded, each written once.
 func TestAFullRefundToldBeforeItsPaymentWaitsAndTheInvoiceEndsRefunded(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppRefund)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -1554,12 +1412,10 @@ func TestAFullRefundToldBeforeItsPaymentWaitsAndTheInvoiceEndsRefunded(t *testin
 	if p.refOf(record).state != "open" || p.fields(record)["status"] != "sent" {
 		t.Fatalf("a refund with no payment moved %+v / %v", p.refOf(record), p.fields(record))
 	}
-	// A refund that no ref of the integration could be (another amount) is not ours: ignored at once.
 	p.put(Event{Kind: EventPaymentRefunded, ObjectID: "ch_" + token()[:20], PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount + 7, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentRefunded), EventIgnored, apierr.CodeIntegrationEventRefUnknown)
 
-	// The payment arrives: it applies, and the refund that waited for it applies after it.
 	p.deliver(sender, pays)
 	p.drain()
 	if n := p.count(`SELECT count(*) FROM integration_events WHERE kind = ? AND state = 'applied'`, EventPaymentSucceeded); n != 1 {
@@ -1577,8 +1433,6 @@ func TestAFullRefundToldBeforeItsPaymentWaitsAndTheInvoiceEndsRefunded(t *testin
 	}
 }
 
-// A refund whose payment never comes within refundWait fails for the admins; and if the payment comes
-// after all, the refund is tried again with it, so the invoice never stays paid though refunded.
 func TestARefundThatWaitedTooLongTellsTheAdminsAndStillFollowsItsPayment(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppRefund)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -1598,8 +1452,6 @@ func TestARefundThatWaitedTooLongTellsTheAdminsAndStillFollowsItsPayment(t *test
 	if all, non := p.adminNotices(); all != 1 || non != 0 {
 		t.Fatalf("notifications: %d, %d to non-admins", all, non)
 	}
-	// The payment arrives after all (stored as the route would: the clock has moved on past what a
-	// signature made now would be checked against).
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: refund.paymentI, AmountMinor: ref.amount, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventApplied, "")
@@ -1609,7 +1461,6 @@ func TestARefundThatWaitedTooLongTellsTheAdminsAndStillFollowsItsPayment(t *test
 	}
 }
 
-// Two payments that both name no object are not the same payment: only the same payment id is.
 func TestPaymentsWithNoObjectAreToldApartByTheirPayment(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -1619,7 +1470,7 @@ func TestPaymentsWithNoObjectAreToldApartByTheirPayment(t *testing.T) {
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventApplied, "")
 	paid, rev := p.fields(record), p.revision(record)
 
-	p.put(first) // the same payment, told again under another event id
+	p.put(first)
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentSucceeded), EventIgnored, apierr.CodeIntegrationEventDuplicate)
 
@@ -1638,8 +1489,6 @@ func TestPaymentsWithNoObjectAreToldApartByTheirPayment(t *testing.T) {
 			t.Fatalf("%d notifications, want %d", all, n)
 		}
 	}
-	// A second payment told again (the purge forgot it, the provider retried) is the duplicate of
-	// one recorded: no other row, and no other notification.
 	p.exec(`DELETE FROM integration_events`)
 	var again Event
 	if err := p.db.QueryRow(`SELECT payment_id FROM integration_ref_duplicates ORDER BY recorded_at LIMIT 1`).Scan(&again.PaymentID); err != nil {
@@ -1660,8 +1509,6 @@ func TestPaymentsWithNoObjectAreToldApartByTheirPayment(t *testing.T) {
 	}
 }
 
-// Each claim's end owes its own notification: an end told after an earlier one that couldn't be written
-// yet never takes its place.
 func TestEveryClaimsNotificationIsKeptUntilItIsWritten(t *testing.T) {
 	p := newPay(t, publicURL)
 	_, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -1670,7 +1517,6 @@ func TestEveryClaimsNotificationIsKeptUntilItIsWritten(t *testing.T) {
 	p.exec(`CREATE TRIGGER no_notices BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT, 'notifications are down'); END`)
 	p.drain()
 	p.mustEvent(p.eventByID(ev.id), EventFailed, apierr.CodeIntegrationAmountMismatch)
-	// An admin retries it before the first notification was written, and it fails again.
 	p.retry(ev.id, http.StatusOK)
 	p.drain()
 	p.mustEvent(p.eventByID(ev.id), EventFailed, apierr.CodeIntegrationAmountMismatch)
@@ -1685,15 +1531,12 @@ func TestEveryClaimsNotificationIsKeptUntilItIsWritten(t *testing.T) {
 	}
 }
 
-// A notification that can't be written never holds back the event it is about, or the ones after it:
-// it is owed, and written once it can be.
 func TestANotificationThatCannotBeWrittenNeverHoldsTheEventsBack(t *testing.T) {
 	p := newPay(t, publicURL)
 	_, refA := p.sentInvoice(100, "EUR", "op-a-0001")
 	recordB, refB := p.sentInvoice(50, "EUR", "op-b-0001")
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: refA.token, ObjectID: refA.object, PaymentID: "pi_" + token()[:20], AmountMinor: refA.amount, Currency: "EUR"})
 	evA := p.lastEvent(EventPaymentSucceeded)
-	// Its last worker died with the lease, on its last try.
 	p.exec(`UPDATE integration_events SET state = 'running', attempts = ?, lease = lease + 1, lease_until = ? WHERE id = ?`,
 		maxEventAttempts, p.svc.store.stamp(time.Now().Add(-time.Minute)), evA.id)
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: refB.token, ObjectID: refB.object, PaymentID: "pi_" + token()[:20], AmountMinor: refB.amount, Currency: "EUR"})
@@ -1724,13 +1567,9 @@ func TestANotificationThatCannotBeWrittenNeverHoldsTheEventsBack(t *testing.T) {
 	}
 }
 
-// The event's outcome commits with the write it made: a worker that stops right after leaves an
-// event that is ended, with its reason and its notification, never one a later try takes for a
-// duplicate. And a claim whose lease ran out writes nothing.
 func TestAnEventsOutcomeCommitsWithItsWrite(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
-	// The invoice was taken back to a draft: the app's rule won't hold.
 	p.exec(`UPDATE app_rows SET data = json_set(data, '$.status', 'draft') WHERE id = ?`, record)
 	before, rev := p.fields(record), p.revision(record)
 	p.put(Event{Kind: EventPaymentSucceeded, RefToken: ref.token, ObjectID: ref.object, PaymentID: "pi_" + token()[:20], AmountMinor: ref.amount, Currency: "EUR"})
@@ -1741,7 +1580,6 @@ func TestAnEventsOutcomeCommitsWithItsWrite(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("claim: %v, %v", found, err)
 	}
-	// Its lease runs out, and another worker claims it: the first one's write is not made.
 	p.later(eventLease + time.Second)
 	ev, lease, found, err := p.svc.claimEvent(ctx)
 	if err != nil || !found {
@@ -1755,7 +1593,6 @@ func TestAnEventsOutcomeCommitsWithItsWrite(t *testing.T) {
 	}
 
 	cause := a.ApplyEvent(ctx, ev)
-	// The worker stops here, before it notes what became of the try.
 	row := p.lastEvent(EventPaymentSucceeded)
 	p.mustEvent(row, EventIgnored, apierr.CodeIntegrationEventConditionUnmet)
 	if p.refOf(record).state != "paid" {
@@ -1764,7 +1601,6 @@ func TestAnEventsOutcomeCommitsWithItsWrite(t *testing.T) {
 	p.later(eventLease + time.Second)
 	p.drain()
 	p.mustEvent(p.eventByID(row.id), EventIgnored, apierr.CodeIntegrationEventConditionUnmet)
-	// The stopped worker's late note changes nothing either.
 	if err := p.svc.settleEvent(ctx, ev, lease, cause); err != nil {
 		t.Fatal(err)
 	}
@@ -1788,7 +1624,6 @@ func (p *pay) eventByID(id int64) eventRow {
 	return eventRow{}
 }
 
-// actions are the record's history actions of payment events, oldest first.
 func (p *pay) actions(record int64) []string {
 	p.t.Helper()
 	rows, err := p.db.Query(`SELECT action FROM app_row_history WHERE row_id = ? AND action LIKE 'payment.%' ORDER BY revision`, record)

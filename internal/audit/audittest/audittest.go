@@ -1,5 +1,3 @@
-// Package audittest is what tests of the audit log share: the check that no known secret value
-// ended up in any audit row.
 package audittest
 
 import (
@@ -10,7 +8,6 @@ import (
 	"strings"
 )
 
-// decoded returns every key and string in the details column, as text.
 func decoded(column any) string {
 	raw, _ := column.(string)
 	if b, ok := column.([]byte); ok {
@@ -41,16 +38,12 @@ func decoded(column any) string {
 	return out.String()
 }
 
-// T is the part of *testing.T the check uses, so the check itself can be tested.
 type T interface {
 	Helper()
 	Errorf(format string, args ...any)
 	Fatalf(format string, args ...any)
 }
 
-// NoSecrets fails the test if any value in secrets (a name for the message, and the secret's
-// value) appears in any column of any audit event. A secret shorter than eight characters is
-// refused as a probe: it would match by chance.
 func NoSecrets(t T, db *sql.DB, secrets map[string]string) {
 	t.Helper()
 	for name, value := range secrets {
@@ -80,8 +73,6 @@ func NoSecrets(t T, db *sql.DB, secrets map[string]string) {
 			}
 			fmt.Fprintf(&row, "%v\x00", v)
 		}
-		// The columns as stored, and the details as decoded: JSON escapes some characters
-		// (&, <, quotes, backslashes), which would hide a secret from the first check.
 		text := row.String() + "\x00" + decoded(*(cols[7].(*any)))
 		for name, value := range secrets {
 			if strings.Contains(text, value) {

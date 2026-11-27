@@ -49,20 +49,17 @@ func TestChanges(t *testing.T) {
 	if d := must[Diff](t)(s.Changes(ctx, sp, last.Commit)); d.Full || len(d.Changes) != 0 {
 		t.Fatalf("since the head: %+v", d)
 	}
-	// A commit the repository doesn't have, or no commit at all: everything.
 	for _, since := range []string{"ffffffffffffffffffffffffffffffffffffffff", "not a commit"} {
 		if d := must[Diff](t)(s.Changes(ctx, sp, since)); !d.Full || len(d.Changes) != 3 {
 			t.Fatalf("since %q: %+v", since, d)
 		}
 	}
 
-	// Every change was heard, a refused one too: it may have failed after main moved.
 	_, err := s.Put(ctx, sp, "a.md", []byte("x"), a.Doc.Version, alice, "")
 	wantErr(t, err, ErrConflict)
 	if len(heard) != 8 {
 		t.Fatalf("heard %d changes, want 8", len(heard))
 	}
-	// Reading needs read access.
 	_, err = s.Changes(ctx, access.Space{ID: 1, WorkspaceID: 1, Access: access.None}, "")
 	wantErr(t, err, access.ErrNotFound)
 }

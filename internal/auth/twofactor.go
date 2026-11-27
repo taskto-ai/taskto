@@ -16,21 +16,6 @@ import (
 	"taskto.ai/taskto/internal/ratelimit"
 )
 
-// Two-factor login (docs/api.md#two-factor-login).
-//
-//   - A user turns it on in their own settings: with their password the server makes a
-//     secret, sealed with the server key, and shows it (as an otpauth URI the web app draws
-//     as a QR code, and as text). It asks for a code from the authenticator app before it
-//     turns anything on, and then shows ten recovery codes, once.
-//   - A password login of a user with it on doesn't make a session: it makes a challenge, a
-//     short-lived token that is not a session and that no route but the second step reads.
-//     The second step takes the challenge and a code, from the app (RFC 6238, a step either
-//     side, each step's code once) or a recovery code (once), and only then makes the session.
-//   - Turning it off and making new recovery codes take the password and a code. An admin
-//     can clear a member's, under the rule for making them a password reset link.
-//   - Signing in with a provider (sso.go) has no second step: the provider's own sign-in
-//     is the second factor, or not, as its operator decided. Access tokens never had one.
-
 var (
 	errWrongCode        = errors.New("the code is wrong or was already used")
 	errChallengeInvalid = errors.New("the sign-in expired or was used: enter your password again")
@@ -43,16 +28,11 @@ var (
 )
 
 const (
-	// challengeTTL is how long someone has to give the second step after the password.
-	challengeTTL = 5 * time.Minute
-	// challengeAttempts is how many wrong codes one challenge takes before it is dropped.
+	challengeTTL      = 5 * time.Minute
 	challengeAttempts = 5
-	// enrolmentTTL is how long the secret an enrolment showed can be confirmed.
-	enrolmentTTL = 15 * time.Minute
+	enrolmentTTL      = 15 * time.Minute
 )
 
-// The second step's limits, in wrong codes per window. They have the login's shape, with a
-// lower ceiling per account: a six-digit code has fewer possibilities than a password.
 const (
 	codeIPAttempts           = 30
 	codeAccountAndIPAttempts = 10
@@ -71,13 +51,11 @@ func (s *Service) twoFactorRoutes(mux *http.ServeMux) {
 		refuseTokens(s.RequireAdmin(http.HandlerFunc(s.handleClearTwoFactor)).ServeHTTP))
 }
 
-// limitKey is a limiter and the key one attempt counts against.
 type limitKey struct {
 	l   *ratelimit.Limiter
 	key string
 }
 
-// takeAll counts an attempt against every limit, or against none if one is used up.
 func takeAll(ls []limitKey) (bool, time.Duration) {
 	for i, lim := range ls {
 		if ok, wait := lim.l.Take(lim.key); !ok {
@@ -98,8 +76,6 @@ func tooManyCodes(w http.ResponseWriter, wait time.Duration) {
 	limited(w, wait, apierr.CodeTooManyTwoFactorCodes, "too many wrong codes: try again later")
 }
 
-// accountLimits are the second step's limits for one user from one address. The key is the
-// user's ID, which the caller only has with a challenge or a session of that user.
 func (s *Service) accountLimits(ip string, userID int64) []limitKey {
 	id := strconv.FormatInt(userID, 10)
 	return []limitKey{{s.codePerAccountIP, id + "|" + ip}, {s.codePerAccount, id}}
@@ -109,13 +85,10 @@ func (s *Service) sealAD(userID int64) []byte {
 	return []byte("taskto auth totp v1 user " + strconv.FormatInt(userID, 10))
 }
 
-// recoveryHash is what is stored for a (normalized) recovery code: a keyed hash, so a copy of
-// the database alone doesn't let anyone check guesses.
 func (s *Service) recoveryHash(userID int64, code string) string {
 	return hex.EncodeToString(s.key.MAC("auth recovery code v1", []byte(strconv.FormatInt(userID, 10)+":"+code)))
 }
 
-// twoFactorOn reports whether userID has two-factor login on.
 func (s *Service) twoFactorOn(ctx context.Context, q interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }, userID int64) (bool, error) {
@@ -124,10 +97,6 @@ func (s *Service) twoFactorOn(ctx context.Context, q interface {
 	return on, err
 }
 
-// useCode spends a code of userID's within tx: a TOTP code of a step later than the last one
-// used, or, for a user with two-factor login on, an unused recovery code. With pending, it
-// takes the TOTP code of a secret that isn't confirmed yet, and no recovery code. It
-// fails with errWrongCode for anything else.
 func (s *Service) useCode(ctx context.Context, tx *sql.Tx, userID int64, raw string, pending bool) error {
 	if s.key == nil {
 		return errNoServerKey
@@ -153,8 +122,6 @@ func (s *Service) useCode(ctx context.Context, tx *sql.Tx, userID int64, raw str
 		if !ok {
 			return errWrongCode
 		}
-		// The step is taken in the same statement that checks it is still later than the last
-		// one, so two requests with the same code can't both pass.
 		res, err := tx.ExecContext(ctx, `UPDATE user_totp SET last_step = ? WHERE user_id = ? AND last_step < ?`, step, userID, step)
 		if err != nil {
 			return err
@@ -174,8 +141,6 @@ func (s *Service) useCode(ctx context.Context, tx *sql.Tx, userID int64, raw str
 	return errWrongCode
 }
 
-// replaceRecoveryCodes drops userID's recovery codes and makes new ones, returned in clear
-// this once.
 func (s *Service) replaceRecoveryCodes(ctx context.Context, tx *sql.Tx, userID int64) ([]string, error) {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM user_recovery_codes WHERE user_id = ?`, userID); err != nil {
 		return nil, err
@@ -192,10 +157,6 @@ func (s *Service) replaceRecoveryCodes(ctx context.Context, tx *sql.Tx, userID i
 	return codes, nil
 }
 
-// checkOwnPassword checks the password of the caller u, counting a wrong one as a failed
-// login: a session someone else got hold of is no faster a way to guess it than the login
-// form. It answers, and returns false, unless the password is right; when it is, it returns the
-// hash that matched, for a transaction to check it is still the user's.
 func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u User, password string) (string, bool) {
 	if password == "" {
 		writeError(w, http.StatusBadRequest, apierr.CodeCurrentPasswordRequired, "the current password is required")
@@ -212,8 +173,6 @@ func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u Use
 		limited(w, wait, apierr.CodeTooManyPasswords, "too many wrong passwords: try again later")
 		return "", false
 	}
-	// An account made by signing in with a provider has no password, and nothing to protect
-	// with a second factor at the password login.
 	if hash == "" {
 		giveAll(limits)
 		writeError(w, http.StatusForbidden, apierr.CodeTwoFactorNoPassword, "this account has no password to protect with a second factor")
@@ -228,7 +187,6 @@ func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u Use
 		return "", false
 	}
 	if !match {
-		// 403, not 401: the session is fine, and 401 would send the web app to the login.
 		writeError(w, http.StatusForbidden, apierr.CodeWrongPassword, errWrongPassword.Error())
 		return "", false
 	}
@@ -236,11 +194,9 @@ func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u Use
 	return hash, true
 }
 
-// failTwoFactor answers for the errors of the routes of one's own two-factor login.
 func failTwoFactor(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errWrongCode):
-		// 403, not 401, as with a wrong password: the session is fine.
 		writeError(w, http.StatusForbidden, apierr.CodeWrongTwoFactorCode, err.Error())
 	case errors.Is(err, errTwoFactorOn):
 		writeError(w, http.StatusConflict, apierr.CodeTwoFactorAlreadyOn, err.Error())
@@ -265,7 +221,6 @@ func (s *Service) needKey(w http.ResponseWriter, r *http.Request) bool {
 
 func (s *Service) handleTwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
-	// One statement, so the two fields describe one committed state.
 	var on bool
 	var left int
 	err := s.db.QueryRowContext(r.Context(), `
@@ -280,8 +235,6 @@ func (s *Service) handleTwoFactorStatus(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": on, "recovery_codes_left": left})
 }
 
-// handleTwoFactorEnrol makes a secret for the caller, not yet on: confirming it with a code
-// turns two-factor login on. Asking again before that makes a new secret.
 func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
 	var req struct {
@@ -290,7 +243,6 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) || !s.needKey(w, r) {
 		return
 	}
-	// Two-factor login protects the password login: with passwords off it protects nothing.
 	if s.opts.DisablePasswordLogin {
 		passwordLoginDisabled(w)
 		return
@@ -308,8 +260,6 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	enrolment, enrolmentHash := newToken()
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
-		// The password that was checked must still be the user's: a change or reset meanwhile
-		// ended the sessions it could have used, and dropped the enrolments it could have made.
 		if err := s.passwordUnchanged(r.Context(), tx, u.ID, verified); err != nil {
 			return err
 		}
@@ -336,8 +286,6 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTwoFactorConfirm turns two-factor login on, for a code of the secret handleTwoFactorEnrol
-// made, and shows the recovery codes.
 func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
 	var req struct {
@@ -355,8 +303,6 @@ func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request)
 	var codes []string
 	err := s.write(r.Context(), func(tx *sql.Tx) error {
 		var pending bool
-		// The code must be for the enrolment that showed the secret: one that was replaced by a
-		// later enrolment (another tab's), or that ran out, is not confirmable.
 		if err := tx.QueryRowContext(r.Context(), `
 			SELECT EXISTS (SELECT 1 FROM user_totp
 				WHERE user_id = ? AND enabled_at IS NULL AND enrolment_id = ? AND enrolment_expires_at > ?)`,
@@ -398,9 +344,6 @@ func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
 }
 
-// ownFactorAction runs act, within a transaction that first spends the caller's code (a TOTP
-// or a recovery code), after checking their password. It answers any failure and reports
-// whether act ran.
 func (s *Service) ownFactorAction(w http.ResponseWriter, r *http.Request, password, code string, act func(tx *sql.Tx, userID int64) error) bool {
 	u, _ := UserFrom(r.Context())
 	if !s.needKey(w, r) {
@@ -416,8 +359,6 @@ func (s *Service) ownFactorAction(w http.ResponseWriter, r *http.Request, passwo
 		return false
 	}
 	err := s.write(r.Context(), func(tx *sql.Tx) error {
-		// The password that was checked must still be the user's: a change or reset meanwhile
-		// ended this session, and the request doesn't outlive it.
 		if err := s.passwordUnchanged(r.Context(), tx, u.ID, verified); err != nil {
 			return err
 		}
@@ -490,8 +431,6 @@ func (s *Service) handleTwoFactorRecoveryCodes(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
 }
 
-// dropTwoFactor removes userID's secret and recovery codes, and the half-done logins that
-// were waiting on them.
 func dropTwoFactor(ctx context.Context, tx *sql.Tx, userID int64) error {
 	for _, q := range []string{
 		`DELETE FROM user_totp WHERE user_id = ?`,
@@ -505,19 +444,13 @@ func dropTwoFactor(ctx context.Context, tx *sql.Tx, userID int64) error {
 	return nil
 }
 
-// signIn is what a verified password earns: a session, or for a user with two-factor login
-// on a challenge for the second step and no session.
 type signIn struct {
 	session   string
 	challenge string
 	expires   string
 }
 
-// issueSignIn makes what userID's verified password earns, within tx: the factor state is
-// read here, in the transaction that inserts the session or the challenge, so enrolling
-// that commits meanwhile can't leave a password-only session behind.
 func (s *Service) issueSignIn(ctx context.Context, tx *sql.Tx, userID int64) (signIn, error) {
-	// A disabled account earns neither a session nor a challenge.
 	if off, err := s.isDisabled(ctx, tx, userID); err != nil {
 		return signIn{}, err
 	} else if off {
@@ -543,9 +476,6 @@ func (s *Service) issueSignIn(ctx context.Context, tx *sql.Tx, userID int64) (si
 	return out, err
 }
 
-// passwordSignIn is issueSignIn for a login whose password was checked against verifiedHash:
-// it fails with errPasswordChanged if the user's password isn't that hash any more (changed
-// or reset since), which also ended the challenges the old one could have made.
 func (s *Service) passwordSignIn(ctx context.Context, userID int64, verifiedHash string) (signIn, error) {
 	var out signIn
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -556,15 +486,12 @@ func (s *Service) passwordSignIn(ctx context.Context, userID int64, verifiedHash
 		if out, err = s.issueSignIn(ctx, tx, userID); err != nil || out.session == "" {
 			return err
 		}
-		// A session is a login; a challenge is not one until its code is given.
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.LoginSucceeded,
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}})
 	})
 	return out, err
 }
 
-// passwordUnchanged fails with errPasswordChanged unless userID's password hash within tx is
-// verified, the one a request checked a password against.
 func (s *Service) passwordUnchanged(ctx context.Context, tx *sql.Tx, userID int64, verified string) error {
 	var current string
 	if err := tx.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, userID).Scan(&current); err != nil {
@@ -576,15 +503,11 @@ func (s *Service) passwordUnchanged(ctx context.Context, tx *sql.Tx, userID int6
 	return nil
 }
 
-// writeChallenge answers a password step that needs a code.
 func writeChallenge(w http.ResponseWriter, out signIn) {
 	writeJSON(w, http.StatusOK, map[string]any{"two_factor_required": true, "challenge": out.challenge, "expires_at": out.expires})
 }
 
-// handleLoginTwoFactor is the second step of a password login that asked for a code: it
-// makes the session, once, for a challenge and a right code.
 func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
-	// A challenge made before the operator turned passwords off finishes no login.
 	if s.opts.DisablePasswordLogin {
 		passwordLoginDisabled(w)
 		return
@@ -600,8 +523,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "a code is required")
 		return
 	}
-	// The address's limit first, so a client adds at most codeIPAttempts keys to the other
-	// two per window, whatever challenges it tries. A challenge that doesn't exist counts.
 	ip := s.clientIP(r)
 	perIP := []limitKey{{s.codePerIP, ip}}
 	if ok, wait := takeAll(perIP); !ok {
@@ -615,8 +536,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
-	// Only to know whose limits to count against; the transaction below looks the challenge up
-	// again, by its hash and this user, and is what decides.
 	challengeHash := hashToken(req.Challenge)
 	var userID int64
 	err := s.db.QueryRowContext(r.Context(), `SELECT user_id FROM login_challenges WHERE token_hash = ? AND expires_at > ?`,
@@ -632,8 +551,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	account := s.accountLimits(ip, userID)
 	if ok, wait := takeAll(account); !ok {
-		// Nothing was tried: the address isn't charged for the account's limit, which would
-		// otherwise block others behind the same address.
 		giveAll(perIP)
 		tooManyCodes(w, wait)
 		return
@@ -643,10 +560,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	var u User
 	var wrong bool
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
-		// The challenge is read, its attempts checked and counted, the code spent and the
-		// challenge used up in this one transaction, which holds the write lock: requests
-		// racing on one challenge go one at a time, and can't take it past its attempts. It is
-		// always addressed by its hash and its user, never by a row id that could be reused.
 		var attempts int
 		err := tx.QueryRowContext(r.Context(), `
 			SELECT attempts FROM login_challenges WHERE token_hash = ? AND user_id = ? AND expires_at > ?`,
@@ -662,8 +575,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		}
 		err = s.useCode(r.Context(), tx, userID, req.Code, false)
 		if errors.Is(err, errWrongCode) {
-			// The wrong code is counted, and commits. Too many wrong codes for one challenge ends
-			// it: the password goes in again.
 			wrong = true
 			if _, err := tx.ExecContext(r.Context(), `
 				UPDATE login_challenges SET attempts = attempts + 1 WHERE token_hash = ? AND user_id = ?`,
@@ -693,8 +604,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}}); err != nil {
 			return err
 		}
-		// Read here, so a failure puts the spent code and challenge back rather than answering
-		// 500 with them gone.
 		u, err = s.userByID(r.Context(), tx, userID)
 		return err
 	})
@@ -703,7 +612,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	case errors.Is(err, errAccountDisabled):
-		// Disabled after the password step: no session, whatever the code was.
 		s.loginFailed(r, userID, "account_disabled")
 		accountDisabled(w)
 		return
@@ -738,10 +646,6 @@ func (s *Service) userByID(ctx context.Context, q querier, id int64) (User, erro
 	return u, err
 }
 
-// handleClearTwoFactor clears a member's two-factor login, for a member who lost both their
-// authenticator and their recovery codes. The rule is the password reset link's: the admin
-// must administer every workspace the member belongs to, and can't do it to their own
-// account. The member's sessions end, so whoever held one of them is out too.
 func (s *Service) handleClearTwoFactor(w http.ResponseWriter, r *http.Request) {
 	m, _ := MembershipFrom(r.Context())
 	admin, _ := UserFrom(r.Context())
@@ -792,12 +696,11 @@ func (s *Service) handleClearTwoFactor(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	s.endLive(userID, "") // their sessions ended, and their open connections go with them
+	s.endLive(userID, "")
 	slog.InfoContext(r.Context(), "a member's two-factor login cleared", "user_id", userID, "by", admin.ID, "workspace_id", m.WorkspaceID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// markTwoFactor sets which of members have two-factor login on, for an admin to see.
 func (s *Service) markTwoFactor(ctx context.Context, workspaceID int64, members []Member) error {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.user_id FROM user_totp t JOIN memberships m ON m.user_id = t.user_id

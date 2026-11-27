@@ -15,33 +15,26 @@ import (
 	"taskto.ai/taskto/internal/egress"
 )
 
-// Service serves the provider account API (docs/api.md) and keeps the agent runtime's
-// providers in step with it.
 type Service struct {
-	store  *Store
-	feed   *Feed // nil when the agent runtime is off
-	egress Egress
-	// The clients of account tests, under each scope's egress policy.
+	store                       *Store
+	feed                        *Feed
+	egress                      Egress
 	workspaceClient, userClient *http.Client
-	resolve                     egress.Resolver // nil: the system's
+	resolve                     egress.Resolver
 }
 
-// New returns the API over store. feed is nil when the agent runtime is off: accounts are
-// then only stored. Its egress policies are "any" until SetEgress.
 func New(store *Store, feed *Feed) *Service {
 	s := &Service{store: store, feed: feed}
 	s.SetEgress(Egress{})
 	return s
 }
 
-// SetEgress sets the egress policies saving and testing accounts check. Set it before serving.
 func (s *Service) SetEgress(e Egress) {
 	s.egress = e
 	s.workspaceClient = checkClient(e.Workspace)
 	s.userClient = checkClient(e.Personal)
 }
 
-// client is the client of o's account tests.
 func (s *Service) client(o owner) *http.Client {
 	if o.workspace != 0 {
 		return s.workspaceClient
@@ -49,12 +42,10 @@ func (s *Service) client(o owner) *http.Client {
 	return s.userClient
 }
 
-// checkEgress refuses a base URL o's egress policy doesn't allow, resolving its host now; a
-// host that doesn't resolve now is left to the check of every connection.
 func (s *Service) checkEgress(ctx context.Context, o owner, baseURL string) error {
 	u, err := checkBaseURL(baseURL)
 	if err != nil {
-		return nil // the validation says what's wrong with it
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, egressCheckTimeout)
 	defer cancel()
@@ -67,7 +58,6 @@ func (s *Service) checkEgress(ctx context.Context, o owner, baseURL string) erro
 	return nil
 }
 
-// Routes mounts the provider account endpoints on mux, behind a's access checks.
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	ws := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	admin := func(h http.HandlerFunc) http.Handler { return a.RequireAdmin(h) }
@@ -88,8 +78,6 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET /api/workspaces/{workspace}/models", ws(s.handleModels))
 }
 
-// workspaceOwner and userOwner read the owner of the accounts a route acts on from what the
-// auth middleware put on the request.
 func workspaceOwner(r *http.Request) owner {
 	m, _ := auth.MembershipFrom(r.Context())
 	return owner{workspace: m.WorkspaceID}
@@ -115,7 +103,6 @@ func (s *Service) handleList(ownerOf func(*http.Request) owner) http.HandlerFunc
 	}
 }
 
-// createRequest is the body of a create. Kind defaults to openai-compatible.
 type createRequest struct {
 	Name        string          `json:"name"`
 	DisplayName string          `json:"display_name"`
@@ -159,7 +146,6 @@ func (s *Service) handleCreate(ownerOf func(*http.Request) owner) http.HandlerFu
 	}
 }
 
-// optional is a field of a PATCH body: absent (not set), null (set, nil value) or a value.
 type optional[T any] struct {
 	set   bool
 	value *T
@@ -174,9 +160,6 @@ func (o *optional[T]) UnmarshalJSON(raw []byte) error {
 	return json.Unmarshal(raw, o.value)
 }
 
-// updateRequest is the body of a PATCH. An absent field stays as it is. api_key: a string sets
-// a new key, null removes it. compat: an object replaces the settings, null removes them. The
-// name and kind can't change: the name is part of the agent runtime's provider ID.
 type updateRequest struct {
 	Name        optional[string]          `json:"name"`
 	Kind        optional[string]          `json:"kind"`
@@ -201,8 +184,6 @@ func (s *Service) handleUpdate(ownerOf func(*http.Request) owner) http.HandlerFu
 			writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "name and kind can't change: add a new account instead")
 			return
 		}
-		// Only a new base URL is checked: an account the policy came to forbid can still be
-		// renamed or pointed elsewhere.
 		if req.BaseURL.set {
 			if err := s.checkEgress(r.Context(), ownerOf(r), deref(req.BaseURL.value)); err != nil {
 				fail(w, r, err)
@@ -263,8 +244,6 @@ func (s *Service) handleDelete(ownerOf func(*http.Request) owner) http.HandlerFu
 	}
 }
 
-// handleModels lists what the caller's conversations in the workspace may use: the
-// operator's providers, the workspace's accounts and the caller's own.
 func (s *Service) handleModels(w http.ResponseWriter, r *http.Request) {
 	choices := []Choice{}
 	if s.feed != nil {
@@ -283,13 +262,10 @@ func (s *Service) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]Choice{"providers": choices})
 }
 
-// changed brings the agent runtime up to date after a change. The change is saved either way:
-// a failure here is logged, and a restarted agent runtime reads the files anew.
 func (s *Service) changed(r *http.Request) {
 	if s.feed == nil {
 		return
 	}
-	// Not the request's context: a client that leaves mustn't stop the files half-updated.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 	defer cancel()
 	if err := s.feed.Sync(ctx); err != nil {
@@ -306,7 +282,6 @@ func accountID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// fail answers with the status for one of the package's errors, or 500.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var bad *apierr.Error
 	switch {
@@ -324,10 +299,9 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// serverError logs err and answers 500 without details.
 func serverError(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
-		return // the client went away
+		return
 	}
 	slog.ErrorContext(r.Context(), "providers: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	apierr.Internal(w)
@@ -335,9 +309,6 @@ func serverError(w http.ResponseWriter, r *http.Request, err error) {
 
 const maxBody = 64 << 10
 
-// readJSON decodes the request body into v, strictly: unknown fields and trailing data are
-// errors. It answers 400 and returns false on failure. The decoder's message isn't passed on:
-// it can quote the body, which may hold a key.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
@@ -352,8 +323,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200 with a
-// broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

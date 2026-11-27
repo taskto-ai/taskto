@@ -1,16 +1,3 @@
-// Dictation end to end (docs/dictation.md): the server binary with the web app built in and
-// the real local model, and a real Chromium (Playwright) whose microphone is a WAV file. For
-// each clip it signs in, presses the chat box's microphone, records the whole clip, stops,
-// and checks that the text lands in the box, editable, with no API key set.
-//
-// It downloads the local model (about 700 MB) and a Chromium, and the long clip records in
-// real time, so it runs only with TASKTO_DICTATION_E2E=1, never in CI: `make dictation-e2e`.
-//
-//   - TASKTO_DICTATION_IT_CACHE keeps the model between runs, as for TestRealLocalModels.
-//   - TASKTO_DICTATION_E2E_LONG=0 skips the clip of nearly 10 minutes.
-//   - The Portuguese clip is made with macOS's `say` and its pt_BR voice Luciana, so it is
-//     skipped where that isn't installed.
-
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -44,7 +31,6 @@ before(async () => {
     const giveUp = setTimeout(() => reject(new Error(`the server didn't start in a minute:\n${logs}`)), 60_000)
     server.stderr.on('data', (b) => {
       logs += b
-      // The setup token comes first; wait for both all the same.
       const m = logs.match(/taskto listening addr=(\S+).*web_app_built=(\w+)/)
       const token = logs.match(/setup_token=([A-Za-z0-9_-]{43})/)
       if (m && token) {
@@ -56,7 +42,6 @@ before(async () => {
       clearTimeout(giveUp)
       reject(e)
     }
-    // No bin/taskto: run make build first (make dictation-e2e does).
     server.on('error', (e) => fail(new Error(`the server didn't start: ${e.message}`)))
     server.on('exit', (code) => fail(new Error(`the server exited (${code}):\n${logs}`)))
   })
@@ -64,7 +49,6 @@ before(async () => {
   assert.equal(built, 'true', 'the web app isn’t built into the binary: run make build (make dictation-e2e does)')
   base = `http://${addr}`
 
-  // The owner, through the API; the browser signs in with the same account.
   const res = await fetch(`${base}/api/setup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -77,8 +61,6 @@ before(async () => {
     .join('; ')
   ws = (await res.json()).workspaces[0].id
 
-  // No API key: the engine is the local model. Download it before the clips, so the first
-  // isn't answered "still downloading" (the web app offers "Try again" for that).
   let st = await call('GET', '/dictation')
   assert.equal(st.engine, 'local')
   assert.equal(st.settings.api.api_key, 'not set')
@@ -93,7 +75,6 @@ before(async () => {
   }
 })
 
-// The server goes before its data directory: SIGTERM, ten seconds to shut down, then SIGKILL.
 after(async () => {
   if (server && server.exitCode === null && server.signalCode === null) {
     const exited = new Promise((resolve) => server.once('exit', resolve))
@@ -105,7 +86,6 @@ after(async () => {
   if (dir) rmSync(dir, { recursive: true, force: true })
 })
 
-// call is the owner's request to the workspace's API.
 async function call(method, path, body) {
   const res = await fetch(`${base}/api/workspaces/${ws}${path}`, {
     method,
@@ -117,8 +97,6 @@ async function call(method, path, body) {
   return res.json()
 }
 
-// The clips. sherpa-onnx's English test clip of Parakeet v3 (Kennedy's inaugural address, in
-// the public domain), at the pinned commit, as TestRealLocalModels: a canonical 24 kHz WAV.
 let english
 async function kennedy() {
   if (english) return english
@@ -138,8 +116,6 @@ async function kennedy() {
   return english
 }
 
-// writeClip writes clip, repeated times with a second of silence after each, after a second
-// of silence, as a WAV file; it returns the path and how long it plays.
 function writeClip(name, clip, times = 1) {
   const gap = clip.rate
   const n = gap + times * (clip.samples.length + gap)
@@ -148,8 +124,8 @@ function writeClip(name, clip, times = 1) {
   b.writeUInt32LE(36 + 2 * n, 4)
   b.write('WAVEfmt ', 8)
   b.writeUInt32LE(16, 16)
-  b.writeUInt16LE(1, 20) // PCM
-  b.writeUInt16LE(1, 22) // mono
+  b.writeUInt16LE(1, 20)
+  b.writeUInt16LE(1, 22)
   b.writeUInt32LE(clip.rate, 24)
   b.writeUInt32LE(2 * clip.rate, 28)
   b.writeUInt16LE(2, 32)
@@ -164,8 +140,6 @@ function writeClip(name, clip, times = 1) {
   return { path, seconds: n / clip.rate }
 }
 
-// wavSeconds is how long a WAV file plays, from its fmt chunk's byte rate and its data
-// chunk's size (say writes other chunks before them).
 function wavSeconds(b) {
   let byteRate = 0
   let size = 0
@@ -180,11 +154,9 @@ function wavSeconds(b) {
   return size / byteRate
 }
 
-// dictate does what the person does in a Chromium whose microphone plays the clip once, and
-// returns the text that lands in the chat box.
 async function dictate(clip) {
   const browser = await chromium.launch({
-    channel: 'chromium', // the full Chromium, in its new headless mode
+    channel: 'chromium',
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
@@ -201,14 +173,12 @@ async function dictate(clip) {
 
     await page.goto(`${base}/w/${ws}/conversations`)
     await page.getByRole('button', { name: 'New', exact: true }).click()
-    // The chat box by its label; its alerts are the conversation's (a new one has no others).
     const box = page.getByRole('textbox', { name: 'Message', exact: true })
     const alerts = page.getByRole('region', { name: 'Conversation' }).getByRole('alert')
     await page.getByRole('button', { name: 'Dictate' }).click()
     const stop = page.getByRole('button', { name: 'Stop dictation' })
     await stop.waitFor({ timeout: 30_000 })
 
-    // The file plays from when the microphone opens: record all of it, by the page's clock.
     const timer = page.getByRole('timer')
     const deadline = Date.now() + (clip.seconds + 60) * 1000
     for (;;) {
@@ -221,7 +191,6 @@ async function dictate(clip) {
     }
     await stop.click()
     const started = Date.now()
-    // The text in the box, or an alert in the conversation: the dictation's error, or the composer's.
     let got
     for (const until = Date.now() + 6 * 60_000; !got; await page.waitForTimeout(250)) {
       assert.ok(Date.now() < until, 'no text and no error after 6 minutes')
@@ -235,7 +204,6 @@ async function dictate(clip) {
     assert.equal(got.alert, undefined, `dictation failed: ${got.alert}`)
     console.log(`${clip.seconds.toFixed(1)} s of audio, text after ${Date.now() - started} ms: ${got.text}`)
 
-    // The text is the person's to edit before sending.
     assert.ok(await box.isEditable())
     await box.press('End')
     await box.pressSequentially(' (edited)')
@@ -272,7 +240,6 @@ test('nearly ten minutes', {
     (!enabled && 'set TASKTO_DICTATION_E2E=1') ||
     (process.env.TASKTO_DICTATION_E2E_LONG === '0' && 'TASKTO_DICTATION_E2E_LONG=0'),
 }, async () => {
-  // The English clip with a second of silence after each, as many times as fit in 9 min 30 s.
   const clip = await kennedy()
   const times = Math.floor((570 - 1) / (clip.samples.length / clip.rate + 1))
   const text = await dictate(writeClip('long.wav', clip, times))
@@ -282,8 +249,6 @@ test('nearly ten minutes', {
 })
 
 test('glossary', { skip: !enabled && 'set TASKTO_DICTATION_E2E=1' }, async (t) => {
-  // A term the model writes as two words: the space's glossary.md joins them. It goes
-  // afterwards, so the other clips never depend on running before this one.
   const { spaces } = await call('GET', '/spaces')
   const doc = `/spaces/${spaces[0].id}/docs/glossary.md`
   await call('PUT', doc, { content: '# Glossary\n\n- **YourCountry**: one word here\n' })

@@ -1,10 +1,3 @@
-// Your data: a zip of what you own in this workspace, to keep (docs/api.md#export-my-data). The
-// button asks the server to start an export (a POST, which uses one of your few exports of the
-// hour), and the server answers with an address that works once, for a minute, for this login; the
-// page then goes to it, and the browser saves the zip as it arrives, however large. A server that
-// is busy, or an hour's exports used up, answers the POST, so the reason is shown here. An admin has
-// a second one, for the workspace's shared spaces they are a member of (docs/api.md#export-a-workspace).
-
 import { api, exportPath, workspaceExportPath } from '../api'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -17,8 +10,6 @@ export function DataTab({ workspace, user, admin = false }: { workspace: number;
   const t = useT()
   const action = useAction()
   const wsAction = useAction()
-  // The tab goes to the download only if it is still here, in the session that asked for it: an
-  // answer that comes after the person left, or after someone else signed in, opens nothing.
   const startAt = (path: string, run: typeof action.run) => async () => {
     let download = ''
     const ok = await run(async () => {

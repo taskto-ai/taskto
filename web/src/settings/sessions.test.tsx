@@ -57,7 +57,6 @@ test('sessions list the device, the dates and which one is this device', async (
   expect(rows[0].textContent).toContain('This device')
   expect(rows[0].textContent).toContain('Signed in')
   expect(rows[0].textContent).toContain('last used')
-  // This device has no sign-out button: logging out is for it.
   expect(within(rows[0]).queryByRole('button')).toBeNull()
   expect(rows[1].textContent).toContain('Safari on iOS')
   expect(within(rows[1]).getByRole('button', { name: 'Sign out Safari on iOS' })).toBeTruthy()
@@ -79,7 +78,6 @@ test('signing out one session asks first, sends the request and shows the list a
   render(<SettingsPage me={me} workspace={member} tab="sessions" />)
   await screen.findByText('Safari on iOS')
   fireEvent.click(screen.getByRole('button', { name: 'Sign out Safari on iOS' }))
-  // Nothing is sent before the answer.
   expect(sent(calls, 'DELETE', '/api/me/sessions/session-2')).toBe(0)
   fireEvent.click(screen.getByRole('button', { name: 'Yes, sign out' }))
   await waitFor(() => expect(screen.queryByText('Safari on iOS')).toBeNull())

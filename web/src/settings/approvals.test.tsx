@@ -19,7 +19,6 @@ const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
 const queue = '/api/workspaces/1/integration-approvals'
-// The spaces an admin manages, by id: another member's private space is never among them.
 const spaceList = (...ids: number[]) => ({
   'GET /api/workspaces/1/spaces?all=true': {
     body: {
@@ -119,8 +118,6 @@ test('approving names the integration, and its space is allowed with it when it 
   fireEvent.click(await screen.findByRole('button', { name: 'Review the request of Invoices' }))
   const dialog = await screen.findByRole('dialog', { name: 'Request of Invoices' })
   const approve = within(dialog).getByRole('button', { name: 'Approve' }) as HTMLButtonElement
-  // Nothing is approved until an integration is chosen, and a switched-off one isn't offered. One
-  // choice is taken as the answer.
   const select = await within(dialog).findByLabelText('Connect it to')
   expect([...(select as HTMLSelectElement).options].map((o) => o.textContent)).toEqual([
     'Choose an integration',
@@ -128,8 +125,6 @@ test('approving names the integration, and its space is allowed with it when it 
   ])
   await waitFor(() => expect(approve.disabled).toBe(false))
   expect(within(dialog).getByText(/Approving also allows it there/)).toBeTruthy()
-  // What keeps it allowed afterwards is the integration's own spaces, in the Integrations tab: pointed
-  // to, not made again here.
   expect(
     within(dialog)
       .getByRole('link', { name: /Keep … after the approval ends/ })
@@ -139,7 +134,6 @@ test('approving names the integration, and its space is allowed with it when it 
   await waitFor(() => expect(sent(calls, 'POST', `${queue}/4/approve`)).toHaveLength(1))
   expect(sent(calls, 'POST', `${queue}/4/approve`)[0]).toEqual({ integration_id: 7, allow_space: true })
   expect(await screen.findByText('Approved Invoices. It can be published now.')).toBeTruthy()
-  // The list is asked for again.
   await waitFor(() =>
     expect(calls.filter((c) => c.method === 'GET' && c.path === `${queue}?status=requested`)).toHaveLength(2),
   )
@@ -215,7 +209,6 @@ test('revoking asks first, and says what stops when the contract is the live one
   expect(within(dialog).getByText('Connected to Shop.')).toBeTruthy()
   expect(within(dialog).getByText('This is what the live release asks.')).toBeTruthy()
   expect(within(dialog).getByText(/Decided by Owner/)).toBeTruthy()
-  // An approval can't be approved again, or turned down.
   expect(within(dialog).queryByRole('button', { name: 'Approve' })).toBeNull()
   expect(within(dialog).queryByRole('button', { name: 'Turn down' })).toBeNull()
   fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke approval' }))
@@ -285,8 +278,6 @@ test('a refusal that leaves the request as it was is said in the dialog, which s
   expect(screen.getByRole('dialog', { name: 'Request of Invoices' })).toBeTruthy()
 })
 
-// The approved list, with one approval of the shop in the space `over` says, and the spaces the admin
-// manages. The workspace's integrations are not asked for: an approval says for itself what it made.
 function approved(over: Partial<IntegrationApproval> = {}, ...managed: number[]) {
   return {
     [`GET ${queue}?status=requested`]: { body: { approvals: [], next_cursor: null } },
@@ -332,15 +323,12 @@ test('revoking an approval whose space an admin allowed says nothing about the s
 })
 
 test('revoking an approval in another member’s private space warns that its grant ends, though the admin can’t list that space', async () => {
-  // The integrations' list leaves out a private space that isn't the admin's, so the warning can only come
-  // from the approval itself, and nothing but the queue and the spaces the admin manages is read.
   const calls = fakeFetch(
     approved({ space_kind: 'private', space_name: 'Alice', space_id: 55, space_grant: 'approval' }, 12),
   )
   render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
   const sure = await askToRevoke()
   expect(within(sure).getByText(/that space also stops being allowed for the integration/)).toBeTruthy()
-  // It is not a space the admin can keep the grant of: no promise of that.
   expect(within(sure).queryByText(/unless it is kept/)).toBeNull()
   expect(calls.some((c) => c.path === '/api/workspaces/1/integrations')).toBe(false)
 })
@@ -416,8 +404,6 @@ test('the revoke warning says what the server holds now, not what the list said 
   expect(within(sure).getByText(/though it stays online/)).toBeTruthy()
 })
 
-// The list says one grant when the dialog opens and the server another when the revoke is asked for:
-// another session kept the space's grant (or the approval made it) in between.
 async function revokeWithGrantNow(before: 'approval' | 'settings', now: 'approval' | 'settings') {
   const row = (grant: 'approval' | 'settings') =>
     approval({
@@ -520,7 +506,6 @@ test('the tab has the settings frame: the page’s heading, the list in a panel 
       }),
   })
   render(<SettingsPage me={me} workspace={admin} tab="integration-approvals" />)
-  // While it is read: the shape of the list, said to a screen reader, and the page's own heading.
   expect(screen.getByRole('heading', { level: 1, name: 'Integration approvals' })).toBeTruthy()
   expect(screen.getByRole('status').textContent).toContain('Loading')
   release?.()
@@ -543,7 +528,6 @@ test('the filter keeps to the start of the page and scrolls inside itself rather
   expect(rule).toMatch(/align-self:\s*flex-start/)
   expect(rule).toMatch(/justify-self:\s*start/)
   expect(rule).toMatch(/max-inline-size:\s*100%/)
-  // On a phone the choices wrap instead of running past the edge.
   expect(css).toMatch(
     /@media \(max-width: 40rem\)\s*\{[^@]*\.approvals-filters \.ui-segmented\s*\{[^}]*flex-wrap:\s*wrap/,
   )

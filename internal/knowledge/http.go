@@ -20,15 +20,10 @@ import (
 	"taskto.ai/taskto/internal/quota"
 )
 
-// RawBodyRoutes are the routes that take a body other than JSON: a file's bytes, as
-// application/octet-stream. auth.CSRF lets that type through to them only.
 var RawBodyRoutes = []string{"PUT " + spaceRoute + "/docs/{path...}"}
 
 const spaceRoute = "/api/workspaces/{workspace}/spaces/{space}"
 
-// Routes mounts the knowledge base's endpoints on mux, behind c.RequireSpace: Read for
-// the routes that only read, Write for the rest. They all take access tokens too.
-// docs/api.md describes them.
 func (s *Store) Routes(mux *http.ServeMux, c *access.Checker) {
 	read := func(h http.HandlerFunc) http.Handler { return auth.AcceptTokens(c.RequireSpace(access.Read, h)) }
 	write := func(h http.HandlerFunc) http.Handler { return auth.AcceptTokens(c.RequireSpace(access.Write, h)) }
@@ -42,11 +37,9 @@ func (s *Store) Routes(mux *http.ServeMux, c *access.Checker) {
 	mux.Handle("GET "+space+"/history", read(s.handleHistory))
 	mux.Handle("GET "+space+"/history/{path...}", read(s.handleHistory))
 	mux.Handle("POST "+space+"/restore/{path...}", write(s.handleRestore))
-	// Admins only, with a session: it deletes versions for good.
 	mux.Handle("DELETE "+space+"/history/{path...}", c.RequireSpaceAdmin(http.HandlerFunc(s.handleRemoveOldVersions)))
 }
 
-// maxBody is the largest JSON body without content.
 const maxBody = 64 << 10
 
 func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
@@ -67,8 +60,6 @@ func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-// DocReply is a document with its content: text for Markdown, base64 for uploads, none
-// for unversioned files.
 type DocReply struct {
 	Entry
 	Content       *string `json:"content,omitempty"`
@@ -102,22 +93,16 @@ func (s *Store) handleRead(w http.ResponseWriter, r *http.Request) {
 	reply := DocReply{Entry: doc.Entry}
 	switch {
 	case !doc.Versioned:
-		// Its bytes can be any size: they are only sent as a download.
 	case IsMarkdown(doc.Path) && utf8.Valid(doc.Content):
 		text := string(doc.Content)
 		reply.Content = &text
 	default:
-		// A .md file whose bytes aren't UTF-8 (an upload renamed to .md, say) comes back as
-		// base64 too: as a JSON string its bytes would be replaced, not returned.
 		b64 := base64.StdEncoding.EncodeToString(doc.Content)
 		reply.ContentBase64 = &b64
 	}
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// serveRaw sends a file's bytes as a download, never a page of this site: whatever the file
-// holds, the browser saves it rather than running it. Audio and video say their media type,
-// so a player on the site can play them; ranges are served, so it can seek.
 func (s *Store) serveRaw(w http.ResponseWriter, r *http.Request, sp access.Space, at string) {
 	entry, f, err := s.Open(r.Context(), sp, r.PathValue("path"), at)
 	if err != nil {
@@ -157,8 +142,6 @@ func (s *Store) handlePut(w http.ResponseWriter, r *http.Request) {
 		BaseVersion   string  `json:"base_version"`
 		Message       string  `json:"message"`
 	}
-	// Room for a file of the large-file size, base64-encoded or as JSON text with its
-	// escapes; larger ones are sent as their bytes.
 	if !readJSON(w, r, &req, 2*s.opts.LargeFileSize+maxBody) {
 		return
 	}
@@ -191,8 +174,6 @@ func (s *Store) handlePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, res)
 }
 
-// handlePutRaw is PUT with the file's bytes as the body (application/octet-stream), for a
-// file of any size: base_version and message are in the query.
 func (s *Store) handlePutRaw(w http.ResponseWriter, r *http.Request, sp access.Space, who Author, name string) {
 	q := r.URL.Query()
 	for k := range q {
@@ -256,7 +237,6 @@ func (s *Store) handleDelete(w http.ResponseWriter, r *http.Request) {
 		BaseVersion string `json:"base_version"`
 		Message     string `json:"message"`
 	}
-	// The body is optional.
 	if !readOptionalJSON(w, r, &req, maxBody) {
 		return
 	}
@@ -310,8 +290,6 @@ func (s *Store) handleRestore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleRemoveOldVersions takes a file's older versions out of the space's history. It is
-// logged, with who asked: it can't be undone.
 func (s *Store) handleRemoveOldVersions(w http.ResponseWriter, r *http.Request) {
 	sp, ok := space(w, r)
 	if !ok {
@@ -339,9 +317,6 @@ func (s *Store) handleRemoveOldVersions(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, res)
 }
 
-// space is the space RequireSpace checked. A route mounted without RequireSpace has none:
-// space answers 500 and returns false, rather than handing on the zero Space, which is a
-// real directory (workspaces/0/spaces/0) every such request would share.
 func space(w http.ResponseWriter, r *http.Request) (access.Space, bool) {
 	sp, ok := access.SpaceFrom(r.Context())
 	if !ok {
@@ -352,9 +327,6 @@ func space(w http.ResponseWriter, r *http.Request) (access.Space, bool) {
 	return sp, true
 }
 
-// author is the logged-in user, who makes the request's change; with an access token, the
-// token is the committer, like the agent's. Without a user, author answers 401 and returns
-// false: no change is made in nobody's name.
 func author(w http.ResponseWriter, r *http.Request) (Author, bool) {
 	u, ok := auth.UserFrom(r.Context())
 	if !ok {
@@ -381,8 +353,6 @@ func queryLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return n, true
 }
 
-// fail answers with the status and code for one of the package's errors, or 500. An error
-// errorf made has its own code; others have their sentinel's.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var status int
 	var code apierr.Code
@@ -410,7 +380,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		status, code = http.StatusGone, apierr.CodeDocNotKept
 	default:
 		if r.Context().Err() != nil {
-			return // the client went away
+			return
 		}
 		slog.Error("knowledge: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		apierr.Internal(w)
@@ -423,15 +393,10 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	writeError(w, status, code, msg, params)
 }
 
-// readJSON decodes the request body, at most limit bytes, into v, strictly: unknown
-// fields and trailing data are errors. It answers 400, or 413 for a body over the limit,
-// and returns false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	return decodeJSON(w, r, v, limit, false)
 }
 
-// readOptionalJSON is readJSON for a body that may be left out: an empty body, whatever
-// its declared length (chunked included), leaves v as it is.
 func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	return decodeJSON(w, r, v, limit, true)
 }
@@ -458,8 +423,6 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any, limit int64, opti
 	return false
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
-// with a broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

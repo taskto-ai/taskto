@@ -9,20 +9,16 @@ import (
 	"time"
 )
 
-// taskto-update --check: what a run would install next, found the same way and published for
-// Settings → About, with nothing pulled, installed or changed, and no run's status written.
-
-// releasedAt sets when a fake release was published.
 func (e *updEnv) releasedAt(tag, at string) {
-	for _, r := range e.gh.releases {
-		if r["tag_name"] == tag {
-			r["published_at"] = at
+	e.gh.locked(func() {
+		for _, r := range e.gh.releases {
+			if r["tag_name"] == tag {
+				r["published_at"] = at
+			}
 		}
-	}
+	})
 }
 
-// wantOnlyLooked: a check changed nothing but what it found: no pull, no run's status, no
-// notification, the install as it was.
 func (e *updEnv) wantOnlyLooked() {
 	e.t.Helper()
 	e.wantUntouched()
@@ -32,12 +28,15 @@ func (e *updEnv) wantOnlyLooked() {
 	if e.exists("state/status.json") {
 		e.t.Error("a check wrote a run's status")
 	}
-	if len(e.gh.notifications) != 0 {
+	var sent int
+	e.gh.locked(func() { sent = len(e.gh.notifications) })
+	if sent != 0 {
 		e.t.Error("a check notified")
 	}
 }
 
 func TestUpdateCheckFindsTheNextReleaseAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.write("etc/update-notify-url", e.server.URL+"/notify/x\n")
 	e.release(updOld, "", false, false)
@@ -56,19 +55,16 @@ func TestUpdateCheckFindsTheNextReleaseAndChangesNothing(t *testing.T) {
 	if s.Looked.IsZero() || s.LastRun != nil || s.RecordedVersion != updOld || s.Running != nil {
 		t.Fatalf("status = %+v", s)
 	}
-	// It looked at the images in the registry, and pulled none.
 	if e.count(`^manifest inspect \S+:`+updNew+` @`) == 0 {
 		t.Error("the check didn't look for the images")
 	}
 
-	// The run that installs it leaves nothing available, and when it looked.
 	if code, _ := e.run(); code != 0 {
 		t.Fatal("update")
 	}
 	if s := e.public(); s.Available != nil || s.Looked.IsZero() || s.RecordedVersion != updNew {
 		t.Fatalf("after the update: available %+v, looked %v", s.Available, s.Looked)
 	}
-	// Nothing newer: none, and the check says when it looked.
 	if code, _ := e.run("--check"); code != 0 {
 		t.Fatal("check")
 	}
@@ -78,6 +74,7 @@ func TestUpdateCheckFindsTheNextReleaseAndChangesNothing(t *testing.T) {
 }
 
 func TestUpdateCheckMarksAReleaseThatNeedsAPerson(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	e.release("v0.4.0", "Nothing special.\n", false, false)
@@ -86,14 +83,12 @@ func TestUpdateCheckMarksAReleaseThatNeedsAPerson(t *testing.T) {
 	}
 	e.wantOnlyLooked()
 	s := e.public()
-	// The newest is what a person installs, past the release that needs steps by hand.
 	if s.Available == nil || s.Available.Version != "v0.4.0" || !s.Available.ManualUpgrade {
 		t.Fatalf("available = %+v", s.Available)
 	}
 	if s.NeedsPerson == nil || s.NeedsPerson.Kind != "manual-upgrade" {
 		t.Fatalf("needs = %+v", s.NeedsPerson)
 	}
-	// A run says the same.
 	if code, _ := e.run(); code != 0 {
 		t.Fatal("run")
 	}
@@ -103,6 +98,7 @@ func TestUpdateCheckMarksAReleaseThatNeedsAPerson(t *testing.T) {
 }
 
 func TestUpdateCheckOnTheMainChannel(t *testing.T) {
+	t.Parallel()
 	sha := func(c string) string { return strings.Repeat(c, 40) }
 	a, unpublished, green := sha("a"), sha("d"), sha("e")
 	e := newUpdEnv(t)
@@ -114,8 +110,10 @@ func TestUpdateCheckOnTheMainChannel(t *testing.T) {
 	run := func(sha, at string) map[string]any {
 		return map[string]any{"head_sha": sha, "head_branch": "main", "conclusion": "success", "head_commit": map[string]any{"timestamp": at}}
 	}
-	e.gh.runs = []map[string]any{run(unpublished, "2026-11-26T09:00:00Z"), run(green, "2026-11-26T08:00:00Z"), run(a, "2026-11-25T08:00:00Z")}
-	e.gh.compare = map[string]string{unpublished: "ahead", green: "ahead", a: "identical"}
+	e.gh.locked(func() {
+		e.gh.runs = []map[string]any{run(unpublished, "2026-11-26T09:00:00Z"), run(green, "2026-11-26T08:00:00Z"), run(a, "2026-11-25T08:00:00Z")}
+		e.gh.compare = map[string]string{unpublished: "ahead", green: "ahead", a: "identical"}
+	})
 	e.publish(green)
 	e.failCalls(`^manifest inspect \S+:` + unpublished + ` @`)
 	if code, _ := e.run("--check"); code != 0 {
@@ -134,24 +132,22 @@ func TestUpdateCheckOnTheMainChannel(t *testing.T) {
 	}
 }
 
-// What can't be told keeps what was found; what was found for another version is not shown; the
-// channel off shows nothing.
 func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, _ := e.run("--check"); code != 0 {
 		t.Fatal("check")
 	}
-	e.gh.failPages = map[int]bool{1: true}
+	e.gh.locked(func() { e.gh.failPages = map[int]bool{1: true} })
 	if code, _ := e.run("--check"); code != 0 {
 		t.Fatal("check, GitHub down")
 	}
 	if s := e.public(); s.Available == nil || s.Available.Version != updNew {
 		t.Fatalf("GitHub didn't answer, and what was found went: %+v", s.Available)
 	}
-	e.gh.failPages = nil
+	e.gh.locked(func() { e.gh.failPages = nil })
 
-	// Found from another version: not this install's.
 	e.write("state/available.json", `{"from":"v0.1.0","looked":"2026-11-26T06:00:00Z","version":"v0.3.0","sha":"","published":"","manual_upgrade":false,"repo":"taskto-ai/taskto"}`)
 	if code, _ := e.run("--publish-status"); code != 0 {
 		t.Fatal("publish")
@@ -169,9 +165,8 @@ func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
 	}
 }
 
-// A check never waits for a run or keeps one from starting: while a run holds the lock it records
-// what it found, and the run publishes it.
 func TestUpdateCheckDoesNotWaitForARun(t *testing.T) {
+	t.Parallel()
 	needTools(t, "flock")
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -200,6 +195,7 @@ func TestUpdateCheckDoesNotWaitForARun(t *testing.T) {
 }
 
 func TestUpdateCheckTakesNoOtherOption(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	for _, args := range [][]string{{"--check", "--dry-run"}, {"--check", "--to", updNew}, {"--check", "--publish-status"}, {"--check", "--requested"}, {"--check", "--clear-block"}} {
 		if code, _ := e.run(args...); code != 2 {
@@ -211,9 +207,8 @@ func TestUpdateCheckTakesNoOtherOption(t *testing.T) {
 	}
 }
 
-// The check's units: a timer every few hours, a service that runs --check and nothing else, and
-// the runbook installs both.
 func TestUpdateCheckUnits(t *testing.T) {
+	t.Parallel()
 	timer := readRepoFile(t, "deploy/taskto-update-check.timer")
 	for _, want := range []string{"Persistent=true", "RandomizedDelaySec=", "OnCalendar=", "WantedBy=timers.target"} {
 		if !strings.Contains(timer, want) {
@@ -232,9 +227,8 @@ func TestUpdateCheckUnits(t *testing.T) {
 	}
 }
 
-// An install that isn't on a version (a build of no release or commit) can't be told what is
-// newer: that is not "nothing newer", so the check records no look.
 func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.setVersion("dev")
@@ -249,9 +243,8 @@ func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
 	}
 }
 
-// Step 16 copies the check's units only when the version has them, and stops before the VM's
-// part when a copy fails.
 func TestRunbookCheckUnitsAreOptionalAndACopyFailureStops(t *testing.T) {
+	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	for _, want := range []string{
 		`taskto-update-check.*) git cat-file -e "${TASKTO_VERSION}:deploy/$f"`,
