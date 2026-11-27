@@ -185,7 +185,14 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	p := e.payload
 	g, err := s.paymentSnapshot(ctx, e)
 	if isCode(err, apierr.CodeIntegrationConditionChanged) {
-		return s.paymentConditionUnmet(ctx, e, g)
+		res, resolve, uerr := s.paymentConditionUnmet(ctx, e, g)
+		if !resolve {
+			return res, uerr
+		}
+		// The entry's reference may hold an object nobody has seen: the entry stays on its key's lookup
+		// (the integration's side looks for it, and waits, and fails for an admin), and the write's own
+		// check of the condition then says the link was made and kept.
+		err = nil
 	}
 	if err != nil {
 		return nil, err
@@ -280,35 +287,41 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 //     false). It is done, with nothing asked of anyone.
 //   - The entry made a link the record doesn't hold (the record stopped meeting the condition while the
 //     provider made it): it is kept with the entry, and the entry says so.
+//   - The entry's reference may hold an object nobody has seen (a call whose outcome is unknown): the
+//     entry goes on as if the condition held (resolve), so it keeps looking for that object, which the
+//     write then keeps with the reference (integration_condition_changed_link_kept).
 //   - Otherwise nothing was made: integration_condition_changed.
-func (s *Service) paymentConditionUnmet(ctx context.Context, e effectRow, g paymentGrant) (map[string]any, error) {
-	link, ok, err := s.platform.Payments.EntryLink(ctx, s.db, e.id)
+func (s *Service) paymentConditionUnmet(ctx context.Context, e effectRow, g paymentGrant) (res map[string]any, resolve bool, err error) {
+	link, pending, err := s.platform.Payments.EntryLink(ctx, s.db, e.id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if !ok {
-		return nil, refuse(apierr.CodeIntegrationConditionChanged)
+	if link.ObjectID == "" {
+		if pending {
+			return nil, true, nil
+		}
+		return nil, false, refuse(apierr.CodeIntegrationConditionChanged)
 	}
 	var raw string
 	switch err := s.db.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, e.recordID, e.appID).Scan(&raw); {
 	case errors.Is(err, sql.ErrNoRows):
-		return nil, refuse(apierr.CodeAppEffectRecordGone)
+		return nil, false, refuse(apierr.CodeAppEffectRecordGone)
 	case err != nil:
-		return nil, err
+		return nil, false, err
 	}
 	var data map[string]any
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if url, _ := data[e.payload.URLField].(string); url == link.URL {
 		if id, _ := data[e.payload.IDField].(string); id == link.ObjectID {
 			return map[string]any{
 				"workspace_id": g.workspaceID, "space_id": g.spaceID,
 				"amount": currency.Format(link.AmountMinor, link.Currency), "currency": link.Currency,
-			}, nil
+			}, false, nil
 		}
 	}
-	return nil, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
+	return nil, false, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
 }
 
 // isCode says whether err is an entry's refusal with code.

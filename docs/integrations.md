@@ -369,9 +369,13 @@ write.
   doesn't list are each refused, with a code that says which, before anything is made. The limits
   (and that the integration is on and allowed in the space) are read again right before every call
   leaves, so a try that moves on from an expired key to a new one is refused by a ceiling lowered
-  meanwhile. They never stop the lookup of a key whose outcome is unknown: its object, if it turns up,
-  is the link, and the key is not asked again past them (the entry waits on the lookup, then fails with
-  `integration_outcome_unknown` for an admin).
+  meanwhile. The money limits (the ceiling, the currencies) never stop the lookup of a key whose
+  outcome is unknown: its object, if it turns up, is the link, and the key is not asked again past them
+  (the entry waits on the lookup, then fails with `integration_outcome_unknown` for an admin). The
+  integration must still be on and allowed in the app's space: one switched off, taken from the space
+  or deleted fails the entry with `integration_unavailable` before anything is looked for. A record that
+  stops meeting the action's condition while a key's outcome is unknown doesn't stop the lookup either:
+  the entry is never told "nothing was created" while a call may have made something.
 - **Once, through crashes: a write-ahead log of keys.** The entry's reference (`integration_refs`) is
   unique by the outbox entry and keeps the provider's answer. It has **keys**
   (`integration_ref_attempts`), one at a time: each a Stripe `Idempotency-Key` with a random token of

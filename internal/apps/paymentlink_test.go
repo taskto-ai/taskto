@@ -59,8 +59,7 @@ func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (pay
 func (s *stubLinks) EntryLink(_ context.Context, _ paylink.Querier, effectID int64) (paylink.Link, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l, ok := s.made[effectID]
-	return l, ok, nil
+	return s.made[effectID], false, nil
 }
 
 func (s *stubLinks) LinkCurrent(context.Context, paylink.Querier, int64, string) error {

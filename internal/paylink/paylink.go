@@ -20,8 +20,10 @@ type Opener interface {
 	// if the request's entry has not made one already. Its failures are *Error.
 	OpenPaymentLink(ctx context.Context, req Request) (Link, error)
 	// EntryLink is the link the entry's reference saved (the entry's number is effectID), read through
-	// q with no call to anyone: ok is false while it has none.
-	EntryLink(ctx context.Context, q Querier, effectID int64) (link Link, ok bool, err error)
+	// q with no call to anyone: link.ObjectID is "" while it has none. pending says that, with none saved,
+	// the reference may still hold an object nobody has given yet (a call whose outcome is unknown, an
+	// object seen and not resolved, a payment that came first): only when it doesn't was nothing made.
+	EntryLink(ctx context.Context, q Querier, effectID int64) (link Link, pending bool, err error)
 	// LinkCurrent says whether a link the integration made may be written to a record now, read
 	// through q (the write's own transaction, under its lock): it is refused (an *Error with
 	// integration_account_changed) when the integration's key is of another mode now than the one the
