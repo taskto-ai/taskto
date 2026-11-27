@@ -324,10 +324,55 @@ func (w *Worker) latestBoot() string {
 	return ""
 }
 
-// registerCensus registers c's boot, or refuses it with ErrStaleBoot: a boot registered before the
-// latest one is an earlier server's. A boot the worker hasn't registered gets the next number and
-// is the latest from now on. It returns the boot's number. The caller holds w.censusMu.
-func (w *Worker) registerCensus(c Census) (int64, error) {
+// reserveBoot is the number boot's census takes as it arrives, before it waits for the census
+// lock: the boot's own if it is registered, the one a census of it that is waiting already took,
+// or the next. Numbers given this way only go up; one a census never registers (it was refused,
+// or its caller went) is skipped.
+func (w *Worker) reserveBoot(boot string) int64 {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	for _, b := range w.boots {
+		if b.Boot == boot {
+			return b.Seq
+		}
+	}
+	if r, ok := w.reserved[boot]; ok {
+		r.waiting++
+		w.reserved[boot] = r
+		return r.seq
+	}
+	w.reservedTop = max(w.reservedTop, w.bootSeq) + 1
+	if w.reserved == nil {
+		w.reserved = map[string]reservation{}
+	}
+	w.reserved[boot] = reservation{seq: w.reservedTop, waiting: 1}
+	return w.reservedTop
+}
+
+// unreserveBoot lets go of a census's reservation once it is done.
+func (w *Worker) unreserveBoot(boot string) {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	if r, ok := w.reserved[boot]; ok {
+		if r.waiting--; r.waiting <= 0 {
+			delete(w.reserved, boot)
+		} else {
+			w.reserved[boot] = r
+		}
+	}
+}
+
+// reservation is a number a waiting census of a boot took, and how many censuses of it wait.
+type reservation struct {
+	seq     int64
+	waiting int
+}
+
+// registerCensus registers c's boot with n, the number its census took as it arrived
+// (reserveBoot), or refuses it with ErrStaleBoot: a boot registered before the latest one is an
+// earlier server's, and so is one whose census arrived before the latest's. It returns the boot's
+// number. The caller holds w.censusMu.
+func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
 	for i, b := range w.boots {
@@ -338,7 +383,10 @@ func (w *Worker) registerCensus(c Census) (int64, error) {
 			return 0, ErrStaleBoot
 		}
 	}
-	seq := w.bootSeq + 1
+	if n <= w.bootSeq {
+		return 0, ErrStaleBoot // a census that arrived after this one was registered first
+	}
+	seq := n
 	// The counter first: a number is never given twice, a stop in between only skipping one.
 	if err := writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n")); err != nil {
 		return 0, err
@@ -384,10 +432,10 @@ func (w *Worker) FenceDeletion(ctx context.Context, a cliowner.Account, do func(
 	}
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
-	if err := w.deletionFence(a.Boot); err != nil {
-		return err
-	}
 	if err := ctx.Err(); err != nil {
+		return err // its caller has gone while it waited: nothing is done
+	}
+	if err := w.deletionFence(a.Boot); err != nil {
 		return err
 	}
 	if err := w.retire(a.Identity, a.User); err != nil {

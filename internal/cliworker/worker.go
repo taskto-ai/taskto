@@ -89,6 +89,9 @@ type Worker struct {
 	helpersBuilt   atomic.Int64
 	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
 	dialHookForTest func()
+	// arrivedHookForTest, in tests, runs as a census has taken its number, before it waits for
+	// the census lock.
+	arrivedHookForTest func(boot string)
 	// provisionHookForTest, in tests, runs as an isolated home is made, once it is owned and
 	// before it is renamed into place; an error stops there, as a crash would.
 	provisionHookForTest func() error
@@ -105,6 +108,10 @@ type Worker struct {
 	bootsMu    sync.Mutex
 	boots      []bootEntry
 	bootSeq    int64
+	// reserved is the numbers the censuses waiting for the census lock took as they arrived, by
+	// boot, and reservedTop the highest given (volume.go), under bootsMu.
+	reserved    map[string]reservation
+	reservedTop int64
 	// nextFree and usedHomes are the allocator's high-water mark and the homes the volume has
 	// (records, retired ones too, and directories), under accountsMu (checkCounter).
 	nextFree  int64

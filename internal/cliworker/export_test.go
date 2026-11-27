@@ -149,3 +149,23 @@ const MaxHomeForTest = maxHome
 // SetProvisionHookForTest has f run as an isolated home is made, once it is owned and before it is
 // renamed into place; an error from it stops there, as a crash would.
 func (w *Worker) SetProvisionHookForTest(f func() error) { w.provisionHookForTest = f }
+
+// HoldCensusForTest takes the lock censuses and deletions wait for, until release is called.
+func (w *Worker) HoldCensusForTest() (release func()) {
+	w.censusMu.Lock()
+	return w.censusMu.Unlock
+}
+
+// ReservedForTest is the number a census of boot waiting for the census lock took, if one waits.
+func (w *Worker) ReservedForTest(boot string) (int64, bool) {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	r, ok := w.reserved[boot]
+	return r.seq, ok
+}
+
+// LatestBootForTest is the latest registered boot, "" for none.
+func (w *Worker) LatestBootForTest() string { return w.latestBoot() }
+
+// SetArrivedHookForTest has f run as a census has taken its number, before it waits for the lock.
+func (w *Worker) SetArrivedHookForTest(f func(boot string)) { w.arrivedHookForTest = f }

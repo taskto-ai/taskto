@@ -44,9 +44,13 @@ func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 		return badRequest{errors.New("invalid account")}
 	}
 	// One at a time with the censuses, and only for the latest server boot: a deletion an earlier
-	// server sent, delayed past a restore that brought the account back, retires nothing.
+	// server sent, delayed past a restore that brought the account back, retires nothing. One whose
+	// caller has gone while it waited (its server stopped) does nothing.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := w.deletionFence(a.Boot); err != nil {
 		return err
 	}
@@ -113,11 +117,24 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	if err := c.check(); err != nil {
 		return badRequest{err}
 	}
+	// The boot's number is given as the census arrives, before it waits for the lock: of two
+	// censuses, the one that arrived first has the lower number, whichever runs first.
+	n := w.reserveBoot(c.Boot)
+	defer w.unreserveBoot(c.Boot)
+	if hook := w.arrivedHookForTest; hook != nil {
+		hook(c.Boot)
+	}
 	// One at a time, and only the latest server boot's: a census an earlier server sent (one a
 	// restore replaced, still running or delayed) would retire the accounts the later one made.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
-	seq, err := w.registerCensus(c)
+	// A census whose caller has gone while it waited (its server stopped: one server runs on a
+	// data directory, so an earlier server's census is late only if it was in flight then) does
+	// nothing, and registers nothing.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	seq, err := w.registerCensus(c, n)
 	if err != nil {
 		return err
 	}

@@ -119,3 +119,88 @@ func TestACensusStopsAFirstTurnBeforeItsHomeIsMade(t *testing.T) {
 		t.Errorf("a retired account's home was made after its census: %v", err)
 	}
 }
+
+// A census still waiting for the census lock when its caller goes (its server stopped, the
+// connection closed) does nothing once it gets the lock: it registers no boot and retires no
+// account. So a dead server's census, queued, never retires anything.
+func TestACensusWhoseCallerWentRetiresNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	r := serve(t, h)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Fatal(err)
+	}
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	release := h.w.HoldCensusForTest()
+	dead := strings.Repeat("d", 32)
+	cctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- r.Reconcile(cctx, bootCensus(dead, time.Now(), nil)) }()
+	eventually(t, "the census didn't arrive", func() bool { _, ok := h.w.ReservedForTest(dead); return ok })
+	cancel()                           // the server goes: its connection closes
+	<-done                             //nolint:errcheck // the caller went: whatever it heard
+	time.Sleep(300 * time.Millisecond) // the worker sees the connection closed
+	release()
+	eventually(t, "the census didn't end", func() bool { _, ok := h.w.ReservedForTest(dead); return !ok })
+	if got := h.w.LatestBootForTest(); got != cliworker.TestBoot {
+		t.Errorf("the latest boot = %q, want the live server's: the abandoned census registered its boot", got)
+	}
+	if st, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Errorf("the account the abandoned census didn't name: %+v %v", st, err)
+	}
+	if _, err := os.Stat(dirs.Root); err != nil {
+		t.Errorf("its home: %v", err)
+	}
+	// The same for a deletion and a browser purge whose callers went.
+	for name, del := range map[string]func(context.Context) error{
+		"a deletion":      func(c context.Context) error { return r.Forget(c, acct(1)) },
+		"a browser purge": func(c context.Context) error { return h.w.FenceDeletion(c, acct(1), func() error { return nil }) },
+	} {
+		release := h.w.HoldCensusForTest()
+		cctx, cancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() { done <- del(cctx) }()
+		time.Sleep(200 * time.Millisecond) // waiting for the lock
+		cancel()
+		time.Sleep(300 * time.Millisecond)
+		release()
+		<-done //nolint:errcheck // the caller went: whatever it heard
+		time.Sleep(100 * time.Millisecond)
+		if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil {
+			t.Errorf("after %s whose caller went: %v", name, err)
+		}
+	}
+}
+
+// Of two censuses, the one that arrived first has the earlier number, whichever gets the lock
+// first: here the first one is held between its arrival and the lock while the second runs, and
+// is then the earlier server's.
+func TestTheCensusThatArrivesFirstHasTheEarlierNumber(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	first, second := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	arrived, proceed := make(chan struct{}), make(chan struct{})
+	h.w.SetArrivedHookForTest(func(boot string) {
+		if boot == first {
+			close(arrived)
+			<-proceed
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- h.w.Reconcile(ctx, bootCensus(first, time.Now(), nil)) }()
+	<-arrived
+	a, _ := h.w.ReservedForTest(first)
+	if err := h.w.Reconcile(ctx, bootCensus(second, time.Now().Add(-time.Hour), nil)); err != nil {
+		t.Fatalf("the second census: %v", err)
+	}
+	close(proceed)
+	if err := <-done; !errors.Is(err, cliworker.ErrStaleBoot) {
+		t.Errorf("the first census, run after the second: %v, want ErrStaleBoot", err)
+	}
+	if got := h.w.LatestBootForTest(); got != second {
+		t.Errorf("the latest boot = %q, want the second census's", got)
+	}
+	if a == 0 {
+		t.Error("the first census took no number as it arrived")
+	}
+}

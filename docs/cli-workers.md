@@ -456,9 +456,11 @@ The UI shows what the command prints.
     temporary directory the next start removes, never a home of the wrong owner;
   - the worker's own directories are made with each new one's parent synced, before anything is
     recorded in them.
-- **Server boots.** The worker orders the servers' boots by itself, never by a clock: the first
-  census of a boot it applies gives the boot the next number of a counter that only goes up
-  (`.worker/boot-seq`, moved on durably first), and a boot with a higher number is a later server.
+- **Server boots.** The worker orders the servers' boots by itself, never by a clock: a boot's
+  census takes the next number of a counter that only goes up as it arrives, before it waits for
+  the lock censuses and deletions share, and the boot is registered with it when that census is
+  applied (`.worker/boot-seq`, moved on durably first). A boot with a higher number is a later
+  server: of two censuses, the one that arrived first is the earlier, whichever runs first.
   The order is on the worker's volume, so a restore of the server's data can't take it back, and a
   clock stepped back changes nothing. Only a census registers a boot: no other request does, so a
   delayed request of an earlier server can't make its boot the latest. Every account record keeps
@@ -478,8 +480,13 @@ The UI shows what the command prints.
     deletions: what a census retires is decided by the records' numbers, never by the list. With
     the list lost, damaged or past its bound, no account is taken for a later server's; deletions
     wait for the next census, which sets the latest boot again;
+  - one server runs on a data directory (its lock), and a restore takes that lock too, so an
+    earlier server's census can come after a later one's only if it was in flight when its server
+    stopped. A census, a deletion or a browser purge whose caller has gone (its connection closed)
+    does nothing and registers nothing: that is checked once it has the lock, and again before
+    each retirement, so a dead server's queued census never retires anything;
   - censuses and deletions run one at a time, so no boot is registered between a decision and
-    what it decides, and one whose caller has given up retires nothing more. The server stops
+    what it decides. The server stops
     trying a census the worker calls stale (a later server has spoken to the worker), and logs it.
 - **Retired accounts.** An account that is gone (`Forget`, `Reconcile`) is **retired**: its record
   says so, durably, and keeps its home number, so the number is never given again. Every request
