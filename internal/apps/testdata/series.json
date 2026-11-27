@@ -29,6 +29,19 @@
       {
         "name": "name",
         "type": "string"
+      },
+      {
+        "name": "tag",
+        "type": "string"
+      },
+      {
+        "name": "tier",
+        "type": "choice",
+        "options": [
+          "big",
+          "mixed",
+          "small"
+        ]
       }
     ]
   },
@@ -88,6 +101,174 @@
       "id": 7,
       "name": "b",
       "status": "closed"
+    },
+    {
+      "active": "true",
+      "amount": 1.7976931348623157e+308,
+      "day": "2026-13-45",
+      "id": 8,
+      "status": "open",
+      "tier": "big"
+    },
+    {
+      "active": false,
+      "amount": 1.7976931348623157e+308,
+      "day": "2026-12-31T10:00",
+      "id": 9,
+      "status": "open",
+      "tag": "",
+      "tier": "big"
+    },
+    {
+      "amount": 1.7976931348623157e+308,
+      "id": 10,
+      "status": "closed",
+      "tier": "mixed"
+    },
+    {
+      "amount": -1.7976931348623157e+308,
+      "id": 11,
+      "status": "open",
+      "tier": "mixed"
+    },
+    {
+      "active": true,
+      "amount": 5,
+      "id": 12,
+      "status": "closed",
+      "tier": "small"
+    },
+    {
+      "id": 54,
+      "name": "only-open",
+      "status": "open"
+    },
+    {
+      "active": true,
+      "day": "2027-01-05",
+      "id": 55,
+      "status": "archived"
+    },
+    {
+      "id": 56,
+      "status": "open",
+      "tier": "giant"
+    },
+    {
+      "id": 13,
+      "tag": "t100"
+    },
+    {
+      "id": 14,
+      "tag": "t101"
+    },
+    {
+      "id": 15,
+      "tag": "t102"
+    },
+    {
+      "id": 16,
+      "tag": "t103"
+    },
+    {
+      "id": 17,
+      "tag": "t104"
+    },
+    {
+      "id": 18,
+      "tag": "t105"
+    },
+    {
+      "id": 19,
+      "tag": "t106"
+    },
+    {
+      "id": 20,
+      "tag": "t107"
+    },
+    {
+      "id": 21,
+      "tag": "t108"
+    },
+    {
+      "id": 22,
+      "tag": "t109"
+    },
+    {
+      "id": 23,
+      "tag": "t110"
+    },
+    {
+      "id": 24,
+      "tag": "t111"
+    },
+    {
+      "id": 25,
+      "tag": "t112"
+    },
+    {
+      "id": 26,
+      "tag": "t113"
+    },
+    {
+      "id": 27,
+      "tag": "t114"
+    },
+    {
+      "id": 28,
+      "tag": "t115"
+    },
+    {
+      "id": 29,
+      "tag": "t116"
+    },
+    {
+      "id": 30,
+      "tag": "t117"
+    },
+    {
+      "id": 31,
+      "tag": "t118"
+    },
+    {
+      "id": 32,
+      "tag": "t119"
+    },
+    {
+      "id": 33,
+      "tag": "t120"
+    },
+    {
+      "id": 34,
+      "tag": "t121"
+    },
+    {
+      "id": 40,
+      "tag": "zeta"
+    },
+    {
+      "id": 41,
+      "tag": "zeta"
+    },
+    {
+      "id": 42,
+      "tag": "zeta"
+    },
+    {
+      "id": 50,
+      "tag": "Ａ"
+    },
+    {
+      "id": 51,
+      "tag": "😀"
+    },
+    {
+      "id": 52,
+      "tag": "other"
+    },
+    {
+      "id": 53,
+      "tag": 7
     }
   ],
   "series": {
@@ -114,11 +295,29 @@
       "group_by": "status",
       "split_by": "active"
     },
+    "by_tag": {
+      "kind": "count",
+      "group_by": "tag"
+    },
     "by_week": {
       "kind": "count",
       "group_by": "day",
       "bucket": "week",
       "last": 4
+    },
+    "default_last": {
+      "kind": "count",
+      "group_by": "day",
+      "bucket": "month"
+    },
+    "name_closed": {
+      "kind": "count",
+      "group_by": "name",
+      "where": {
+        "field": "status",
+        "op": "eq",
+        "value": "closed"
+      }
     },
     "open_total": {
       "kind": "sum",
@@ -129,6 +328,21 @@
         "op": "eq",
         "value": "open"
       }
+    },
+    "split_tier": {
+      "kind": "count",
+      "group_by": "status",
+      "split_by": "tier"
+    },
+    "tier_avg": {
+      "kind": "avg",
+      "field": "amount",
+      "group_by": "tier"
+    },
+    "tier_sum": {
+      "kind": "sum",
+      "field": "amount",
+      "group_by": "tier"
     }
   },
   "expected": {
@@ -221,6 +435,10 @@
           "label": "c"
         },
         {
+          "key": "only-open",
+          "label": "only-open"
+        },
+        {
           "key": "other",
           "label": "other"
         }
@@ -232,6 +450,7 @@
           "values": [
             3,
             2,
+            1,
             1,
             1
           ]
@@ -254,7 +473,7 @@
           "key": "false",
           "label": "false",
           "values": [
-            1,
+            2,
             2
           ]
         },
@@ -263,7 +482,124 @@
           "label": "true",
           "values": [
             2,
-            2
+            3
+          ]
+        }
+      ]
+    },
+    "by_tag": {
+      "x": [
+        {
+          "key": "zeta",
+          "label": "zeta"
+        },
+        {
+          "key": "",
+          "label": ""
+        },
+        {
+          "key": "t100",
+          "label": "t100"
+        },
+        {
+          "key": "t101",
+          "label": "t101"
+        },
+        {
+          "key": "t102",
+          "label": "t102"
+        },
+        {
+          "key": "t103",
+          "label": "t103"
+        },
+        {
+          "key": "t104",
+          "label": "t104"
+        },
+        {
+          "key": "t105",
+          "label": "t105"
+        },
+        {
+          "key": "t106",
+          "label": "t106"
+        },
+        {
+          "key": "t107",
+          "label": "t107"
+        },
+        {
+          "key": "t108",
+          "label": "t108"
+        },
+        {
+          "key": "t109",
+          "label": "t109"
+        },
+        {
+          "key": "t110",
+          "label": "t110"
+        },
+        {
+          "key": "t111",
+          "label": "t111"
+        },
+        {
+          "key": "t112",
+          "label": "t112"
+        },
+        {
+          "key": "t113",
+          "label": "t113"
+        },
+        {
+          "key": "t114",
+          "label": "t114"
+        },
+        {
+          "key": "t115",
+          "label": "t115"
+        },
+        {
+          "key": "t116",
+          "label": "t116"
+        },
+        {
+          "key": "t117",
+          "label": "t117"
+        },
+        {
+          "key": "other",
+          "label": "other"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            3,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            7
           ]
         }
       ]
@@ -295,6 +631,110 @@
             1,
             0,
             3,
+            2
+          ]
+        }
+      ]
+    },
+    "default_last": {
+      "x": [
+        {
+          "key": "2026-02",
+          "label": "2026-02"
+        },
+        {
+          "key": "2026-03",
+          "label": "2026-03"
+        },
+        {
+          "key": "2026-04",
+          "label": "2026-04"
+        },
+        {
+          "key": "2026-05",
+          "label": "2026-05"
+        },
+        {
+          "key": "2026-06",
+          "label": "2026-06"
+        },
+        {
+          "key": "2026-07",
+          "label": "2026-07"
+        },
+        {
+          "key": "2026-08",
+          "label": "2026-08"
+        },
+        {
+          "key": "2026-09",
+          "label": "2026-09"
+        },
+        {
+          "key": "2026-10",
+          "label": "2026-10"
+        },
+        {
+          "key": "2026-11",
+          "label": "2026-11"
+        },
+        {
+          "key": "2026-12",
+          "label": "2026-12"
+        },
+        {
+          "key": "2027-01",
+          "label": "2027-01"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            3,
+            3
+          ]
+        }
+      ]
+    },
+    "name_closed": {
+      "x": [
+        {
+          "key": "a",
+          "label": "a"
+        },
+        {
+          "key": "b",
+          "label": "b"
+        },
+        {
+          "key": "c",
+          "label": "c"
+        },
+        {
+          "key": "other",
+          "label": "other"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            1,
+            1,
+            1,
             1
           ]
         }
@@ -316,8 +756,100 @@
           "key": "",
           "label": "",
           "values": [
-            6,
+            1.7976931348623157e+308,
             12
+          ]
+        }
+      ]
+    },
+    "split_tier": {
+      "x": [
+        {
+          "key": "open",
+          "label": "Open"
+        },
+        {
+          "key": "closed",
+          "label": "Closed"
+        }
+      ],
+      "series": [
+        {
+          "key": "big",
+          "label": "big",
+          "values": [
+            2,
+            0
+          ]
+        },
+        {
+          "key": "mixed",
+          "label": "mixed",
+          "values": [
+            1,
+            1
+          ]
+        },
+        {
+          "key": "small",
+          "label": "small",
+          "values": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    "tier_avg": {
+      "x": [
+        {
+          "key": "big",
+          "label": "big"
+        },
+        {
+          "key": "mixed",
+          "label": "mixed"
+        },
+        {
+          "key": "small",
+          "label": "small"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            1.7976931348623157e+308,
+            0,
+            5
+          ]
+        }
+      ]
+    },
+    "tier_sum": {
+      "x": [
+        {
+          "key": "big",
+          "label": "big"
+        },
+        {
+          "key": "mixed",
+          "label": "mixed"
+        },
+        {
+          "key": "small",
+          "label": "small"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            null,
+            0,
+            5
           ]
         }
       ]

@@ -158,6 +158,8 @@ func TestSeriesFixtureSharedWithTheWebApp(t *testing.T) {
 			{Name: "active", Type: TypeBoolean},
 			{Name: "day", Type: TypeDate},
 			{Name: "name", Type: TypeString},
+			{Name: "tag", Type: TypeString},
+			{Name: "tier", Type: TypeChoice, Options: []string{"big", "mixed", "small"}},
 		}},
 		Rows: []map[string]any{
 			{"id": 1, "amount": 4, "status": "open", "active": true, "day": "2026-11-30", "name": "a"},
@@ -169,15 +171,43 @@ func TestSeriesFixtureSharedWithTheWebApp(t *testing.T) {
 			{"id": 7, "amount": 3, "status": "closed", "active": true, "day": "2026-12-28", "name": "b"},
 		},
 		Series: map[string]Series{
-			"by_status":  {Kind: "count", GroupBy: "status", SplitBy: "active"},
-			"by_month":   {Kind: "sum", Field: "amount", GroupBy: "day", Bucket: "month", Last: 3},
-			"by_week":    {Kind: "count", GroupBy: "day", Bucket: "week", Last: 4},
-			"by_day":     {Kind: "avg", Field: "amount", GroupBy: "day", Bucket: "day", Last: 7},
-			"by_name":    {Kind: "count", GroupBy: "name"},
-			"open_total": {Kind: "sum", Field: "amount", GroupBy: "active", Where: &Rule{Field: "status", Op: "eq", Value: "open"}},
+			"by_status":    {Kind: "count", GroupBy: "status", SplitBy: "active"},
+			"by_month":     {Kind: "sum", Field: "amount", GroupBy: "day", Bucket: "month", Last: 3},
+			"by_week":      {Kind: "count", GroupBy: "day", Bucket: "week", Last: 4},
+			"by_day":       {Kind: "avg", Field: "amount", GroupBy: "day", Bucket: "day", Last: 7},
+			"by_name":      {Kind: "count", GroupBy: "name"},
+			"open_total":   {Kind: "sum", Field: "amount", GroupBy: "active", Where: &Rule{Field: "status", Op: "eq", Value: "open"}},
+			"by_tag":       {Kind: "count", GroupBy: "tag"},
+			"tier_sum":     {Kind: "sum", Field: "amount", GroupBy: "tier"},
+			"tier_avg":     {Kind: "avg", Field: "amount", GroupBy: "tier"},
+			"split_tier":   {Kind: "count", GroupBy: "status", SplitBy: "tier"},
+			"name_closed":  {Kind: "count", GroupBy: "name", Where: &Rule{Field: "status", Op: "eq", Value: "closed"}},
+			"default_last": {Kind: "count", GroupBy: "day", Bucket: "month"},
 		},
 		Expected: map[string]SeriesData{},
 	}
+	fixture.Rows = append(fixture.Rows,
+		map[string]any{"id": 8, "amount": math.MaxFloat64, "tier": "big", "status": "open", "active": "true", "day": "2026-13-45"},
+		map[string]any{"id": 9, "amount": math.MaxFloat64, "tier": "big", "status": "open", "active": false, "day": "2026-12-31T10:00", "tag": ""},
+		map[string]any{"id": 10, "amount": math.MaxFloat64, "tier": "mixed", "status": "closed"},
+		map[string]any{"id": 11, "amount": -math.MaxFloat64, "tier": "mixed", "status": "open"},
+		map[string]any{"id": 12, "amount": 5, "tier": "small", "status": "closed", "active": true},
+		map[string]any{"id": 54, "name": "only-open", "status": "open"},
+		map[string]any{"id": 55, "status": "archived", "active": true, "day": "2027-01-05"},
+		map[string]any{"id": 56, "status": "open", "tier": "giant"},
+	)
+	for i := 0; i < 22; i++ {
+		fixture.Rows = append(fixture.Rows, map[string]any{"id": 13 + i, "tag": "t" + strconv.Itoa(100+i)})
+	}
+	for i := 0; i < 3; i++ {
+		fixture.Rows = append(fixture.Rows, map[string]any{"id": 40 + i, "tag": "zeta"})
+	}
+	fixture.Rows = append(fixture.Rows,
+		map[string]any{"id": 50, "tag": "\uff21"},
+		map[string]any{"id": 51, "tag": "\U0001F600"},
+		map[string]any{"id": 52, "tag": "other"},
+		map[string]any{"id": 53, "tag": 7},
+	)
 	rows := make([]Row, len(fixture.Rows))
 	for i, data := range fixture.Rows {
 		values := map[string]any{}
