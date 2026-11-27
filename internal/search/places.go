@@ -2,13 +2,13 @@ package search
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -64,8 +64,9 @@ func sortPlaces[T any](items []T, name func(T) string, needle string, limit int)
 		if ap != bp {
 			return ap
 		}
-		if len(a) != len(b) {
-			return len(a) < len(b)
+		al, bl := utf8.RuneCountInString(a), utf8.RuneCountInString(b)
+		if al != bl {
+			return al < bl
 		}
 		return a < b
 	})
@@ -83,7 +84,7 @@ func (x *Index) SearchPlaces(ctx context.Context, checker *access.Checker, userI
 	res := PlaceResults{Spaces: []PlaceSpace{}, Apps: []PlaceApp{}, Boards: []PlaceBoard{}}
 	spaceByID := map[int64]access.Space{}
 	for _, sp := range spaces {
-		if sp.WorkspaceID != workspaceID || !sp.Access.Allows(access.Read) {
+		if sp.WorkspaceID != workspaceID || !sp.Access.Allows(access.Read) || sp.ArchivedAt != nil {
 			continue
 		}
 		spaceByID[sp.ID] = sp
@@ -94,20 +95,39 @@ func (x *Index) SearchPlaces(ctx context.Context, checker *access.Checker, userI
 		if err != nil {
 			return PlaceResults{}, err
 		}
+		ids := make([]int64, 0, len(apps))
 		for id, appAccess := range apps {
 			if !appAccess.View && !appAccess.Design {
 				continue
 			}
-			var name string
-			err := x.db.QueryRowContext(ctx, `SELECT name FROM apps WHERE id = ? AND space_id = ? AND archived_at IS NULL`, id, sp.ID).Scan(&name)
-			if err == sql.ErrNoRows {
-				continue
-			}
+			ids = append(ids, id)
+		}
+		if len(ids) > 0 {
+			encoded, err := json.Marshal(ids)
 			if err != nil {
 				return PlaceResults{}, err
 			}
-			if placeMatches(name, needle) {
-				res.Apps = append(res.Apps, PlaceApp{SpaceID: sp.ID, SpaceName: sp.Name, AppID: id, Name: name})
+			rows, err := x.db.QueryContext(ctx, `SELECT id, name FROM apps WHERE id IN (SELECT value FROM json_each(?)) AND space_id = ? AND archived_at IS NULL`, string(encoded), sp.ID)
+			if err != nil {
+				return PlaceResults{}, err
+			}
+			for rows.Next() {
+				var id int64
+				var name string
+				if err := rows.Scan(&id, &name); err != nil {
+					_ = rows.Close()
+					return PlaceResults{}, err
+				}
+				if placeMatches(name, needle) {
+					res.Apps = append(res.Apps, PlaceApp{SpaceID: sp.ID, SpaceName: sp.Name, AppID: id, Name: name})
+				}
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return PlaceResults{}, err
+			}
+			if err := rows.Close(); err != nil {
+				return PlaceResults{}, err
 			}
 		}
 	}
@@ -148,6 +168,7 @@ func (x *Index) SearchPlaces(ctx context.Context, checker *access.Checker, userI
 	res.Apps = sortPlaces(res.Apps, func(p PlaceApp) string { return p.Name }, needle, limit)
 	res.Boards = sortPlaces(res.Boards, func(p PlaceBoard) string { return p.Name }, needle, limit)
 	readable := map[int64]bool{}
+	appReadable := map[int64]bool{}
 	for _, was := range spaces {
 		cur, err := checker.Check(ctx, userID, was.ID)
 		switch {
@@ -156,12 +177,21 @@ func (x *Index) SearchPlaces(ctx context.Context, checker *access.Checker, userI
 		case err != nil:
 			return PlaceResults{}, err
 		default:
-			readable[was.ID] = cur.WorkspaceID == workspaceID && cur.Access.Allows(access.Read) &&
+			readable[was.ID] = cur.WorkspaceID == workspaceID && cur.Access.Allows(access.Read) && cur.ArchivedAt == nil &&
 				(was.Generation == 0 || cur.Generation == was.Generation)
+			if readable[was.ID] {
+				apps, err := checker.AppsIn(ctx, userID, cur)
+				if err != nil {
+					return PlaceResults{}, err
+				}
+				for id, appAccess := range apps {
+					appReadable[id] = appAccess.View || appAccess.Design
+				}
+			}
 		}
 	}
 	res.Spaces = slices.DeleteFunc(res.Spaces, func(p PlaceSpace) bool { return !readable[p.ID] })
-	res.Apps = slices.DeleteFunc(res.Apps, func(p PlaceApp) bool { return !readable[p.SpaceID] })
+	res.Apps = slices.DeleteFunc(res.Apps, func(p PlaceApp) bool { return !readable[p.SpaceID] || !appReadable[p.AppID] })
 	res.Boards = slices.DeleteFunc(res.Boards, func(p PlaceBoard) bool { return !readable[p.SpaceID] })
 	return res, nil
 }

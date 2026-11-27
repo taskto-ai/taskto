@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"taskto.ai/taskto/internal/access"
 )
 
 type paletteReply struct {
@@ -69,6 +71,13 @@ func TestPalettePlaceNamesIgnoreCaseAndAccents(t *testing.T) {
 	if _, err := w.e.db.Exec(`UPDATE spaces SET name = 'Café team' WHERE id = ?`, w.team.ID); err != nil {
 		t.Fatal(err)
 	}
+	archivedSpace := w.createShared("Café retired space")
+	w.addMember(archivedSpace, w.alice, access.RoleViewer)
+	w.newApp(w.owner, archivedSpace, "Café retired app", false)
+	w.teamBoard(w.owner, archivedSpace, "Café retired board")
+	if _, err := w.e.db.Exec(`UPDATE spaces SET archived_at = CURRENT_TIMESTAMP WHERE id = ?`, archivedSpace.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	status, got := w.searchPalette(w.alice, "CAFE")
 	if status != http.StatusOK || len(got.Places.Spaces) != 1 || got.Places.Spaces[0].ID != w.team.ID ||
@@ -80,6 +89,14 @@ func TestPalettePlaceNamesIgnoreCaseAndAccents(t *testing.T) {
 	status, got = w.searchPalette(w.alice, "CAFE")
 	if status != http.StatusOK || len(got.Places.Spaces) != 0 || len(got.Places.Apps) != 0 || len(got.Places.Boards) != 0 {
 		t.Fatalf("revoked space remained in palette: status %d places %+v", status, got.Places)
+	}
+}
+
+func TestPlaceRankingUsesUnicodeCharacterCount(t *testing.T) {
+	names := []string{"abcd", "a猫"}
+	ranked := sortPlaces(names, func(s string) string { return s }, "a", 5)
+	if len(ranked) != 2 || ranked[0] != "a猫" {
+		t.Fatalf("ranked names = %v", ranked)
 	}
 }
 
