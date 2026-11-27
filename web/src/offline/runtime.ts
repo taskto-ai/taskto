@@ -11,7 +11,16 @@ import {
 import { SchemaTooNew } from './idb'
 import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
-import { type Approval, type Download, OfflineStore, Superseded, seenOf, type UnsentRef } from './store'
+import {
+  type Approval,
+  approvalOf,
+  type Download,
+  NotOnDevice,
+  OfflineStore,
+  Superseded,
+  seenOf,
+  type UnsentRef,
+} from './store'
 import { type SyncDeps, SyncEngine } from './sync'
 import { OfflineWriter, type WriterDeps } from './writer'
 
@@ -32,6 +41,10 @@ function writeUsers(list: number[]) {
   } catch {}
 }
 
+function dropUser(id: number) {
+  writeUsers(readUsers().filter((n) => n !== id))
+}
+
 export { type LastUser, lastUser, rememberUser }
 
 export type Runtime = {
@@ -42,7 +55,13 @@ export type Runtime = {
   stop: () => void
 }
 
-export type Foreign = { users: number[]; count: number }
+export type Foreign = {
+  users: number[]
+  count: number
+  owner: number
+  unsent: Record<number, UnsentRef[]>
+  failed?: true
+}
 
 export type RuntimeState = {
   runtime: Runtime | null
@@ -75,28 +94,38 @@ export function setSyncDeps(next: SyncDeps, writer: WriterDeps = {}) {
 async function sweep(user: number, current: () => boolean): Promise<Foreign | null> {
   const others = readUsers().filter((id) => id !== user)
   const keep: number[] = []
-  const foreign: Foreign = { users: [], count: 0 }
+  const foreign: Foreign = { users: [], count: 0, owner: user, unsent: {} }
   for (const id of others) {
     if (!current()) throw new Lapsed()
     let store: OfflineStore
     try {
-      store = await OfflineStore.open(id)
-    } catch {
+      store = await OfflineStore.open(id, { still: current })
+    } catch (e) {
+      if (e instanceof Superseded) throw new Lapsed()
       keep.push(id)
       continue
     }
+    if (!current()) {
+      store.close()
+      throw new Lapsed()
+    }
     try {
-      const unsent = await store.retireOrKeepUnsent()
+      const unsent = await store.retireOrKeepUnsent(new Map(), true, current)
       if (unsent.length === 0) {
-        await store.destroy()
+        store.close()
+        const outcome = await OfflineStore.deleteRetired(id, { still: current }).catch(() => 'failed' as const)
+        if (outcome === 'stopped') throw new Lapsed()
+        if (outcome !== 'removed') keep.push(id)
       } else {
         keep.push(id)
         foreign.users.push(id)
         foreign.count += unsent.length
+        foreign.unsent[id] = unsent
         store.close()
       }
-    } catch {
+    } catch (e) {
       store.close()
+      if (e instanceof Lapsed || e instanceof Superseded) throw new Lapsed()
       if (!keep.includes(id)) keep.push(id)
     }
   }
@@ -125,17 +154,20 @@ function watch() {
   watchAccount()
   onAccountSignal((who) => {
     if (state.runtime && state.runtime.user !== who) retire()
+    else if (state.foreign && state.foreign.owner !== who) set({ ...state, foreign: null })
   })
   window.addEventListener(ACCOUNT_CHANGED_EVENT, (e) => {
     const expected = (e as CustomEvent<{ expected?: number }>).detail?.expected
     if (state.runtime && state.runtime.user === expected) retire()
+    else if (state.foreign && state.foreign.owner === expected) set({ ...state, foreign: null })
   })
 }
 
-export async function activate(user: number, name?: string): Promise<RuntimeState> {
+export async function activate(user: number, name?: string, still: () => boolean = () => true): Promise<RuntimeState> {
   watch()
   if (opening) await opening.catch(() => {})
   if (state.runtime?.user === user) {
+    if (!still()) return state
     if (name) rememberUser({ id: user, name })
     if (!signOutPending(user)) state.runtime.engine.resume()
     void revalidate(state.runtime.store).catch(() => {})
@@ -147,8 +179,10 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
       set({ runtime: null, problem: 'unavailable', foreign: null })
       return state
     }
+    if (!still()) return state
     const marker = name ? rememberUser({ id: user, name }) : 'ok'
     const current = () => {
+      if (!still()) return false
       const who = lastUser()
       return marker === 'ok' ? who?.id === user : who === null || who.id === user
     }
@@ -167,7 +201,7 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
     }
     let store: OfflineStore | undefined
     try {
-      store = await OfflineStore.open(user)
+      store = await OfflineStore.open(user, { still: current })
       if (!current()) return abandon(store)
       const opened = store
       opened.connectTabs(
@@ -197,6 +231,7 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
       void revalidate(opened).catch(() => {})
     } catch (e) {
       store?.close()
+      if (e instanceof Superseded) return abandon()
       set({ runtime: null, problem: e instanceof SchemaTooNew ? 'schema' : 'unavailable', foreign })
     }
     return state
@@ -205,13 +240,64 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   return attempt
 }
 
+async function discardShown(
+  id: number,
+  shown: UnsentRef[],
+  mine: () => boolean,
+): Promise<'removed' | 'newer' | 'stopped' | UnsentRef[]> {
+  let store: OfflineStore
+  try {
+    store = await OfflineStore.open(id, { still: mine })
+  } catch (e) {
+    if (e instanceof Superseded) return 'stopped'
+    if (e instanceof NotOnDevice) {
+      if (mine()) dropUser(id)
+      return 'removed'
+    }
+    throw e
+  }
+  let left: UnsentRef[]
+  try {
+    left = await store.retireOrKeepUnsent(approvalOf(shown), false, mine)
+  } catch (e) {
+    if (e instanceof Superseded) return 'stopped'
+    throw e
+  } finally {
+    store.close()
+  }
+  if (left.length > 0) return left
+  return OfflineStore.deleteRetired(id, {
+    still: mine,
+    removed: () => {
+      if (mine()) dropUser(id)
+    },
+  })
+}
+
 export async function discardForeign(): Promise<void> {
   if (opening) await opening.catch(() => {})
   const foreign = state.foreign
   if (!foreign) return
-  for (const id of foreign.users) await OfflineStore.destroyFor(id).catch(() => {})
-  writeUsers(readUsers().filter((id) => !foreign.users.includes(id)))
-  set({ ...state, foreign: null })
+  const mine = () => state.foreign === foreign && lastUser()?.id === foreign.owner
+  const gone: number[] = []
+  const changed: Record<number, UnsentRef[]> = {}
+  let stopped = false
+  for (const id of foreign.users) {
+    if (!mine()) {
+      stopped = true
+      break
+    }
+    const outcome = await discardShown(id, foreign.unsent[id] ?? [], mine).catch(() => 'failed' as const)
+    if (outcome === 'removed') gone.push(id)
+    else if (outcome === 'stopped') stopped = true
+    else if (Array.isArray(outcome)) changed[id] = outcome
+  }
+  if (state.foreign !== foreign) return
+  const users = foreign.users.filter((id) => !gone.includes(id))
+  if (stopped || users.length === 0) return set({ ...state, foreign: null })
+  const unsent = Object.fromEntries(users.map((id) => [id, changed[id] ?? foreign.unsent[id] ?? []]))
+  const count = users.reduce((sum, id) => sum + (unsent[id]?.length ?? 0), 0)
+  set({ ...state, foreign: { users, count, owner: foreign.owner, unsent, failed: true } })
 }
 
 export type Unsent = { count: number; items: UnsentRef[]; unreadable: 'schema' | 'unavailable' | null }
@@ -254,14 +340,16 @@ export async function stillAgreed(user: number, approved: Approval = new Map()):
 export async function unsentState(
   user: number,
   approved: Approval = new Map(),
+  inspect?: { still: () => boolean },
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
-  return checkUnsent(user, (store) => store.unapproved(approved))
+  return checkUnsent(user, (store) => store.unapproved(approved), inspect?.still, !!inspect)
 }
 
 async function checkUnsent(
   user: number | undefined,
   ask: (store: OfflineStore) => Promise<UnsentRef[]>,
   still: () => boolean = () => true,
+  existing = false,
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   if (opening) await opening.catch(() => {})
   if (!still()) return { left: [], unreadable: false }
@@ -274,8 +362,10 @@ async function checkUnsent(
     let store = runtime?.user === id ? runtime.store : undefined
     const own = !store
     try {
-      store ??= await OfflineStore.open(id)
-    } catch {
+      store ??= await OfflineStore.open(id, existing ? { still, existing } : {})
+    } catch (e) {
+      if (e instanceof Superseded) return { left: [], unreadable: false }
+      if (e instanceof NotOnDevice) continue
       unreadable = true
       continue
     }
