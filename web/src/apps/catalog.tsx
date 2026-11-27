@@ -1,6 +1,7 @@
 import { createComponentImplementation, useSignalValue } from '@a2ui/react/v0_9'
 import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
+import { Markdown as MarkdownText } from '../markdown'
 import { BarcodeField } from './BarcodeInput'
 import { type CaptureInfo, isLocation } from './capture'
 import { iconPath, iconsShowingTheirName, type SurfaceComponent } from './iconPath'
@@ -27,6 +28,23 @@ const Stat = createComponentImplementation(StatApi, ({ props }) => (
     <dt className="ui-stat-label">{props.label}</dt>
     <dd className="ui-stat-value">{props.value}</dd>
   </dl>
+))
+
+const MarkdownApi = {
+  name: 'Markdown',
+  schema: z
+    .object({
+      text: CommonSchemas.DynamicString,
+      accessibility: CommonSchemas.AccessibilityAttributes.optional(),
+      weight: z.number().optional(),
+    })
+    .strict(),
+}
+
+const Markdown = createComponentImplementation(MarkdownApi, ({ props }) => (
+  <div className="ui-app-markdown">
+    <MarkdownText text={props.text} headingShift={2} links="text" />
+  </div>
 ))
 
 const ShowApi = {
@@ -237,6 +255,7 @@ export const appsCatalog = new Catalog(
     ...(TextField ? [TextField] : []),
     Icon,
     Stat,
+    Markdown,
     Show,
     PhotoInput,
     Photos,
