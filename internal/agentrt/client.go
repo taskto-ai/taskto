@@ -183,6 +183,20 @@ func (c *Client) Continue(ctx context.Context, conversation int64, model ModelRe
 	return out.SubmissionID, err
 }
 
+type NoteInput struct {
+	Text      string `json:"text"`
+	Author    int64  `json:"author"`
+	RequestID string `json:"requestId,omitempty"`
+}
+
+func (c *Client) Note(ctx context.Context, conversation int64, n NoteInput) (int64, error) {
+	var out struct {
+		SubmissionID int64 `json:"submissionId"`
+	}
+	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/note", n, &out)
+	return out.SubmissionID, err
+}
+
 func (c *Client) Wait(ctx context.Context, submission int64) (Settled, error) {
 	var out Settled
 	err := c.do(ctx, http.MethodPost, "/submissions/"+itoa(submission)+"/wait", nil, &out)

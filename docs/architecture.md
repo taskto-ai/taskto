@@ -135,6 +135,12 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   [api.md](api.md#access-tokens)). The routes that read an app and its rows, and `POST …/actions`, take a token too,
   with a budget of actions; building, publishing, roles, the offline download and uploads stay
   behind a session.
+- **Conversation notes:** a person can add a note to a conversation that stays in its history
+  for the people who read it but is never part of the model's context. A note is a passive
+  `taskto.note` entry the sidecar writes (`kind` and `data` only, no `model`), so Pi Durable
+  appends it at once, even in the middle of a run; the messages view, the CLI hand-off and the
+  conversation search, which read the model's context, never contain it
+  ([api.md](api.md#post-apiworkspacesworkspaceconversationsconversationnotes)).
 - **CLI workers:** a conversation can run on the official Claude Code, Codex or Grok Build
   CLI, signed in with the user's own subscription. Go runs the CLIs: in a worker container
   where each user is a Unix user of their own, or, on a one-user install, in the server

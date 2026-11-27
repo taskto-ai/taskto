@@ -3,7 +3,7 @@ import { expect, test } from 'vitest'
 import { turnChanges } from './changes'
 import stream from './testdata/stream.json'
 import turn from './testdata/turn-changes.json'
-import { type ConversationView, transcript } from './transcript'
+import { type ConversationView, pendingHelp, transcript } from './transcript'
 
 type Event = { type: string; value?: ConversationView; ops?: Op[] }
 
@@ -228,6 +228,64 @@ test('an app a CLI turn saved is the app of its cli_turn call, from the result i
     ],
   })
   expect(none.messages[0].tools[0].app).toBeUndefined()
+})
+
+test('shows a note between the messages around it, in entry order, and never as a model message', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'What are the numbers?' }] },
+      { id: 2, kind: 'taskto.note', data: { v: 1, author: 7, text: 'checked with finance' } },
+      { id: 3, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'Fine.' }] }] },
+      { id: 4, kind: 'taskto.note', data: { v: 1, author: 7, text: 'second' } },
+    ],
+  })
+  expect(t.messages.map((m) => [m.role, m.text])).toEqual([
+    ['user', 'What are the numbers?'],
+    ['note', 'checked with finance'],
+    ['assistant', 'Fine.'],
+    ['note', 'second'],
+  ])
+  expect(t.messages[1]).toMatchObject({ key: '2', author: 7, tools: [] })
+})
+
+test('leaves out a note entry that has no text', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'taskto.note', data: { v: 1, author: 7, text: '   ' } },
+      { id: 2, kind: 'taskto.note', data: { v: 1, author: 7 } },
+      { id: 3, kind: 'taskto.note' },
+      { id: 4, kind: 'other.note', data: { text: 'not ours' } },
+    ],
+  })
+  expect(t.messages).toEqual([])
+})
+
+test('a note does not clear what the agent is waiting for', () => {
+  const entries = [
+    {
+      id: 1,
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'h1', name: 'browser_help', arguments: { reason: 'captcha', message: 'Solve it' } },
+          ],
+        },
+      ],
+    },
+    { id: 2, kind: 'taskto.note', data: { v: 1, author: 1, text: 'on it' } },
+  ]
+  expect(pendingHelp(transcript({ entries }).messages)).toEqual({ reason: 'captcha', message: 'Solve it' })
+})
+
+test('an entry that is not a note never becomes one, whatever its data holds', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'hi' }], data: { text: 'sneaky', author: 1 } },
+    ],
+  })
+  expect(t.messages.map((m) => [m.role, m.text])).toEqual([['user', 'hi']])
 })
 
 test('keeps what each call that changed something changed, and nothing for readers or failed calls', () => {

@@ -232,6 +232,7 @@ const (
 	CodeConversationNotFound     Code = "conversation_not_found"
 	CodeConversationArchived     Code = "conversation_archived"
 	CodeConversationTitleInvalid Code = "conversation_title_invalid"
+	CodeConversationNoteInvalid  Code = "conversation_note_invalid"
 	CodeConversationLost         Code = "conversation_lost"
 	CodeConversationNoModel      Code = "conversation_no_model"
 	CodeConversationBusy         Code = "conversation_busy"

@@ -46,6 +46,10 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
     if (testHooks.scriptFailures && text.trim() === `fail:${provider}`) {
       return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'rate limit reached' })
     }
+    if (text.trim() === 'context') {
+      const seen = context.messages.filter((m) => m.role !== 'system').map((m) => `${m.role}=${textOf(m.content)}`)
+      return fauxAssistantMessage(fauxText(`context: ${seen.join(' | ')}`))
+    }
     const call = /^tool:(?<name>[a-z_]+):(?<ms>\d+)$/.exec(text.trim())?.groups
     if (call?.name && call.ms) {
       return fauxAssistantMessage(fauxToolCall(call.name, { ms: Number(call.ms) }), { stopReason: 'toolUse' })

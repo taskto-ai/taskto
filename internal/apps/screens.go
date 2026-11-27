@@ -122,7 +122,7 @@ const screensComponent = "Screens"
 
 func (d Definition) surfaceComponents() []json.RawMessage {
 	if !d.hasScreens() {
-		return d.Components
+		return d.withColumnTypes(d.Components)
 	}
 	refs := make([]map[string]string, len(d.Screens))
 	for i, s := range d.Screens {
@@ -138,9 +138,46 @@ func (d Definition) surfaceComponents() []json.RawMessage {
 	}
 	out := []json.RawMessage{host}
 	for _, s := range d.Screens {
-		out = append(out, s.Components...)
+		out = append(out, d.withColumnTypes(s.Components)...)
 	}
 	return out
+}
+
+func (d Definition) withColumnTypes(components []json.RawMessage) []json.RawMessage {
+	out := make([]json.RawMessage, len(components))
+	for i, raw := range components {
+		out[i] = d.withColumnTypesIn(raw)
+	}
+	return out
+}
+
+func (d Definition) withColumnTypesIn(raw json.RawMessage) json.RawMessage {
+	var head struct {
+		Component string `json:"component"`
+	}
+	if json.Unmarshal(raw, &head) != nil || head.Component != "Table" {
+		return raw
+	}
+	obj, err := decodeObject(raw)
+	if err != nil {
+		return raw
+	}
+	columns, _ := obj["columns"].([]any)
+	for _, c := range columns {
+		column, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := column["field"].(string)
+		if f, declared := d.Collection.field(name); declared {
+			column["type"] = f.Type
+		}
+	}
+	typed, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return typed
 }
 
 func Opened(surfaceID, screen string, record map[string]any) []Message {

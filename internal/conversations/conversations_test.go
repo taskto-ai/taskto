@@ -33,6 +33,7 @@ type fakeRuntime struct {
 	models     map[int64]agentrt.ModelRef
 	created    []agentrt.ModelRef
 	inputs     map[int64][]agentrt.Input
+	notes      map[int64][]agentrt.NoteInput
 	watches    []*fakeWatch
 	aborts     map[int64]int
 	resumes    map[int64]int
@@ -50,7 +51,7 @@ type fakeRuntime struct {
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -93,7 +94,17 @@ func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.Mode
 	}
 	f.resumed = append(f.resumed, continueCall{model, after})
 	f.resumes[conv]++
-	return int64(2000 + f.resumes[conv]), nil
+	return int64(3000 + f.resumes[conv]), nil
+}
+
+func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.notes[conv] = append(f.notes[conv], n)
+	return int64(2000 + len(f.notes[conv])), nil
 }
 
 func (f *fakeRuntime) Messages(_ context.Context, conv int64) ([]agentrt.Message, error) {
@@ -687,6 +698,7 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 			{http.MethodGet, one + "/cli-permissions", nil},
 			{http.MethodPost, one + "/cli-permissions/q1", map[string]any{"allow": true}},
 			{http.MethodPost, one + "/messages", map[string]any{"content": "hi"}},
+			{http.MethodPost, one + "/notes", map[string]any{"content": "a note"}},
 			{http.MethodGet, one + "/messages", nil},
 			{http.MethodGet, one + "/model", nil},
 			{http.MethodPut, one + "/model", map[string]any{"provider": "script", "model_id": "script-1"}},
@@ -723,7 +735,7 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 		t.Fatalf("the conversation changed: %+v", got)
 	}
 	e.rt.mu.Lock()
-	if n := len(e.rt.inputs) + len(e.rt.watches) + len(e.rt.aborts); n != 0 {
+	if n := len(e.rt.inputs) + len(e.rt.notes) + len(e.rt.watches) + len(e.rt.aborts); n != 0 {
 		t.Fatalf("the agent runtime got %d calls for denied requests", n)
 	}
 	e.rt.mu.Unlock()

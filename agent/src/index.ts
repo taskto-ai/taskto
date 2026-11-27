@@ -15,6 +15,7 @@ import {
   type SubmissionId,
 } from '@earendil-works/pi-durable'
 import { cliTools } from './cli.js'
+import { InputError, type NoteInput, noteEntry, parseNote } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
@@ -338,6 +339,20 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         throw error
       }
       return send(res, 202, { submissionId })
+    }
+    if (req.method === 'POST' && action === 'note') {
+      let note: NoteInput
+      try {
+        note = parseNote(await readJson(req))
+      } catch (error) {
+        if (error instanceof InputError) throw new HttpError(400, error.message)
+        throw error
+      }
+      const submission = await (await conversation(id)).submit(
+        { type: 'write', entry: noteEntry(note), ...(note.requestId ? { requestId: note.requestId } : {}) },
+        context,
+      )
+      return send(res, 202, { submissionId: submission.id })
     }
     if (req.method === 'POST' && action === 'retire') {
       const found = await conversation(id)

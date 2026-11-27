@@ -20,6 +20,16 @@ export function Message({
   changes?: Changed[]
 }) {
   const t = useT()
+  if (message.role === 'note') {
+    return (
+      <article className="ui-chat-msg" data-role="note">
+        <p className="ui-chat-note-label">{t('conversations.note.hidden')}</p>
+        <div className="ui-chat-markdown">
+          <Markdown text={message.text} headingShift={2} lineBreaks />
+        </div>
+      </article>
+    )
+  }
   if (message.role === 'user') {
     return (
       <article className="ui-chat-msg" data-role="user">

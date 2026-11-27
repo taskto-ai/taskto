@@ -3,7 +3,7 @@ import { t } from '../i18n'
 import { type Changed, changeOf, isId } from './changes'
 
 export type ConversationView = {
-  entries?: { id: number; kind: string; model?: unknown[] }[]
+  entries?: { id: number; kind: string; model?: unknown[]; data?: unknown }[]
   before?: number
   docs?: Record<string, unknown>
 }
@@ -22,6 +22,8 @@ export type ToolUse = {
   help?: { reason: string; message: string }
 }
 
+export const NOTE_KIND = 'taskto.note'
+
 export const HELP_TOOL = 'browser_help'
 
 export const CLI_TOOL = 'cli_turn'
@@ -30,9 +32,10 @@ const APP_TOOLS = new Set(['create_app', 'update_app'])
 
 export type ChatMessage = {
   key: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'note'
   text: string
   tools: ToolUse[]
+  author?: number
   error?: string
   failed?: boolean
   pending?: boolean
@@ -143,6 +146,15 @@ function toMessage(key: string, message: unknown, kept: Kept, pending = false): 
   return out
 }
 
+function toNote(entry: { id: number; kind: string; data?: unknown }): ChatMessage | null {
+  if (entry.kind !== NOTE_KIND) return null
+  const data = entry.data as { text?: unknown; author?: unknown } | undefined
+  if (typeof data?.text !== 'string' || !data.text.trim()) return null
+  const note: ChatMessage = { key: `${entry.id}`, role: 'note', text: data.text, tools: [] }
+  if (isId(data.author)) note.author = data.author
+  return note
+}
+
 type Slot = { callId?: unknown; name?: unknown; status?: unknown; output?: unknown }
 
 type Call = { at: string; name: string; args: unknown }
@@ -165,7 +177,7 @@ function liveOutput(messages: ChatMessage[], slots: unknown) {
 
 export function transcript(view: ConversationView | null | undefined): Transcript {
   const messages: ChatMessage[] = []
-  const entries = (view?.entries ?? []).filter((e) => Array.isArray(e?.model))
+  const entries = (view?.entries ?? []).filter((e) => Array.isArray(e?.model) || e?.kind === NOTE_KIND)
   const saved = new Map<string, AppRef>()
   const done = new Map<string, CliKept>()
   const changed = new Map<string, Changed>()
@@ -193,6 +205,8 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
   }
   const results: Kept = { saved, done, changed }
   for (const entry of entries) {
+    const note = toNote(entry)
+    if (note) messages.push(note)
     entry.model?.forEach((message, i) => {
       const m = toMessage(`${entry.id}.${i}`, message, results)
       if (m) messages.push(m)
@@ -219,6 +233,7 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
 export function pendingHelp(messages: ChatMessage[]): ToolUse['help'] | null {
   let help: ToolUse['help'] | null = null
   for (const m of messages) {
+    if (m.role === 'note') continue
     if (m.role === 'user') help = null
     else for (const t of m.tools) if (t.help) help = t.help
   }

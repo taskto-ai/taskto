@@ -731,6 +731,10 @@ export type Member = {
   two_factor?: boolean
 }
 
+export type NoteReply = {
+  submission_id: number
+}
+
 export type NotificationItem = {
   id: number
   workspace_id: number
