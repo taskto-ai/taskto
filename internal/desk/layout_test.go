@@ -1,7 +1,9 @@
 package desk
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -118,6 +120,57 @@ func TestCheckRejectsInvalidLayouts(t *testing.T) {
 				t.Fatal("Check accepted invalid layout")
 			}
 		})
+	}
+}
+
+func TestCheckRefusesPathsThatLeaveTheirRoute(t *testing.T) {
+	for _, path := range []string{
+		`/w/12/apps/..\..\13\home`,
+		`/w/12/apps/a\b`,
+		"/w/12/apps/..",
+		"/w/12/apps/.",
+		"/w/12/apps/%2e%2e",
+		"/w/12/apps/%2E",
+		"/w/12/apps/a%2Fb",
+		"/w/12/apps/a%5Cb",
+		"/w/12/apps/a?b",
+		"/w/12/apps/a#b",
+		"/w/12/apps/a\nb",
+		"/w/12/apps/%zz",
+	} {
+		raw, err := json.Marshal(layout{V: 1, Focus: "g1", Root: &node{Group: "g1", Active: "t1", Tabs: []tab{{ID: "t1", Path: path}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Check(12, raw); err == nil {
+			t.Fatalf("Check accepted %q", path)
+		}
+	}
+	for _, path := range []string{"/w/12/knowledge/3:notes.md", "/w/12/knowledge/3:my%20notes.md", "/w/12/boards/4"} {
+		raw, err := json.Marshal(layout{V: 1, Focus: "g1", Root: &node{Group: "g1", Active: "t1", Tabs: []tab{{ID: "t1", Path: path}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Check(12, raw); err != nil {
+			t.Fatalf("Check refused %q: %v", path, err)
+		}
+	}
+}
+
+func TestCheckLimitsTheStoredSizeToo(t *testing.T) {
+	path := "/w/12/home/" + strings.Repeat("&", 490)
+	raw, err := json.Marshal(layout{V: 1, Focus: "g1", Root: &node{Group: "g1", Active: "t1", Tabs: makeTabs(12, path)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.ReplaceAll(raw, []byte("\\"+"u0026"), []byte("&"))
+	if len(raw) > maxLayoutBytes {
+		t.Fatalf("input is %d bytes, over the limit already", len(raw))
+	}
+	_, err = Check(12, raw)
+	var bad *layoutInvalid
+	if !errors.As(err, &bad) || bad.reason != "too_large" {
+		t.Fatalf("Check err = %v", err)
 	}
 }
 

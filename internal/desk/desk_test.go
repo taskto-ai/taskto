@@ -65,6 +65,21 @@ func TestMainDeskIsVirtualUntilSavedAndSurvivesReload(t *testing.T) {
 	if !errors.Is(err, ErrChanged) || current.Version != 1 || current.ID != saved.ID {
 		t.Fatalf("stale save current = %+v, err %v", current, err)
 	}
+	second := []byte(`{"v":1,"focus":"g1","root":{"group":"g1","active":"t2","tabs":[{"id":"t1","path":"/w/1/home"},{"id":"t2","path":"/w/1/boards"}]}}`)
+	next, err := service.SaveLayout(ctx, 1, 1, 0, 1, second)
+	if err != nil || next.ID != saved.ID || next.Version != 2 {
+		t.Fatalf("second save through main = %+v, err %v", next, err)
+	}
+	if _, err := service.SaveLayout(ctx, 1, 1, 0, 1, second); !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale second save err = %v", err)
+	}
+	if _, err := service.SaveLayout(ctx, 1, 1, 0, 7, second); !errors.Is(err, ErrChanged) {
+		t.Fatalf("future version err = %v", err)
+	}
+	byID, err := service.SaveLayout(ctx, 1, 1, saved.ID, 2, raw)
+	if err != nil || byID.Version != 3 {
+		t.Fatalf("save by id = %+v, err %v", byID, err)
+	}
 }
 
 func TestConcurrentFirstMainDeskSavesOnlyOneWins(t *testing.T) {

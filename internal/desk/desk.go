@@ -108,16 +108,6 @@ func (s *Service) SaveLayout(ctx context.Context, workspaceID, userID, id, versi
 			return Desk{}, err
 		}
 	}
-	if version != 0 {
-		current, readErr := getMainWith(ctx, tx, workspaceID, userID)
-		if readErr != nil {
-			return Desk{}, readErr
-		}
-		if err := tx.Commit(); err != nil {
-			return Desk{}, err
-		}
-		return current, ErrChanged
-	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE desks SET layout = ?, version = version + 1, updated_at = ?
 		WHERE user_id = ? AND workspace_id = ? AND name = '' AND version = ?`, string(checked), s.now().UTC().Format("2006-01-02T15:04:05.000Z"), userID, workspaceID, version)

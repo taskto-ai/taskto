@@ -54,6 +54,9 @@ func TestDeskLayoutsArePrivateAndWorkspaceScoped(t *testing.T) {
 	if code != http.StatusConflict || stale["code"] != "desk_changed" || stale["current"].(map[string]any)["version"] != float64(1) {
 		t.Fatalf("stale update = %d %v", code, stale)
 	}
+	if code, next := s.browser(s.alice.cookie, http.MethodPut, deskPath(s.one, "main", "/layout"), map[string]any{"version": 1, "layout": layout}); code != http.StatusOK || next["version"] != float64(2) || next["id"] != float64(id) {
+		t.Fatalf("second save through main = %d %v", code, next)
+	}
 	token, _ := s.newToken(s.alice.cookie, s.one, "desk test")
 	if code, body := s.api(token, http.MethodGet, listPath, nil); code != http.StatusForbidden || body["code"] != "token_refused" {
 		t.Fatalf("access token read desks = %d %v", code, body)

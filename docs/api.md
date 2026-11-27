@@ -4365,9 +4365,11 @@ Groups contain 1 to 20 tabs; there are at most 6 groups and 60 tabs, and at most
 Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes adding to 1 within
 0.01. Group and tab ids are distinct lowercase letters and digits, 1 to 16 characters. Paths are
 at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
-`knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route. Unknown fields,
-other workspace paths, malformed layouts, and bodies larger than 32 KiB are refused; invalid
-layouts return `400` with code `desk_invalid` and a closed `reason` code.
+`knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route, optionally followed
+by one segment that has no slash, backslash, `?`, `#` or control character, and is not `.` or `..`
+(also when percent-encoded). Unknown fields, other workspace paths, malformed layouts, and layouts
+larger than 32 KiB, as sent or as stored, are refused; invalid layouts return `400` with code
+`desk_invalid` and a closed `reason` code.
 
 ## Integrations
 

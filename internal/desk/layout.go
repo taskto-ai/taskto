@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -82,6 +83,9 @@ func Check(workspaceID int64, raw []byte) ([]byte, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("marshal desk layout: %w", err)
+	}
+	if len(encoded) > maxLayoutBytes {
+		return nil, invalid("too_large")
 	}
 	return encoded, nil
 }
@@ -180,11 +184,26 @@ func validRoute(workspaceID int64, path string) bool {
 			return true
 		}
 		if len(parts) > len(route) && parts[:len(route)] == route && parts[len(route)] == '/' {
-			tail := parts[len(route)+1:]
-			if tail != "" && !strings.Contains(tail, "/") {
+			if validSegment(parts[len(route)+1:]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func validSegment(segment string) bool {
+	if segment == "" || strings.ContainsAny(segment, `/\?#`) {
+		return false
+	}
+	for _, r := range segment {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	decoded, err := url.PathUnescape(segment)
+	if err != nil || strings.ContainsAny(decoded, `/\`) {
+		return false
+	}
+	return decoded != "." && decoded != ".."
 }
