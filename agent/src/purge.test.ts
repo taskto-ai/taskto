@@ -89,7 +89,6 @@ describe('runPurge', () => {
       CREATE TABLE document_revisions (document_id INTEGER NOT NULL, seq INTEGER NOT NULL, content TEXT,
         PRIMARY KEY (document_id, seq));
       CREATE TABLE record_ids (id INTEGER PRIMARY KEY);
-      -- Pi Durable's indexes of these, by which the purge finds the rows
       CREATE INDEX entries_by_conversation ON entries (conversation_id, id DESC);
       CREATE INDEX tasks_by_conversation ON tasks (conversation_id, id);
       CREATE INDEX conversations_by_owner_task ON conversations (owner_task_id, id);
@@ -100,7 +99,6 @@ describe('runPurge', () => {
       INSERT INTO submissions (id, conversation_id) VALUES (30, 3);
       INSERT INTO documents (id, scope_kind, owner_id) VALUES (40, 'conversation', 1), (41, 'task', 20), (42, 'conversation', 2);
       INSERT INTO document_revisions (document_id, seq, content) VALUES (40, 1, 'a'), (40, 2, 'b'), (41, 1, 'c'), (42, 1, 'kept');
-      -- Conversations 1 and 3 are retired, as the sidecar records it.
       INSERT INTO documents (id, kind, scope_kind, owner_id) VALUES (43, '${storedKind(LIFECYCLE_KIND)}', 'conversation', 1),
         (44, '${storedKind(LIFECYCLE_KIND)}', 'conversation', 3);
       INSERT INTO document_revisions (document_id, seq, content) VALUES (43, 1, 'retired'), (44, 1, 'retired');
@@ -530,20 +528,21 @@ describe('runPurge', () => {
     reader.exec('COMMIT')
     const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
     writer.exec('BEGIN')
-    for (let i = 0; i < 300_000; i++) more.run('m'.repeat(400))
+    for (let i = 0; i < 2000; i++) more.run('m'.repeat(400))
     writer.exec('COMMIT')
     const db = new DatabaseSync(path, { timeout: 1000 })
+    const durations = [100, 1, 1]
     const rounds: { backlog: number; ms: number }[] = []
     let truncatedAfter: { backlog: number; ms: number } | undefined
     try {
       truncateWalWithin(db, 20_000, {
+        measure: (run) => ({ left: run(), ms: durations.shift() ?? 1 }),
         round: (backlog, ms) => rounds.push({ backlog, ms }),
         truncating: () => (truncatedAfter = rounds[rounds.length - 1]),
       })
-      expect(rounds[0].ms).toBeGreaterThan(20)
-      expect(truncatedAfter).toBeDefined()
-      expect(truncatedAfter?.ms).toBeLessThanOrEqual(20)
-      expect(rounds.length).toBeGreaterThan(1)
+      expect(rounds[0].ms).toBe(100)
+      expect(truncatedAfter).toEqual(rounds[1])
+      expect(rounds.length).toBe(2)
       expect(log()).toBe('')
     } finally {
       db.close()
@@ -970,34 +969,47 @@ describe('runPurge', () => {
   it('truncates only after a quick second look too', () => {
     const { writer, reader } = fixture()
     reader.exec('COMMIT')
-    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
     const db = new DatabaseSync(path, { timeout: 1000 })
-    let wrote = false
-    let looked = 0
-    const sinceLook: number[] = []
+    const durations = [1, 100, 1, 1]
+    let rounds = 0
+    let truncations = 0
     try {
       truncateWalWithin(db, 20_000, {
-        round: () => {
-          if (!wrote) {
-            wrote = true
-            writer.exec('BEGIN')
-            for (let i = 0; i < 100_000; i++) more.run('q'.repeat(400))
-            writer.exec('COMMIT')
-          }
-          looked = performance.now()
-        },
-        truncating: () => sinceLook.push(performance.now() - looked),
+        measure: (run) => ({ left: run(), ms: durations.shift() ?? 1 }),
+        round: () => rounds++,
+        truncating: () => truncations++,
       })
-      expect(wrote).toBe(true)
-      expect(sinceLook.length).toBeGreaterThan(0)
-      for (const ms of sinceLook) expect(ms).toBeLessThanOrEqual(40)
+      expect(rounds).toBe(2)
+      expect(truncations).toBe(1)
+      expect(durations).toEqual([])
       expect(log()).toBe('')
     } finally {
       db.close()
       reader.close()
       writer.close()
     }
-  }, 60_000)
+  })
+
+  it('says a slow checkpoint was too slow, not that a reader held the log', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    try {
+      let error: unknown
+      try {
+        truncateWalWithin(db, 100, { measure: (run) => ({ left: run(), ms: 100 }) })
+      } catch (e) {
+        error = e
+      }
+      expect(error).toBeInstanceOf(WalBusyError)
+      expect((error as Error).message).toMatch(/did not finish within the allowed time/)
+      expect((error as Error).message).not.toMatch(/reader/)
+    } finally {
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  })
 
   it('does not truncate while another checkpoint is copying the log', async () => {
     const { writer, reader } = fixture()
@@ -1197,6 +1209,8 @@ describe('runPurge', () => {
     })
     const until2 = Date.now() + 10_000
     while (stopping === undefined && Date.now() < until2) await new Promise((r) => setTimeout(r, 10))
+    if (stopping === undefined) await stop2()
+    expect(stopping).toBeDefined()
     await stopping
     await new Promise((r) => setTimeout(r, 200))
     expect(again).toBe(1)

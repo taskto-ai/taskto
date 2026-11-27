@@ -17,6 +17,11 @@ testHooks.extraToolSpecs = [
 ]
 
 const modelPauseMs = Number(process.env.TASKTO_AGENT_TEST_MODEL_PAUSE_MS ?? 0)
-if (modelPauseMs > 0) testHooks.beforeModelWrite = () => new Promise((resolve) => setTimeout(resolve, modelPauseMs))
+if (modelPauseMs > 0) {
+  testHooks.beforeModelWrite = () => {
+    console.error('test: the model write is waiting before its commit')
+    return new Promise((resolve) => setTimeout(resolve, modelPauseMs))
+  }
+}
 
 await import('./index.js')

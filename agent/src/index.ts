@@ -327,6 +327,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const num = parseId(id) as ConversationId
       const running = purgeInFlight(dbPath as string, num)
       if (running) {
+        console.error(`conversation ${num} purge joins the running one`)
         await running
         res.writeHead(204).end()
         return

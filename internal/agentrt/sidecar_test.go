@@ -614,10 +614,15 @@ func TestPurgeAskedAgainWhileItRunsHasItsOutcome(t *testing.T) {
 	}
 	first := make(chan error, 1)
 	go func() { first <- s.client.PurgeConversation(ctx, doomed) }()
-	time.Sleep(150 * time.Millisecond)
 	var se *StatusError
-	if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
-		t.Fatalf("the purge asked again while the first waits for the reader: err = %v, want the first's 503", err)
+	joined := fmt.Sprintf("conversation %d purge joins the running one", doomed)
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(s.output.String(), joined); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the purge asked again never joined the running one; output %q", s.output.String())
+		}
+		if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
+			t.Fatalf("the purge asked again while the first waits for the reader: err = %v, want the first's 503", err)
+		}
 	}
 	if err := <-first; !errors.As(err, &se) || se.Code != 503 {
 		t.Fatalf("the first purge: err = %v, want a 503", err)
@@ -627,6 +632,16 @@ func TestPurgeAskedAgainWhileItRunsHasItsOutcome(t *testing.T) {
 	}
 	if err := s.client.PurgeConversation(ctx, doomed); err != nil {
 		t.Fatalf("the retry once the reader is gone: %v", err)
+	}
+}
+
+func waitForOutput(t *testing.T, s *sidecar, want string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(s.output.String(), want); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the sidecar never said %q; output %q", want, s.output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -643,7 +658,7 @@ func TestSetModelOvertakenByARetireIsRefused(t *testing.T) {
 	}
 	set := make(chan error, 1)
 	go func() { set <- s.client.SetModel(ctx, conv, catalog.Default) }()
-	time.Sleep(200 * time.Millisecond)
+	waitForOutput(t, s, "test: the model write is waiting before its commit")
 	if err := s.client.RetireConversation(ctx, conv); err != nil {
 		t.Fatal(err)
 	}

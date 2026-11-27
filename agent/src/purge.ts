@@ -54,7 +54,16 @@ function backlog(db: DatabaseSync): number {
 
 const QUICK_MS = 20
 
+export type Measured = { left: number; ms: number }
+
+function timed(run: () => number): Measured {
+  const began = performance.now()
+  const left = run()
+  return { left, ms: performance.now() - began }
+}
+
 export type TruncateHooks = {
+  measure?: (run: () => number) => Measured
   round?: (backlog: number, ms: number) => void
   truncating?: (backlog: number) => void
   truncated?: (ms: number) => void
@@ -63,15 +72,16 @@ export type TruncateHooks = {
 export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, hooks?: TruncateHooks): void {
   db.exec('PRAGMA busy_timeout = 0')
   const deadline = performance.now() + timeoutMs
+  const measure = hooks?.measure ?? timed
   let last: unknown
+  let held = false
   for (;;) {
-    const began = performance.now()
-    const left = backlog(db)
-    const took = performance.now() - began
+    const { left, ms: took } = measure(() => backlog(db))
+    if (left === Number.POSITIVE_INFINITY) held = true
     hooks?.round?.(left, took)
     const quickAgain = () => {
-      const again = performance.now()
-      return backlog(db) <= DRAINED_FRAMES && performance.now() - again <= QUICK_MS
+      const second = measure(() => backlog(db))
+      return second.left <= DRAINED_FRAMES && second.ms <= QUICK_MS
     }
     if (left <= DRAINED_FRAMES && took <= QUICK_MS && quickAgain()) {
       hooks?.truncating?.(left)
@@ -86,9 +96,12 @@ export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, hooks?: T
       }
     }
     if (performance.now() + PAUSE_MS > deadline) {
-      throw last instanceof WalBusyError
-        ? last
-        : new WalBusyError('a reader holds the write-ahead log, so it could not be copied and truncated')
+      if (last instanceof WalBusyError) throw last
+      throw new WalBusyError(
+        held
+          ? 'a reader holds the write-ahead log, so it could not be copied and truncated'
+          : 'the write-ahead log checkpoint did not finish within the allowed time',
+      )
     }
     sleep(PAUSE_MS)
   }

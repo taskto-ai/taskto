@@ -911,7 +911,8 @@ is a decision about the workspace's records, not an account's.
   `agent.db` first, the backup schedule and any backup or `sqlite3` shell still running included
   (`docker compose down` stops the schedule when its profile is in `COMPOSE_PROFILES`), then run
   `docker compose run --rm taskto agent-compact` (outside Docker, `taskto agent-compact -data-dir
-  <data>`), which needs room on the disk for a copy of the database. It refuses while a server or
+  <data>`), which needs room on the disk for twice the database's size (`VACUUM` builds a copy
+  and SQLite can need that much beside the original). It refuses while a server or
   the runtime has the data directory, rewrites the database (`VACUUM`), empties the write-ahead
   log, and records the compaction only when SQLite says the log was emptied: when a reader still
   holds it, what was deleted may still be in it, so it says so, records nothing and exits with an
