@@ -4367,9 +4367,13 @@ Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes add
 at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
 `knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route, optionally followed
 by one segment that has no slash, backslash, `?`, `#` or control character as written, and is
-neither `.` nor `..`; after percent-decoding it still has no slash or backslash and is still
-neither `.` nor `..`. A percent-encoded `?`, `#` or other character stays inside its segment, so it
-is allowed. Unknown fields, other workspace paths, malformed layouts, and layouts
+neither `.` nor `..`; after percent-decoding it still has no backslash or control character and is
+still neither `.` nor `..`, and (except under `knowledge`) no slash. A percent-encoded `?`, `#` or
+other character stays inside its segment, so it is allowed. Under `knowledge` the segment is what
+the web app builds for a document, `<space>:<path>` percent-encoded as a whole, so a document in a
+folder (`3%3Afolder%2Fnotes.md`) is allowed: after the `<space>:` prefix every folder or file name
+in the decoded path must be non-empty and neither `.` nor `..`, so a leading, trailing or doubled
+slash and `..` are refused. Unknown fields, other workspace paths, malformed layouts, and layouts
 larger than 32 KiB, as sent or as stored, are refused; invalid layouts return `400` with code
 `desk_invalid` and a closed `reason` code.
 

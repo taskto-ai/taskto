@@ -184,7 +184,8 @@ func validRoute(workspaceID int64, path string) bool {
 			return true
 		}
 		if len(parts) > len(route) && parts[:len(route)] == route && parts[len(route)] == '/' {
-			if validSegment(parts[len(route)+1:]) {
+			segment := parts[len(route)+1:]
+			if route == "knowledge" && validDocumentSegment(segment) || route != "knowledge" && validSegment(segment) {
 				return true
 			}
 		}
@@ -193,17 +194,42 @@ func validRoute(workspaceID int64, path string) bool {
 }
 
 func validSegment(segment string) bool {
-	if segment == "" || strings.ContainsAny(segment, `/\?#`) {
+	decoded, ok := decodeSegment(segment)
+	return ok && !strings.Contains(decoded, "/") && decoded != "." && decoded != ".."
+}
+
+func validDocumentSegment(segment string) bool {
+	decoded, ok := decodeSegment(segment)
+	if !ok {
 		return false
 	}
-	for _, r := range segment {
-		if r < 0x20 || r == 0x7f {
+	space, path, found := strings.Cut(decoded, ":")
+	if !found || space == "" || strings.Trim(space, "0123456789") != "" {
+		return !strings.Contains(decoded, "/") && decoded != "." && decoded != ".."
+	}
+	if path == "" {
+		return true
+	}
+	for _, element := range strings.Split(path, "/") {
+		if element == "" || element == "." || element == ".." {
 			return false
 		}
 	}
-	decoded, err := url.PathUnescape(segment)
-	if err != nil || strings.ContainsAny(decoded, `/\`) {
-		return false
+	return true
+}
+
+func decodeSegment(segment string) (string, bool) {
+	if segment == "" || strings.ContainsAny(segment, `/\?#`) {
+		return "", false
 	}
-	return decoded != "." && decoded != ".."
+	decoded, err := url.PathUnescape(segment)
+	if err != nil || strings.Contains(decoded, `\`) {
+		return "", false
+	}
+	for _, r := range decoded {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return decoded, true
 }

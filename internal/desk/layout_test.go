@@ -157,6 +157,49 @@ func TestCheckRefusesPathsThatLeaveTheirRoute(t *testing.T) {
 	}
 }
 
+func TestCheckAcceptsTheKnowledgePathsTheWebAppBuilds(t *testing.T) {
+	check := func(path string) error {
+		raw, err := json.Marshal(layout{V: 1, Focus: "g1", Root: &node{Group: "g1", Active: "t1", Tabs: []tab{{ID: "t1", Path: path}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Check(12, raw)
+		return err
+	}
+	for _, path := range []string{
+		"/w/12/knowledge/3%3Anotes.md",
+		"/w/12/knowledge/3%3Afolder%2Fnotes.md",
+		"/w/12/knowledge/3%3Aa%2Fb%2Fc%2Fmy%20notes.md",
+		"/w/12/knowledge/3%3Afolder%2Fa%3Fb%23c.md",
+		"/w/12/knowledge/3%3A",
+		"/w/12/boards/1%3A2%3A3",
+	} {
+		if err := check(path); err != nil {
+			t.Fatalf("Check refused %q: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		"/w/12/knowledge/3%3A..%2Fx",
+		"/w/12/knowledge/3%3Afolder%2F..%2Fx",
+		"/w/12/knowledge/3%3Afolder%2F..",
+		"/w/12/knowledge/3%3Afolder%2F.%2Fx",
+		"/w/12/knowledge/%2F..",
+		"/w/12/knowledge/%2Fx",
+		"/w/12/knowledge/3%3A%2Fx",
+		"/w/12/knowledge/3%3Afolder%2F%2Fx",
+		"/w/12/knowledge/3%3Afolder%2F",
+		"/w/12/knowledge/3%3Afolder%5Cx",
+		"/w/12/knowledge/3%3Afolder%2Fx%0Ay",
+		"/w/12/knowledge/3%3Afolder/x",
+		"/w/12/boards/1%3A2%2F3",
+		"/w/12/apps/a%2Fb",
+	} {
+		if err := check(path); err == nil {
+			t.Fatalf("Check accepted %q", path)
+		}
+	}
+}
+
 func TestCheckLimitsTheStoredSizeToo(t *testing.T) {
 	path := "/w/12/home/" + strings.Repeat("&", 490)
 	raw, err := json.Marshal(layout{V: 1, Focus: "g1", Root: &node{Group: "g1", Active: "t1", Tabs: makeTabs(12, path)}})
