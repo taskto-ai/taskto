@@ -14,11 +14,20 @@ function sources(dir: string): string[] {
   })
 }
 
-function importsModuleNavigate(source: string): boolean {
-  const imports = source.matchAll(/import\s*\{([^}]*)\}\s*from\s*'(?:\.\.?\/)+router'/g)
-  return [...imports].some((m) =>
-    (m[1] ?? '').split(',').some((name) => name.trim().replace(/^type\s+/, '') === 'navigate'),
+function importedName(specifier: string): string {
+  return (
+    specifier
+      .trim()
+      .replace(/^type\s+/, '')
+      .split(/\s+as\s+/)[0]
+      ?.trim() ?? ''
   )
+}
+
+function importsModuleNavigate(source: string): boolean {
+  if (/import\s*\*\s*as\s+\w+\s+from\s*'(?:\.\.?\/)+router'/.test(source)) return true
+  const imports = source.matchAll(/import\s*\{([^}]*)\}\s*from\s*'(?:\.\.?\/)+router'/g)
+  return [...imports].some((m) => (m[1] ?? '').split(',').some((name) => importedName(name) === 'navigate'))
 }
 
 test('only the shell, the app and the notification sync use the router’s own navigate', () => {
@@ -33,4 +42,8 @@ test('the scan sees a page that imports navigate, aliased or among others', () =
   expect(importsModuleNavigate(`import { Link, navigate, routePath } from '../router'`)).toBe(true)
   expect(importsModuleNavigate(`import { Link, useNavigate } from '../router'`)).toBe(false)
   expect(importsModuleNavigate(`import { navigate } from './router'`)).toBe(true)
+  expect(importsModuleNavigate(`import { Link, navigate as go, routePath } from '../router'`)).toBe(true)
+  expect(importsModuleNavigate(`import {\n  navigate as go,\n} from '../../router'`)).toBe(true)
+  expect(importsModuleNavigate(`import * as router from '../router'`)).toBe(true)
+  expect(importsModuleNavigate(`import { useNavigate as navigate } from '../router'`)).toBe(false)
 })
