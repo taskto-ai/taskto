@@ -28,7 +28,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 	ctx, cancel := context.WithCancel(sessionCtx)
 	defer cancel()
 
-	events, unsubscribe, err := h.Subscribe(ctx, topic, user)
+	events, revoked, unsubscribe, err := h.Subscribe(ctx, topic, user)
 	switch {
 	case errors.Is(err, ErrTooManyStreams):
 		apierr.Write(w, http.StatusTooManyRequests, apierr.CodeTooManyStreams,
@@ -63,7 +63,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	out := &eventWriter{w: w, rc: http.NewResponseController(w), timeout: h.cfg.WriteTimeout}
+	out := &eventWriter{w: w, rc: http.NewResponseController(w), timeout: h.cfg.WriteTimeout, ctx: ctx, revoked: revoked}
 	defer func() { _ = out.rc.SetWriteDeadline(time.Time{}) }()
 	if out.write([]byte("retry: 2000\n\n")) != nil {
 		return
@@ -76,7 +76,13 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 	for {
 		select {
 		case ev, ok := <-events:
-			if !ok || out.event(ev) != nil {
+			if !ok {
+				return
+			}
+			if ev.carriesData() && !stillAllowed(ctx, topic, recheck) {
+				return
+			}
+			if out.event(ev) != nil {
 				return
 			}
 		case <-heartbeat:
@@ -84,10 +90,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 				return
 			}
 		case <-rechecks:
-			if err := recheck(ctx); err != nil {
-				if ctx.Err() == nil {
-					slog.WarnContext(ctx, "live: ending a stream that failed its access check", "kind", topic.Kind, "err", err)
-				}
+			if !stillAllowed(ctx, topic, recheck) {
 				return
 			}
 		case <-ctx.Done():
@@ -96,10 +99,26 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 	}
 }
 
+func stillAllowed(ctx context.Context, topic Topic, recheck Recheck) bool {
+	if err := recheck(ctx); err != nil {
+		if ctx.Err() == nil {
+			slog.WarnContext(ctx, "live: ending a stream that failed its access check", "kind", topic.Kind, "err", err)
+		}
+		return false
+	}
+	return true
+}
+
+func (ev Event) carriesData() bool { return ev.Type != TypeReady && ev.Type != TypeResync }
+
+var errStreamEnded = errors.New("live: the stream ended")
+
 type eventWriter struct {
 	w       http.ResponseWriter
 	rc      *http.ResponseController
 	timeout time.Duration
+	ctx     context.Context
+	revoked <-chan struct{}
 }
 
 func (e *eventWriter) event(ev Event) error {
@@ -111,6 +130,14 @@ func (e *eventWriter) event(ev Event) error {
 }
 
 func (e *eventWriter) write(p []byte) error {
+	select {
+	case <-e.revoked:
+		return errStreamEnded
+	default:
+	}
+	if e.ctx.Err() != nil {
+		return errStreamEnded
+	}
 	if err := e.rc.SetWriteDeadline(time.Now().Add(e.timeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return err
 	}

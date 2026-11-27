@@ -2,6 +2,7 @@ package live
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -189,6 +190,32 @@ func (s *stream) ended() {
 	}
 }
 
+func (s *stream) endedWithoutData() {
+	s.t.Helper()
+	done := make(chan []string, 1)
+	go func() {
+		var data []string
+		for {
+			line, err := s.r.ReadString('\n')
+			if strings.HasPrefix(line, "data: ") {
+				data = append(data, line)
+			}
+			if err != nil {
+				done <- data
+				return
+			}
+		}
+	}()
+	select {
+	case data := <-done:
+		if len(data) != 0 {
+			s.t.Fatalf("the stream wrote %q after its access ended", data)
+		}
+	case <-time.After(5 * time.Second):
+		s.t.Fatal("the stream stayed open")
+	}
+}
+
 func (g *rig) refused(session, query string) (int, apierr.Code, map[string]any) {
 	g.t.Helper()
 	res := g.open(session, query)
@@ -306,8 +333,8 @@ func TestTheCheckRunsAgainWhileConnectedAndAFailureEndsTheStream(t *testing.T) {
 		t.Fatalf("after a passing check = %+v", ev)
 	}
 	mu.Lock()
-	if calls != 2 {
-		t.Fatalf("%d checks, want the one on connect and one more", calls)
+	if calls != 3 {
+		t.Fatalf("%d checks, want the one on connect, the tick and the one before the event", calls)
 	}
 	failing = true
 	mu.Unlock()
@@ -412,5 +439,185 @@ func TestAHubWithNoSessionWatcherServesNothing(t *testing.T) {
 	}
 	if n := h.openStreams(); n != 0 {
 		t.Fatalf("%d streams", n)
+	}
+}
+
+func TestAnEventIsNotWrittenToAStreamWhoseAccessNoLongerHolds(t *testing.T) {
+	g := newRig(t, Config{})
+	s := g.connect("a")
+	g.recheck = func(context.Context) error {
+		return apierr.New(http.StatusNotFound, apierr.CodeSpaceNotFound, "space not found")
+	}
+	g.publish(`{"secret":1}`)
+	s.endedWithoutData()
+	g.waitSubscribers(0)
+}
+
+type gatedWriter struct {
+	mu     sync.Mutex
+	header http.Header
+	body   bytes.Buffer
+	first  chan struct{}
+	gate   chan struct{}
+	once   sync.Once
+}
+
+func newGatedWriter() *gatedWriter {
+	return &gatedWriter{header: http.Header{}, first: make(chan struct{}), gate: make(chan struct{})}
+}
+
+func (w *gatedWriter) Header() http.Header { return w.header }
+func (w *gatedWriter) WriteHeader(int)     {}
+func (w *gatedWriter) Flush()              {}
+
+func (w *gatedWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.first)
+		<-w.gate
+	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+
+func (w *gatedWriter) written() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.String()
+}
+
+func serveGated(g *rig, w http.ResponseWriter, session string, recheck Recheck) <-chan struct{} {
+	done := make(chan struct{})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Session", session)
+	go func() {
+		defer close(done)
+		g.hub.Serve(w, r, room, 1, recheck)
+	}()
+	return done
+}
+
+func finished(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler did not return")
+	}
+}
+
+func TestARevokedStreamWritesNoQueuedEvent(t *testing.T) {
+	g := newRig(t, Config{})
+	w := newGatedWriter()
+	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	<-w.first
+	g.publish(`{"queued":1}`)
+	g.hub.EndUserIn(room.SpaceID, 1)
+	close(w.gate)
+	finished(t, done)
+	if got := w.written(); strings.Contains(got, "data:") {
+		t.Fatalf("wrote %q after the revocation", got)
+	}
+}
+
+func TestARevocationAfterAnEventWasTakenStopsItsWrite(t *testing.T) {
+	g := newRig(t, Config{})
+	w := newGatedWriter()
+	close(w.gate)
+	checking, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	done := serveGated(g, w, "a", func(context.Context) error {
+		if w.written() != "" {
+			once.Do(func() { close(checking) })
+			<-release
+		}
+		return nil
+	})
+	<-w.first
+	g.waitSubscribers(1)
+	for !strings.Contains(w.written(), "ready") {
+		time.Sleep(time.Millisecond)
+	}
+	g.publish(`{"taken":1}`)
+	<-checking
+	g.hub.EndUserIn(room.SpaceID, 1)
+	close(release)
+	finished(t, done)
+	if got := w.written(); strings.Contains(got, "taken") {
+		t.Fatalf("wrote %q after the revocation", got)
+	}
+}
+
+func TestAnEndedSessionWritesNoEventThatWasAlreadyTaken(t *testing.T) {
+	g := newRig(t, Config{})
+	w := newGatedWriter()
+	close(w.gate)
+	checking, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	done := serveGated(g, w, "a", func(context.Context) error {
+		if w.written() != "" {
+			once.Do(func() { close(checking) })
+			<-release
+		}
+		return nil
+	})
+	<-w.first
+	for !strings.Contains(w.written(), "ready") {
+		time.Sleep(time.Millisecond)
+	}
+	g.publish(`{"taken":1}`)
+	<-checking
+	g.endSession("a")
+	close(release)
+	finished(t, done)
+	if got := w.written(); strings.Contains(got, "taken") {
+		t.Fatalf("wrote %q after the session ended", got)
+	}
+}
+
+func TestAStreamKeepsItsSlotUntilItsHandlerReturns(t *testing.T) {
+	g := newRig(t, Config{MaxStreams: 1, Buffer: 2})
+	w := newGatedWriter()
+	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	<-w.first
+	for range 3 {
+		g.publish(`1`)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+	r.Header.Set("X-Session", "b")
+	g.srv.Config.Handler.ServeHTTP(rec, r)
+	if code, _ := errorBody(t, rec.Result()); rec.Code != http.StatusTooManyRequests || code != apierr.CodeTooManyStreams {
+		t.Fatalf("a second stream while the first handler is still open = %d %q, want 429", rec.Code, code)
+	}
+	close(w.gate)
+	finished(t, done)
+	g.waitSubscribers(0)
+}
+
+func TestAClientThatOverflowsBeforeItsFirstEventStillGetsReadyThenResync(t *testing.T) {
+	g := newRig(t, Config{Buffer: 3})
+	w := newGatedWriter()
+	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	<-w.first
+	for range 5 {
+		g.publish(`1`)
+	}
+	close(w.gate)
+	finished(t, done)
+	var types []string
+	for _, line := range strings.Split(w.written(), "\n") {
+		if raw, ok := strings.CutPrefix(line, "data: "); ok {
+			var ev Event
+			if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+				t.Fatal(err)
+			}
+			types = append(types, ev.Type)
+		}
+	}
+	if strings.Join(types, ",") != "ready,resync" {
+		t.Fatalf("the client saw %v, want ready then resync", types)
 	}
 }

@@ -47,7 +47,7 @@ func silent(t *testing.T, ch <-chan Event) {
 
 func subscribe(t *testing.T, h *Hub, topic Topic, user int64) (<-chan Event, func()) {
 	t.Helper()
-	ch, stop, err := h.Subscribe(context.Background(), topic, user)
+	ch, _, stop, err := h.Subscribe(context.Background(), topic, user)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestATopicOfAnotherKindSpaceOrResourceGetsNothing(t *testing.T) {
 
 func TestASlowSubscriberGetsResyncAndIsDroppedWithoutBlockingOthers(t *testing.T) {
 	h := New(Config{Buffer: 3})
-	slow, _ := subscribe(t, h, room, 1)
+	slow, stopSlow := subscribe(t, h, room, 1)
 	fast, _ := subscribe(t, h, room, 2)
 	take(t, fast)
 	done := make(chan struct{})
@@ -182,15 +182,13 @@ func TestASlowSubscriberGetsResyncAndIsDroppedWithoutBlockingOthers(t *testing.T
 		}
 		break
 	}
-	last := got[len(got)-1]
-	if last.Type != TypeResync || last.Seq != 3 {
-		t.Fatalf("slow ended with %+v, want a resync at the first event it missed", last)
+	if len(got) != 2 || got[0].Type != TypeReady || got[1].Type != TypeResync || got[1].Seq != 3 {
+		t.Fatalf("slow got %+v, want its ready and then a resync at the event that overflowed", got)
 	}
-	for i, ev := range got[:len(got)-1] {
-		if ev.Seq != int64(i+1) || ev.Type != "stroke" {
-			t.Fatalf("slow got %+v at %d before the resync", ev, i)
-		}
+	if n := h.openStreams(); n != 2 {
+		t.Fatalf("%d streams, want the fast one and the slow one that has not stopped", n)
 	}
+	stopSlow()
 	if n := h.openStreams(); n != 1 {
 		t.Fatalf("%d streams left, want the fast one", n)
 	}
@@ -202,15 +200,15 @@ func TestThePerUserCapCountsAcrossTopicsAndFreesOnStop(t *testing.T) {
 	other := room
 	other.ResourceID = 99
 	subscribe(t, h, other, 1)
-	if _, _, err := h.Subscribe(context.Background(), room, 1); !errors.Is(err, ErrTooManyStreams) {
+	if _, _, _, err := h.Subscribe(context.Background(), room, 1); !errors.Is(err, ErrTooManyStreams) {
 		t.Fatalf("third = %v, want too many streams", err)
 	}
-	if _, _, err := h.Subscribe(context.Background(), room, 2); err != nil {
+	if _, _, _, err := h.Subscribe(context.Background(), room, 2); err != nil {
 		t.Fatalf("another user = %v", err)
 	}
 	stop()
 	stop()
-	if _, _, err := h.Subscribe(context.Background(), room, 1); err != nil {
+	if _, _, _, err := h.Subscribe(context.Background(), room, 1); err != nil {
 		t.Fatalf("after a stop = %v", err)
 	}
 }
@@ -218,7 +216,7 @@ func TestThePerUserCapCountsAcrossTopicsAndFreesOnStop(t *testing.T) {
 func TestACancelledContextEndsTheSubscription(t *testing.T) {
 	h := New(Config{})
 	ctx, cancel := context.WithCancel(context.Background())
-	ch, _, err := h.Subscribe(ctx, room, 1)
+	ch, _, _, err := h.Subscribe(ctx, room, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,23 +234,21 @@ func TestEndStreamsClosesEveryoneAndRefusesLaterSubscribes(t *testing.T) {
 	b, _ := subscribe(t, h, Topic{Kind: "notes", SpaceID: 1, Generation: 1, ResourceID: 1}, 2)
 	h.EndStreams()
 	for _, ch := range []<-chan Event{a, b} {
-		take(t, ch)
 		closed(t, ch)
 	}
-	if _, _, err := h.Subscribe(context.Background(), room, 3); !errors.Is(err, ErrClosed) {
+	if _, _, _, err := h.Subscribe(context.Background(), room, 3); !errors.Is(err, ErrClosed) {
 		t.Fatalf("subscribe after the end = %v", err)
 	}
 }
 
 func TestEndUserInEndsOnlyThatUsersStreamsInThatSpace(t *testing.T) {
 	h := New(Config{})
-	gone, _ := subscribe(t, h, room, 1)
+	gone, stopGone := subscribe(t, h, room, 1)
 	stays, _ := subscribe(t, h, room, 2)
 	elsewhere := room
 	elsewhere.SpaceID = 8
 	otherSpace, _ := subscribe(t, h, elsewhere, 1)
 	h.EndUserIn(7, 1)
-	take(t, gone)
 	closed(t, gone)
 	take(t, stays)
 	take(t, otherSpace)
@@ -261,6 +257,7 @@ func TestEndUserInEndsOnlyThatUsersStreamsInThatSpace(t *testing.T) {
 		t.Fatalf("stays = %+v", ev)
 	}
 	closed(t, gone)
+	stopGone()
 	if n := h.openStreams(); n != 2 {
 		t.Fatalf("%d streams, want 2", n)
 	}
@@ -275,7 +272,6 @@ func TestEndSpaceEndsEveryStreamOfThatSpace(t *testing.T) {
 	c, _ := subscribe(t, h, elsewhere, 3)
 	h.EndSpace(7)
 	for _, ch := range []<-chan Event{a, b} {
-		take(t, ch)
 		closed(t, ch)
 	}
 	take(t, c)
@@ -337,4 +333,89 @@ func (h *Hub) openStreams() int {
 		n += c
 	}
 	return n
+}
+
+func revokedSignal(t *testing.T, revoked <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-revoked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subscription was not told it was revoked")
+	}
+}
+
+func TestRevokingDiscardsWhatIsQueuedAndSignalsIt(t *testing.T) {
+	h := New(Config{})
+	ch, revoked, stop, err := h.Subscribe(context.Background(), room, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	publish(t, h, room, "stroke", `1`)
+	publish(t, h, room, "stroke", `2`)
+	h.EndUserIn(room.SpaceID, 1)
+	revokedSignal(t, revoked)
+	closed(t, ch)
+}
+
+func TestRevokingAStreamThatOverflowedStillEndsIt(t *testing.T) {
+	h := New(Config{Buffer: 2})
+	ch, revoked, stop, err := h.Subscribe(context.Background(), room, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	for range 3 {
+		publish(t, h, room, "stroke", `1`)
+	}
+	if n := len(h.topics); n != 0 {
+		t.Fatalf("%d topics, the overflowed stream should have left the fan-out", n)
+	}
+	h.EndUserIn(room.SpaceID, 1)
+	revokedSignal(t, revoked)
+	closed(t, ch)
+}
+
+func TestAnOverflowedStreamKeepsItsSlotUntilItIsStopped(t *testing.T) {
+	h := New(Config{Buffer: 2, MaxStreams: 1})
+	_, stop := subscribe(t, h, room, 1)
+	for range 3 {
+		publish(t, h, room, "stroke", `1`)
+	}
+	if _, _, _, err := h.Subscribe(context.Background(), room, 1); !errors.Is(err, ErrTooManyStreams) {
+		t.Fatalf("a second stream while the first has not returned = %v, want too many streams", err)
+	}
+	stop()
+	if _, _, _, err := h.Subscribe(context.Background(), room, 1); err != nil {
+		t.Fatalf("after the first stopped = %v", err)
+	}
+}
+
+func TestOverflowBeforeTheFirstEventKeepsReadyAheadOfResync(t *testing.T) {
+	h := New(Config{Buffer: 4})
+	ch, _ := subscribe(t, h, room, 1)
+	for range 6 {
+		publish(t, h, room, "stroke", `1`)
+	}
+	if ev := take(t, ch); ev.Type != TypeReady || ev.Seq != 0 {
+		t.Fatalf("first = %+v, want the ready baseline", ev)
+	}
+	if ev := take(t, ch); ev.Type != TypeResync {
+		t.Fatalf("second = %+v, want the resync", ev)
+	}
+	closed(t, ch)
+}
+
+func TestPublishKeepsItsOwnCopyOfTheValidatedBytes(t *testing.T) {
+	h := New(Config{})
+	ch, _ := subscribe(t, h, room, 1)
+	take(t, ch)
+	data := []byte(`{"n":1}`)
+	if _, err := h.Publish(room, "stroke", data); err != nil {
+		t.Fatal(err)
+	}
+	copy(data, `x7`)
+	if ev := take(t, ch); string(ev.Data) != `{"n":1}` {
+		t.Fatalf("data = %q, the publisher's later write reached the queue", ev.Data)
+	}
 }
