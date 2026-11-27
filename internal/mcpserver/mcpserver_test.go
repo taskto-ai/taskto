@@ -522,3 +522,66 @@ func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 		}
 	}
 }
+
+func TestAnAccessTokenGivesAnAppAnIconOnlyInItsOwnWorkspace(t *testing.T) {
+	f := newFixture(t)
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				InputSchema struct {
+					Properties map[string]struct {
+						Type string `json:"type"`
+					} `json:"properties"`
+				} `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rpc(t, f.endpoint, tokenA, "tools/list", map[string]any{}).Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	offered := 0
+	for _, tl := range listed.Result.Tools {
+		if (tl.Name == "create_app" || tl.Name == "update_app") && tl.InputSchema.Properties["icon"].Type == "string" {
+			offered++
+		}
+	}
+	if offered != 2 {
+		t.Fatalf("%d of create_app and update_app offer an icon", offered)
+	}
+
+	var def map[string]any
+	if err := json.Unmarshal([]byte(invoicing), &def); err != nil {
+		t.Fatal(err)
+	}
+	code, refused, text := callTool(t, f.endpoint, tokenA, "create_app", map[string]any{"space_id": f.spaceA, "name": "Iconic", "icon": "🧾", "definition": def})
+	var app struct {
+		ID   int64  `json:"id"`
+		Icon string `json:"icon"`
+	}
+	if code != http.StatusOK || refused || json.Unmarshal([]byte(text), &app) != nil || app.ID == 0 || app.Icon != "🧾" {
+		t.Fatalf("create_app with an icon = %d %v %q", code, refused, text)
+	}
+	if code, refused, text := callTool(t, f.endpoint, tokenA, "create_app", map[string]any{"space_id": f.spaceA, "name": "Bad", "icon": "abc", "definition": def}); code != http.StatusOK || !refused {
+		t.Fatalf("create_app with a bad icon = %d %v %q", code, refused, text)
+	}
+	update := func(token string, args map[string]any) (bool, string) {
+		_, refused, text := callTool(t, f.endpoint, token, "update_app", args)
+		return refused, text
+	}
+	if refused, text := update(tokenA, map[string]any{"space_id": f.spaceA, "app_id": app.ID, "version": 1, "icon": "🇧🇷"}); refused || !strings.Contains(text, "🇧🇷") {
+		t.Fatalf("update_app with an icon = %v %q", refused, text)
+	}
+	if refused, _ := update(tokenA, map[string]any{"space_id": f.spaceA, "app_id": app.ID, "version": 1, "icon": "🏠"}); !refused {
+		t.Fatal("a stale version changed the icon")
+	}
+	if refused, _ := update(tokenA, map[string]any{"space_id": f.spaceA, "app_id": app.ID, "version": 2, "icon": "abc"}); !refused {
+		t.Fatal("a bad icon was accepted")
+	}
+	if refused, text := update(tokenB, map[string]any{"space_id": f.spaceA, "app_id": app.ID, "version": 2, "icon": "🏠"}); !refused || text != "error: not found" {
+		t.Fatalf("another workspace's token changed the icon: %v %q", refused, text)
+	}
+	if _, _, text := callTool(t, f.endpoint, tokenA, "show_app", map[string]any{"space_id": f.spaceA, "app_id": app.ID}); !strings.Contains(text, "🇧🇷") {
+		t.Fatalf("show_app = %q", text)
+	}
+}
