@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -37,6 +36,12 @@ type profileHost struct {
 	// inPurge, if set, is told when Purge is called, which then waits for release.
 	inPurge chan int64
 	release chan struct{}
+	// inClean, if set, is told when Clean is first called, which then waits for releaseClean: a
+	// testing browser's stop removes its profile last, so its session hasn't ended until then.
+	inClean      chan struct{}
+	releaseClean chan struct{}
+	// purges counts the Purge calls.
+	purges int
 }
 
 func newProfileHost(t *testing.T) *profileHost {
@@ -110,6 +115,7 @@ func (h *profileHost) Purge(user int64) error {
 			h.aliveAtPurge[user]++
 		}
 	}
+	h.purges++
 	fail := h.failPurge > 0
 	if fail {
 		h.failPurge--
@@ -123,6 +129,24 @@ func (h *profileHost) Purge(user int64) error {
 		return errors.New("a file is busy")
 	}
 	return os.RemoveAll(h.dir(user))
+}
+
+func (h *profileHost) Clean(int64) error {
+	h.mu.Lock()
+	in := h.inClean
+	h.inClean = nil
+	h.mu.Unlock()
+	if in != nil {
+		close(in)
+		<-h.releaseClean
+	}
+	return nil
+}
+
+func (h *profileHost) purged() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.purges
 }
 
 func (h *profileHost) exists(user int64) bool {
@@ -457,12 +481,23 @@ func TestRemoteAccountClosing(t *testing.T) {
 // waited for by Forget: the newer one, which never ran, doesn't take its place.
 func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	h := newProfileHost(t)
-	// The fake takes 2 s to exit after it is told to close: far longer than the start waits, so
-	// a busy machine doesn't let the old browser go before the start gives up. Stopping waits
-	// StopGrace/2 (2.5 s) before it signals it, so it still exits on its own.
-	h.exit = 2 * time.Second
-	m := NewManager(Config{Host: h, StartTimeout: 100 * time.Millisecond})
+	// The old browser's stop is held at its last step, so it is still stopping for as long as the
+	// test needs: no timing decides it.
+	inClean := make(chan struct{})
+	h.inClean = inClean
+	h.releaseClean = make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(h.releaseClean)
+		}
+	}
+	// The start timeout is how long the second start waits for the old browser before it gives
+	// up; it bounds the first start too, which a loaded machine can make slow.
+	m := NewManager(Config{Host: h, StartTimeout: 3 * time.Second})
 	t.Cleanup(m.Close)
+	t.Cleanup(release) // runs before m.Close
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -471,31 +506,31 @@ func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	}
 	stopped := make(chan struct{})
 	go func() { _ = m.Stop(ctx, 1, Testing); close(stopped) }()
-	for {
-		st, _ := m.Status(ctx, 1)
-		if !st[Testing].Running {
-			break
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-inClean:
+	case <-ctx.Done():
+		t.Fatal("the old browser's stop didn't reach its last step")
 	}
-	// The start waits 100 ms for the old browser, then gives up.
+	// The start waits for the old browser until its timeout, then gives up.
 	if err := m.Start(ctx, 1, Testing); err == nil {
-		// It may only have succeeded because this goroutine, or the start's, was held up until
-		// the old browser had exited: then the new one started after it, and there is nothing to
-		// wait for. A new browser started while the old one ran is the failure.
-		if events := browserEvents(t, h.log); strings.Join(events, " ") != "start exit start" {
-			t.Fatalf("a start while the old browser was still stopping succeeded: %v", events)
-		}
-		t.Skip("the old browser was already gone: nothing to wait for")
+		t.Fatal("a start while the old browser was still stopping succeeded")
 	}
-	if h.alive(1) == 0 {
-		t.Skip("the old browser was already gone: nothing to wait for")
+	forgot := make(chan error, 1)
+	go func() { forgot <- m.Forget(ctx, 1) }()
+	select {
+	case err := <-forgot:
+		t.Fatalf("Forget returned (%v) while the old browser was still stopping", err)
+	case <-time.After(200 * time.Millisecond):
 	}
-	if err := m.Forget(ctx, 1); err != nil {
+	if n := h.purged(); n != 0 {
+		t.Fatalf("the files were removed while the old browser was still stopping (%d purges)", n)
+	}
+	release()
+	if err := <-forgot; err != nil {
 		t.Fatal(err)
 	}
-	if n := h.alivePurge(1); n != 0 {
-		t.Errorf("the files were removed with %d processes still running", n)
+	if n := h.alivePurge(1); n != 0 || h.purged() != 1 {
+		t.Errorf("the files were removed with %d processes still running (%d purges)", n, h.purged())
 	}
 	<-stopped
 }

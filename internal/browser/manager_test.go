@@ -28,11 +28,20 @@ func TestMain(m *testing.M) {
 	case "xvfb":
 		// The display number on -displayfd, then run until stopped.
 		_, _ = os.NewFile(3, "displayfd").WriteString("7\n")
-		select {}
+		runUntilStopped()
 	case "x11vnc":
-		select {}
+		runUntilStopped()
 	}
 	os.Exit(m.Run())
+}
+
+// runUntilStopped blocks until the process is signalled. Not with select {}: in a process with
+// no other goroutine the runtime takes that for a deadlock and exits at once, so the fake would
+// sometimes end before the Manager stops it. A sleeping goroutine is never a deadlock.
+func runUntilStopped() {
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func fakeChromium(logPath string) {
@@ -46,12 +55,8 @@ func fakeChromium(logPath string) {
 	logf("start")
 	in, out := os.NewFile(3, "devtools-in"), os.NewFile(4, "devtools-out")
 	br := bufio.NewReader(in)
-	exit := 700 * time.Millisecond
-	if d, err := time.ParseDuration(os.Getenv("TASKTO_FAKE_EXIT")); err == nil {
-		exit = d
-	}
 	shutdown := func() {
-		time.Sleep(exit)
+		time.Sleep(700 * time.Millisecond)
 		logf("exit")
 		os.Exit(0)
 	}
@@ -73,26 +78,10 @@ func fakeChromium(logPath string) {
 	}
 }
 
-// browserEvents is what the fake Chromiums logged, in order: "start" and "exit".
-func browserEvents(t *testing.T, log string) []string {
-	t.Helper()
-	b, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var events []string
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		events = append(events, strings.Fields(line)[0])
-	}
-	return events
-}
-
-// fakeHost starts the fake programs. vnc, if set, is the display's side of each live view; exit,
-// if set, is how long the fake Chromium takes to shut down (700 ms otherwise).
+// fakeHost starts the fake programs. vnc, if set, is the display's side of each live view.
 type fakeHost struct {
-	log  string
-	vnc  func(io.ReadWriteCloser)
-	exit time.Duration
+	log string
+	vnc func(io.ReadWriteCloser)
 }
 
 func (h *fakeHost) Bin(Program) string { return "fake" }
@@ -104,9 +93,6 @@ func (h *fakeHost) Start(_ int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, e
 	}
 	cmd := exec.Command(exe) //nolint:noctx // stopped as a group by the Manager
 	cmd.Env = append(os.Environ(), "TASKTO_FAKE_PROGRAM="+string(spec.Program), "TASKTO_FAKE_LOG="+h.log)
-	if h.exit > 0 {
-		cmd.Env = append(cmd.Env, "TASKTO_FAKE_EXIT="+h.exit.String())
-	}
 	cmd.ExtraFiles = extra
 	NewGroup(cmd)
 	return cmd, cmd.Start()
@@ -150,7 +136,15 @@ func TestRestartWaitsForTheOldBrowser(t *testing.T) {
 	if err := m.Start(ctx, 1, Testing); err != nil {
 		t.Fatal(err)
 	}
-	if events := browserEvents(t, log); strings.Join(events, " ") != "start exit start" {
+	b, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		events = append(events, strings.Fields(line)[0])
+	}
+	if strings.Join(events, " ") != "start exit start" {
 		t.Fatalf("the browsers' starts and exits: %v", events)
 	}
 }

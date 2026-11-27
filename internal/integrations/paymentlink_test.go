@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,11 +85,32 @@ func newPay(t *testing.T, public string) *pay { return newPayWith(t, public, inv
 // newPayWith is newPay with the invoicing app's definition, for a test that needs another.
 func newPayWith(t *testing.T, public, definition string) *pay {
 	t.Helper()
+	return newPayClocked(t, public, definition, false)
+}
+
+// newPayOnOneClock is newPay with the fake Stripe on the server's clock too, for a test of the times
+// the provider says: p.later moves the provider's time as well.
+func newPayOnOneClock(t *testing.T, public string) *pay {
+	t.Helper()
+	return newPayClocked(t, public, invoiceApp, true)
+}
+
+// clockFunc is a testprovider.Clock of a function.
+type clockFunc func() time.Time
+
+func (f clockFunc) Now() time.Time { return f() }
+
+func newPayClocked(t *testing.T, public, definition string, providerToo bool) *pay {
+	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
-	fake := testprovider.NewStripe(t)
 	// One clock moves the integrations' and the apps' alike.
 	offset := new(atomic.Int64)
+	var fakeOpts []testprovider.Option
+	if providerToo {
+		fakeOpts = append(fakeOpts, testprovider.WithClock(clockFunc(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })))
+	}
+	fake := testprovider.NewStripe(t, fakeOpts...)
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
 		Now:           func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
 		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host()), WithoutConnectionReuse()}})
@@ -2091,6 +2113,50 @@ func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 	}
 }
 
+// A lookup that stopped for another reason than the wait ending (the integration's account changed)
+// is neither waiting nor ready for a decision: the list says so and names the code the entry failed
+// with, and confirming is refused.
+func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	p.unknownOutcome(shape, "op-stopped-0001")
+	p.later(time.Minute)
+	p.looked(shape.path, 1)
+	p.later(7 * time.Hour)
+	e := p.settled(apps.StateFailed)
+	p.exec(`UPDATE app_effects SET error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationAccountChanged), e.id)
+
+	rec := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	list := decode[PaymentLinkOutcomes](t, rec)
+	if len(list.PaymentLinks) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	if got := list.PaymentLinks[0]; got.Waiting || got.CanConfirm || got.Code != string(apierr.CodeIntegrationAccountChanged) {
+		t.Fatalf("link = %+v: want stopped, with the entry's code", got)
+	}
+	expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusConflict)
+
+	// A code whose message names values (the ceiling that refused the amount) is listed with them, as
+	// the entry failed with them.
+	p.exec(`UPDATE app_effects SET error_code = ?, error_params = ? WHERE id = ?`,
+		string(apierr.CodeIntegrationAmountAboveMax), `{"max":"5.00","currency":"EUR"}`, e.id)
+	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	if got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks[0]; got.Code != string(apierr.CodeIntegrationAmountAboveMax) ||
+		got.Params["max"] != "5.00" || got.Params["currency"] != "EUR" {
+		t.Fatalf("link = %+v: want the code with its params", got)
+	}
+
+	// A link ready for a decision carries no code.
+	p.exec(`UPDATE app_effects SET error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), e.id)
+	rec = p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	if got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks[0]; !got.CanConfirm || got.Code != "" || got.Params != nil {
+		t.Fatalf("link = %+v", got)
+	}
+}
+
 // While the server still looks, nothing is asked of an admin: confirming then is refused, and the key
 // stays where it is.
 func TestAnAdminCannotConfirmWhileTheServerStillLooks(t *testing.T) {
@@ -2876,5 +2942,140 @@ func TestASavedLinkIsGivenAgainOnlyWhileAPayerCanUseIt(t *testing.T) {
 				t.Fatalf("%d calls, %d sessions: something else was made", n, len(p.fake.Sessions()))
 			}
 		})
+	}
+}
+
+// An admin looks for an unresolved payment at the provider by each attempt's reference, so the list
+// gives every attempt (not only the current one) with what to search and where: the reference, the kind
+// of object (which says the field it is in), any object seen and whether it was verified, the account and
+// mode it was made under, and when it was first sent.
+func TestTheUnresolvedListGivesEveryAttemptsReferenceAndWhereToLookForIt(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			p := newPay(t, shape.public)
+			p.unknownOutcome(shape, "op-attempts-0001")
+			p.later(time.Minute)
+			p.looked(shape.path, 1)
+			p.later(7 * time.Hour)
+			e := p.settled(apps.StateFailed)
+			kind := AttemptPaymentLink
+			if shape.public != "" {
+				kind = AttemptCheckoutSession
+			}
+			var first, mode string
+			if err := p.db.QueryRow(`SELECT a.token, r.account_mode FROM integration_ref_attempts a JOIN integration_refs r ON r.id = a.ref_id WHERE a.seq = 0`).Scan(&first, &mode); err != nil {
+				t.Fatal(err)
+			}
+
+			list := func() PaymentLinkOutcome {
+				t.Helper()
+				rec := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+				expect(t, rec, http.StatusOK)
+				got := decode[PaymentLinkOutcomes](t, rec).PaymentLinks
+				if len(got) != 1 {
+					t.Fatalf("list = %+v", got)
+				}
+				return got[0]
+			}
+
+			got := list().Attempts
+			if len(got) != 1 {
+				t.Fatalf("attempts = %+v", got)
+			}
+			if a := got[0]; a.Reference != first || a.Kind != kind || a.AccountID != testprovider.TestAccountID || a.Mode != mode || mode == "" ||
+				a.FirstSentAt == "" || a.ObjectID != "" || a.ObjectVerified {
+				t.Fatalf("attempt = %+v, want reference %q of a %s under %s (%s)", a, first, kind, testprovider.TestAccountID, mode)
+			}
+
+			// The reference moved to a second key after an abandoned one, and the first saw an object that
+			// couldn't be checked: both are listed, the oldest first, each with its own reference.
+			second := strings.Repeat("c", 16) + strings.Repeat("d", 16)
+			p.exec(`UPDATE integration_ref_attempts SET outcome = 'abandoned', object_id = 'obj_seen', object_verified = 0 WHERE seq = 0`)
+			p.exec(`INSERT INTO integration_ref_attempts (ref_id, seq, token, sends, clean_sends, first_sent_at, unknown_since)
+				SELECT id, 1, ?, 1, 0, '2026-11-26T12:00:00.000Z', '2026-11-26T12:00:00.000Z' FROM integration_refs`, second)
+			p.exec(`UPDATE integration_refs SET key_seq = 1`)
+			p.exec(`UPDATE integration_ref_attempts SET object_id = 'obj_checked', object_verified = 1 WHERE seq = 1`)
+			got = list().Attempts
+			if len(got) != 2 || got[0].Reference != first || got[1].Reference != second ||
+				got[0].ObjectID != "obj_seen" || got[0].ObjectVerified || got[1].ObjectID != "obj_checked" || !got[1].ObjectVerified ||
+				got[1].FirstSentAt != "2026-11-26T12:00:00.000Z" || got[1].Kind != kind || got[1].AccountID != got[0].AccountID {
+				t.Fatalf("attempts = %+v", got)
+			}
+		})
+	}
+}
+
+// The list never carries what is sealed or sent to the provider: only the fields of an attempt that are
+// named, and nothing of the integration's keys, whatever the response holds.
+func TestTheUnresolvedListHoldsNoKeysOrOtherFields(t *testing.T) {
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	p.unknownOutcome(shape, "op-attempts-0002")
+	p.later(time.Minute)
+	p.looked(shape.path, 1)
+	p.later(7 * time.Hour)
+	e := p.settled(apps.StateFailed)
+
+	rec := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, rec, http.StatusOK)
+	for _, leaked := range []string{p.fake.APIKey(), stripeHook, "whsec_", "api_key", "secret", "success_url", "cancel_url", "idempotency"} {
+		if strings.Contains(rec.Body.String(), leaked) {
+			t.Fatalf("the list holds %q: %s", leaked, rec.Body)
+		}
+	}
+	var raw struct {
+		Links []struct {
+			Attempts []map[string]any `json:"attempts"`
+		} `json:"payment_links"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || len(raw.Links) != 1 || len(raw.Links[0].Attempts) != 1 {
+		t.Fatalf("list = %s, %v", rec.Body, err)
+	}
+	var keys []string
+	for k := range raw.Links[0].Attempts[0] {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	want := []string{"account_id", "first_sent_at", "kind", "mode", "object_id", "object_verified", "reference"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("an attempt's fields = %v, want %v", keys, want)
+	}
+}
+
+// An admin of another workspace, who is not a member of this one, gets neither this workspace's payments
+// nor any attempt's reference: not by this workspace's route, and not by naming this integration's number
+// in their own.
+func TestAnotherWorkspacesAdminGetsNoAttemptsOfUnresolvedPayments(t *testing.T) {
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	p.unknownOutcome(shape, "op-attempts-0003")
+	p.later(time.Minute)
+	p.looked(shape.path, 1)
+	p.later(7 * time.Hour)
+	e := p.settled(apps.StateFailed)
+	var reference string
+	if err := p.db.QueryRow(`SELECT token FROM integration_ref_attempts WHERE seq = 0`).Scan(&reference); err != nil {
+		t.Fatal(err)
+	}
+	// The same call, for the workspace's own admin, does hold it: the refusals below are about who asks.
+	own := p.owner.do(http.MethodGet, p.confirmPath(e.id, "unresolved"), nil)
+	expect(t, own, http.StatusOK)
+	if !strings.Contains(own.Body.String(), reference) {
+		t.Fatalf("the admin's own list lacks the reference: %s", own.Body)
+	}
+
+	_, other := p.otherWorkspace(p.owner)
+	stranger := p.invite(p.owner, other, "second-admin@example.com", "admin")
+	for name, path := range map[string]string{
+		"this workspace's route":            p.confirmPath(e.id, "unresolved"),
+		"their own, naming its integration": wsPath(other, fmt.Sprintf("integrations/%d/payment-links/unresolved", p.in.ID)),
+	} {
+		rec := stranger.do(http.MethodGet, path, nil)
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: status %d: %s", name, rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), reference) || strings.Contains(rec.Body.String(), "attempts") {
+			t.Fatalf("%s: the answer holds attempts: %s", name, rec.Body)
+		}
 	}
 }

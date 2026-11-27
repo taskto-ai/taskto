@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -54,6 +55,45 @@ type PaymentLinkOutcome struct {
 	// line items couldn't be read: "" when none was seen. When set, the admin can't confirm that no link
 	// exists; they check this object at the provider, and the entry adopts it once a lookup can.
 	ObjectID string `json:"object_id"`
+	// Code is why the lookup stopped, when it is neither waiting nor ready for a decision: the code
+	// the entry failed with (for example integration_account_changed), which the web app says in
+	// words. It is empty while the server waits and when the admin may confirm.
+	Code string `json:"code,omitempty"`
+	// Params are the values the code's message names (for integration_amount_above_max, the ceiling and
+	// its currency), as the entry failed with them; left out when there are none.
+	Params apierr.Params `json:"params,omitempty"`
+	// Attempts is every try at this payment (every idempotency key of the reference, oldest first, not
+	// only the current one): what an admin searches the provider's account for. Never anything sealed.
+	Attempts []PaymentLinkAttempt `json:"attempts" apitypes:"nonnull"`
+}
+
+// The kinds of object an attempt asked the provider for, which say which of its fields holds the
+// attempt's reference.
+const (
+	// AttemptCheckoutSession: a Checkout Session, whose client_reference_id holds the reference.
+	AttemptCheckoutSession = "checkout_session"
+	// AttemptPaymentLink: a Payment Link, whose metadata[taskto_ref] holds the reference.
+	AttemptPaymentLink = "payment_link"
+)
+
+// PaymentLinkAttempt is one attempt at a payment link, as an admin looks for it at the provider.
+type PaymentLinkAttempt struct {
+	// Reference is the attempt's random token: what the call carried as client_reference_id (a Checkout
+	// Session) or metadata[taskto_ref] (a Payment Link), and the provider echoes back with a payment. It
+	// is a reference TaskTo made up, never a key of the provider's account.
+	Reference string `json:"reference"`
+	// Kind is the kind of object the attempt asked for: AttemptCheckoutSession or AttemptPaymentLink.
+	Kind string `json:"kind"`
+	// ObjectID is the provider's id of an object seen for this attempt, "" when none was, and
+	// ObjectVerified whether that object was checked to ask this payment's amount and currency.
+	ObjectID       string `json:"object_id"`
+	ObjectVerified bool   `json:"object_verified"`
+	// AccountID is the provider's account the reference was made under and Mode the key's mode there
+	// ("test" or "live"), both as recorded when it was made ("" when it wasn't recorded).
+	AccountID string `json:"account_id"`
+	Mode      string `json:"mode"`
+	// FirstSentAt is when the first call under the attempt's reference went out, "" when none did.
+	FirstSentAt string `json:"first_sent_at"`
 }
 
 // PaymentLinkOutcomes is the answer of the list.
@@ -76,8 +116,8 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		return nil, err
 	}
 	rows, err := s.store.db.QueryContext(ctx, `
-		SELECT r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
-			coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`,
+		SELECT r.id, r.success_url, r.account_id, r.account_mode, r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
+			coalesce(e.state, ''), coalesce(e.error_code, ''), e.error_params, `+confirmable+`,
 			coalesce(k.object_id, '')
 		FROM integration_refs r
 		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
@@ -91,12 +131,15 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 	}
 	defer rows.Close()
 	out := []PaymentLinkOutcome{}
+	var refs []refView
 	for rows.Next() {
 		var o PaymentLinkOutcome
+		var v refView
 		var minor int64
 		var state, code string
+		var params sql.NullString
 		var clean bool
-		if err := rows.Scan(&o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &clean, &o.ObjectID); err != nil {
+		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID); err != nil {
 			return nil, err
 		}
 		if !spaces[o.SpaceID] || len(out) >= maxOutcomesListed {
@@ -105,7 +148,62 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		o.Amount = currency.Format(minor, o.Currency)
 		o.CanConfirm = clean && state == "failed" && code == string(apierr.CodeIntegrationOutcomeUnknown)
 		o.Waiting = state == "pending" || state == "running"
+		if !o.Waiting && !o.CanConfirm {
+			o.Code = code
+			if params.Valid && params.String != "" {
+				// Written by the outbox as JSON; params that can't be read leave the code without them.
+				_ = json.Unmarshal([]byte(params.String), &o.Params)
+			}
+		}
 		out = append(out, o)
+		refs = append(refs, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Attempts, err = s.attempts(ctx, refs[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// refView is what of a ref the attempts' listing needs.
+type refView struct {
+	id         int64
+	successURL string
+	account    string
+	mode       string
+}
+
+// attempts lists every key of a ref, oldest first. A ref that asked for the server's own pages
+// (success_url set) made Checkout Sessions, and one that didn't made Payment Links: the same choice
+// the provider call makes (payments.go), so the kind always names the field the reference is in.
+func (s *Service) attempts(ctx context.Context, r refView) ([]PaymentLinkAttempt, error) {
+	rows, err := s.store.db.QueryContext(ctx, `
+		SELECT token, coalesce(object_id, ''), object_verified, coalesce(first_sent_at, '')
+		FROM integration_ref_attempts WHERE ref_id = ? ORDER BY seq`, r.id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kind := AttemptPaymentLink
+	if r.successURL != "" {
+		kind = AttemptCheckoutSession
+	}
+	out := []PaymentLinkAttempt{}
+	for rows.Next() {
+		a := PaymentLinkAttempt{Kind: kind, AccountID: r.account, Mode: r.mode}
+		var verified bool
+		if err := rows.Scan(&a.Reference, &a.ObjectID, &verified, &a.FirstSentAt); err != nil {
+			return nil, err
+		}
+		a.ObjectVerified = a.ObjectID != "" && verified
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }
