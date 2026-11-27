@@ -81,5 +81,20 @@ test('an overflowing sum is null and an average of huge values is kept', () => {
     },
   )
   expect((value.total as { series: { values: unknown[] }[] }).series[0].values).toEqual([null])
+  expect(
+    (
+      modelOf(
+        [
+          { name: 'amount', type: 'number' },
+          { name: 'kind', type: 'choice', options: ['a'] },
+        ],
+        [
+          { id: 1, amount: Number.MAX_VALUE, kind: 'a' },
+          { id: 2, amount: -Number.MAX_VALUE, kind: 'a' },
+        ],
+        { mean: { kind: 'avg', field: 'amount', group_by: 'kind' } },
+      ).mean as { series: { values: unknown[] }[] }
+    ).series[0].values,
+  ).toEqual([0])
   expect((value.mean as { series: { values: unknown[] }[] }).series[0].values).toEqual([Number.MAX_VALUE])
 })

@@ -99,7 +99,7 @@ type seriesGroup struct {
 type seriesTotal struct {
 	count int
 	sum   float64
-	mean  float64
+	half  float64
 }
 
 func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData {
@@ -220,7 +220,7 @@ func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData
 		t := &totals[split][group]
 		t.count++
 		t.sum += amount
-		t.mean += (amount - t.mean) / float64(t.count)
+		t.half += amount / 2
 	}
 	data := SeriesData{}
 	for _, group := range groups {
@@ -239,7 +239,10 @@ func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData
 				if total.count == 0 {
 					continue
 				}
-				value = total.mean
+				value = total.sum / float64(total.count)
+				if math.IsInf(value, 0) {
+					value = total.half / float64(total.count) * 2
+				}
 			}
 			if math.IsInf(value, 0) || math.IsNaN(value) {
 				continue

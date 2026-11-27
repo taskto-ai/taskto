@@ -240,6 +240,13 @@ func TestSeriesNeverReportsANonFiniteNumber(t *testing.T) {
 	if got := avg.Series[0].Values[0]; got == nil || *got != huge {
 		t.Fatalf("average = %v, want %v", got, huge)
 	}
+	opposite := computeSeries(Series{Kind: "avg", Field: "amount", GroupBy: "status"}, c, []Row{
+		{Data: map[string]any{"amount": huge, "status": "open"}},
+		{Data: map[string]any{"amount": -huge, "status": "open"}},
+	}, now)
+	if got := opposite.Series[0].Values[0]; got == nil || *got != 0 {
+		t.Fatalf("opposite average = %v, want 0", got)
+	}
 	sum := computeSeries(Series{Kind: "sum", Field: "amount", GroupBy: "status"}, c, rows, now)
 	if sum.Series[0].Values[0] != nil {
 		t.Fatalf("overflowing sum = %v, want null", *sum.Series[0].Values[0])

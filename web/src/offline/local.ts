@@ -383,6 +383,11 @@ function ownLabel(labels: Record<string, string> | undefined, key: string): stri
   return labels && Object.hasOwn(labels, key) ? labels[key] : key
 }
 
+function meanOf(total: { count: number; sum: number; half: number }): number {
+  const mean = total.sum / total.count
+  return Number.isFinite(mean) ? mean : (total.half / total.count) * 2
+}
+
 function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: Date): unknown {
   const fields = def.collection.fields as Field[]
   const byName = new Map(fields.map((f) => [f.name, f]))
@@ -454,7 +459,7 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
             { key: 'true', label: 'true' },
           ]
         : [{ key: '', label: '' }]
-  const totals = splits.map(() => groups.map(() => ({ count: 0, sum: 0, mean: 0 })))
+  const totals = splits.map(() => groups.map(() => ({ count: 0, sum: 0, half: 0 })))
   for (const row of rows) {
     const raw = row[s.group_by]
     if (!keeps(row)) continue
@@ -483,7 +488,7 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
     total.count++
     if (s.kind !== 'count') {
       total.sum += amount as number
-      total.mean += ((amount as number) - total.mean) / total.count
+      total.half += (amount as number) / 2
     }
   }
   return {
@@ -491,7 +496,7 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
     series: splits.map((split, i) => ({
       ...split,
       values: totals[i].map((v) => {
-        const value = s.kind === 'count' ? v.count : s.kind === 'sum' ? v.sum : v.count ? v.mean : null
+        const value = s.kind === 'count' ? v.count : s.kind === 'sum' ? v.sum : v.count ? meanOf(v) : null
         return value !== null && Number.isFinite(value) ? value : null
       }),
     })),
