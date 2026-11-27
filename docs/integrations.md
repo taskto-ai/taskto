@@ -600,7 +600,8 @@ created; no admin is needed). One edited so while the provider makes the link fa
 `integration_condition_changed_link_kept`: the link exists at the provider and is not written to the
 record, and it stays with the entry's reference, so a payment on it is still recorded (and, since the
 app's rule then leaves the record as it is, the admins are told). Retrying the entry once the record
-meets the condition again writes that same link; running the action again would ask for another. And
+meets the condition again writes that same link, and so does running the action again (the record's
+earlier link that may still be paid is given again: see one payable link per record below). And
 an entry that wrote its link and stopped before it was noted done, whose condition reads the link's
 own field (for example "no payment id yet"), finds its own link on the record and ends done. The
 link's write also checks, in its transaction, that the integration's key is of the mode the link was
@@ -1174,8 +1175,10 @@ code and of this section; the real-provider check is manual and never in CI.
   step can map a refund through it; a charge with no payment intent is not stored. Ids are checked against Stripe's shapes (`evt_`, `cs_test_`
   or `cs_live_`, `ch_`, `pi_`), the currency is three lower-case letters and the amount a
   whole number above zero; an event that isn't of the shape is answered `200` and not stored.
-  An event of live money for an integration in test mode, or the other way round, is ignored
-  the same way.
+  An event of live money for an integration in test mode, or the other way round, is stored like
+  any other: the apply step compares it with the mode of the reference it names, so it settles a
+  reference made in its own mode (one made before the key was replaced) and is ignored
+  (`integration_event_mode_mismatch`) against any other.
 
 ## The fakes tests use
 
