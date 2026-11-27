@@ -291,3 +291,47 @@ test('the transcript follows a list that appears under the newest answer while t
   await screen.findByText('Changed in this turn (2)')
   expect(el.scrollTop).toBe(100)
 })
+
+test('boards link to the board, a card the turn only commented on is named by its number, and a deleted record has no link', async () => {
+  const call = (id: string, name: string, args: unknown) => ({ type: 'toolCall', id, name, arguments: args })
+  const result = (id: string, name: string, text: unknown) => ({
+    role: 'toolResult',
+    toolCallId: id,
+    toolName: name,
+    content: [{ type: 'text', text: JSON.stringify(text) }],
+    isError: false,
+  })
+  await showTurn([
+    { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'Tidy' }] },
+    {
+      id: 2,
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [
+            call('a', 'create_board', { space_id: 3, name: 'Plans' }),
+            call('b', 'comment_card', { space_id: 3, board_id: 4, card_id: 9, body: 'Done' }),
+            call('c', 'run_app_action', { space_id: 2, app_id: 5, action: 'remove', id: 12 }),
+          ],
+        },
+      ],
+    },
+    { id: 3, kind: 'pi.tool', model: [result('a', 'create_board', { id: 6, space_id: 3, name: 'Plans' })] },
+    { id: 4, kind: 'pi.tool', model: [result('b', 'comment_card', { id: 70, card_id: 9, body: 'Done' })] },
+    { id: 5, kind: 'pi.tool', model: [result('c', 'run_app_action', { kind: 'delete', id: 12, changed: true })] },
+    { id: 6, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'Tidied.' }] }] },
+  ])
+  const box = (await screen.findByText('Changed in this turn (3)')).closest('details') as HTMLElement
+  expect(
+    within(box)
+      .getAllByRole('link')
+      .map((l) => [l.textContent, l.getAttribute('href')]),
+  ).toEqual([
+    ['Plans', '/w/1/boards/3%3A6'],
+    ['Card 9', '/w/1/boards/3%3A4%3A9'],
+  ])
+  expect(within(box).getByText('Record 12')).toBeTruthy()
+  expect(within(box).getByText('Commented')).toBeTruthy()
+  expect(within(box).getByText('Deleted')).toBeTruthy()
+})

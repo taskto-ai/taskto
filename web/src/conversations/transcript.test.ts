@@ -262,3 +262,37 @@ test('a result that arrives for a call of another name is not taken for a change
   })
   expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
 })
+
+function write(...rest: unknown[]): ConversationView {
+  return {
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'w', name: 'write_doc', arguments: { space_id: 3, path: 'a.md' } }],
+          },
+          ...rest,
+        ],
+      },
+    ],
+  }
+}
+
+const saved = { content: [{ type: 'text', text: '{"commit":"c","doc":{"path":"a.md"}}' }] }
+
+test('a failed call lists nothing, even when its text reads like a result', () => {
+  const t = transcript(write({ role: 'toolResult', toolCallId: 'w', toolName: 'write_doc', isError: true, ...saved }))
+  expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
+  const ok = transcript(write({ role: 'toolResult', toolCallId: 'w', toolName: 'write_doc', ...saved }))
+  expect(ok.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([
+    { kind: 'doc', space: 3, path: 'a.md', change: 'created' },
+  ])
+})
+
+test('a result for a call the transcript has not seen is not given to another call', () => {
+  const t = transcript(write({ role: 'toolResult', toolCallId: 'other', toolName: 'write_doc', ...saved }))
+  expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
+})

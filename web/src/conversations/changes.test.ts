@@ -189,6 +189,43 @@ test('an action that changed nothing, was replayed, or navigated lists no record
   expect(changeOf('run_app_action', args, json({ kind: 'other', id: 12, changed: true }))).toBeUndefined()
 })
 
+test('the server’s own ids and path win over the call’s, and the call fills in only what the result lacks', () => {
+  const edited = { space_id: 3, board_id: 4, card_id: 5, version: 1 }
+  expect(changeOf('update_card', edited, json({ id: 9, board_id: 6, title: 'x' }))).toMatchObject({
+    board: 6,
+    card: 9,
+  })
+  expect(changeOf('update_card', edited, json({ id: 0, board_id: 4, title: 'x' }))).toMatchObject({ card: 5 })
+  expect(changeOf('update_card', edited, json({ id: 9, board_id: 0, title: 'x' }))).toMatchObject({ board: 4 })
+  expect(
+    changeOf('write_doc', { space_id: 3, path: 'A.md' }, json({ commit: 'c', doc: { path: 'a.md' } })),
+  ).toMatchObject({ path: 'a.md' })
+  expect(changeOf('write_doc', { space_id: 3, path: 'A.md' }, json({ commit: 'c', doc: { path: '' } }))).toMatchObject({
+    path: 'A.md',
+  })
+  expect(changeOf('update_board', { board_id: 4, version: 1 }, json({ id: 4, space_id: 3, name: 'P' }))).toMatchObject({
+    space: 3,
+    board: 4,
+  })
+  expect(changeOf('update_board', { space_id: 8, board_id: 4 }, json({ id: 4, space_id: 3, name: 'P' }))).toMatchObject(
+    { space: 3 },
+  )
+})
+
+test('a comment or an action without the board or the app it names lists nothing', () => {
+  expect(changeOf('comment_card', { space_id: 3, card_id: 9, body: 'x' }, json({ id: 70, card_id: 9 }))).toBeUndefined()
+  expect(
+    changeOf('run_app_action', { space_id: 3, action: 'add' }, json({ kind: 'insert', id: 12, changed: true })),
+  ).toBeUndefined()
+  expect(
+    changeOf(
+      'run_app_action',
+      { space_id: 3, app_id: 0, action: 'add' },
+      json({ kind: 'insert', id: 12, changed: true }),
+    ),
+  ).toBeUndefined()
+})
+
 const doc = (path: string, change: Changed['change'], from?: string): Changed => ({
   kind: 'doc',
   space: 3,
@@ -342,4 +379,44 @@ test('a record is named by its app when the turn made or changed the app', () =>
   expect(run(user('1.0'), agent('2.0', app, record, elsewhere))).toEqual({
     '2.0': [app, { ...record, appName: 'Expenses' }, elsewhere],
   })
+})
+
+test('a card on another board with the same number is another card', () => {
+  const elsewhere = { ...cardOf('created'), board: 5 }
+  expect(run(user('1.0'), agent('2.0', cardOf('created'), elsewhere))).toEqual({
+    '2.0': [cardOf('created'), elsewhere],
+  })
+})
+
+test('a later change whose result has no name keeps the name the turn already had', () => {
+  const unnamed = (c: Changed, change: Changed['change']): Changed => ({
+    ...c,
+    ...('title' in c ? { title: '' } : { name: '' }),
+    change,
+  })
+  const board: Changed = { kind: 'board', space: 3, board: 4, name: 'Plans', change: 'created' }
+  const app: Changed = { kind: 'app', space: 3, app: 5, name: 'Expenses', change: 'created' }
+  for (const [made, change] of [
+    [cardOf('created'), 'edited'],
+    [board, 'edited'],
+    [app, 'edited'],
+    [{ ...cardOf('edited'), change: 'edited' as const }, 'archived'],
+    [{ ...board, change: 'edited' as const }, 'edited'],
+    [{ ...app, change: 'edited' as const }, 'edited'],
+  ] as [Changed, Changed['change']][]) {
+    const [kept] = Object.values(run(user('1.0'), agent('2.0', made, unnamed(made, change))))[0] ?? []
+    expect(kept && ('title' in kept ? kept.title : 'name' in kept ? kept.name : '')).not.toBe('')
+  }
+})
+
+test('a move that does not say where the document came from changes no other entry', () => {
+  expect(run(user('1.0'), agent('2.0', doc('x.md', 'created'), doc('b.md', 'moved')))).toEqual({
+    '2.0': [doc('x.md', 'created'), doc('b.md', 'moved')],
+  })
+})
+
+test('arguments that are not an object are not trusted for what the result alone could name', () => {
+  const result = json({ id: 5, space_id: 3, name: 'x' })
+  expect(changeOf('create_app', null, result)).toBeUndefined()
+  expect(changeOf('create_board', 'x', result)).toBeUndefined()
 })
