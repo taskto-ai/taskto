@@ -347,12 +347,16 @@ export type DraftEffect = {
   card?: string
   path?: string
   route?: 'board' | 'card' | 'document'
-  // A payment link: the slot it asks, the amount's field and the currency (a code, or the choice
-  // field it is read from).
+  // A payment link (create_payment_link): the slot of the app's integrations it asks, the number
+  // field with the amount, the currency (a code, or a choice field of codes), and the two fields the
+  // link and its id are written to. Never a provider, an address or a key.
   integration?: string
   amount_field?: string
   currency?: string
   currency_field?: string
+  description?: string
+  url_field?: string
+  id_field?: string
 }
 
 // The space, and board, an effect of the draft acts on, with the names the caller may be told (none
@@ -542,8 +546,8 @@ export type AppEffect = {
   attempts: number
   next_attempt_at: string | null
   error: { code: string; params?: Params } | null
-  // amount and currency: what a simulated payment link would ask for, in the currency's own units.
-  detail: { title?: string; column?: string; path?: string; route?: string; amount?: number; currency?: string }
+  // A payment link's amount (decimal text with the currency's decimals) and currency code.
+  detail: { title?: string; column?: string; path?: string; route?: string; amount?: string; currency?: string }
   result?: Record<string, unknown>
   created_at?: string
   updated_at?: string
@@ -857,6 +861,69 @@ export type IntegrationApproval = {
 export type SpaceGrant = 'none' | 'approval' | 'settings'
 export type IntegrationApprovalList = { approvals: IntegrationApproval[]; next_cursor: string | null }
 
+// A provider event the server stored for an integration, as an admin sees it: its kind, amount and
+// state, and the code that says why it wasn't applied. It holds no record, app, space or body.
+export type IntegrationEventState = 'pending' | 'running' | 'applied' | 'ignored' | 'failed'
+export type IntegrationEvent = {
+  id: number
+  kind: string
+  source: string
+  state: IntegrationEventState
+  // Why an ignored or failed event wasn't applied (an errors.<code> text); absent for the others.
+  code?: string
+  // In the currency's smallest unit.
+  amount_minor: number
+  currency: string
+  livemode: boolean
+  attempts: number
+  occurred_at: string
+  received_at: string
+  processed_at: string | null
+  retriable: boolean
+}
+// A page, newest first; `next_before` is the id to continue after, 0 on the last page.
+export type IntegrationEventList = { events: IntegrationEvent[]; next_before: number }
+
+// A payment link whose outcome at the provider is unknown, in a space the admin manages.
+export type PaymentLinkOutcome = {
+  effect_id: number
+  app_id: number
+  space_id: number
+  record_id: number
+  // Decimal text with the currency's decimals.
+  amount: string
+  currency: string
+  since: string
+  // The server is still looking for the link: nothing is asked of the admin yet.
+  waiting: boolean
+  // The wait ended and the entry stopped: the admin may confirm that no link exists.
+  can_confirm: boolean
+  // Why the lookup stopped, when it neither waits nor may be confirmed (the code the entry failed
+  // with); older servers don't send it.
+  code?: string
+  // The values the code's message names (the ceiling that refused an amount), when it has any.
+  params?: Params
+  // The provider's id of an object of the waiting key that the server saw and couldn't resolve, "" when none.
+  object_id: string
+  // Every attempt at this payment, oldest first: what an admin looks for at the provider.
+  attempts: PaymentLinkAttempt[]
+}
+// One attempt at a payment link. `reference` is its random token, sent as client_reference_id for a
+// Checkout Session and as metadata[taskto_ref] for a Payment Link (`kind` says which).
+export type PaymentLinkAttempt = {
+  reference: string
+  kind: 'checkout_session' | 'payment_link'
+  // An object seen for this attempt ("" when none) and whether it was checked against the payment.
+  object_id: string
+  object_verified: boolean
+  // The provider's account and the key's mode (test or live) it was made under; "" when not recorded.
+  account_id: string
+  mode: string
+  // When the first call under the reference went out; "" when none did.
+  first_sent_at: string
+}
+export type PaymentLinkOutcomes = { payment_links: PaymentLinkOutcome[] }
+
 // What a space's readers see of an integration allowed there.
 export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }
 
@@ -1115,8 +1182,22 @@ export type UpdateStatus = {
     running: UpdateRunning | null
     // Null from an updater that predates the button.
     requests: { supported: boolean; last: UpdateRequestRun | null } | null
+    // When the updater last looked for a newer version; absent from one that predates the check.
+    looked?: string
+    available: UpdateAvailable | null
   } | null
   request: UpdateRequestState
+  // The release's page (release channel) or the comparison with it (main), built by the server.
+  notes_url?: string
+}
+// The version the host's updater would install next, under the same rules as a run.
+export type UpdateAvailable = {
+  version: string
+  sha?: string
+  published?: string
+  // A person must install it: it, or a release it passes, says `manual-upgrade: true`.
+  manual_upgrade: boolean
+  repo?: string
 }
 // "Update now": POST with no body. The host installs what its nightly run would, under its gates.
 export type UpdateRequested = { requested_at: string }

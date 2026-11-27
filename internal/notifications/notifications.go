@@ -53,7 +53,10 @@ const (
 	KindAppEffectFailed = "app_effect_failed"
 	KindCardDue         = "card_due"
 	KindCardOverdue     = "card_overdue"
-	KindChanged         = "changed"
+	// KindIntegrationEvent is for a workspace's admins: a payment event of an integration wasn't
+	// applied and waits for them (internal/integrations apply.go).
+	KindIntegrationEvent = "integration_event"
+	KindChanged          = "changed"
 )
 
 // Bounds.
@@ -79,6 +82,9 @@ type Ref struct {
 	Card   int64 `json:"card,omitempty"`
 	App    int64 `json:"app,omitempty"`
 	Effect int64 `json:"effect,omitempty"`
+	// Integration and Event are an integration of the workspace and one of its stored events.
+	Integration int64 `json:"integration,omitempty"`
+	Event       int64 `json:"event,omitempty"`
 	// Due is the date a card's reminder or overdue notice was made for, a calendar date: the
 	// notice says it only while the card is still due then.
 	Due string `json:"due,omitempty"`
@@ -102,7 +108,7 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 // the notification is about, which is checked when it is shown.
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	switch n.Kind {
-	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue:
+	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent:
 	default:
 		return errUnknownKind
 	}

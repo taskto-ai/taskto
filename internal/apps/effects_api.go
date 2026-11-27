@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/currency"
 )
 
 // Seeing the effects of an app, retrying the ones that failed, and trying an action out without
@@ -69,15 +69,24 @@ type EffectDetail struct {
 	Column string `json:"column,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Route  string `json:"route,omitempty"`
-	// Amount and Currency are what a simulated payment link would ask for, as the sample record
-	// has them (the amount in the currency's own units, such as euros). Only a preview has them:
-	// no entry is queued for a payment link yet.
-	Amount   *float64 `json:"amount,omitempty"`
-	Currency string   `json:"currency,omitempty"`
+	// Amount and Currency are what a payment link asks: the amount as decimal text with the
+	// currency's decimals ("120.00"), never the provider's, and shown only while the live release
+	// still declares the fields they were read from.
+	Amount   string `json:"amount,omitempty"`
+	Currency string `json:"currency,omitempty"`
 }
 
 func detailOf(p payload) EffectDetail {
-	return EffectDetail{Title: p.Title, Column: p.Column, Path: p.Path, Route: p.Route}
+	d := EffectDetail{Title: p.Title, Column: p.Column, Path: p.Path, Route: p.Route}
+	if p.Slot != "" {
+		d.Title, d.Currency = p.Description, p.Currency
+		if minor, err := currency.Minor(p.Amount, p.Currency); err == nil {
+			d.Amount = currency.Format(minor, p.Currency)
+		} else {
+			d.Amount = p.Amount // what the record held: the entry fails with why when it runs
+		}
+	}
+	return d
 }
 
 // EffectList is a page of effects, newest first, with how many of the app's wait and failed.
@@ -125,7 +134,7 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 	if targetReadable {
 		v.Detail = detailOf(e.payload)
 		if !fieldsHold {
-			v.Detail.Title, v.Detail.Path = "", ""
+			v.Detail.Title, v.Detail.Path, v.Detail.Amount, v.Detail.Currency = "", "", "", ""
 		}
 	}
 	if e.doneAt.Valid {
@@ -143,6 +152,10 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 			if !fieldsHold {
 				delete(v.Error.Params, "path")
 				delete(v.Error.Params, "title")
+				// A payment link's refusal names the currency and the ceiling it was held to, which the
+				// amount and currency fields of the record chose.
+				delete(v.Error.Params, "currency")
+				delete(v.Error.Params, "max")
 			}
 		}
 	}
@@ -162,10 +175,12 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 }
 
 // withheld removes from a result what was made from the record's fields (a card's title, a
-// document's path), at the top and in a route.
+// document's path, a payment link's amount and currency), at the top and in a route.
 func withheld(res map[string]any) {
 	delete(res, "title")
 	delete(res, "path")
+	delete(res, "amount")
+	delete(res, "currency")
 	if route, ok := res["route"].(map[string]any); ok {
 		delete(route, "path")
 	}
@@ -459,60 +474,32 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 		if !e.applies(def.Collection, rec.Data) {
 			continue
 		}
-		// A payment link is only said, never asked for: the preview calls no network, opens no
-		// secret and needs no approval, and shows what the sample record would send.
-		// A new record has no number yet: its details, and the effect's record, say "new".
+		// A new record has no number yet: its details say "new".
 		id := rec.ID
 		if ch.Kind == ActionInsert {
 			id = 0
-		}
-		if e.Kind == EffectCreatePaymentLink {
-			out = append(out, EffectView{
-				Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: id, Status: StateSimulated,
-				Detail: previewLink(e, rec.Data),
-			})
-			continue
 		}
 		p := e.payload(def.Collection, rec.Data, id)
 		v := EffectView{
 			Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: id, Status: StateSimulated,
 			Detail: detailOf(p), NextAttemptAt: nil, DoneAt: nil,
 		}
-		if code := s.previewTarget(ctx, userID, e, p); code != "" {
+		if e.Kind == EffectCreatePaymentLink {
+			// A payment link is only simulated: the amount and currency it would ask, and why it
+			// would be refused if the amount can't be asked in that currency. Nothing is called, no
+			// integration or key is read, and no reference is made.
+			var code apierr.Code
+			v.Detail, code = previewPaymentLink(p)
+			v.Detail.Title = p.Description
+			if code != "" {
+				v.Error = &EffectError{Code: code}
+			}
+		} else if code := s.previewTarget(ctx, userID, e, p); code != "" {
 			v.Error = &EffectError{Code: code}
 		}
 		out = append(out, v)
 	}
 	return out
-}
-
-// previewLink is what a payment link of effect e would ask for, from the sample record's fields. A
-// missing or odd amount is left out rather than guessed.
-func previewLink(e Effect, data map[string]any) EffectDetail {
-	d := EffectDetail{Currency: e.Currency}
-	if e.CurrencyField != "" {
-		if c, ok := data[e.CurrencyField].(string); ok {
-			d.Currency = c
-		}
-	}
-	switch n := data[e.AmountField].(type) {
-	case float64:
-		d.Amount = &n
-	case int64:
-		f := float64(n)
-		d.Amount = &f
-	case int:
-		f := float64(n)
-		d.Amount = &f
-	case json.Number:
-		if f, err := n.Float64(); err == nil {
-			d.Amount = &f
-		}
-	}
-	if d.Amount != nil && (math.IsNaN(*d.Amount) || math.IsInf(*d.Amount, 0)) {
-		d.Amount = nil
-	}
-	return d
 }
 
 // previewTarget is the code an effect would fail with for lack of access to its target, or "".

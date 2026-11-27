@@ -17,6 +17,20 @@ import { PasswordInput } from './PasswordInput'
 // The shortest password the server takes (internal/auth/password.go).
 const MIN_PASSWORD = 12
 
+// Where the provider's hosted payment page sends the payer back to: the server's own pages, which
+// never come from an app's definition. The payer is a customer of whoever sent the link, often with
+// no account here, so these pages call nothing and show nothing of the payment: the provider told
+// them already, and what happened to the record is the business's to say.
+export function PaymentReturnScreen({ outcome }: { outcome: 'done' | 'cancelled' }) {
+  const t = useT()
+  return (
+    <AuthLayout
+      title={outcome === 'done' ? t('payment.done.title') : t('payment.cancelled.title')}
+      help={<p>{outcome === 'done' ? t('payment.done.body') : t('payment.cancelled.body')}</p>}
+    />
+  )
+}
+
 // What is shown before the app knows what to show: the logo and the shape of a form, still. A
 // screen reader hears that it is loading.
 export function StartingScreen() {

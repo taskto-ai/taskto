@@ -259,8 +259,8 @@ isn't trusted every request, the provider's and anyone's, counts against the pro
 and a flood of bad requests can hold back real deliveries.
 
 A server without a public address (a laptop, a home server) works without webhooks: the
-provider's events don't reach it and payments are reconciled by polling the provider, which
-arrives in a later release. A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
+provider's events don't reach it and payments are reconciled by polling the provider, which the
+server always does for open payments ([integrations](integrations.md#reconciliation-polling)). A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
 `POST /hooks/*` to the server gives the same instant updates without opening the server; give
 `-public-url` the tunnel's address.
 
@@ -432,6 +432,15 @@ server's external address, `https://taskto.example.com`), never on the address a
 to, which someone asking for a reset email could choose. Without `public_url` the server
 doesn't email links: it says so in its log at startup, the login page doesn't offer **Forgot
 your password?**, and the invite dialog doesn't offer to email.
+
+**Payment links use it, and work without it.** With `public_url`, the pages a payer returns to from
+Stripe's payment page, `<public_url>/payment/done` and `/payment/cancelled`, are the server's own and
+are built on it. Without one a [payment link](integrations.md#payment-links) is still made, and the
+payer stays on a confirmation page Stripe hosts; but Stripe can't send webhooks to such a server, so
+paid status comes from polling Stripe. The two pages need no session, so a
+reverse proxy that exposes only what payers must reach forwards those two paths and `/assets/*`,
+where the web app's scripts, styles and fonts are (the two pages are the web app's, and without them
+the payer sees a blank page), and `POST /hooks/*` once webhooks are used.
 
 | Setting | Flag / environment | |
 |---|---|---|
@@ -1535,6 +1544,20 @@ reason in the status; none changes anything.
   [When an update fails](#when-an-update-fails): the stack is stopped (or left as it is),
   and nothing runs again until a person has restored the backup and cleared it.
 
+**Looking without installing.** `taskto-update --check` chooses the version a run would install,
+on the same channel and with the same rules (on `release` the newest release whose images are
+published, and whether it, or a release it passes, says `manual-upgrade: true`; on `main` the
+newest green descendant whose images are published), and does nothing else: it pulls no image
+(it asks the registry only whether the images are there), changes nothing on the install, writes
+no run's status and sends no notification. It publishes what it found as `available` (the
+version, its commit, when it was published, and whether a person must install it, with the
+repository the updater reads, `TASKTO_UPDATE_REPO`, for the link to the notes) and when it
+looked. `taskto-update-check.timer` runs it every six hours, and every run refreshes it too. It
+never waits for a run, nor keeps one from starting: while a run holds the lock, it records what
+it found and the run publishes it when it ends. What it found holds only while the install is on
+the version it was found from, and when it can't tell (GitHub's API didn't answer) what it found
+before stays.
+
 `taskto-update --dry-run` chooses and checks and changes nothing on the install (it does pull
 the images, to check them, and logs in to a private registry for that, with a Docker config of
 its own that is removed after, so the operator's isn't changed; it makes no backup directory);
@@ -1630,7 +1653,14 @@ the version the server runs, the version on record in `.env`, the updater's chan
 its last run and last change (the result, when, the versions, a reason, whether it made a
 backup), and, while the install waits for a person, what to do: a stopped or interrupted
 update (`taskto-update --clear-block`, once the install is put right) or a release that needs
-steps by hand (`taskto-update --to VERSION`). The same is at
+steps by hand (`taskto-update --to VERSION`). When the updater has found a newer version
+(`taskto-update --check`, above), the page says **Update available: <version> (published
+<date>)**, next to Update now, with a link to what it brings, which the server builds from the
+updater's repository and the versions only: the release's page on GitHub on the `release`
+channel, or the comparison of the version on record with the new commit on `main`. A version
+that needs a person is badged so, with the `taskto-update --to` command that installs it once its
+notes are followed; with nothing newer it says the server is up to date, and when the updater
+last looked. The same is at
 [`GET /api/workspaces/{workspace}/updates`](api.md). The server gets it without gaining any
 power over the host (the one thing it can do is [ask for a run](#update-now)): on every run (and each night a stop is still waiting) the updater writes
 a copy of its status, made for this, to `/var/lib/taskto-update/public/status.json`
@@ -1678,6 +1708,10 @@ the `main` channel, whose servers run a commit and not a tag, do the same from a
 the commit the host runs (`TASKTO_VERSION` in `/srv/taskto/.env`) or a newer one, with
 `TASKTO_VERSION` in `~/.config/taskto-install.env` set to it for the step: a `main` host that
 isn't reinstalled keeps its old updater, however far it updates the server.
+
+The same goes for the release that added `taskto-update --check` and its timer: until step 16 is
+run again from it (or a newer version), the host has no check timer and its updater publishes no
+`available`, so the page shows no available update, only what the last run did.
 
 ### Update now
 

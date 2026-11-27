@@ -1,6 +1,7 @@
 package testprovider
 
 import (
+	"encoding/json"
 	"maps"
 	"net/http"
 	"net/url"
@@ -19,9 +20,11 @@ type session struct {
 	piMetadata  map[string]string
 	piID        string
 	chargeID    string
-	receiptURL  string
-	refunded    int64
-	attempts    int
+	// chargeCreated is when the latest charge was made (Unix seconds): its "created".
+	chargeCreated int64
+	receiptURL    string
+	refunded      int64
+	attempts      int
 	// delayed is true from a delayed payment's start (PayDelayed) until it settles, either way.
 	delayed bool
 }
@@ -161,15 +164,89 @@ func optional(v string) *string {
 	return &v
 }
 
+var sessionRetrieveParams = compileAll([]string{`expand\[\d*\]`})
+
 func (s *Stripe) retrieveSession(_ *http.Request, form url.Values, id string) reply {
-	if rp := unknownParam(form, nil); rp != nil {
+	if rp := unknownParam(form, sessionRetrieveParams); rp != nil {
+		return *rp
+	}
+	expand, rp := expansions(form, "")
+	if rp != nil {
 		return *rp
 	}
 	ss, ok := s.sessions[id]
 	if !ok {
 		return noSuch("checkout.session", id, "session")
 	}
-	return jsonReply(http.StatusOK, ss.snapshot())
+	return jsonReply(http.StatusOK, s.expanded(ss, expand))
+}
+
+// Expansion (https://docs.stripe.com/expand): a session's payment_intent, and that intent's
+// latest_charge, can be asked for as objects in the same answer instead of their ids. These are the
+// only expansions the fake knows; any other is refused as Stripe refuses a property it can't expand.
+const (
+	expandIntent = "payment_intent"
+	expandCharge = "payment_intent.latest_charge"
+)
+
+// expansions reads the expand[] parameters, each under prefix ("data." for a list), and says whether
+// the intent and its charge were asked for.
+func expansions(form url.Values, prefix string) (map[string]bool, *reply) {
+	out := map[string]bool{}
+	for k, vs := range form {
+		if k != "expand[]" && !strings.HasPrefix(k, "expand[") {
+			continue
+		}
+		for _, v := range vs {
+			path, ok := strings.CutPrefix(v, prefix)
+			if !ok || (path != expandIntent && path != expandCharge) {
+				rp := invalid("", "This property cannot be expanded ("+v+").", "expand")
+				return nil, &rp
+			}
+			out[path] = true
+			if path == expandCharge {
+				out[expandIntent] = true
+			}
+		}
+	}
+	return out, nil
+}
+
+// expanded is the session's snapshot with the expansions asked for: the intent as the object it is
+// now, and its latest charge as one too (both null where the session has none).
+func (s *Stripe) expanded(ss *session, expand map[string]bool) any {
+	snap := ss.snapshot()
+	if !expand[expandIntent] {
+		return snap
+	}
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		panic("testprovider: session doesn't marshal: " + err.Error())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		panic("testprovider: session doesn't unmarshal: " + err.Error())
+	}
+	if ss.piID == "" {
+		return m
+	}
+	status := "requires_payment_method"
+	switch {
+	case ss.PaymentStatus == PaymentPaid:
+		status = "succeeded"
+	case ss.delayed:
+		status = "processing"
+	}
+	intent := s.intentOf(ss, status)
+	if expand[expandCharge] && ss.chargeID != "" {
+		charge := "failed"
+		if ss.PaymentStatus == PaymentPaid {
+			charge = "succeeded"
+		}
+		intent["latest_charge"] = s.chargeOf(ss, charge)
+	}
+	m["payment_intent"] = intent
+	return m
 }
 
 // noSuch is Stripe's answer to a retrieval of an id that doesn't exist: a 404.
@@ -215,15 +292,27 @@ func (s *Stripe) expireDueAt(now time.Time) {
 	}
 }
 
-var sessionListParams = compileAll([]string{`limit`, `starting_after`, `ending_before`, `payment_link`, `status`, `payment_intent`})
+var sessionListParams = compileAll([]string{`limit`, `starting_after`, `ending_before`, `payment_link`, `status`, `payment_intent`,
+	`created`, `created\[(gt|gte|lt|lte)\]`, `expand\[\d*\]`})
 
 func (s *Stripe) listSessions(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, sessionListParams); rp != nil {
 		return *rp
 	}
+	created, rp := createdFilter(form)
+	if rp != nil {
+		return *rp
+	}
+	expand, rp := expansions(form, "data.")
+	if rp != nil {
+		return *rp
+	}
 	var ids []string
 	for i := len(s.sessionOrder) - 1; i >= 0; i-- { // newest first
 		ss := s.sessions[s.sessionOrder[i]]
+		if !created(ss.Created) {
+			continue
+		}
 		if v := form.Get("payment_link"); v != "" && (ss.PaymentLink == nil || *ss.PaymentLink != v) {
 			continue
 		}
@@ -239,11 +328,47 @@ func (s *Stripe) listSessions(_ *http.Request, form url.Values, _ string) reply 
 	if rp != nil {
 		return *rp
 	}
-	data := make([]Session, 0, len(page))
+	data := make([]any, 0, len(page))
 	for _, id := range page {
-		data = append(data, s.sessions[id].snapshot())
+		data = append(data, s.expanded(s.sessions[id], expand))
 	}
 	return jsonReply(http.StatusOK, listOf("/v1/checkout/sessions", more, data))
+}
+
+// createdFilter is the `created` filter of a list: an exact second, or a range with gt, gte, lt
+// and lte (whole seconds since the epoch).
+func createdFilter(form url.Values) (func(int64) bool, *reply) {
+	type bound struct {
+		param string
+		ok    func(created, bound int64) bool
+	}
+	var checks []func(int64) bool
+	bounds := []bound{
+		{"created[gt]", func(c, b int64) bool { return c > b }},
+		{"created[gte]", func(c, b int64) bool { return c >= b }},
+		{"created[lt]", func(c, b int64) bool { return c < b }},
+		{"created[lte]", func(c, b int64) bool { return c <= b }},
+		{"created", func(c, b int64) bool { return c == b }},
+	}
+	for _, b := range bounds {
+		v := form.Get(b.param)
+		if v == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, badInteger(b.param, v)
+		}
+		checks = append(checks, func(c int64) bool { return b.ok(c, n) })
+	}
+	return func(c int64) bool {
+		for _, check := range checks {
+			if !check(c) {
+				return false
+			}
+		}
+		return true
+	}, nil
 }
 
 func listOf(path string, more bool, data any) map[string]any {

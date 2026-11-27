@@ -395,3 +395,27 @@ func TestAnEventKeepsItsMode(t *testing.T) {
 		t.Fatalf("the worker got %+v, want a live event and then a test one", a.seen)
 	}
 }
+
+// A queue that stays busy never keeps the admins waiting: the notifications owed are written between
+// events, not only once the queue is empty.
+func TestNotificationsAreWrittenWhileTheQueueIsBusy(t *testing.T) {
+	r := newRig(t)
+	ids := r.put(2*noticeTurn + 1)
+	var seen []int
+	a := &applier{fn: func(ev StoredEvent) error {
+		if ev.ID == ids[0] {
+			return &EventError{Code: apierr.CodeIntegrationAmountMismatch} // a failure the admins are told of
+		}
+		var n int
+		if err := r.db.QueryRow(`SELECT count(*) FROM notifications WHERE kind = 'integration_event'`).Scan(&n); err != nil {
+			t.Error(err)
+		}
+		seen = append(seen, n)
+		return nil
+	}}
+	r.svc.SetApplier(a)
+	r.svc.drainEvents(context.Background())
+	if len(seen) != 2*noticeTurn || seen[len(seen)-1] == 0 {
+		t.Fatalf("notifications seen by each later event: %v", seen)
+	}
+}

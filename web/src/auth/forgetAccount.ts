@@ -1,3 +1,4 @@
+import { browserLogin, forgetLogin } from '../offline/pendingSignOut'
 import { purgeAccount } from '../offline/runtime'
 import { approvalOf } from '../offline/store'
 import { forgetDraftsOf } from '../uiState'
@@ -10,6 +11,9 @@ import { forgetDraftsOf } from '../uiState'
 // request that was refused a moment earlier ends the session in the app first, and the answer to
 // the deletion would then find no one listening.
 export async function forgetAccount(user: number): Promise<void> {
+  // Its login on this browser is over with it: it shields nothing from here on.
+  const login = browserLogin()
+  if (login?.user === user) forgetLogin(user, login.session)
   forgetDraftsOf(user)
   try {
     let left = await purgeAccount(user)

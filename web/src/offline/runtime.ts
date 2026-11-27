@@ -29,7 +29,7 @@ import {
 import { SchemaTooNew } from './idb'
 import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
-import { type Approval, type Download, OfflineStore, seenOf, type UnsentRef } from './store'
+import { type Approval, type Download, OfflineStore, Superseded, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
 import { OfflineWriter, type WriterDeps } from './writer'
 
@@ -187,7 +187,9 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   if (opening) await opening.catch(() => {})
   if (state.runtime?.user === user) {
     if (name) rememberUser({ id: user, name })
-    state.runtime.engine.resume()
+    // Not while a sign-out of the account is unresolved (Back starting the app again): the queue goes
+    // on once that is let go.
+    if (!signOutPending(user)) state.runtime.engine.resume()
     // The same person back after the server couldn't be reached (the app opened offline): what they
     // downloaded is asked about again, since what they may keep may have changed meanwhile.
     void revalidate(state.runtime.store).catch(() => {})
@@ -322,103 +324,148 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // (a stale tab, another tab of the same account). An approval is of an item as it was shown (its
 // version and its operation), so a record that was changed since, or made after, is not agreed to.
 // Answers the unsent records that are there and were not approved, as they are now: then nothing
-// was changed, and the person is asked again. A database that can't be opened is not looked at
-// here: the person already chose what happens to it.
-export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
-  return checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false))
+// was changed, and the person is asked again. A database that can't be opened or read now is not
+// an empty one (`unreadable`): it may hold a record saved after the person was asked, so it is
+// kept, unless they were told it couldn't be read and chose to discard it (`discardUnreadable`).
+// `still`: whether the database is still the departing login's, asked after every wait and inside
+// the transaction before anything changes; when it no longer is, nothing is changed.
+export async function settle(
+  user: number | undefined,
+  approved: Approval = new Map(),
+  discardUnreadable = false,
+  still: () => boolean = () => true,
+): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
+  const checked = await checkUnsent(user, (store) => store.retireOrKeepUnsent(approved, false, still), still)
+  return { ...checked, unreadable: checked.unreadable && !discardUnreadable }
 }
 
 // The same question as `settle`, only asked: the unsent records of `user` that the person didn't
 // agree to as they are now, with nothing changed on the device. A sign-out asks this before it is
 // certain; what it agreed to is discarded only after the server confirmed the sign-out (deactivate).
+// A database that can't be read answers none here: the person is not asked about what can't be
+// shown (they were told when it couldn't be read before), and what happens to it is the cleanup's
+// (`settle`). `unsentState` says which it was.
 export async function stillAgreed(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
+  return (await unsentState(user, approved)).left
+}
+
+export async function unsentState(
+  user: number,
+  approved: Approval = new Map(),
+): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   return checkUnsent(user, (store) => store.unapproved(approved))
 }
 
 async function checkUnsent(
   user: number | undefined,
   ask: (store: OfflineStore) => Promise<UnsentRef[]>,
-): Promise<UnsentRef[]> {
+  still: () => boolean = () => true,
+): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   if (opening) await opening.catch(() => {})
+  if (!still()) return { left: [], unreadable: false }
+  // A browser with no IndexedDB at all holds nothing: that is none, not unknown.
+  if (typeof indexedDB === 'undefined') return { left: [], unreadable: false }
   const runtime = state.runtime
   // Only the account signing out (`user`), never another that is open here meanwhile.
   const users = user !== undefined ? [user] : runtime ? [runtime.user] : []
   const left: UnsentRef[] = []
+  let unreadable = false
   for (const id of users) {
     let store = runtime?.user === id ? runtime.store : undefined
     const own = !store
     try {
       store ??= await OfflineStore.open(id)
     } catch {
+      unreadable = true
       continue
     }
     try {
+      if (!still()) return { left: [], unreadable: false }
       left.push(...(await ask(store)))
-    } catch {
-      // Not read: the person's choice (they were told) decides, as it did.
+    } catch (e) {
+      // Stopped for a newer login: nothing was changed, and nothing is to be.
+      if (e instanceof Superseded) return { left: [], unreadable: false }
+      unreadable = true
     } finally {
       if (own) store.close()
     }
   }
-  return left
+  return { left, unreadable }
 }
 
-async function teardown(purge: boolean, user?: number): Promise<void> {
+// What a purge is for: `still`, whether it is still the account's to remove (a sign-out asks whether
+// a newer login of the account started since); `force`, removing the database even if it isn't the
+// retired one (the person chose to discard one that couldn't be read).
+type PurgeOptions = { still?: () => boolean; force?: boolean }
+
+async function teardown(purge: boolean, user?: number, { still = () => true, force = false }: PurgeOptions = {}) {
   // The runtime open here is let go only if it is the account signing out's: another's (signed in
   // since) is left as it is.
   const runtime = user === undefined || state.runtime?.user === user ? state.runtime : null
   if (runtime) {
     runtime.stop()
-    if (purge) {
-      await runtime.store.destroy()
-      writeUsers(readUsers().filter((id) => id !== runtime.user))
-      forgetLast(runtime.user)
-    } else {
-      runtime.store.close()
-    }
+    runtime.store.close()
     set({ runtime: null, problem: null, foreign: state.foreign })
   }
   // Signing out deletes the account's database whether or not it was opened here (the invite
-  // page, a database of a newer version, one that could not be opened).
-  if (purge && user !== undefined && user !== runtime?.user) {
-    await OfflineStore.destroyFor(user).catch(() => {})
-    writeUsers(readUsers().filter((id) => id !== user))
-    forgetLast(user)
-  }
+  // page, a database of a newer version, one that could not be opened): the one it retired, never
+  // one a newer start of the account made again since (store.ts, `deleteRetired`).
+  const id = runtime?.user ?? user
+  if (purge && id !== undefined) await purgeDatabase(id, { still, force })
   if (purge && !runtime && user === undefined) forgetLast()
   if (purge && state.problem) set({ runtime: null, problem: null, foreign: state.foreign })
+}
+
+async function purgeDatabase(user: number, { still = () => true, force = false }: PurgeOptions) {
+  const outcome = await OfflineStore.deleteRetired(user, { still, force }).catch(() => 'failed' as const)
+  // Asked again: a newer start of the account, once the lock was let go, may have listed it again.
+  if (outcome === 'removed' && still()) writeUsers(readUsers().filter((id) => id !== user))
+  // The browser is no longer the account's, unless a newer start of it made the database again (it
+  // is that login's) or it is someone's to keep now. A deletion that failed still lets go of the
+  // marker: the sign-out is not verified clear, and is finished later.
+  if ((outcome === 'removed' || outcome === 'failed') && still()) forgetLast(user)
 }
 
 // Lets go of the user's database: it is closed, and with `purge` deleted, which is what signing
 // out does. `user` is who is signing out: their database goes even if it was never opened here.
 // With `keep`, the person chose to sign out without deleting a database whose unsent records this
 // version couldn't check: it stays (and stays listed, for its owner's next sign-in to deal with),
-// and the browser is nobody's.
+// and the browser is nobody's. With `purge`, a database that can't be read now is kept, as one
+// holding records the person wasn't shown is ('unreadable', for the caller to keep it so), unless
+// they chose to discard it when told it couldn't be read (`discardUnreadable`).
 export async function deactivate({
   purge,
   user,
   keep,
   approved,
+  discardUnreadable,
+  still = () => true,
 }: {
   purge: boolean
   user?: number
   keep?: boolean
   approved?: Approval
-}): Promise<UnsentRef[]> {
+  discardUnreadable?: boolean
+  // Whether the database is still the departing login's to let go of: asked after every wait.
+  still?: () => boolean
+}): Promise<UnsentRef[] | 'unreadable'> {
   if (opening) await opening.catch(() => {})
+  if (!still()) return []
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])
     await teardown(false, user)
-    forgetLast(user)
+    if (still()) forgetLast(user)
     return []
   }
   // Deleting is conditional on there being nothing unsent that the person didn't approve: if some
   // appeared since they were asked, everything stays (and is the answer, for the caller to say).
   if (purge) {
-    const left = await settle(user, approved)
+    const { left, unreadable } = await settle(user, approved, discardUnreadable, still)
     if (left.length > 0) return left
+    if (unreadable) return 'unreadable'
+    if (!still()) return []
   }
-  await teardown(purge, user)
+  await teardown(purge, user, { still, force: discardUnreadable })
   return []
 }
 
@@ -427,19 +474,14 @@ export async function deactivate({
 // the one in use, and which must stay as it is (`deactivate` lets go of the one in use). The same
 // condition as signing out holds: unsent records the person wasn't shown (`approved`) stop it, and
 // are the answer.
+// An account that is deleted can't send what its database holds: one that can't be read goes too.
 export async function purgeAccount(user: number, approved: Approval = new Map()): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
-  const left = await settle(user, approved)
+  const { left } = await settle(user, approved, true)
   if (left.length > 0) return left
-  // Looked at again after the waits above: the one in use may have changed.
-  const runtime = state.runtime
-  if (runtime?.user === user) {
-    await teardown(true, user)
-  } else {
-    await OfflineStore.destroyFor(user).catch(() => {})
-    writeUsers(readUsers().filter((id) => id !== user))
-    forgetLast(user)
-  }
+  // Looked at again after the waits above: the one in use may have changed. The account is gone:
+  // its database goes whatever it is (`force`).
+  await teardown(true, user, { force: true })
   return []
 }
 

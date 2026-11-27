@@ -45,6 +45,26 @@ type Report struct {
 	Status *Status `json:"status"`
 	// Request is "Update now"'s state.
 	Request RequestState `json:"request"`
+	// NotesURL is where to read what the available version brings: its release's page on the
+	// release channel, or on main the comparison of the version on record with it. Empty when
+	// nothing is available, or the updater named no repository. The server builds it, from the
+	// checked repository and versions only.
+	NotesURL string `json:"notes_url,omitempty"`
+}
+
+// NotesURL is the page that says what a, available on top of current, brings.
+func NotesURL(a *Available, current string) string {
+	if a == nil || a.Repo == "" || !IsVersion(a.Version) || !isRepo(a.Repo) {
+		return ""
+	}
+	base := "https://github.com/" + a.Repo
+	if !IsSHA(a.Version) {
+		return base + "/releases/tag/" + a.Version
+	}
+	if IsVersion(current) && current != a.Version {
+		return base + "/compare/" + current + "..." + a.Version
+	}
+	return base + "/commit/" + a.Version
 }
 
 // BuildReport reads the status in statusDir and the request in requestDir and says what the page
@@ -60,6 +80,11 @@ func BuildReport(version, statusDir, requestDir string, now time.Time) (Report, 
 			st.Running = nil
 		}
 		rep.Status, rep.Stale = &st, st.Stale(now)
+		current := st.RecordedVersion
+		if current == "" {
+			current = version
+		}
+		rep.NotesURL = NotesURL(st.Available, current)
 	} else {
 		rep.ExpectsStatus = rep.Configured && IsVersion(version)
 	}

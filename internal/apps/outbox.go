@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/paylink"
 	"taskto.ai/taskto/internal/quota"
 )
 
@@ -39,7 +40,11 @@ import (
 //     after a crash between making the card and noting it finds the card and makes no second one;
 //   - a document is made only where none is, and one that is already there with the very content
 //     the entry would write is the entry's own;
-//   - moving a card to a column it is in already is nothing to do.
+//   - moving a card to a column it is in already is nothing to do;
+//   - a payment link is asked of the provider once for the entry: the entry has one reference
+//     (integration_refs.effect_id is unique) whose random token is the provider's idempotency key,
+//     so doing the entry again after a crash finds the reference, and the link it made if the
+//     answer had been noted, and writing the link to the record again changes nothing.
 //
 // An entry runs as the user who acted, with that user's access at that time. Both the app (the
 // right the action needed) and the target are checked every time; if either was taken away the
@@ -98,6 +103,9 @@ type Platform struct {
 	// registry does, so an admin can't bind a slot to one that doesn't. It is a function, not the
 	// registry, because package integrations is built on this one. Without it no slot can be bound.
 	ProviderKinds func(provider string) []string
+	// Payments makes the payment links of create_payment_link effects (paymentlink.go). Without it
+	// such an entry can't be done (it is tried again, then fails for a retry).
+	Payments paylink.Opener
 }
 
 // WithPlatform gives the service what its effects act on, and returns it.
@@ -208,9 +216,7 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	}
 	var queued []int
 	for i, e := range action.Effects {
-		// A payment link is asked of an integration, not done to boards and documents: the entries
-		// for it are the integrations' (their table admits the kind), so none is queued here.
-		if e.Kind != EffectCreatePaymentLink && e.applies(def.Collection, ap.data) {
+		if e.applies(def.Collection, ap.data) {
 			queued = append(queued, i)
 		}
 	}
@@ -228,6 +234,12 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	for _, i := range queued {
 		e := action.Effects[i]
 		p := e.payload(def.Collection, ap.data, ap.id)
+		if e.Kind == EffectCreatePaymentLink {
+			// Its target is the app's own space: who may read the record may be told what it asks.
+			if err := tx.QueryRowContext(ctx, `SELECT space_id FROM apps WHERE id = ?`, appID).Scan(&p.SpaceID); err != nil {
+				return 0, err
+			}
+		}
 		if e.Card != "" {
 			// An update_card or a route to a card has no target of its own: it is the one of the
 			// effect that makes the card, kept here so who may be told about it is known.
@@ -239,12 +251,22 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO app_effects (app_id, operation_id, position, name, kind, record_id, record_revision,
 				user_id, acted_by_agent, acted_via, action_kind, payload, state, next_attempt_at, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-			appID, opID, i, e.Name, e.Kind, ap.id, ap.revision, actor.UserID, actor.Agent, via(actor), action.Kind, string(raw), at, at, at); err != nil {
+			appID, opID, i, e.Name, e.Kind, ap.id, ap.revision, actor.UserID, actor.Agent, via(actor), action.Kind, string(raw), at, at, at)
+		if err != nil {
 			return 0, err
+		}
+		if e.Kind == EffectCreatePaymentLink {
+			effectID, err := res.LastInsertId()
+			if err != nil {
+				return 0, err
+			}
+			if err := notePaymentLinkEntry(ctx, tx, appID, ap.id, effectID, p); err != nil {
+				return 0, err
+			}
 		}
 	}
 	return len(queued), nil
@@ -299,6 +321,10 @@ type effectError struct {
 	code      apierr.Code
 	params    apierr.Params
 	transient bool
+	// wait, when positive, puts the entry back to pending for that long and gives the try back: the
+	// work is waiting for something outside that bounds its own wait (a payment link whose outcome at
+	// the provider is not known yet).
+	wait time.Duration
 }
 
 func (e *effectError) Error() string { return string(e.code) }
@@ -544,6 +570,13 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 		raw, _ := json.Marshal(ee.params)
 		params = string(raw)
 	}
+	if ee.wait > 0 {
+		// Not a failed try: the entry waits, and the wait's own bound ends it (hold's way).
+		_, err := s.db.ExecContext(ctx, `
+			UPDATE app_effects SET state = 'pending', attempts = max(attempts - 1, 0), next_attempt_at = ?, lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
+			WHERE id = ? AND state = 'running' AND lease = ?`, s.stamp(t.Add(ee.wait)), string(ee.code), params, s.stamp(t), e.id, e.lease)
+		return err
+	}
 	if ee.transient && e.attempts < maxAttempts {
 		wait := min(backoffBase<<(e.attempts-1), backoffMax)
 		_, err := s.db.ExecContext(ctx, `
@@ -608,6 +641,8 @@ func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, err
 		return s.createDocument(ctx, e)
 	case EffectOpenRoute:
 		return s.openRoute(ctx, e)
+	case EffectCreatePaymentLink:
+		return s.createPaymentLink(ctx, e)
 	}
 	return nil, refuse(apierr.CodeAppEffectInvalid)
 }
@@ -618,16 +653,29 @@ func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, err
 // role now says: an update needs the right to change that record, and to read it), and the record
 // is still there. An offline app does nothing.
 func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
+	return s.authorizeAppIn(ctx, e, 0)
+}
+
+// authorizeAppIn is authorizeApp for a caller that has read other things of the app in a space it
+// names (inSpace, 0 for none): an app that is in another space now, moved since, is not found.
+func (s *Service) authorizeAppIn(ctx context.Context, e effectRow, inSpace int64) error {
+	return s.authorizeAppOn(ctx, s.db, s.access, e, inSpace)
+}
+
+// authorizeAppOn is authorizeAppIn reading through q and ac: a caller that holds a transaction passes
+// it, and the checker over it (access.Checker.On, Snapshot), so that every read of the check, and the
+// caller's own, are of one state of the database and not of several instants.
+func (s *Service) authorizeAppOn(ctx context.Context, q queryer, ac *access.Checker, e effectRow, inSpace int64) error {
 	var spaceID int64
 	var archived sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT space_id, archived_at FROM apps WHERE id = ?`, e.appID).Scan(&spaceID, &archived)
-	if errors.Is(err, sql.ErrNoRows) {
+	err := q.QueryRowContext(ctx, `SELECT space_id, archived_at FROM apps WHERE id = ?`, e.appID).Scan(&spaceID, &archived)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && inSpace != 0 && spaceID != inSpace) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
 	if err != nil {
 		return err
 	}
-	sp, err := s.access.Check(ctx, e.userID, spaceID)
+	sp, err := ac.Check(ctx, e.userID, spaceID)
 	if errors.Is(err, access.ErrNotFound) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
@@ -640,7 +688,7 @@ func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
 		}
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
-	acc, err := s.access.App(ctx, e.userID, spaceID, e.appID)
+	acc, err := ac.App(ctx, e.userID, spaceID, e.appID)
 	if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
@@ -655,7 +703,7 @@ func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
 	}
 	var creator sql.NullInt64
 	var deleted sql.NullString
-	err = s.db.QueryRowContext(ctx, `SELECT created_by, deleted_at FROM app_rows WHERE id = ? AND app_id = ?`, e.recordID, e.appID).Scan(&creator, &deleted)
+	err = q.QueryRowContext(ctx, `SELECT created_by, deleted_at FROM app_rows WHERE id = ? AND app_id = ?`, e.recordID, e.appID).Scan(&creator, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return refuse(apierr.CodeAppEffectRecordGone)
 	}

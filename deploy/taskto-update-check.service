@@ -1,0 +1,13 @@
+# Installed by deploy/INSTALL.md (step 16). Started by taskto-update-check.timer. Runs
+# deploy/taskto-update.sh --check: it looks for the next version on the channel, as a run would,
+# and publishes it for Settings → About. It installs, pulls and changes nothing.
+[Unit]
+Description=taskto.ai: look for a newer version, and change nothing
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/taskto-update --check
+# A look is a few calls to GitHub's API and the registry, each with a time limit of its own.
+TimeoutStartSec=15min

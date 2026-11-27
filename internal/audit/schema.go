@@ -191,6 +191,8 @@ var schemas = map[string]map[string]kind{
 	IntegrationEnabled:       {"provider": integrationProviders},
 	IntegrationSpacesChanged: {"provider": integrationProviders, "added": number, "removed": number},
 	IntegrationSpacesKept:    {"provider": integrationProviders, "kept": number},
+	// The app and the entry by id; never the amount or the record.
+	IntegrationNewLinkAllowed: {"provider": integrationProviders, "app_id": number, "effect_id": number},
 
 	// An approval names the app and the integration by id, and the slot by its kind: the slot's own
 	// name is the app builder's text, so it is not recorded.

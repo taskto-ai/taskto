@@ -179,3 +179,12 @@ func (s *Stripe) balance(_ *http.Request, form url.Values, _ string) reply {
 		"object": "balance", "available": money, "pending": money, "livemode": s.live,
 	})
 }
+
+// retrieveAccount is the account of the key: Stripe's "Retrieve account" with no id, which answers
+// the account the key belongs to (https://docs.stripe.com/api/accounts/retrieve).
+func (s *Stripe) retrieveAccount(_ *http.Request, form url.Values, _ string) reply {
+	if rp := unknownParam(form, nil); rp != nil {
+		return *rp
+	}
+	return jsonReply(http.StatusOK, map[string]any{"object": "account", "id": s.account})
+}

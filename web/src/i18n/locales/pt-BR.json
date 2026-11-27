@@ -290,10 +290,11 @@
           "createCard": "Cria um cartão em {board}",
           "updateCard": "Move para {column} o cartão que este registro criou",
           "createDocument": "Cria um documento em {path} no espaço {space}",
+          "createPaymentLink": "Pede à integração “{slot}” um link para pagar {amount} em {currency} e põe o link em {url} e o seu id em {id}",
+          "createPaymentLinkField": "Pede à integração “{slot}” um link para pagar {amount} na moeda de {currencyField} e põe o link em {url} e o seu id em {id}",
           "openBoard": "Oferece um link para {board}",
           "openCard": "Oferece um link para o cartão que este registro criou",
-          "openDocument": "Oferece um link para o documento {path} no espaço {space}",
-          "createPaymentLink": "Pede ao serviço externo “{slot}” um link para pagar o valor de “{amount}”"
+          "openDocument": "Oferece um link para o documento {path} no espaço {space}"
         },
         "target": {
           "board": "{board} ({space})",
@@ -1190,6 +1191,39 @@
     "app_effect_app_offline": "O app está offline ou o seu espaço está arquivado.",
     "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
     "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
+    "app_effect_space_changed": "O app foi movido para outro espaço depois que este pagamento foi iniciado, então ele nunca foi aprovado lá. Inicie o pagamento de novo.",
+    "integration_unavailable": "A integração de pagamentos deste app não pode ser usada agora: um administrador pode tê-la revogado, desativado ou retirado este espaço. Fale com um administrador e tente de novo.",
+    "integration_amount_refused": "Não dá para pedir esse valor: ele precisa ser maior que zero e ter no máximo as casas decimais da moeda. Corrija o valor no registro e execute a ação de novo.",
+    "integration_amount_above_max": "O valor está acima dos {max} {currency} que um administrador permite por pagamento.",
+    "integration_currency_refused": "{currency} não é uma moeda que esta integração de pagamentos aceita.",
+    "integration_credentials_refused": "O provedor de pagamentos não aceitou a chave desta integração. Um administrador precisa informar uma chave válida; depois você pode tentar de novo.",
+    "integration_provider_refused": "O provedor de pagamentos recusou criar o link de pagamento. Confira o valor e a moeda e tente de novo.",
+    "integration_provider_unreachable": "O provedor de pagamentos não respondeu. Tente de novo em alguns minutos.",
+    "integration_account_changed": "Este link de pagamento foi iniciado em outra conta do provedor de pagamentos, porque a chave da integração foi trocada. Um administrador precisa verificar essa conta primeiro: se o link anterior foi pago, nada deve ser recriado; se não, ele deve ser impedido de receber pagamento antes de a ação ser executada de novo.",
+    "integration_changed": "Este link de pagamento foi criado em outra integração de pagamentos que não a que este app usa agora. Um administrador precisa verificar se esse link foi pago e, se não, impedi-lo de receber pagamento antes de a ação ser executada de novo.",
+    "integration_link_already_paid": "Uma tentativa anterior deste link de pagamento foi paga ou não pode mais receber pagamento (foi paga, foi encerrada por uma pessoa ou atingiu o limite), então nenhum link novo foi criado. Um administrador precisa conciliar esse pagamento na conta do provedor de pagamentos antes de a ação ser executada de novo.",
+    "integration_event_unavailable": "Chegou um pagamento, mas a integração de pagamentos do app não pode ser usada agora: a aprovação foi retirada, ela foi desligada ou este espaço foi removido dela. Corrija isso e tente o evento de novo.",
+    "integration_event_integration_changed": "Chegou um pagamento por uma integração que não é mais a que este app usa. Conecte o app a ela de novo ou resolva o pagamento à mão.",
+    "integration_event_app_offline": "Chegou um pagamento, mas o app está offline, não publicado ou em um espaço arquivado. Traga-o de volta e tente o evento de novo.",
+    "integration_event_record_gone": "Chegou um pagamento para um registro que não existe mais. Resolva o pagamento à mão.",
+    "integration_event_record_refused": "Chegou um pagamento, mas o registro, como o pagamento o mudaria, não cabe no app. Corrija o app ou o registro e tente o evento de novo.",
+    "integration_amount_mismatch": "Chegou um pagamento de outro valor ou moeda que o link de pagamento pedia. Ele não foi aplicado: confira no provedor.",
+    "integration_event_payment_unknown": "Chegou um reembolso de um pagamento que nenhum link de pagamento recebeu ainda. Ele espera até 72 horas por esse pagamento e depois espera por você.",
+    "integration_event_ref_unknown": "O evento não cita nenhum link de pagamento desta integração. Nada foi alterado.",
+    "integration_event_mode_mismatch": "O evento é de dinheiro real para um link feito em modo de teste, ou o contrário. Nada foi alterado.",
+    "integration_event_duplicate": "O evento repete um pagamento ou um fim que o link de pagamento já tem. Nada foi alterado.",
+    "integration_event_late": "O link de pagamento já tinha passado do que este evento diz. Nada foi alterado.",
+    "integration_event_no_handler": "O app não declara nada para este evento, então o registro ficou como está.",
+    "integration_event_condition_unmet": "O registro não atendia à condição do app para este evento, então ficou como está.",
+    "integration_event_partial_refund": "Parte do pagamento foi reembolsada. O registro só muda com o reembolso de todo o valor.",
+    "integration_event_second_payment": "O link de pagamento foi pago uma segunda vez. Ele não foi aplicado: reembolse ou concilie no provedor.",
+    "integration_event_not_found": "Este evento não existe mais.",
+    "integration_event_not_retriable": "Só um evento que falhou pode ser tentado de novo.",
+    "integration_outcome_unknown": "O provedor de pagamentos nunca informou se criou este link de pagamento, então nenhum outro foi criado: um segundo link poderia ser pago duas vezes. Um administrador precisa verificar, na conta do provedor, se há um link deste pagamento. Se houver, tente este pagamento de novo; se não houver, o administrador confirma que nenhum link existe e um novo é criado.",
+    "integration_link_lookup_pending": "O provedor de pagamentos não informou se criou este link de pagamento. O servidor continua procurando por ele, e não cria outro, por algumas horas.",
+    "integration_condition_changed": "O registro foi alterado e não atende mais à condição desta ação, então nenhum link de pagamento foi criado. Ninguém precisa aprovar nada: desfaça a alteração ou execute a ação quando o registro se qualificar.",
+    "integration_nothing_to_confirm": "Este pagamento não está aguardando uma decisão sobre um resultado desconhecido.",
+    "integration_link_not_confirmable": "Um link deste pagamento já foi visto no provedor de pagamentos, ou uma tentativa anterior dele já foi resolvida, então confirmar que nenhum existe não pode liberar um novo: um segundo link poderia ser pago duas vezes. Verifique a conta do provedor e concilie este pagamento lá.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_icon_path": "O ícone “{component}” não é um caminho SVG: ele deve começar com M ou m e só deve ter comandos de caminho, números, vírgulas e espaços, com no máximo {max} caracteres.",
     "app_icon_label": "O ícone “{component}” está em um botão ou gatilho que só mostra ícones, então precisa de um nome: dê a ele um rótulo de acessibilidade.",
@@ -1259,6 +1293,16 @@
     "deletion_not_pending": "Esta conta não aguarda exclusão.",
     "deletion_purging": "Esta conta está sendo excluída agora: não dá mais para cancelar."
   },
+  "payment": {
+    "done": {
+      "title": "Obrigado",
+      "body": "Seu pagamento foi enviado ao provedor de pagamentos. Você pode fechar esta página: o provedor vai confirmá-lo para você."
+    },
+    "cancelled": {
+      "title": "Pagamento cancelado",
+      "body": "Nada foi cobrado. Você pode fechar esta página ou abrir o link de pagamento de novo para pagar."
+    }
+  },
   "language": {
     "label": "Idioma",
     "automatic": "Automático: {name}",
@@ -1283,7 +1327,8 @@
       "tokens": "Tokens de acesso",
       "about": "Sobre",
       "notifications": "Notificações",
-      "integrationApprovals": "Aprovações de integrações"
+      "integrationApprovals": "Aprovações de integrações",
+      "integrationEvents": "Eventos das integrações"
     },
     "general": {
       "language": "Idioma padrão",
@@ -1691,7 +1736,17 @@
           "blocked": "Precisa de uma pessoa",
           "manualUpgrade": "Atualização manual"
         },
-        "mismatchBadge": "Não é a versão registrada"
+        "mismatchBadge": "Não é a versão registrada",
+        "available": {
+          "line": "Atualização disponível: {version} (publicada em {date})",
+          "lineUndated": "Atualização disponível: {version}",
+          "notes": "Notas da versão",
+          "compare": "O que mudou",
+          "needsPerson": "Precisa de uma pessoa",
+          "manual": "Ela precisa de passos manuais, então nem a execução noturna nem Atualizar agora a instalam: leia as notas, faça o que elas dizem no host e depois execute {command} lá.",
+          "upToDate": "Atualizado: nada mais novo neste canal.",
+          "looked": "Última busca por atualizações"
+        }
       }
     },
     "actions": {
@@ -2105,6 +2160,7 @@
         "integration_enabled": "Integração ligada",
         "integration_spaces_changed": "Espaços da integração alterados",
         "integration_spaces_kept": "Espaços da integração mantidos após uma aprovação",
+        "integration_new_link_allowed": "Novo link de pagamento permitido após um resultado desconhecido",
         "app_integration_requested": "Uso de uma integração por um app solicitado",
         "app_integration_approved": "Uso de uma integração por um app aprovado",
         "app_integration_rejected": "Uso de uma integração por um app recusado",
@@ -2185,6 +2241,7 @@
         "webhook_secret_changed": "Segredo do webhook alterado",
         "app_id": "Número do app",
         "integration_id": "Número da integração",
+        "effect_id": "Número do pagamento",
         "space_allowed": "Espaço também permitido"
       },
       "values": {
@@ -2271,6 +2328,102 @@
       "integrations": "Contas em provedores de pagamento que os apps podem usar."
     },
     "actionsColumn": "Ações",
+    "events": {
+      "title": "Eventos das integrações",
+      "intro": "O que aconteceu com os pagamentos e outros eventos que o provedor de uma integração enviou: o que foi aplicado aos registros de um app, o que foi deixado como estava e por quê, e o que precisa de você. Você vê o tipo, o valor e o estado de cada evento, nunca o app nem o registro a que ele se referia.",
+      "integration": "Integração",
+      "noIntegrations": "Não há integração para mostrar eventos.",
+      "openIntegrations": "Abrir integrações",
+      "filter": "Mostrar eventos que estão",
+      "filters": {
+        "all": "Todos",
+        "failed": "Com falha",
+        "ignored": "Ignorados",
+        "applied": "Aplicados",
+        "pending": "Em espera"
+      },
+      "empty": {
+        "all": "Nenhum evento chegou ainda.",
+        "failed": "Nenhum evento falhou.",
+        "ignored": "Nenhum evento foi ignorado.",
+        "applied": "Nenhum evento foi aplicado.",
+        "pending": "Nenhum evento está em espera."
+      },
+      "state": {
+        "pending": "Em espera",
+        "running": "Sendo aplicado",
+        "applied": "Aplicado",
+        "ignored": "Ignorado",
+        "failed": "Falhou",
+        "duplicate": "Pagamento duplicado",
+        "mismatch": "Valor divergente"
+      },
+      "kind": {
+        "payment_succeeded": "Pagamento recebido",
+        "payment_expired": "Link de pagamento expirado",
+        "payment_failed": "Pagamento recusado",
+        "payment_refunded": "Pagamento estornado"
+      },
+      "live": "Dinheiro real",
+      "test": "Modo de teste",
+      "attempts_one": "Tentado {count} vez.",
+      "attempts_many": "Tentado {count} de vezes.",
+      "attempts_other": "Tentado {count} vezes.",
+      "retry": "Tentar de novo",
+      "retryNamed": "Tentar de novo o evento “{kind}” de {when}",
+      "retried": "“{kind}” será aplicado de novo em instantes.",
+      "retryRefused": "“{kind}” de {when} não foi tentado de novo: {reason}",
+      "older": "Mostrar eventos mais antigos",
+      "list": {
+        "title": "Eventos",
+        "intro": "Os mais recentes primeiro. Um evento que falhou espera até você corrigir o problema; depois, tente de novo.",
+        "label": "Eventos"
+      },
+      "links": {
+        "title": "Links de pagamento a conferir",
+        "intro": "Um link de pagamento cuja criação o provedor nunca confirmou não é refeito sozinho, para que o pagador nunca receba dois links.",
+        "none": "Nenhum link de pagamento espera uma decisão.",
+        "list": "Links de pagamento a conferir",
+        "row": "Link de pagamento de {amount}",
+        "detail": "Registro {record} do app {app} · {space}",
+        "since": "Resultado desconhecido desde {when}.",
+        "looking": "Ainda procurando",
+        "needsYou": "Precisa de você",
+        "checkTitle": "O que conferir no Stripe",
+        "checkWhere": "Abra a conta do Stripe em que o link de pagamento foi pedido pela primeira vez (a da integração, a menos que a chave tenha sido trocada), no mesmo modo, de teste ou real, do pagamento.",
+        "checkSession": "Para uma sessão de checkout, abra os detalhes e procure “client_reference_id”.",
+        "checkPaymentLink": "Para um link de pagamento, procure “metadata[taskto_ref]”.",
+        "checkValue": "O valor é a referência aleatória de 32 caracteres que o TaskTo deu a cada tentativa deste pagamento, e ela deve ser procurada em todas as tentativas, não só na última. Cada pagamento abaixo lista suas tentativas com a referência a procurar. Onde o Stripe não puder ser pesquisado por ela, ache os candidatos pelo valor e pelo horário mostrados, ativos ou não, e leia esse campo em cada um.",
+        "checkFound": "Se achar um, deixe-o e não confirme. Quem executou a ação original no app, e não o pagador, tenta de novo: o link é encontrado e usado.",
+        "checkNone": "Se não houver nenhum, nem inativo nem expirado, confirme abaixo que nenhum existe.",
+        "stopped": "Busca parada",
+        "stoppedTitle": "O servidor parou de procurar este link",
+        "stoppedFallback": "O servidor parou de procurar e não deu um motivo que possa ser mostrado.",
+        "stoppedDo": "Nada pode ser confirmado aqui. Confira a conta do Stripe como descrito acima e resolva o que foi dito antes de executar a ação de novo.",
+        "confirmAction": "Confirmar que não há link",
+        "confirmNamed": "Confirmar que não existe link de pagamento de {amount}",
+        "confirmQuestion": "Confirmar que o Stripe não tem link de pagamento de {amount}?",
+        "confirmBody": "Você está dizendo que conferiu a conta do Stripe e não achou link de pagamento nem sessão de checkout de {amount} para o registro {record}, com resultado desconhecido desde {since}. Mais uma tentativa de criar um link de pagamento será colocada na fila, uma única vez. Ela pode encontrar e usar um link que exista, ou falhar.",
+        "confirmWarning": "Se um existir e você não o viu, o pagador ficará com dois links e poderá pagar duas vezes. Confira no Stripe antes de confirmar.",
+        "confirmed": "Mais uma tentativa de criar um link de pagamento de {amount} está na fila, uma única vez. Ela pode encontrar e usar um link que exista, ou falhar; se um existir e você não o viu, o pagador poderá ficar com dois links e pagar duas vezes.",
+        "attemptsList": "Tentativas deste pagamento",
+        "attemptTitle": "Tentativa {n} · {kind}",
+        "kindCheckoutSession": "Sessão de checkout",
+        "kindPaymentLink": "Link de pagamento",
+        "reference": "Referência",
+        "referenceName": "referência da tentativa {n}",
+        "searchField": "Campo em que procurá-la:",
+        "objectSeenAccepted": "Objeto visto: {id} (aceito para esta tentativa)",
+        "objectSeenNotAccepted": "Objeto visto: {id} (visto, não aceito)",
+        "objectNote": "Um objeto visto mas não aceito bloqueia um novo link de pagamento até que uma pessoa o confira no Stripe.",
+        "objectNone": "Nenhum objeto visto",
+        "account": "Conta {account}",
+        "accountNone": "Conta não registrada",
+        "firstSent": "Enviada pela primeira vez em {when}",
+        "notSent": "Nunca enviada",
+        "space": "Espaço {id}"
+      }
+    },
     "approvals": {
       "title": "Aprovações de integrações",
       "intro": "Os apps pedem aqui para usar um serviço externo, como receber pagamentos. Você vê o que o app pede em palavras simples, quem pediu e onde, e nunca o app nem seus registros. Aprovar conecta o app a uma das integrações do workspace.",
@@ -3057,6 +3210,7 @@
       "card_comment": "Um cartão seu tem um novo comentário: {title}",
       "card_mention": "Você foi mencionado em um comentário em um cartão: {title}",
       "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
+      "integration_event": "Um pagamento de {integration} não foi aplicado e precisa de um administrador",
       "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
     },
     "push": {
@@ -3066,6 +3220,7 @@
       "card_comment": "Um cartão seu tem um novo comentário",
       "card_mention": "Você foi mencionado em um comentário",
       "app_effect_failed": "Uma ação de um app precisa da sua atenção",
+      "integration_event": "Um pagamento precisa de um administrador",
       "changed": "Algo mudou"
     },
     "settings": {

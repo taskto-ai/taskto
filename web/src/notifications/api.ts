@@ -10,6 +10,7 @@ export type NotificationKind =
   | 'card_due'
   | 'card_overdue'
   | 'app_effect_failed'
+  | 'integration_event'
   | 'changed'
 
 // An item as the person may read it now: `changed` says nothing of what it was about.

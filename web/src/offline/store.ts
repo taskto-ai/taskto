@@ -16,7 +16,7 @@
 // losing a queue it can't read (the update waits for the person: docs/pwa.md).
 
 import type { OfflineApp } from '../api'
-import { deleteDatabase, type Migration, openDatabase, runTx, type Tx } from './idb'
+import { deleteDatabase, type Migration, openDatabase, runTx, StorageUnavailable, type Tx } from './idb'
 
 export const SCHEMA_VERSION = 2
 
@@ -398,7 +398,13 @@ export class OfflineStore {
     return `taskto-offline-${user}`
   }
 
-  static async open(user: number): Promise<OfflineStore> {
+  // Opening is one at a time with a sign-out's deletion of the same account's database (`withLock`):
+  // a retired database made again here is never the one that deletion then removes.
+  static open(user: number): Promise<OfflineStore> {
+    return withLock(user, () => OfflineStore.openNow(user))
+  }
+
+  private static async openNow(user: number): Promise<OfflineStore> {
     const name = OfflineStore.databaseName(user)
     const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
     // A database whose purge began (it was found empty, and marked) but did not finish: it is empty
@@ -557,6 +563,7 @@ export class OfflineStore {
         if (staleView(e)) this.refresh()
         throw e
       }
+      if (e instanceof Superseded) throw e
       throw asNotSaved(e)
     }
   }
@@ -868,10 +875,22 @@ export class OfflineStore {
   //     server's data), and the answer is which; the unsent are the person's own work, which
   //     they send by signing in as the account again, or discard. (`seal: false`, for an account
   //     still signed in, leaves the database exactly as it is instead.)
-  async retireOrKeepUnsent(approved: Approval = new Map(), seal = true): Promise<UnsentRef[]> {
+  // `still`: asked inside the transaction, right before anything is changed; when it no longer holds
+  // (a newer login of the account started), nothing is, and the answer is nothing unsent.
+  async retireOrKeepUnsent(
+    approved: Approval = new Map(),
+    seal = true,
+    still: () => boolean = () => true,
+  ): Promise<UnsentRef[]> {
+    // Asked after every step that waits, before the next change: once it doesn't hold, the whole
+    // transaction is aborted, so nothing of what it had removed is removed, and nothing is retired.
+    const go = () => {
+      if (!still()) throw new Superseded()
+    }
     return this.keep([DOWNLOADS, OUTBOX, BLOBS, META], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const items = await outbox.getAll()
+      go()
       const unsent = items.filter((i) => i.state !== 'synced')
       const everyApproved = unsent.every((i) => {
         const shown = approved.get(i.id)
@@ -880,12 +899,26 @@ export class OfflineStore {
       const refs = unsent.map((i): UnsentRef => ({ id: i.id, ...seenOf(i) }))
       if (!everyApproved && !seal) return refs
       const downloads = tx.store<Download>(DOWNLOADS)
-      for (const d of await downloads.getAll()) await downloads.delete(d.key)
+      const kept = await downloads.getAll()
+      go()
+      for (const d of kept) {
+        await downloads.delete(d.key)
+        go()
+      }
       const blobs = tx.store<BlobRow>(BLOBS)
       if (everyApproved) {
-        for (const i of items) await outbox.delete(i.id)
-        for (const b of await blobs.getAll()) await blobs.delete(b.id)
+        for (const i of items) {
+          await outbox.delete(i.id)
+          go()
+        }
+        const photos = await blobs.getAll()
+        go()
+        for (const b of photos) {
+          await blobs.delete(b.id)
+          go()
+        }
         await tx.store<{ key: string; value: number }>(META).put({ key: RETIRED, value: 1 })
+        go()
         return []
       }
       const gone = new Set<string>()
@@ -893,8 +926,15 @@ export class OfflineStore {
         if (i.state !== 'synced') continue
         gone.add(i.id)
         await outbox.delete(i.id)
+        go()
       }
-      for (const b of await blobs.getAll()) if (gone.has(b.item)) await blobs.delete(b.id)
+      const photos = await blobs.getAll()
+      go()
+      for (const b of photos) {
+        if (!gone.has(b.item)) continue
+        await blobs.delete(b.id)
+        go()
+      }
       return refs
     })
   }
@@ -916,6 +956,157 @@ export class OfflineStore {
 
   static destroyFor(user: number): Promise<void> {
     return deleteDatabase(OfflineStore.databaseName(user))
+  }
+
+  // A sign-out's deletion of `user`'s database, which its first step retired (emptied and marked):
+  // one at a time with opening it (`withLock`), and only while `still()` holds, it removes that
+  // database and no other. One that isn't retired any more was made again since, by a newer start of
+  // the account, and stays with whatever was saved in it ('newer'). `force` removes it retired or not
+  // (the person chose to discard a database that couldn't be read), still only while `still()`
+  // holds ('stopped' otherwise). A deletion the browser refused throws.
+  static deleteRetired(
+    user: number,
+    { force = false, still = () => true }: { force?: boolean; still?: () => boolean } = {},
+  ): Promise<'removed' | 'newer' | 'stopped'> {
+    return withLock(user, async () => {
+      if (!still()) return 'stopped'
+      // A browser with no IndexedDB holds no database to remove.
+      if (typeof indexedDB === 'undefined') return 'removed'
+      const name = OfflineStore.databaseName(user)
+      if (!force && !(await retiredOrNew(name))) return 'newer'
+      if (!still()) return 'stopped'
+      await deleteDatabase(name)
+      return 'removed'
+    })
+  }
+}
+
+// Whether `user`'s database is on this device, asked without leaving one made by asking: from the
+// browser's list of databases, or else by opening it (one that opening made is removed again).
+// Undefined when it can't be told.
+export function databaseExists(user: number): Promise<boolean | undefined> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(false)
+  const name = OfflineStore.databaseName(user)
+  return (async () => {
+    const names = await indexedDB.databases?.().catch(() => undefined)
+    if (names) return names.some((d) => d.name === name)
+    return withLock(user, () => probe(name))
+  })()
+}
+
+function probe(name: string): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    let made = false
+    let request: IDBOpenDBRequest
+    try {
+      request = indexedDB.open(name)
+    } catch {
+      resolve(undefined)
+      return
+    }
+    // Not there: the creation is undone (an aborted first upgrade leaves no database at all).
+    request.onupgradeneeded = (e) => {
+      if (e.oldVersion !== 0) return
+      made = true
+      request.transaction?.abort()
+    }
+    request.onsuccess = () => {
+      request.result.close()
+      if (!made) return resolve(true)
+      deleteDatabase(name).then(
+        () => resolve(false),
+        () => resolve(undefined),
+      )
+    }
+    request.onerror = (e) => {
+      e.preventDefault?.()
+      resolve(made ? false : undefined)
+    }
+    request.onblocked = () => resolve(undefined)
+  })
+}
+
+// How long the account's lock is waited for, and held at most (milliseconds), and the clocks that
+// say so: a signal that aborts the wait, and a timer that ends the hold. Tests replace the clocks
+// with ones they trigger themselves.
+export const lockTimes = {
+  wait: 10_000,
+  hold: 10_000,
+  waitOver: (ms: number): AbortSignal | undefined =>
+    typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined,
+  holdOver: (ms: number, over: () => void): (() => void) => {
+    const timer = setTimeout(over, ms)
+    return () => clearTimeout(timer)
+  },
+}
+
+// A sign-out's change of the database stopped because a newer login of the account started: the
+// transaction was aborted, and nothing was changed.
+export class Superseded extends Error {
+  constructor() {
+    super('a newer login of the account started')
+    this.name = 'Superseded'
+  }
+}
+
+// One at a time per account, across the browser's tabs: opening its database, and a sign-out's
+// deletion of it. Where the browser has no Web Locks, the deletion still removes only a retired
+// database, which leaves only the moment between that check and the deletion unguarded.
+//
+// Bounded both ways, so nothing waits on it for good: waiting for the lock gives up after a while
+// (the database is said to be unavailable, as one in use by another tab is), and the holder lets it
+// go when its own time is up, whatever its work is still waiting on (a deletion the browser keeps
+// blocked by another connection). What comes after it then meets the browser as it is, as it would
+// without the lock.
+function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  if (!locks?.request) return work()
+  let granted = false
+  const signal = lockTimes.waitOver(lockTimes.wait)
+  const held = () => {
+    granted = true
+    return withinTime(work(), lockTimes.hold)
+  }
+  return (locks.request(`taskto-offline-db:${user}`, signal ? { signal } : {}, held) as Promise<T>).catch((e) => {
+    if (!granted && signal?.aborted) throw new StorageUnavailable('the offline database is busy in another tab')
+    throw e
+  })
+}
+
+function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const cancel = lockTimes.holdOver(ms, () => reject(new StorageUnavailable('the offline database took too long')))
+    work.then(
+      (v) => {
+        cancel()
+        resolve(v)
+      },
+      (e) => {
+        cancel()
+        reject(e)
+      },
+    )
+  })
+}
+
+// Whether the database is retired, or didn't exist (opening it here made it, empty).
+async function retiredOrNew(name: string): Promise<boolean> {
+  let made = false
+  const db = await openDatabase(name, SCHEMA_VERSION, {
+    ...MIGRATIONS,
+    1: (d, tx) => {
+      made = true
+      MIGRATIONS[1]?.(d, tx)
+    },
+  })
+  try {
+    if (made) return true
+    return (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
+  } catch {
+    // Not read: not known to be retired, so not removed.
+    return false
+  } finally {
+    db.close()
   }
 }
 

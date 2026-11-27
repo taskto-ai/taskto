@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { NoWorkspace } from '../shell/NoWorkspace'
 import { fakeFetch } from '../test/fakes'
-import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
+import { InviteScreen, LoginScreen, PaymentReturnScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
 import { ackDeletion, peekDeletion, rememberDeletion } from './deleted'
 import { ServerUnreachable } from './ServerUnreachable'
 
@@ -996,4 +996,16 @@ test('a single sign-on start pressed twice before the page draws it, on one prov
   answer({ body: { url: 'https://accounts.example.com/authorize?state=fake' } })
   await vi.waitFor(() => expect(assign).toHaveBeenCalledOnce())
   expect(calls.filter((c) => c.path.startsWith('/api/sso/'))).toHaveLength(1)
+})
+
+test('the pages a payer returns to say so, call nothing and show nothing of the payment', () => {
+  const calls = fakeFetch({})
+  const done = render(<PaymentReturnScreen outcome="done" />)
+  screen.getByRole('heading', { name: 'Thank you' })
+  expect(done.container.textContent).toContain('the provider will confirm it')
+  done.unmount()
+  render(<PaymentReturnScreen outcome="cancelled" />)
+  screen.getByRole('heading', { name: 'Payment cancelled' })
+  expect(screen.getByText(/Nothing was charged/)).toBeTruthy()
+  expect(calls).toHaveLength(0)
 })

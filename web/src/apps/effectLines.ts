@@ -94,12 +94,18 @@ export function effectLines(
       case 'create_document':
         line = t('apps.builder.can.effect.createDocument', { path: e.path ?? '', space: spaceOf(e, targets) })
         break
-      case 'create_payment_link':
-        line = t('apps.builder.can.effect.createPaymentLink', {
+      case 'create_payment_link': {
+        const slot = {
           slot: e.integration ?? '',
           amount: e.amount_field ?? '',
-        })
+          url: e.url_field ?? '',
+          id: e.id_field ?? '',
+        }
+        line = e.currency_field
+          ? t('apps.builder.can.effect.createPaymentLinkField', { ...slot, currencyField: e.currency_field })
+          : t('apps.builder.can.effect.createPaymentLink', { ...slot, currency: e.currency ?? '' })
         break
+      }
       default:
         if (e.route === 'board') line = t('apps.builder.can.effect.openBoard', { board: boardOf(e, targets) })
         else if (e.route === 'card') line = t('apps.builder.can.effect.openCard')
