@@ -1848,3 +1848,88 @@ test('losing the whole workspace while an app is open ends in the not found page
   await act(async () => {})
   expect(calls.filter((c) => c.path === '/api/workspaces/1/spaces')).toHaveLength(2)
 })
+
+test('an open app asks again when its tab becomes visible, and not while the tab is hidden', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': {
+      body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] },
+    },
+  })
+  const visibility = vi.spyOn(document, 'visibilityState', 'get')
+  try {
+    render(<App />)
+    await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+    const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+    expect(spaceReads()).toBe(1)
+
+    visibility.mockReturnValue('hidden')
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(spaceReads()).toBe(1)
+
+    visibility.mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await waitFor(() => expect(spaceReads()).toBe(2))
+  } finally {
+    visibility.mockRestore()
+  }
+})
+
+test('an app on its own is in the workspace’s language', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const inPortuguese = { ...me, workspaces: [{ ...me.workspaces[0], locale: 'pt-BR' }, me.workspaces[1]] }
+  fakeFetch({ ...runRoutes, 'GET /api/me': { body: inPortuguese } })
+  const languages = vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['xx'])
+  try {
+    render(<App />)
+    await screen.findByRole('link', { name: 'Abrir no taskto' })
+  } finally {
+    languages.mockRestore()
+    await setPreferences({ workspace: null })
+  }
+})
+
+test('an app on its own in a space the person can only read says it is view only, and one they write to does not', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const space = (access: string) => ({
+    'GET /api/workspaces/1/spaces': {
+      body: { spaces: [{ id: 3, name: 'Mine', kind: 'shared', access, archived_at: null }] },
+    },
+  })
+  fakeFetch({ ...runRoutes, ...space('read') })
+  render(<App />)
+  await screen.findByText(/You can view this app; only the space’s editors change it\./)
+  cleanup()
+  fakeFetch({ ...runRoutes, ...space('write') })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(screen.queryByText(/You can view this app/)).toBeNull()
+})
+
+test('going from one app’s address to another’s starts the second app afresh', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const other = '/api/workspaces/1/spaces/3/apps/8'
+  const again = Object.fromEntries(
+    Object.entries(runRoutes)
+      .filter(([key]) => key.includes(appBase))
+      .map(([key, value]) => [
+        key.replace(appBase, other),
+        key.endsWith(appBase) ? { body: { ...runApp, id: 8, name: 'Hours' } } : value,
+      ]),
+  )
+  fakeFetch({ ...runRoutes, ...again })
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Records and history' }))
+  expect(screen.getAllByRole('button', { name: 'Hide records and history' })[0]?.getAttribute('aria-expanded')).toBe(
+    'true',
+  )
+  act(() => navigate('/w/1/run/3-8'))
+  await screen.findByRole('heading', { level: 1, name: 'Hours' })
+  expect(screen.getByRole('button', { name: 'Records and history' }).getAttribute('aria-expanded')).toBe('false')
+})
