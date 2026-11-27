@@ -32,8 +32,9 @@ const first = { user: { id: 7, email: 'pat@example.com', name: 'Pat' }, workspac
 
 // Another tab signed in as someone else: the marker it moved, and the event this tab hears.
 function anotherAccountSignsIn() {
-  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  const marker = JSON.stringify({ id: 8, name: 'Bob' })
+  window.localStorage.setItem(LAST_KEY, marker)
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: marker }))
 }
 
 beforeEach(() => {
