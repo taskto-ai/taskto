@@ -36,7 +36,8 @@ type PaymentProvider interface {
 	// the provider was read in full and has no such object that a payer can use: a read that couldn't
 	// be finished is an error, never "not found". expired says that it saw an object of the token that
 	// no payer can use and that was never paid (an expired Checkout Session): the key's outcome is then
-	// known. Its failures are *CallError. A failure after an object of the token was seen (one that
+	// known, and link.ObjectID names that object when the provider gives its id, so that a key with
+	// another object on record is not taken as ended by it. Its failures are *CallError. A failure after an object of the token was seen (one that
 	// couldn't be checked, such as a link whose line items couldn't be read, or one that isn't a link a
 	// payer may be given) returns that object's id in link.ObjectID (and no URL): it is not adopted, and it
 	// is kept on the key, so that no one takes the key's outcome for "nothing made".
@@ -397,8 +398,9 @@ const (
 // second object is made and a person reconciles the payment.
 func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
 	hosted := l.SuccessURL == ""
-	// sawExpired: an object of the token that can't be paid and never was.
+	// sawExpired: an object of the token that can't be paid and never was, and expiredID its id.
 	sawExpired := false
+	expiredID := ""
 	path := "/v1/checkout/sessions"
 	q := url.Values{"limit": {strconv.Itoa(findPageSize)}}
 	if hosted {
@@ -420,6 +422,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				URL               string            `json:"url"`
 				Currency          string            `json:"currency"`
 				Status            string            `json:"status"`
+				Mode              string            `json:"mode"`
 				Active            *bool             `json:"active"`
 				AmountTotal       int64             `json:"amount_total"`
 				ClientReferenceID *string           `json:"client_reference_id"`
@@ -453,12 +456,21 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 			}
 			if !hosted {
+				if o.Mode != "payment" {
+					// Our calls make sessions in payment mode only: one of the token in another mode is not
+					// one of ours to adopt, and its expiry says nothing of the key's call.
+					return seen, false, false, &CallError{Kind: CallRefused, Status: status}
+				}
 				switch o.Status {
 				case "open":
 				case "expired":
 					// Can't be paid, and the payer was never given an address that works: the call that
 					// made it is accounted for, and another may be made.
-					sawExpired = true
+					if sawExpired && expiredID != seen.ObjectID {
+						// Two objects of one key: nothing says which the call made.
+						return seen, false, false, &CallError{Kind: CallRefused, Status: status}
+					}
+					sawExpired, expiredID = true, seen.ObjectID
 					continue
 				default:
 					if o.Status == "complete" {
@@ -488,7 +500,10 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			return link, true, false, nil
 		}
 		if !more {
-			return Link{}, false, sawExpired, nil
+			if sawExpired {
+				return Link{ObjectID: expiredID}, false, true, nil
+			}
+			return Link{}, false, false, nil
 		}
 		last := data[len(data)-1].ID
 		if last == "" {
@@ -534,10 +549,14 @@ func (stripe) LinkState(ctx context.Context, creds Credentials, c *Client, hoste
 		ID     string `json:"id"`
 		Object string `json:"object"`
 		Status string `json:"status"`
+		Mode   string `json:"mode"`
 		Active *bool  `json:"active"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil || out.Object != want || out.ID != objectID {
 		return 0, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	if !hosted && out.Mode != "payment" {
+		return 0, &CallError{Kind: CallRefused, Status: status} // not a session our calls make
 	}
 	if hosted {
 		switch {

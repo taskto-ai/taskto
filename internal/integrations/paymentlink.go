@@ -390,6 +390,11 @@ func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylin
 		}
 		return t.settle(ctx, r, a, found)
 	case expired:
+		if a.objectID != "" && found.ObjectID != a.objectID {
+			// The key has another object on record than the one seen expired: that says nothing of the one
+			// on record, which may be open. The entry waits, and a person sees it if it never resolves.
+			return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
+		}
 		return resolvedExpired, paylink.Link{}, t.s.markAttempt(ctx, a, attemptExpired)
 	}
 	if seen {

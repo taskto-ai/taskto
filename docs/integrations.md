@@ -462,7 +462,11 @@ write.
   `GET /v1/payment_links/{id}`) and saved only if a payer can use it now: an `open` session, an
   `active` Payment Link. An expired session is never given; its key is accounted for (it made that
   session and nothing else), so the reference moves on to the next key by itself, and the call is made
-  under it. A completed session and an inactive link stop the entry with
+  under it. Only a session in `payment` mode (the one mode the calls make) is one of ours, whether a
+  lookup lists it or its state is read: one of the token in another mode is refused and never adopted.
+  And a key with an object on record moves on only when that very object is seen expired: an expired
+  session of its token with another id, or two of them, says nothing of the one on record, and the entry
+  waits. A completed session and an inactive link stop the entry with
   `integration_link_already_paid`. If the state can't be read, the object stays on the key and the
   outcome stays unknown (above).
 - **A saved link is read again before it is given again.** An entry done again after its link was
