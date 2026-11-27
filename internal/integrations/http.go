@@ -69,6 +69,8 @@ type Service struct {
 	// afterCall is for tests: it runs after a call answered with an object and before anything of the
 	// answer is noted, and an error it returns ends the try there, as a crash would.
 	afterCall func() error
+	// beforeSettle is for tests: it runs before an object's state is read (settle), with its id.
+	beforeSettle func(objectID string)
 
 	now func() time.Time
 	// hookIP and hookID limit the webhook route (webhook.go); applier applies stored events and

@@ -420,6 +420,12 @@ func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylin
 		return unresolved, paylink.Link{}, t.s.readFailed(ctx, t.rec, a, err)
 	}
 	switch {
+	case ok && a.objectID != "" && found.ObjectID != a.objectID:
+		// Another object of the key's token than the one on record: two objects of one key, and nothing
+		// says which the call made. The one on record stays (it may be open and paid), neither is given,
+		// and no other key is taken: the entry waits, and then fails for a person.
+		slog.Warn("integrations: a lookup found a second object of a key's token; an admin decides", "ref", r.id)
+		return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
 	case ok:
 		slog.Info("integrations: a payment link made by an earlier call was found", "integration", r.integrationID, "provider", t.rec.Provider)
 		// Checked, and kept on the key before its state is read: a try that can't read it finds it there,
@@ -450,6 +456,9 @@ func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylin
 // refused included), nothing is resolved: the object stays on the key, and the entry waits on the
 // reconciliation's schedule.
 func (t try) settle(ctx context.Context, r *ref, a attempt, l Link) (resolution, paylink.Link, error) {
+	if t.s.beforeSettle != nil {
+		t.s.beforeSettle(l.ObjectID)
+	}
 	state, err := t.provider.LinkState(ctx, t.creds, t.client, t.hosted, l.ObjectID)
 	if err != nil {
 		now, rerr := t.s.attemptByKey(ctx, a.refID, a.seq)
@@ -468,7 +477,26 @@ func (t try) settle(ctx context.Context, r *ref, a attempt, l Link) (resolution,
 	case LinkSettled:
 		return unresolved, paylink.Link{}, t.s.settleAttempt(ctx, a)
 	}
-	return resolvedExpired, paylink.Link{}, t.s.markAttempt(ctx, a, attemptExpired)
+	// Expired: the key's outcome, only while this is the object on record (or none is): another object
+	// of the key may be open.
+	if ok, err := t.s.markExpiredOf(ctx, a, l.ObjectID); err != nil {
+		return unresolved, paylink.Link{}, err
+	} else if !ok {
+		return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
+	}
+	return resolvedExpired, paylink.Link{}, nil
+}
+
+// markExpiredOf gives the key the outcome expired for its object objectID, only while the object on
+// record is that one or none: says false, and changes nothing, otherwise.
+func (s *Service) markExpiredOf(ctx context.Context, a attempt, objectID string) (bool, error) {
+	res, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'expired'
+		WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND (object_id IS NULL OR object_id = ?)`, a.refID, a.seq, objectID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // settleAttempt notes that the key's object was paid, or can't be used for a reason that doesn't say it
@@ -1016,7 +1044,7 @@ func (s *Service) noteNotExecuted(ctx context.Context, a attempt) (attempt, erro
 // its state is read: one that may be adopted.
 func (s *Service) noteObject(ctx context.Context, a attempt, l Link) error {
 	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = ?, url = ?, object_verified = 1
-		WHERE ref_id = ? AND seq = ? AND outcome IS NULL`, l.ObjectID, l.URL, a.refID, a.seq)
+		WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND (object_id IS NULL OR object_id = ?)`, l.ObjectID, l.URL, a.refID, a.seq, l.ObjectID)
 	return err
 }
 
@@ -1025,7 +1053,7 @@ func (s *Service) noteObject(ctx context.Context, a attempt, l Link) error {
 // as it is. It never replaces an object that may be adopted.
 func (s *Service) noteSeen(ctx context.Context, a attempt, objectID string) error {
 	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET object_id = ?, url = NULL, object_verified = 0
-		WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND object_verified = 0`, objectID, a.refID, a.seq)
+		WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND object_verified = 0 AND (object_id IS NULL OR object_id = ?)`, objectID, a.refID, a.seq, objectID)
 	return err
 }
 
