@@ -104,7 +104,10 @@ export function ConversationView({
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const readModel = () => {
-    api<ModelRef>(`${base}/model`).then(setPicked, () => loadedModel.reload())
+    api<ModelRef>(`${base}/model`).then(setPicked, () => {
+      setPicked(null)
+      loadedModel.reload()
+    })
   }
   const model = picked ?? loadedModel.data
   const agents = useMemo(

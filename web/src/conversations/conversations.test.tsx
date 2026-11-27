@@ -911,3 +911,32 @@ test('a leading agent token shows as a chip in the sent message, and a later one
   expect(chip.parentElement?.textContent).toBe('@Codex review this')
   expect(screen.getByText('ask @[Codex](agent:cli-codex/default) again')).toBeTruthy()
 })
+
+test('when the model cannot be read back after a switching send, the picker shows the reloaded one', async () => {
+  const answers = [
+    { body: { provider: 'script', model_id: 'script-1' } },
+    { body: { provider: 'cli-codex', model_id: 'default' } },
+    { status: 500, body: { error: 'down' } },
+    { body: { provider: 'script', model_id: 'script-1' } },
+  ]
+  let read = 0
+  await openWith({
+    ...agentCatalog,
+    'GET /api/workspaces/1/conversations/7/model': () => answers[Math.min(read++, answers.length - 1)],
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-codex', 'default'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) two' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+})
