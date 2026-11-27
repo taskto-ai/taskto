@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +37,7 @@ type Service struct {
 	clientOpts      []ClientOption
 	beforeBeginRef  func()
 	afterWriteAhead func() error
+	beforeCall      func()
 	afterCall       func() error
 
 	now            func() time.Time
@@ -44,6 +46,8 @@ type Service struct {
 	afterLookup    func()
 	applier        atomic.Pointer[Applier]
 	wake           chan struct{}
+	pollMu         sync.Mutex
+	polls          pollLimits
 }
 
 func New(store *Store, opts Options) *Service {
@@ -101,9 +105,11 @@ func (s *Service) view(rec record, visible map[int64]bool) Integration {
 			out.OtherSpaces++
 		}
 	}
-	if u := hookURL(s.publicURL, rec.publicID); u != "" {
+	u := hookURL(s.publicURL, rec.publicID)
+	if u != "" {
 		out.WebhookURL = &u
 	}
+	out.WebhookURLChanged = rec.registeredURL != "" && rec.registeredURL != u
 	return out
 }
 
@@ -229,6 +235,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	d.publicURL = s.publicURL
 	ids, ok := s.manageable(w, r)
 	if !ok {
 		return
@@ -266,7 +273,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	rec, err := s.store.update(r.Context(), workspaceOf(r), actorOf(r), id, change{
 		displayName: req.DisplayName, settings: req.Settings, secrets: req.Secrets,
-		maxAmount: req.MaxAmountMinor, currencies: req.Currencies, disabled: req.Disabled,
+		maxAmount: req.MaxAmountMinor, currencies: req.Currencies, disabled: req.Disabled, publicURL: s.publicURL,
 	})
 	if err != nil {
 		fail(w, r, err)

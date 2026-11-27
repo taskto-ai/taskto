@@ -223,13 +223,15 @@ func TestNormalizeStripe(t *testing.T) {
 func TestNormalizedEventsHoldNoFreeText(t *testing.T) {
 	shapes := map[string]*regexp.Regexp{
 		"ID": stripeEventIDRe, "Kind": regexp.MustCompile(`^payment\.(succeeded|expired|failed|refunded)$`), "RefToken": regexp.MustCompile(`^([0-9a-f]{32})?$`),
-		"ObjectID": regexp.MustCompile(`^(cs_(test|live)_|ch_|py_)[A-Za-z0-9_]+$`), "PaymentID": regexp.MustCompile(`^(pi_[A-Za-z0-9_]+)?$`), "Currency": regexp.MustCompile(`^[A-Z]{3}$`),
+		"ObjectID": regexp.MustCompile(`^(cs_(test|live)_|ch_|py_)[A-Za-z0-9_]+$`), "PaymentID": regexp.MustCompile(`^(pi_[A-Za-z0-9_]+)?$`),
+		"LinkID": regexp.MustCompile(`^(plink_[A-Za-z0-9]+)?$`), "Currency": regexp.MustCompile(`^[A-Z]{3}$`),
 	}
 	for _, c := range []struct {
 		typ string
 		obj map[string]any
 	}{
 		{"checkout.session.completed", session(nil)}, {"checkout.session.expired", session(nil)}, {"charge.refunded", charge(nil)},
+		{"checkout.session.completed", session(map[string]any{"payment_link": "plink_" + "1AbC"})},
 	} {
 		ev, ok := stripe{}.Normalize(event(c.typ, c.obj))
 		if !ok {
@@ -256,11 +258,24 @@ func TestNormalizedEventsHoldNoFreeText(t *testing.T) {
 	}
 }
 
-func TestStripeIsAReceiverAndSquareIsNot(t *testing.T) {
-	if _, ok := Lookup("stripe").(Receiver); !ok {
-		t.Error("Stripe doesn't receive webhooks")
+func TestEveryProviderMakesLinksAndReceivesWebhooks(t *testing.T) {
+	for _, p := range Providers() {
+		if _, ok := p.(Receiver); !ok {
+			t.Errorf("%s doesn't receive webhooks", p.ID())
+		}
+		if _, ok := p.(PaymentProvider); !ok {
+			t.Errorf("%s doesn't make payment links", p.ID())
+		}
 	}
-	if _, ok := Lookup("square").(Receiver); ok {
-		t.Error("Square receives webhooks before its card adds it")
+}
+
+func TestASessionsPaymentLinkIsKeptOnlyInItsShape(t *testing.T) {
+	ev, ok := (stripe{}).Normalize(event("checkout.session.completed", session(map[string]any{"payment_link": "plink_" + "1AbC"})))
+	if !ok || ev.LinkID != "plink_1AbC" {
+		t.Fatalf("a session of a payment link: %+v, %v", ev, ok)
+	}
+	bad := session(map[string]any{"payment_link": "plink_1 or free text"})
+	if _, ok := (stripe{}).Normalize(event("checkout.session.completed", bad)); ok {
+		t.Fatal("a payment link of another shape was taken")
 	}
 }

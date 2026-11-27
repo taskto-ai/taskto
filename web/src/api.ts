@@ -559,6 +559,7 @@ export type Integration = {
   currencies: string[]
   secrets: Record<string, string>
   webhook_url: string | null
+  webhook_url_changed: boolean
   disabled: boolean
   disabled_at: string | null
   spaces: number[]
@@ -671,6 +672,50 @@ export type IntegrationApproval = {
 }
 export type SpaceGrant = 'none' | 'approval' | 'settings'
 export type IntegrationApprovalList = { approvals: IntegrationApproval[]; next_cursor: string | null }
+
+export type IntegrationEventState = 'pending' | 'running' | 'applied' | 'ignored' | 'failed'
+export type IntegrationEvent = {
+  id: number
+  kind: string
+  source: string
+  state: IntegrationEventState
+  code?: string
+  amount_minor: number
+  currency: string
+  livemode: boolean
+  attempts: number
+  occurred_at: string
+  received_at: string
+  processed_at: string | null
+  retriable: boolean
+}
+export type IntegrationEventList = { events: IntegrationEvent[]; next_before: number }
+
+export type PaymentLinkOutcome = {
+  effect_id: number
+  app_id: number
+  space_id: number
+  record_id: number
+  amount: string
+  currency: string
+  since: string
+  waiting: boolean
+  can_confirm: boolean
+  code?: string
+  params?: Params
+  object_id: string
+  attempts: PaymentLinkAttempt[]
+}
+export type PaymentLinkAttempt = {
+  reference: string
+  kind: 'checkout_session' | 'payment_link'
+  object_id: string
+  object_verified: boolean
+  account_id: string
+  mode: string
+  first_sent_at: string
+}
+export type PaymentLinkOutcomes = { payment_links: PaymentLinkOutcome[] }
 
 export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }
 

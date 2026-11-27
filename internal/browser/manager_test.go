@@ -24,11 +24,17 @@ func TestMain(m *testing.M) {
 		return
 	case "xvfb":
 		_, _ = os.NewFile(3, "displayfd").WriteString("7\n")
-		select {}
+		runUntilStopped()
 	case "x11vnc":
-		select {}
+		runUntilStopped()
 	}
 	os.Exit(m.Run())
+}
+
+func runUntilStopped() {
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func fakeChromium(logPath string) {

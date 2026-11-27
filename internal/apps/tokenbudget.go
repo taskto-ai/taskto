@@ -33,6 +33,11 @@ func (s *Service) WithClock(clock func() time.Time) *Service {
 	return s
 }
 
+func (s *Service) WithOutboxPoll(every time.Duration) *Service {
+	s.poll = every
+	return s
+}
+
 type budgetKey struct{ user, workspace int64 }
 
 type bucket struct {

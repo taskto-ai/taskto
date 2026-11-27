@@ -879,7 +879,25 @@ func (r *repo) countAuthored(ctx context.Context, head *object.Commit, set map[s
 func (s *Store) RemoveSpace(sp access.Space) error {
 	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
-	st.removed, st.removedCreated = true, sp.CreatedAt
+	if sp.Generation != 0 {
+		if st.lastGen.Load() > sp.Generation {
+			return nil
+		}
+		if s.spaceExists != nil {
+			ok, err := s.spaceExists(sp)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+		}
+	}
+	st.serve(sp.Generation)
+	st.removed, st.removedGen = true, sp.Generation
+	st.size, st.unv = -1, -1
+	st.anc.reset()
+	st.publish(nil)
 	dir := sp.Dir(s.dataDir)
 	leftover := dir + removingSuffix
 	if err := os.RemoveAll(leftover); err != nil {
@@ -908,7 +926,7 @@ func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
 func (s *Store) ForgetSpace(sp access.Space) {
 	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
-	if !st.removed {
+	if !st.removed || (st.removedGen != 0 && sp.Generation != 0 && sp.Generation != st.removedGen) {
 		return
 	}
 	s.mu.Lock()

@@ -24,17 +24,45 @@ import { setPreferences, t as translate } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
 import { AccountChanged } from './offline/AccountChanged'
-import { onAccountSignal, watchAccount } from './offline/account'
+import { forgetLast, onAccountSignal, watchAccount } from './offline/account'
 import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
-import { confirmSignOut, recordSignOut, settleSignOut, signOutPending } from './offline/pendingSignOut'
-import { activate, discardForeign, lastUser, runtimeState, stillAgreed, type Unsent, unsentOf } from './offline/runtime'
+import {
+  backedSignOut,
+  backFromSignOut,
+  beginLogout,
+  browserLogin,
+  confirmSignOut,
+  endLogout,
+  forgetLogin,
+  loginIsCurrent,
+  recordSignOut,
+  settleSignOut,
+  signOutPending,
+} from './offline/pendingSignOut'
+import {
+  activate,
+  deactivate,
+  discardForeign,
+  lastUser,
+  runtimeState,
+  stillAgreed,
+  type Unsent,
+  unsentOf,
+} from './offline/runtime'
 import { approvalOf } from './offline/store'
 import { beforeLeaving, navigate } from './router'
 import { beginSession, endSession, sameSession } from './session'
 import { Shell } from './shell/Shell'
-import { cleanUpAfterSignOut, finishUnfinishedSignOuts, SIGN_OUT_WAIT_MS, signOutToResume } from './signOut'
+import {
+  cleanUpAfterSignOut,
+  type Decision,
+  decisionOf,
+  finishUnfinishedSignOuts,
+  SIGN_OUT_WAIT_MS,
+  signOutToResume,
+} from './signOut'
 import { reportTimeZone } from './timezone'
 import { toast } from './ui/Toast'
 import { claimDrafts } from './uiState'
@@ -62,24 +90,36 @@ const PAYMENT_PATHS: Record<string, 'done' | 'cancelled'> = {
 
 type Leaving = { user: number; session: string; next: Session }
 type Asked = Leaving & Unsent
-type Tail = Leaving & { keep: boolean; approved: ReturnType<typeof approvalOf> }
+type Tail = Leaving & Decision
 
 export function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' })
   const { runtime, foreign, problem } = useRuntime()
-  const claim = useCallback(async (me: Me) => {
-    await finishUnfinishedSignOuts(me)
+  const claim = useCallback(async (me: Me, asked = Date.now(), still: () => boolean = () => true) => {
+    if (!(await finishUnfinishedSignOuts(me, asked))) return false
+    if (!still()) return false
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name)
+    return loginIsCurrent(me.user.id, me.session)
   }, [])
-  const signIn = useCallback(
-    async (me: Me) => {
-      await claim(me)
-      const now = await reportTimeZone(me)
-      beginSession(now.user.id)
-      setSession({ state: 'in', me: now })
+  const enter = useCallback(
+    async (me: Me, asked?: number, still?: () => boolean) => {
+      if (!(await claim(me, asked, still))) return null
+      return reportTimeZone(me)
     },
     [claim],
+  )
+  const [finishedElsewhere, setFinishedElsewhere] = useState(false)
+  const staleStart = useRef<() => void>(() => {})
+  const signIn = useCallback(
+    async (me: Me, asked?: number) => {
+      const now = await enter(me, asked)
+      if (!now) return staleStart.current()
+      beginSession(now.user.id)
+      setFinishedElsewhere(false)
+      setSession({ state: 'in', me: now })
+    },
+    [enter],
   )
   const [leaving, setLeaving] = useState<Asked | null>(null)
   const [notCleared, setNotCleared] = useState(false)
@@ -88,6 +128,16 @@ export function App() {
     setNotCleared(false)
     toast({ message: translate('app.deviceNotCleared'), tone: 'danger' })
   }, [notCleared, session.state])
+  const over = useCallback(async (tail: Tail, mine: () => boolean) => {
+    const { user, session, next } = tail
+    confirmSignOut(user, session)
+    const cleared = await cleanUpAfterSignOut(user, session, tail)
+    if (!mine()) return
+    endSession()
+    setLeaving(null)
+    setSession(next)
+    if (!cleared) setNotCleared(true)
+  }, [])
 
   const signedIn = session.state === 'in'
   const account =
@@ -98,14 +148,22 @@ export function App() {
         : null
   const [changed, setChanged] = useState(false)
   const heardChange = useRef(false)
+  const page = useRef(0)
+  const stillHere = useCallback(() => {
+    const mine = sameSession()
+    const at = page.current
+    return () => mine() && page.current === at
+  }, [])
   const accountChanged = useCallback(() => {
     heardChange.current = true
+    page.current += 1
     endSession()
     setChanged(true)
   }, [])
+  staleStart.current = accountChanged
   const leavingTo = useRef<Session | null>(null)
   leavingTo.current = session.state === 'leaving' ? session.tail.next : null
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (account === null) return
     const over = accountChanged
     watchAccount()
@@ -114,8 +172,10 @@ export function App() {
       if (who === null && !heardChange.current) forgetOperationsOf(account)
       const next = leavingTo.current
       if (who === null && next) {
+        page.current += 1
         endSession()
         setLeaving(null)
+        setFinishedElsewhere(true)
         setSession(next)
         return
       }
@@ -125,6 +185,8 @@ export function App() {
       if ((e as CustomEvent<{ expected?: number }>).detail?.expected === account) over()
     }
     window.addEventListener(ACCOUNT_CHANGED_EVENT, refused)
+    const now = lastUser()
+    if (leavingTo.current === null && now !== null && now.id !== account) over()
     return () => {
       off()
       window.removeEventListener(ACCOUNT_CHANGED_EVENT, refused)
@@ -134,45 +196,58 @@ export function App() {
     if (problem === 'account') endSession()
   }, [problem])
   const signedInUser = session.state === 'in' ? session.me.user.id : null
+  const signedInLogin = session.state === 'in' ? session.me.session : undefined
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!signedIn) return
     const lost = (e: Event) => {
       if (!concernsAccount(e, signedInUser)) return
       endSession()
-      if (signedInUser !== null) void leavePush(signedInUser)
+      if (signedInUser !== null) forgetLogin(signedInUser, signedInLogin)
+      const backed = signedInUser !== null ? backedSignOut(signedInUser, signedInLogin) : undefined
+      if (backed) {
+        const tail: Tail = {
+          user: backed.user,
+          session: backed.session,
+          next: { state: 'login' },
+          ...decisionOf(backed),
+        }
+        setSession({ state: 'leaving', tail })
+        void over(tail, stillHere())
+        return
+      }
+      if (signedInUser !== null)
+        void leavePush(signedInUser, () => {
+          const now = browserLogin()
+          return !(now?.user === signedInUser && now.session !== signedInLogin)
+        })
       setSession({ state: 'login' })
     }
     window.addEventListener(SESSION_LOST, lost)
     return () => window.removeEventListener(SESSION_LOST, lost)
-  }, [signedIn, signedInUser])
+  }, [signedIn, signedInUser, signedInLogin, over, stillHere])
 
   const logIn = useCallback(
     async (me: Me) => {
+      const asked = Date.now()
       await setPreferences({ user: me.user.locale ?? null })
-      await signIn(me)
+      await signIn(me, asked)
     },
     [signIn],
   )
 
   const tailBusy = useRef(false)
-  const over = useCallback(async (tail: Tail, mine: () => boolean) => {
-    const { user, next, keep, approved } = tail
-    confirmSignOut(user)
-    const cleared = await cleanUpAfterSignOut(user, keep, approved)
-    if (!mine()) return
-    endSession()
-    setLeaving(null)
-    setSession(next)
-    if (!cleared) setNotCleared(true)
-  }, [])
   const logoutNow = useCallback(
     async (tail: Tail) => {
-      const mine = sameSession()
+      const mine = stillHere()
       const { user, session } = tail
+      const before = browserLogin()
+      let lapsed = false
       setSession((s) => (s.state === 'leaving' ? { ...s, failed: undefined, busy: false } : s))
       const wait = new AbortController()
       const timer = setTimeout(() => wait.abort(), SIGN_OUT_WAIT_MS)
+      const attempt = beginLogout(user, session)
+      let answered = true
       const outcome = await api('/api/logout', {
         method: 'POST',
         headers: forAccount(user),
@@ -180,22 +255,31 @@ export function App() {
         signal: wait.signal,
       }).then(
         () => 'out' as const,
-        (e) =>
-          e instanceof ApiError && e.code === 'session_account_changed'
-            ? ('changed' as const)
-            : e instanceof ApiError && e.status === 401
-              ? ('out' as const)
-              : wait.signal.aborted
-                ? translate('app.signOutNoAnswer')
-                : errorText(e),
+        (e) => {
+          if (e instanceof ApiError && e.code === 'session_account_changed') return 'changed' as const
+          if (e instanceof ApiError && e.status === 401) {
+            lapsed = true
+            return 'out' as const
+          }
+          if (!(e instanceof ApiError) || !e.code) answered = false
+          return wait.signal.aborted ? translate('app.signOutNoAnswer') : errorText(e)
+        },
       )
       clearTimeout(timer)
-      if (outcome === 'out') return over(tail, mine)
+      endLogout(attempt, user, session, answered)
+      if (outcome === 'out') {
+        if (lapsed && before) forgetLogin(before.user, before.session)
+        return over(tail, mine)
+      }
+      if (outcome === 'changed') {
+        const now = browserLogin()
+        if (now?.user === user && now.session !== session) settleSignOut(user, session)
+      }
       if (!mine()) return
       if (outcome === 'changed') return accountChanged()
       setSession((s) => (s.state === 'leaving' ? { ...s, failed: outcome } : s))
     },
-    [accountChanged, over],
+    [accountChanged, over, stillHere],
   )
   const finish = useCallback(
     async (tail: Tail) => {
@@ -210,9 +294,13 @@ export function App() {
     [logoutNow],
   )
   const signOut = useCallback(
-    async ({ user, session, next, items }: Leaving & Partial<Pick<Unsent, 'items'>>, keep = false) => {
+    async (
+      { user, session, next, items, unreadable }: Leaving & Partial<Pick<Unsent, 'items' | 'unreadable'>>,
+      keep = false,
+    ) => {
       const still = sameSession()
       const approved = approvalOf(items ?? [])
+      const discardUnreadable = !keep && !!unreadable
       if (!keep) {
         const left = await stillAgreed(user, approved)
         if (!still()) return
@@ -221,11 +309,11 @@ export function App() {
           return
         }
       }
-      recordSignOut(user, session, keep, approved)
+      recordSignOut(user, session, keep, approved, discardUnreadable)
       endSession()
       const queue = runtimeState().runtime
       if (queue?.user === user) queue.engine.pause('signing-out')
-      const tail: Tail = { user, session, next, keep, approved }
+      const tail: Tail = { user, session, next, keep, approved, discardUnreadable }
       setLeaving(null)
       setSession({ state: 'leaving', tail })
       await finish(tail)
@@ -246,40 +334,50 @@ export function App() {
   )
   const backNow = useCallback(
     async (tail: Tail) => {
-      const mine = sameSession()
-      let signalled = false
+      const mine = stillHere()
+      const before = browserLogin()
+      let heard: number | null | undefined
       watchAccount()
-      const off = onAccountSignal(() => {
-        signalled = true
+      const off = onAccountSignal((who) => {
+        heard = who
       })
       try {
+        const asked = Date.now()
         const me = await api<Me>('/api/me')
-        off()
         if (!mine()) return
-        if (signalled || me.user.id !== tail.user || !tail.session || me.session !== tail.session)
+        if (heard !== undefined || me.user.id !== tail.user || !tail.session || me.session !== tail.session)
           return accountChanged()
-        settleSignOut(tail.user)
+        await setPreferences({ user: me.user.locale ?? null })
+        const invite = tail.next.state === 'invite'
+        const wanted = () => mine() && heard === undefined
+        let now: Me | null = me
+        if (invite) now = (await claim(me, asked, wanted)) ? me : null
+        else now = await enter(me, asked, wanted)
+        if (!now || !mine() || heard !== undefined) {
+          await deactivate({ purge: false, user: me.user.id }).catch(() => {})
+          if (heard === null) forgetLast(me.user.id)
+          if (mine()) accountChanged()
+          return
+        }
+        backFromSignOut(tail.user, tail.session)
         const queue = runtimeState().runtime
         if (queue?.user === tail.user && queue.engine.status().paused === 'signing-out') queue.engine.resume()
         setLeaving(null)
-        await setPreferences({ user: me.user.locale ?? null })
-        if (tail.next.state === 'invite') {
-          await claim(me)
-          beginSession(me.user.id)
-          setSession({ state: 'invite', me })
-        } else {
-          await signIn(me)
-        }
+        beginSession(now.user.id)
+        setFinishedElsewhere(false)
+        setSession(invite ? { state: 'invite', me: now } : { state: 'in', me: now })
       } catch (e) {
-        off()
+        if (e instanceof ApiError && e.status === 401) {
+          if (before) forgetLogin(before.user, before.session)
+          return over(tail, mine)
+        }
         if (!mine()) return
-        if (e instanceof ApiError && e.status === 401) return over(tail, mine)
         setSession((s) => (s.state === 'leaving' ? { ...s, failed: errorText(e) } : s))
       } finally {
         off()
       }
     },
-    [accountChanged, over, claim, signIn],
+    [accountChanged, over, claim, enter, stillHere],
   )
   const goBack = useCallback(
     async (tail: Tail) => {
@@ -296,17 +394,14 @@ export function App() {
     [backNow],
   )
   const resumed = useCallback(
-    async (me: Me, next: Session) => {
+    async (me: Me, next: Session, asked?: number) => {
       const pending = signOutToResume(me)
       if (!pending) return false
-      await finishUnfinishedSignOuts(me)
-      const tail: Tail = {
-        user: pending.user,
-        session: pending.session,
-        next,
-        keep: pending.keep,
-        approved: new Map(pending.approved),
+      if (!(await finishUnfinishedSignOuts(me, asked))) {
+        staleStart.current()
+        return true
       }
+      const tail: Tail = { user: pending.user, session: pending.session, next, ...decisionOf(pending) }
       setSession({ state: 'leaving', tail })
       void finish(tail)
       return true
@@ -316,29 +411,43 @@ export function App() {
   const load = useCallback(async () => {
     const payment = PAYMENT_PATHS[window.location.pathname]
     if (payment) return setSession({ state: 'payment', outcome: payment })
+    let before = browserLogin()
+    let started = Date.now()
+    const asking = () => {
+      before = browserLogin()
+      started = Date.now()
+      return started
+    }
+    const lapsed = async () => {
+      if (before) forgetLogin(before.user, before.session)
+      await finishUnfinishedSignOuts(null, started)
+    }
     try {
       const setup = await api<{ needed: boolean }>('/api/setup')
       if (setup.needed) return setSession({ state: 'setup' })
       if (window.location.pathname === RESET_PATH) return setSession({ state: 'reset' })
       if (window.location.pathname === INVITE_PATH) {
+        const asked = asking()
         const me = await api<Me>('/api/me').catch((e) => {
           if (e instanceof ApiError && e.status === 401) return null
           throw e
         })
-        if (me && (await resumed(me, { state: 'invite', me: null }))) return
+        if (!me) await lapsed()
+        if (me && (await resumed(me, { state: 'invite', me: null }, asked))) return
         if (me) {
-          await claim(me)
+          if (!(await claim(me, asked))) return staleStart.current()
           beginSession(me.user.id)
         }
         return setSession({ state: 'invite', me })
       }
+      const asked = asking()
       const me = await api<Me>('/api/me')
       await setPreferences({ user: me.user.locale ?? null })
-      if (await resumed(me, { state: 'login' })) return
-      await signIn(me)
+      if (await resumed(me, { state: 'login' }, asked)) return
+      await signIn(me, asked)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
-        await finishUnfinishedSignOuts(null)
+        await lapsed()
         return setSession({ state: 'login' })
       }
       const before = !(e instanceof ApiError) ? lastUser() : null
@@ -397,7 +506,7 @@ export function App() {
       </>
     )
 
-  if (problem === 'account' || changed) return <AccountChanged />
+  if ((problem === 'account' && !finishedElsewhere) || changed) return <AccountChanged />
 
   switch (session.state) {
     case 'loading':

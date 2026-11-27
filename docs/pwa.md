@@ -149,7 +149,9 @@ gone, is "not available". Signed out, the address is kept through the login. The
 
 - The person turns push off on that device (the server forgets it, the browser unsubscribes). If
   either fails, push stays on, as it was, Settings says why and the button tries again: it never
-  says "off" while this browser is still subscribed.
+  says "off" while the server still knows this device. From before the server is asked, the flag
+  says push is being turned off, so a tab closed in the middle leaves push shown off in the other
+  tabs and never registered again at a start once the server has forgotten the device.
 - They **sign out** of that browser: the web app removes the device first, and the server removes a
   subscription with the session it is bound to, so expiry, being signed out elsewhere and a
   password change end it as well. The next sign-in turns push on again only for the same person,

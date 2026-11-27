@@ -191,6 +191,7 @@ export const SETTINGS_HEADINGS = {
   providers: 'Model providers',
   integrations: 'Integrations',
   'integration-approvals': 'Integration approvals',
+  'integration-events': 'Integration events',
   'cli-accounts': 'CLI accounts',
   search: 'Search',
   dictation: 'Dictation',

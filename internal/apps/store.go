@@ -13,6 +13,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/paylink"
 	"taskto.ai/taskto/internal/quota"
 )
 
@@ -148,6 +149,7 @@ type Service struct {
 	platform         Platform
 	clock            func() time.Time
 	wake             chan struct{}
+	poll             time.Duration
 	hooks            outboxHooks
 	dataDir          string
 	holder           SpaceHolder
@@ -937,7 +939,7 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 		if fromOlder && (action.Exact || !liveTakes(live, def, action.Name, ch)) {
 			return &outdatedError{release: *action.Release, live: a.Live.Number}
 		}
-		ap, err := apply(ctx, tx, actor, appID, live, ch,
+		ap, err := apply(ctx, tx, actor, appID, live, ch, s.platform.Payments,
 			visibility{scope: acc.ModifyRecords, user: actor.UserID}, readable(acc, actor.UserID))
 		if err != nil {
 			return err
@@ -1094,7 +1096,7 @@ func shownBy(live, from Definition) Definition {
 	return shown
 }
 
-func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify, read visibility) (applied, error) {
+func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, payments paylink.Opener, modify, read visibility) (applied, error) {
 	var count, size int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(length(CAST(data AS BLOB))), 0) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, appID).
 		Scan(&count, &size); err != nil {
@@ -1149,6 +1151,9 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		}
 		next := merged(cur.fields, ch.Data)
 		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
+			return applied{}, err
+		}
+		if err := paymentMoneyLocked(ctx, tx, payments, appID, ch.ID, def, cur.fields, next); err != nil {
 			return applied{}, err
 		}
 		if err := def.Collection.Fits(next); err != nil {

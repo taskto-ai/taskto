@@ -18,6 +18,7 @@ import { LogoutGuard } from './LogoutGuard'
 import { itemsOf } from './local'
 import { OfflinePanel } from './OfflinePanel'
 import { OfflineApp as OfflineAppView } from './OfflineShell'
+import { recordSignOut, settleSignOut } from './pendingSignOut'
 import { revalidate } from './revalidate'
 import {
   activate,
@@ -1253,16 +1254,16 @@ test('a tab told that another account is signed in lets go of the offline view a
   if (!runtime) throw new Error('no runtime')
   await queue(runtime.store, { description: 'Pat’s secret', amount: '1' }, download(7))
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
   await waitFor(() => expect(runtime.store.listItems()).rejects.toThrow())
   await activate(7, 'Pat')
   expect(runtimeState().runtime?.user).toBe(7)
   window.localStorage.removeItem(LAST_KEY)
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
   await activate(7, 'Pat')
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect(runtimeState().runtime?.user).toBe(7)
 })
 
@@ -1459,7 +1460,7 @@ test('an account that signs in while another one’s database is still opening i
   const attempt = activate(7, 'Pat')
   await waitFor(() => expect(opening).toHaveBeenCalledWith(7))
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   held.open()
   expect(await attempt).toMatchObject({ runtime: null, problem: 'account' })
   expect(runtimeState().runtime).toBeNull()
@@ -1548,7 +1549,7 @@ test('a database found empty is marked as it is deleted: a stale tab can no long
   const runtime = runtimeState().runtime
   if (!runtime) throw new Error('no runtime')
   const stale = await OfflineStore.open(7)
-  expect(await settle(7)).toEqual([])
+  expect(await settle(7)).toEqual({ left: [], unreadable: false })
   const item: Omit<OutboxItem, 'seq' | 'version'> = {
     kind: 'insert',
     id: 'late',
@@ -1688,4 +1689,37 @@ test('a tab that finds another sending waits the retry delay, even when an item�
   } finally {
     Reflect.deleteProperty(navigator, 'locks')
   }
+})
+
+test('a sign-out that becomes certain between two photos stops the send before the next photo goes up', async () => {
+  const store = await openStore()
+  const photoDefinition: OfflineApp['definition'] = {
+    ...definition,
+    collection: {
+      fields: [{ name: 'description', type: 'string' }, { name: 'photos', type: 'attachment', max_files: 2 } as never],
+    },
+  }
+  const d = download(7, { definition: photoDefinition })
+  await store.putDownload(d)
+  const transport = offlineTransport(idle(store), d)
+  const photos = [transport.photos.stage(blob('one', 'image/png')), transport.photos.stage(blob('two', 'image/png'))]
+  await transport.act(press('add_expense', { description: 'Receipts', photos }))
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  let uploads = 0
+  const upload = vi.fn(async (_base: string, _field: string, file: Blob) => {
+    uploads++
+    recordSignOut(7, 's1', false, new Map())
+    return {
+      id: String(uploads).padStart(32, '0'),
+      field: 'photos',
+      status: 'ready' as const,
+      size: file.size,
+      received: file.size,
+      attached: false,
+    }
+  })
+  await engineOf(store, clock(), { upload }).run()
+  expect(uploads).toBe(1)
+  expect(calls.filter((c) => c.path === `${base}/actions`)).toHaveLength(0)
+  settleSignOut(7)
 })

@@ -159,6 +159,9 @@ func (s *Service) systemWriteTx(ctx context.Context, tx *sql.Tx, w SystemWrite, 
 		return SystemResult{}, conflict(w.RecordID, liveRecord{revision: revision, fields: fields}, creator, everything, def)
 	}
 	next := merged(fields, set)
+	if err := paymentMoneyLocked(ctx, tx, s.platform.Payments, w.AppID, w.RecordID, def, fields, next); err != nil {
+		return SystemResult{}, err
+	}
 	if err := def.Collection.Fits(next); err != nil {
 		return SystemResult{}, err
 	}

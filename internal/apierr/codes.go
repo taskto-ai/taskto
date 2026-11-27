@@ -185,6 +185,7 @@ const (
 	CodeAppFieldNotSignature   Code = "app_field_not_signature"
 	CodeAppFieldNotBarcode     Code = "app_field_not_barcode"
 	CodeAppFieldLocked         Code = "app_field_locked"
+	CodeAppPaymentLinkOpen     Code = "app_payment_link_open"
 	CodeAppSignatureType       Code = "app_signature_type"
 
 	CodeOfflineDisabled Code = "offline_downloads_disabled"
@@ -381,6 +382,8 @@ const (
 	CodeIntegrationAccountChanged      Code = "integration_account_changed"
 	CodeIntegrationChanged             Code = "integration_changed"
 	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"
+	CodeIntegrationLinkStillOpen       Code = "integration_link_still_open"
+	CodeIntegrationAmountChanged       Code = "integration_amount_changed"
 
 	CodeIntegrationEventUnavailable        Code = "integration_event_unavailable"
 	CodeIntegrationEventIntegrationChanged Code = "integration_event_integration_changed"

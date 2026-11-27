@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +22,7 @@ import (
 )
 
 func (x *Index) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
-	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search", auth.AcceptTokens(c.RequireSpace(access.Read, http.HandlerFunc(x.handleSpace))))
+	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpace(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search", auth.AcceptTokens(a.RequireMember(x.handleWorkspace(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/cards", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceCards(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/cards", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceCards(c))))
@@ -31,12 +32,15 @@ func (x *Index) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
 	mux.Handle("GET /api/workspaces/{workspace}/search/settings", a.RequireMember(http.HandlerFunc(x.handleSettings)))
 	mux.Handle("PUT /api/workspaces/{workspace}/search/settings", a.RequireAdmin(http.HandlerFunc(x.handleSetSettings)))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, http.HandlerFunc(x.handleConsent)))
-	mux.Handle("PUT /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, http.HandlerFunc(x.handleSetConsent)))
+	mux.Handle("PUT /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, x.handleSetConsent(c)))
 }
 
-func (x *Index) handleSpace(w http.ResponseWriter, r *http.Request) {
-	sp, _ := access.SpaceFrom(r.Context())
-	x.search(w, r, sp.WorkspaceID, []access.Space{sp})
+func (x *Index) handleSpace(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, _ := auth.UserFrom(r.Context())
+		sp, _ := access.SpaceFrom(r.Context())
+		x.search(w, r, c, u.ID, sp.WorkspaceID, []access.Space{sp})
+	}
 }
 
 func (x *Index) handleWorkspace(c *access.Checker) http.HandlerFunc {
@@ -48,7 +52,7 @@ func (x *Index) handleWorkspace(c *access.Checker) http.HandlerFunc {
 			serverError(w, r, err)
 			return
 		}
-		x.search(w, r, m.WorkspaceID, spaces)
+		x.search(w, r, c, u.ID, m.WorkspaceID, spaces)
 	}
 }
 
@@ -108,7 +112,7 @@ func (x *Index) handleConversations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (x *Index) search(w http.ResponseWriter, r *http.Request, workspaceID int64, spaces []access.Space) {
+func (x *Index) search(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
 	q := Query{Text: r.URL.Query().Get("q")}
 	var ok bool
 	if q.Limit, ok = queryInt(w, r, "limit"); !ok {
@@ -117,7 +121,7 @@ func (x *Index) search(w http.ResponseWriter, r *http.Request, workspaceID int64
 	if q.Offset, ok = queryInt(w, r, "offset"); !ok {
 		return
 	}
-	res, err := x.Search(r.Context(), workspaceID, spaces, q)
+	res, err := x.Search(r.Context(), c, userID, workspaceID, spaces, q)
 	if searchFailed(w, r, err) {
 		return
 	}
@@ -287,7 +291,11 @@ func (x *Index) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (x *Index) handleConsent(w http.ResponseWriter, r *http.Request) {
 	sp, _ := access.SpaceFrom(r.Context())
-	c, err := x.consent(r.Context(), sp.WorkspaceID, sp.ID)
+	c, err := x.consent(r.Context(), sp)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -295,7 +303,13 @@ func (x *Index) handleConsent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
-func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
+func (x *Index) handleSetConsent(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		x.setConsentRoute(c, w, r)
+	}
+}
+
+func (x *Index) setConsentRoute(c *access.Checker, w http.ResponseWriter, r *http.Request) {
 	sp, _ := access.SpaceFrom(r.Context())
 	u, _ := auth.UserFrom(r.Context())
 	if sp.Role != access.RoleOwner && sp.Role != access.RoleEditor {
@@ -313,7 +327,28 @@ func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, "enabled is required")
 		return
 	}
-	err := x.setConsent(r.Context(), sp.WorkspaceID, sp.ID, u.ID, *req.Enabled, req.Endpoint)
+	if x.afterConsentBody != nil {
+		x.afterConsentBody()
+	}
+	authorize := func(ctx context.Context, tx *sql.Tx) error {
+		cur, err := c.CheckTx(ctx, tx, u.ID, sp.ID)
+		if err != nil {
+			return err
+		}
+		if cur.Role != access.RoleOwner && cur.Role != access.RoleEditor {
+			return errConsentForbidden
+		}
+		return nil
+	}
+	err := x.setConsent(r.Context(), sp, u.ID, *req.Enabled, req.Endpoint, authorize)
+	if errors.Is(err, errConsentForbidden) {
+		apierr.Write(w, http.StatusForbidden, apierr.CodeConsentForbidden, "only the space's owner or one of its editors can change this")
+		return
+	}
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if errors.Is(err, errNoConsentEndpoint) {
 		apierr.Write(w, http.StatusConflict, apierr.CodeConsentNoModel, "this workspace has no embeddings model to consent to")
 		return
@@ -326,12 +361,16 @@ func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	c, err := x.consent(r.Context(), sp.WorkspaceID, sp.ID)
+	reply, err := x.consent(r.Context(), sp)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, reply)
 }
 
 const maxRequest = 64 << 10

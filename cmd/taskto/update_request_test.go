@@ -65,6 +65,7 @@ func requestOutcome(t *testing.T, e *updEnv) *updatestatus.RequestRun {
 }
 
 func TestUpdateRequestedDoesTheChannelRun(t *testing.T) {
+	t.Parallel()
 	e, dir := requestEnv(t)
 	e.request(dir, requestLine)
 	e.write("fake/block", "")
@@ -108,6 +109,7 @@ func TestUpdateRequestedDoesTheChannelRun(t *testing.T) {
 }
 
 func TestUpdateNightlyRunIsNotRequested(t *testing.T) {
+	t.Parallel()
 	e, dir := requestEnv(t)
 	e.request(dir, requestLine)
 	if code, out := e.run(); code != 0 {
@@ -125,6 +127,7 @@ func TestUpdateNightlyRunIsNotRequested(t *testing.T) {
 }
 
 func TestUpdateRequestedRespectsTheGates(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		prepare func(e *updEnv)
 		code    int
@@ -137,10 +140,10 @@ func TestUpdateRequestedRespectsTheGates(t *testing.T) {
 			e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_CHANNEL=off\n")
 		}, 0, "skipped", "off", "automatic updates are off"},
 		"a release that needs a person": {func(e *updEnv) {
-			e.gh.releases = []map[string]any{}
+			e.gh.locked(func() { e.gh.releases = []map[string]any{} })
 			e.release(updNew, "Notes\nmanual-upgrade: true\n", false, false)
 		}, 0, "skipped", "manual-upgrade", "needs manual steps"},
-		"nothing newer": {func(e *updEnv) { e.gh.releases = []map[string]any{} }, 0, "up-to-date", "", "no release is newer"},
+		"nothing newer": {func(e *updEnv) { e.gh.locked(func() { e.gh.releases = []map[string]any{} }) }, 0, "up-to-date", "", "no release is newer"},
 		"a stopped update": {func(e *updEnv) {
 			e.write("state/blocked", "an earlier update stopped\n")
 		}, 1, "blocked", "blocked", "taskto-update --clear-block"},
@@ -150,6 +153,7 @@ func TestUpdateRequestedRespectsTheGates(t *testing.T) {
 		"a server that isn't the version on record": {func(e *updEnv) { e.setRunning("v9.9.9") }, 1, "blocked", "version-mismatch", "the server runs"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e, dir := requestEnv(t)
 			tc.prepare(e)
 			e.request(dir, requestLine)
@@ -180,6 +184,7 @@ func TestUpdateRequestedRespectsTheGates(t *testing.T) {
 }
 
 func TestUpdateRequestedIgnoresAHostileRequest(t *testing.T) {
+	t.Parallel()
 	secret := "do-not-read-this"
 	for name, setup := range map[string]func(t *testing.T, e *updEnv, dir string) (guard string){
 		"a symbolic link": func(t *testing.T, e *updEnv, dir string) string {
@@ -224,6 +229,7 @@ func TestUpdateRequestedIgnoresAHostileRequest(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e, dir := requestEnv(t)
 			guard := setup(t, e, dir)
 			done := make(chan struct{})
@@ -262,6 +268,7 @@ func TestUpdateRequestedIgnoresAHostileRequest(t *testing.T) {
 }
 
 func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
+	t.Parallel()
 	pwned := func(e *updEnv) string { return filepath.Join(e.dir, "pwned") }
 	for name, content := range map[string]func(e *updEnv) string{
 		"a command line":         func(e *updEnv) string { return "--to v9.9.9; touch " + pwned(e) + " $(touch " + pwned(e) + "2)\n" },
@@ -274,6 +281,7 @@ func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 		"NUL after the line":     func(e *updEnv) string { return requestLine + "\x00" },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e, dir := requestEnv(t)
 			e.request(dir, content(e))
 			if code, out := e.run("--requested"); code != 0 {
@@ -304,6 +312,7 @@ func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 }
 
 func TestUpdateRequestedIsRateLimited(t *testing.T) {
+	t.Parallel()
 	e, dir := requestEnv(t)
 	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())}
 	e.request(dir, requestLine)
@@ -353,8 +362,10 @@ func TestUpdateRequestedIsRateLimited(t *testing.T) {
 }
 
 func TestUpdateRequestedNeedsItsRateLimitRecord(t *testing.T) {
+	t.Parallel()
 	for _, blocked := range []string{"request-last-run.new", "request-last-run"} {
 		t.Run(blocked, func(t *testing.T) {
+			t.Parallel()
 			e, dir := requestEnv(t)
 			e.sub("state/" + blocked)
 			e.request(dir, requestLine)
@@ -375,6 +386,7 @@ func TestUpdateRequestedNeedsItsRateLimitRecord(t *testing.T) {
 }
 
 func TestUpdateRequestedWithNoRequest(t *testing.T) {
+	t.Parallel()
 	e, _ := requestEnv(t)
 	code, out := e.run("--requested")
 	if code != 0 || !strings.Contains(out, "no request waits") || e.exists("state/status.json") || e.count(`^pull`) != 0 {
@@ -383,7 +395,9 @@ func TestUpdateRequestedWithNoRequest(t *testing.T) {
 }
 
 func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
+	t.Parallel()
 	t.Run("missing", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		code, out := e.run("--requested")
@@ -398,6 +412,7 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 		}
 	})
 	t.Run("a link", func(t *testing.T) {
+		t.Parallel()
 		e, dir := requestEnv(t)
 		real := e.sub("realrequest")
 		if err := os.WriteFile(filepath.Join(real, updatestatus.RequestFile), []byte(requestLine), 0o644); err != nil {
@@ -415,6 +430,7 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 		}
 	})
 	t.Run("another owner", func(t *testing.T) {
+		t.Parallel()
 		e, dir := requestEnv(t)
 		e.request(dir, requestLine)
 		e.extra = append(e.extra, "TASKTO_UPDATE_REQUEST_OWNER="+strconv.Itoa(os.Getuid()+2))
@@ -424,6 +440,7 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 		}
 	})
 	t.Run("the path unit is off", func(t *testing.T) {
+		t.Parallel()
 		e, _ := requestEnv(t)
 		e.write("bin/systemctl", "#!/bin/sh\necho \"systemctl $*\" >>\"$FAKE_DIR/calls\"\n[ \"$1\" != is-active ] || [ \"$3\" != taskto-update-request.path ]\n")
 		if code, _ := e.run("--publish-status"); code != 0 {
@@ -436,6 +453,7 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 }
 
 func TestUpdateRequestedTakesNoArguments(t *testing.T) {
+	t.Parallel()
 	e, dir := requestEnv(t)
 	e.request(dir, requestLine)
 	for _, args := range [][]string{{"--requested", "--to", updNew}, {"--requested", "--dry-run"}, {"--requested", "--clear-block"}, {"--requested", "--publish-status"}, {"--requested", "extra"}} {
@@ -449,6 +467,7 @@ func TestUpdateRequestedTakesNoArguments(t *testing.T) {
 }
 
 func TestUpdateStatusSaysTheHostCanTakeARequest(t *testing.T) {
+	t.Parallel()
 	e, _ := requestEnv(t)
 	if code, _ := e.run("--publish-status"); code != 0 {
 		t.Fatal("publish")
@@ -460,6 +479,7 @@ func TestUpdateStatusSaysTheHostCanTakeARequest(t *testing.T) {
 }
 
 func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
+	t.Parallel()
 	refused := func(t *testing.T, e *updEnv, edit, want string) {
 		t.Helper()
 		e.write("fake/config-edit", e.paths().Replace(edit))
@@ -476,6 +496,7 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 		}
 	}
 	t.Run("the default one is fine", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		if code, out := e.run(); code != 0 {
@@ -484,6 +505,7 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 		e.wantStatus("updated", "")
 	})
 	t.Run("a request directory beside the state is fine, and the server may write only that", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		req := filepath.Join(e.dir, "requests")
@@ -495,6 +517,7 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 		e.wantStatus("updated", "")
 	})
 	t.Run("a directory above a request directory beside the state, writable", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		req := filepath.Join(e.dir, "requests")
@@ -517,12 +540,14 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 		"the server mounts the public directory writable":                      {`(.services.taskto.volumes[] | select(.target == "/update-status") | .read_only) = false`, "can write where it publishes"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			refused(t, e, tc.edit, tc.want)
 		})
 	}
 	t.Run("another service has a volume that binds it", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		e.write("fake/volume-options", "taskto_reqvol "+e.state+"/request\n")
@@ -530,12 +555,14 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 			| .volumes.reqvol = {name: "taskto_reqvol", external: true}`, "other than the server")
 	})
 	t.Run("the request directory is the public directory", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + filepath.Join(e.state, "public")}
 		refused(t, e, `.`, "place of its own")
 	})
 	t.Run("the request directory is the state", func(t *testing.T) {
+		t.Parallel()
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
 		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + e.state}
@@ -544,8 +571,10 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 }
 
 func TestUpdateSafetyChecksRunningRequestMounts(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"none", "bind", "read-only bind", "alias", "volume", "inspect failure", "volume inspect failure"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			req := filepath.Join(e.state, "request")
 			mount := map[string]any{"Type": "bind", "Source": req, "Destination": "/request", "RW": true}

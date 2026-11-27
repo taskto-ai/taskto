@@ -41,6 +41,11 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldWith(t, search.Options{})
+}
+
+func newWorldWith(t *testing.T, searchOpts search.Options) *world {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	sqlDB, err := db.Open(ctx, filepath.Join(dir, db.FileName))
@@ -56,7 +61,7 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	kb := knowledge.New(dir, knowledge.Options{})
-	index := search.New(sqlDB, kb, providers.NewStore(sqlDB, key), search.Options{})
+	index := search.New(sqlDB, kb, providers.NewStore(sqlDB, key), searchOpts)
 	checker := access.New(sqlDB, nil)
 	appSvc := apps.New(sqlDB, checker)
 	w := &world{t: t, db: sqlDB, kb: kb, apps: appSvc, tools: New(Options{

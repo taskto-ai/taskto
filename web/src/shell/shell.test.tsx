@@ -1350,7 +1350,12 @@ for (const ending of ['logs out', 'loses the session', 'is replaced from another
     } else {
       act(() => {
         localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 2, name: 'Second' }))
-        window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+        window.dispatchEvent(
+          new StorageEvent('storage', {
+            key: 'taskto:offline-last',
+            newValue: localStorage.getItem('taskto:offline-last'),
+          }),
+        )
       })
       expect(await screen.findByText('The account changed')).toBeTruthy()
     }

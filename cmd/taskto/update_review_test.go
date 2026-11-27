@@ -47,6 +47,7 @@ func (e *updEnv) wantNothingStarted() {
 }
 
 func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		override bool
 		dir      string
@@ -56,6 +57,7 @@ func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
 		"in a path with a space in": {override: true, dir: "an install"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnvIn(t, filepath.Join(t.TempDir(), tc.dir))
 			if !tc.override {
 				if err := os.Remove(filepath.Join(e.srv, "compose.override.yaml")); err != nil {
@@ -107,9 +109,11 @@ func TestUpdateGivesComposeOneExplicitListOfFiles(t *testing.T) {
 }
 
 func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
+	t.Parallel()
 	unsafe := "services:\n  cli-worker:\n    privileged: true\n    volumes:\n      - /:/host\n"
 	for _, name := range []string{"compose.override.yml", "docker-compose.override.yaml", "docker-compose.override.yml", "docker-compose.yml", "docker-compose.yaml", "compose.yml"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("srv/"+name, unsafe)
@@ -129,6 +133,7 @@ func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
 		"COMPOSE_FILE in the environment": func(e *updEnv) { e.extra = []string{"COMPOSE_FILE=compose.yaml:evil.yaml"} },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)
@@ -145,6 +150,7 @@ func TestUpdateRefusesComposeFilesItDoesNotRender(t *testing.T) {
 }
 
 func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		edit, editBackup string
 		subpath, ro      bool
@@ -166,6 +172,7 @@ func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
 		"a candidate with an anonymous volume": {edit: `.services.taskto.volumes += [{type: "volume", target: "/scratch", volume: {}}]`, reason: "an anonymous volume"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.edit != "" {
@@ -214,6 +221,7 @@ func TestUpdateComparesTheWholeDataMountAndCreatesNoVolume(t *testing.T) {
 }
 
 func TestUpdateReportsAndRunbookUseTheRecordedDataVolume(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/volname", "acme_data")
@@ -244,6 +252,7 @@ func TestUpdateReportsAndRunbookUseTheRecordedDataVolume(t *testing.T) {
 }
 
 func TestUpdateChecksTheImagesOfTheContainersBeforeStartingThem(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/retag-on-create", "ghcr.io/taskto-ai/taskto-cli-worker:"+updNew+"\n")
@@ -286,6 +295,7 @@ func TestUpdateChecksTheImagesOfTheContainersBeforeStartingThem(t *testing.T) {
 }
 
 func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -317,6 +327,7 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 		"the containers can't be listed, and the stop does nothing": {fail: []string{`^ps -aq --filter label=com.docker.compose.project=taskto @`}, noop: true, result: "stop-failed", reasonPart: "could NOT be confirmed stopped"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("etc/update-notify-url", e.server.URL+"/notify/x\n")
@@ -343,11 +354,10 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 			if b, _ := st["backup"].(string); b == "" || !strings.Contains(fmt.Sprint(st["reason"]), "restore the backup "+b) {
 				t.Errorf("the report doesn't name the backup: %v", st)
 			}
-			e.gh.mu.Lock()
-			notified := len(e.gh.notifications) == 1 && e.gh.notifications[0].Body["result"] == tc.result
-			e.gh.mu.Unlock()
-			if !notified {
-				t.Errorf("the alert doesn't say %s: %+v", tc.result, e.gh.notifications)
+			var sent []notification
+			e.gh.locked(func() { sent = append(sent, e.gh.notifications...) })
+			if len(sent) != 1 || sent[0].Body["result"] != tc.result {
+				t.Errorf("the alert doesn't say %s: %+v", tc.result, sent)
 			}
 			code, out := e.run()
 			if code != 1 || !strings.Contains(out, "blocked") {
@@ -367,6 +377,7 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 }
 
 func TestUpdateCurlIgnoresTheCurlrc(t *testing.T) {
+	t.Parallel()
 	script := readRepoFile(t, "deploy/taskto-update.sh")
 	n := 0
 	for _, m := range regexp.MustCompile(`"\$CURL"( [^\n]{0,6})?`).FindAllStringSubmatch(script, -1) {
@@ -397,9 +408,10 @@ func TestUpdateCurlIgnoresTheCurlrc(t *testing.T) {
 }
 
 func TestUpdateRefusesAVersionWithoutSafetyRulesAndPointsAtTheRunbook(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	delete(e.gh.files[shaOf(updOld)], "deploy/safety-check.sh")
+	e.gh.locked(func() { delete(e.gh.files[shaOf(updOld)], "deploy/safety-check.sh") })
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
@@ -409,6 +421,7 @@ func TestUpdateRefusesAVersionWithoutSafetyRulesAndPointsAtTheRunbook(t *testing
 }
 
 func TestClearBlockChecksTheFirewallAndTheSafetyRules(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -456,6 +469,7 @@ func TestClearBlockChecksTheFirewallAndTheSafetyRules(t *testing.T) {
 }
 
 func TestDocsSayWhatTheRollbackTagsProtect(t *testing.T) {
+	t.Parallel()
 	install := readRepoFile(t, "docs/install.md")
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	script := readRepoFile(t, "deploy/taskto-update.sh")
@@ -478,6 +492,7 @@ func TestDocsSayWhatTheRollbackTagsProtect(t *testing.T) {
 }
 
 func TestSafetyRulesLookAtEnvironmentNamesNotValues(t *testing.T) {
+	t.Parallel()
 	const providers = "TASKTO_SSO_PROVIDERS"
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -508,6 +523,7 @@ func TestSafetyRulesLookAtEnvironmentNamesNotValues(t *testing.T) {
 }
 
 func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
+	t.Parallel()
 	const name = "TASKTO_SMTP_PASSWORD_FILE"
 	for _, tc := range []struct {
 		desc, value string
@@ -516,6 +532,7 @@ func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
 		{"email on (a file's path)", "/etc/taskto/smtp/password"},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("fake/server-env", name+"="+tc.value+"\n")
@@ -537,6 +554,7 @@ func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
 	}
 	for desc, tc := range refused {
 		t.Run(desc, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			wantCode := 1
@@ -557,6 +575,7 @@ func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
 }
 
 func TestStatusSurvivesAWriteThatFails(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/full"); err != nil {
 		t.Skip("no /dev/full")
 	}
@@ -586,6 +605,7 @@ func TestStatusSurvivesAWriteThatFails(t *testing.T) {
 }
 
 func TestUpdateRefusesAnEmptyTo(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"--to", ""}, {"--clear-block", "--to", ""}, {"--dry-run", "--to", ""}} {
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
@@ -604,6 +624,7 @@ func TestUpdateRefusesAnEmptyTo(t *testing.T) {
 }
 
 func TestUpdateComparesMountFieldsNotTheirDescription(t *testing.T) {
+	t.Parallel()
 	const asRunning = `.services |= with_entries(if (.key | IN("taskto", "backup", "backup-schedule")) then .value.volumes[0] |= (.volume.subpath = "x" | .read_only = true) else . end)`
 	for name, tc := range map[string]struct {
 		edit string
@@ -613,6 +634,7 @@ func TestUpdateComparesMountFieldsNotTheirDescription(t *testing.T) {
 		"another subpath and mode that read same": {edit: asRunning + ` | .services.taskto.volumes[0] |= (.volume.subpath = "x) (read-only" | .read_only = false)`, code: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("fake/running-subpath", "x")
@@ -634,8 +656,10 @@ func TestUpdateComparesMountFieldsNotTheirDescription(t *testing.T) {
 }
 
 func TestUpdateRequiresTheBackupServicesToMountTheData(t *testing.T) {
+	t.Parallel()
 	for _, svc := range []string{"backup-schedule", "backup"} {
 		t.Run(svc, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			e.write("fake/config-edit-backup", `.services["`+svc+`"].volumes |= map(select(.target != "/data"))`)
@@ -650,6 +674,7 @@ func TestUpdateRequiresTheBackupServicesToMountTheData(t *testing.T) {
 }
 
 func TestFakeDockerCreateRejectsWhatComposeCreateDoesNotTake(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	for _, tc := range []struct {
 		args []string
@@ -682,6 +707,7 @@ func TestFakeDockerCreateRejectsWhatComposeCreateDoesNotTake(t *testing.T) {
 }
 
 func TestClearBlockKeepsTheFailedListWhenItCantBeRewritten(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/full"); err != nil {
 		t.Skip("no /dev/full")
 	}
@@ -716,6 +742,7 @@ func TestClearBlockKeepsTheFailedListWhenItCantBeRewritten(t *testing.T) {
 }
 
 func TestUpdateRecordsTheSubpathOfTheDataVolume(t *testing.T) {
+	t.Parallel()
 	const sub = `.services |= with_entries(if (.key | IN("taskto", "backup", "backup-schedule")) then .value.volumes[0] |= (.volume.subpath = "kept") else . end)`
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -736,6 +763,7 @@ func TestUpdateRecordsTheSubpathOfTheDataVolume(t *testing.T) {
 }
 
 func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
+	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	rollback := runbook[strings.Index(runbook, "\n## Rollback\n"):strings.Index(runbook, "\n## Backups\n")]
 	if strings.Contains(rollback, "docker volume rm") {

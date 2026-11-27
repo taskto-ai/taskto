@@ -135,6 +135,14 @@ type invalidError struct {
 func (e *invalidError) Error() string        { return e.msg }
 func (e *invalidError) Is(target error) bool { return target == ErrInvalid }
 
+func InvalidCode(err error) (code apierr.Code, params apierr.Params, ok bool) {
+	var bad *invalidError
+	if !errors.As(err, &bad) || bad.code == "" || bad.code == apierr.CodeBadRequest {
+		return "", nil, false
+	}
+	return bad.code, bad.params, true
+}
+
 func invalidf(format string, args ...any) error {
 	return &invalidError{msg: fmt.Sprintf(format, args...), code: apierr.CodeBadRequest}
 }

@@ -98,6 +98,7 @@ export const shop: Integration = {
   currencies: ['EUR'],
   secrets: { api_key: 'set', webhook_secret: 'not set' },
   webhook_url: null,
+  webhook_url_changed: false,
   disabled: false,
   disabled_at: null,
   spaces: [12],

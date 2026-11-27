@@ -1166,6 +1166,9 @@ func TestWebhookAddressFollowsThePublicURL(t *testing.T) {
 	if moved.WebhookURL == nil || *moved.WebhookURL != "https://new.example.com"+HookPrefix+strings.TrimPrefix(*in.WebhookURL, "https://old.example.com"+HookPrefix) {
 		t.Fatalf("webhook url after the change = %v", moved.WebhookURL)
 	}
+	if in.WebhookURLChanged || !moved.WebhookURLChanged {
+		t.Fatalf("webhook_url_changed before %v, after %v", in.WebhookURLChanged, moved.WebhookURLChanged)
+	}
 }
 
 func TestRegistryServesCurrencyExponents(t *testing.T) {

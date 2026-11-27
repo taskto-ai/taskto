@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -141,12 +142,13 @@ type Store struct {
 }
 
 type spaceState struct {
-	mu             sync.RWMutex
-	size           int64
-	anc            ancestry
-	unv            int64
-	removed        bool
-	removedCreated string
+	mu         sync.RWMutex
+	size       int64
+	anc        ancestry
+	unv        int64
+	removed    bool
+	removedGen int64
+	lastGen    atomic.Int64
 
 	cacheMu sync.Mutex
 	cache   usageCache
@@ -174,7 +176,7 @@ func (s *Store) MaxFileSize() int64 { return s.opts.MaxFileSize }
 func (s *Store) SetSpaceCheck(exists func(sp access.Space) (bool, error)) { s.spaceExists = exists }
 
 func (s *Store) admit(st *spaceState, sp access.Space) error {
-	if st.removed && (st.removedCreated == "" || sp.CreatedAt == "" || sp.CreatedAt == st.removedCreated) {
+	if st.removed && (st.removedGen == 0 || sp.Generation == 0 || sp.Generation == st.removedGen) {
 		return ErrSpaceRemoved
 	}
 	if s.spaceExists != nil {
@@ -186,7 +188,16 @@ func (s *Store) admit(st *spaceState, sp access.Space) error {
 			return ErrSpaceRemoved
 		}
 	}
+	st.serve(sp.Generation)
 	return nil
+}
+
+func (st *spaceState) serve(g int64) {
+	for last := st.lastGen.Load(); g > last; last = st.lastGen.Load() {
+		if st.lastGen.CompareAndSwap(last, g) {
+			return
+		}
+	}
 }
 
 func (s *Store) refusedIfRemoved(sp access.Space, err error) error {

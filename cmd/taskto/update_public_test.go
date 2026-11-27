@@ -36,6 +36,7 @@ func (e *updEnv) extraBind(version, path string, writable bool) {
 }
 
 func TestUpdateAllowsHostPathsThatOnlyLookLikeTheState(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/config-edit", e.paths().Replace(`
@@ -57,6 +58,7 @@ func TestUpdateAllowsHostPathsThatOnlyLookLikeTheState(t *testing.T) {
 }
 
 func TestUpdateChecksTheDockerOptionsOfExistingVolumesBeforeStarting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/config-edit", e.paths().Replace(`
@@ -77,6 +79,7 @@ func TestUpdateChecksTheDockerOptionsOfExistingVolumesBeforeStarting(t *testing.
 }
 
 func TestUpdateWithAPublicDirectoryOutsideTheState(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T) *updEnv {
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
@@ -147,23 +150,24 @@ func (e *updEnv) publicAt(dir string) (s struct {
 }
 
 func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
-		prepare func(e *updEnv)
+		prepare func(t *testing.T, e *updEnv)
 		extra   func(e *updEnv) []string
 	}{
 		"a directory above it is writable by its group": {
-			prepare: func(e *updEnv) { chmod(t, e.sub("outer"), 0o775) },
+			prepare: func(t *testing.T, e *updEnv) { chmod(t, e.sub("outer"), 0o775) },
 			extra:   func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=" + e.dir + "/outer/public"} },
 		},
 		"a directory above it is writable by anyone": {
-			prepare: func(e *updEnv) { chmod(t, e.sub("outer"), 0o777) },
+			prepare: func(t *testing.T, e *updEnv) { chmod(t, e.sub("outer"), 0o777) },
 			extra:   func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=" + e.dir + "/outer/public"} },
 		},
 		"the directory is somebody else's": {extra: func(e *updEnv) []string {
 			return []string{fmt.Sprintf("TASKTO_UPDATE_OWNER=%d", os.Getuid()+1)}
 		}},
 		"above it, a link to a directory others can write": {
-			prepare: func(e *updEnv) {
+			prepare: func(t *testing.T, e *updEnv) {
 				chmod(t, e.sub("elsewhere"), 0o777)
 				if err := os.Symlink(filepath.Join(e.dir, "elsewhere"), filepath.Join(e.dir, "viaLink")); err != nil {
 					t.Fatal(err)
@@ -171,7 +175,7 @@ func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 			},
 			extra: func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=" + e.dir + "/viaLink/public"} },
 		},
-		"it is a link to a file": {prepare: func(e *updEnv) {
+		"it is a link to a file": {prepare: func(t *testing.T, e *updEnv) {
 			e.write("file", "x")
 			if err := os.Symlink(filepath.Join(e.dir, "file"), filepath.Join(e.state, "public")); err != nil {
 				t.Fatal(err)
@@ -182,10 +186,11 @@ func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.prepare != nil {
-				tc.prepare(e)
+				tc.prepare(t, e)
 			}
 			if tc.extra != nil {
 				e.extra = tc.extra(e)
@@ -206,6 +211,7 @@ func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 }
 
 func TestUpdateMakesItsPublicDirectoryRightAgain(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	chmod(t, e.sub("state/public"), 0o777)
@@ -228,6 +234,7 @@ func chmod(t *testing.T, path string, mode os.FileMode) {
 }
 
 func TestUpdatePublishesThroughANewTemporaryFileOnly(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	victim := filepath.Join(e.dir, "victim")
@@ -271,6 +278,7 @@ func TestUpdatePublishesThroughANewTemporaryFileOnly(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerHasNoPathHostOrVolumeName(t *testing.T) {
+	t.Parallel()
 	allowed := map[string]bool{"version": true, "checked": true, "channel": true, "hold": true, "recorded_version": true,
 		"last_run": true, "last_change": true, "needs_person": true, "running": true, "requests": true, "looked": true, "available": true}
 	runKeys := map[string]bool{"at": true, "finished": true, "result": true, "from": true, "to": true, "code": true, "backed_up": true, "requested": true}
@@ -283,6 +291,7 @@ func TestUpdateStatusForTheServerHasNoPathHostOrVolumeName(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)
@@ -323,6 +332,7 @@ func TestUpdateStatusForTheServerHasNoPathHostOrVolumeName(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerGivesReasonCodes(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		setup func(e *updEnv)
 		exit  int
@@ -337,6 +347,7 @@ func TestUpdateStatusForTheServerGivesReasonCodes(t *testing.T) {
 		"a setting that is wrong":  {func(e *updEnv) { e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_KEEP='x'\n") }, 1, "bad-setting"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			tc.setup(e)
@@ -351,6 +362,7 @@ func TestUpdateStatusForTheServerGivesReasonCodes(t *testing.T) {
 }
 
 func TestUpdatePublishStatusWritesOnlyTheServersCopy(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, out := e.run("--publish-status"); code != 0 {
@@ -383,6 +395,7 @@ func TestUpdatePublishStatusWritesOnlyTheServersCopy(t *testing.T) {
 }
 
 func TestRunbookRequiresReinstallingTheUpdaterForTheStatus(t *testing.T) {
+	t.Parallel()
 	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	runbook := flat(readRepoFile(t, "deploy/INSTALL.md"))
 	for _, want := range []string{"required again on a VM set up before the release that added the update status", "`main` channel",
@@ -403,6 +416,7 @@ func TestRunbookRequiresReinstallingTheUpdaterForTheStatus(t *testing.T) {
 }
 
 func TestUpdatePublicDirectoryIsAnInstallSettingAndRelativeDevicesAreRefused(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	pub := filepath.Join(e.dir, "moved")
@@ -434,6 +448,7 @@ func TestUpdatePublicDirectoryIsAnInstallSettingAndRelativeDevicesAreRefused(t *
 }
 
 func TestUpdatePublishStatusRefusesARelativeDirectory(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.extra = []string{"TASKTO_UPDATE_PUBLIC=state/public"}
 	if code, out := e.run("--publish-status"); code != 1 || !strings.Contains(out, "isn't an absolute path") {
@@ -445,6 +460,7 @@ func TestUpdatePublishStatusRefusesARelativeDirectory(t *testing.T) {
 }
 
 func TestSafetyCheckReadsThePublicDirectoryFromInstallEnv(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	pub := filepath.Join(e.dir, "moved")
 	e.write("fake/config-edit-install", `.services.taskto.volumes += [{type: "bind", source: "`+pub+`", target: "/pub"}]`)

@@ -139,6 +139,12 @@ type ancestry struct {
 	idx   map[plumbing.Hash]int
 }
 
+func (a *ancestry) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.chain, a.idx = nil, nil
+}
+
 func (a *ancestry) reaches(ctx context.Context, r *repo, head *object.Commit, want plumbing.Hash) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

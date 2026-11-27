@@ -1,5 +1,5 @@
 import type { OfflineApp } from '../api'
-import { deleteDatabase, type Migration, openDatabase, runTx, type Tx } from './idb'
+import { deleteDatabase, type Migration, openDatabase, runTx, StorageUnavailable, type Tx } from './idb'
 
 export const SCHEMA_VERSION = 2
 
@@ -262,7 +262,11 @@ export class OfflineStore {
     return `taskto-offline-${user}`
   }
 
-  static async open(user: number): Promise<OfflineStore> {
+  static open(user: number): Promise<OfflineStore> {
+    return withLock(user, () => OfflineStore.openNow(user))
+  }
+
+  private static async openNow(user: number): Promise<OfflineStore> {
     const name = OfflineStore.databaseName(user)
     const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
     let retired = false
@@ -384,6 +388,7 @@ export class OfflineStore {
         if (staleView(e)) this.refresh()
         throw e
       }
+      if (e instanceof Superseded) throw e
       throw asNotSaved(e)
     }
   }
@@ -609,10 +614,18 @@ export class OfflineStore {
       .map((i): UnsentRef => ({ id: i.id, ...seenOf(i) }))
   }
 
-  async retireOrKeepUnsent(approved: Approval = new Map(), seal = true): Promise<UnsentRef[]> {
+  async retireOrKeepUnsent(
+    approved: Approval = new Map(),
+    seal = true,
+    still: () => boolean = () => true,
+  ): Promise<UnsentRef[]> {
+    const go = () => {
+      if (!still()) throw new Superseded()
+    }
     return this.keep([DOWNLOADS, OUTBOX, BLOBS, META], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const items = await outbox.getAll()
+      go()
       const unsent = items.filter((i) => i.state !== 'synced')
       const everyApproved = unsent.every((i) => {
         const shown = approved.get(i.id)
@@ -621,12 +634,26 @@ export class OfflineStore {
       const refs = unsent.map((i): UnsentRef => ({ id: i.id, ...seenOf(i) }))
       if (!everyApproved && !seal) return refs
       const downloads = tx.store<Download>(DOWNLOADS)
-      for (const d of await downloads.getAll()) await downloads.delete(d.key)
+      const kept = await downloads.getAll()
+      go()
+      for (const d of kept) {
+        await downloads.delete(d.key)
+        go()
+      }
       const blobs = tx.store<BlobRow>(BLOBS)
       if (everyApproved) {
-        for (const i of items) await outbox.delete(i.id)
-        for (const b of await blobs.getAll()) await blobs.delete(b.id)
+        for (const i of items) {
+          await outbox.delete(i.id)
+          go()
+        }
+        const photos = await blobs.getAll()
+        go()
+        for (const b of photos) {
+          await blobs.delete(b.id)
+          go()
+        }
         await tx.store<{ key: string; value: number }>(META).put({ key: RETIRED, value: 1 })
+        go()
         return []
       }
       const gone = new Set<string>()
@@ -634,8 +661,15 @@ export class OfflineStore {
         if (i.state !== 'synced') continue
         gone.add(i.id)
         await outbox.delete(i.id)
+        go()
       }
-      for (const b of await blobs.getAll()) if (gone.has(b.item)) await blobs.delete(b.id)
+      const photos = await blobs.getAll()
+      go()
+      for (const b of photos) {
+        if (!gone.has(b.item)) continue
+        await blobs.delete(b.id)
+        go()
+      }
       return refs
     })
   }
@@ -654,6 +688,130 @@ export class OfflineStore {
 
   static destroyFor(user: number): Promise<void> {
     return deleteDatabase(OfflineStore.databaseName(user))
+  }
+
+  static deleteRetired(
+    user: number,
+    { force = false, still = () => true }: { force?: boolean; still?: () => boolean } = {},
+  ): Promise<'removed' | 'newer' | 'stopped'> {
+    return withLock(user, async () => {
+      if (!still()) return 'stopped'
+      if (typeof indexedDB === 'undefined') return 'removed'
+      const name = OfflineStore.databaseName(user)
+      if (!force && !(await retiredOrNew(name))) return 'newer'
+      if (!still()) return 'stopped'
+      await deleteDatabase(name)
+      return 'removed'
+    })
+  }
+}
+
+export function databaseExists(user: number): Promise<boolean | undefined> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(false)
+  const name = OfflineStore.databaseName(user)
+  return (async () => {
+    const names = await indexedDB.databases?.().catch(() => undefined)
+    if (names) return names.some((d) => d.name === name)
+    return withLock(user, () => probe(name))
+  })()
+}
+
+function probe(name: string): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    let made = false
+    let request: IDBOpenDBRequest
+    try {
+      request = indexedDB.open(name)
+    } catch {
+      resolve(undefined)
+      return
+    }
+    request.onupgradeneeded = (e) => {
+      if (e.oldVersion !== 0) return
+      made = true
+      request.transaction?.abort()
+    }
+    request.onsuccess = () => {
+      request.result.close()
+      if (!made) return resolve(true)
+      deleteDatabase(name).then(
+        () => resolve(false),
+        () => resolve(undefined),
+      )
+    }
+    request.onerror = (e) => {
+      e.preventDefault?.()
+      resolve(made ? false : undefined)
+    }
+    request.onblocked = () => resolve(undefined)
+  })
+}
+
+export const lockTimes = {
+  wait: 10_000,
+  hold: 10_000,
+  waitOver: (ms: number): AbortSignal | undefined =>
+    typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined,
+  holdOver: (ms: number, over: () => void): (() => void) => {
+    const timer = setTimeout(over, ms)
+    return () => clearTimeout(timer)
+  },
+}
+
+export class Superseded extends Error {
+  constructor() {
+    super('a newer login of the account started')
+    this.name = 'Superseded'
+  }
+}
+
+function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  if (!locks?.request) return work()
+  let granted = false
+  const signal = lockTimes.waitOver(lockTimes.wait)
+  const held = () => {
+    granted = true
+    return withinTime(work(), lockTimes.hold)
+  }
+  return (locks.request(`taskto-offline-db:${user}`, signal ? { signal } : {}, held) as Promise<T>).catch((e) => {
+    if (!granted && signal?.aborted) throw new StorageUnavailable('the offline database is busy in another tab')
+    throw e
+  })
+}
+
+function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const cancel = lockTimes.holdOver(ms, () => reject(new StorageUnavailable('the offline database took too long')))
+    work.then(
+      (v) => {
+        cancel()
+        resolve(v)
+      },
+      (e) => {
+        cancel()
+        reject(e)
+      },
+    )
+  })
+}
+
+async function retiredOrNew(name: string): Promise<boolean> {
+  let made = false
+  const db = await openDatabase(name, SCHEMA_VERSION, {
+    ...MIGRATIONS,
+    1: (d, tx) => {
+      made = true
+      MIGRATIONS[1]?.(d, tx)
+    },
+  })
+  try {
+    if (made) return true
+    return (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
+  } catch {
+    return false
+  } finally {
+    db.close()
   }
 }
 

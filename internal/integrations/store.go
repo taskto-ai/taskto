@@ -38,25 +38,26 @@ const (
 )
 
 type Integration struct {
-	ID             int64             `json:"id"`
-	Provider       string            `json:"provider"`
-	Kind           string            `json:"kind"`
-	Name           string            `json:"name"`
-	DisplayName    string            `json:"display_name"`
-	Mode           string            `json:"mode"`
-	Settings       map[string]string `json:"settings" apitypes:"nonnull"`
-	MaxAmountMinor int64             `json:"max_amount_minor"`
-	Currencies     []string          `json:"currencies" apitypes:"nonnull"`
-	Secrets        map[string]string `json:"secrets" apitypes:"nonnull"`
-	WebhookURL     *string           `json:"webhook_url"`
-	Disabled       bool              `json:"disabled"`
-	DisabledAt     *string           `json:"disabled_at"`
-	Spaces         []int64           `json:"spaces" apitypes:"nonnull"`
-	OtherSpaces    int               `json:"other_spaces"`
-	ApprovalSpaces []int64           `json:"approval_spaces" apitypes:"nonnull"`
-	CreatedAt      string            `json:"created_at"`
-	UpdatedAt      string            `json:"updated_at"`
-	LastEventAt    *string           `json:"last_event_at"`
+	ID                int64             `json:"id"`
+	Provider          string            `json:"provider"`
+	Kind              string            `json:"kind"`
+	Name              string            `json:"name"`
+	DisplayName       string            `json:"display_name"`
+	Mode              string            `json:"mode"`
+	Settings          map[string]string `json:"settings" apitypes:"nonnull"`
+	MaxAmountMinor    int64             `json:"max_amount_minor"`
+	Currencies        []string          `json:"currencies" apitypes:"nonnull"`
+	Secrets           map[string]string `json:"secrets" apitypes:"nonnull"`
+	WebhookURL        *string           `json:"webhook_url"`
+	WebhookURLChanged bool              `json:"webhook_url_changed"`
+	Disabled          bool              `json:"disabled"`
+	DisabledAt        *string           `json:"disabled_at"`
+	Spaces            []int64           `json:"spaces" apitypes:"nonnull"`
+	OtherSpaces       int               `json:"other_spaces"`
+	ApprovalSpaces    []int64           `json:"approval_spaces" apitypes:"nonnull"`
+	CreatedAt         string            `json:"created_at"`
+	UpdatedAt         string            `json:"updated_at"`
+	LastEventAt       *string           `json:"last_event_at"`
 }
 
 const (
@@ -66,7 +67,8 @@ const (
 
 type record struct {
 	Integration
-	publicID string
+	publicID      string
+	registeredURL string
 }
 
 type Store struct {
@@ -103,7 +105,7 @@ type querier interface {
 }
 
 const columns = `i.id, i.public_id, i.provider, i.name, i.display_name, i.mode, i.settings, i.max_amount_minor,
-	i.currencies, i.disabled_at, i.created_at, i.updated_at, i.last_event_at`
+	i.currencies, i.disabled_at, i.created_at, i.updated_at, i.last_event_at, coalesce(i.webhook_registered_url, '')`
 
 func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]record, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+columns+` FROM integrations i
@@ -116,7 +118,7 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 		var r record
 		var settings, currencies string
 		if err := rows.Scan(&r.ID, &r.publicID, &r.Provider, &r.Name, &r.DisplayName, &r.Mode, &settings, &r.MaxAmountMinor,
-			&currencies, &r.DisabledAt, &r.CreatedAt, &r.UpdatedAt, &r.LastEventAt); err != nil {
+			&currencies, &r.DisabledAt, &r.CreatedAt, &r.UpdatedAt, &r.LastEventAt, &r.registeredURL); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -260,6 +262,7 @@ type draft struct {
 	maxAmount   int64
 	currencies  []string
 	mode        string
+	publicURL   string
 }
 
 func newPublicID() (string, error) {
@@ -410,10 +413,14 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 			return err
 		}
 		now := s.stamp(s.now())
+		var registered any
+		if _, ok := d.secrets[SecretWebhookSecret]; ok {
+			registered = nullString(hookURL(d.publicURL, publicID))
+		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO integrations (workspace_id, public_id, provider, name, display_name, mode, settings,
-			max_amount_minor, currencies, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			max_amount_minor, currencies, created_by, created_at, updated_at, webhook_registered_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			workspace, publicID, d.provider.ID(), d.name, d.displayName, d.mode, string(settings), d.maxAmount, string(currencies),
-			user, now, now)
+			user, now, now, registered)
 		if err != nil {
 			return err
 		}
@@ -446,6 +453,7 @@ type change struct {
 	maxAmount   *int64
 	currencies  []string
 	disabled    *bool
+	publicURL   string
 }
 
 func (s *Store) update(ctx context.Context, workspace, user, id int64, c change) (record, error) {
@@ -519,6 +527,12 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 				return err
 			}
 			if err := s.seal(ctx, tx, ref, SecretWebhookSecret, webhook, nil); err != nil {
+				return err
+			}
+		}
+		if _, ok := c.secrets[SecretWebhookSecret]; ok {
+			if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_registered_url = ? WHERE id = ? AND workspace_id = ?`,
+				nullString(hookURL(c.publicURL, old.publicID)), id, workspace); err != nil {
 				return err
 			}
 		}
@@ -628,11 +642,6 @@ func (s *Store) holds(ctx context.Context, tx *sql.Tx, ref sealRef, name, value 
 	return err == nil && subtle.ConstantTimeCompare(plain, []byte(value)) == 1
 }
 
-func (s *Store) opens(sealed []byte, ref sealRef, name string) ([]byte, bool) {
-	plain, err := s.key.Open(sealed, ref.ad(name))
-	return plain, err == nil
-}
-
 func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM integration_secrets WHERE integration_id = ? AND name = ? AND expires_at <= ?`,
 		ref.id, SecretWebhookSecretPrevious, s.stamp(now)); err != nil {
@@ -658,6 +667,10 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 	if held {
 		_, err = tx.ExecContext(ctx, `DELETE FROM integration_secrets WHERE integration_id = ? AND name = ?`,
 			ref.id, SecretWebhookSecretPrevious)
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_previous_registered_url = webhook_registered_url WHERE id = ?`,
+		ref.id); err != nil {
 		return err
 	}
 	expires := now.Add(previousOverlap)
@@ -889,4 +902,9 @@ func hookURL(publicURL, publicID string) string {
 		return ""
 	}
 	return strings.TrimRight(publicURL, "/") + HookPrefix + publicID
+}
+
+func (s *Store) opens(sealed []byte, ref sealRef, name string) ([]byte, bool) {
+	plain, err := s.key.Open(sealed, ref.ad(name))
+	return plain, err == nil
 }

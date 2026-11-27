@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 	"time"
@@ -54,7 +55,7 @@ func (x *Index) syncForSearch(ctx context.Context, sp access.Space) (bool, error
 }
 
 func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, error) {
-	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Access: access.Read}
+	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Generation: sp.Generation, Access: access.Read}
 
 	var since string
 	var partial bool
@@ -141,6 +142,9 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 			x.onBatch(len(docs), size)
 		}
 		err := x.write(ctx, func(tx *sql.Tx) error {
+			if err := stillSpace(ctx, tx, sp); err != nil {
+				return err
+			}
 			if first && !last {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO search_spaces (space_id, commit_id, partial) VALUES (?, ?, 1)
 					ON CONFLICT (space_id) DO UPDATE SET partial = 1`, sp.ID, since); err != nil {
@@ -179,6 +183,16 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 		wake(x.embedWake)
 	}
 	return diff.Head, nil
+}
+
+func stillSpace(ctx context.Context, tx *sql.Tx, sp access.Space) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ? AND (? = 0 OR generation = ?)`,
+		sp.ID, sp.WorkspaceID, sp.Generation, sp.Generation).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: space %d is gone, or is another space with the ID", access.ErrNotFound, sp.ID)
+	}
+	return err
 }
 
 type doc struct {

@@ -60,6 +60,10 @@ export function toText(v: unknown): string {
 
 export const numberFields = (fields: AppField[]) => fields.filter((f) => f.type === 'number')
 
-export function actionOf(actions: Record<string, { kind: string }> | undefined, kind: 'update' | 'delete') {
-  return Object.entries(actions ?? {}).find(([, a]) => a.kind === kind)?.[0]
+export function actionOf(
+  actions: Record<string, { kind: string; effects?: unknown[] | null }> | undefined,
+  kind: 'update' | 'delete',
+) {
+  const all = Object.entries(actions ?? {}).filter(([, a]) => a.kind === kind)
+  return (all.find(([, a]) => !a.effects?.length) ?? all[0])?.[0]
 }

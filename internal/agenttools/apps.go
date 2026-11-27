@@ -3,8 +3,10 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"sort"
 
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 )
 
@@ -220,7 +222,15 @@ func (s *Service) runAppAction(ctx context.Context, c *call, args json.RawMessag
 	if a.Operation != nil {
 		operation = *a.Operation
 	}
-	return s.o.Apps.RunAction(ctx, appsActor(c), a.SpaceID, a.AppID, apps.ActionRun{
+	out, err := s.o.Apps.RunAction(ctx, appsActor(c), a.SpaceID, a.AppID, apps.ActionRun{
 		Action: a.Action, Context: fields, ExpectedRevision: a.ExpectedRevision, ExpectedRelease: *a.ExpectedRelease, Operation: operation,
 	})
+	if code, params, ok := apps.InvalidCode(err); ok {
+		status := http.StatusBadRequest
+		if code == apierr.CodeAppPaymentLinkOpen {
+			status = http.StatusUnprocessableEntity
+		}
+		return nil, &Refusal{Status: status, Message: err.Error(), Code: code, Params: params}
+	}
+	return out, err
 }

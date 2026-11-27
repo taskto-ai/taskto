@@ -102,6 +102,9 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 
 	guard := &hookGuard{mode: sub.target.mode, revision: sub.revision}
 	ev, ok := sub.provider.Normalize(body)
+	if m, modeless := sub.provider.(modeOfAccount); ok && modeless && m.EventsCarryNoMode() {
+		ev.Livemode = sub.target.mode == ModeLive
+	}
 	if !ok || ev.Livemode != (sub.target.mode == ModeLive) {
 		if err := s.store.noteEvent(ctx, sub.target.id, guard); err != nil {
 			s.hookWriteFailed(w, r, err)
@@ -161,9 +164,20 @@ func (s *Service) hookSubject(ctx context.Context, publicID string) (hookSubject
 	}
 	return hookSubject{
 		target: target, provider: provider, revision: revision,
-		secrets: WebhookSecrets{Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious},
-		live:    !target.disabled,
+		secrets: WebhookSecrets{
+			Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious,
+			URL:         signedURL(hookURL(s.publicURL, publicID), target.registeredURL),
+			PreviousURL: signedURL(hookURL(s.publicURL, publicID), target.previousRegisteredURL),
+		},
+		live: !target.disabled,
 	}, nil
+}
+
+func signedURL(current, registered string) string {
+	if registered != "" {
+		return registered
+	}
+	return current
 }
 
 var decoyReceiver Receiver = stripe{}

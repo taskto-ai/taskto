@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
+	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
@@ -73,6 +77,9 @@ func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, sp
 	}) {
 		return paymentGrant{}, refuse(apierr.CodeIntegrationConditionChanged)
 	}
+	if amount, code := p.moneyEffect().moneyOf(ap.liveDef.Collection, data); amount != p.Amount || code != p.Currency {
+		return paymentGrant{}, refuse(apierr.CodeIntegrationAmountChanged)
+	}
 	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
 }
 
@@ -136,7 +143,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
-		Slot: p.Slot, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
+		Slot: p.Slot, URLField: p.URLField, AmountField: p.AmountField, CurrencyField: p.CurrencyField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
 	})
 	if err != nil {
 		var pe *paylink.Error
@@ -223,4 +230,171 @@ func notePaymentLinkEntry(ctx context.Context, tx *sql.Tx, appID, recordID, effe
 		}
 	}
 	return nil
+}
+
+func (p payload) moneyEffect() Effect {
+	e := Effect{Kind: EffectCreatePaymentLink, AmountField: p.AmountField, CurrencyField: p.CurrencyField}
+	if p.CurrencyField == "" {
+		e.Currency = p.Currency
+	}
+	return e
+}
+
+func paymentMoneyLocked(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID, recordID int64, def Definition, before, after map[string]any) error {
+	locked, err := lockedMoney(ctx, tx, payments, appID, recordID, def)
+	if err != nil {
+		return err
+	}
+	for _, f := range locked[recordID] {
+		e := Effect{Kind: EffectCreatePaymentLink, AmountField: f.Amount, CurrencyField: f.Currency}
+		wasAmount, wasCode := e.moneyOf(def.Collection, before)
+		nowAmount, nowCode := e.moneyOf(def.Collection, after)
+		changed := ""
+		if wasAmount != nowAmount || !sameValue(before[f.Amount], after[f.Amount]) {
+			changed = f.Amount
+		} else if f.Currency != "" && (wasCode != nowCode || !sameValue(before[f.Currency], after[f.Currency])) {
+			changed = f.Currency
+		}
+		if changed != "" {
+			return invalidAs(apierr.CodeAppPaymentLinkOpen, apierr.Params{"field": changed},
+				"%s can't change while the record's payment link may still be paid: change it once the link has expired", changed)
+		}
+	}
+	return nil
+}
+
+func paymentMoneyKept(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID int64, live *Definition, next Definition) error {
+	if live == nil {
+		return nil
+	}
+	locked, err := lockedMoney(ctx, tx, payments, appID, 0, *live)
+	if err != nil {
+		return err
+	}
+	for _, id := range slices.Sorted(maps.Keys(locked)) {
+		var raw string
+		switch err := tx.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, id, appID).Scan(&raw); {
+		case errors.Is(err, sql.ErrNoRows):
+			continue
+		case err != nil:
+			return err
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(raw), &data); err != nil {
+			return err
+		}
+		for _, f := range locked[id] {
+			e := Effect{Kind: EffectCreatePaymentLink, AmountField: f.Amount, CurrencyField: f.Currency}
+			wasAmount, wasCode := e.moneyOf(live.Collection, data)
+			nowAmount, nowCode := e.moneyOf(next.Collection, data)
+			field := ""
+			if wasAmount != nowAmount {
+				field = f.Amount
+			} else if wasCode != nowCode {
+				field = f.Currency
+			}
+			if field != "" {
+				return apierr.New(http.StatusUnprocessableEntity, apierr.CodeAppPaymentLinkOpen,
+					fmt.Sprintf("%s can't be read otherwise while a record's payment link may still be paid: publish this once the link has expired", field),
+					apierr.Params{"field": field})
+			}
+		}
+	}
+	return nil
+}
+
+func lockedMoney(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID, recordID int64, def Definition) (map[int64][]paylink.MoneyFields, error) {
+	locked := map[int64][]paylink.MoneyFields{}
+	rows, err := tx.QueryContext(ctx, `SELECT record_id, coalesce(json_extract(payload, '$.amount_field'), ''), coalesce(json_extract(payload, '$.currency_field'), '')
+		FROM app_effects WHERE app_id = ? AND (? = 0 OR record_id = ?) AND kind = ? AND state IN ('pending', 'running')`,
+		appID, recordID, recordID, EffectCreatePaymentLink)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id int64
+		var f paylink.MoneyFields
+		if err := rows.Scan(&id, &f.Amount, &f.Currency); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		locked[id] = append(locked[id], f)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	if payments != nil {
+		linked, err := payments.PayableMoney(ctx, tx, appID, recordID)
+		if err != nil {
+			return nil, err
+		}
+		for id, fields := range linked {
+			locked[id] = append(locked[id], fields...)
+		}
+	}
+	if len(locked) == 0 {
+		return locked, nil
+	}
+	own := moneyFieldsOf(def)
+	var every []paylink.MoneyFields
+	for id, fields := range locked {
+		out := slices.Clone(own)
+		for _, f := range fields {
+			if f.Amount != "" {
+				out = append(out, f)
+				continue
+			}
+			if every == nil {
+				if every, err = releasesMoneyFields(ctx, tx, appID); err != nil {
+					return nil, err
+				}
+			}
+			out = append(out, every...)
+		}
+		slices.SortFunc(out, func(a, b paylink.MoneyFields) int {
+			return strings.Compare(a.Amount+"\x00"+a.Currency, b.Amount+"\x00"+b.Currency)
+		})
+		locked[id] = slices.Compact(out)
+	}
+	return locked, nil
+}
+
+func moneyFieldsOf(def Definition) []paylink.MoneyFields {
+	var out []paylink.MoneyFields
+	for _, name := range slices.Sorted(maps.Keys(def.Actions)) {
+		for _, e := range def.Actions[name].Effects {
+			if e.Kind == EffectCreatePaymentLink {
+				out = append(out, paylink.MoneyFields{Amount: e.AmountField, Currency: e.CurrencyField})
+			}
+		}
+	}
+	return out
+}
+
+func releasesMoneyFields(ctx context.Context, tx *sql.Tx, appID int64) ([]paylink.MoneyFields, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT definition FROM app_releases WHERE app_id = ? ORDER BY number`, appID)
+	if err != nil {
+		return nil, err
+	}
+	out := []paylink.MoneyFields{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		var def Definition
+		if err := json.Unmarshal([]byte(raw), &def); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, moneyFieldsOf(def)...)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+func sameValue(a, b any) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(x) == string(y)
 }

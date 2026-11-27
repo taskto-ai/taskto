@@ -68,7 +68,7 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	return newStackDB(t, func(o *Options, _ *sql.DB) { mod(o) })
 }
 
-func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
+func newStackDB(t *testing.T, mod func(*Options, *sql.DB), wrap ...func(http.Handler) http.Handler) *stack {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -115,6 +115,9 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 		mod(&opts, sqlDB)
 	}
 	s.h = newHandler(t, sqlDB, opts)
+	for _, w := range wrap {
+		s.h = w(s.h)
+	}
 	srv := httptest.NewServer(s.h)
 	t.Cleanup(srv.Close)
 	s.mcpURL = srv.URL + "/mcp"

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,6 +54,9 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if found && (ref.objectID != "" || paidWithoutLink(ref)) {
 		return s.savedLink(ctx, rec, provider, ref, req)
 	}
+	if found && ref.state == "expired" {
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+	}
 	if found && ref.integrationID != req.IntegrationID {
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
 	}
@@ -85,13 +89,33 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		return paylink.Link{}, s.failed(ctx, rec, pending, err)
 	}
 	success, cancel := s.pageURLs()
-	if s.beforeBeginRef != nil {
-		s.beforeBeginRef()
-	}
 	mode := Lookup(rec.Provider).Mode(rec.Settings, creds.APIKey.Reveal())
-	ref, err = s.beginRef(ctx, req, minor, cur, whose{account: account, mode: mode}, success, cancel)
-	if err != nil {
-		return paylink.Link{}, err
+	who := whose{account: account, mode: mode}
+	for i := 0; ; i++ {
+		var checked []int64
+		if !found {
+			var link paylink.Link
+			var reuse bool
+			if link, reuse, checked, err = s.earlierLink(ctx, provider, creds, client, rec, req, minor, cur, who); err != nil {
+				return paylink.Link{}, err
+			} else if reuse {
+				return link, nil
+			}
+		}
+		if s.beforeBeginRef != nil {
+			s.beforeBeginRef()
+		}
+		ref, err = s.beginRef(ctx, req, minor, cur, who, success, cancel, checked)
+		if errors.Is(err, errRecheck) && i < maxKeysPerTry {
+			continue
+		}
+		if err != nil {
+			if errors.Is(err, errRecheck) {
+				return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+			}
+			return paylink.Link{}, err
+		}
+		break
 	}
 	if ref.objectID != "" {
 		return madeLink(ref, req)
@@ -104,6 +128,15 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	t := try{s: s, provider: provider, creds: creds, client: client, rec: rec, req: req, since: since, hosted: ref.successURL == ""}
 	for range maxKeysPerTry {
 		a, err := s.currentAttempt(ctx, ref)
+		if errors.Is(err, errRefMoved) {
+			if ref, err = s.refByID(ctx, ref.id); err != nil {
+				return paylink.Link{}, err
+			}
+			if ref.objectID != "" {
+				return madeLink(ref, req)
+			}
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+		}
 		if err != nil {
 			return paylink.Link{}, err
 		}
@@ -136,7 +169,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			case res == resolvedExpired:
 				continue
 			}
-			if !s.keyKept(a) {
+			if !s.keyKept(a, provider) {
 				return paylink.Link{}, s.stillUnknown(ctx, a)
 			}
 		}
@@ -157,7 +190,22 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 				return paylink.Link{}, err
 			}
 		}
-		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(a, req.Description))
+		callCtx, cancel := ctx, context.CancelFunc(func() {})
+		if a.unknown() {
+			start := time.Now()
+			left := s.keyLeft(a, provider)
+			if left <= 0 {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+			if s.beforeCall != nil {
+				s.beforeCall()
+			}
+			callCtx, cancel = context.WithDeadline(ctx, start.Add(left))
+		} else if s.beforeCall != nil {
+			s.beforeCall()
+		}
+		made, err := provider.CreatePaymentLink(callCtx, creds, client, ref.newLink(a, req.Description))
+		cancel()
 		if err != nil {
 			ce, ok := IsCall(err)
 			if !ok {
@@ -340,9 +388,18 @@ func (s *Service) stillUnknown(ctx context.Context, a attempt) error {
 	return &paylink.Error{Code: apierr.CodeIntegrationLinkLookupPending, Wait: max(wait, time.Second)}
 }
 
-func (s *Service) keyKept(a attempt) bool {
+func (s *Service) keyKept(a attempt, p PaymentProvider) bool { return s.keyLeft(a, p) > 0 }
+
+func (s *Service) keyLeft(a attempt, p PaymentProvider) time.Duration {
 	first, err := time.Parse(timeFormat, a.firstSentAt)
-	return err == nil && s.store.now().Sub(first) < keyTrusted
+	if err != nil || p.KeyKept() <= 0 {
+		return 0
+	}
+	elapsed := s.store.now().Sub(first)
+	if elapsed < 0 || elapsed >= p.KeyKept() {
+		return 0
+	}
+	return p.KeyKept() - elapsed
 }
 
 func madeLink(r ref, req paylink.Request) (paylink.Link, error) {
@@ -424,7 +481,7 @@ const (
 	maxKeysPerTry = 3
 )
 
-const keyTrusted = 23 * time.Hour
+const stripeKeyKept = 23 * time.Hour
 
 func providerDoes(id, kind string) bool {
 	p := Lookup(id)
@@ -491,6 +548,11 @@ type ref struct {
 	createdAt                                     string
 	accountID, accountMode, successURL, cancelURL string
 	paidObjectID, paymentID                       string
+	effectID                                      int64
+	paidLinkID                                    string
+	linkExpiredAt                                 string
+	amountField, currencyField                    string
+	polls                                         int
 }
 
 func (r ref) newLink(a attempt, description string) NewLink {
@@ -506,13 +568,14 @@ func (r ref) link() paylink.Link {
 
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
 	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
-	coalesce(paid_object_id, ''), coalesce(payment_id, '')`
+	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), coalesce(paid_link_id, ''), coalesce(link_expired_at, ''),
+	amount_field, currency_field, polls`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
 		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
-		&r.paidObjectID, &r.paymentID)
+		&r.paidObjectID, &r.paymentID, &r.effectID, &r.paidLinkID, &r.linkExpiredAt, &r.amountField, &r.currencyField, &r.polls)
 	return r, err
 }
 
@@ -541,7 +604,7 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string, who whose, successURL, cancelURL string) (ref, error) {
+func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64, cur string, who whose, successURL, cancelURL string, checked []int64) (ref, error) {
 	token, err := newToken()
 	if err != nil {
 		return ref{}, err
@@ -551,14 +614,25 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 		return ref{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	at := s.store.stamp(s.store.now())
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at, account_id, account_mode, success_url, cancel_url)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (effect_id) DO NOTHING`,
-		token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at, who.account, who.mode, successURL, cancelURL); err != nil {
-		return ref{}, err
-	}
 	out, err := scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		var took bool
+		if out, took, err = s.takeEarlier(ctx, tx, req, checked); err != nil {
+			return ref{}, err
+		}
+		if !took {
+			at := s.store.stamp(s.store.now())
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, effect_id, amount_minor, currency, created_at,
+					account_id, account_mode, success_url, cancel_url, amount_field, currency_field)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				token, req.IntegrationID, req.AppID, req.RecordID, req.Slot, req.EffectID, minor, cur, at,
+				who.account, who.mode, successURL, cancelURL, req.AmountField, req.CurrencyField); err != nil {
+				return ref{}, err
+			}
+			out, err = scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE effect_id = ?`, req.EffectID))
+		}
+	}
 	if err != nil {
 		return ref{}, err
 	}
@@ -568,8 +642,8 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 	if out.objectID == "" && out.integrationID != req.IntegrationID {
 		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
 	}
-	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur) {
-		return ref{}, unavailable()
+	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur || !sameMoneyFields(out, req)) {
+		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
 	}
 	return out, tx.Commit()
 }
@@ -627,19 +701,28 @@ func (s *Service) currentAttempt(ctx context.Context, r ref) (attempt, error) {
 			return attempt{}, err
 		}
 	}
-	if _, err := s.store.db.ExecContext(ctx, `INSERT INTO integration_ref_attempts (ref_id, seq, token, created_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (ref_id, seq) DO NOTHING`, r.id, r.keySeq, token, s.store.stamp(s.store.now())); err != nil {
+	if _, err := s.store.db.ExecContext(ctx, `INSERT INTO integration_ref_attempts (ref_id, seq, token, created_at)
+		SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
+			AND state IN ('creating', 'failed'))
+		ON CONFLICT (ref_id, seq) DO NOTHING`, r.id, r.keySeq, token, s.store.stamp(s.store.now()), r.id, r.keySeq); err != nil {
 		return attempt{}, err
 	}
-	return s.attemptByKey(ctx, r.id, r.keySeq)
+	a, err := s.attemptByKey(ctx, r.id, r.keySeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return attempt{}, errRefMoved
+	}
+	return a, err
 }
+
+var errRefMoved = errors.New("the payment link's reference moved on")
 
 func (s *Service) writeAhead(ctx context.Context, r ref, a attempt) (bool, error) {
 	at := s.store.stamp(s.store.now())
 	res, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET sends = sends + 1,
 			first_sent_at = coalesce(first_sent_at, ?), unknown_since = coalesce(unknown_since, ?)
 		WHERE ref_id = ? AND seq = ? AND outcome IS NULL
-			AND EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL)`,
+			AND EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
+				AND state IN ('creating', 'failed'))`,
 		at, at, a.refID, a.seq, r.id, a.seq)
 	if err != nil {
 		return false, err
@@ -678,7 +761,7 @@ func (s *Service) markAttempt(ctx context.Context, a attempt, outcome string) er
 
 func (s *Service) nextAttempt(ctx context.Context, r ref, a attempt) (ref, error) {
 	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET key_seq = key_seq + 1
-		WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
+		WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed')
 			AND EXISTS (SELECT 1 FROM integration_ref_attempts WHERE ref_id = ? AND seq = ? AND outcome IN ('expired', 'abandoned'))
 			AND NOT EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = ?
 				AND (o.outcome IS NULL OR o.outcome NOT IN ('expired', 'abandoned') OR (o.outcome = 'abandoned' AND o.object_id IS NOT NULL)))`,
@@ -720,4 +803,207 @@ func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Re
 	}
 	_ = tx.Rollback()
 	return s.refHolds(ctx, r, req)
+}
+
+var errRecheck = errors.New("the record's payment links changed")
+
+func recordRefs(ctx context.Context, q interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, req paylink.Request) ([]ref, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+refColumns+` FROM integration_refs
+		WHERE app_id = ? AND record_id = ? AND (effect_id IS NULL OR effect_id != ?) ORDER BY id`, req.AppID, req.RecordID, req.EffectID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ref
+	for rows.Next() {
+		r, err := scanRef(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+func paidOnOwnLink(r ref) bool {
+	return (r.state == "paid" || r.state == "refunded") && r.objectID != "" &&
+		(r.paidObjectID == r.objectID || r.paidLinkID == r.objectID)
+}
+
+func linkFinished(r ref) bool {
+	return r.state == "expired" || r.linkExpiredAt != "" || paidOnOwnLink(r)
+}
+
+func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, creds Credentials, client *Client, rec record,
+	req paylink.Request, minor int64, cur string, who whose) (link paylink.Link, reuse bool, checked []int64, err error) {
+	refs, err := recordRefs(ctx, s.store.db, req)
+	if err != nil {
+		return paylink.Link{}, false, nil, err
+	}
+	var open *ref
+	for _, prior := range refs {
+		if prior.objectID == "" || linkFinished(prior) {
+			continue
+		}
+		switch {
+		case prior.integrationID != req.IntegrationID:
+			return paylink.Link{}, false, nil, &paylink.Error{Code: apierr.CodeIntegrationChanged}
+		case prior.accountID != who.account || prior.accountMode != who.mode:
+			return paylink.Link{}, false, nil, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+		}
+		state, err := provider.LinkState(ctx, creds, client, prior.successURL == "", prior.objectID)
+		if err != nil {
+			return paylink.Link{}, false, nil, s.failed(ctx, rec, nil, err)
+		}
+		switch state {
+		case LinkOpen:
+			if prior.state == "paid" || prior.state == "refunded" {
+				return paylink.Link{}, false, nil, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+			}
+			if open != nil {
+				return paylink.Link{}, false, nil, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
+			}
+			open = &prior
+		case LinkExpired:
+			at := s.store.stamp(s.store.now())
+			if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET state = 'expired', settled_at = coalesce(settled_at, ?)
+				WHERE id = ? AND state IN ('creating', 'open')`, at, prior.id); err != nil {
+				return paylink.Link{}, false, nil, err
+			}
+			if err := s.noteLinkExpired(ctx, prior.id, prior.objectID, at); err != nil {
+				return paylink.Link{}, false, nil, err
+			}
+			checked = append(checked, prior.id)
+		default:
+			if prior.state != "paid" && prior.state != "refunded" {
+				return paylink.Link{}, false, nil, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
+			}
+			checked = append(checked, prior.id)
+		}
+	}
+	if open == nil {
+		return paylink.Link{}, false, checked, nil
+	}
+	if open.amountMinor != minor || open.currency != cur || !sameMoneyFields(*open, req) {
+		return paylink.Link{}, false, nil, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
+	}
+	if _, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET slot = ?, slot_effect_id = ?
+		WHERE id = ? AND coalesce(slot_effect_id, effect_id, 0) < ?`, req.Slot, req.EffectID, open.id, req.EffectID); err != nil {
+		return paylink.Link{}, false, nil, err
+	}
+	slog.Info("integrations: a record's payment link that may still be paid is given again", "integration", open.integrationID, "ref", open.id)
+	return open.link(), true, nil, nil
+}
+
+func (s *Service) takeEarlier(ctx context.Context, tx *sql.Tx, req paylink.Request, checked []int64) (ref, bool, error) {
+	refs, err := recordRefs(ctx, tx, req)
+	if err != nil {
+		return ref{}, false, err
+	}
+	var live []ref
+	for _, prior := range refs {
+		switch {
+		case prior.objectID != "":
+			if linkFinished(prior) || slices.Contains(checked, prior.id) {
+				continue
+			}
+			return ref{}, false, errRecheck
+		case paidWithoutLink(prior), prior.state == "expired":
+			continue
+		case prior.effectID > req.EffectID:
+			return ref{}, false, &paylink.Error{Code: apierr.CodeIntegrationLinkLookupPending, Wait: lookupWaitMin}
+		}
+		var ran bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_ref_attempts
+			WHERE ref_id = ? AND (sends > clean_sends OR object_id IS NOT NULL OR outcome IS NOT NULL))`, prior.id).Scan(&ran); err != nil {
+			return ref{}, false, err
+		}
+		if !ran && prior.state == "creating" {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM integration_refs WHERE id = ?`, prior.id); err != nil {
+				return ref{}, false, err
+			}
+			continue
+		}
+		var alive bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = ? AND NOT `+deadKey+`)`,
+			prior.id).Scan(&alive); err != nil {
+			return ref{}, false, err
+		}
+		if !alive {
+			if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET state = 'expired', settled_at = coalesce(settled_at, ?)
+				WHERE id = ? AND state IN ('creating', 'failed')`, s.store.stamp(s.store.now()), prior.id); err != nil {
+				return ref{}, false, err
+			}
+			continue
+		}
+		live = append(live, prior)
+	}
+	switch len(live) {
+	case 0:
+		return ref{}, false, nil
+	case 1:
+	default:
+		slog.Warn("integrations: a record has more than one payment link still being made; an admin decides", "app", req.AppID)
+		return ref{}, false, &paylink.Error{Code: apierr.CodeIntegrationOutcomeUnknown}
+	}
+	prior := live[0]
+	if _, err := tx.ExecContext(ctx, `UPDATE integration_refs SET effect_id = ?, slot = ?, slot_effect_id = NULL WHERE id = ?`, req.EffectID, req.Slot, prior.id); err != nil {
+		return ref{}, false, err
+	}
+	slog.Info("integrations: a record's payment link still being made is taken by its newer entry", "integration", prior.integrationID, "ref", prior.id)
+	out, err := scanRef(tx.QueryRowContext(ctx, `SELECT `+refColumns+` FROM integration_refs WHERE id = ?`, prior.id))
+	return out, err == nil, err
+}
+
+const deadKey = `(coalesce(o.outcome, '') = 'expired' OR (coalesce(o.outcome, '') = 'abandoned' AND o.object_id IS NULL)
+	OR (o.outcome IS NULL AND o.sends = o.clean_sends AND o.object_id IS NULL))`
+
+const payableRef = `(CASE WHEN r.provider_object_id IS NOT NULL
+		THEN r.state != 'expired' AND r.link_expired_at IS NULL
+			AND NOT (r.state IN ('paid', 'refunded') AND (coalesce(r.paid_object_id, '') = r.provider_object_id
+				OR coalesce(r.paid_link_id, '') = r.provider_object_id))
+		ELSE EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = r.id AND NOT ` + deadKey + `)
+	END)`
+
+func (s *Service) PayableMoney(ctx context.Context, q paylink.Querier, appID, recordID int64) (map[int64][]paylink.MoneyFields, error) {
+	rows, err := q.QueryContext(ctx, `SELECT r.record_id, r.amount_field, r.currency_field FROM integration_refs r
+		WHERE r.app_id = ? AND (? = 0 OR r.record_id = ?) AND `+payableRef+` ORDER BY r.record_id, r.id`, appID, recordID, recordID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64][]paylink.MoneyFields{}
+	for rows.Next() {
+		var id int64
+		var f paylink.MoneyFields
+		if err := rows.Scan(&id, &f.Amount, &f.Currency); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out[id] = append(out[id], f)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+func (s *Service) MayBePaid(ctx context.Context, q paylink.Querier, appID, recordID int64) (bool, []paylink.MoneyFields, error) {
+	m, err := s.PayableMoney(ctx, q, appID, recordID)
+	if err != nil {
+		return false, nil, err
+	}
+	f, ok := m[recordID]
+	return ok, f, nil
+}
+
+func (s *Service) noteLinkExpired(ctx context.Context, refID int64, objectID, at string) error {
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET link_expired_at = coalesce(link_expired_at, ?)
+		WHERE id = ? AND provider_object_id = ?`, at, refID, objectID)
+	return err
+}
+
+func sameMoneyFields(r ref, req paylink.Request) bool {
+	if r.amountField == "" && r.currencyField == "" {
+		return true
+	}
+	return r.amountField == req.AmountField && r.currencyField == req.CurrencyField
 }

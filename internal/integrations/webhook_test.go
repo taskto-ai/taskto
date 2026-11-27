@@ -402,7 +402,10 @@ func TestEveryNotFoundIsOneAnswer(t *testing.T) {
 	noSecret["secrets"] = map[string]string{"api_key": stripeTestKey}
 	_, _, noSecretSender := r.integration(noSecret, stripeHook)
 
-	_, _, squareSender := r.integration(squareBody("shop2"), stripeHook)
+	sq := squareBody("shop2")
+	squareHook := "sqhook" + strings.Repeat("Fake", 6)
+	sq["secrets"] = map[string]string{"api_key": squareToken, "webhook_secret": squareHook}
+	_, _, squareSender := r.integration(sq, squareHook)
 
 	disabled, _, disabledSender := r.integration(stripeBody("off"), hookFor("off"))
 	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", disabled.ID)), map[string]any{"disabled": true}), http.StatusOK)
@@ -419,7 +422,7 @@ func TestEveryNotFoundIsOneAnswer(t *testing.T) {
 		"long id":                      r.sender(r.id+"0", stripeHook),
 		"not hex":                      r.sender(strings.Repeat("z", 32), stripeHook),
 		"no webhook secret":            noSecretSender,
-		"a provider without webhooks":  squareSender,
+		"another provider's delivery":  squareSender,
 		"disabled":                     disabledSender,
 		"secrets that can't be opened": brokenSender,
 		"bad signature":                r.sender(r.id, testprovider.OtherWebhookSecret),

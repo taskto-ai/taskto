@@ -31,8 +31,10 @@ const (
 )
 
 type WebhookSecrets struct {
-	Current  Secret
-	Previous Secret
+	Current     Secret
+	Previous    Secret
+	URL         string
+	PreviousURL string
 }
 
 type Event struct {
@@ -41,6 +43,7 @@ type Event struct {
 	RefToken    string
 	ObjectID    string
 	PaymentID   string
+	LinkID      string
 	AmountMinor int64
 	Currency    string
 	OccurredAt  time.Time
@@ -51,6 +54,10 @@ type Receiver interface {
 	Provider
 	VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, now time.Time) error
 	Normalize(body []byte) (Event, bool)
+}
+
+type modeOfAccount interface {
+	EventsCarryNoMode() bool
 }
 
 var (
@@ -187,6 +194,7 @@ type stripeObject struct {
 	PaymentStatus     string  `json:"payment_status"`
 	ClientReferenceID *string `json:"client_reference_id"`
 	PaymentIntent     *string `json:"payment_intent"`
+	PaymentLink       *string `json:"payment_link"`
 	AmountTotal       int64   `json:"amount_total"`
 	AmountRefunded    int64   `json:"amount_refunded"`
 	Currency          string  `json:"currency"`
@@ -232,6 +240,12 @@ func (stripe) Normalize(body []byte) (Event, bool) {
 			return Event{}, false
 		}
 		out.PaymentID = *obj.PaymentIntent
+	}
+	if obj.PaymentLink != nil {
+		if !stripeLinkID.MatchString(*obj.PaymentLink) {
+			return Event{}, false
+		}
+		out.LinkID = *obj.PaymentLink
 	}
 	return out, true
 }

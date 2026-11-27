@@ -124,31 +124,26 @@ func newID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-func (s *Service) filesRoot(ctx context.Context, spaceID int64) (root *os.Root, done func(), err error) {
-	return s.filesRootAs(ctx, spaceID, "")
-}
-
-func (s *Service) filesRootAs(ctx context.Context, spaceID int64, created string) (root *os.Root, done func(), err error) {
+func (s *Service) filesRootAs(ctx context.Context, spaceID, generation int64) (root *os.Root, done func(), err error) {
 	if s.dataDir == "" {
 		return nil, nil, errNoFiles
 	}
-	var workspace int64
-	var row string
-	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id, created_at FROM spaces WHERE id = ?`, spaceID).Scan(&workspace, &row); err != nil {
+	var workspace, row int64
+	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id, generation FROM spaces WHERE id = ?`, spaceID).Scan(&workspace, &row); err != nil {
 		return nil, nil, goneAsNotFound(err)
 	}
-	if created != "" && row != created {
+	if generation != 0 && row != generation {
 		return nil, nil, goneAsNotFound(sql.ErrNoRows)
 	}
-	sp := access.Space{ID: spaceID, WorkspaceID: workspace, CreatedAt: row}
+	sp := access.Space{ID: spaceID, WorkspaceID: workspace, Generation: row}
 	release := func() {}
 	if s.holder != nil {
 		if release, err = s.holder.HoldSpace(sp); err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+			return nil, nil, goneHolderAsNotFound(err)
 		}
 	}
 	var one int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ? AND created_at = ?`,
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ? AND generation = ?`,
 		sp.ID, sp.WorkspaceID, row).Scan(&one); err != nil {
 		release()
 		return nil, nil, goneAsNotFound(err)
@@ -159,6 +154,13 @@ func (s *Service) filesRootAs(ctx context.Context, spaceID int64, created string
 		return nil, nil, err
 	}
 	return root, func() { _ = root.Close(); release() }, nil
+}
+
+func goneHolderAsNotFound(err error) error {
+	if errors.Is(err, access.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
+	return err
 }
 
 func goneAsNotFound(err error) error {
@@ -174,19 +176,21 @@ func fileName(appID int64, id, suffix string) string {
 
 type upload struct {
 	Attachment
-	appID   int64
-	spaceID int64
-	owner   sql.NullInt64
-	rowID   sql.NullInt64
+	appID    int64
+	spaceID  int64
+	spaceGen int64
+	owner    sql.NullInt64
+	rowID    sql.NullInt64
 }
 
 const attachmentColumns = `id, app_id, space_id, field, owner, status, size, received, coalesce(content_type, ''),
-	coalesce(width, 0), coalesce(height, 0), row_id, created_at`
+	coalesce(width, 0), coalesce(height, 0), row_id, created_at,
+	coalesce((SELECT generation FROM spaces WHERE spaces.id = app_attachments.space_id), 0)`
 
 func scanAttachment(row scanner) (upload, error) {
 	var u upload
 	if err := row.Scan(&u.ID, &u.appID, &u.spaceID, &u.Field, &u.owner, &u.Status, &u.Size, &u.Received, &u.ContentType,
-		&u.Width, &u.Height, &u.rowID, &u.CreatedAt); err != nil {
+		&u.Width, &u.Height, &u.rowID, &u.CreatedAt, &u.spaceGen); err != nil {
 		return upload{}, err
 	}
 	u.Attached = u.rowID.Valid
@@ -320,6 +324,22 @@ func (s *Service) uploadState(ctx context.Context, sp access.Space, a Actor, app
 	return out, err
 }
 
+func (s *Service) holdAttachmentSpace(ctx context.Context, appID int64, id string) (space int64, root *os.Root, done func(), err error) {
+	var generation int64
+	if err := s.db.QueryRowContext(ctx, `SELECT t.space_id, s.generation FROM app_attachments t JOIN spaces s ON s.id = t.space_id
+		WHERE t.id = ? AND t.app_id = ?`, id, appID).Scan(&space, &generation); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil, nil, ErrNotFound
+		}
+		return 0, nil, nil, err
+	}
+	root, done, err = s.filesRootAs(ctx, space, generation)
+	if err != nil {
+		return space, nil, nil, err
+	}
+	return space, root, done, nil
+}
+
 func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID int64, id string, offset int64, data []byte) (Attachment, error) {
 	if err := may(sp, access.Write); err != nil {
 		return Attachment{}, err
@@ -328,17 +348,9 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 		return Attachment{}, ErrNotFound
 	}
 	defer s.lock(id)()
-	var held *os.Root
-	var heldSpace int64
-	var rootErr error
-	if err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND app_id = ?`, id, appID).Scan(&heldSpace); err == nil {
-		root, done, err := s.filesRoot(ctx, heldSpace)
-		if err != nil {
-			rootErr = err
-		} else {
-			defer done()
-			held = root
-		}
+	heldSpace, held, done, rootErr := s.holdAttachmentSpace(ctx, appID, id)
+	if done != nil {
+		defer done()
 	}
 	var out Attachment
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -366,10 +378,7 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 				apierr.Params{"max": u.Size - u.Received}}
 		}
 		if held == nil {
-			if rootErr != nil {
-				return rootErr
-			}
-			return ErrNotFound
+			return rootErr
 		}
 		if u.spaceID != heldSpace {
 			return errUploadState
@@ -433,7 +442,7 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if u.Received != u.Size {
 		return Attachment{}, offsetError(u.Received)
 	}
-	root, done, err := s.filesRoot(ctx, u.spaceID)
+	root, done, err := s.filesRootAs(ctx, u.spaceID, u.spaceGen)
 	if err != nil {
 		return Attachment{}, err
 	}
@@ -604,18 +613,21 @@ func (s *Service) abandonUpload(ctx context.Context, sp access.Space, a Actor, a
 	if err != nil {
 		return err
 	}
-	s.removeFiles(ctx, u.spaceID, appID, id)
+	s.removeFiles(ctx, u.spaceID, u.spaceGen, appID, id)
 	return nil
 }
 
 func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64, held *os.Root) error {
-	var spaceID int64
+	var spaceID, generation int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND row_id IS NULL RETURNING space_id`, id).Scan(&spaceID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return spaceGeneration(ctx, tx, spaceID, &generation)
 	})
 	if err != nil || spaceID == 0 {
 		return err
@@ -626,18 +638,26 @@ func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64, 
 		}
 		return nil
 	}
-	s.removeFiles(ctx, spaceID, appID, id)
+	s.removeFiles(ctx, spaceID, generation, appID, id)
 	return nil
 }
 
-func (s *Service) removeFiles(ctx context.Context, spaceID, appID int64, id string) {
-	if err := s.unlinkFiles(ctx, spaceID, appID, id); err != nil {
+func spaceGeneration(ctx context.Context, q queryer, id int64, g *int64) error {
+	err := q.QueryRowContext(ctx, `SELECT generation FROM spaces WHERE id = ?`, id).Scan(g)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	return err
+}
+
+func (s *Service) removeFiles(ctx context.Context, spaceID, generation, appID int64, id string) {
+	if err := s.unlinkFiles(ctx, spaceID, generation, appID, id); err != nil {
 		slog.Warn("apps: removing attachment files", "app", appID, "err", err)
 	}
 }
 
-func (s *Service) unlinkFiles(ctx context.Context, spaceID, appID int64, id string) error {
-	root, done, err := s.filesRoot(ctx, spaceID)
+func (s *Service) unlinkFiles(ctx context.Context, spaceID, generation, appID int64, id string) error {
+	root, done, err := s.filesRootAs(ctx, spaceID, generation)
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, access.ErrNotFound) {
 		return nil
 	}
@@ -695,7 +715,7 @@ func (s *Service) openAttachment(ctx context.Context, sp access.Space, a Actor, 
 	} else if !u.owner.Valid || u.owner.Int64 != a.UserID {
 		return nil, ErrNotFound
 	}
-	root, done, err := s.filesRoot(ctx, u.spaceID)
+	root, done, err := s.filesRootAs(ctx, u.spaceID, u.spaceGen)
 	if err != nil {
 		return nil, err
 	}
@@ -934,25 +954,24 @@ func (s *Service) relocate(ctx context.Context, appID int64) error {
 	if s.dataDir == "" {
 		return nil
 	}
-	var home int64
-	var homeCreated string
-	if err := s.db.QueryRowContext(ctx, `SELECT a.space_id, s.created_at FROM apps a JOIN spaces s ON s.id = a.space_id WHERE a.id = ?`, appID).Scan(&home, &homeCreated); err != nil {
+	var home, homeGen int64
+	if err := s.db.QueryRowContext(ctx, `SELECT a.space_id, s.generation FROM apps a JOIN spaces s ON s.id = a.space_id WHERE a.id = ?`, appID).Scan(&home, &homeGen); err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT t.id, t.space_id, s.created_at FROM app_attachments t JOIN spaces s ON s.id = t.space_id
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id, t.space_id, s.generation FROM app_attachments t JOIN spaces s ON s.id = t.space_id
 		WHERE t.app_id = ? AND t.space_id != ?`, appID, home)
 	if err != nil {
 		return err
 	}
 	type move struct {
-		id      string
-		space   int64
-		created string
+		id    string
+		space int64
+		gen   int64
 	}
 	var moves []move
 	for rows.Next() {
 		var m move
-		if err := rows.Scan(&m.id, &m.space, &m.created); err != nil {
+		if err := rows.Scan(&m.id, &m.space, &m.gen); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -966,12 +985,12 @@ func (s *Service) relocate(ctx context.Context, appID int64) error {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(errs, err)...)
 		}
-		errs = append(errs, s.relocateOne(ctx, appID, m.id, m.space, m.created, home, homeCreated))
+		errs = append(errs, s.relocateOne(ctx, appID, m.id, m.space, m.gen, home, homeGen))
 	}
 	return errors.Join(errs...)
 }
 
-func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from int64, fromCreated string, to int64, toCreated string) error {
+func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from, fromGen, to, toGen int64) error {
 	defer s.lock(id)()
 	if from == to {
 		return nil
@@ -983,14 +1002,14 @@ func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from 
 		first, second = &dst, &src
 		ids = [2]int64{to, from}
 	}
-	created := map[int64]string{from: fromCreated, to: toCreated}
+	generation := map[int64]int64{from: fromGen, to: toGen}
 	var err error
 	var doneFirst, doneSecond func()
-	if *first, doneFirst, err = s.filesRootAs(ctx, ids[0], created[ids[0]]); err != nil {
+	if *first, doneFirst, err = s.filesRootAs(ctx, ids[0], generation[ids[0]]); err != nil {
 		return err
 	}
 	defer doneFirst()
-	if *second, doneSecond, err = s.filesRootAs(ctx, ids[1], created[ids[1]]); err != nil {
+	if *second, doneSecond, err = s.filesRootAs(ctx, ids[1], generation[ids[1]]); err != nil {
 		return err
 	}
 	defer doneSecond()
@@ -1123,38 +1142,28 @@ func (s *Service) sweep(ctx context.Context, cutoff time.Time, appID int64) erro
 
 func (s *Service) deleteExpired(ctx context.Context, id string, appID int64, cutoff time.Time) error {
 	defer s.lock(id)()
-	var spaceID int64
+	var spaceID, generation int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND row_id IS NULL AND updated_at < ? RETURNING space_id`,
 			id, cutoff.UTC().Format(timeFormat)).Scan(&spaceID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return spaceGeneration(ctx, tx, spaceID, &generation)
 	})
 	if err != nil || spaceID == 0 {
 		return err
 	}
-	s.removeFiles(ctx, spaceID, appID, id)
+	s.removeFiles(ctx, spaceID, generation, appID, id)
 	return nil
 }
 
 func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id FROM spaces`)
+	spaces, err := s.spacesToSweep(ctx)
 	if err != nil {
-		return err
-	}
-	type space struct{ id, workspace int64 }
-	var spaces []space
-	for rows.Next() {
-		var sp space
-		if err := rows.Scan(&sp.id, &sp.workspace); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		spaces = append(spaces, sp)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
 	var errs []error
@@ -1162,16 +1171,33 @@ func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(errs, err)...)
 		}
-		if _, err := os.Stat(filepath.Join(access.SpaceDir(s.dataDir, sp.workspace, sp.id), filesDir)); err != nil {
+		if _, err := os.Stat(filepath.Join(access.SpaceDir(s.dataDir, sp.WorkspaceID, sp.ID), filesDir)); err != nil {
 			continue
 		}
-		errs = append(errs, s.sweepSpace(ctx, access.Space{ID: sp.id, WorkspaceID: sp.workspace}, cutoff))
+		errs = append(errs, s.sweepSpace(ctx, sp, cutoff))
 	}
 	return errors.Join(errs...)
 }
 
+func (s *Service) spacesToSweep(ctx context.Context) ([]access.Space, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, generation FROM spaces`)
+	if err != nil {
+		return nil, err
+	}
+	var spaces []access.Space
+	for rows.Next() {
+		var sp access.Space
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.Generation); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		spaces = append(spaces, sp)
+	}
+	return spaces, errors.Join(rows.Err(), rows.Close())
+}
+
 func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.Time) error {
-	root, done, err := s.filesRoot(ctx, sp.ID)
+	root, done, err := s.filesRootAs(ctx, sp.ID, sp.Generation)
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, access.ErrNotFound) {
 		return nil
 	}
@@ -1351,16 +1377,16 @@ func (s *Service) PurgeUploadsNoting(ctx context.Context, owner int64, removed f
 
 func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int64, removed func(context.Context, *sql.Tx) error) (bool, error) {
 	defer s.lock(id)()
-	var spaceID int64
-	err := s.db.QueryRowContext(ctx, `SELECT space_id FROM app_attachments WHERE id = ? AND owner = ? AND row_id IS NULL`,
-		id, owner).Scan(&spaceID)
+	var spaceID, generation int64
+	err := s.db.QueryRowContext(ctx, `SELECT t.space_id, s.generation FROM app_attachments t JOIN spaces s ON s.id = t.space_id
+		WHERE t.id = ? AND t.owner = ? AND t.row_id IS NULL`, id, owner).Scan(&spaceID, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if err := s.unlinkFiles(ctx, spaceID, appID, id); err != nil {
+	if err := s.unlinkFiles(ctx, spaceID, generation, appID, id); err != nil {
 		return false, fmt.Errorf("removing the files of upload %s: %w", id, err)
 	}
 	var gone bool

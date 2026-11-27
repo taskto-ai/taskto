@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -13,6 +14,17 @@ import (
 	"taskto.ai/taskto/internal/currency"
 	"taskto.ai/taskto/internal/paylink"
 )
+
+func (s *Service) EventBinding(ctx context.Context, appID int64, slot string) (int64, bool, error) {
+	b, err := s.Binding(ctx, appID, slot)
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOffline), errors.Is(err, ErrNotPublished), errors.Is(err, ErrIntegrationUnapproved):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, err
+	}
+	return b.IntegrationID, true, nil
+}
 
 func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink.EventResult, error) {
 	var spaceID, workspaceID int64
@@ -31,7 +43,7 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 		Actor: SystemActor{Kind: SystemKindIntegration, ID: w.IntegrationID}, SpaceID: spaceID, AppID: w.AppID, RecordID: w.RecordID,
 		Action: w.Event,
 		Guard: func(ctx context.Context, tx *sql.Tx) error {
-			b, err := liveBinding(ctx, tx, w.AppID, w.Slot)
+			b, err := eventBinding(ctx, tx, w.AppID, w.Slot, w.IntegrationID)
 			if err != nil {
 				return err
 			}
@@ -101,6 +113,37 @@ func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink
 		return paylink.EventResult{}, eventFailure(err)
 	}
 	return paylink.EventResult{Written: res.Changed, NoHandler: noHandler, ConditionUnmet: unmet}, nil
+}
+
+func eventBinding(ctx context.Context, q queryer, appID int64, slot string, integrationID int64) (Binding, error) {
+	b, err := liveBinding(ctx, q, appID, slot)
+	if !errors.Is(err, ErrIntegrationUnapproved) {
+		return b, err
+	}
+	var live sql.NullInt64
+	if err := q.QueryRowContext(ctx, `SELECT live_release FROM apps WHERE id = ?`, appID).Scan(&live); err != nil || !live.Valid {
+		return Binding{}, err
+	}
+	rel, rerr := loadRelease(ctx, q, appID, live.Int64, true)
+	if rerr != nil {
+		return Binding{}, rerr
+	}
+	if _, declared := rel.Definition.Integrations[slot]; declared {
+		return Binding{}, err
+	}
+	var found []Binding
+	for _, other := range slices.Sorted(maps.Keys(rel.Definition.Integrations)) {
+		ob, oerr := liveBinding(ctx, q, appID, other)
+		if oerr == nil && ob.IntegrationID == integrationID && ob.Kind == KindPayments {
+			found = append(found, ob)
+		} else if oerr != nil && !errors.Is(oerr, ErrIntegrationUnapproved) {
+			return Binding{}, oerr
+		}
+	}
+	if len(found) != 1 {
+		return Binding{}, err
+	}
+	return found[0], nil
 }
 
 type settleError struct{ err error }

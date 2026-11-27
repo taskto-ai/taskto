@@ -33,20 +33,23 @@ type Index struct {
 	now       func() time.Time
 	vectors   *vectorCache
 
-	batchFiles, batchBytes int
-	onBatch                func(files, bytes int)
-	afterCardSync          func()
-	afterRecordSync        func()
-	recordSyncLimit        int
-	conversationSyncLimit  int
-	conversationPassLimit  int
-	conversations          atomic.Pointer[ConversationSource]
+	batchFiles, batchBytes                                                 int
+	onBatch                                                                func(files, bytes int)
+	afterPending                                                           func()
+	afterEndpoint, beforeStore, afterQueryEndpoint                         func()
+	afterEmbedRequest, afterQueryEmbedded, beforeRelease, afterConsentBody func()
+	afterCardSync                                                          func()
+	afterRecordSync                                                        func()
+	recordSyncLimit                                                        int
+	conversationSyncLimit                                                  int
+	conversationPassLimit                                                  int
+	conversations                                                          atomic.Pointer[ConversationSource]
 
 	locks    sync.Map
 	syncWait time.Duration
 
 	dirtyMu   sync.Mutex
-	dirty     map[int64]access.Space
+	dirty     map[dirtyKey]access.Space
 	syncWake  chan struct{}
 	embedWake chan struct{}
 	convWake  chan struct{}
@@ -57,7 +60,7 @@ func New(sqlDB *sql.DB, kb *knowledge.Store, prov *providers.Store, opts Options
 		db: sqlDB, kb: kb, providers: prov, client: opts.HTTPClient, log: opts.Logger, now: time.Now,
 		vectors:    newVectorCache(opts.VectorCache),
 		batchFiles: syncBatch, batchBytes: syncBatchBytes, syncWait: searchSyncWait, recordSyncLimit: recordSyncMax, conversationSyncLimit: conversationSyncMax, conversationPassLimit: conversationPassMax,
-		dirty:    map[int64]access.Space{},
+		dirty:    map[dirtyKey]access.Space{},
 		syncWake: make(chan struct{}, 1), embedWake: make(chan struct{}, 1), convWake: make(chan struct{}, 1),
 	}
 	if x.client == nil {
@@ -74,10 +77,12 @@ func (x *Index) Knowledge() *knowledge.Store { return x.kb }
 
 func (x *Index) changed(sp access.Space) {
 	x.dirtyMu.Lock()
-	x.dirty[sp.ID] = sp
+	x.dirty[dirtyKey{sp.ID, sp.Generation}] = sp
 	x.dirtyMu.Unlock()
 	wake(x.syncWake)
 }
+
+type dirtyKey struct{ id, generation int64 }
 
 func wake(c chan struct{}) {
 	select {
@@ -130,7 +135,7 @@ func (x *Index) syncLoop(ctx context.Context) {
 		}
 		x.dirtyMu.Lock()
 		dirty := x.dirty
-		x.dirty = map[int64]access.Space{}
+		x.dirty = map[dirtyKey]access.Space{}
 		x.dirtyMu.Unlock()
 		for _, sp := range dirty {
 			if _, err := x.Sync(ctx, sp); err != nil && ctx.Err() == nil {
@@ -144,14 +149,14 @@ func (x *Index) syncLoop(ctx context.Context) {
 }
 
 func (x *Index) syncAll(ctx context.Context) error {
-	rows, err := x.db.QueryContext(ctx, `SELECT id, workspace_id FROM spaces ORDER BY id`)
+	rows, err := x.db.QueryContext(ctx, `SELECT id, workspace_id, generation FROM spaces ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var spaces []access.Space
 	for rows.Next() {
 		var sp access.Space
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.Generation); err != nil {
 			_ = rows.Close()
 			return err
 		}

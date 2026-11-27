@@ -168,8 +168,6 @@ func (square) Hosts(settings map[string]string) []string {
 	return []string{"connect.squareupsandbox.com"}
 }
 
-func (square) APIVersion() string { return "" }
-
 func (square) CheckSecret(name, value string) error {
 	switch {
 	case name == SecretAPIKey && squareTokenRe.MatchString(value):

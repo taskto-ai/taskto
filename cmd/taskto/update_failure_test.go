@@ -53,6 +53,7 @@ func (e *updEnv) wantNeverRestores() {
 }
 
 func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
+	t.Parallel()
 	script := readRepoFile(t, "deploy/taskto-update.sh")
 	var code []string
 	for _, l := range strings.Split(script, "\n") {
@@ -90,6 +91,7 @@ func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 }
 
 func TestSafetyCheckTakesOnlyItsOwnArguments(t *testing.T) {
+	t.Parallel()
 	needTools(t, "bash")
 	script, _ := filepath.Abs(filepath.Join("..", "..", "deploy", "safety-check.sh"))
 	for _, args := range [][]string{{"--nope"}, {"--static"}, {"--static", "a", "b"}} {
@@ -104,6 +106,7 @@ func TestSafetyCheckTakesOnlyItsOwnArguments(t *testing.T) {
 func asExit(err error, target **exec.ExitError) bool { return errors.As(err, target) }
 
 func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		edit, reason  string
 		imageUser     string
@@ -161,6 +164,7 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		"an existing volume that binds the status, writable": {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", volume: {}}] | .volumes.statevol = {name: "taskto_statevol"}`, volumeOptions: "taskto_statevol {linkpub}", reason: "a host path that holds the updater's state"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.edit != "" {
@@ -191,6 +195,7 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 }
 
 func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		setup  func(e *updEnv)
 		reason string
@@ -205,6 +210,7 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 		}, "docker compose create and start failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			tc.setup(e)
@@ -263,6 +269,7 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 }
 
 func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
+	t.Parallel()
 	for name, setup := range map[string]func(e *updEnv){
 		"the server isn't healthy":                                     func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
 		"docker compose start fails after it started":                  func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
@@ -282,6 +289,7 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 		"the proxy still answers as the old version":                   func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)
@@ -347,6 +355,7 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 }
 
 func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -375,6 +384,7 @@ func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
 }
 
 func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.failCalls(`^compose start .* @`+updNew+`$`, `^compose start .* @`+updOld+`$`)
@@ -407,6 +417,7 @@ func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 }
 
 func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.failCalls(`^compose start .* @` + updNew + `$`)
@@ -459,6 +470,7 @@ func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 }
 
 func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("state/failed", updNew+"\n")
@@ -500,6 +512,7 @@ func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
 }
 
 func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/volname", "acme_data")
@@ -514,6 +527,7 @@ func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
 }
 
 func TestClearBlock(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, out := e.run("--clear-block"); code != 0 || !strings.Contains(out, "nothing to clear") {
@@ -576,6 +590,7 @@ func TestClearBlock(t *testing.T) {
 }
 
 func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.extra = []string{"TASKTO_UPDATE_KEEP=1"}
@@ -606,6 +621,7 @@ func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
 }
 
 func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
+	t.Parallel()
 	setup := func() *updEnv {
 		e := newUpdEnv(t)
 		e.installAt("v1.0.0")
@@ -637,7 +653,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 	}
 
 	e = setup()
-	e.gh.failPages = map[int]bool{2: true}
+	e.gh.locked(func() { e.gh.failPages = map[int]bool{2: true} })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -647,7 +663,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 	}
 
 	e = setup()
-	e.gh.releases[2]["body"] = ""
+	e.gh.locked(func() { e.gh.releases[2]["body"] = "" })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -662,6 +678,7 @@ func (e *updEnv) traefik() {
 }
 
 func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.traefik()
 	e.release(updNew, "", false, false)
@@ -693,6 +710,7 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 		"a stale LAN port":       func(e *updEnv) { e.write("fake/lan-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.traefik()
 			e.release(updNew, "", false, false)
@@ -709,6 +727,7 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 }
 
 func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/Caddyfile", "caddy changed\n")
@@ -743,6 +762,7 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 }
 
 func TestUpdateNotifies(t *testing.T) {
+	t.Parallel()
 	const secret = "SECRET-TOKEN-123"
 	notify := func(e *updEnv) { e.write("etc/update-notify-url", e.server.URL+"/notify/"+secret+"\n") }
 	posts := func(e *updEnv) []notification {
@@ -804,6 +824,7 @@ func TestUpdateNotifies(t *testing.T) {
 		"a version on file": {func(e *updEnv) { e.setVersion(updNew) }, "blocked"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			notify(e)
@@ -823,6 +844,7 @@ func TestUpdateNotifies(t *testing.T) {
 		"a dry run":  func(e *updEnv) { e.run("--dry-run") },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			if name != "up to date" {
 				e.release(updNew, "", false, false)
@@ -838,7 +860,7 @@ func TestUpdateNotifies(t *testing.T) {
 	}
 
 	for name, setup := range map[string]func(e *updEnv){
-		"the server answers 500": func(e *updEnv) { notify(e); e.gh.notifyStatus = 500 },
+		"the server answers 500": func(e *updEnv) { notify(e); e.gh.locked(func() { e.gh.notifyStatus = 500 }) },
 		"nothing listens":        func(e *updEnv) { e.write("etc/update-notify-url", "http://127.0.0.1:1/notify/"+secret+"\n") },
 		"not an address":         func(e *updEnv) { e.write("etc/update-notify-url", "not a url "+secret+"\n") },
 		"an address with a quote": func(e *updEnv) {
@@ -846,6 +868,7 @@ func TestUpdateNotifies(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)

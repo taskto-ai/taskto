@@ -68,6 +68,12 @@ func (g *fakeGitHub) health(w http.ResponseWriter, file string) {
 	fmt.Fprintf(w, `{"status":"ok","version":%q,"database":"ok","agent":"ready"}`, strings.TrimSpace(string(b)))
 }
 
+func (g *fakeGitHub) locked(f func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	f()
+}
+
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -277,17 +283,18 @@ func (e *updEnv) writeFirewall(v string) {
 }
 
 func (e *updEnv) publish(ref string) {
-	e.gh.files[shaOf(ref)] = map[string]string{
+	files := map[string]string{
 		"compose.yaml":              "# compose " + ref + "\n# TASKTO_IMAGE_PREFIX\n",
 		"deploy/Caddyfile":          "caddy\n",
 		"deploy/worker-firewall.sh": firewallScript + "# " + updOld + "\n",
 		"deploy/safety-check.sh":    readRepoFile(e.t, "deploy/safety-check.sh"),
 	}
+	e.gh.locked(func() { e.gh.files[shaOf(ref)] = files })
 	e.write("fake/revision-"+ref, shaOf(ref))
 }
 
 func (e *updEnv) commitFile(ref, name, content string) {
-	e.gh.files[shaOf(ref)][name] = content
+	e.gh.locked(func() { e.gh.files[shaOf(ref)][name] = content })
 }
 
 func (e *updEnv) mutate(version string, kinds ...string) {
@@ -301,7 +308,9 @@ func (e *updEnv) mutate(version string, kinds ...string) {
 func (e *updEnv) setRunning(v string) { e.write("fake/running", v+"\n") }
 
 func (e *updEnv) release(tag, body string, draft, pre bool) {
-	e.gh.releases = append(e.gh.releases, map[string]any{"tag_name": tag, "body": body, "draft": draft, "prerelease": pre})
+	e.gh.locked(func() {
+		e.gh.releases = append(e.gh.releases, map[string]any{"tag_name": tag, "body": body, "draft": draft, "prerelease": pre})
+	})
 	e.publish(tag)
 }
 
@@ -426,6 +435,7 @@ func (e *updEnv) wantUntouched() {
 }
 
 func TestUpdateNothingNewer(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updOld, "", false, false)
 	e.release("v0.4.0", "", false, true)
@@ -443,6 +453,7 @@ func TestUpdateNothingNewer(t *testing.T) {
 }
 
 func TestUpdateImagesNotPublishedYet(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.unpublish(updNew)
@@ -463,6 +474,7 @@ func TestUpdateImagesNotPublishedYet(t *testing.T) {
 }
 
 func TestUpdateSucceeds(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Notes.\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -564,7 +576,7 @@ func TestUpdateSucceeds(t *testing.T) {
 	if last, _ := e.status()["last_change"].(map[string]any); last["result"] != "updated" {
 		t.Errorf("last_change = %v", last)
 	}
-	e.gh.releases = e.gh.releases[:0]
+	e.gh.locked(func() { e.gh.releases = e.gh.releases[:0] })
 	e.release(updNew, "", false, false)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("second run exit %d", code)
@@ -576,6 +588,7 @@ func TestUpdateSucceeds(t *testing.T) {
 }
 
 func TestUpdateNeverDowngradesNorRepeats(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.setVersion(updNew)
 	e.setInstallVersion(updNew)
@@ -598,6 +611,7 @@ func TestUpdateNeverDowngradesNorRepeats(t *testing.T) {
 }
 
 func TestUpdateHoldAndOff(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/update.hold", "")
@@ -628,6 +642,7 @@ func TestUpdateHoldAndOff(t *testing.T) {
 }
 
 func TestUpdateSkipsManualUpgrades(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	e.release("v0.4.0", "Nothing special.\n", false, false)
@@ -646,6 +661,7 @@ func TestUpdateSkipsManualUpgrades(t *testing.T) {
 }
 
 func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		setup  func(e *updEnv)
 		reason string
@@ -669,7 +685,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 			"can't pull caddy:",
 		},
 		"a file that isn't there": {
-			func(e *updEnv) { delete(e.gh.files[shaOf(updNew)], "deploy/Caddyfile") },
+			func(e *updEnv) { e.gh.locked(func() { delete(e.gh.files[shaOf(updNew)], "deploy/Caddyfile") }) },
 			"can't fetch deploy/Caddyfile",
 		},
 		"images that aren't built from the commit": {
@@ -735,11 +751,12 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 			"the public address doesn't answer as " + updOld + " before the update",
 		},
 		"a tag that isn't a commit": {
-			func(e *updEnv) { delete(e.gh.files, shaOf(updNew)) },
+			func(e *updEnv) { e.gh.locked(func() { delete(e.gh.files, shaOf(updNew)) }) },
 			"can't resolve " + updNew,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			tc.setup(e)
@@ -759,6 +776,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 }
 
 func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if err := os.Remove(e.firewall); err != nil {
@@ -774,6 +792,7 @@ func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
 }
 
 func TestUpdateChangedFirewallIsAManualUpgrade(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/worker-firewall.sh", firewallScript+"# a new rule\n")
@@ -803,6 +822,7 @@ func TestUpdateChangedFirewallIsAManualUpgrade(t *testing.T) {
 }
 
 func TestUpdateRunsOneAtATime(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/block", "")
@@ -835,6 +855,7 @@ func TestUpdateRunsOneAtATime(t *testing.T) {
 }
 
 func TestUpdateDryRunChangesNothing(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	code, out := e.run("--dry-run")
@@ -878,6 +899,7 @@ func mustReadDir(t *testing.T, dir string) []os.DirEntry {
 }
 
 func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
+	t.Parallel()
 	sha := func(c string) string { return strings.Repeat(c, 40) }
 	a, red, diverged, unpublished, green := sha("a"), sha("b"), sha("c"), sha("d"), sha("e")
 	e := newUpdEnv(t)
@@ -890,8 +912,10 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 	run := func(sha, conclusion string) map[string]any {
 		return map[string]any{"head_sha": sha, "head_branch": "main", "conclusion": conclusion}
 	}
-	e.gh.runs = []map[string]any{run(red, "failure"), run(diverged, "success"), run(unpublished, "success"), run(green, "success"), run(a, "success")}
-	e.gh.compare = map[string]string{red: "ahead", diverged: "diverged", unpublished: "ahead", green: "ahead", a: "identical"}
+	e.gh.locked(func() {
+		e.gh.runs = []map[string]any{run(red, "failure"), run(diverged, "success"), run(unpublished, "success"), run(green, "success"), run(a, "success")}
+		e.gh.compare = map[string]string{red: "ahead", diverged: "diverged", unpublished: "ahead", green: "ahead", a: "identical"}
+	})
 	for _, c := range []string{unpublished, green} {
 		e.publish(c)
 	}
@@ -916,8 +940,10 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 		t.Error("the CI runs weren't asked for by success")
 	}
 
-	e.gh.runs = []map[string]any{run(green, "success"), run(a, "success")}
-	e.gh.compare[green] = "identical"
+	e.gh.locked(func() {
+		e.gh.runs = []map[string]any{run(green, "success"), run(a, "success")}
+		e.gh.compare[green] = "identical"
+	})
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -925,6 +951,7 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 }
 
 func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	now := time.Now()
@@ -971,6 +998,7 @@ func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
 }
 
 func TestUpdaterIsOnTheHostOnly(t *testing.T) {
+	t.Parallel()
 	if strings.Contains(readRepoFile(t, "compose.yaml"), "docker.sock") {
 		t.Error("compose.yaml gives a container the Docker socket")
 	}
@@ -1004,6 +1032,7 @@ func TestUpdaterIsOnTheHostOnly(t *testing.T) {
 }
 
 func TestUpdateBlocksWhenTheServerIsNotTheVersionOnRecord(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.setVersion(updNew)
@@ -1025,6 +1054,7 @@ func TestUpdateBlocksWhenTheServerIsNotTheVersionOnRecord(t *testing.T) {
 func tagOfLength(n int) string { return "v1.0.1" + strings.Repeat("0", n-len("v1.0.1")) }
 
 func TestUpdateOnlyTheCanonicalVersionGrammar(t *testing.T) {
+	t.Parallel()
 	for _, to := range []string{"v01.0.0", "v1.02.0", "v1.0.0-rc1", "v1.0.0+build", "1.0.0", "v1.0", "V1.0.0", "main", "abc123"} {
 		e := newUpdEnv(t)
 		if code, out := e.run("--to", to); code != 2 || !strings.Contains(out, "--to takes") {
@@ -1050,6 +1080,7 @@ func TestUpdateOnlyTheCanonicalVersionGrammar(t *testing.T) {
 }
 
 func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ installed, release string }{
 		"1.10.0 is newer than 1.9.0":           {"v1.9.0", "v1.10.0"},
 		"2.0.0 is newer than 1.99.99":          {"v1.99.99", "v2.0.0"},
@@ -1059,6 +1090,7 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 		"the newest of several, not the first": {"v1.9.0", "v1.10.0"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.setVersion(tc.installed)
 			e.setInstallVersion(tc.installed)
@@ -1087,6 +1119,7 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 }
 
 func TestUpdateLogsInWithAConfigOfItsOwn(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_REGISTRY_USER='puller'\n")
@@ -1140,6 +1173,7 @@ func workflowStep(t *testing.T, workflow, name string) string {
 }
 
 func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
+	t.Parallel()
 	wf := readRepoFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{
 		`--method POST "repos/$GH_REPO/git/refs"`,
@@ -1191,6 +1225,7 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 }
 
 func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
+	t.Parallel()
 	needTools(t, "bash")
 	step := workflowStep(t, ".github/workflows/release.yml", "Create the tag at the commit CI passed on")
 	for _, tc := range []struct {
@@ -1234,6 +1269,7 @@ func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 }
 
 func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
+	t.Parallel()
 	needTools(t, "bash")
 	var check string
 	for _, line := range strings.Split(readRepoFile(t, ".github/workflows/release.yml"), "\n") {
@@ -1263,6 +1299,7 @@ func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 }
 
 func TestSafetyChecksAreOneScript(t *testing.T) {
+	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	if !strings.Contains(runbook, "vm < deploy/safety-check.sh") {
 		t.Error("step 12 doesn't run deploy/safety-check.sh")

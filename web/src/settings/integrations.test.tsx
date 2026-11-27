@@ -32,7 +32,10 @@ const registry = (over: Partial<IntegrationRegistry> = {}): IntegrationRegistry 
     {
       id: 'square',
       kinds: ['payments'],
-      secrets: [{ name: 'api_key', required: true }],
+      secrets: [
+        { name: 'api_key', required: true },
+        { name: 'webhook_secret', required: false },
+      ],
       settings: [
         { name: 'environment', options: ['sandbox', 'production'], required: true },
         { name: 'location_id', options: [], required: true },
@@ -58,6 +61,7 @@ const shop: Integration = {
   currencies: ['EUR', 'JPY'],
   secrets: { api_key: 'set', webhook_secret: 'not set' },
   webhook_url: null,
+  webhook_url_changed: false,
   disabled: false,
   disabled_at: null,
   spaces: [12],
@@ -145,6 +149,41 @@ test('with a public URL the row shows the address to register', async () => {
   expect(screen.queryByText(/Webhooks unavailable: set the server/)).toBeNull()
 })
 
+test('a Square account says Square’s own names for its secrets, and that it signs the address', async () => {
+  const square: Integration = {
+    ...shop,
+    id: 8,
+    provider: 'square',
+    name: 'counter',
+    display_name: 'Counter',
+    settings: { environment: 'sandbox', location_id: 'L123' },
+    webhook_url: 'https://tasks.example.com/hooks/0123456789abcdef0123456789abcdef',
+  }
+  fakeFetch(routes([square], registry({ webhooks_available: true })))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await findRow('Counter')
+  expect(within(row).getByText(/Access token set · Webhook signature key not set/)).toBeTruthy()
+  expect(within(row).getByText(/Square signs each event over this exact address/)).toBeTruthy()
+  expect(within(row).queryByText('Address changed')).toBeNull()
+})
+
+test('when the public URL changed since the signing secret was saved, the admin is told what to do', async () => {
+  const moved: Integration = {
+    ...shop,
+    webhook_url: 'https://new.example.com/hooks/0123456789abcdef0123456789abcdef',
+    webhook_url_changed: true,
+  }
+  fakeFetch(routes([moved], registry({ webhooks_available: true })))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await findRow('Shop')
+  expect(within(row).getByText('Address changed')).toBeTruthy()
+  expect(
+    within(row).getByText(
+      'The server’s public URL changed after “Webhook signing secret” was saved, so the provider still sends events to the old address. Register the address above at the provider, then save “Webhook signing secret” again.',
+    ),
+  ).toBeTruthy()
+})
+
 test('an admin connects a Stripe account: the key is sent once and the form is cleared', async () => {
   const calls = fakeFetch({ ...routes([]), 'POST /api/workspaces/1/integrations': { status: 201, body: shop } })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
@@ -182,7 +221,7 @@ test("Square's form asks for its environment and location, as the registry says"
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'square-shop' } })
   fireEvent.change(within(form).getByLabelText('Environment'), { target: { value: 'sandbox' } })
   fireEvent.change(within(form).getByLabelText('Location ID'), { target: { value: 'L123' } })
-  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-square-token-for-the-form' } })
+  fireEvent.change(within(form).getByLabelText('Access token'), { target: { value: 'fake-square-token-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '1000' } })
   fireEvent.click(within(form).getByRole('checkbox', { name: 'USD' }))
   fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
@@ -268,7 +307,7 @@ test('a provider change drops what was typed for the last one, and a check says 
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'square-shop' } })
   fireEvent.change(within(form).getByLabelText('Environment'), { target: { value: 'sandbox' } })
   fireEvent.change(within(form).getByLabelText('Location ID'), { target: { value: 'L123' } })
-  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-square-token-for-the-form' } })
+  fireEvent.change(within(form).getByLabelText('Access token'), { target: { value: 'fake-square-token-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '1000' } })
   fireEvent.click(within(form).getByRole('checkbox', { name: 'USD' }))
   fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))

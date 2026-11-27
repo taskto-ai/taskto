@@ -182,6 +182,11 @@ func (a *eventApplier) classify(ctx context.Context, ev StoredEvent, r ref, tr t
 		return a.svc.settledAlready(ctx, ev, r, tr)
 	}
 	if r.objectID == "" && ev.Kind != EventPaymentSucceeded && ev.Kind != EventPaymentRefunded {
+		if ev.Kind == EventPaymentExpired {
+			if err := a.svc.expiredKeyOfEvent(ctx, r, ev); err != nil {
+				return err
+			}
+		}
 		return Ignore(apierr.CodeIntegrationEventLate)
 	}
 	if ev.Kind != EventPaymentSucceeded && ev.Kind != EventPaymentRefunded && ev.ObjectID != "" && ev.ObjectID != r.objectID {
@@ -220,6 +225,10 @@ func (s *Service) settledAlready(ctx context.Context, ev StoredEvent, r ref, tr 
 		return Ignore(apierr.CodeIntegrationEventDuplicate)
 	case ev.Kind == EventPaymentRefunded:
 		return s.refundWaits(ev)
+	case ev.Kind == EventPaymentExpired && ev.ObjectID != "" && ev.ObjectID == r.objectID:
+		if err := s.noteLinkExpired(ctx, r.id, r.objectID, s.store.stamp(s.now())); err != nil {
+			return err
+		}
 	}
 	return Ignore(apierr.CodeIntegrationEventLate)
 }
@@ -273,8 +282,8 @@ func (s *Service) settleRef(ctx context.Context, tx *sql.Tx, r ref, ev StoredEve
 	args := []any{tr.to, at}
 	set := `state = ?, settled_at = coalesce(settled_at, ?)`
 	if tr.to == "paid" {
-		set += `, paid_object_id = ?, payment_id = ?`
-		args = append(args, nullString(ev.ObjectID), nullString(ev.PaymentID))
+		set += `, paid_object_id = ?, payment_id = ?, paid_link_id = ?`
+		args = append(args, nullString(ev.ObjectID), nullString(ev.PaymentID), nullString(ev.LinkID))
 		set += `, provider_object_id = CASE WHEN provider_object_id IS NULL AND ? != '' AND NOT EXISTS (
 				SELECT 1 FROM integration_refs o WHERE o.integration_id = ? AND o.provider_object_id = ?)
 			THEN ? ELSE provider_object_id END`
@@ -302,6 +311,16 @@ func (s *Service) settleRef(ctx context.Context, tx *sql.Tx, r ref, ev StoredEve
 		return s.settleAttemptOfEvent(ctx, tx, r, ev)
 	}
 	return nil
+}
+
+func (s *Service) expiredKeyOfEvent(ctx context.Context, r ref, ev StoredEvent) error {
+	if ev.ObjectID == "" || ev.LinkID != "" || r.successURL == "" || ev.RefToken == "" {
+		return nil
+	}
+	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'expired', object_id = ?
+		WHERE ref_id = ? AND token = ? AND outcome IS NULL AND (object_id IS NULL OR object_id = ?)`,
+		ev.ObjectID, r.id, ev.RefToken, ev.ObjectID)
+	return err
 }
 
 func (s *Service) settleAttemptOfEvent(ctx context.Context, tx *sql.Tx, r ref, ev StoredEvent) error {

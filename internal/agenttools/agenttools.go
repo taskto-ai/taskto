@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
@@ -207,7 +208,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Authorize(r)
 	var refusal *Refusal
 	if errors.As(err, &refusal) {
-		writeError(w, refusal.Status, refusal.Message)
+		writeRefusal(w, refusal)
 		return
 	}
 	if err != nil {
@@ -272,6 +273,8 @@ func (s *Service) Call(ctx context.Context, c Caller, name string, args json.Raw
 type Refusal struct {
 	Status  int
 	Message string
+	Code    apierr.Code
+	Params  apierr.Params
 }
 
 func (r *Refusal) Error() string { return r.Message }
@@ -279,47 +282,50 @@ func (r *Refusal) Error() string { return r.Message }
 func (s *Service) refusal(ctx context.Context, name string, err error) error {
 	var invalid errInvalid
 	var refused *Refusal
+	var coded *apierr.Error
 	switch {
 	case errors.As(err, &refused):
 		return refused
 	case errors.As(err, &invalid), errors.Is(err, boards.ErrInvalid), errors.Is(err, knowledge.ErrInvalid), errors.Is(err, search.ErrInvalid),
 		errors.Is(err, apps.ErrInvalid):
-		return &Refusal{http.StatusBadRequest, err.Error()}
+		return &Refusal{Status: http.StatusBadRequest, Message: err.Error()}
 	case errors.Is(err, errNotFound), errors.Is(err, boards.ErrNotFound), errors.Is(err, access.ErrNotFound), errors.Is(err, apps.ErrNotFound):
-		return &Refusal{http.StatusNotFound, errNotFound.Error()}
+		return &Refusal{Status: http.StatusNotFound, Message: errNotFound.Error()}
 	case errors.Is(err, knowledge.ErrNotFound):
-		return &Refusal{http.StatusNotFound, err.Error()}
+		return &Refusal{Status: http.StatusNotFound, Message: err.Error()}
 	case errors.Is(err, boards.ErrReadOnly), errors.Is(err, boards.ErrBoardArchived), errors.Is(err, knowledge.ErrReadOnly), errors.Is(err, apps.ErrReadOnly),
 		errors.Is(err, apps.ErrForbidden):
-		return &Refusal{http.StatusForbidden, err.Error()}
+		return &Refusal{Status: http.StatusForbidden, Message: err.Error()}
 	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull),
 		errors.Is(err, apps.ErrOffline), errors.Is(err, apps.ErrNotPublished), errors.Is(err, apps.ErrOperationReused):
-		return &Refusal{http.StatusConflict, err.Error()}
+		return &Refusal{Status: http.StatusConflict, Message: err.Error()}
 	case errors.Is(err, apps.ErrReleaseOutdated):
-		return &Refusal{http.StatusConflict, "the app's live release is not expected_release: nothing was done; call list_app_actions again and decide again"}
+		return &Refusal{Status: http.StatusConflict, Message: "the app's live release is not expected_release: nothing was done; call list_app_actions again and decide again"}
 	case errors.Is(err, apps.ErrConflict):
-		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
+		return &Refusal{Status: http.StatusConflict, Message: err.Error() + ": read the record again (query_app_rows) and decide again"}
 	case apps.IsRateLimited(err):
 		seconds, _ := apps.RetryAfter(err)
 		unit := "seconds"
 		if seconds == 1 {
 			unit = "second"
 		}
-		return &Refusal{http.StatusTooManyRequests, fmt.Sprintf("too many actions run with access tokens just now: try again in %d %s", seconds, unit)}
+		return &Refusal{Status: http.StatusTooManyRequests, Message: fmt.Sprintf("too many actions run with access tokens just now: try again in %d %s", seconds, unit)}
+	case errors.As(err, &coded):
+		return &Refusal{Status: coded.Status, Message: coded.Msg, Code: coded.Code, Params: coded.Params}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
-		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
+		return &Refusal{Status: http.StatusRequestEntityTooLarge, Message: err.Error()}
 	case errors.Is(err, quota.ErrExceeded):
-		return &Refusal{http.StatusInsufficientStorage, err.Error()}
+		return &Refusal{Status: http.StatusInsufficientStorage, Message: err.Error()}
 	case errors.Is(err, quota.ErrUnavailable):
-		return &Refusal{http.StatusServiceUnavailable, "the storage in use can't be measured right now; try again in a moment"}
+		return &Refusal{Status: http.StatusServiceUnavailable, Message: "the storage in use can't be measured right now; try again in a moment"}
 	case errors.Is(err, knowledge.ErrNotKept):
-		return &Refusal{http.StatusGone, err.Error()}
+		return &Refusal{Status: http.StatusGone, Message: err.Error()}
 	default:
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		slog.ErrorContext(ctx, "agent tools: call failed", "tool", name, "err", err)
-		return &Refusal{http.StatusInternalServerError, "internal error"}
+		return &Refusal{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 }
 
@@ -331,7 +337,21 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, name string, err 
 			return
 		}
 	}
-	writeError(w, refused.Status, refused.Message)
+	writeRefusal(w, refused)
+}
+
+func writeRefusal(w http.ResponseWriter, r *Refusal) {
+	if r.Code == "" {
+		writeError(w, r.Status, r.Message)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(r.Status)
+	body := map[string]any{"error": r.Message, "code": r.Code}
+	if len(r.Params) > 0 {
+		body["params"] = r.Params
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

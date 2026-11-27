@@ -67,11 +67,19 @@ function refuse(on: boolean) {
     .catch(() => {})
 }
 
-export function lastUser(): LastUser | null {
+function markerOf(raw: string | null): LastUser | null {
   if (refusedNow()) return null
   try {
-    const v = JSON.parse(window.localStorage.getItem(LAST) ?? 'null') as Partial<LastUser> | null
+    const v = JSON.parse(raw ?? 'null') as Partial<LastUser> | null
     return v && Number.isInteger(v.id) && typeof v.name === 'string' ? (v as LastUser) : null
+  } catch {
+    return null
+  }
+}
+
+export function lastUser(): LastUser | null {
+  try {
+    return markerOf(window.localStorage.getItem(LAST))
   } catch {
     return null
   }
@@ -120,7 +128,7 @@ export function watchAccount() {
   broadcast()
   window.addEventListener('storage', (e: StorageEvent) => {
     if (e.key !== null && e.key !== LAST) return
-    notify(lastUser()?.id ?? null)
+    notify(e.key === null ? null : (markerOf(e.newValue)?.id ?? null))
   })
 }
 

@@ -215,7 +215,7 @@ func TestTemplatesHaveIcons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 3 {
+	if len(all) != 4 {
 		t.Fatalf("%d templates", len(all))
 	}
 	for _, tpl := range all {

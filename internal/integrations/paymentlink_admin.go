@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -13,16 +14,34 @@ import (
 )
 
 type PaymentLinkOutcome struct {
-	EffectID   int64  `json:"effect_id"`
-	AppID      int64  `json:"app_id"`
-	SpaceID    int64  `json:"space_id"`
-	RecordID   int64  `json:"record_id"`
-	Amount     string `json:"amount"`
-	Currency   string `json:"currency"`
-	Since      string `json:"since"`
-	Waiting    bool   `json:"waiting"`
-	CanConfirm bool   `json:"can_confirm"`
-	ObjectID   string `json:"object_id"`
+	EffectID   int64                `json:"effect_id"`
+	AppID      int64                `json:"app_id"`
+	SpaceID    int64                `json:"space_id"`
+	RecordID   int64                `json:"record_id"`
+	Amount     string               `json:"amount"`
+	Currency   string               `json:"currency"`
+	Since      string               `json:"since"`
+	Waiting    bool                 `json:"waiting"`
+	CanConfirm bool                 `json:"can_confirm"`
+	ObjectID   string               `json:"object_id"`
+	Code       string               `json:"code,omitempty"`
+	Params     apierr.Params        `json:"params,omitempty"`
+	Attempts   []PaymentLinkAttempt `json:"attempts" apitypes:"nonnull"`
+}
+
+const (
+	AttemptCheckoutSession = "checkout_session"
+	AttemptPaymentLink     = "payment_link"
+)
+
+type PaymentLinkAttempt struct {
+	Reference      string `json:"reference"`
+	Kind           string `json:"kind"`
+	ObjectID       string `json:"object_id"`
+	ObjectVerified bool   `json:"object_verified"`
+	AccountID      string `json:"account_id"`
+	Mode           string `json:"mode"`
+	FirstSentAt    string `json:"first_sent_at"`
 }
 
 type PaymentLinkOutcomes struct {
@@ -39,8 +58,8 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		return nil, err
 	}
 	rows, err := s.store.db.QueryContext(ctx, `
-		SELECT r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
-			coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`,
+		SELECT r.id, r.success_url, r.account_id, r.account_mode, r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
+			coalesce(e.state, ''), coalesce(e.error_code, ''), e.error_params, `+confirmable+`,
 			coalesce(k.object_id, '')
 		FROM integration_refs r
 		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
@@ -54,12 +73,15 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 	}
 	defer rows.Close()
 	out := []PaymentLinkOutcome{}
+	var refs []refView
 	for rows.Next() {
 		var o PaymentLinkOutcome
+		var v refView
 		var minor int64
 		var state, code string
+		var params sql.NullString
 		var clean bool
-		if err := rows.Scan(&o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &clean, &o.ObjectID); err != nil {
+		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID); err != nil {
 			return nil, err
 		}
 		if !spaces[o.SpaceID] || len(out) >= maxOutcomesListed {
@@ -68,7 +90,57 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		o.Amount = currency.Format(minor, o.Currency)
 		o.CanConfirm = clean && state == "failed" && code == string(apierr.CodeIntegrationOutcomeUnknown)
 		o.Waiting = state == "pending" || state == "running"
+		if !o.Waiting && !o.CanConfirm {
+			o.Code = code
+			if params.Valid && params.String != "" {
+				_ = json.Unmarshal([]byte(params.String), &o.Params)
+			}
+		}
 		out = append(out, o)
+		refs = append(refs, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Attempts, err = s.attempts(ctx, refs[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+type refView struct {
+	id         int64
+	successURL string
+	account    string
+	mode       string
+}
+
+func (s *Service) attempts(ctx context.Context, r refView) ([]PaymentLinkAttempt, error) {
+	rows, err := s.store.db.QueryContext(ctx, `
+		SELECT token, coalesce(object_id, ''), object_verified, coalesce(first_sent_at, '')
+		FROM integration_ref_attempts WHERE ref_id = ? ORDER BY seq`, r.id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kind := AttemptPaymentLink
+	if r.successURL != "" {
+		kind = AttemptCheckoutSession
+	}
+	out := []PaymentLinkAttempt{}
+	for rows.Next() {
+		a := PaymentLinkAttempt{Kind: kind, AccountID: r.account, Mode: r.mode}
+		var verified bool
+		if err := rows.Scan(&a.Reference, &a.ObjectID, &verified, &a.FirstSentAt); err != nil {
+			return nil, err
+		}
+		a.ObjectVerified = a.ObjectID != "" && verified
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

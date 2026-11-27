@@ -344,6 +344,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}()
 	stopIntegrationEvents := integrationSvc.StartEvents(ctx)
 	defer stopIntegrationEvents()
+	stopIntegrationPolling := integrationSvc.StartPolling(ctx)
+	defer stopIntegrationPolling()
 	var accounts *auth.Service
 	handler, err := server.New(version, sqlDB, server.Options{
 		AccountsReady: func(svc *auth.Service) {

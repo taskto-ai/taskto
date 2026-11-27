@@ -1194,14 +1194,14 @@ test('without Web Locks, a subscription another tab is still ending is never reu
     'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
     'PUT /api/me/push/subscription': { status: 204 },
   })
-  localStorage.setItem('taskto.push-unsubscribing', JSON.stringify([{ id: 'other-tab', at: Date.now() }]))
+  localStorage.setItem('taskto.push-unsubscribing:other-tab', String(Date.now()))
   await expect(enablePush(1)).rejects.toBeInstanceOf(PushBusy)
   localStorage.setItem('taskto.push', '1')
   expect(await syncPush(1)).toBe(false)
   expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   expect(browser.subscribe).not.toHaveBeenCalled()
 
-  localStorage.removeItem('taskto.push-unsubscribing')
+  localStorage.removeItem('taskto.push-unsubscribing:other-tab')
   expect(await syncPush(1)).toBe(true)
 })
 
@@ -1283,4 +1283,231 @@ test("turning push off ends a subscription whose flag was another account's befo
   expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
   expect(sub.unsubscribe).toHaveBeenCalled()
   expect(localStorage.getItem('taskto.push')).toBeNull()
+})
+
+test('a tab closed while turning push off leaves it off: shown off elsewhere, and never registered again at a start', async () => {
+  const held = heldUnsubscribe()
+  pushBrowser({ permission: 'granted', subscription: held.sub })
+  localStorage.setItem('taskto.push', '1')
+  const calls = fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'DELETE /api/me/push/subscription': { status: 204 },
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  const off = disablePush().catch(() => {})
+  try {
+    await vi.waitFor(() => expect(held.sub.unsubscribe).toHaveBeenCalled())
+    expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
+    const later = Date.now() + 61_000
+    vi.spyOn(Date, 'now').mockReturnValue(later)
+    vi.resetModules()
+    const other = await import('./push')
+    expect(await other.pushState({ platform: 'other', installed: false } as never)).toBe('off')
+    expect(await other.syncPush(1)).toBe(false)
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  } finally {
+    held.end()
+    await off
+  }
+})
+
+test('without Web Locks, two tabs ending the subscription at once never rewrite each other’s mark', async () => {
+  const first = heldUnsubscribe()
+  const browser = pushBrowser({ permission: 'granted', subscription: first.sub })
+  fakeFetch({
+    'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  localStorage.setItem('taskto.push', '9')
+  const leaving = leavePush(9)
+  await vi.waitFor(() => expect(first.sub.unsubscribe).toHaveBeenCalled())
+  vi.resetModules()
+  const other = await import('./push')
+  const second = heldUnsubscribe()
+  browser.state.subscription = second.sub
+  const written: string[] = []
+  const set = Storage.prototype.setItem
+  const remove = Storage.prototype.removeItem
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    written.push(key)
+    set.call(this, key, value)
+  })
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+    written.push(key)
+    remove.call(this, key)
+  })
+  const otherLeaving = other.leavePush(9)
+  try {
+    await vi.waitFor(() => expect(second.sub.unsubscribe).toHaveBeenCalled())
+    const theirs = written.filter((k) => k.startsWith('taskto.push-unsubscribing'))
+    expect(theirs.length).toBeGreaterThan(0)
+    written.length = 0
+    first.end()
+    await leaving
+    expect(written.filter((k) => theirs.includes(k))).toEqual([])
+    await expect(enablePush(1)).rejects.toBeInstanceOf(PushBusy)
+  } finally {
+    first.end()
+    second.end()
+    await leaving
+    await otherLeaving
+  }
+})
+
+test('without Web Locks, a start that registers the device again stops when another tab turned push off meanwhile', async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  const calls = fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
+  const registration = await navigator.serviceWorker.getRegistration()
+  let answer: (() => void) | undefined
+  vi.mocked(registration?.pushManager.getSubscription as () => Promise<unknown>).mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        answer = () => done(sub)
+      }),
+  )
+  const synced = syncPush(1)
+  await vi.waitFor(() => expect(answer).toBeDefined())
+  await new Promise((r) => setTimeout(r, 0))
+  localStorage.setItem('taskto.push', 'off:1')
+  answer?.()
+  expect(await synced).toBe(false)
+  expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+})
+
+test("a sign-out's removal of push stops when a newer login of the account started while it waited", async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  const registration = await navigator.serviceWorker.getRegistration()
+  let answer: (() => void) | undefined
+  vi.mocked(registration?.pushManager.getSubscription as () => Promise<unknown>).mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        answer = () => done(sub)
+      }),
+  )
+  let older = true
+  const leaving = leavePush(1, () => older)
+  await vi.waitFor(() => expect(answer).toBeDefined())
+  older = false
+  localStorage.setItem('taskto.push', '1')
+  answer?.()
+  await leaving
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+})
+
+test('marks of unsubscribes long over, or that are no time at all, are removed when looked at', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
+  localStorage.setItem('taskto.push', '1')
+  localStorage.setItem('taskto.push-unsubscribing:closed-tab', String(Date.now() - 120_000))
+  localStorage.setItem('taskto.push-unsubscribing:garbled', 'not a time')
+  expect(await syncPush(1)).toBe(true)
+  expect(localStorage.getItem('taskto.push-unsubscribing:closed-tab')).toBeNull()
+  expect(localStorage.getItem('taskto.push-unsubscribing:garbled')).toBeNull()
+})
+
+test("without Web Locks, a turn-off that fails never puts push back on over another tab's turn-off", async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  let deletes = 0
+  let fail: () => void = () => {}
+  fakeFetch({
+    'DELETE /api/me/push/subscription': () => {
+      deletes++
+      return deletes === 1
+        ? new Promise((done) => {
+            fail = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+          })
+        : new Promise(() => {})
+    },
+  })
+  const mine = disablePush().catch(() => {})
+  await vi.waitFor(() => expect(deletes).toBe(1))
+  vi.resetModules()
+  const other = await import('./push')
+  ;(await import('../session')).beginSession(1)
+  void other.disablePush().catch(() => {})
+  await vi.waitFor(() => expect(deletes).toBe(2))
+  fail()
+  await mine
+  expect(localStorage.getItem('taskto.push')).not.toBe('1')
+})
+
+test('without Web Locks, two turn-offs that both fail leave push on as it was, registered again at a start', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  const fails: (() => void)[] = []
+  const calls = fakeFetch({
+    'DELETE /api/me/push/subscription': () =>
+      new Promise((done) => {
+        fails.push(() => done({ status: 500, body: { error: 'internal error', code: 'internal' } }))
+      }),
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  const first = disablePush().catch(() => {})
+  await vi.waitFor(() => expect(fails).toHaveLength(1))
+  vi.resetModules()
+  const other = await import('./push')
+  ;(await import('../session')).beginSession(1)
+  const second = other.disablePush().catch(() => {})
+  await vi.waitFor(() => expect(fails).toHaveLength(2))
+  fails[0]()
+  await first
+  fails[1]()
+  await second
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+  expect(await other.syncPush(1)).toBe(true)
+  expect(calls.some((c) => c.method === 'PUT')).toBe(true)
+})
+
+test('without Web Locks, a turn-off that fails while an earlier one is still on its way leaves push off', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  const fails: (() => void)[] = []
+  const calls = fakeFetch({
+    'DELETE /api/me/push/subscription': () =>
+      new Promise((done) => {
+        fails.push(() => done({ status: 500, body: { error: 'internal error', code: 'internal' } }))
+      }),
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  const first = disablePush().catch(() => {})
+  await vi.waitFor(() => expect(fails).toHaveLength(1))
+  vi.resetModules()
+  const other = await import('./push')
+  ;(await import('../session')).beginSession(1)
+  const second = other.disablePush().catch(() => {})
+  await vi.waitFor(() => expect(fails).toHaveLength(2))
+  fails[1]()
+  await second
+  expect(localStorage.getItem('taskto.push')).not.toBe('1')
+  expect(await other.syncPush(1)).toBe(false)
+  expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  fails[0]()
+  await first
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+})
+
+test("turning push off over another account's stale flag never ends that account's push turned on again meanwhile", async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '2')
+  let answer: (() => void) | undefined
+  fakeFetch({
+    'DELETE /api/me/push/subscription': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 204 })
+      }),
+  })
+  const off = disablePush()
+  await vi.waitFor(() => expect(answer).toBeDefined())
+  localStorage.setItem('taskto.push', '2')
+  answer?.()
+  await off
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('2')
 })

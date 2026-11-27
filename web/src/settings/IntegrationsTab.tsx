@@ -9,7 +9,7 @@ import {
   type Space,
   ws,
 } from '../api'
-import { type Format, has, type Key, useFormat, useT } from '../i18n'
+import { has, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -24,6 +24,7 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Select } from '../ui/Select'
+import { amounts, type Exponents } from './money'
 import { Alert, CopyButton, FormError, Loading, Section, SettingsTab, useAction, useRefocus } from './parts'
 
 type Translate = ReturnType<typeof useT>
@@ -33,20 +34,9 @@ function label(t: Translate, group: string, code: string): string {
   return has(key) ? t(key as Key) : code
 }
 
-type Exponents = Record<string, number>
-
-function money(f: Format, exponents: Exponents, minor: number, currency: string): string {
-  const digits = exponents[currency] ?? 2
-  return f.number(minor / 10 ** digits, {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  })
-}
-
-function amounts(f: Format, exponents: Exponents, minor: number, currencies: string[]): string {
-  return f.list(currencies.map((c) => money(f, exponents, minor, c)))
+function secretLabel(t: Translate, provider: string, code: string): string {
+  const key = `settings.integrations.secretOf.${provider}.${code}`
+  return has(key) ? t(key as Key) : label(t, 'secret', code)
 }
 
 export function IntegrationsTab({ workspace }: { workspace: number }) {
@@ -208,6 +198,11 @@ function IntegrationRow({
               {t('settings.providers.failing')}
             </Badge>
           )}
+          {i.webhook_url_changed && (
+            <Badge tone="warning" dot>
+              {t('settings.integrations.webhookMoved')}
+            </Badge>
+          )}
           {i.disabled && <Badge>{t('settings.integrations.switchedOff')}</Badge>}
         </>
       }
@@ -222,12 +217,12 @@ function IntegrationRow({
           </span>
           <span>
             {i.secrets.api_key === 'set'
-              ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'api_key') })
-              : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'api_key') })}
+              ? t('settings.integrations.secretSet', { name: secretLabel(t, i.provider, 'api_key') })
+              : t('settings.integrations.secretNotSet', { name: secretLabel(t, i.provider, 'api_key') })}
             {' · '}
             {i.secrets.webhook_secret === 'set'
-              ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'webhook_secret') })
-              : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'webhook_secret') })}
+              ? t('settings.integrations.secretSet', { name: secretLabel(t, i.provider, 'webhook_secret') })
+              : t('settings.integrations.secretNotSet', { name: secretLabel(t, i.provider, 'webhook_secret') })}
           </span>
           <span>
             {t('settings.integrations.limits', {
@@ -249,6 +244,14 @@ function IntegrationRow({
               t('settings.integrations.polling')
             )}
           </span>
+          {i.webhook_url_changed && (
+            <span className="settings-error-text">
+              {t('settings.integrations.webhookMovedHelp', { secret: secretLabel(t, i.provider, 'webhook_secret') })}
+            </span>
+          )}
+          {i.webhook_url && i.provider === 'square' && !i.webhook_url_changed && (
+            <span>{t('settings.integrations.squareSignsAddress')}</span>
+          )}
           <span role="status" className="settings-check-status">
             {checking ? t('settings.integrations.checking') : check?.ok ? t('settings.integrations.checkOk') : ''}
           </span>
@@ -403,18 +406,6 @@ function IntegrationForm({
 }) {
   const t = useT()
   const f = useFormat()
-  const action = useAction(
-    new Map([
-      ['name', t('settings.actions.name')],
-      ['display_name', t('settings.providers.displayName')],
-      ['max_amount_minor', t('settings.integrations.ceiling')],
-      ['currencies', t('settings.integrations.currencies')],
-      ...registry.providers.flatMap((p) => [
-        ...p.secrets.map((x) => [x.name, label(t, 'secret', x.name)] as const),
-        ...p.settings.map((x) => [x.name, label(t, 'setting', x.name)] as const),
-      ]),
-    ]),
-  )
   const formId = useId()
   const [form, setForm] = useState({
     provider: integration?.provider ?? registry.providers[0]?.id ?? '',
@@ -426,6 +417,16 @@ function IntegrationForm({
   const [secrets, setSecrets] = useState<Record<string, string>>({})
   const [currencies, setCurrencies] = useState<string[]>(integration?.currencies ?? [])
   const provider: IntegrationProvider | undefined = registry.providers.find((p) => p.id === form.provider)
+  const action = useAction(
+    new Map([
+      ['name', t('settings.actions.name')],
+      ['display_name', t('settings.providers.displayName')],
+      ['max_amount_minor', t('settings.integrations.ceiling')],
+      ['currencies', t('settings.integrations.currencies')],
+      ...(provider?.secrets ?? []).map((x) => [x.name, secretLabel(t, provider?.id ?? '', x.name)] as const),
+      ...(provider?.settings ?? []).map((x) => [x.name, label(t, 'setting', x.name)] as const),
+    ]),
+  )
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((x) => ({ ...x, [key]: e.target.value }))
   const pickProvider = (e: { target: { value: string } }) => {
@@ -546,7 +547,7 @@ function IntegrationForm({
         ))}
         {provider?.secrets.map((spec) => {
           const stored = integration?.secrets[spec.name] === 'set'
-          const name = label(t, 'secret', spec.name)
+          const name = secretLabel(t, provider.id, spec.name)
           return (
             <Field
               key={spec.name}

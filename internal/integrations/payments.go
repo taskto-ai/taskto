@@ -21,6 +21,25 @@ type PaymentProvider interface {
 	FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (link Link, found, expired bool, err error)
 	LinkState(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (LinkState, error)
 	AccountID(ctx context.Context, creds Credentials, c *Client) (string, error)
+	KeyKept() time.Duration
+}
+
+type PaymentPoller interface {
+	ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error)
+}
+
+type Observed struct {
+	Expired  bool
+	Livemode bool
+	Payments []ObservedPayment
+}
+
+type ObservedPayment struct {
+	ObjectID, PaymentID string
+	AmountMinor         int64
+	Currency            string
+	Livemode            bool
+	PaidAt              time.Time
 }
 
 type NewLink struct {
@@ -63,6 +82,7 @@ type CallError struct {
 	Status         int
 	NotExecuted    bool
 	OutcomeUnknown bool
+	RetryAfter     time.Duration
 }
 
 func (e *CallError) Error() string {
@@ -403,16 +423,165 @@ func stripeGet(ctx context.Context, creds Credentials, c *Client, pathAndQuery s
 		return nil, resp.StatusCode, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, stripeLookupFailure(resp.StatusCode)
+		return nil, resp.StatusCode, stripeLookupFailure(resp.StatusCode, resp.Header)
 	}
 	return body, resp.StatusCode, nil
 }
 
-func stripeLookupFailure(status int) error {
+const maxRetryAfter = time.Hour
+
+func stripeLookupFailure(status int, h http.Header) error {
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return &CallError{Kind: CallCredentials, Status: status}
 	}
-	return &CallError{Kind: CallUnreachable, Status: status}
+	ce := &CallError{Kind: CallUnreachable, Status: status}
+	if status == http.StatusTooManyRequests {
+		if secs, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && secs > 0 {
+			ce.RetryAfter = min(time.Duration(secs)*time.Second, maxRetryAfter)
+		}
+	}
+	return ce
+}
+
+type polledSession struct {
+	ID            string        `json:"id"`
+	Object        string        `json:"object"`
+	Mode          string        `json:"mode"`
+	Status        string        `json:"status"`
+	PaymentStatus string        `json:"payment_status"`
+	PaymentIntent *polledIntent `json:"payment_intent"`
+	PaymentLink   *string       `json:"payment_link"`
+	AmountTotal   int64         `json:"amount_total"`
+	Currency      string        `json:"currency"`
+	Livemode      bool          `json:"livemode"`
+}
+
+const stripePollExpand = "payment_intent.latest_charge"
+
+type polledIntent struct {
+	ID            string
+	ChargeCreated int64
+}
+
+func (pi *polledIntent) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		return json.Unmarshal(b, &pi.ID)
+	}
+	var o struct {
+		ID           string          `json:"id"`
+		Object       string          `json:"object"`
+		LatestCharge json.RawMessage `json:"latest_charge"`
+	}
+	if err := json.Unmarshal(b, &o); err != nil {
+		return err
+	}
+	if o.Object != "payment_intent" {
+		return errors.New("integrations: payment_intent isn't a PaymentIntent")
+	}
+	pi.ID = o.ID
+	if len(o.LatestCharge) > 0 && o.LatestCharge[0] == '{' {
+		var ch struct {
+			Object  string `json:"object"`
+			Created int64  `json:"created"`
+		}
+		if err := json.Unmarshal(o.LatestCharge, &ch); err != nil {
+			return err
+		}
+		if ch.Object == "charge" {
+			pi.ChargeCreated = ch.Created
+		}
+	}
+	return nil
+}
+
+func (o polledSession) payment() (ObservedPayment, bool) {
+	if o.Object != "checkout.session" || o.Mode != "payment" || o.Status != "complete" || o.PaymentStatus != "paid" ||
+		!stripeSessionIDRe.MatchString(o.ID) || o.AmountTotal <= 0 || !currencyCodeRe.MatchString(o.Currency) {
+		return ObservedPayment{}, false
+	}
+	p := ObservedPayment{ObjectID: o.ID, AmountMinor: o.AmountTotal, Currency: strings.ToUpper(o.Currency), Livemode: o.Livemode}
+	if o.PaymentIntent != nil {
+		if !stripeIntentIDRe.MatchString(o.PaymentIntent.ID) {
+			return ObservedPayment{}, false
+		}
+		p.PaymentID = o.PaymentIntent.ID
+		if o.PaymentIntent.ChargeCreated > 0 {
+			p.PaidAt = time.Unix(o.PaymentIntent.ChargeCreated, 0).UTC()
+		}
+	}
+	return p, true
+}
+
+func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error) {
+	if hosted {
+		return stripeReadLinkPayments(ctx, creds, c, objectID)
+	}
+	if !stripeSessionID.MatchString(objectID) {
+		return Observed{}, &CallError{Kind: CallRefused}
+	}
+	q := url.Values{"expand[]": {stripePollExpand}}
+	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions/"+objectID+"?"+q.Encode())
+	if err != nil {
+		return Observed{}, err
+	}
+	var out polledSession
+	if err := json.Unmarshal(body, &out); err != nil || out.Object != "checkout.session" || out.ID != objectID {
+		return Observed{}, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	switch out.Status {
+	case "open":
+		return Observed{Livemode: out.Livemode}, nil
+	case "expired":
+		return Observed{Livemode: out.Livemode, Expired: true}, nil
+	case "complete":
+		if out.PaymentStatus != "paid" {
+			return Observed{Livemode: out.Livemode}, nil
+		}
+		p, ok := out.payment()
+		if !ok {
+			return Observed{}, &CallError{Kind: CallRefused, Status: status}
+		}
+		return Observed{Livemode: out.Livemode, Payments: []ObservedPayment{p}}, nil
+	}
+	return Observed{}, &CallError{Kind: CallRefused, Status: status}
+}
+
+func stripeReadLinkPayments(ctx context.Context, creds Credentials, c *Client, linkID string) (Observed, error) {
+	if !stripeLinkID.MatchString(linkID) {
+		return Observed{}, &CallError{Kind: CallRefused}
+	}
+	q := url.Values{"payment_link": {linkID}, "status": {"complete"}, "limit": {strconv.Itoa(findPageSize)},
+		"expand[]": {"data." + stripePollExpand}}
+	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions?"+q.Encode())
+	if err != nil {
+		return Observed{}, err
+	}
+	var page struct {
+		Object  string           `json:"object"`
+		HasMore *bool            `json:"has_more"`
+		Data    *[]polledSession `json:"data"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || page.HasMore == nil {
+		return Observed{}, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	var out Observed
+	data := *page.Data
+	for i := len(data) - 1; i >= 0; i-- {
+		o := data[i]
+		if o.PaymentLink == nil || *o.PaymentLink != linkID {
+			continue
+		}
+		if o.Status != "complete" || o.PaymentStatus != "paid" {
+			continue
+		}
+		p, ok := o.payment()
+		if !ok {
+			return Observed{}, &CallError{Kind: CallRefused, Status: status}
+		}
+		out.Livemode = p.Livemode
+		out.Payments = append(out.Payments, p)
+	}
+	return out, nil
 }
 
 func stripeFailure(status int, body []byte) error {
@@ -433,6 +602,8 @@ func stripeFailure(status int, body []byte) error {
 	}
 	return &CallError{Kind: CallRefused, Status: status, OutcomeUnknown: true}
 }
+
+func (stripe) KeyKept() time.Duration { return stripeKeyKept }
 
 func (stripe) AccountID(ctx context.Context, creds Credentials, c *Client) (string, error) {
 	body, status, err := stripeGet(ctx, creds, c, "/v1/account")

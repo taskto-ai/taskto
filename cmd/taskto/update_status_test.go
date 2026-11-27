@@ -20,6 +20,7 @@ func (e *updEnv) public() updatestatus.Status {
 }
 
 func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/update-notify-url", "https://hooks.example.com/notify-path-token\n")
@@ -66,6 +67,7 @@ func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerSaysHoldAndChannel(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("etc/update.hold", "")
@@ -88,6 +90,7 @@ func TestUpdateStatusForTheServerSaysHoldAndChannel(t *testing.T) {
 }
 
 func TestUpdateDryRunLeavesTheServersStatusAlone(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, _ := e.run("--dry-run"); code != 0 {
@@ -99,6 +102,7 @@ func TestUpdateDryRunLeavesTheServersStatusAlone(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -117,6 +121,7 @@ func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/worker-firewall.sh", firewallScript+"# changed\n")
@@ -129,6 +134,7 @@ func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -166,6 +172,7 @@ func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T
 }
 
 func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.setRunning("v0.9.9")
@@ -180,6 +187,7 @@ func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
 }
 
 func TestUpdateWithoutAWritableServerStatusStillUpdates(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("state/public", "in the way")
@@ -190,6 +198,7 @@ func TestUpdateWithoutAWritableServerStatusStillUpdates(t *testing.T) {
 }
 
 func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
+	t.Parallel()
 	compose := readRepoFile(t, "compose.yaml")
 	for _, want := range []string{
 		"TASKTO_UPDATE_STATUS_DIR: /update-status",
@@ -215,6 +224,7 @@ func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -242,7 +252,7 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 		t.Fatalf("off: %+v", s.NeedsPerson)
 	}
 	e.write("etc/install.env", strings.Replace(e.read("etc/install.env"), "TASKTO_UPDATE_CHANNEL='off'\n", "", 1))
-	e.gh.releases = []map[string]any{}
+	e.gh.locked(func() { e.gh.releases = []map[string]any{} })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -252,12 +262,13 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 }
 
 func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "manual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	e.gh.releases = nil
+	e.gh.locked(func() { e.gh.releases = nil })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -267,6 +278,7 @@ func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t 
 }
 
 func TestUpdateStatusForTheServerGivesTheCurrentReasonForAStop(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")

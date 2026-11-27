@@ -215,11 +215,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 	}
 	res := Result{}
 
-	private, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
+	private, err := s.spaces(ctx, `SELECT id, workspace_id, generation FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
-	shared, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE kind = 'shared' ORDER BY id`)
+	shared, err := s.spaces(ctx, `SELECT id, workspace_id, generation FROM spaces WHERE kind = 'shared' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,8 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
 	for _, sp := range spaces {
 		var one int
-		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND (? = 0 OR generation = ?)`,
+			sp.ID, sp.Generation, sp.Generation).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			s.o.Knowledge.ForgetSpace(sp)
 		}
@@ -382,7 +383,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 	var out []access.Space
 	for rows.Next() {
 		sp := access.Space{Access: access.Write}
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.Generation); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)

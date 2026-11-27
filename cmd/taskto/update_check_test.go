@@ -10,11 +10,13 @@ import (
 )
 
 func (e *updEnv) releasedAt(tag, at string) {
-	for _, r := range e.gh.releases {
-		if r["tag_name"] == tag {
-			r["published_at"] = at
+	e.gh.locked(func() {
+		for _, r := range e.gh.releases {
+			if r["tag_name"] == tag {
+				r["published_at"] = at
+			}
 		}
-	}
+	})
 }
 
 func (e *updEnv) wantOnlyLooked() {
@@ -26,12 +28,15 @@ func (e *updEnv) wantOnlyLooked() {
 	if e.exists("state/status.json") {
 		e.t.Error("a check wrote a run's status")
 	}
-	if len(e.gh.notifications) != 0 {
+	var sent int
+	e.gh.locked(func() { sent = len(e.gh.notifications) })
+	if sent != 0 {
 		e.t.Error("a check notified")
 	}
 }
 
 func TestUpdateCheckFindsTheNextReleaseAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.write("etc/update-notify-url", e.server.URL+"/notify/x\n")
 	e.release(updOld, "", false, false)
@@ -69,6 +74,7 @@ func TestUpdateCheckFindsTheNextReleaseAndChangesNothing(t *testing.T) {
 }
 
 func TestUpdateCheckMarksAReleaseThatNeedsAPerson(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	e.release("v0.4.0", "Nothing special.\n", false, false)
@@ -92,6 +98,7 @@ func TestUpdateCheckMarksAReleaseThatNeedsAPerson(t *testing.T) {
 }
 
 func TestUpdateCheckOnTheMainChannel(t *testing.T) {
+	t.Parallel()
 	sha := func(c string) string { return strings.Repeat(c, 40) }
 	a, unpublished, green := sha("a"), sha("d"), sha("e")
 	e := newUpdEnv(t)
@@ -103,8 +110,10 @@ func TestUpdateCheckOnTheMainChannel(t *testing.T) {
 	run := func(sha, at string) map[string]any {
 		return map[string]any{"head_sha": sha, "head_branch": "main", "conclusion": "success", "head_commit": map[string]any{"timestamp": at}}
 	}
-	e.gh.runs = []map[string]any{run(unpublished, "2026-11-26T09:00:00Z"), run(green, "2026-11-26T08:00:00Z"), run(a, "2026-11-25T08:00:00Z")}
-	e.gh.compare = map[string]string{unpublished: "ahead", green: "ahead", a: "identical"}
+	e.gh.locked(func() {
+		e.gh.runs = []map[string]any{run(unpublished, "2026-11-26T09:00:00Z"), run(green, "2026-11-26T08:00:00Z"), run(a, "2026-11-25T08:00:00Z")}
+		e.gh.compare = map[string]string{unpublished: "ahead", green: "ahead", a: "identical"}
+	})
 	e.publish(green)
 	e.failCalls(`^manifest inspect \S+:` + unpublished + ` @`)
 	if code, _ := e.run("--check"); code != 0 {
@@ -124,19 +133,20 @@ func TestUpdateCheckOnTheMainChannel(t *testing.T) {
 }
 
 func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, _ := e.run("--check"); code != 0 {
 		t.Fatal("check")
 	}
-	e.gh.failPages = map[int]bool{1: true}
+	e.gh.locked(func() { e.gh.failPages = map[int]bool{1: true} })
 	if code, _ := e.run("--check"); code != 0 {
 		t.Fatal("check, GitHub down")
 	}
 	if s := e.public(); s.Available == nil || s.Available.Version != updNew {
 		t.Fatalf("GitHub didn't answer, and what was found went: %+v", s.Available)
 	}
-	e.gh.failPages = nil
+	e.gh.locked(func() { e.gh.failPages = nil })
 
 	e.write("state/available.json", `{"from":"v0.1.0","looked":"2026-11-26T06:00:00Z","version":"v0.3.0","sha":"","published":"","manual_upgrade":false,"repo":"taskto-ai/taskto"}`)
 	if code, _ := e.run("--publish-status"); code != 0 {
@@ -156,6 +166,7 @@ func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
 }
 
 func TestUpdateCheckDoesNotWaitForARun(t *testing.T) {
+	t.Parallel()
 	needTools(t, "flock")
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -184,6 +195,7 @@ func TestUpdateCheckDoesNotWaitForARun(t *testing.T) {
 }
 
 func TestUpdateCheckTakesNoOtherOption(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	for _, args := range [][]string{{"--check", "--dry-run"}, {"--check", "--to", updNew}, {"--check", "--publish-status"}, {"--check", "--requested"}, {"--check", "--clear-block"}} {
 		if code, _ := e.run(args...); code != 2 {
@@ -196,6 +208,7 @@ func TestUpdateCheckTakesNoOtherOption(t *testing.T) {
 }
 
 func TestUpdateCheckUnits(t *testing.T) {
+	t.Parallel()
 	timer := readRepoFile(t, "deploy/taskto-update-check.timer")
 	for _, want := range []string{"Persistent=true", "RandomizedDelaySec=", "OnCalendar=", "WantedBy=timers.target"} {
 		if !strings.Contains(timer, want) {
@@ -215,6 +228,7 @@ func TestUpdateCheckUnits(t *testing.T) {
 }
 
 func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.setVersion("dev")
@@ -230,6 +244,7 @@ func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
 }
 
 func TestRunbookCheckUnitsAreOptionalAndACopyFailureStops(t *testing.T) {
+	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
 	for _, want := range []string{
 		`taskto-update-check.*) git cat-file -e "${TASKTO_VERSION}:deploy/$f"`,

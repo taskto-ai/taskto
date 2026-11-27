@@ -58,6 +58,7 @@ type Space struct {
 	Name             string  `json:"name"`
 	ArchivedAt       *string `json:"archived_at"`
 	CreatedAt        string  `json:"created_at"`
+	Generation       int64   `json:"-"`
 	OfflineDownloads bool    `json:"offline_downloads"`
 	Role             Role    `json:"role,omitempty"`
 	Access           Access  `json:"access"`
@@ -113,7 +114,7 @@ func New(sqlDB *sql.DB, a *auth.Service) *Checker {
 	return &Checker{db: sqlDB, reads: sqlDB, auth: a}
 }
 
-const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.created_at, s.offline_downloads,
+const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.created_at, s.offline_downloads, s.generation,
 	CASE WHEN s.kind = 'private' AND s.owner_id = m.user_id THEN 'owner' ELSE coalesce(sm.role, '') END`
 
 const fromSpaceFor = `
@@ -126,7 +127,7 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanSpace(row scanner) (Space, error) {
 	var s Space
-	if err := row.Scan(&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Role); err != nil {
+	if err := row.Scan(&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Generation, &s.Role); err != nil {
 		return Space{}, err
 	}
 	s.Access = s.access()
@@ -208,7 +209,7 @@ func CanReadIn(ctx context.Context, q Querier, userID, spaceID int64) (bool, err
 
 func (c *Checker) CheckWith(ctx context.Context, userID, spaceID int64, columns, joins string, args []any, dest ...any) (Space, error) {
 	var s Space
-	all := append([]any{&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Role}, dest...)
+	all := append([]any{&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Generation, &s.Role}, dest...)
 	query := `SELECT ` + spaceColumns + `, ` + columns + fromSpaceFor + ` ` + joins + ` WHERE s.id = ?`
 	params := append(append([]any{userID}, args...), spaceID)
 	err := c.reads.QueryRowContext(ctx, query, params...).Scan(all...)

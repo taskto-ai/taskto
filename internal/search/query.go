@@ -106,13 +106,69 @@ const (
 
 const queryTimeout = 15 * time.Second
 
-func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+func (x *Index) Search(ctx context.Context, c *access.Checker, userID, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+	res, err := x.searchIndex(ctx, workspaceID, spaces, q)
+	if err != nil {
+		return Results{}, err
+	}
+	if x.beforeRelease != nil {
+		x.beforeRelease()
+	}
+	return x.stillReadable(ctx, c, userID, spaces, res)
+}
+
+func (x *Index) stillReadable(ctx context.Context, c *access.Checker, userID int64, spaces []access.Space, res Results) (Results, error) {
+	readable := make(map[int64]bool, len(spaces))
+	err := c.Snapshot(ctx, func(snap *access.Checker, _ *sql.Tx) error {
+		for _, was := range spaces {
+			cur, err := snap.Check(ctx, userID, was.ID)
+			switch {
+			case errors.Is(err, access.ErrNotFound):
+				readable[was.ID] = false
+			case err != nil:
+				return err
+			default:
+				readable[was.ID] = cur.WorkspaceID == was.WorkspaceID && (was.Generation == 0 || cur.Generation == was.Generation)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Results{}, err
+	}
+	lost := false
+	for _, ok := range readable {
+		lost = lost || !ok
+	}
+	if !lost {
+		return res, nil
+	}
+	kept := res.Results[:0:0]
+	for _, r := range res.Results {
+		if readable[r.SpaceID] {
+			kept = append(kept, r)
+		}
+	}
+	res.Results, res.NextOffset = kept, nil
+	var notices []Notice
+	for _, n := range res.Notices {
+		if n.Code == NoticePending {
+			res.Notice = strings.TrimSpace(strings.Replace(res.Notice, fmt.Sprintf(noticePending, n.Count), "", 1))
+			continue
+		}
+		notices = append(notices, n)
+	}
+	res.Notices = notices
+	return res, nil
+}
+
+func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
 	match, err := checkQuery(&q)
 	if err != nil {
 		return Results{}, err
 	}
 	names := map[int64]string{}
-	ids := []int64{}
+	scope := []scopeEntry{}
 	behind := false
 	for _, sp := range spaces {
 		if sp.WorkspaceID != workspaceID || !sp.Access.Allows(access.Read) {
@@ -127,12 +183,12 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		}
 		behind = behind || !synced
 		names[sp.ID] = sp.Name
-		ids = append(ids, sp.ID)
+		scope = append(scope, scopeEntry{ID: sp.ID, Workspace: sp.WorkspaceID, Generation: sp.Generation})
 	}
-	if len(ids) == 0 {
+	if len(scope) == 0 {
 		return Results{Results: []Result{}, Mode: ModeFullText}, nil
 	}
-	idsJSON, err := json.Marshal(ids)
+	idsJSON, err := json.Marshal(scope)
 	if err != nil {
 		return Results{}, err
 	}
@@ -143,9 +199,13 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	e, ep, err := x.embeddings(ctx, workspaceID)
 	var embeddable bool
 	if err == nil {
+		if x.afterQueryEndpoint != nil {
+			x.afterQueryEndpoint()
+		}
 		err = x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM spaces sp
 			JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE sp.id IN (SELECT value FROM json_each(?)) AND `+embeddableSQL+`)`, in).Scan(&embeddable)
+			WHERE sp.id IN (`+scopeSQL+`) AND e.account_id = ? AND e.model = ? AND `+embeddableAtSQL+`)`,
+			in, e.Account, e.Model, ep.BaseURL).Scan(&embeddable)
 	}
 	switch {
 	case errors.Is(err, errNoEmbeddings):
@@ -170,6 +230,9 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		} else {
 			qv = vs[0]
 			res.Mode = ModeHybrid
+			if x.afterQueryEmbedded != nil {
+				x.afterQueryEmbedded()
+			}
 		}
 	}
 
@@ -186,7 +249,7 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		if err != nil {
 			return Results{}, err
 		}
-		near, err := x.nearest(ctx, workspaceID, in, e.key(), qv, hybridDepth)
+		near, err := x.nearest(ctx, workspaceID, in, rankEndpoint{key: e.key(), baseURL: ep.BaseURL}, qv, hybridDepth)
 		if err != nil {
 			return Results{}, err
 		}
@@ -198,7 +261,7 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 			return Results{}, err
 		}
 		var pending int
-		if err := x.db.QueryRowContext(ctx, `SELECT count(*) `+pendingSQL+` AND d.space_id IN (SELECT value FROM json_each(?))`,
+		if err := x.db.QueryRowContext(ctx, `SELECT count(*) `+pendingSQL+` AND d.space_id IN (`+scopeSQL+`)`,
 			in).Scan(&pending); err != nil {
 			return Results{}, err
 		}
@@ -228,6 +291,18 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	}
 	return res, nil
 }
+
+type rankEndpoint struct{ key, baseURL string }
+
+type scopeEntry struct {
+	ID         int64 `json:"id"`
+	Workspace  int64 `json:"workspace"`
+	Generation int64 `json:"generation"`
+}
+
+const scopeSQL = `SELECT sp.id FROM spaces sp, json_each(?) j
+	WHERE sp.id = j.value ->> 'id' AND sp.workspace_id = j.value ->> 'workspace'
+		AND (j.value ->> 'generation' = 0 OR sp.generation = j.value ->> 'generation')`
 
 func checkQuery(q *Query) (string, error) {
 	switch {
@@ -315,7 +390,7 @@ func (x *Index) fullText(ctx context.Context, in, match string, limit, offset in
 		FROM search_fts
 		JOIN search_docs d ON d.id = search_fts.rowid
 		JOIN search_spaces s ON s.space_id = d.space_id
-		WHERE search_fts MATCH ? AND d.space_id IN (SELECT value FROM json_each(?))
+		WHERE search_fts MATCH ? AND d.space_id IN (`+scopeSQL+`)
 		ORDER BY `+rankSQL+`, d.path, d.id LIMIT ? OFFSET ?`, match, in, limit, offset)
 	if err != nil {
 		return nil, err
@@ -435,36 +510,47 @@ type near struct {
 	similarity float64
 }
 
-func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, qv []float32, limit int) ([]near, error) {
-	rows, err := x.db.QueryContext(ctx, `SELECT sp.id FROM spaces sp
+func (x *Index) nearest(ctx context.Context, workspaceID int64, in string, ep rankEndpoint, qv []float32, limit int) ([]near, error) {
+	key := ep.key
+	rows, err := x.db.QueryContext(ctx, `SELECT sp.id, sp.generation FROM spaces sp
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE sp.id IN (SELECT value FROM json_each(?)) AND sp.workspace_id = ? AND `+embeddableSQL+`
-		ORDER BY sp.id`, in, workspaceID)
+		WHERE sp.id IN (`+scopeSQL+`) AND sp.workspace_id = ? AND `+keySQL+` = ? AND `+embeddableAtSQL+`
+		ORDER BY sp.id`, in, workspaceID, key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
-	var spaces []int64
+	var spaces []spaceRef
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var sp spaceRef
+		if err := rows.Scan(&sp.id, &sp.generation); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		spaces = append(spaces, id)
+		spaces = append(spaces, sp)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, key, qv)
+	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, ep, qv)
 	if err != nil {
 		return nil, err
 	}
 	if len(rest) > 0 {
-		raw, err := json.Marshal(rest)
+		var entries []scopeEntry
+		var all []scopeEntry
+		if err := json.Unmarshal([]byte(in), &all); err != nil {
+			return nil, err
+		}
+		for _, e := range all {
+			if slices.Contains(rest, e.ID) {
+				entries = append(entries, e)
+			}
+		}
+		raw, err := json.Marshal(entries)
 		if err != nil {
 			return nil, err
 		}
-		more, err := x.nearestBrute(ctx, string(raw), key, qv)
+		more, err := x.nearestBrute(ctx, string(raw), ep, qv)
 		if err != nil {
 			return nil, err
 		}
@@ -473,13 +559,13 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, 
 	return rank(found, limit), nil
 }
 
-func (x *Index) nearestBrute(ctx context.Context, in, key string, qv []float32) ([]near, error) {
+func (x *Index) nearestBrute(ctx context.Context, in string, ep rankEndpoint, qv []float32) ([]near, error) {
 	rows, err := x.db.QueryContext(ctx, `SELECT c.doc_id, c.seq, c.vector FROM search_chunks c
 		JOIN search_docs d ON d.id = c.doc_id
 		JOIN spaces sp ON sp.id = d.space_id
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE d.space_id IN (SELECT value FROM json_each(?)) AND d.embed_key = ? AND d.embed_version = d.version
-			AND `+embeddableSQL, in, key)
+		WHERE d.space_id IN (`+scopeSQL+`) AND d.embed_key = ? AND d.embed_version = d.version
+			AND `+keySQL+` = ? AND `+embeddableAtSQL, in, ep.key, ep.key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +635,7 @@ func (x *Index) fuse(ctx context.Context, in string, text []hit, sem []near) ([]
 		}
 		rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, d.path, d.title, d.version, s.commit_id
 			FROM search_docs d JOIN search_spaces s ON s.space_id = d.space_id
-			WHERE d.id IN (SELECT value FROM json_each(?)) AND d.space_id IN (SELECT value FROM json_each(?))`, string(docs), in)
+			WHERE d.id IN (SELECT value FROM json_each(?)) AND d.space_id IN (`+scopeSQL+`)`, string(docs), in)
 		if err != nil {
 			return nil, err
 		}

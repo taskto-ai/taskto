@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/providers"
@@ -115,11 +116,12 @@ type ConsentEndpoint struct {
 var (
 	errNoConsentEndpoint      = errors.New("no embeddings model to consent to")
 	errConsentEndpointChanged = errors.New("the embeddings endpoint has changed")
+	errConsentForbidden       = errors.New("only the space's owner or one of its editors can change this")
 )
 
-func (x *Index) consent(ctx context.Context, workspaceID, spaceID int64) (Consent, error) {
+func (x *Index) consent(ctx context.Context, sp access.Space) (Consent, error) {
 	var c Consent
-	e, ep, err := x.embeddings(ctx, workspaceID)
+	e, ep, err := x.embeddings(ctx, sp.WorkspaceID)
 	switch {
 	case err == nil:
 		c.Endpoint = &ConsentEndpoint{Account: e.Account, Provider: e.Provider, Model: e.Model, BaseURL: ep.BaseURL}
@@ -129,13 +131,19 @@ func (x *Index) consent(ctx context.Context, workspaceID, spaceID int64) (Consen
 	var account int64
 	var model, baseURL, at string
 	var by sql.NullInt64
-	err = x.db.QueryRowContext(ctx, `SELECT account_id, model, base_url, given_by, given_at
-		FROM search_embedding_consent WHERE space_id = ?`, spaceID).Scan(&account, &model, &baseURL, &by, &at)
+	var there int
+	err = x.db.QueryRowContext(ctx, `SELECT 1, coalesce(c.account_id, 0), coalesce(c.model, ''), coalesce(c.base_url, ''), c.given_by, coalesce(c.given_at, '')
+		FROM spaces sp LEFT JOIN search_embedding_consent c ON c.space_id = sp.id
+		WHERE sp.id = ? AND sp.workspace_id = ? AND (? = 0 OR sp.generation = ?)`,
+		sp.ID, sp.WorkspaceID, sp.Generation, sp.Generation).Scan(&there, &account, &model, &baseURL, &by, &at)
 	if errors.Is(err, sql.ErrNoRows) {
-		return c, nil
+		return Consent{}, fmt.Errorf("%w: the space is gone, or is another space with the ID", access.ErrNotFound)
 	}
 	if err != nil {
 		return Consent{}, err
+	}
+	if at == "" {
+		return c, nil
 	}
 	c.GivenAt = &at
 	if by.Valid {
@@ -145,7 +153,9 @@ func (x *Index) consent(ctx context.Context, workspaceID, spaceID int64) (Consen
 	return c, nil
 }
 
-func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int64, on bool, want *ConsentEndpoint) error {
+func (x *Index) setConsent(ctx context.Context, sp access.Space, userID int64, on bool, want *ConsentEndpoint,
+	authorize func(ctx context.Context, tx *sql.Tx) error) error {
+	workspaceID, spaceID := sp.WorkspaceID, sp.ID
 	const docs = `SELECT id FROM search_docs WHERE space_id = ?`
 	dropVectors := func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM search_chunks WHERE doc_id IN (`+docs+`)`, spaceID); err != nil {
@@ -205,15 +215,25 @@ func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int
 		return dropVectors(tx)
 	}
 	err := x.write(ctx, func(tx *sql.Tx) error {
+		if err := stillSpace(ctx, tx, sp); err != nil {
+			return err
+		}
+		if authorize != nil {
+			if err := authorize(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if err := apply(tx); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.SearchConsentChanged,
 			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"enabled": on}})
 	})
-	x.vectors.changedSpace(spaceID)
-	if err == nil && on {
-		wake(x.embedWake)
+	if err == nil {
+		x.vectors.changedSpace(spaceID)
+		if on {
+			wake(x.embedWake)
+		}
 	}
 	return err
 }
@@ -221,6 +241,11 @@ func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int
 const embeddableSQL = `EXISTS (SELECT 1 FROM search_embedding_consent c
 	JOIN provider_accounts pa ON pa.id = c.account_id
 	WHERE c.space_id = sp.id AND c.account_id = e.account_id AND c.model = e.model AND c.base_url = pa.base_url)`
+
+const embeddableAtSQL = `EXISTS (SELECT 1 FROM search_embedding_consent c
+	JOIN provider_accounts pa ON pa.id = c.account_id
+	WHERE c.space_id = sp.id AND c.account_id = e.account_id AND c.model = e.model AND c.base_url = pa.base_url
+		AND c.base_url = ?)`
 
 const pendingSQL = `FROM search_docs d
 	JOIN spaces sp ON sp.id = d.space_id
@@ -237,15 +262,16 @@ const (
 )
 
 type pending struct {
-	id, space, workspace int64
-	version              string
-	title                string
-	tries                int
+	id, space, workspace, generation int64
+	version                          string
+	title                            string
+	tries                            int
+	key, url                         string
 }
 
 func (x *Index) embedPending(ctx context.Context) (int, error) {
 	now := x.now().UTC().Format(timeFormat)
-	rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, sp.workspace_id, d.version, d.title, d.embed_tries `+pendingSQL+`
+	rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, sp.workspace_id, sp.generation, d.version, d.title, d.embed_tries `+pendingSQL+`
 		AND (d.embed_after IS NULL OR d.embed_after <= ?) ORDER BY d.embed_tries, d.id LIMIT ?`, now, embedBatch)
 	if err != nil {
 		return 0, err
@@ -253,7 +279,7 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 	var batch []pending
 	for rows.Next() {
 		var p pending
-		if err := rows.Scan(&p.id, &p.space, &p.workspace, &p.version, &p.title, &p.tries); err != nil {
+		if err := rows.Scan(&p.id, &p.space, &p.workspace, &p.generation, &p.version, &p.title, &p.tries); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -262,15 +288,23 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return 0, err
 	}
+	if x.afterPending != nil {
+		x.afterPending()
+	}
 	for _, p := range batch {
-		if err := x.embedDoc(ctx, p); err != nil {
+		if err := x.embedDoc(ctx, &p); err != nil {
 			if ctx.Err() != nil {
 				return 0, ctx.Err()
 			}
 			x.log.Warn("search: embedding a document failed; it will be retried", "doc", p.id, "tries", p.tries+1, "err", err)
 			wait := min(retryFirst<<min(p.tries, 16), retryMax)
 			if _, err := x.db.ExecContext(ctx, `UPDATE search_docs SET embed_tries = embed_tries + 1, embed_after = ?
-				WHERE id = ? AND version = ?`, x.now().Add(wait).UTC().Format(timeFormat), p.id, p.version); err != nil {
+				WHERE id = ? AND version = ?
+				AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = search_docs.space_id AND sp.workspace_id = ? AND sp.generation = ?)
+				AND (? = '' OR EXISTS (SELECT 1 FROM search_settings e JOIN provider_accounts pa ON pa.id = e.account_id
+					JOIN spaces sp ON sp.id = search_docs.space_id
+					WHERE e.workspace_id = sp.workspace_id AND `+keySQL+` = ? AND pa.base_url = ?))`,
+				x.now().Add(wait).UTC().Format(timeFormat), p.id, p.version, p.workspace, p.generation, p.key, p.key, p.url); err != nil {
 				return 0, err
 			}
 		}
@@ -278,7 +312,7 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 	return len(batch), nil
 }
 
-func (x *Index) embedDoc(ctx context.Context, p pending) error {
+func (x *Index) embedDoc(ctx context.Context, p *pending) error {
 	e, ep, err := x.embeddings(ctx, p.workspace)
 	if errors.Is(err, errNoEmbeddings) {
 		return nil
@@ -286,31 +320,64 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 	if err != nil {
 		return err
 	}
+	p.key, p.url = e.key(), ep.BaseURL
+	if x.afterEndpoint != nil {
+		x.afterEndpoint()
+	}
 	var body string
-	if err := x.db.QueryRowContext(ctx, `SELECT body FROM search_fts WHERE rowid = ?`, p.id).Scan(&body); err != nil {
+	err = x.db.QueryRowContext(ctx, `SELECT f.body FROM search_docs d
+		JOIN search_fts f ON f.rowid = d.id
+		JOIN spaces sp ON sp.id = d.space_id
+		JOIN search_settings e ON e.workspace_id = sp.workspace_id
+		WHERE d.id = ? AND d.version = ? AND d.markdown AND sp.workspace_id = ? AND sp.generation = ?
+		AND `+keySQL+` = ? AND `+embeddableAtSQL, p.id, p.version, p.workspace, p.generation, e.key(), ep.BaseURL).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	chunks := chunk(unsegment(body))
 	vectors := make([][]float32, 0, len(chunks))
 	for start := 0; start < len(chunks); start += inputsPerCall {
+		if start > 0 {
+			var one int
+			err := x.db.QueryRowContext(ctx, `SELECT 1 FROM search_docs d
+				JOIN spaces sp ON sp.id = d.space_id
+				JOIN search_settings e ON e.workspace_id = sp.workspace_id
+				WHERE d.id = ? AND d.version = ? AND d.markdown AND sp.workspace_id = ? AND sp.generation = ?
+				AND `+keySQL+` = ? AND `+embeddableAtSQL, p.id, p.version, p.workspace, p.generation, e.key(), ep.BaseURL).Scan(&one)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
 		inputs := make([]string, 0, inputsPerCall)
 		for _, c := range chunks[start:min(start+inputsPerCall, len(chunks))] {
 			inputs = append(inputs, p.title+"\n\n"+c)
 		}
 		vs, err := x.embed(ctx, ep, e.Model, inputs)
+		if x.afterEmbedRequest != nil {
+			x.afterEmbedRequest()
+		}
 		if err != nil {
 			return err
 		}
 		vectors = append(vectors, vs...)
 	}
 	defer x.vectors.changedDocs(p.space, p.id)
+	if x.beforeStore != nil {
+		x.beforeStore()
+	}
 	return x.write(ctx, func(tx *sql.Tx) error {
 		var version string
 		var key sql.NullString
 		var allowed bool
-		err := tx.QueryRowContext(ctx, `SELECT d.version, `+keySQL+`, `+embeddableSQL+` FROM search_docs d
+		err := tx.QueryRowContext(ctx, `SELECT d.version, `+keySQL+`, `+embeddableAtSQL+` FROM search_docs d
 			JOIN spaces sp ON sp.id = d.space_id LEFT JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE d.id = ?`, p.id).Scan(&version, &key, &allowed)
+			WHERE d.id = ? AND sp.workspace_id = ? AND sp.generation = ?`, ep.BaseURL, p.id, p.workspace, p.generation).Scan(&version, &key, &allowed)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && (version != p.version || key.String != e.key() || !allowed)) {
 			return nil
 		}

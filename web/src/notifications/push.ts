@@ -8,6 +8,13 @@ const FLAG = 'taskto.push'
 const KEY_PATH = '/api/me/push/key'
 const SUBSCRIPTION_PATH = '/api/me/push/subscription'
 
+const TURNING_OFF = 'off:'
+
+const ownerOf = (flag: string | null) =>
+  flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[0] : flag
+const baseOf = (flag: string | null): string | null =>
+  flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[2] || null : flag
+
 function read(): string | null {
   try {
     return localStorage.getItem(FLAG)
@@ -60,44 +67,44 @@ function withPushLock<T>(work: () => Promise<T>): Promise<T> {
   })
 }
 
-const UNSUBSCRIBING = 'taskto.push-unsubscribing'
+const UNSUBSCRIBING = 'taskto.push-unsubscribing:'
 const UNSUBSCRIBE_UNRESOLVED_MS = 60_000
 
-function unsubscribing(): { id: string; at: number }[] {
+const TURNING_OFF_MARK = 'taskto.push-turning-off:'
+
+const unsubscribeUnresolved = () => freshMarks(UNSUBSCRIBING)
+
+function freshMarks(prefix: string): boolean {
+  let unresolved = false
   try {
-    const list = JSON.parse(localStorage.getItem(UNSUBSCRIBING) ?? '[]') as unknown
-    return Array.isArray(list)
-      ? list.filter(
-          (e): e is { id: string; at: number } =>
-            !!e &&
-            typeof e.id === 'string' &&
-            typeof e.at === 'number' &&
-            Date.now() - e.at < UNSUBSCRIBE_UNRESOLVED_MS,
-        )
-      : []
-  } catch {
-    return []
-  }
+    const over: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key?.startsWith(prefix)) continue
+      const raw = localStorage.getItem(key)
+      const at = raw === null || raw.trim() === '' ? Number.NaN : Number(raw)
+      if (Number.isFinite(at) && Math.abs(Date.now() - at) < UNSUBSCRIBE_UNRESOLVED_MS) unresolved = true
+      else over.push(key)
+    }
+    for (const key of over) localStorage.removeItem(key)
+  } catch {}
+  return unresolved
 }
 
-function setUnsubscribing(list: { id: string; at: number }[]) {
+function mark(key: string, on: boolean) {
   try {
-    if (list.length === 0) localStorage.removeItem(UNSUBSCRIBING)
-    else localStorage.setItem(UNSUBSCRIBING, JSON.stringify(list))
+    if (on) localStorage.setItem(key, String(Date.now()))
+    else localStorage.removeItem(key)
   } catch {}
 }
 
-function unsubscribeUnresolved(): boolean {
-  return unsubscribing().length > 0
-}
-
 async function unsubscribe(sub: PushSubscription): Promise<boolean> {
-  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  setUnsubscribing([...unsubscribing(), { id, at: Date.now() }])
+  const key = `${UNSUBSCRIBING}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  mark(key, true)
   try {
     return await sub.unsubscribe()
   } finally {
-    setUnsubscribing(unsubscribing().filter((e) => e.id !== id))
+    mark(key, false)
   }
 }
 
@@ -127,7 +134,8 @@ export async function pushState(install: Pick<InstallInfo, 'platform' | 'install
   const reg = await registration()
   if (!reg) return 'unsupported'
   const sub = await reg.pushManager.getSubscription()
-  return sub && Notification.permission === 'granted' && read() !== null ? 'on' : 'off'
+  const flag = read()
+  return sub && Notification.permission === 'granted' && flag !== null && !flag.startsWith(TURNING_OFF) ? 'on' : 'off'
 }
 
 export class PushDenied extends Error {}
@@ -200,7 +208,7 @@ async function registerFor(userId: number, reg: ServiceWorkerRegistration, s: Re
 
 function someoneElses(userId: number): boolean {
   const signedIn = sessionUser()
-  const flag = read()
+  const flag = ownerOf(read())
   return (signedIn !== null && signedIn !== userId) || (flag !== null && flag !== String(userId))
 }
 
@@ -220,29 +228,53 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   const before = read()
   const sub = s.check(await (await registration())?.pushManager.getSubscription())
   if (sub) {
-    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
-    s.check(undefined)
-    const now = read()
-    if (now !== null && now !== String(who) && now !== before) return
-    if (!(await unsubscribe(sub).catch(() => false))) throw new PushUnsubscribeFailed()
-    s.check(undefined)
+    const turn = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    const pending = `${TURNING_OFF_MARK}${who}:${turn}`
+    mark(pending, true)
+    write(`${TURNING_OFF}${who}:${turn}:${baseOf(before) ?? ''}`)
+    const giveUp = () => {
+      mark(pending, false)
+      const now = read()
+      if (now?.startsWith(TURNING_OFF) && ownerOf(now) === String(who) && !freshMarks(`${TURNING_OFF_MARK}${who}:`))
+        write(baseOf(before))
+    }
+    try {
+      try {
+        await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
+      } catch (e) {
+        giveUp()
+        throw e
+      }
+      s.check(undefined)
+      const now = read()
+      if (now !== null && ownerOf(now) !== String(who)) return
+      if (!(await unsubscribe(sub).catch(() => false))) {
+        giveUp()
+        throw new PushUnsubscribeFailed()
+      }
+      s.check(undefined)
+    } finally {
+      mark(pending, false)
+    }
   }
-  write(null)
+  const now = read()
+  if (now === null || ownerOf(now) === String(who) || now === before) write(null)
 }
 
-export async function leavePush(userId: number): Promise<void> {
+export async function leavePush(userId: number, still: () => boolean = () => true): Promise<void> {
   if (!pushSupported()) return
   const mine = sameSession()
+  const ours = () => mine() && still()
   const theirs = () => {
-    const flag = read()
+    const flag = ownerOf(read())
     return flag !== null && flag !== String(userId)
   }
-  if (!theirs()) write(null)
+  if (!theirs() && still()) write(null)
   const leave = () =>
     withPushLock(async () => {
-      if (!theirs() && mine()) write(null)
+      if (!theirs() && ours()) write(null)
       const sub = await (await registration())?.pushManager.getSubscription()
-      if (!sub || !mine() || theirs()) return
+      if (!sub || !ours() || theirs()) return
       await unsubscribe(sub).catch(() => {})
     })
   await Promise.race([leave().catch(() => {}), new Promise((done) => setTimeout(done, 3000))])
@@ -261,9 +293,10 @@ async function syncNow(userId: number): Promise<boolean> {
   const sub = await reg?.pushManager.getSubscription()
   if (!s.ok()) return false
   if (!sub || Notification.permission !== 'granted') {
-    write(null)
+    if (read() === String(userId)) write(null)
     return false
   }
+  if (read() !== String(userId) || unsubscribeUnresolved()) return false
   await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub), headers: forAccount(userId) }).catch(
     () => {},
   )

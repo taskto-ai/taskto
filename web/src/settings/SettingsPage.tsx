@@ -8,6 +8,7 @@ import { AuditTab } from './AuditTab'
 import { CliAccountsTab } from './CliAccountsTab'
 import { DataTab } from './DataTab'
 import { DictationTab } from './DictationTab'
+import { IntegrationEventsTab } from './EventsTab'
 import { GeneralTab } from './GeneralTab'
 import { IntegrationsTab } from './IntegrationsTab'
 import { MembersTab } from './MembersTab'
@@ -29,6 +30,7 @@ type Tab =
   | 'providers'
   | 'integrations'
   | 'integration-approvals'
+  | 'integration-events'
   | 'cli-accounts'
   | 'search'
   | 'dictation'
@@ -50,6 +52,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean; group: Group }[] = [
   { tab: 'providers', label: 'settings.tabs.providers', admin: false, group: 'workspace' },
   { tab: 'integrations', label: 'settings.tabs.integrations', admin: true, group: 'workspace' },
   { tab: 'integration-approvals', label: 'settings.tabs.integrationApprovals', admin: true, group: 'workspace' },
+  { tab: 'integration-events', label: 'settings.tabs.integrationEvents', admin: true, group: 'workspace' },
   { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false, group: 'workspace' },
   { tab: 'search', label: 'settings.tabs.search', admin: false, group: 'workspace' },
   { tab: 'dictation', label: 'settings.tabs.dictation', admin: false, group: 'workspace' },
@@ -150,6 +153,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <IntegrationsTab workspace={workspace.id} />
     case 'integration-approvals':
       return <ApprovalsTab workspace={workspace.id} />
+    case 'integration-events':
+      return <IntegrationEventsTab workspace={workspace.id} />
     case 'cli-accounts':
       return <CliAccountsTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'search':

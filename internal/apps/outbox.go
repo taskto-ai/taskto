@@ -264,7 +264,11 @@ func (s *Service) StartOutbox(ctx context.Context) (stop func()) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		poll := time.NewTicker(outboxPoll)
+		every := s.poll
+		if every <= 0 {
+			every = outboxPoll
+		}
+		poll := time.NewTicker(every)
 		defer poll.Stop()
 		tidy := time.NewTicker(time.Hour)
 		defer tidy.Stop()
