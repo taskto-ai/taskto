@@ -14,19 +14,21 @@ import (
 )
 
 type PaymentLinkOutcome struct {
-	EffectID   int64                `json:"effect_id"`
-	AppID      int64                `json:"app_id"`
-	SpaceID    int64                `json:"space_id"`
-	RecordID   int64                `json:"record_id"`
-	Amount     string               `json:"amount"`
-	Currency   string               `json:"currency"`
-	Since      string               `json:"since"`
-	Waiting    bool                 `json:"waiting"`
-	CanConfirm bool                 `json:"can_confirm"`
-	ObjectID   string               `json:"object_id"`
-	Code       string               `json:"code,omitempty"`
-	Params     apierr.Params        `json:"params,omitempty"`
-	Attempts   []PaymentLinkAttempt `json:"attempts" apitypes:"nonnull"`
+	EffectID     int64                `json:"effect_id"`
+	AppID        int64                `json:"app_id"`
+	SpaceID      int64                `json:"space_id"`
+	RecordID     int64                `json:"record_id"`
+	Amount       string               `json:"amount"`
+	Currency     string               `json:"currency"`
+	Since        string               `json:"since"`
+	Waiting      bool                 `json:"waiting"`
+	CanConfirm   bool                 `json:"can_confirm"`
+	ObjectID     string               `json:"object_id"`
+	Code         string               `json:"code,omitempty"`
+	Params       apierr.Params        `json:"params,omitempty"`
+	AttemptSeq   int                  `json:"attempt_seq"`
+	AttemptSends int                  `json:"attempt_sends"`
+	Attempts     []PaymentLinkAttempt `json:"attempts" apitypes:"nonnull"`
 }
 
 const (
@@ -60,7 +62,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 	rows, err := s.store.db.QueryContext(ctx, `
 		SELECT r.id, r.success_url, r.account_id, r.account_mode, r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
 			coalesce(e.state, ''), coalesce(e.error_code, ''), e.error_params, `+confirmable+`,
-			coalesce(k.object_id, '')
+			coalesce(k.object_id, ''), k.seq, k.sends
 		FROM integration_refs r
 		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
 		JOIN apps a ON a.id = r.app_id
@@ -81,7 +83,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		var state, code string
 		var params sql.NullString
 		var clean bool
-		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID); err != nil {
+		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID, &o.AttemptSeq, &o.AttemptSends); err != nil {
 			return nil, err
 		}
 		if !spaces[o.SpaceID] || len(out) >= maxOutcomesListed {
@@ -162,7 +164,7 @@ func (s *Service) handleUnresolved(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, PaymentLinkOutcomes{PaymentLinks: list})
 }
 
-func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, integration, effect int64, spaces map[int64]bool) error {
+func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, integration, effect int64, checked CheckedAttempt, spaces map[int64]bool) error {
 	return s.store.write(ctx, func(tx *sql.Tx) error {
 		rec, err := s.store.get(ctx, tx, workspace, integration)
 		if err != nil {
@@ -171,14 +173,16 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 		var refID, keySeq, appID, spaceID int64
 		var object, refState, state, code string
 		var unknown, clean bool
+		var sends int
 		err = tx.QueryRowContext(ctx, `
 			SELECT r.id, r.key_seq, r.app_id, coalesce(r.provider_object_id, ''), r.state, a.space_id,
-				coalesce(k.outcome IS NULL AND k.sends > k.clean_sends, 0), coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`
+				coalesce(k.outcome IS NULL AND k.sends > k.clean_sends, 0), coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`,
+				coalesce(k.sends, 0)
 			FROM integration_refs r
 			JOIN apps a ON a.id = r.app_id
 			LEFT JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
 			LEFT JOIN app_effects e ON e.id = r.effect_id
-			WHERE r.effect_id = ? AND r.integration_id = ?`, effect, integration).Scan(&refID, &keySeq, &appID, &object, &refState, &spaceID, &unknown, &state, &code, &clean)
+			WHERE r.effect_id = ? AND r.integration_id = ?`, effect, integration).Scan(&refID, &keySeq, &appID, &object, &refState, &spaceID, &unknown, &state, &code, &clean, &sends)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && !spaces[spaceID]) {
 			return errNotFound
 		}
@@ -190,14 +194,18 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 		if object != "" || !unknown || refState == "paid" || refState == "refunded" || state != "failed" || code != string(apierr.CodeIntegrationOutcomeUnknown) {
 			return nothing
 		}
+		if checked.Seq == nil || checked.Sends == nil || int64(*checked.Seq) != keySeq || *checked.Sends != sends {
+			return apierr.New(http.StatusConflict, apierr.CodeIntegrationLinkAttemptChanged,
+				"this payment link was tried again since it was listed: check the provider again")
+		}
 		if !clean {
 			return apierr.New(http.StatusConflict, apierr.CodeIntegrationLinkNotConfirmable,
 				"an object of this payment link was seen at the provider, or a key of it was already resolved: no new key is allowed")
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'abandoned'
-			WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND sends > clean_sends AND object_id IS NULL
+			WHERE ref_id = ? AND seq = ? AND sends = ? AND outcome IS NULL AND sends > clean_sends AND object_id IS NULL
 				AND NOT EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = ? AND (o.object_id IS NOT NULL OR o.outcome IS NOT NULL))`,
-			refID, keySeq, refID)
+			refID, keySeq, sends, refID)
 		if err != nil {
 			return err
 		}
@@ -232,6 +240,11 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 	})
 }
 
+type CheckedAttempt struct {
+	Seq   *int `json:"attempt_seq"`
+	Sends *int `json:"attempt_sends"`
+}
+
 func (s *Service) handleConfirmNoLink(w http.ResponseWriter, r *http.Request) {
 	id, ok := integrationID(w, r)
 	if !ok {
@@ -242,7 +255,7 @@ func (s *Service) handleConfirmNoLink(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, errNotFound)
 		return
 	}
-	var req struct{}
+	var req CheckedAttempt
 	if !readJSON(w, r, &req) {
 		return
 	}
@@ -250,7 +263,7 @@ func (s *Service) handleConfirmNoLink(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.ConfirmNoPaymentLink(r.Context(), workspaceOf(r), actorOf(r), id, effect, visibleTo(ids)); err != nil {
+	if err := s.ConfirmNoPaymentLink(r.Context(), workspaceOf(r), actorOf(r), id, effect, req, visibleTo(ids)); err != nil {
 		fail(w, r, err)
 		return
 	}

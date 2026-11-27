@@ -958,7 +958,8 @@ async function seed({ api, base, workspace, agent, say }) {
   const apps = []
   for (const template of templates.filter((t) => !t.needs_board).slice(0, 3)) {
     const app = await api('POST', `${P}/app-templates/${template.id}/install`, {})
-    await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
+    if (Object.keys(app.draft?.integrations ?? {}).length === 0)
+      await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
     apps.push(app)
   }
   {

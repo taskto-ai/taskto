@@ -584,6 +584,89 @@ func TestPurgeConversationIsNotDoneWhileAReaderHoldsTheLog(t *testing.T) {
 	}
 }
 
+func TestPurgeAskedAgainWhileItRunsHasItsOutcome(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	doomed, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.RetireConversation(ctx, doomed); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sql.Open("sqlite", filepath.Join(s.dir, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	conn, err := reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	first := make(chan error, 1)
+	go func() { first <- s.client.PurgeConversation(ctx, doomed) }()
+	var se *StatusError
+	joined := fmt.Sprintf("conversation %d purge joins the running one", doomed)
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(s.output.String(), joined); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the purge asked again never joined the running one; output %q", s.output.String())
+		}
+		if err := s.client.PurgeConversation(ctx, doomed); !errors.As(err, &se) || se.Code != 503 {
+			t.Fatalf("the purge asked again while the first waits for the reader: err = %v, want the first's 503", err)
+		}
+	}
+	if err := <-first; !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("the first purge: err = %v, want a 503", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.PurgeConversation(ctx, doomed); err != nil {
+		t.Fatalf("the retry once the reader is gone: %v", err)
+	}
+}
+
+func waitForOutput(t *testing.T, s *sidecar, want string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(s.output.String(), want); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the sidecar never said %q; output %q", want, s.output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSetModelOvertakenByARetireIsRefused(t *testing.T) {
+	s := startSidecar(t, "TASKTO_AGENT_TEST_MODEL_PAUSE_MS=600")
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := s.client.Models(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := make(chan error, 1)
+	go func() { set <- s.client.SetModel(ctx, conv, catalog.Default) }()
+	waitForOutput(t, s, "test: the model write is waiting before its commit")
+	if err := s.client.RetireConversation(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-set; !notFound(err) {
+		t.Fatalf("a model change the retire overtook: err = %v, want a 404", err)
+	}
+}
+
 func TestAbortStopsTheRunningWork(t *testing.T) {
 	s := startSidecar(t)
 	ctx := ctxFor(t)

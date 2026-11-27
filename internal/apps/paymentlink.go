@@ -72,15 +72,16 @@ func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, sp
 	if !slices.ContainsFunc(b.Contract.Links, asks) {
 		return paymentGrant{}, refuse(apierr.CodeIntegrationUnavailable)
 	}
+	g := paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}
 	if !slices.ContainsFunc(b.Contract.Links, func(l ContractLink) bool {
 		return asks(l) && (l.When == nil || ap.liveDef.Collection.holds(*l.When, data))
 	}) {
-		return paymentGrant{}, refuse(apierr.CodeIntegrationConditionChanged)
+		return g, refuse(apierr.CodeIntegrationConditionChanged)
 	}
 	if amount, code := p.moneyEffect().moneyOf(ap.liveDef.Collection, data); amount != p.Amount || code != p.Currency {
 		return paymentGrant{}, refuse(apierr.CodeIntegrationAmountChanged)
 	}
-	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
+	return g, nil
 }
 
 func amountWithinBounds(c Contract, field, amount string) bool {
@@ -131,6 +132,14 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	p := e.payload
 	g, err := s.paymentSnapshot(ctx, e)
+	lookupOnly := false
+	if isCode(err, apierr.CodeIntegrationConditionChanged) {
+		res, resolve, uerr := s.paymentConditionUnmet(ctx, e, g)
+		if !resolve {
+			return res, uerr
+		}
+		err, lookupOnly = nil, true
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +153,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
 		Slot: p.Slot, URLField: p.URLField, AmountField: p.AmountField, CurrencyField: p.CurrencyField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
+		LookupOnly: lookupOnly,
 	})
 	if err != nil {
 		var pe *paylink.Error
@@ -173,10 +183,19 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 			if now.binding.IntegrationID != b.IntegrationID {
 				return refuse(apierr.CodeIntegrationChanged)
 			}
+			if err := s.platform.Payments.LinkCurrent(ctx, tx, b.IntegrationID, link.ObjectID); err != nil {
+				var pe *paylink.Error
+				if errors.As(err, &pe) {
+					return &effectError{code: pe.Code, params: pe.Params, transient: pe.Transient}
+				}
+				return err
+			}
 			return nil
 		},
 	})
 	switch {
+	case isCode(err, apierr.CodeIntegrationConditionChanged):
+		return nil, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
 	case errors.Is(err, errSuperseded):
 		return superseded, nil
 	case errors.Is(err, ErrNotFound):
@@ -194,6 +213,44 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 		"workspace_id": workspaceID, "space_id": spaceID,
 		"amount": currency.Format(link.AmountMinor, link.Currency), "currency": link.Currency,
 	}, nil
+}
+
+func (s *Service) paymentConditionUnmet(ctx context.Context, e effectRow, g paymentGrant) (res map[string]any, resolve bool, err error) {
+	link, pending, err := s.platform.Payments.EntryLink(ctx, s.db, e.id)
+	if err != nil {
+		return nil, false, err
+	}
+	if link.ObjectID == "" {
+		if pending {
+			return nil, true, nil
+		}
+		return nil, false, refuse(apierr.CodeIntegrationConditionChanged)
+	}
+	var raw string
+	switch err := s.db.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, e.recordID, e.appID).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, false, refuse(apierr.CodeAppEffectRecordGone)
+	case err != nil:
+		return nil, false, err
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return nil, false, err
+	}
+	if url, _ := data[e.payload.URLField].(string); url == link.URL {
+		if id, _ := data[e.payload.IDField].(string); id == link.ObjectID {
+			return map[string]any{
+				"workspace_id": g.workspaceID, "space_id": g.spaceID,
+				"amount": currency.Format(link.AmountMinor, link.Currency), "currency": link.Currency,
+			}, false, nil
+		}
+	}
+	return nil, false, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
+}
+
+func isCode(err error, code apierr.Code) bool {
+	var ee *effectError
+	return errors.As(err, &ee) && ee.code == code
 }
 
 func previewPaymentLink(p payload) (EffectDetail, apierr.Code) {

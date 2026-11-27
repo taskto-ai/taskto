@@ -3,7 +3,7 @@ import { type App, type AppRole, type AppTemplate, api, type Board, errorText, t
 import { has, type Key, useT } from '../i18n'
 import { useLoad } from '../load'
 import { useMounted } from '../mounted'
-import { navigate, routePath } from '../router'
+import { routePath, useNavigate } from '../router'
 import { steps } from '../session'
 import { spaceLabel } from '../spaces'
 import { Avatar } from '../ui/Avatar'
@@ -183,6 +183,7 @@ function InstallDialog({
   onClose: () => void
 }) {
   const t = useT()
+  const go = useNavigate()
   const formId = useId()
   const { mine, shared: sharedSpaces } = writableSpaces(spaces)
   const [name, setName] = useState(templateText(template, 'name', t))
@@ -208,7 +209,7 @@ function InstallDialog({
         method: 'POST',
         body: { name: name.trim(), ...(template.needs_board && target ? { board: target } : {}) },
       })
-      if (s.ok()) return navigate(installedPath(workspace, space.id, made.id))
+      if (s.ok()) return go(installedPath(workspace, space.id, made.id))
     } catch (err) {
       if (s.ok()) setError(appError(err))
     }
@@ -390,6 +391,7 @@ export function DuplicateDialog({
   onClose: () => void
 }) {
   const t = useT()
+  const go = useNavigate()
   const formId = useId()
   const mine = spaces.find((s) => s.kind === 'private')
   const [name, setName] = useState(t('apps.duplicate.defaultName', { name: app.name }))
@@ -409,7 +411,7 @@ export function DuplicateDialog({
         method: 'POST',
         body: { name: name.trim(), space_id: Number(to) },
       })
-      if (s.ok()) return navigate(installedPath(workspace, made.space_id, made.id))
+      if (s.ok()) return go(installedPath(workspace, made.space_id, made.id))
     } catch (err) {
       if (s.ok()) setError(errorText(err))
     }

@@ -1,6 +1,6 @@
 import type { Me, Workspace } from '../api'
 import { type Key, useT } from '../i18n'
-import { Link, navigate, routePath } from '../router'
+import { Link, routePath, useNavigate } from '../router'
 import { Select } from '../ui/Select'
 import { AboutTab } from './AboutTab'
 import { ApprovalsTab } from './ApprovalsTab'
@@ -73,6 +73,7 @@ const GROUPS: { group: Group; label: Key }[] = [
 
 export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Workspace; tab?: string }) {
   const t = useT()
+  const go = useNavigate()
   const admin = workspace.role === 'admin'
   const tabs = TABS.filter((x) => admin || !x.admin)
   const current = tabs.find((x) => x.tab === tab) ?? tabs[0]
@@ -112,7 +113,7 @@ export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Worksp
           <Select
             aria-label={t('settings.choose')}
             value={current.tab}
-            onChange={(e) => navigate(href(e.target.value as Tab))}
+            onChange={(e) => go(href(e.target.value as Tab))}
           >
             {GROUPS.map((g) => {
               const items = tabs.filter((x) => x.group === g.group)

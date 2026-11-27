@@ -31,20 +31,24 @@ function bounded<T>(work: Promise<T>, ms = SIGN_OUT_WAIT_MS): Promise<T> {
   })
 }
 
-async function verifiedClear(user: number, { keep, approved, discardUnreadable }: Decision): Promise<boolean> {
+async function verifiedClear(
+  user: number,
+  { keep, approved, discardUnreadable }: Decision,
+  still: () => boolean,
+): Promise<boolean> {
   if (lastUser()?.id === user) return false
   if (typeof indexedDB === 'undefined' || keep) return true
   const present = await databaseExists(user)
   if (present === false) return true
   if (discardUnreadable) return false
-  const { left, unreadable } = await unsentState(user, new Map())
+  const { left, unreadable } = await unsentState(user, new Map(), { still })
   return !unreadable && !left.some((r) => approved.has(r.id))
 }
 
-function newerLogin(user: number, session: string): boolean {
+function newerLogin(user: number, session: string, since?: number): boolean {
   const now = browserLogin()
   if (!session || now?.user !== user || now.session === session) return false
-  const recorded = pendingSignOuts().find((p) => p.user === user && p.session === session)?.at ?? 0
+  const recorded = since ?? pendingSignOuts().find((p) => p.user === user && p.session === session)?.at ?? 0
   return now.at >= recorded
 }
 
@@ -52,14 +56,15 @@ export type Decision = {
   keep: boolean
   approved: Approval
   discardUnreadable?: boolean
+  at?: number
 }
 
 export async function cleanUpAfterSignOut(
   user: number,
   session: string,
-  { keep, approved, discardUnreadable = false }: Decision,
+  { keep, approved, discardUnreadable = false, at }: Decision,
 ): Promise<boolean> {
-  const still = () => !newerLogin(user, session)
+  const still = () => !newerLogin(user, session, at)
   const superseded = () => {
     if (still()) return false
     settleSignOut(user, session)
@@ -84,12 +89,13 @@ export async function cleanUpAfterSignOut(
     )
     if (superseded()) return true
     if (unreadable) return false
-    if (!(await bounded(verifiedClear(user, { keep, approved, discardUnreadable })))) return false
+    const clear = await bounded(verifiedClear(user, { keep, approved, discardUnreadable }, still))
     if (superseded()) return true
+    if (!clear) return false
     settleSignOut(user, session)
     return true
   } catch {
-    return false
+    return superseded()
   }
 }
 
@@ -107,7 +113,8 @@ export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()
     if (!p) continue
     if (me && sameLogin(p, me)) continue
     if (me && p.user === me.user.id) {
-      if ((p.at ?? 0) <= asked) settleSignOut(p.user, p.session)
+      if ((p.at ?? 0) <= asked || (remembered === 'ok' && loginIsCurrent(me.user.id, me.session)))
+        settleSignOut(p.user, p.session)
       continue
     }
     if ((p.at ?? 0) > asked) continue
@@ -121,4 +128,5 @@ export const decisionOf = (p: PendingSignOut): Decision => ({
   keep: p.keep,
   approved: new Map(p.approved),
   discardUnreadable: p.discardUnreadable ?? false,
+  at: p.at,
 })
