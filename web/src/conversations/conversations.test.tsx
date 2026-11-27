@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
-import { navigate, parseRoute, usePath } from '../router'
+import { navigate, type Place, PlaceContext, parseRoute, usePath } from '../router'
 import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { wholeText } from '../test/text'
@@ -37,6 +37,30 @@ function Page({ streams }: { streams: ReturnType<typeof fakeStreams>['factory'] 
   const route = parseRoute(usePath())
   return <ConversationsPage workspace={1} open={route?.item} streams={streams} />
 }
+
+test('the list reports its title to its place, and the archived list its own', async () => {
+  fakeFetch({ 'GET /api/workspaces/1/conversations': { body: { conversations: [] } } })
+  const titles: (string | null)[] = []
+  const at: Place = {
+    id: 'a',
+    path: '/w/1/conversations',
+    navigate: vi.fn(),
+    setTitle: (title) => titles.push(title),
+  }
+  const { factory } = fakeStreams()
+  const view = render(
+    <PlaceContext.Provider value={at}>
+      <Page streams={factory} />
+    </PlaceContext.Provider>,
+  )
+  await screen.findByRole('heading', { level: 1, name: 'Conversations' })
+  expect(titles.at(-1)).toBe('Conversations')
+  fireEvent.click(screen.getByRole('button', { name: 'Show archived conversations' }))
+  await screen.findByRole('heading', { level: 1, name: 'Archived' })
+  expect(titles.at(-1)).toBe('Archived')
+  view.unmount()
+  expect(titles.at(-1)).toBeNull()
+})
 
 test('lists conversations, creates one and opens it', async () => {
   const calls = fakeFetch({

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import { api, type Me } from '../api'
 import { setPreferences } from '../i18n'
-import { type BeforeLeave, navigate, useBeforeLeave } from '../router'
+import { type BeforeLeave, navigate, type Place, PlaceContext, setFocusedPlace, useBeforeLeave } from '../router'
 import { beginSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { resetToasts, Toaster, toast } from '../ui/Toast'
@@ -390,6 +390,91 @@ test('a page that asks before it is left is asked when another workspace is pick
   act(() => leave?.())
   expect(window.location.pathname).toBe('/w/4/conversations')
   await screen.findByRole('button', { name: 'Workspace: Team' })
+})
+
+const inPlace = (id: string): Place => ({ id, path: '/w/1/conversations', navigate: vi.fn(), setTitle: vi.fn() })
+
+function PlacedDraft({ id, ask }: { id: string; ask: BeforeLeave }) {
+  return (
+    <PlaceContext.Provider value={inPlace(id)}>
+      <Draft ask={ask} />
+    </PlaceContext.Provider>
+  )
+}
+
+test('picking another workspace asks every place, the focused one once, and waits for each', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  let leaveA: (() => void) | null = null
+  const askA = vi.fn<BeforeLeave>((go) => {
+    leaveA = go
+  })
+  const askB = vi.fn<BeforeLeave>((go) => go())
+  render(
+    <>
+      <Shell me={me as unknown as Me} onLogout={() => {}} />
+      <PlacedDraft id="a" ask={askA} />
+      <PlacedDraft id="b" ask={askB} />
+    </>,
+  )
+  setFocusedPlace('b')
+  try {
+    fireEvent.click(within(await openSwitcher('Home')).getByRole('menuitemradio', { name: 'Team' }))
+    expect(askA).toHaveBeenCalledTimes(1)
+    expect(askB).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/w/1/conversations')
+    act(() => leaveA?.())
+    expect(askB).toHaveBeenCalledTimes(1)
+    expect(window.location.pathname).toBe('/w/4/conversations')
+    await screen.findByRole('button', { name: 'Workspace: Team' })
+  } finally {
+    setFocusedPlace(null)
+  }
+})
+
+test('a workspace made in the dialog is opened only once every place agrees to leave', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const created = {
+    workspace: { id: 9, name: 'Side project', role: 'admin' },
+    user: me.user,
+    workspaces: [...me.workspaces, { id: 9, name: 'Side project', role: 'admin' }],
+    can_create_workspace: true,
+  }
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': { status: 201, body: created },
+    'GET /api/workspaces/9/conversations': { body: { conversations: [] } },
+    ...pages,
+  })
+  let leaveA: (() => void) | null = null
+  const askA = vi.fn<BeforeLeave>((go) => {
+    leaveA = go
+  })
+  const askB = vi.fn<BeforeLeave>((go) => go())
+  render(
+    <>
+      <App />
+      <PlacedDraft id="a" ask={askA} />
+      <PlacedDraft id="b" ask={askB} />
+    </>,
+  )
+  await screen.findByRole('navigation', { name: 'Sections' })
+  setFocusedPlace('b')
+  try {
+    fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New workspace' })
+    fireEvent.change(within(dialog).getByLabelText(/^Name of the new workspace/), { target: { value: 'Side project' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create workspace' }))
+    await waitFor(() => expect(askA).toHaveBeenCalledTimes(1))
+    expect(askB).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/w/1/conversations')
+    act(() => leaveA?.())
+    expect(askB).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(window.location.pathname).toBe('/w/9/conversations'))
+  } finally {
+    setFocusedPlace(null)
+  }
 })
 
 test('a drawer link whose move is refused (a draft kept) doesn’t take the focus from a later Escape', async () => {

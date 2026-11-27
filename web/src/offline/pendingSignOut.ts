@@ -97,7 +97,8 @@ export function recordSignOut(
   keep: boolean,
   approved: Approval,
   discardUnreadable = false,
-): void {
+  at = Date.now(),
+): number {
   const before = read().find((p) => p.user === user && p.session === session)
   const unanswered = !!before?.unanswered && session !== ''
   put(user, session, {
@@ -108,7 +109,30 @@ export function recordSignOut(
     approved: [...approved],
     ...(discardUnreadable ? { discardUnreadable } : {}),
     ...(unanswered ? { unanswered } : {}),
-    at: Date.now(),
+    at,
+  })
+  return at
+}
+
+export type SignOutDecision = { keep: boolean; approved: Approval; discardUnreadable?: boolean; at?: number }
+
+export function ensureSignOut(
+  user: number,
+  session: string,
+  d: SignOutDecision,
+  phase: SignOutPhase = 'requested',
+): void {
+  const held = read().find((p) => p.user === user && p.session === session)
+  if (held && held.phase !== 'backed') return
+  put(user, session, {
+    user,
+    session,
+    phase,
+    keep: d.keep,
+    approved: [...d.approved],
+    ...(d.discardUnreadable ? { discardUnreadable: true } : {}),
+    ...(held?.unanswered ? { unanswered: true } : {}),
+    ...(held?.at !== undefined ? { at: held.at } : d.at !== undefined ? { at: d.at } : {}),
   })
 }
 
@@ -166,7 +190,8 @@ export function backedSignOut(user: number, session: string | undefined): Pendin
   return read().find((p) => p.user === user && p.phase === 'backed' && !!session && p.session === session)
 }
 
-export function confirmSignOut(user: number, session: string): void {
+export function confirmSignOut(user: number, session: string, d?: SignOutDecision): void {
+  if (d) ensureSignOut(user, session, d, 'confirmed')
   change(user, session, (p) => ({ ...p, phase: 'confirmed' }))
 }
 
@@ -190,15 +215,21 @@ const LOGIN = 'taskto:login'
 
 export type BrowserLogin = { user: number; session: string; at: number }
 
-function readLogin(): BrowserLogin | null {
+function readLogin(): (BrowserLogin & { ended?: string }) | null {
   try {
     const v = JSON.parse(window.localStorage.getItem(LOGIN) ?? 'null') as {
       user?: unknown
       session?: unknown
       at?: unknown
+      ended?: unknown
     } | null
     return v && Number.isInteger(v.user) && typeof v.session === 'string'
-      ? { user: v.user as number, session: v.session, at: Number.isFinite(v.at) ? (v.at as number) : 0 }
+      ? {
+          user: v.user as number,
+          session: v.session,
+          at: Number.isFinite(v.at) ? (v.at as number) : 0,
+          ...(typeof v.ended === 'string' ? { ended: v.ended } : {}),
+        }
       : null
   } catch {
     return null
@@ -211,7 +242,8 @@ export function rememberLogin(
   asked = Date.now(),
 ): 'ok' | 'stale' | 'unkept' {
   const known = readLogin()
-  if (known && known.at > asked) return 'stale'
+  const endedNow = known?.session === '' && known.user === user && !!session && known.ended === session
+  if (known && (known.at > asked || (endedNow && known.at === asked))) return 'stale'
   try {
     window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: session ?? '', at: asked }))
     return 'ok'
@@ -224,7 +256,7 @@ export function forgetLogin(user: number, session: string | undefined): void {
   const now = browserLogin()
   if (!now || now.user !== user || !session || now.session !== session) return
   try {
-    window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: '', at: Date.now() }))
+    window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: '', ended: session, at: Date.now() }))
   } catch {
     try {
       window.localStorage.removeItem(LOGIN)

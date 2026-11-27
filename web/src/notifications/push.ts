@@ -258,7 +258,7 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
     }
   }
   const now = read()
-  if (now === null || ownerOf(now) === String(who) || now === before) write(null)
+  if (now === null || ownerOf(now) === String(who)) write(null)
 }
 
 export async function leavePush(userId: number, still: () => boolean = () => true): Promise<void> {
