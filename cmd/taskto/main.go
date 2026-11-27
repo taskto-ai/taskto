@@ -474,13 +474,14 @@ func runnableModels(p *providers.Service, cli *cliaccounts.Service) conversation
 		out := make([]providers.Choice, 0, len(all))
 		for _, c := range all {
 			if c.Scope == providers.ScopeCLI {
-				ok, err := cli.Runnable(ctx, workspace, user, cliworker.CLI(strings.TrimPrefix(c.Provider, providers.CLIProviderPrefix)))
+				models, err := cli.RunnableModels(ctx, workspace, user, cliworker.CLI(strings.TrimPrefix(c.Provider, providers.CLIProviderPrefix)), c.Models)
 				if err != nil {
 					return nil, err
 				}
-				if !ok {
+				if len(models) == 0 {
 					continue
 				}
+				c.Models = models
 			}
 			out = append(out, c)
 		}

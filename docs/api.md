@@ -5605,7 +5605,7 @@ archived conversation.
 The models a continue may name, for the owner of the conversation, now: `{"providers": [...]}`
 in the shape of `GET …/models`, with the CLI models only where the caller has an account that can
 run them (a connected account of their own, or one of the workspace's shared accounts, as the
-member's account mode allows). The list is the one `continue` checks, so a model that is not in
+member's account mode allows; a shared account an admin pinned to one model offers only that model, the one its turns run on). The list is the one `continue` checks, so a model that is not in
 it is refused there. `404` for a conversation the caller doesn't own, `409
 conversation_archived` for an archived one.
 
@@ -5613,7 +5613,7 @@ conversation_archived` for an archived one.
 
 Runs the conversation again on what it holds, with no new message: for a reply that failed (the
 model's provider refused it, for a limit or an overload), on the model the body names, which may
-be the one it already has. The body is `{"model": {"provider", "model_id"}, "after_entry": 42}`:
+be the one it already has. The body names a model from `continue-models` and the last entry, for example `{"model": {"provider": "cli-claude", "model_id": "default"}, "after_entry": 42}`:
 the model is the one the run answers on, written together with the run's admission, so no other
 model write can come between them, and `after_entry` is the id of the conversation's last entry
 as the caller saw it, the failed reply the caller is continuing. `202 {"submission_id": 12}`; the

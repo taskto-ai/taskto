@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/providers"
 	"taskto.ai/taskto/internal/usage"
 )
 
@@ -543,40 +544,63 @@ func (s *Service) pick(ctx context.Context, p conversations.Principal, cli cliwo
 	return choice{}, fmt.Sprintf("%s isn't connected: connect it in Settings → CLI accounts, then send the message again", cli.Name()), nil
 }
 
-func (s *Service) Runnable(ctx context.Context, workspace, user int64, cli cliworker.CLI) (bool, error) {
+func (s *Service) Runnable(ctx context.Context, workspace, user int64, cli cliworker.CLI) (bool, string, error) {
 	switch err := s.Usable(ctx); {
 	case errors.Is(err, ErrOff), errors.Is(err, ErrNoBoundary):
-		return false, nil
+		return false, "", nil
 	case err != nil:
-		return false, err
+		return false, "", err
 	}
 	if s.worker == nil || !s.worker.Available(cli) {
-		return false, nil
+		return false, "", nil
 	}
 	mode, err := s.modeOf(ctx, workspace, user)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if mode.usesOwn() {
 		own, err := s.own(ctx, user, cli)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 		for _, r := range own {
 			if r.state == Connected {
-				return true, nil
+				return true, "", nil
 			}
 		}
 	}
 	if !mode.usesShared() {
-		return false, nil
+		return false, "", nil
 	}
 	shared, err := s.sharedAccounts(ctx, workspace, cli)
 	if err != nil || len(shared) == 0 {
-		return false, err
+		return false, "", err
 	}
 	unusable, _, err := s.sharedUnusable(ctx)
-	return unusable == "", err
+	if err != nil || unusable != "" {
+		return false, "", err
+	}
+	if err := s.byQueue(ctx, user, nil, shared); err != nil {
+		return false, "", err
+	}
+	return true, shared[0].Model, nil
+}
+
+func (s *Service) RunnableModels(ctx context.Context, workspace, user int64, cli cliworker.CLI, models []providers.ModelChoice) ([]providers.ModelChoice, error) {
+	ok, only, err := s.Runnable(ctx, workspace, user, cli)
+	if err != nil || !ok {
+		return nil, err
+	}
+	if only == "" {
+		return models, nil
+	}
+	var kept []providers.ModelChoice
+	for _, m := range models {
+		if m.ID == only {
+			kept = append(kept, m)
+		}
+	}
+	return kept, nil
 }
 
 func (s *Service) accountOf(ctx context.Context, user int64, spec cliworker.TurnSpec) (row, bool, error) {
