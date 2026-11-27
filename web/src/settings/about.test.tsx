@@ -540,7 +540,7 @@ test('operators see when the CLI worker lost its authority, with the command tha
     ...noUpdater,
     ...noBackups,
     'GET /api/workspaces/1/cli-worker': {
-      body: { mode: 'container', reachable: true, authority_lost: true, boot },
+      body: { mode: 'container', reachable: true, authority_lost: true, other_installation: false, boot },
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
@@ -551,9 +551,29 @@ test('operators see when the CLI worker lost its authority, with the command tha
   fakeFetch({
     ...noUpdater,
     ...noBackups,
-    'GET /api/workspaces/1/cli-worker': { body: { mode: 'container', reachable: true, authority_lost: false } },
+    'GET /api/workspaces/1/cli-worker': {
+      body: { mode: 'container', reachable: true, authority_lost: false, other_installation: false },
+    },
   })
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   await screen.findByText(/No scheduled backup has run on this server/)
   expect(screen.queryByText(/lost its history/)).toBeNull()
+})
+
+test('operators see when the CLI worker belongs to another installation, with the command that moves it to this one', async () => {
+  const boot = 'ab'.repeat(16)
+  const installation = 'cd'.repeat(16)
+  fakeFetch({
+    ...noUpdater,
+    ...noBackups,
+    'GET /api/workspaces/1/cli-worker': {
+      body: { mode: 'container', reachable: true, authority_lost: false, other_installation: true, boot, installation },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/belongs to another taskto installation/)).toBeTruthy()
+  expect(
+    screen.getByText(`taskto cli-worker trust-server -homes /homes -boot ${boot} -installation ${installation}`)
+      .tagName,
+  ).toBe('CODE')
 })

@@ -31,3 +31,18 @@ ALTER TABLE purge_cleanups ADD COLUMN cli_identity TEXT;
 
 UPDATE purge_cleanups SET cli_identity = (SELECT cli_identity FROM users WHERE users.id = purge_cleanups.user_id)
 WHERE kind IN ('browser', 'cli_home');
+
+-- This server's installation for the CLI worker: random, made once with the database, so a restore
+-- keeps it and another data directory has its own. The worker's volume belongs to one
+-- installation, and takes no census, deletion or new account from another (docs/cli-workers.md).
+CREATE TABLE cli_installation (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    installation TEXT NOT NULL
+);
+
+INSERT INTO cli_installation (id, installation) VALUES (1, lower(hex(randomblob(16))));
+
+CREATE TRIGGER cli_installation_kept BEFORE UPDATE ON cli_installation
+BEGIN
+    SELECT RAISE(ABORT, 'the installation never changes');
+END;

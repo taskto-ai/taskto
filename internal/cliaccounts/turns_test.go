@@ -599,12 +599,16 @@ func TestACensusLeavesARunningTurnToItsStop(t *testing.T) {
 	w := &halfReconcile{Worker: LocalWorker(e.worker)}
 	sw.use(w)
 	// An account of another history, whose home the census removes: the part the worker stops in.
-	stranger := cliowner.Account{User: 77, Identity: strings.Repeat("7", 32), Boot: strings.Repeat("8", 32)}
+	inst, err := e.svc.Installation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger := cliowner.Account{User: 77, Identity: strings.Repeat("7", 32), Boot: strings.Repeat("8", 32), Installation: inst}
 	if _, err := e.worker.AccountDirs(stranger, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	// That server's census, from before this one started.
-	if err := e.worker.Reconcile(ctx, cliworker.Census{Owners: map[int64]string{77: stranger.Identity}, Boot: stranger.Boot, Before: time.Now().Add(-time.Hour)}); err != nil {
+	if err := e.worker.Reconcile(ctx, cliworker.Census{Owners: map[int64]string{77: stranger.Identity}, Boot: stranger.Boot, Installation: inst, Before: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	e.owner.connect(cliworker.Codex)

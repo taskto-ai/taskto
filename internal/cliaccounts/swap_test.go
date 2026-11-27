@@ -69,8 +69,8 @@ func (s *swapWorker) Reconcile(ctx context.Context, census cliworker.Census) err
 	return s.w().Reconcile(ctx, census)
 }
 
-func (s *swapWorker) AuthorityLost(ctx context.Context) (string, error) {
-	return s.w().AuthorityLost(ctx)
+func (s *swapWorker) Authority(ctx context.Context) (cliworker.Authority, error) {
+	return s.w().Authority(ctx)
 }
 
 func (s *swapWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {

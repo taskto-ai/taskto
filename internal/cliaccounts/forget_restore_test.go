@@ -286,7 +286,7 @@ func TestADeletionWaitsForTheOperatorAfterTheWorkerLostItsHistory(t *testing.T) 
 		t.Fatalf("the refused deletion removed something: %v", err)
 	}
 	w.Close()
-	if err := cliworker.TrustServer(e.layout, e.svc.Boot()); err != nil {
+	if err := cliworker.TrustServer(e.layout, e.svc.Boot(), ""); err != nil {
 		t.Fatal(err)
 	}
 	w = start()
@@ -298,5 +298,44 @@ func TestADeletionWaitsForTheOperatorAfterTheWorkerLostItsHistory(t *testing.T) 
 	}
 	if _, err := w.AccountDirs(accountIn(t, e.svc, user), "", ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the deleted account after its deletion: %v, want ErrForgotten", err)
+	}
+}
+
+// Two servers of separate data directories (a move to a new host while the old one still runs)
+// can't both act on one worker: the first one's census pins the worker's volume to its
+// installation, and the second's census and deletions are refused, nothing removed; its operators
+// see it. A restore of the same installation (TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory)
+// is the same installation, and goes on.
+func TestAServerOfAnotherDataDirectoryCannotActOnTheWorker(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, Container, nil)
+	dbB := openData(t, t.TempDir())
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
+	user := newUser(t, e.db, "kept@example.com")
+	dirs := e.dirs(user)
+	svcB := New(dbB, Container, LocalWorker(e.worker))
+	t.Cleanup(svcB.Close)
+	instA, _ := e.svc.Installation(ctx)
+	instB, _ := svcB.Installation(ctx)
+	if instA == instB || instA == "" {
+		t.Fatalf("fixture: the installations %q and %q", instA, instB)
+	}
+	if err := svcB.ReconcileForgotten(ctx); !errors.Is(err, cliowner.ErrOtherInstallation) {
+		t.Errorf("the other data directory's census: %v, want ErrOtherInstallation", err)
+	}
+	// Its purge of the number, with the identity its step kept.
+	if err := svcB.Forget(cliowner.With(ctx, accountIn(t, e.svc, user).Identity), user); !errors.Is(err, cliowner.ErrOtherInstallation) {
+		t.Errorf("the other data directory's deletion: %v, want ErrOtherInstallation", err)
+	}
+	if _, err := os.Stat(dirs.Root); err != nil {
+		t.Errorf("the account's home: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	svcB.handleWorkerStatus(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	got := decode[WorkerStatus](t, rec)
+	if !got.OtherInstallation || got.Installation != instB || got.Boot != svcB.Boot() {
+		t.Errorf("the other data directory's operators see %+v", got)
 	}
 }

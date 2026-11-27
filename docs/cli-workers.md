@@ -496,6 +496,22 @@ The UI shows what the command prints.
   - censuses and deletions run one at a time, so no boot is registered between a decision and
     what it decides. The server stops trying a census the worker calls stale (a later server has
     spoken to the worker), and logs it.
+- <a id="one-installation"></a>**One installation per worker volume.** A boot order can't tell
+  apart two servers that run at the same time, and the data directory's lock only keeps two servers
+  off one data directory: two servers of separate data directories (a move to a new host while the
+  old one still runs, a second install) could both reach one worker. So the worker's volume belongs
+  to one taskto **installation**: a random id made once with the server's database
+  (`cli_installation`, migration 0062), which a restore of the same data keeps and another data
+  directory doesn't share, sent with every census and every account (`X-Taskto-Installation`).
+  The first census pins the volume to it, durably (`.worker/installation`). From then on a census,
+  a deletion, a browser purge or a new account of another installation is refused
+  (`other_installation`, `409`) and registers nothing; other work for the accounts the worker has
+  goes on. The boot order then only tells apart the boots of one installation, which one server
+  holds at a time (a dying server's request in flight is a caller that has gone, and does nothing).
+  Never run two copies of one data directory against one worker: they are one installation to it.
+  Moving the volume to another installation (a cutover to a new data directory) is the operator's
+  handover below, with `-installation`: Settings → About shows it, with the command, when the
+  worker's volume is another installation's.
 - <a id="authority-lost"></a>**Authority lost.** A worker in this state (in container mode; the
   reason is in its log, at every start, and in `.worker/authority-lost`) refuses every census and
   every deletion, the agent browsers' purge too (`authority_lost`, `409`): nothing is retired or
@@ -507,9 +523,10 @@ The UI shows what the command prints.
   1. Stop every other server that may still talk to this worker (a server a restore replaced, an
      older install during a move): from then on the worker takes censuses and deletions from the
      server it is handed to only, and a boot it can't place is taken for a later server.
-  2. Find the current server's boot: Settings → About shows it, with the command, to the server's
-     operators while the worker is in this state, and the server logs it at every start
-     (`this server's boot, for the CLI worker`).
+  2. Find the current server's boot (and its installation, to move the volume to it): Settings →
+     About shows them, with the command, to the server's operators while the worker needs handing
+     over, and the server logs them at every start (`this server's boot and installation, for the
+     CLI worker`).
   3. Stop the worker, hand it over on its volume, and start it again:
 
      ```sh
@@ -517,6 +534,9 @@ The UI shows what the command prints.
      docker compose --profile cli run --rm --no-deps cli-worker trust-server -homes /homes -boot <boot>
      docker compose start cli-worker
      ```
+
+     Add `-installation <installation>` to move the volume to another installation (a cutover to a
+     new data directory); without it the volume stays its own installation's.
 
      The worker's deletions and censuses from that server go through again; the server's next
      census (at its next start, or the one it tries again by itself) tidies what waited. The boot

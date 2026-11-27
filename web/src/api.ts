@@ -1211,7 +1211,11 @@ export type CLIWorkerStatus = {
   mode: string
   reachable: boolean
   authority_lost: boolean
+  // The worker's volume belongs to another taskto installation (another data directory).
+  other_installation: boolean
+  // This server's boot and installation, when the worker needs handing over to it.
   boot?: string
+  installation?: string
 }
 export const cliWorkerPath = (workspace: number) => `${ws(workspace)}/cli-worker`
 export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`

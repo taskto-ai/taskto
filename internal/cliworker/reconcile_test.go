@@ -23,7 +23,7 @@ import (
 // census is what the tests' server says: the live users with the identities the tests give them,
 // and those given in owners, with the tests' boot.
 func census(owners map[int64]string, live ...int64) cliworker.Census {
-	c := cliworker.Census{Owners: map[int64]string{}, Boot: cliworker.TestBoot, Before: time.Now()}
+	c := cliworker.Census{Owners: map[int64]string{}, Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation, Before: time.Now()}
 	for _, user := range live {
 		c.Owners[user] = cliworker.IdentityForTest(user)
 	}
@@ -35,7 +35,7 @@ func census(owners map[int64]string, live ...int64) cliworker.Census {
 
 // otherAccount is an account given number user in another history: an identity of its own.
 func otherAccount(user int64) cliowner.Account {
-	return cliowner.Account{User: user, Identity: fmt.Sprintf("%031xe", user), Boot: cliworker.TestBoot}
+	return cliowner.Account{User: user, Identity: fmt.Sprintf("%031xe", user), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}
 }
 
 // mine puts a file of the account's own in its working directory.
@@ -238,7 +238,7 @@ func bootCensus(boot string, before time.Time, owners map[int64]string) cliworke
 	if owners == nil {
 		owners = map[int64]string{}
 	}
-	return cliworker.Census{Owners: owners, Boot: boot, Before: before}
+	return cliworker.Census{Owners: owners, Boot: boot, Installation: cliworker.TestInstallation, Before: before}
 }
 
 // Reconcile retires the accounts the census doesn't name that servers it heard from made (an
@@ -258,7 +258,7 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Another server after it, which made an account and told the worker.
-	other := cliowner.Account{User: 3, Identity: strings.Repeat("3", 32), Boot: strings.Repeat("9", 32)}
+	other := cliowner.Account{User: 3, Identity: strings.Repeat("3", 32), Boot: strings.Repeat("9", 32), Installation: cliworker.TestInstallation}
 	if _, err := h.w.Status(ctx, other, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	}
 	// A server whose census hasn't come makes an account after this census was registered: the
 	// census, tried again, keeps it.
-	coming := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: strings.Repeat("e", 32)}
+	coming := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: strings.Repeat("e", 32), Installation: cliworker.TestInstallation}
 	if _, err := h.w.Status(ctx, coming, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func (f *fakeBrowsers) Unforget(again func(string) bool, _ time.Time) {
 func TestABrowserPurgeOfAnAccountWithNoHomeDoesNothing(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
-	a := cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: cliworker.TestBoot}
+	a := cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}
 	host := h.w.BrowserHost(map[browser.Program]string{})
 	built := h.w.HelpersBuiltForTest()
 	if err := h.w.FenceDeletion(ctx, a, func() error { return host.Purge(a) }); err != nil {

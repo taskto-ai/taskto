@@ -727,6 +727,17 @@ docker compose --profile cli up -d --build
   long a browser runs unused, and `-browser-max 4` how many run at once. Chromium takes
   about 300–500 MB each, so raise `TASKTO_CLI_WORKER_MEMORY` with `-browser-max`.
 
+### One installation per CLI worker
+
+The CLI worker's volume (`cli-homes`) belongs to one taskto installation: the first server whose
+census reaches it ([cli-workers.md](cli-workers.md#one-installation)). A restore of the same
+server's data is the same installation. A new data directory (a move to another host, a fresh
+install) is another: the worker refuses its census, deletions and new accounts until an operator
+hands the volume over (`taskto cli-worker trust-server -boot <boot> -installation <installation>`,
+with both values from Settings → About or the server's log; [cli-workers.md](cli-workers.md#authority-lost)
+has the steps). Stop the old server before the new one starts, and never run two copies of one
+data directory against one worker: to the worker they are one installation.
+
 ### Upgrading to account homes
 
 The version that keys the CLI worker's files by each account's identity (account homes,

@@ -88,7 +88,7 @@ func acct(user int64) cliowner.Account { return cliworker.AccountForTest(user) }
 func (h *harness) home(user int64) cliworker.Dirs { return h.layout.Home(h.w.HomeForTest(acct(user))) }
 
 func spec(id string, user int64, cli cliworker.CLI, prompt string) cliworker.TurnSpec {
-	s := cliworker.TurnSpec{ID: id, User: user, Identity: cliworker.IdentityForTest(user), Boot: cliworker.TestBoot, CLI: cli, Conversation: 7, Prompt: prompt}
+	s := cliworker.TurnSpec{ID: id, User: user, Identity: cliworker.IdentityForTest(user), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation, CLI: cli, Conversation: 7, Prompt: prompt}
 	if cli != cliworker.Codex {
 		s.Session = fmt.Sprintf("00000000-0000-4000-8000-%012d", user*1000+int64(len(id)))
 	}

@@ -467,7 +467,9 @@ export type CLIWorkerStatus = {
   mode: string
   reachable: boolean
   authority_lost: boolean
+  other_installation: boolean
   boot?: string
+  installation?: string
 }
 
 export type Card = {

@@ -121,6 +121,8 @@ type Worker struct {
 	bootSeq    int64
 	// authorityLost says why the worker can't tell the current server, "" when it can (volume.go).
 	authorityLost string
+	// installation is the installation the volume belongs to, "" before the first census.
+	installation string
 	// reserved is the numbers the censuses waiting for the census lock took as they arrived, by
 	// boot, and reservedTop the highest given (volume.go), under bootsMu.
 	reserved    map[string]reservation

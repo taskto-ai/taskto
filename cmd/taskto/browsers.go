@@ -68,7 +68,11 @@ func (p purgeBrowsers) Forget(ctx context.Context, user int64) error {
 	if p.b == nil {
 		return nil
 	}
-	a := cliowner.Account{User: user, Boot: p.cli.Boot()}
+	inst, err := p.cli.Installation(ctx)
+	if err != nil {
+		return err
+	}
+	a := cliowner.Account{User: user, Boot: p.cli.Boot(), Installation: inst}
 	if id, ok := cliowner.From(ctx); ok {
 		a.Identity = id
 	} else if found, err := p.cli.Account(ctx, user); err == nil {

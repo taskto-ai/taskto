@@ -3,6 +3,8 @@ package cliworker
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,7 +89,76 @@ func (w *Worker) openVolume() error {
 			return err
 		}
 	}
+	if err := w.loadInstallation(); err != nil {
+		return err
+	}
 	return w.loadBoots()
+}
+
+// The worker's volume belongs to one taskto installation (the server's database's, which a restore
+// keeps and another data directory doesn't share): the first census pins it, durably
+// (.worker/installation), and from then on a census, a deletion or a new account of another
+// installation is refused (ErrOtherInstallation) and registers nothing. Two servers of separate
+// data directories (a move to a new host, a second install) can then never both act on one
+// volume; moving it to another installation is an operator's handover (TrustServer). Boot order
+// only has to tell apart the boots of one installation, which one server holds at a time.
+
+// ErrOtherInstallation is the worker's answer to a census, a deletion or a new account from a
+// server of another installation than the volume's.
+var ErrOtherInstallation = cliowner.ErrOtherInstallation
+
+func (w *Worker) installationFile() string { return filepath.Join(w.stateDir(), "installation") }
+
+func (w *Worker) loadInstallation() error {
+	b, there, err := readIfThere(w.installationFile())
+	if err != nil || !there {
+		return err
+	}
+	inst := strings.TrimSpace(string(b))
+	if !cliowner.IsIdentity(inst) {
+		return errors.New("cliworker: the volume's installation (.worker/installation) is damaged: an operator hands the volume over (taskto cli-worker trust-server -installation, docs/cli-workers.md)")
+	}
+	w.installation = inst
+	return nil
+}
+
+// Authority is what the worker says of its authority (GET /authority): why it lost it, "" when it
+// didn't, and the installation its volume belongs to, "" before the first census.
+type Authority struct {
+	Lost         string `json:"lost,omitempty"`
+	Installation string `json:"installation,omitempty"`
+}
+
+// Authority is the worker's authority, for the server's operators.
+func (w *Worker) Authority() Authority {
+	return Authority{Lost: w.AuthorityLost(), Installation: w.Installation()}
+}
+
+// Installation is the installation the volume belongs to, "" before the first census.
+func (w *Worker) Installation() string {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	return w.installation
+}
+
+// sameInstallation refuses inst unless it is the volume's (or the volume has none yet, and pin
+// is set: then it becomes the volume's). The caller holds w.bootsMu.
+func (w *Worker) sameInstallation(inst string, pin bool) error {
+	switch {
+	case w.installation != "" && inst == w.installation:
+		return nil
+	case w.installation != "":
+		return ErrOtherInstallation
+	case !pin:
+		return nil
+	case !cliowner.IsIdentity(inst):
+		return badRequest{errors.New("a census names its installation")}
+	}
+	if err := writeDurably(w.stateDir(), w.installationFile(), []byte(inst+"\n")); err != nil {
+		return err
+	}
+	w.installation = inst
+	return nil
 }
 
 // homeOfName is the home number a name on the volume gives (h<home>, or a removal's in the trash,
@@ -282,6 +353,17 @@ type bootEntry struct {
 type bootLog struct {
 	// Boots is the boots, oldest first.
 	Boots []bootEntry `json:"boots"`
+	// Count and Sum make the history's completeness part of it: how many boots it has, and the
+	// sha256 of their JSON. A history that lost an entry, or had one changed, doesn't match them.
+	Count int    `json:"count"`
+	Sum   string `json:"sum"`
+}
+
+// historySum is the sha256 of boots' JSON, in hex.
+func historySum(boots []bootEntry) string {
+	b, _ := json.Marshal(boots) //nolint:errchkjson // strings and numbers only
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // bootState is what the worker's volume says of the server boots: the history, the counter, and
@@ -356,6 +438,20 @@ func decodeHistory(b []byte) (bootLog, string) {
 		return l, "its history of boots (.worker/boots.json) is damaged: " + err.Error()
 	case len(l.Boots) == 0:
 		return l, "its history of boots (.worker/boots.json) is empty"
+	case l.Count != len(l.Boots) || l.Sum != historySum(l.Boots):
+		return l, "its history of boots (.worker/boots.json) isn't whole: its count or its sum doesn't match its boots"
+	}
+	seen := map[string]bool{}
+	for i, e := range l.Boots {
+		switch {
+		case !cliowner.IsIdentity(e.Boot) || e.Seq <= 0:
+			return l, "its history of boots (.worker/boots.json) has an entry that isn't a boot"
+		case seen[e.Boot]:
+			return l, "its history of boots (.worker/boots.json) has a boot twice"
+		case i > 0 && e.Seq <= l.Boots[i-1].Seq:
+			return l, "its history of boots (.worker/boots.json) isn't in order"
+		}
+		seen[e.Boot] = true
 	}
 	return l, ""
 }
@@ -500,6 +596,9 @@ func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	if w.authorityLost != "" {
 		return 0, ErrAuthorityLost
 	}
+	if err := w.sameInstallation(c.Installation, true); err != nil {
+		return 0, err
+	}
 	for i, b := range w.boots {
 		if b.Boot == c.Boot {
 			if i == len(w.boots)-1 {
@@ -524,7 +623,7 @@ func (w *Worker) register(boot string, seq int64) error {
 	w.bootSeq = seq
 	latest := bootEntry{Boot: boot, Seq: seq}
 	boots := append(append([]bootEntry(nil), w.boots...), latest)
-	b, err := json.Marshal(bootLog{Boots: boots})
+	b, err := json.Marshal(bootLog{Boots: boots, Count: len(boots), Sum: historySum(boots)})
 	if err != nil {
 		return err
 	}
@@ -540,29 +639,38 @@ func (w *Worker) register(boot string, seq int64) error {
 // removes nothing (ErrStaleBoot). On a volume that never had a census there is nothing to fence
 // against. In the authority-lost state every deletion is refused (ErrAuthorityLost). The caller
 // holds w.censusMu.
-func (w *Worker) deletionFence(boot string) error {
+func (w *Worker) deletionFence(a cliowner.Account) error {
 	if w.AuthorityLost() != "" {
 		return ErrAuthorityLost
+	}
+	w.bootsMu.Lock()
+	err := w.sameInstallation(a.Installation, false)
+	w.bootsMu.Unlock()
+	if err != nil {
+		return err
 	}
 	if w.latestSeq() == 0 {
 		return nil
 	}
-	if boot == w.latestBoot() {
+	if a.Boot == w.latestBoot() {
 		return nil
 	}
 	return ErrStaleBoot
 }
 
 // TrustServer hands the worker's volume under layout over to the server with boot, ending the
-// authority-lost state: an operator's step (`taskto cli-worker trust-server`), with the worker
-// stopped (it takes the volume's lock) and every server but the current one stopped too. The
-// boot is registered as the latest, after everything the volume names (the history that is
-// left, its counter, its records), and the mark is removed. A boot the history no longer has is,
-// from then on, a server the worker never heard from: that is why every other server must be
-// stopped.
-func TrustServer(layout Layout, boot string) error {
+// authority-lost state, and, with installation, to that installation (a move to another data
+// directory): an operator's step (`taskto cli-worker trust-server`), with the worker stopped (it
+// takes the volume's lock) and every server but the current one stopped too. The boot is
+// registered as the latest, after everything the volume names (the history that is left, its
+// counter, its records), and the mark is removed. A boot the history no longer has is, from then
+// on, a server the worker never heard from: that is why every other server must be stopped.
+func TrustServer(layout Layout, boot, installation string) error {
 	if !cliowner.IsIdentity(boot) {
 		return badRequest{errors.New("invalid boot: 32 hexadecimal characters, as the server logs it")}
+	}
+	if installation != "" && !cliowner.IsIdentity(installation) {
+		return badRequest{errors.New("invalid installation: 32 hexadecimal characters, as the server logs it")}
 	}
 	w := &Worker{cfg: Config{Layout: layout}, accounts: map[string]accountRecord{}}
 	for _, dir := range []string{w.stateDir(), w.accountsDir()} {
@@ -594,10 +702,15 @@ func TrustServer(layout Layout, boot string) error {
 	if err != nil {
 		return err
 	}
+	if installation != "" {
+		if err := writeDurably(w.stateDir(), w.installationFile(), []byte(installation+"\n")); err != nil {
+			return err
+		}
+	}
 	if err := os.Remove(w.authorityLostFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	slog.Info("cliworker: handed over to the server with this boot", "boot", boot, "seq", w.bootSeq)
+	slog.Info("cliworker: handed over to the server with this boot", "boot", boot, "installation", installation, "seq", w.bootSeq)
 	return syncDir(w.stateDir())
 }
 
@@ -614,7 +727,7 @@ func (w *Worker) FenceDeletion(ctx context.Context, a cliowner.Account, do func(
 	if err := ctx.Err(); err != nil {
 		return err // its caller has gone while it waited: nothing is done
 	}
-	if err := w.deletionFence(a.Boot); err != nil {
+	if err := w.deletionFence(a); err != nil {
 		return err
 	}
 	if err := w.retire(a.Identity, a.User); err != nil {

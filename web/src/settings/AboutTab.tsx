@@ -483,15 +483,25 @@ function CLIWorkerPanel({ workspace }: { workspace: number }) {
   const t = useT()
   const status = useLoad(() => api<CLIWorkerStatus>(cliWorkerPath(workspace)), [workspace])
   const s = status.data
-  if (!s?.authority_lost) {
+  if (!s?.authority_lost && !s?.other_installation) {
     return null
   }
+  // Moving the volume to this installation names it too; a lost authority only needs the boot.
+  const command = s.other_installation
+    ? `taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''} -installation ${s.installation ?? ''}`
+    : `taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''}`
   return (
     <Section title={t('settings.about.cliWorker.title')}>
-      <Notice tone="danger">{t('settings.about.cliWorker.authorityLost')}</Notice>
+      <Notice tone="danger">
+        {t(
+          s.other_installation
+            ? 'settings.about.cliWorker.otherInstallation'
+            : 'settings.about.cliWorker.authorityLost',
+        )}
+      </Notice>
       <p className="settings-text">{t('settings.about.cliWorker.handOver')}</p>
       <p className="settings-text">
-        <code>{`taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''}`}</code>
+        <code>{command}</code>
       </p>
     </Section>
   )

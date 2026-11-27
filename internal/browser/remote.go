@@ -56,19 +56,20 @@ var _ Browsers = (*Remote)(nil)
 // "invalid" for a BadAction; the message is the Manager's, written for the agent.
 
 // remoteErrorOrder is the order refuse tries remoteErrors in.
-var remoteErrorOrder = []string{"closed", "unavailable", "busy", "not_running", "too_many_live", "no_tab", "stale_ref", "not_agent_tab", "account_closing", "authority_lost"}
+var remoteErrorOrder = []string{"closed", "unavailable", "busy", "not_running", "too_many_live", "no_tab", "stale_ref", "not_agent_tab", "account_closing", "authority_lost", "other_installation"}
 
 var remoteErrors = map[string]error{
-	"unavailable":     ErrUnavailable,
-	"busy":            ErrBusy,
-	"not_running":     ErrNotRunning,
-	"no_tab":          ErrNoTab,
-	"not_agent_tab":   ErrNotAgentTab,
-	"stale_ref":       ErrStaleRef,
-	"closed":          ErrClosed,
-	"too_many_live":   ErrTooManyLive,
-	"account_closing": ErrAccountClosing,
-	"authority_lost":  cliowner.ErrAuthorityLost,
+	"unavailable":        ErrUnavailable,
+	"busy":               ErrBusy,
+	"not_running":        ErrNotRunning,
+	"no_tab":             ErrNoTab,
+	"not_agent_tab":      ErrNotAgentTab,
+	"stale_ref":          ErrStaleRef,
+	"closed":             ErrClosed,
+	"too_many_live":      ErrTooManyLive,
+	"account_closing":    ErrAccountClosing,
+	"authority_lost":     cliowner.ErrAuthorityLost,
+	"other_installation": cliowner.ErrOtherInstallation,
 }
 
 // upgradeProtocol is the live view's protocol on the worker's socket.
@@ -83,7 +84,7 @@ func NewHandler(m *Manager) http.Handler {
 	user := func(h func(w http.ResponseWriter, r *http.Request, a cliowner.Account)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id, err := strconv.ParseInt(r.PathValue("user"), 10, 64)
-			a := cliowner.Account{User: id, Identity: r.Header.Get(identityHeader), Boot: r.Header.Get(bootHeader)}
+			a := cliowner.Account{User: id, Identity: r.Header.Get(identityHeader), Boot: r.Header.Get(bootHeader), Installation: r.Header.Get(installationHeader)}
 			// Only a purge from before identities were kept names none.
 			if err != nil || id <= 0 || (a.Identity != "" && !a.Valid()) || (a.Identity == "" && !strings.HasSuffix(r.URL.Path, "/forget")) {
 				refuse(w, badf("invalid account"))
@@ -271,6 +272,8 @@ func NewRemote(socket string) *Remote {
 const (
 	identityHeader = "X-Taskto-Identity"
 	bootHeader     = "X-Taskto-Boot"
+	// installationHeader names the server's installation (cliowner.Account.Installation).
+	installationHeader = "X-Taskto-Installation"
 )
 
 func (c *Remote) do(ctx context.Context, a cliowner.Account, method, path string, in, out any) error {
@@ -345,6 +348,9 @@ func setAccount(req *http.Request, a cliowner.Account) {
 	}
 	if a.Boot != "" {
 		req.Header.Set(bootHeader, a.Boot)
+	}
+	if a.Installation != "" {
+		req.Header.Set(installationHeader, a.Installation)
 	}
 }
 

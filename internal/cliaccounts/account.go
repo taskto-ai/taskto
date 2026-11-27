@@ -34,9 +34,31 @@ func newBoot() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Account is user's account as the worker knows it: their number, their identity and this
-// server's boot. A user with no account (deleted) is cliworker.ErrForgotten.
+// Installation is this server's installation for the CLI worker (cliowner.Account.Installation):
+// made once with the database, so a restore keeps it and another data directory has its own.
+func (s *Service) Installation(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	inst := s.installation
+	s.mu.Unlock()
+	if inst != "" || s.db == nil {
+		return inst, nil
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT installation FROM cli_installation WHERE id = 1`).Scan(&inst); err != nil {
+		return "", fmt.Errorf("reading this server's installation: %w", err)
+	}
+	s.mu.Lock()
+	s.installation = inst
+	s.mu.Unlock()
+	return inst, nil
+}
+
+// Account is user's account as the worker knows it: their number, their identity, this server's
+// boot and its installation. A user with no account (deleted) is cliworker.ErrForgotten.
 func (s *Service) Account(ctx context.Context, user int64) (cliowner.Account, error) {
+	inst, err := s.Installation(ctx)
+	if err != nil {
+		return cliowner.Account{}, err
+	}
 	s.mu.Lock()
 	id, ok := s.identities[user]
 	s.mu.Unlock()
@@ -53,7 +75,7 @@ func (s *Service) Account(ctx context.Context, user int64) (cliowner.Account, er
 		s.identities[user] = id
 		s.mu.Unlock()
 	}
-	return cliowner.Account{User: user, Identity: id, Boot: s.boot}, nil
+	return cliowner.Account{User: user, Identity: id, Boot: s.boot, Installation: inst}, nil
 }
 
 // reconcileAttempt is one attempt at telling the worker who exists, which StartReconcile waits for:
@@ -111,7 +133,7 @@ type userWorker interface {
 	Logout(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) error
 	Forget(ctx context.Context, user int64) error
 	Reconcile(ctx context.Context, census cliworker.Census) error
-	AuthorityLost(ctx context.Context) (string, error)
+	Authority(ctx context.Context) (cliworker.Authority, error)
 	StartTurn(spec cliworker.TurnSpec) (Turn, bool, error)
 	// FindTurn is user's turn id; false when the worker has none, and the error when it can't be
 	// asked.
@@ -204,7 +226,11 @@ func (a accountWorker) Logout(ctx context.Context, user int64, cli cliworker.CLI
 // recorded before identities were kept, of an account gone since), it names none: the worker then
 // removes only the number's directory from before identities.
 func (a accountWorker) Forget(ctx context.Context, user int64) error {
-	acct := cliowner.Account{User: user, Boot: a.s.boot}
+	inst, err := a.s.Installation(ctx)
+	if err != nil {
+		return err
+	}
+	acct := cliowner.Account{User: user, Boot: a.s.boot, Installation: inst}
 	if id, ok := cliowner.From(ctx); ok {
 		acct.Identity = id
 	} else if found, err := a.s.Account(ctx, user); err == nil {
@@ -219,8 +245,8 @@ func (a accountWorker) Reconcile(ctx context.Context, census cliworker.Census) e
 	return a.w.Reconcile(ctx, census)
 }
 
-func (a accountWorker) AuthorityLost(ctx context.Context) (string, error) {
-	return a.w.AuthorityLost(ctx)
+func (a accountWorker) Authority(ctx context.Context) (cliworker.Authority, error) {
+	return a.w.Authority(ctx)
 }
 
 func (a accountWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
@@ -228,7 +254,7 @@ func (a accountWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	spec.Identity, spec.Boot = acct.Identity, acct.Boot
+	spec.Identity, spec.Boot, spec.Installation = acct.Identity, acct.Boot, acct.Installation
 	return a.w.StartTurn(spec)
 }
 

@@ -239,6 +239,13 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 		if !make {
 			return account{}, ErrUnknownAccount
 		}
+		// A new account of another installation than the volume's is never given a home here.
+		w.bootsMu.Lock()
+		err := w.sameInstallation(a.Installation, false)
+		w.bootsMu.Unlock()
+		if err != nil {
+			return account{}, err
+		}
 		r = accountRecord{User: a.User, Boot: a.Boot, Gen: w.latestSeq()}
 		if err := w.giveHome(&r); err != nil {
 			return account{}, err

@@ -77,9 +77,9 @@ type Worker interface {
 	Forget(ctx context.Context, a cliowner.Account) error
 	// Reconcile tells the worker which accounts exist (cliworker.Worker.Reconcile).
 	Reconcile(ctx context.Context, census cliworker.Census) error
-	// AuthorityLost says why the worker can't tell the current server from an earlier one, ""
-	// when it can (cliworker.Worker.AuthorityLost).
-	AuthorityLost(ctx context.Context) (string, error)
+	// Authority is the worker's authority: whether it lost it, and the installation its volume
+	// belongs to (cliworker.Worker.Authority).
+	Authority(ctx context.Context) (cliworker.Authority, error)
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
@@ -128,8 +128,8 @@ func LocalWorker(w *cliworker.Worker) Worker { return localWorker{w} }
 
 type localWorker struct{ *cliworker.Worker }
 
-func (l localWorker) AuthorityLost(context.Context) (string, error) {
-	return l.Worker.AuthorityLost(), nil
+func (l localWorker) Authority(context.Context) (cliworker.Authority, error) {
+	return l.Worker.Authority(), nil
 }
 
 func (l localWorker) StartLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
@@ -166,8 +166,8 @@ func RemoteWorker(r *cliworker.Remote) Worker { return remoteWorker{r} }
 
 type remoteWorker struct{ *cliworker.Remote }
 
-func (r remoteWorker) AuthorityLost(ctx context.Context) (string, error) {
-	return r.Remote.AuthorityLost(ctx)
+func (r remoteWorker) Authority(ctx context.Context) (cliworker.Authority, error) {
+	return r.Remote.Authority(ctx)
 }
 
 func (r remoteWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
@@ -209,6 +209,8 @@ type Service struct {
 	// identities holds the identities of the users read so far (they never change).
 	boot       string
 	identities map[int64]string
+	// installation is this server's installation, once read (Installation).
+	installation string
 
 	// watching holds the logins a goroutine is following to their end, and started when each
 	// account's last login started: an account that isn't connected yet is listed while its
@@ -399,7 +401,11 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot}
+	inst, err := s.Installation(ctx)
+	if err != nil {
+		return err
+	}
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot, Installation: inst}
 	// Not the accounts whose purge has begun: it retires them in the worker before it deletes
 	// them, and one that stopped between the two is made again from its start.
 	rows, err := s.db.QueryContext(ctx, `SELECT id, cli_identity FROM users
@@ -440,7 +446,8 @@ func (s *Service) StartReconcile() {
 	}
 	// An operator hands a CLI worker that lost its history of server boots over to this server by
 	// naming it (taskto cli-worker trust-server -boot, docs/cli-workers.md).
-	slog.Info("cliaccounts: this server's boot, for the CLI worker", "boot", s.boot)
+	inst, _ := s.Installation(context.Background())
+	slog.Info("cliaccounts: this server's boot and installation, for the CLI worker", "boot", s.boot, "installation", inst)
 	try := func() error {
 		a := s.startAttempt()
 		<-a.done

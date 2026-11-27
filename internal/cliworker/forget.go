@@ -31,28 +31,24 @@ var ErrIncomplete = errors.New("some retired accounts' files could not be remove
 // A purge step from before identities were kept names none: then only the number's directory from
 // before homes (Root/u<n>), if any, goes.
 func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
-	if a.User <= 0 {
-		return badRequest{errors.New("invalid user")}
-	}
-	if a.Identity == "" {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return w.removeLegacy(a.User)
-	}
-	if !cliowner.IsIdentity(a.Identity) {
+	if a.User <= 0 || (a.Identity != "" && !cliowner.IsIdentity(a.Identity)) {
 		return badRequest{errors.New("invalid account")}
 	}
-	// One at a time with the censuses, and only for the latest server boot: a deletion an earlier
-	// server sent, delayed past a restore that brought the account back, retires nothing. One whose
-	// caller has gone while it waited (its server stopped) does nothing.
+	// One at a time with the censuses, and only for the latest server boot of the volume's
+	// installation, the worker holding its authority: a deletion an earlier server sent, delayed
+	// past a restore that brought the account back, or another installation's, retires nothing.
+	// One whose caller has gone while it waited (its server stopped) does nothing. A purge step
+	// from before identities were kept is a deletion too, and is fenced the same.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := w.deletionFence(a.Boot); err != nil {
+	if err := w.deletionFence(a); err != nil {
 		return err
+	}
+	if a.Identity == "" {
+		return w.removeLegacy(a.User)
 	}
 	end, err := w.beginGate(ctx, scope{id: a.Identity, all: true})
 	if err != nil {
@@ -84,13 +80,16 @@ type Census struct {
 	// Boot is the server's own: a random value it takes when it starts, and sends with every
 	// request (cliowner.Account).
 	Boot string `json:"boot"`
+	// Installation is the server's (cliowner.Account.Installation): the first census pins the
+	// volume to it, and another installation's census is refused.
+	Installation string `json:"installation"`
 	// Before is when the server read its database, for the logs: nothing is decided by it (the
 	// worker orders boots by when it registered them, volume.go).
 	Before time.Time `json:"before"`
 }
 
 func (c Census) check() error {
-	if c.Before.IsZero() || !cliowner.IsIdentity(c.Boot) {
+	if c.Before.IsZero() || !cliowner.IsIdentity(c.Boot) || !cliowner.IsIdentity(c.Installation) {
 		return errors.New("invalid census")
 	}
 	for user, id := range c.Owners {

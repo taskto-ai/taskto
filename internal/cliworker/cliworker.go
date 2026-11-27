@@ -180,7 +180,9 @@ type TurnSpec struct {
 	// runs it in that account's own home.
 	Identity string `json:"identity"`
 	Boot     string `json:"boot,omitempty"`
-	CLI      CLI    `json:"cli"`
+	// Installation is the server's installation (cliowner.Account.Installation).
+	Installation string `json:"installation,omitempty"`
+	CLI          CLI    `json:"cli"`
 	// Slot is the account directory the turn runs in: the CLI's login and sessions there.
 	Slot Slot `json:"slot,omitempty"`
 	// Proxy points the CLI at the server's proxy instead of a login, for a workspace's shared
@@ -296,7 +298,7 @@ const maxPrompt = 96 << 10
 
 // Account is the account the turn is for.
 func (s TurnSpec) Account() cliowner.Account {
-	return cliowner.Account{User: s.User, Identity: s.Identity, Boot: s.Boot}
+	return cliowner.Account{User: s.User, Identity: s.Identity, Boot: s.Boot, Installation: s.Installation}
 }
 
 func (s TurnSpec) check() error {

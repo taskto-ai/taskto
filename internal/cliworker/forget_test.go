@@ -291,7 +291,7 @@ func TestARetiredAccountIsRefusedUntilACensusSaysItIsLive(t *testing.T) {
 	// live, but deleted once the census was registered: the census is tried again, and the deletion
 	// stays.
 	h.introduce(t, 5)
-	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: cliworker.TestBoot}
+	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}
 	c := census(map[int64]string{4: next.Identity}, 1, 2, 5)
 	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)

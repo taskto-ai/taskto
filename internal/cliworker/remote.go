@@ -47,32 +47,35 @@ import (
 // Refusals are {"error", "code"}, the code naming the sentinel error (see remoteErrors).
 
 var remoteErrors = map[string]error{
-	"unavailable":     ErrUnavailable,
-	"turn_clash":      ErrTurnClash,
-	"closed":          ErrClosed,
-	"no_login":        ErrNoLogin,
-	"bad_code":        ErrBadCode,
-	"no_code_needed":  ErrNoCodeNeeded,
-	"no_permission":   ErrNoPermission,
-	"forgotten":       ErrForgotten,
-	"removing":        ErrRemoving,
-	"busy":            ErrBusy,
-	"incomplete":      ErrIncomplete,
-	"unknown_account": ErrUnknownAccount,
-	"full":            ErrFull,
-	"stale_boot":      ErrStaleBoot,
-	"authority_lost":  cliowner.ErrAuthorityLost,
+	"unavailable":        ErrUnavailable,
+	"turn_clash":         ErrTurnClash,
+	"closed":             ErrClosed,
+	"no_login":           ErrNoLogin,
+	"bad_code":           ErrBadCode,
+	"no_code_needed":     ErrNoCodeNeeded,
+	"no_permission":      ErrNoPermission,
+	"forgotten":          ErrForgotten,
+	"removing":           ErrRemoving,
+	"busy":               ErrBusy,
+	"incomplete":         ErrIncomplete,
+	"unknown_account":    ErrUnknownAccount,
+	"full":               ErrFull,
+	"stale_boot":         ErrStaleBoot,
+	"authority_lost":     cliowner.ErrAuthorityLost,
+	"other_installation": cliowner.ErrOtherInstallation,
 }
 
 // The headers that name a request's account by its identity and the server's boot.
 const (
 	identityHeader = "X-Taskto-Identity"
 	bootHeader     = "X-Taskto-Boot"
+	// installationHeader names the server's installation (cliowner.Account.Installation).
+	installationHeader = "X-Taskto-Installation"
 )
 
 // accountOf is the account a request names: user, and its headers.
 func accountOf(r *http.Request, user int64) cliowner.Account {
-	return cliowner.Account{User: user, Identity: r.Header.Get(identityHeader), Boot: r.Header.Get(bootHeader)}
+	return cliowner.Account{User: user, Identity: r.Header.Get(identityHeader), Boot: r.Header.Get(bootHeader), Installation: r.Header.Get(installationHeader)}
 }
 
 // queryUser is the ?user= of a request, 0 if there is none.
@@ -197,7 +200,7 @@ func (w *Worker) Handler() http.Handler {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /authority", func(rw http.ResponseWriter, _ *http.Request) {
-		reply(rw, authorityReply{Lost: w.AuthorityLost()})
+		reply(rw, w.Authority())
 	})
 	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
 		var req Census
@@ -336,7 +339,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrAuthorityLost):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrAuthorityLost), errors.Is(sentinel, cliowner.ErrOtherInstallation):
 				status = http.StatusConflict
 			}
 		}
@@ -409,6 +412,9 @@ func (c *Remote) do(ctx context.Context, a cliowner.Account, method, path string
 	}
 	if a.Boot != "" {
 		req.Header.Set(bootHeader, a.Boot)
+	}
+	if a.Installation != "" {
+		req.Header.Set(installationHeader, a.Installation)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -531,19 +537,11 @@ func (c *Remote) Reconcile(ctx context.Context, census Census) error {
 	return c.do(ctx, cliowner.Account{}, http.MethodPost, "/reconcile", census, nil)
 }
 
-// authorityReply is GET /authority: why the worker can't tell the current server, "" when it can.
-type authorityReply struct {
-	Lost string `json:"lost,omitempty"`
-}
-
-// AuthorityLost says why the worker can't tell the current server from an earlier one, "" when it
-// can (Worker.AuthorityLost).
-func (c *Remote) AuthorityLost(ctx context.Context) (string, error) {
-	var out authorityReply
-	if err := c.do(ctx, cliowner.Account{}, http.MethodGet, "/authority", nil, &out); err != nil {
-		return "", err
-	}
-	return out.Lost, nil
+// Authority is the worker's authority (Worker.Authority).
+func (c *Remote) Authority(ctx context.Context) (Authority, error) {
+	var out Authority
+	err := c.do(ctx, cliowner.Account{}, http.MethodGet, "/authority", nil, &out)
+	return out, err
 }
 
 // StartTurn starts spec's turn on the worker, or attaches to the one with its ID.

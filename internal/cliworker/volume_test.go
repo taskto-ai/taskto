@@ -199,7 +199,7 @@ func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 	}
 	// The later server makes an account before its census reaches the worker.
 	later := strings.Repeat("c", 32)
-	made := cliowner.Account{User: 2, Identity: strings.Repeat("d", 32), Boot: later}
+	made := cliowner.Account{User: 2, Identity: strings.Repeat("d", 32), Boot: later, Installation: cliworker.TestInstallation}
 	dirs, err := h.w.AccountDirs(made, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +254,7 @@ func TestAnEarlierCensusRacingALaterServersAccountsRetiresNone(t *testing.T) {
 	later := strings.Repeat("c", 32)
 	accounts := make([]cliowner.Account, 20)
 	for i := range accounts {
-		accounts[i] = cliowner.Account{User: int64(100 + i), Identity: fmt.Sprintf("%030x%02x", 7, i), Boot: later}
+		accounts[i] = cliowner.Account{User: int64(100 + i), Identity: fmt.Sprintf("%030x%02x", 7, i), Boot: later, Installation: cliworker.TestInstallation}
 	}
 	var wg sync.WaitGroup
 	wg.Add(2)

@@ -13,6 +13,11 @@ import (
 // ErrAuthorityLost is the CLI worker's answer to a census or a deletion while it can't tell the
 // current server from an earlier one (it lost its history of server boots): it refuses them all
 // until an operator hands it over (`taskto cli-worker trust-server`, docs/cli-workers.md).
+// ErrOtherInstallation is the CLI worker's answer to a census, a deletion or a new account from a
+// server of another installation than the one its volume belongs to: an operator hands the volume
+// over (`taskto cli-worker trust-server -installation`, docs/cli-workers.md).
+var ErrOtherInstallation = errors.New("the CLI worker's volume belongs to another taskto installation: see docs/cli-workers.md")
+
 var ErrAuthorityLost = errors.New("the CLI worker lost its history of server boots and refuses every deletion until an operator hands it over: see docs/cli-workers.md")
 
 type key struct{}
@@ -40,6 +45,10 @@ type Account struct {
 	User     int64  `json:"user"`
 	Identity string `json:"identity"`
 	Boot     string `json:"boot,omitempty"`
+	// Installation is the sending server's installation (its database's, kept across a restore,
+	// never shared by another data directory): the worker's volume belongs to one, and takes no
+	// census, deletion or new account from another (cliworker.ErrOtherInstallation).
+	Installation string `json:"installation,omitempty"`
 }
 
 // Valid reports whether a names an account: a number and a well-formed identity.

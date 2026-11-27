@@ -63,12 +63,15 @@ func (w *Worker) SetGroupWaitForTest(d time.Duration) { w.groupWait = d }
 // TestBoot is the server boot the tests' requests carry.
 const TestBoot = "00000000000000000000000000000b00"
 
+// TestInstallation is the installation the tests' server is of.
+const TestInstallation = "00000000000000000000000000000c00"
+
 // IdentityForTest is the identity the tests give user's account.
 func IdentityForTest(user int64) string { return fmt.Sprintf("%032x", user) }
 
 // AccountForTest is the account the tests give user.
 func AccountForTest(user int64) cliowner.Account {
-	return cliowner.Account{User: user, Identity: IdentityForTest(user), Boot: TestBoot}
+	return cliowner.Account{User: user, Identity: IdentityForTest(user), Boot: TestBoot, Installation: TestInstallation}
 }
 
 // HomeForTest is a's home number: its record's, retired or not, or a new one.

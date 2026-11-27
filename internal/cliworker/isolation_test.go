@@ -426,7 +426,7 @@ func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	}
 	// A restore gave 5 to another account: the old account is retired, and tidied up.
 	old := h.home(5)
-	next := cliowner.Account{User: 5, Identity: strings.Repeat("b", 32), Boot: strings.Repeat("c", 32)}
+	next := cliowner.Account{User: 5, Identity: strings.Repeat("b", 32), Boot: strings.Repeat("c", 32), Installation: cliworker.TestInstallation}
 	again := census(map[int64]string{5: next.Identity})
 	again.Boot = next.Boot // the server's next start
 	if err := h.w.Reconcile(context.Background(), again); err != nil {

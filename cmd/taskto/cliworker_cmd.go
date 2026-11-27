@@ -34,10 +34,11 @@ func runTrustServer(args []string, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	homes := fs.String("homes", "/homes", "the worker's volume")
 	boot := fs.String("boot", "", "the current server's boot, as it logs it and Settings → About shows it")
+	installation := fs.String("installation", "", "the current server's installation, to move the volume to it (another data directory); empty: the volume keeps its own")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if err := cliworker.TrustServer(cliworker.Layout{Root: *homes}, *boot); err != nil {
+	if err := cliworker.TrustServer(cliworker.Layout{Root: *homes}, *boot, *installation); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(stderr, "the CLI worker on %s now takes censuses and deletions from the server with boot %s only\n", *homes, *boot)

@@ -1601,6 +1601,7 @@
       "credit": "<work>{name}</work> by {by}, under <licenceLink>{licence}</licenceLink>.",
       "cliWorker": {
         "title": "CLI worker",
+        "otherInstallation": "The CLI worker's volume belongs to another taskto installation (another data directory). It takes no census, deletion or new account from this server until an operator hands it over: never run two installations, or two copies of one data directory, against one worker.",
         "authorityLost": "The CLI worker lost its history of this server's starts. Until an operator hands it over to this server, it removes nothing: account deletions, and the tidying of the accounts a restore left, wait. Everything else goes on.",
         "handOver": "Stop every other server that may still talk to the worker, then stop the worker and run this on its volume, and start the worker again (docs/cli-workers.md explains why):"
       },
