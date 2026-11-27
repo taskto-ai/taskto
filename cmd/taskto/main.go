@@ -398,7 +398,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 
 	inflight := drain.New()
 	srv := &http.Server{
-		Handler:           inflight.Handler(wrapHandler(handler, sqlDB)),
+		Handler:           inflight.Handler(wrapHandler(handler, sqlDB, liveHub)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -454,7 +454,7 @@ func keepLock(f *os.File) {
 
 var (
 	shutdownGrace = defaultShutdownGrace
-	wrapHandler   = func(h http.Handler, _ *sql.DB) http.Handler { return h }
+	wrapHandler   = func(h http.Handler, _ *sql.DB, _ *live.Hub) http.Handler { return h }
 	listen        = func(ctx context.Context, addr string) (net.Listener, error) {
 		return new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	}
