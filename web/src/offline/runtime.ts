@@ -11,7 +11,16 @@ import {
 import { SchemaTooNew } from './idb'
 import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
-import { type Approval, type Download, NotOnDevice, OfflineStore, Superseded, seenOf, type UnsentRef } from './store'
+import {
+  type Approval,
+  approvalOf,
+  type Download,
+  NotOnDevice,
+  OfflineStore,
+  Superseded,
+  seenOf,
+  type UnsentRef,
+} from './store'
 import { type SyncDeps, SyncEngine } from './sync'
 import { OfflineWriter, type WriterDeps } from './writer'
 
@@ -42,7 +51,13 @@ export type Runtime = {
   stop: () => void
 }
 
-export type Foreign = { users: number[]; count: number; owner: number; unsent: Record<number, number>; failed?: true }
+export type Foreign = {
+  users: number[]
+  count: number
+  owner: number
+  unsent: Record<number, UnsentRef[]>
+  failed?: true
+}
 
 export type RuntimeState = {
   runtime: Runtime | null
@@ -101,7 +116,7 @@ async function sweep(user: number, current: () => boolean): Promise<Foreign | nu
         keep.push(id)
         foreign.users.push(id)
         foreign.count += unsent.length
-        foreign.unsent[id] = unsent.length
+        foreign.unsent[id] = unsent
         store.close()
       }
     } catch (e) {
@@ -135,10 +150,12 @@ function watch() {
   watchAccount()
   onAccountSignal((who) => {
     if (state.runtime && state.runtime.user !== who) retire()
+    else if (state.foreign && state.foreign.owner !== who) set({ ...state, foreign: null })
   })
   window.addEventListener(ACCOUNT_CHANGED_EVENT, (e) => {
     const expected = (e as CustomEvent<{ expected?: number }>).detail?.expected
     if (state.runtime && state.runtime.user === expected) retire()
+    else if (state.foreign && state.foreign.owner === expected) set({ ...state, foreign: null })
   })
 }
 
@@ -219,28 +236,56 @@ export async function activate(user: number, name?: string, still: () => boolean
   return attempt
 }
 
+async function discardShown(
+  id: number,
+  shown: UnsentRef[],
+  mine: () => boolean,
+): Promise<'removed' | 'newer' | 'stopped' | UnsentRef[]> {
+  let store: OfflineStore
+  try {
+    store = await OfflineStore.open(id, { still: mine })
+  } catch (e) {
+    if (e instanceof Superseded) return 'stopped'
+    if (e instanceof NotOnDevice) return 'removed'
+    throw e
+  }
+  let left: UnsentRef[]
+  try {
+    left = await store.retireOrKeepUnsent(approvalOf(shown), false, mine)
+  } catch (e) {
+    if (e instanceof Superseded) return 'stopped'
+    throw e
+  } finally {
+    store.close()
+  }
+  if (left.length > 0) return left
+  return OfflineStore.deleteRetired(id, { still: mine })
+}
+
 export async function discardForeign(): Promise<void> {
   if (opening) await opening.catch(() => {})
   const foreign = state.foreign
   if (!foreign) return
   const mine = () => state.foreign === foreign && lastUser()?.id === foreign.owner
   const gone: number[] = []
+  const changed: Record<number, UnsentRef[]> = {}
   let stopped = false
   for (const id of foreign.users) {
     if (!mine()) {
       stopped = true
       break
     }
-    const outcome = await OfflineStore.deleteRetired(id, { force: true, still: mine }).catch(() => 'failed' as const)
+    const outcome = await discardShown(id, foreign.unsent[id] ?? [], mine).catch(() => 'failed' as const)
     if (outcome === 'removed') gone.push(id)
-    if (outcome === 'stopped') stopped = true
+    else if (outcome === 'stopped') stopped = true
+    else if (Array.isArray(outcome)) changed[id] = outcome
   }
   writeUsers(readUsers().filter((id) => !gone.includes(id)))
   if (state.foreign !== foreign) return
   const users = foreign.users.filter((id) => !gone.includes(id))
   if (stopped || users.length === 0) return set({ ...state, foreign: null })
-  const unsent = Object.fromEntries(users.map((id) => [id, foreign.unsent[id] ?? 0]))
-  const count = users.reduce((sum, id) => sum + (unsent[id] ?? 0), 0)
+  const unsent = Object.fromEntries(users.map((id) => [id, changed[id] ?? foreign.unsent[id] ?? []]))
+  const count = users.reduce((sum, id) => sum + (unsent[id]?.length ?? 0), 0)
   set({ ...state, foreign: { users, count, owner: foreign.owner, unsent, failed: true } })
 }
 

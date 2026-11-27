@@ -20,7 +20,7 @@ import {
   unansweredSignOut,
 } from './pendingSignOut'
 import { activate, deactivate, discardForeign, lastUser, runtimeState, unsentState } from './runtime'
-import { databaseExists, lockTimes, OfflineStore, type OutboxItem } from './store'
+import { databaseExists, lockTimes, MIGRATIONS, OfflineStore, type OutboxItem } from './store'
 
 const during = vi.hoisted(() => ({
   claim: null as (() => void) | null,
@@ -1558,4 +1558,102 @@ test('a sign-out recorded after a start asked is not settled by a start whose lo
   expect(await finishUnfinishedSignOuts({ ...me, session: 's1' }, asked)).toBe(true)
   vi.restoreAllMocks()
   expect(pendingSignOuts().some((p) => p.session === 's2')).toBe(true)
+})
+
+async function unreadableOwnDatabase(user: number) {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(`taskto-offline-${user}`, 99)
+    request.onsuccess = () => {
+      request.result.close()
+      resolve()
+    }
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function idsOf(user: number) {
+  const store = await OfflineStore.open(user)
+  try {
+    return (await store.listItems()).map((i) => i.id).sort()
+  } finally {
+    store.close()
+  }
+}
+
+test('a discard asked after another account signed in and saved records deletes only what the prompt showed', async () => {
+  await sealedOf(8)
+  await unreadableOwnDatabase(7)
+  const state = await activate(7, 'Pat')
+  expect(state).toMatchObject({ runtime: null, foreign: { users: [8], count: 1 } })
+  localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Kim' }))
+  const theirs = await OfflineStore.open(8)
+  await theirs.enqueue({ ...queued('saved-after-prompt'), user: 8 }, [])
+  theirs.close()
+  localStorage.setItem(LAST, JSON.stringify({ id: 7, name: 'Pat' }))
+  await discardForeign()
+  expect(await idsOf(8)).toEqual(['of-8', 'saved-after-prompt'])
+  expect(runtimeState().foreign).toMatchObject({ users: [8], count: 2, failed: true })
+  await discardForeign()
+  expect(runtimeState().foreign).toBeNull()
+  expect(await databases()).not.toContain('taskto-offline-8')
+})
+
+test("a prompt about another account's records ends when another login takes the browser, with no runtime open", async () => {
+  await sealedOf(8)
+  await unreadableOwnDatabase(7)
+  await activate(7, 'Pat')
+  expect(runtimeState().foreign).toMatchObject({ users: [8] })
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST, newValue: JSON.stringify({ id: 8, name: 'Kim' }) }))
+  expect(runtimeState().foreign).toBeNull()
+  localStorage.setItem(LAST, JSON.stringify({ id: 7, name: 'Pat' }))
+  await discardForeign()
+  expect(await idsOf(8)).toEqual(['of-8'])
+})
+
+test("a start whose open outlasts the account's lock during the upgrade's later steps leaves no database made", async () => {
+  fakeLocks()
+  const overs: (() => void)[] = []
+  lockTimes.holdOver = (_ms, over) => {
+    overs.push(over)
+    return () => {}
+  }
+  const original = MIGRATIONS[2]
+  MIGRATIONS[2] = (db, tx) => {
+    original?.(db, tx)
+    const probe = tx.objectStore('outbox').count()
+    probe.onsuccess = () => {
+      for (const over of overs.splice(0)) over()
+    }
+  }
+  try {
+    await expect(OfflineStore.open(7)).rejects.toThrow()
+    await new Promise((done) => setTimeout(done, 50))
+  } finally {
+    MIGRATIONS[2] = original as NonNullable<typeof original>
+  }
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test('a check of a database that is not there stops its upgrade at once: no later step runs on the aborted transaction', async () => {
+  const later = vi.fn()
+  const thrown: unknown[] = []
+  const original = MIGRATIONS[2]
+  MIGRATIONS[2] = (db, tx) => {
+    later()
+    try {
+      return original?.(db, tx)
+    } catch (e) {
+      thrown.push(e)
+      throw e
+    }
+  }
+  try {
+    expect(await unsentState(7, new Map(), { still: () => true })).toEqual({ left: [], unreadable: false })
+    await new Promise((done) => setTimeout(done, 20))
+  } finally {
+    MIGRATIONS[2] = original as NonNullable<typeof original>
+  }
+  expect(thrown.map((e) => (e as Error).name)).toEqual([])
+  expect(later).not.toHaveBeenCalled()
+  expect(await databases()).not.toContain('taskto-offline-7')
 })

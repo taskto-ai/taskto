@@ -524,10 +524,12 @@ signing in is dealt with when it signs in:
   not reached the server**, those alone stay, **sealed**: nothing of them is shown or sent, and
   the person signing in is **asked first, with nothing else on screen**: *This browser holds N
   unsent records of another account. Sign in as that account to send them, or discard them.*
-  *Discard them* (asks again) deletes everything of that account on this device, each one under its
-  account's lock and only while the choice still holds (the account that made it is still the one
-  here, and none of the others signed in since, in another tab: their data is theirs again), and it works
-  though the signed-in account's own database can't be opened; an account whose deletion failed stays in the
+  *Discard them* (asks again) deletes the records that were shown, each account under its
+  lock and only while the choice still holds (the account that made it is still the one
+  here; a sign-in of another account heard in another tab ends the prompt, even where this tab has no open database), and it works
+  though the signed-in account's own database can't be opened. It is bound to the records as they were shown, by their versions and keys:
+  anything an account saved since, or changed, is kept and the prompt shows the new count for another decision, and the
+  database goes only once nothing else is left in it; an account whose deletion failed stays in the
   prompt, which says so, for another try, and only the ones deleted leave it; signing out
   leaves them for their owner to sign in and send. A database that can't be opened, read or cut
   down at that point (written by a newer version, or a storage error that may pass) is **never
@@ -592,7 +594,7 @@ signing in is dealt with when it signs in:
   (a runtime this tab still holds for the account is taken up only then: a lapsed start writes no
   marker and resumes nothing), inside the account's lock before it opens or makes the database (a
   start that waited there behind a sign-out's deletion never makes it again; one it made for a login
-  that ended meanwhile is deleted before the lock goes, and one that was there is left as it is; an open still pending when the lock's time runs out aborts its making of the database instead of committing it, so none is made once the lock is gone),
+  that ended meanwhile is deleted before the lock goes, and one that was there is left as it is; an open still pending when the lock's time runs out aborts its upgrade, whichever step it is at, instead of committing it, so none is made once the lock is gone; an upgrade that is stopped runs none of its later steps),
   and after taking the account up, reporting its time zone and setting its language: when it isn't
   any more, what it took is let go (no database left open, no queue, no writer's lock), and the
   language and time zone of another account are never set. A Try again in a tab whose sign-out

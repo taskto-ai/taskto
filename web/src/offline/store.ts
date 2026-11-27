@@ -266,13 +266,16 @@ export class OfflineStore {
     user: number,
     { still = () => true, existing = false }: { still?: () => boolean; existing?: boolean } = {},
   ): Promise<OfflineStore> {
-    return withLock(user, (expired, locked) => OfflineStore.openNow(user, expired, locked, still, existing))
+    return withLock(user, (expired, locked, onExpire) =>
+      OfflineStore.openNow(user, expired, locked, onExpire, still, existing),
+    )
   }
 
   private static async openNow(
     user: number,
     expired: () => boolean,
     locked: boolean,
+    onExpire: (fn: () => void) => void,
     still: () => boolean,
     existing: boolean,
   ): Promise<OfflineStore> {
@@ -280,26 +283,40 @@ export class OfflineStore {
     if (!still()) throw new Superseded()
     let made = false
     let refused: 'existing' | 'expired' | null = null
+    let upgrading: IDBTransaction | null = null
+    onExpire(() => {
+      if (!upgrading) return
+      refused = 'expired'
+      try {
+        upgrading.abort()
+      } catch {}
+    })
+    const steps: Record<number, Migration> = {}
+    for (const [key, step] of Object.entries(MIGRATIONS)) {
+      const version = Number(key)
+      steps[version] = (d, tx) => {
+        upgrading = tx
+        if (version === 1) made = true
+        if ((version === 1 && existing) || expired()) {
+          refused = version === 1 && existing ? 'existing' : 'expired'
+          tx.abort()
+          return 'stop'
+        }
+        return step(d, tx)
+      }
+    }
     const open = async () => {
       made = false
       refused = null
+      upgrading = null
       try {
-        return await openDatabase(name, SCHEMA_VERSION, {
-          ...MIGRATIONS,
-          1: (d, tx) => {
-            made = true
-            if (existing || expired()) {
-              refused = existing ? 'existing' : 'expired'
-              tx.abort()
-              return
-            }
-            MIGRATIONS[1]?.(d, tx)
-          },
-        })
+        return await openDatabase(name, SCHEMA_VERSION, steps)
       } catch (e) {
         if (refused === 'existing') throw new NotOnDevice()
         if (refused === 'expired') throw new StorageUnavailable('the offline database took too long')
         throw e
+      } finally {
+        upgrading = null
       }
     }
     const giveUp = async (db: IDBDatabase, error: Error): Promise<never> => {
@@ -826,19 +843,35 @@ export class Superseded extends Error {
   }
 }
 
-function withLock<T>(user: number, work: (expired: () => boolean, locked: boolean) => Promise<T>): Promise<T> {
+function withLock<T>(
+  user: number,
+  work: (expired: () => boolean, locked: boolean, onExpire: (fn: () => void) => void) => Promise<T>,
+): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  if (!locks?.request) return work(() => false, false)
+  if (!locks?.request)
+    return work(
+      () => false,
+      false,
+      () => {},
+    )
   let granted = false
   const signal = lockTimes.waitOver(lockTimes.wait)
   const held = () => {
     granted = true
     let over = false
+    const hooks: (() => void)[] = []
     return withinTime(
-      work(() => over, true),
+      work(
+        () => over,
+        true,
+        (fn) => {
+          hooks.push(fn)
+        },
+      ),
       lockTimes.hold,
       () => {
         over = true
+        for (const fn of hooks) fn()
       },
     )
   }
