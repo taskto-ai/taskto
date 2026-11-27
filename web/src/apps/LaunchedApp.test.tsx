@@ -263,3 +263,18 @@ test('an offline app has no window to open', async () => {
   expect(screen.queryByRole('button', { name: 'Open in a new window' })).toBeNull()
   expect(screen.queryByRole('link', { name: 'Open in a new tab' })).toBeNull()
 })
+
+test('standalone, an offline app or one that fails to load still has the way to taskto', async () => {
+  serve({ archived_at: '2026-11-18T00:00:00.000Z' })
+  const { unmount } = render(<LaunchedApp standalone workspace={1} space={2} app={1} writable />)
+  await screen.findByText(/This app is offline/)
+  expect(screen.getByRole('link', { name: 'Open in taskto' }).getAttribute('href')).toBe('/w/1/apps/2-1')
+  expect(screen.queryByRole('button', { name: 'Records and history' })).toBeNull()
+  unmount()
+  cleanup()
+
+  fakeFetch({})
+  render(<LaunchedApp standalone workspace={1} space={2} app={1} writable />)
+  await screen.findByRole('alert')
+  expect(screen.getByRole('link', { name: 'Open in taskto' }).getAttribute('href')).toBe('/w/1/apps/2-1')
+})

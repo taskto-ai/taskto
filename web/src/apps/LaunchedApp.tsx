@@ -86,20 +86,23 @@ export function LaunchedApp({
         title={data?.name ?? t('apps.app')}
         help={notes.length > 0 ? notes.join(' ') : undefined}
         actions={
-          running && (
+          (standalone || running) && (
             <>
-              <RecordsButton
-                access={data.access}
-                open={recordsOpen}
-                controls={recordsId}
-                ref={recordsToggle}
-                onToggle={() => (recordsOpen ? closeRecords(false) : setRecordsOpen(true))}
-              />
-              {standalone ? (
+              {running && (
+                <RecordsButton
+                  access={data.access}
+                  open={recordsOpen}
+                  controls={recordsId}
+                  ref={recordsToggle}
+                  onToggle={() => (recordsOpen ? closeRecords(false) : setRecordsOpen(true))}
+                />
+              )}
+              {standalone && (
                 <ButtonLink variant="ghost" icon="apps" href={appPath(workspace, space, app, screen)}>
                   {t('apps.openInTaskto')}
                 </ButtonLink>
-              ) : (
+              )}
+              {!standalone && running && (
                 <>
                   <Button variant="ghost" icon="browser" onClick={() => openRunWindow(workspace, space, app, screen)}>
                     {t('apps.openWindow')}
@@ -109,7 +112,7 @@ export function LaunchedApp({
                   </ButtonLink>
                 </>
               )}
-              {!standalone && writable && data.access.design && (
+              {!standalone && running && writable && data.access.design && (
                 <ButtonLink
                   icon="edit"
                   href={builderPath(workspace, { kind: 'edit', space, app })}
