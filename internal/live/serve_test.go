@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -360,16 +361,26 @@ func TestTooManyStreamsAreRefusedWithItsCodeAndCountedAcrossConnections(t *testi
 
 func TestAStreamThatFellBehindIsToldToResyncAndEnds(t *testing.T) {
 	g := newRig(t, Config{Buffer: 2})
-	s := g.connect("a")
-	g.waitSubscribers(1)
-	g.hub.mu.Lock()
-	for sub := range g.hub.topics[room].subs {
-		for len(sub.ch) < cap(sub.ch) {
-			sub.ch <- Event{Seq: 0, Type: "filler"}
+	holding, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	var armed atomic.Bool
+	g.recheck = func(context.Context) error {
+		if armed.Load() {
+			once.Do(func() {
+				close(holding)
+				<-release
+			})
 		}
+		return nil
 	}
-	g.hub.mu.Unlock()
+	s := g.connect("a")
+	armed.Store(true)
 	g.publish("")
+	<-holding
+	for range 3 {
+		g.publish("")
+	}
+	close(release)
 	var last Event
 	for {
 		line, err := s.r.ReadString('\n')
