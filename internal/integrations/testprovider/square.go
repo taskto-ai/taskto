@@ -511,3 +511,15 @@ func uuid() string {
 	}
 	return string(b)
 }
+
+func (s *Square) SetToken(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.token = token
+}
+
+func (s *Square) SetMerchant(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.merchant = id
+}

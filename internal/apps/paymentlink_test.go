@@ -18,11 +18,12 @@ import (
 )
 
 type stubLinks struct {
-	mu     sync.Mutex
-	calls  []paylink.Request
-	made   map[int64]paylink.Link
-	fail   error
-	onOpen func(req paylink.Request)
+	mu        sync.Mutex
+	calls     []paylink.Request
+	made      map[int64]paylink.Link
+	fail      error
+	onOpen    func(req paylink.Request)
+	otherMode bool
 }
 
 func (s *stubLinks) PayableMoney(context.Context, paylink.Querier, int64, int64) (map[int64][]paylink.MoneyFields, error) {
@@ -52,6 +53,21 @@ func (s *stubLinks) OpenPaymentLink(_ context.Context, req paylink.Request) (pay
 	l := paylink.Link{URL: fmt.Sprintf("https://pay.example.test/c/%d", n), ObjectID: fmt.Sprintf("cs_test_%d", n), AmountMinor: 12010, Currency: "EUR"}
 	s.made[req.EffectID] = l
 	return l, nil
+}
+
+func (s *stubLinks) EntryLink(_ context.Context, _ paylink.Querier, effectID int64) (paylink.Link, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.made[effectID], false, nil
+}
+
+func (s *stubLinks) LinkCurrent(context.Context, paylink.Querier, int64, string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.otherMode {
+		return &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}
+	}
+	return nil
 }
 
 func (s *stubLinks) count() int {

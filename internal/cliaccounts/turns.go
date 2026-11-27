@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/usage"
 )
 
 type Turn interface {
@@ -320,11 +321,14 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 }
 
 type passed struct {
-	done    cliworker.Event
-	last    int
-	limited bool
-	text    string
-	hop     *modelHop
+	done     cliworker.Event
+	last     int
+	limited  bool
+	text     string
+	input    int64
+	output   int64
+	hasUsage bool
+	hop      *modelHop
 }
 
 type modelHop struct {
@@ -357,7 +361,7 @@ func (s *Service) pass(ctx context.Context, out *eventWriter, p conversations.Pr
 			s.wg.Add(1)
 			go func() {
 				defer s.wg.Done()
-				s.drain(record, p, t, seen, accountID)
+				s.drain(record, p, t, seen, accountID, res.input, res.output, res.hasUsage)
 			}()
 			return res, false
 		}
@@ -367,6 +371,11 @@ func (s *Service) pass(ctx context.Context, out *eventWriter, p conversations.Pr
 			s.recordEvent(record, p, accountID, e)
 			switch e.Type {
 			case cliworker.EventUsage:
+				if e.Tokens != nil {
+					res.input += e.Tokens.Input
+					res.output += e.Tokens.Output
+					res.hasUsage = true
+				}
 				for _, l := range e.Limits {
 					if l.Status == "rejected" || (l.UsedPercent != nil && *l.UsedPercent >= 100) {
 						res.limited = true
@@ -378,6 +387,7 @@ func (s *Service) pass(ctx context.Context, out *eventWriter, p conversations.Pr
 				}
 			case cliworker.EventDone:
 				res.done, res.last = e, e.Seq
+				s.recordTokens(record, p, spec, res)
 				continue
 			}
 			e.Seq += offset
@@ -386,6 +396,15 @@ func (s *Service) pass(ctx context.Context, out *eventWriter, p conversations.Pr
 		if done {
 			return res, true
 		}
+	}
+}
+
+func (s *Service) recordTokens(ctx context.Context, p conversations.Principal, spec cliworker.TurnSpec, res passed) {
+	if !res.hasUsage {
+		return
+	}
+	if err := usage.Record(ctx, s.db, usage.Entry{User: p.User, Workspace: p.Workspace, Source: "cli", Engine: string(spec.CLI), Input: res.input, Output: res.output, Turns: 1, At: time.Now(), Turn: spec.ID}); err != nil {
+		slog.ErrorContext(ctx, "cli turn: recording token usage", "conversation", p.Conversation, "err", err)
 	}
 }
 
@@ -613,7 +632,7 @@ func (s *Service) recordEvent(ctx context.Context, p conversations.Principal, ac
 	}
 }
 
-func (s *Service) drain(ctx context.Context, p conversations.Principal, t Turn, seen int, accountID int64) {
+func (s *Service) drain(ctx context.Context, p conversations.Principal, t Turn, seen int, accountID, input, output int64, hasUsage bool) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
 	go func() {
@@ -639,7 +658,16 @@ func (s *Service) drain(ctx context.Context, p conversations.Principal, t Turn, 
 		failures = 0
 		for _, e := range events {
 			seen = e.Seq
-			s.recordEvent(ctx, p, accountID, s.seen(t.Spec(), e))
+			e = s.seen(t.Spec(), e)
+			s.recordEvent(ctx, p, accountID, e)
+			if e.Type == cliworker.EventUsage && e.Tokens != nil {
+				input += e.Tokens.Input
+				output += e.Tokens.Output
+				hasUsage = true
+			}
+			if e.Type == cliworker.EventDone {
+				s.recordTokens(ctx, p, t.Spec(), passed{input: input, output: output, hasUsage: hasUsage})
+			}
 		}
 		if done {
 			return

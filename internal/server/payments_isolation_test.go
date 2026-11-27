@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
@@ -388,17 +389,23 @@ func TestATestModeEventNeverMovesALiveReference(t *testing.T) {
 	test := s.completed(session, func(o map[string]any) { o["livemode"] = false })
 	test.Livemode = false
 	s.deliver(live, []testprovider.Event{test})
-	if n := len(s.eventsOf(s.alice, live)); n != 0 {
-		t.Fatalf("a test-mode event of a live integration was stored (%d events)", n)
+	if evs := s.settled(s.alice, live, 1); evs[0].State != integrations.EventIgnored || evs[0].Code != string(apierr.CodeIntegrationEventModeMismatch) {
+		t.Fatalf("the test-mode event = %+v", evs[0])
 	}
 	if after := s.record(s.bob, app, record); after.Revision != before.Revision || after.Data["status"] != "sent" {
 		t.Fatalf("a test-mode event moved a live reference: %+v", after)
 	}
 
 	s.payAndDeliver(live, session)
-	events := s.settled(s.alice, live, 1)
-	if e := events[0]; e.State != integrations.EventApplied || !e.Livemode {
-		t.Fatalf("event = %+v", e)
+	events := s.settled(s.alice, live, 2)
+	applied := 0
+	for _, e := range events {
+		if e.State == integrations.EventApplied && e.Livemode {
+			applied++
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("events = %+v", events)
 	}
 	if s.record(s.bob, app, record).Data["status"] != "paid" {
 		t.Fatal("the live payment wasn't applied")

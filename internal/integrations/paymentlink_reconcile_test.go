@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,7 +23,7 @@ func retrieval(r *http.Request) bool {
 
 func (p *pay) confirm(effect int64) (int, string) {
 	p.t.Helper()
-	rec := p.owner.do(http.MethodPost, p.confirmPath(effect, fmt.Sprintf("%d/confirm-no-link", effect)), map[string]any{})
+	rec := p.owner.do(http.MethodPost, p.confirmPath(effect, fmt.Sprintf("%d/confirm-no-link", effect)), p.checkedBody(effect))
 	if rec.Code == http.StatusNoContent {
 		return rec.Code, ""
 	}
@@ -315,4 +316,87 @@ func TestEveryFailedReadOfTheReconciliationStaysOnItsSchedule(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAnAdminsConfirmationIsBoundToTheAttemptTheyChecked(t *testing.T) {
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	p.unknownOutcome(shape, "op-bound-0001")
+	p.later(time.Minute)
+	p.looked(shape.path, 1)
+	p.later(7 * time.Hour)
+	e := p.settled(apps.StateFailed)
+	list := p.unresolvedList()
+	if len(list) != 1 || !list[0].CanConfirm || list[0].AttemptSeq != 0 || list[0].AttemptSends < 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	checked := list[0]
+
+	expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, e.id)), map[string]any{}), http.StatusOK)
+	p.waitFor("another call under the key", func() bool {
+		return p.count(`SELECT sends FROM integration_ref_attempts WHERE seq = 0`) > checked.AttemptSends
+	})
+	if e = p.settled(apps.StateFailed); e.code != string(apierr.CodeIntegrationOutcomeUnknown) {
+		t.Fatalf("entry = %+v", e)
+	}
+
+	confirm := func(seq, sends any) (int, string) {
+		body := map[string]any{}
+		if seq != nil {
+			body["attempt_seq"] = seq
+		}
+		if sends != nil {
+			body["attempt_sends"] = sends
+		}
+		rec := p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), body)
+		if rec.Code == http.StatusNoContent {
+			return rec.Code, ""
+		}
+		return rec.Code, decode[struct {
+			Code string `json:"code"`
+		}](t, rec).Code
+	}
+	for name, c := range map[string][2]any{
+		"what the admin checked": {checked.AttemptSeq, checked.AttemptSends},
+		"no attempt named":       {nil, nil},
+		"another attempt":        {checked.AttemptSeq + 1, checked.AttemptSends + 1},
+	} {
+		if status, code := confirm(c[0], c[1]); status != http.StatusConflict || code != string(apierr.CodeIntegrationLinkAttemptChanged) {
+			t.Fatalf("%s: confirm = %d %q", name, status, code)
+		}
+	}
+	if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE outcome = 'abandoned'`); n != 0 {
+		t.Fatalf("%d keys abandoned by a stale confirmation", n)
+	}
+	if r := p.refs(); len(r) != 1 || r[0].keySeq != 0 {
+		t.Fatalf("refs = %+v: the ref moved on", r)
+	}
+
+	now := p.unresolvedList()
+	if len(now) != 1 || now[0].AttemptSeq != 0 || now[0].AttemptSends != checked.AttemptSends+1 {
+		t.Fatalf("list = %+v", now)
+	}
+	if status, code := confirm(now[0].AttemptSeq, now[0].AttemptSends); status != http.StatusNoContent {
+		t.Fatalf("confirm = %d %q", status, code)
+	}
+}
+
+func (p *pay) checkedAttempt(effect int64) CheckedAttempt {
+	p.t.Helper()
+	var seq, sends int
+	err := p.db.QueryRow(`SELECT k.seq, k.sends FROM integration_refs r
+		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq WHERE r.effect_id = ?`, effect).Scan(&seq, &sends)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CheckedAttempt{Seq: &seq, Sends: &sends}
+	}
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	return CheckedAttempt{Seq: &seq, Sends: &sends}
+}
+
+func (p *pay) checkedBody(effect int64) map[string]any {
+	p.t.Helper()
+	c := p.checkedAttempt(effect)
+	return map[string]any{"attempt_seq": *c.Seq, "attempt_sends": *c.Sends}
 }

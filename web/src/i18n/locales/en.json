@@ -36,6 +36,12 @@
     "offlineNamed": "{name} is offline: it can’t be launched.",
     "openInApps": "Open in Apps",
     "openNamedInApps": "Open {name} in Apps",
+    "table": {
+      "yes": "Yes",
+      "no": "No",
+      "more": "Showing {shown} of {total}",
+      "open": "Open {title}"
+    },
     "invalidScreen": "The app sent a screen that can’t be shown: {error}",
     "noDataChanges": "Your role in this app lets you view it, not change its data.",
     "ownRecords": "You see only the records you added.",
@@ -1047,6 +1053,7 @@
     "search_query_no_words": "There are no words to search for.",
     "conversation_not_found": "Conversation not found.",
     "conversation_archived": "This conversation is archived: unarchive it first.",
+    "conversation_note_invalid": "A note must have 1 to {max} characters.",
     "conversation_title_invalid": "A title can have at most {max} characters, and no control characters.",
     "conversation_lost": "The agent no longer has this conversation's content. An operator can find out why in the server's log.",
     "conversation_no_model": "This conversation has no model: choose one.",
@@ -1219,8 +1226,11 @@
     "integration_event_not_retriable": "Only an event that failed can be retried.",
     "integration_outcome_unknown": "The payment provider never said whether it made this payment link, so none was made: a second one could be paid twice. An admin needs to check the payment provider’s account for a link of this payment. If one is there, retry this payment; if none is, the admin confirms that no link exists and a new one is made.",
     "integration_link_lookup_pending": "The payment provider didn’t say whether it made this payment link. The server keeps looking for it, and makes no other, for a few hours.",
-    "integration_condition_changed": "The record was changed and no longer meets this action’s condition, so no payment link was made. Nobody needs to approve anything: change the record back, or run the action when it qualifies.",
+    "integration_condition_changed": "The record was changed before the payment link was asked for and no longer meets this action’s condition, so no payment link was made. Nobody needs to approve anything: change the record back, or run the action when it qualifies.",
+    "integration_condition_changed_link_kept": "The record was changed while the payment link was being made and no longer meets this action’s condition. The link was made at the payment provider and is kept with this entry, so a payment on it is still recorded, but it wasn’t added to the record. Once the record meets the condition again, retry this entry (or run the action again) to add that same link: no second link is made while this one may still be paid.",
     "integration_nothing_to_confirm": "This payment isn’t waiting for a decision about an unknown outcome.",
+    "integration_mode_change_refused": "This key would switch the integration between test and live mode, but payment links made with the current mode may still be paid ({count} of them), and their payments could no longer be checked or recorded. Wait until they are paid or expire (for a link whose outcome is unknown, confirm in Events that none exists), then change the key. A new key of the same mode can be set at any time.",
+    "integration_link_attempt_changed": "This payment link was tried again since this list was shown, so what you checked at the payment provider may not be all there is. Check the payment provider’s account again before you confirm.",
     "integration_link_not_confirmable": "A link of this payment was already seen at the payment provider, or an earlier try of it was already accounted for, so confirming that none exists can’t allow a new one: a second link could be paid twice. Check the payment provider’s account and reconcile this payment there.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_icon_path": "The icon “{component}” isn’t SVG path data: it must start with M or m and hold only path commands, numbers, commas and spaces, at most {max} characters.",
@@ -1248,6 +1258,8 @@
     "home_limit": "You can have at most {max} of these.",
     "home_order_invalid": "That order isn’t made of your own items.",
     "home_defaults_shared": "Defaults are only for the apps of shared spaces.",
+    "desk_changed": "Someone changed this desk meanwhile: reload and try again.",
+    "desk_invalid": "This desk layout is invalid ({reason}).",
     "app_query_cursor": "That page can no longer be found. Start again from the first page.",
     "app_query_field": "The app has no field “{field}” that can be used here.",
     "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
@@ -2758,6 +2770,19 @@
     "openApp": "Open the app",
     "replyStopped": "The reply was stopped.",
     "replyFailed": "The reply failed.",
+    "changes": {
+      "title": "Changed in this turn ({count})",
+      "created": "Created",
+      "edited": "Edited",
+      "moved": "Moved",
+      "deleted": "Deleted",
+      "restored": "Restored",
+      "archived": "Archived",
+      "commented": "Commented",
+      "card": "Card {id}",
+      "record": "Record {id} in {app}",
+      "recordBare": "Record {id}"
+    },
     "tool": {
       "help": "Asked you to take over the browser",
       "used": "Used {name}",
@@ -2792,6 +2817,15 @@
       "cliOptionNotConnected": "{provider}: {model} (not connected)",
       "signInAgain": "{cli} needs you to sign in again: reconnect it here or in <link>Settings → CLI accounts</link>.",
       "notConnected": "{cli} isn't connected: connect it in <link>Settings → CLI accounts</link>."
+    },
+    "note": {
+      "toggle": "What you are writing",
+      "modeMessage": "To the agent",
+      "modeNote": "Note",
+      "placeholder": "Add a note for the record",
+      "hint": "A note stays in this conversation but the agent never sees it.",
+      "send": "Add note",
+      "hidden": "Note · the agent doesn’t see this"
     },
     "composer": {
       "archived": "This conversation is archived.",
