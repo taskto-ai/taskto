@@ -48,13 +48,17 @@ workers' isolation, the worker's network, backups, the agent browser) and a secr
 1. Fork the repository and branch from `main`.
 2. Keep the change small and about one thing. Several small pull requests are easier to
    review than one large one. A pull request changes at most **800 lines of production
-   code**: CI's Lint job counts them, leaving out tests (`_test.go`, `.test.ts(x)`,
-   `testdata/`, `e2e/` and the test helper packages), generated files, lock files,
+   code**, counted over the changes GitHub shows for the pull request by CI's "Pull request
+   size" check, leaving out tests (`_test.go`, `.test.ts(x)`, `testdata/`, `e2e/`,
+   `web/src/test/` and the test helper packages), generated files, lock files,
    translations (`locales/`) and Markdown. Over that, split the work into pull requests that
    each stand on `main` and keep it working: the schema and storage first, then the routes,
    then the screens; or one behaviour at a time behind code nothing calls yet. A maintainer
    can allow a larger one, such as a mechanical change across the tree, with the
-   `size-exception` label.
+   `size-exception` label. The check runs as it is on `main`, so a pull request can't
+   change its own limit, and it reads the label when the pull request is pushed or
+   labelled: once a pull request is in the merge queue, removing the label doesn't take it
+   out.
 3. Say in the description which rules the change keeps and which test fails when each
    rule's guard is removed (the template's "Rules this PR keeps"). Reviewers check the
    change against those rules.

@@ -177,7 +177,7 @@ installed).
 
 - `main` is protected: every change goes through a pull request with green CI.
 - Small PRs with conventional titles (`feat:`, `fix:`, `docs:`, `chore:`), squash-merged.
-- A PR changes at most 800 lines of production code (CI's Lint job, `.github/scripts/prsize.go`;
+- A PR changes at most 800 lines of production code (CI's "Pull request size" check, `.github/workflows/pr-size.yml` and `.github/scripts/prsize/`;
   tests, generated files, lock files, translations and Markdown aren't counted). Split larger
   work into PRs that each stand on `main`; only a maintainer's `size-exception` label allows
   more ([CONTRIBUTING.md](CONTRIBUTING.md#sending-a-change)).

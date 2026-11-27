@@ -24,7 +24,7 @@ behaviour to guard (docs, a rename).
 ## Checklist
 
 - [ ] The title is conventional (`feat:`, `fix:`, `docs:`, `chore:`, …).
-- [ ] At most 800 lines of production code changed (CI's Lint job counts them), or split.
+- [ ] At most 800 lines of production code changed (CI's "Pull request size" check counts them), or split.
 - [ ] New API routes check the caller's access and have a cross-user test.
 - [ ] Every string people see is translated (a key in `en.json`).
 - [ ] Docs are updated (`docs/api.md` for the API).
