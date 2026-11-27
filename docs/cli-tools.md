@@ -62,6 +62,7 @@ Minted by the server for each worker turn it starts, whatever account it runs on
 |---|---|
 | user, conversation | whom it acts for |
 | identity | the user's account's (`users.cli_identity`): a number a restore gave again is another account, which the token doesn't reach |
+| workspace | the conversation's when the turn started: the conversation's number in another workspace is another conversation |
 | turn | the worker turn (`c<conversation>-<turn>`, or a switch's `…-s1`) |
 | nonce | tells two tokens of one turn apart: a replay gets a new one, and the old one stops |
 | expiry | two hours, as the proxy's: the longest turn and a wait for a place |

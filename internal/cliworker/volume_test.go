@@ -203,13 +203,10 @@ func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), map[int64]string{2: made.Identity})); err != nil {
 		t.Fatal(err)
 	}
-	// From now on the earlier server's census and deletion are stale, and so is the census of a
-	// server the worker never heard from that read its database before the latest did.
-	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
+	// From now on the earlier server's census and deletion are stale: registered before the
+	// latest, whatever its clock says (it says later here).
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now().Add(time.Hour), nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
 		t.Errorf("the earlier boot's census: %v, want ErrStaleBoot", err)
-	}
-	if err := h.w.Reconcile(ctx, bootCensus(strings.Repeat("f", 32), start.Add(time.Minute), nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
-		t.Errorf("an unknown earlier boot's census: %v, want ErrStaleBoot", err)
 	}
 	earlier := made
 	earlier.Boot = cliworker.TestBoot

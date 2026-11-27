@@ -41,7 +41,7 @@ func newIsolated(t *testing.T) *isoHarness {
 	// Everything the users' processes run must be reachable by them: a directory others can
 	// pass through, a copy of this test binary as the helper and the fake CLIs. A short one: the
 	// agent browser's sockets under a home must fit a Unix socket's path.
-	base, err := os.MkdirTemp("", "iso")
+	base, err := os.MkdirTemp("/tmp", "iso")
 	if err != nil {
 		t.Fatal(err)
 	}

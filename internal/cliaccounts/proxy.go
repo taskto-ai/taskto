@@ -42,7 +42,10 @@ type proxyClaims struct {
 	// Identity is the user's account's (users.cli_identity): numbers are given again after a
 	// restore of the server's data, the identity never, so a token of a turn from before a restore
 	// reaches nothing of an account given its number since.
-	Identity     string `json:"i"`
+	Identity string `json:"i"`
+	// Workspace is the conversation's, when the turn started: a conversation number a restore gave
+	// again in another workspace is another conversation.
+	Workspace    int64  `json:"w"`
 	Conversation int64  `json:"c"`
 	Turn         string `json:"t"`
 	Expires      int64  `json:"e"`
@@ -272,7 +275,7 @@ func (s *Service) proxyAccount(ctx context.Context, c proxyClaims) (sharedRow, s
 		return sharedRow{}, "this token's account is gone", err
 	}
 	p, err := conversations.PrincipalOf(ctx, s.db, c.Conversation)
-	if errors.Is(err, conversations.ErrInactive) || (err == nil && p.User != c.User) {
+	if errors.Is(err, conversations.ErrInactive) || (err == nil && (p.User != c.User || p.Workspace != c.Workspace)) {
 		return sharedRow{}, "this conversation can't use the workspace's accounts: it is archived, or its owner left the workspace or was disabled", nil
 	}
 	if err != nil {

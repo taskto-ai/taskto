@@ -51,7 +51,7 @@ func (s *Service) toolsFor(ctx context.Context, id string, p conversations.Princ
 	if err != nil {
 		return nil, err
 	}
-	token, err := s.mintToolsToken(toolsClaims{User: p.User, Identity: a.Identity, Conversation: p.Conversation, Turn: id})
+	token, err := s.mintToolsToken(toolsClaims{User: p.User, Identity: a.Identity, Workspace: p.Workspace, Conversation: p.Conversation, Turn: id})
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,9 @@ type toolsClaims struct {
 	Nonce string `json:"n"`
 	User  int64  `json:"u"`
 	// Identity is the user's account's, as the proxy's (proxyClaims.Identity).
-	Identity     string `json:"i"`
+	Identity string `json:"i"`
+	// Workspace is the conversation's, as the proxy's (proxyClaims.Workspace).
+	Workspace    int64  `json:"w"`
 	Conversation int64  `json:"c"`
 	Turn         string `json:"t"`
 	Expires      int64  `json:"e"`
@@ -142,7 +144,7 @@ func (s *Service) ToolsCaller(r *http.Request) (agenttools.Caller, error) {
 		return agenttools.Caller{}, errToolsToken
 	}
 	p, err := conversations.PrincipalOf(r.Context(), s.db, c.Conversation)
-	if errors.Is(err, conversations.ErrInactive) || (err == nil && p.User != c.User) {
+	if errors.Is(err, conversations.ErrInactive) || (err == nil && (p.User != c.User || p.Workspace != c.Workspace)) {
 		return agenttools.Caller{}, errToolsConversation
 	}
 	if err != nil {

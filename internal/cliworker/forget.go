@@ -77,8 +77,8 @@ type Census struct {
 	// Boot is the server's own: a random value it takes when it starts, and sends with every
 	// request (cliowner.Account).
 	Boot string `json:"boot"`
-	// Before is when the server read its database: a retirement made after it is a deletion the
-	// census can't know of.
+	// Before is when the server read its database, for the logs: nothing is decided by it (the
+	// worker orders boots by when it registered them, volume.go).
 	Before time.Time `json:"before"`
 }
 
@@ -98,10 +98,10 @@ func (c Census) check() error {
 // data may have taken back in its history (the server calls it at every start, and again until it
 // succeeds). For each account the worker has a record of:
 //
-//   - live in the census: a retirement made before the census was read is taken back (a restore
-//     brought the account back);
-//   - not live, but made by a request of this server's boot: a person added since the census was
-//     read, kept;
+//   - live in the census: a retirement made before the census was registered is taken back (a
+//     restore brought the account back);
+//   - not live, but made by a request of this server's boot, or made since the census was
+//     registered: kept;
 //   - otherwise: retired, and its files and processes removed (tidying up: its home and uid are
 //     never another account's).
 //
@@ -117,7 +117,8 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	// restore replaced, still running or delayed) would retire the accounts the later one made.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
-	if err := w.registerCensus(c); err != nil {
+	seq, err := w.registerCensus(c)
+	if err != nil {
 		return err
 	}
 	live := make(map[string]bool, len(c.Owners))
@@ -132,24 +133,25 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	for id, r := range recs {
 		switch {
 		case live[id]:
-			if err := w.unretire(id, c.Before); err != nil {
+			if err := w.unretire(id, seq); err != nil {
 				return err
 			}
-		case !r.Retired && (r.Boot == c.Boot || (r.Boot != "" && !w.knownBoot(r.Boot))):
-			// Made by this census's server since it read its database, or by a server whose census
-			// the worker never applied: a later one's, whose census is still to come. Kept.
+		case !r.Retired && (r.Boot == c.Boot || r.Gen >= seq):
+			// Made by this census's server since it read its database, or made since the census was
+			// registered (by a later server, whose census is still to come). Kept.
 		default:
 			// A caller that has given up retires nothing more.
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(errs, err)...)
 			}
-			if err := w.retire(id, r.User); err != nil {
+			already, err := w.retireNow(id, r.User)
+			if err != nil {
 				return err
 			}
 			if r.Home == 0 {
 				continue
 			}
-			if err := w.tidy(ctx, account{id: id, user: r.User, home: r.Home}); err != nil {
+			if err := w.tidy(ctx, account{id: id, user: r.User, home: r.Home}, already); err != nil {
 				if ctx.Err() != nil {
 					return errors.Join(append(errs, err)...)
 				}
@@ -174,7 +176,11 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 		errs = append(errs, err)
 	}
 	if b := w.browserStopper(); b != nil {
-		b.Unforget(func(id string) bool { return live[id] }, c.Before)
+		// The records decide, not a clock: the browsers' refusals of the accounts this census
+		// brought back go, and those of accounts retired since it was registered (a deletion
+		// running now) stay. Deletions wait for the census lock, so every refusal there is now
+		// was made before this point of the worker's own time.
+		b.Unforget(func(id string) bool { return live[id] && !w.retired(id) }, time.Now())
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%w: %w", ErrIncomplete, errors.Join(errs...))
@@ -182,9 +188,13 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	return nil
 }
 
-// tidy removes a retired account's home and processes, if its home is still there.
-func (w *Worker) tidy(ctx context.Context, acct account) error {
-	if _, err := os.Lstat(w.cfg.Layout.Home(acct.home).Root); errors.Is(err, fs.ErrNotExist) {
+// tidy removes a retired account's processes and home. An account retired just now may have work
+// admitted before (a first turn, a sign-in, a browser) whose helper hasn't made its home yet: the
+// gate is closed and that work stopped and waited for whether or not the home is there, so nothing
+// makes it afterwards. One retired already, at an earlier census or deletion, had that done then,
+// and nothing was admitted since: with no home left there is nothing to do.
+func (w *Worker) tidy(ctx context.Context, acct account, already bool) error {
+	if _, err := os.Lstat(w.cfg.Layout.Home(acct.home).Root); already && errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	end, err := w.beginGate(ctx, scope{id: acct.id, all: true})

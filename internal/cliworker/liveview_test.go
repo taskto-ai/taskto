@@ -20,7 +20,7 @@ import (
 // other (run with -race).
 func TestALiveViewHandedOutAsItsAccountGoesEnds(t *testing.T) {
 	// A short root: the VNC socket's path must fit a Unix socket's.
-	root, err := os.MkdirTemp("", "lv")
+	root, err := os.MkdirTemp("/tmp", "lv")
 	if err != nil {
 		t.Fatal(err)
 	}

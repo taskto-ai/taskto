@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"testing"
-	"time"
 )
 
 // The UID base is the volume's: pinned the first time, and a worker with another is refused, as it
@@ -92,7 +91,7 @@ func TestEveryHomeComesWithItsUID(t *testing.T) {
 	if err := w.retire(id, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.unretire(id, time.Now().Add(time.Hour)); err != nil {
+	if err := w.unretire(id, 1); err != nil { // a census registered after the retirement
 		t.Fatal(err)
 	}
 	r, ok, err := w.find(id)
@@ -110,5 +109,23 @@ func TestEveryHomeComesWithItsUID(t *testing.T) {
 	}
 	if err := w.pinUIDBase(200000); err == nil {
 		t.Error("a volume with homes and no base to rebuild was accepted")
+	}
+}
+
+// A home's directory whose record was lost, with the pin, is a home given under some base: the
+// volume's base can't be rebuilt, and a worker doesn't start on it with isolation.
+func TestAnOrphanHomeKeepsTheUIDBaseFromBeingGuessed(t *testing.T) {
+	w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, accounts: map[string]accountRecord{}}
+	if err := mkdirDurable(w.accountsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(w.cfg.Layout.Home(firstHome).Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.checkCounter(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.pinUIDBase(99999); err == nil {
+		t.Error("a UID base was accepted on a volume with a home and no record of its base")
 	}
 }

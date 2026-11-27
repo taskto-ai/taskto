@@ -288,17 +288,17 @@ func TestARetiredAccountIsRefusedUntilACensusSaysItIsLive(t *testing.T) {
 		}
 	}
 	// 2's account is back; 3 is gone for good; 4's number is a new account's now; 5's account is
-	// live, but was deleted after the server read its database.
+	// live, but deleted once the census was registered: the census is tried again, and the deletion
+	// stays.
 	h.introduce(t, 5)
-	time.Sleep(20 * time.Millisecond)
-	snapshot := time.Now()
-	time.Sleep(20 * time.Millisecond)
+	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: cliworker.TestBoot}
+	c := census(map[int64]string{4: next.Identity}, 1, 2, 5)
+	if err := h.w.Reconcile(ctx, c); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.w.Forget(ctx, acct(5)); err != nil {
 		t.Fatal(err)
 	}
-	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: cliworker.TestBoot}
-	c := census(map[int64]string{4: next.Identity}, 1, 2, 5)
-	c.Before = snapshot
 	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}

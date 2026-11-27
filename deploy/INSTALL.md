@@ -1422,16 +1422,20 @@ the one that failed (a failed release isn't tried again by itself, but a newer o
    account's files in a home of its own, [docs/install.md](../docs/install.md#upgrading-to-account-homes))
    and the CLI workers run in container mode, give the older worker a new, empty `cli-homes`
    volume, and keep the upgraded one aside, mounted by nothing: an older worker reads directories
-   by user number and must never see the homes. Before step 9:
+   by user number and must never see the homes. Before step 9, with everything still down from
+   step 2. The volume is the Compose project's `cli-homes`, as the Compose file names it (the
+   containers that mounted it are gone by now); set `HOMES` yourself only if that can't tell:
 
    ```sh
    . ~/.config/taskto-install.env
    vm <<'EOF'
    cd /srv/taskto
-   worker=$(docker compose ps -aq cli-worker)
-   HOMES=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/homes"}}{{.Name}}{{end}}{{end}}' "$worker")
-   [ -n "$HOMES" ] || { echo "FAIL: no cli-homes volume: set HOMES to the worker's /homes"; exit 1; }
-   docker compose down
+   HOMES=   # only when the lookup below can't tell
+   if [ -z "$HOMES" ]; then
+     HOMES=$(docker compose --profile cli config --format json | jq -r '.volumes["cli-homes"].name // empty')
+   fi
+   [ -n "$HOMES" ] || { echo "FAIL: no cli-homes volume: set HOMES to the worker's /homes volume"; exit 1; }
+   docker volume inspect "$HOMES" >/dev/null || { echo "FAIL: no volume $HOMES"; exit 1; }
    docker run --rm </dev/null -v "$HOMES":/from -v "${HOMES}_kept_$(date +%Y%m%d%H%M%S)":/to alpine cp -a /from/. /to/
    docker run --rm </dev/null -v "$HOMES":/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
    EOF

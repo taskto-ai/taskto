@@ -49,12 +49,18 @@ type accountRecord struct {
 	// User is the number the account had when the worker first saw it, for logs and adoption.
 	User int64 `json:"user"`
 	// Boot is the server boot whose request made the record (Reconcile keeps an account made since
-	// the census it is given).
+	// the census it is given), and Gen the number of the latest registered boot then (volume.go): a
+	// census retires only accounts made before it was registered.
 	Boot string `json:"boot"`
+	Gen  int64  `json:"gen,omitempty"`
 	// Retired is set when the account is gone (Forget, Reconcile), with when: nothing runs for it
 	// until a census says it is live again, and its files are removed.
 	Retired   bool      `json:"retired,omitempty"`
 	RetiredAt time.Time `json:"retired_at,omitzero"`
+	// RetiredGen is the number of the latest registered boot when it was retired: a census takes
+	// back only a retirement made before it was registered (a deletion since is one it can't know
+	// of). RetiredAt is for people to read; nothing is decided by it.
+	RetiredGen int64 `json:"retired_gen,omitempty"`
 	// Adopting is the number of a directory from before homes (Root/u<n>) being moved to this home
 	// (Config.AdoptLegacy): set before the move, cleared after it, so a stop in between is finished
 	// by the next use.
@@ -230,7 +236,7 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 		if !make {
 			return account{}, ErrUnknownAccount
 		}
-		r = accountRecord{User: a.User, Boot: a.Boot}
+		r = accountRecord{User: a.User, Boot: a.Boot, Gen: w.latestSeq()}
 		if err := w.giveHome(&r); err != nil {
 			return account{}, err
 		}
@@ -285,20 +291,26 @@ func (w *Worker) adopt(identity string, r accountRecord) error {
 // is live again. Its record stays, so its home number is never given again; one the worker had
 // none of gets one with no home.
 func (w *Worker) retire(identity string, user int64) error {
+	_, err := w.retireNow(identity, user)
+	return err
+}
+
+// retireNow is retire, and reports whether the account was retired already.
+func (w *Worker) retireNow(identity string, user int64) (already bool, err error) {
 	w.accountsMu.Lock()
 	defer w.accountsMu.Unlock()
 	r, ok, err := w.record(identity)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
-		r = accountRecord{User: user}
+		r = accountRecord{User: user, Gen: w.latestSeq()}
 	}
 	if r.Retired {
-		return nil
+		return true, nil
 	}
-	r.Retired, r.RetiredAt = true, time.Now()
-	return w.putRecord(identity, r)
+	r.Retired, r.RetiredAt, r.RetiredGen = true, time.Now(), w.latestSeq()
+	return false, w.putRecord(identity, r)
 }
 
 // retired reports whether identity is retired. A record that can't be read counts as retired: only
@@ -355,14 +367,14 @@ func (w *Worker) find(identity string) (accountRecord, bool, error) {
 // unretire takes back identity's retirement, made before before: a census says the account is
 // live again (a restore of the server's data brought it back). A retirement made after it is a
 // deletion the census can't know of, and stays.
-func (w *Worker) unretire(identity string, before time.Time) error {
+func (w *Worker) unretire(identity string, seq int64) error {
 	w.accountsMu.Lock()
 	defer w.accountsMu.Unlock()
 	r, ok, err := w.record(identity)
-	if err != nil || !ok || !r.Retired || !r.RetiredAt.Before(before) {
+	if err != nil || !ok || !r.Retired || r.RetiredGen >= seq {
 		return err
 	}
-	r.Retired, r.RetiredAt = false, time.Time{}
+	r.Retired, r.RetiredAt, r.RetiredGen = false, time.Time{}, 0
 	if r.Home == 0 {
 		// Retired before the worker gave it a home: it gets one now, as any account does.
 		if err := w.giveHome(&r); err != nil {

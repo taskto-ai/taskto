@@ -456,22 +456,31 @@ The UI shows what the command prints.
     temporary directory the next start removes, never a home of the wrong owner;
   - the worker's own directories are made with each new one's parent synced, before anything is
     recorded in them.
-- **Server boots.** Only a census registers a server's boot: the worker keeps the boots whose
-  censuses it applied, in that order, with when each server read its database
-  (`.worker/boots.json`, the last 4096). No other request registers one, so a delayed request of an
-  earlier server can't make its boot the latest. Then:
-  - a census from a registered boot that isn't the latest, or from one the worker never heard from
-    whose server read its database before the latest's did, is ignored (`ErrStaleBoot`, `409`,
-    `stale_boot`). The time only ever makes the worker refuse a census, which removes nothing;
-  - a census retires only the accounts of boots it was told of before: an account made by a
-    server whose census hasn't come (a later one's, made before its census reached the worker) is
-    kept, so an earlier server's census, a retry or a delayed one, never retires it;
+- **Server boots.** The worker orders the servers' boots by itself, never by a clock: the first
+  census of a boot it applies gives the boot the next number of a counter that only goes up
+  (`.worker/boot-seq`, moved on durably first), and a boot with a higher number is a later server.
+  The order is on the worker's volume, so a restore of the server's data can't take it back, and a
+  clock stepped back changes nothing. Only a census registers a boot: no other request does, so a
+  delayed request of an earlier server can't make its boot the latest. Every account record keeps
+  the number of the latest boot when it was made and, once retired, when that was. Then:
+  - a census from a boot registered before the latest is ignored (`ErrStaleBoot`, `409`,
+    `stale_boot`); a boot the worker hasn't registered is the latest from its census on (so the
+    first census of a server registers it, whatever its clock says);
+  - a census retires only accounts made before it was registered, apart from those its own
+    server made: an account made since (by a later server, before its census reached the worker)
+    is kept, so an earlier server's census, a retry or a delayed one, never retires it;
+  - a census takes back only retirements made before it was registered: a deletion since (a purge
+    running now) stays;
   - a deletion (`Forget`, and the agent browsers' purge in the worker, `FenceDeletion`) is taken
-    only from the latest census's boot, and retires the account before it stops or removes
+    only from the latest registered boot, and retires the account before it stops or removes
     anything. The server sends its boot with every deletion, the purge's too;
+  - the list of boots (`.worker/boots.json`, the last 4096) only names the latest one, for
+    deletions: what a census retires is decided by the records' numbers, never by the list. With
+    the list lost, damaged or past its bound, no account is taken for a later server's; deletions
+    wait for the next census, which sets the latest boot again;
   - censuses and deletions run one at a time, so no boot is registered between a decision and
     what it decides, and one whose caller has given up retires nothing more. The server stops
-    trying a census the worker calls stale, and logs it.
+    trying a census the worker calls stale (a later server has spoken to the worker), and logs it.
 - **Retired accounts.** An account that is gone (`Forget`, `Reconcile`) is **retired**: its record
   says so, durably, and keeps its home number, so the number is never given again. Every request
   for a retired identity is refused (`ErrForgotten`, `410 Gone` with the code `forgotten` over the
@@ -543,6 +552,11 @@ The UI shows what the command prints.
     number to make a request adopts its old directory instead (below);
   - deletes what an earlier removal left in its trash, and takes back the agent browsers' refusals
     of the live accounts.
+
+  An account a census retires now may have work the worker admitted just before (a first turn, a
+  sign-in, a browser) whose helper hasn't made its home yet: the census closes its gate and stops
+  that work whether or not the home is there, so nothing makes the home afterwards. One retired
+  already, whose home is gone, has nothing left to do.
 
   A home that can't be removed yet (a process of it doesn't end in time) is kept, its account
   retired, and the answer is `ErrIncomplete` (`409`, `incomplete`): the server tries again later.

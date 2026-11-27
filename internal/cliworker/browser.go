@@ -296,8 +296,8 @@ func (h *browserHost) Purge(a cliowner.Account) error {
 		return nil
 	}
 	r, ok, err := h.w.find(a.Identity)
-	if err != nil || !ok {
-		return err
+	if err != nil || !ok || r.Home == 0 {
+		return err // the worker never gave it a home: no browser files
 	}
 	end, err := h.w.beginGate(context.Background(), scope{id: a.Identity, all: true})
 	if err != nil {

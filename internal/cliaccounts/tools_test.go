@@ -211,7 +211,7 @@ func TestToolsTokenRefusals(t *testing.T) {
 		}
 		return token
 	}
-	claims := toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id}
+	claims := toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id}
 
 	good := mint(claims)
 	if c, status := caller(good); status != http.StatusOK || c != (agenttools.Caller{Workspace: e.ws, User: e.owner.id, Conversation: conv}) {
@@ -225,19 +225,25 @@ func TestToolsTokenRefusals(t *testing.T) {
 	if _, status := caller(mint(before)); status == http.StatusOK {
 		t.Error("a token of the number's earlier account was accepted")
 	}
+	// Nor one for the conversation's number in another workspace.
+	elsewhere := claims
+	elsewhere.Workspace = e.ws + 1
+	if _, status := caller(mint(elsewhere)); status == http.StatusOK {
+		t.Error("a token of another workspace's conversation was accepted")
+	}
 
 	// Forged, signed for something else, expired, malformed or missing.
 	forged := good[:len(good)-4] + "AAAA"
-	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id})
+	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id})
 	if err != nil {
 		t.Fatal(err)
 	}
-	expired, _ := sealToken(e.svc.shared.Key, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "old", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
+	expired, _ := sealToken(e.svc.shared.Key, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "old", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
 	otherKey, err := serverkey.Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherServer, _ := sealToken(otherKey, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "x", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
+	otherServer, _ := sealToken(otherKey, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "x", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
 	for name, token := range map[string]string{
 		"forged": forged, "a proxy token": proxyToken, "expired": expired, "another server's": otherServer,
 		"none": "", "malformed": "ttm1.nope", "an access token's shape": "ttp_0123456789abcdef0123456789abcdef",
@@ -250,9 +256,9 @@ func TestToolsTokenRefusals(t *testing.T) {
 	// Another conversation's turn, or one the worker doesn't run, or claims about another
 	// user's conversation.
 	for name, c := range map[string]toolsClaims{
-		"a turn the worker doesn't know":     {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: "c1-unknown"},
-		"the turn, for another user":         {User: e.other.id, Identity: e.acct(e.other.id).Identity, Conversation: conv, Turn: id},
-		"the turn, for another conversation": {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: e.conversation(e.owner), Turn: id},
+		"a turn the worker doesn't know":     {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-unknown"},
+		"the turn, for another user":         {User: e.other.id, Identity: e.acct(e.other.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id},
+		"the turn, for another conversation": {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: e.conversation(e.owner), Turn: id},
 	} {
 		if _, status := caller(mint(c)); status == http.StatusOK {
 			t.Errorf("%s: accepted", name)
@@ -349,7 +355,7 @@ func TestTurnsWithoutTaskToTools(t *testing.T) {
 func TestAToolsTokenCheckDuringAnOutageIsNotReady(t *testing.T) {
 	e := newTurnEnv(t)
 	conv := e.conversation(e.owner)
-	token, err := e.svc.mintToolsToken(toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: fmt.Sprintf("c%d-t1", conv)})
+	token, err := e.svc.mintToolsToken(toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: fmt.Sprintf("c%d-t1", conv)})
 	if err != nil {
 		t.Fatal(err)
 	}

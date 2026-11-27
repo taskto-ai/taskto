@@ -269,7 +269,7 @@ func (s *Service) start(ctx context.Context, p conversations.Principal, req turn
 		if err != nil {
 			return nil, err
 		}
-		token, err := s.mintToken(proxyClaims{Account: c.shared.ID, User: p.User, Identity: a.Identity, Conversation: p.Conversation, Turn: id})
+		token, err := s.mintToken(proxyClaims{Account: c.shared.ID, User: p.User, Identity: a.Identity, Workspace: p.Workspace, Conversation: p.Conversation, Turn: id})
 		if err != nil {
 			return nil, err
 		}

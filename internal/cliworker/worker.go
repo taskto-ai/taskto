@@ -104,6 +104,7 @@ type Worker struct {
 	volumeLock *os.File
 	bootsMu    sync.Mutex
 	boots      []bootEntry
+	bootSeq    int64
 	// nextFree and usedHomes are the allocator's high-water mark and the homes the volume has
 	// (records, retired ones too, and directories), under accountsMu (checkCounter).
 	nextFree  int64

@@ -815,6 +815,18 @@ func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
 			t.Errorf("the Rollback doesn't have %q", want)
 		}
 	}
+	// The worker's volume, emptied for an older worker, is found once step 2 has taken every
+	// container down (a lookup through a container fails then, under the runbook's set -e): from
+	// the Compose project, unless set by hand, and the stack isn't taken down a second time.
+	homes := rollback[strings.Index(rollback, "HOMES="):]
+	if strings.Contains(homes, "docker compose ps") || strings.Contains(homes, "docker compose down") {
+		t.Error("the Rollback's worker-volume step looks for a container step 2 removed, or takes the stack down again")
+	}
+	for _, want := range []string{`if [ -z "$HOMES" ]; then`, `docker compose --profile cli config --format json | jq -r '.volumes["cli-homes"].name // empty'`, `docker volume inspect "$HOMES"`} {
+		if !strings.Contains(homes, want) {
+			t.Errorf("the Rollback's worker-volume step doesn't have %q", want)
+		}
+	}
 	// A rollback with no record still has a volume: the one the server has.
 	if i, j := strings.Index(rollback, `RECORDED=`), strings.Index(rollback, `[ -z "$VOLUME" ]`); i < 0 || j < i {
 		t.Error("the Rollback doesn't take the recorded volume first, and the server's own when there is none")

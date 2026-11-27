@@ -265,17 +265,21 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	if err := h.w.Reconcile(ctx, bootCensus(other.Boot, start.Add(time.Minute), map[int64]string{1: cliworker.IdentityForTest(1), 2: cliworker.IdentityForTest(2), 3: other.Identity})); err != nil {
 		t.Fatal(err)
 	}
-	// A server whose census hasn't come: its account is kept.
-	coming := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: strings.Repeat("e", 32)}
-	if _, err := h.w.Status(ctx, coming, cliworker.Claude, ""); err != nil {
-		t.Fatal(err)
-	}
 	// The server starts again: its census has a boot of its own, and an account it makes since it
 	// read its database carries that boot.
 	again := bootCensus(strings.Repeat("a", 32), time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})
 	since := acct(4)
 	since.Boot = again.Boot
 	if _, err := h.w.Status(ctx, since, cliworker.Claude, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Reconcile(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	// A server whose census hasn't come makes an account after this census was registered: the
+	// census, tried again, keeps it.
+	coming := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: strings.Repeat("e", 32)}
+	if _, err := h.w.Status(ctx, coming, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.w.Reconcile(ctx, again); err != nil {
@@ -353,4 +357,28 @@ func (f *fakeBrowsers) Unforget(again func(string) bool, _ time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.again = again
+}
+
+// The browsers' purge of an account the worker never gave a home (one a deletion retired before
+// it ever came, a record with no home) has nothing to remove, and asks no helper: there is no
+// home number to run one for.
+func TestABrowserPurgeOfAnAccountWithNoHomeDoesNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	a := cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: cliworker.TestBoot}
+	host := h.w.BrowserHost(map[browser.Program]string{})
+	built := h.w.HelpersBuiltForTest()
+	if err := h.w.FenceDeletion(ctx, a, func() error { return host.Purge(a) }); err != nil {
+		t.Errorf("the purge of an account with no home: %v", err)
+	}
+	if h.w.HelpersBuiltForTest() != built {
+		t.Error("a helper was made for an account with no home")
+	}
+	// Not even when a directory named for home 0 is there.
+	if err := os.MkdirAll(filepath.Join(h.layout.Root, "h0"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Purge(a); err != nil {
+		t.Errorf("the purge again, with h0 there: %v", err)
+	}
 }

@@ -127,7 +127,7 @@ server instead of the provider:
 These are the same settings the CLI workers' gateway tests use, with the server in the gateway's place.
 
 - **The token** is minted for one turn: the shared account, the user and their account's identity
-  (`users.cli_identity`), the conversation and an expiry, sealed with the server key
+  (`users.cli_identity`), the conversation and its workspace, and an expiry, sealed with the server key
   (`serverkey.Seal`, so the CLI reads none of it) and signed with the server key (`serverkey.MAC`). The expiry is a fixed two hours: the
   worker's longest turn (30 minutes) and a wait for a free place, with room to spare. It is
   stateless, so a server restart in the middle of a turn doesn't break it.

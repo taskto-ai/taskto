@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/lockfile"
@@ -224,22 +223,37 @@ func (w *Worker) pinUIDBase(base int) error {
 			return fmt.Errorf("cliworker: this volume's accounts run under uid base %d: start the worker with -uid-base %d, or on a new volume", r.UID-r.Home, r.UID-r.Home)
 		}
 	}
-	if homes > 0 && said == 0 {
+	// A home's directory with no record (its record lost) is a home given under some base too.
+	if (homes > 0 || len(w.usedHomes) > 0) && said == 0 {
 		return errors.New("cliworker: this volume has homes but no record of the UID base they were given under (.worker/uid-base is gone): start the worker on a new volume")
 	}
 	return writeDurably(w.stateDir(), w.uidBaseFile(), []byte(strconv.Itoa(base)+"\n"))
 }
 
-// bootsFile keeps the server boots whose censuses the worker applied, in that order.
+// Server boots are ordered by the worker alone, never by a clock: the first census of a boot it
+// applies gives the boot the next number of a counter that only goes up (.worker/boot-seq, moved
+// on durably before the boot is used), and a boot with a higher number is a later server. The
+// order lives on the worker's volume, so a restore of the server's data can't take it back. Only
+// a census registers a boot: a delayed request of an earlier server can't make its boot the
+// latest. Every account record keeps the number of the latest boot when it was made (Gen) and,
+// once retired, when it was (RetiredGen): a census retires only accounts made before it was
+// registered, and takes back only retirements made before it, so what it decides never depends on
+// the list of boots (.worker/boots.json, the last maxBoots), whose loss only makes the worker
+// refuse deletions until a census registers a boot again.
+
+// bootsFile is the boots registered, with their numbers.
 func (w *Worker) bootsFile() string { return filepath.Join(w.stateDir(), "boots.json") }
 
-// maxBoots bounds the boots kept: a server start each, a few kilobytes for years of them.
+// bootSeqFile is the boot counter: the highest number given.
+func (w *Worker) bootSeqFile() string { return filepath.Join(w.stateDir(), "boot-seq") }
+
+// maxBoots bounds the boots kept: a server start each.
 const maxBoots = 4096
 
-// bootEntry is a boot whose census the worker applied, with when its server read its database.
+// bootEntry is a registered boot, with its number.
 type bootEntry struct {
-	Boot   string    `json:"boot"`
-	Before time.Time `json:"before"`
+	Boot string `json:"boot"`
+	Seq  int64  `json:"seq"`
 }
 
 type bootLog struct {
@@ -247,91 +261,114 @@ type bootLog struct {
 	Boots []bootEntry `json:"boots"`
 }
 
+// loadBoots reads the boots and the counter, which is moved past every number the volume names
+// (the list's, and the records' Gen and RetiredGen) if it is behind: numbers only ever go up.
 func (w *Worker) loadBoots() error {
 	b, err := os.ReadFile(w.bootsFile())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		var l bootLog
+		if json.Unmarshal(b, &l) != nil {
+			// Written whole, by a rename: damaged is the disk's doing. The list only names the
+			// latest boot, for deletions, which are refused until the next census.
+			slog.Warn("cliworker: the list of server boots (.worker/boots.json) is damaged: deletions wait for the next census")
+		} else {
+			w.boots = l.Boots
+		}
 	}
+	seq, _ := w.readSeq(w.bootSeqFile())
+	for _, e := range w.boots {
+		seq = max(seq, e.Seq)
+	}
+	recs, err := w.records()
 	if err != nil {
 		return err
 	}
-	var l bootLog
-	if err := json.Unmarshal(b, &l); err != nil {
-		// It is written whole, by a rename: damaged is the disk's doing, and the order it kept is
-		// what keeps an earlier server's census from retiring a later one's accounts.
-		return fmt.Errorf("cliworker: the log of server boots (.worker/boots.json) is damaged; remove it to start it again: %w", err)
+	for _, r := range recs {
+		seq = max(seq, r.Gen, r.RetiredGen)
 	}
-	w.boots = l.Boots
+	w.bootSeq = seq
+	if n, _ := w.readSeq(w.bootSeqFile()); n < seq {
+		return writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n"))
+	}
 	return nil
 }
 
-// Only a census registers a boot: a server's census is the first thing it sends, and the worker
-// keeps the order it applied them in. No other request registers one, so a delayed request of an
-// earlier server can't make its boot look like the latest. The caller holds w.censusMu, which every
-// census and deletion takes, so nothing registers a boot between a decision and what it decides.
+func (w *Worker) readSeq(path string) (int64, bool) {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the worker's own counter, in its own directory
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	return n, err == nil && n >= 0
+}
 
-// latestBoot is the boot of the last census applied, "" before any.
+// latestSeq is the number of the latest registered boot (0 before any): a new record's Gen.
+func (w *Worker) latestSeq() int64 {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	return w.bootSeq
+}
+
+// latestBoot is the boot whose number is the counter's, "" when none is (no census yet, or the
+// list lost it).
 func (w *Worker) latestBoot() string {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
-	if len(w.boots) == 0 {
-		return ""
+	if n := len(w.boots); n > 0 && w.boots[n-1].Seq == w.bootSeq {
+		return w.boots[n-1].Boot
 	}
-	return w.boots[len(w.boots)-1].Boot
+	return ""
 }
 
-// knownBoot reports whether a census of boot was applied.
-func (w *Worker) knownBoot(boot string) bool {
-	w.bootsMu.Lock()
-	defer w.bootsMu.Unlock()
-	for _, b := range w.boots {
-		if b.Boot == boot {
-			return true
-		}
-	}
-	return false
-}
-
-// registerCensus takes c's boot as the latest, or refuses it with ErrStaleBoot: a boot whose
-// census was applied before another's, or one the worker never heard from whose server read its
-// database before the latest's did (an earlier server's census, delayed). The clock only ever
-// makes the worker refuse a census, which removes nothing, never apply one.
-func (w *Worker) registerCensus(c Census) error {
+// registerCensus registers c's boot, or refuses it with ErrStaleBoot: a boot registered before the
+// latest one is an earlier server's. A boot the worker hasn't registered gets the next number and
+// is the latest from now on. It returns the boot's number. The caller holds w.censusMu.
+func (w *Worker) registerCensus(c Census) (int64, error) {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
 	for i, b := range w.boots {
 		if b.Boot == c.Boot {
-			if i == len(w.boots)-1 {
-				return nil
+			if i == len(w.boots)-1 && b.Seq == w.bootSeq {
+				return b.Seq, nil
 			}
-			return ErrStaleBoot
+			return 0, ErrStaleBoot
 		}
 	}
-	if n := len(w.boots); n > 0 && !c.Before.After(w.boots[n-1].Before) {
-		return ErrStaleBoot
+	seq := w.bootSeq + 1
+	// The counter first: a number is never given twice, a stop in between only skipping one.
+	if err := writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n")); err != nil {
+		return 0, err
 	}
-	boots := append(append([]bootEntry(nil), w.boots...), bootEntry{Boot: c.Boot, Before: c.Before})
+	w.bootSeq = seq
+	boots := append(append([]bootEntry(nil), w.boots...), bootEntry{Boot: c.Boot, Seq: seq})
 	if len(boots) > maxBoots {
 		boots = boots[len(boots)-maxBoots:]
 	}
 	b, err := json.Marshal(bootLog{Boots: boots})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := writeDurably(w.stateDir(), w.bootsFile(), b); err != nil {
-		return err
+		return 0, err
 	}
 	w.boots = boots
-	return nil
+	return seq, nil
 }
 
-// deletionFence admits a deletion (Forget, a browser purge) only from the latest census's boot:
+// deletionFence admits a deletion (Forget, a browser purge) only from the latest registered boot:
 // one an earlier server sent, delayed past a restore that brought the account back, retires and
-// removes nothing. Before any census, there is nothing to fence against. The caller holds
+// removes nothing. On a volume that never had a census there is nothing to fence against; one
+// whose list of boots was lost refuses until a census registers one again. The caller holds
 // w.censusMu.
 func (w *Worker) deletionFence(boot string) error {
-	latest := w.latestBoot()
-	if latest == "" || boot == latest {
+	if w.latestSeq() == 0 {
+		return nil
+	}
+	if latest := w.latestBoot(); latest != "" && boot == latest {
 		return nil
 	}
 	return ErrStaleBoot
