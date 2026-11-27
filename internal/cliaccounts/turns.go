@@ -387,7 +387,7 @@ func (s *Service) recordTokens(ctx context.Context, p conversations.Principal, s
 	if !res.hasUsage {
 		return
 	}
-	if err := usage.Record(ctx, s.db, usage.Entry{User: p.User, Workspace: p.Workspace, Source: "cli", Engine: string(spec.CLI), Input: res.input, Output: res.output, At: time.Now(), Turn: spec.ID}); err != nil {
+	if err := usage.Record(ctx, s.db, usage.Entry{User: p.User, Workspace: p.Workspace, Source: "cli", Engine: string(spec.CLI), Input: res.input, Output: res.output, Turns: 1, At: time.Now(), Turn: spec.ID}); err != nil {
 		slog.ErrorContext(ctx, "cli turn: recording token usage", "conversation", p.Conversation, "err", err)
 	}
 }

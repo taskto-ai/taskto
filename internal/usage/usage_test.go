@@ -48,10 +48,10 @@ func TestRecordAggregatesByUTCDateAndDailyScopesTheOwner(t *testing.T) {
 	one, two := user(t, d, "one@example.test"), user(t, d, "two@example.test")
 	first := time.Date(2026, 11, 27, 23, 30, 0, 0, time.FixedZone("west", -5*60*60))
 	for _, entry := range []Entry{
-		{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 4, Output: 2, At: first},
-		{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 6, Output: 3, At: first.Add(time.Minute)},
-		{User: one, Workspace: workspace, Source: "agent", Engine: "provider-a", Input: 7, Output: 5, At: first.Add(2 * time.Hour)},
-		{User: two, Workspace: workspace, Source: "cli", Engine: "codex", Input: 900, Output: 800, At: first},
+		{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 4, Output: 2, Turns: 1, At: first},
+		{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 6, Output: 3, Turns: 1, At: first.Add(time.Minute)},
+		{User: one, Workspace: workspace, Source: "agent", Engine: "provider-a", Input: 7, Output: 5, Turns: 1, At: first.Add(2 * time.Hour)},
+		{User: two, Workspace: workspace, Source: "cli", Engine: "codex", Input: 900, Output: 800, Turns: 1, At: first},
 	} {
 		if err := Record(ctx, d, entry); err != nil {
 			t.Fatal(err)
@@ -80,10 +80,10 @@ func TestRecordPrunesOlderThan400DaysAndAccountDeletionCascades(t *testing.T) {
 	workspace, _ := res.LastInsertId()
 	one, two := user(t, d, "one@example.test"), user(t, d, "two@example.test")
 	old := time.Now().UTC().AddDate(0, 0, -401)
-	if err := Record(ctx, d, Entry{User: one, Workspace: workspace, Source: "cli", Engine: "claude", Input: 1, At: old}); err != nil {
+	if err := Record(ctx, d, Entry{User: one, Workspace: workspace, Source: "cli", Engine: "claude", Input: 1, Turns: 1, At: old}); err != nil {
 		t.Fatal(err)
 	}
-	if err := Record(ctx, d, Entry{User: two, Workspace: workspace, Source: "cli", Engine: "claude", Input: 1, At: time.Now()}); err != nil {
+	if err := Record(ctx, d, Entry{User: two, Workspace: workspace, Source: "cli", Engine: "claude", Input: 1, Turns: 1, At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -107,7 +107,7 @@ func TestRecordCountsATurnOnce(t *testing.T) {
 	}
 	workspace, _ := res.LastInsertId()
 	one := user(t, d, "one@example.test")
-	entry := Entry{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 5, Output: 2, At: time.Now(), Turn: "c1-t1"}
+	entry := Entry{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 5, Output: 2, Turns: 1, At: time.Now(), Turn: "c1-t1"}
 	for range 3 {
 		if err := Record(ctx, d, entry); err != nil {
 			t.Fatal(err)

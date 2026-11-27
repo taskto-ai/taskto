@@ -17,6 +17,7 @@ type Entry struct {
 	Output    int64
 	At        time.Time
 	Turn      string
+	Turns     int64
 }
 
 type Day struct {
@@ -44,7 +45,7 @@ func Record(ctx context.Context, db *sql.DB, e Entry) error {
 }
 
 func (e Entry) validate() error {
-	if e.User < 1 || e.Workspace < 1 || (e.Source != "cli" && e.Source != "agent") || len(e.Engine) < 1 || len(e.Engine) > 64 || len(e.Turn) > 128 || e.Input < 0 || e.Output < 0 || e.At.IsZero() {
+	if e.User < 1 || e.Workspace < 1 || (e.Source != "cli" && e.Source != "agent") || len(e.Engine) < 1 || len(e.Engine) > 64 || len(e.Turn) > 128 || e.Turns < 0 || e.Input < 0 || e.Output < 0 || e.At.IsZero() {
 		return errors.New("invalid usage entry")
 	}
 	return nil
@@ -69,11 +70,11 @@ func RecordTx(ctx context.Context, tx *sql.Tx, e Entry) error {
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_usage_daily
 		(user_id, workspace_id, day, source, engine, input_tokens, output_tokens, turns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (user_id, workspace_id, day, source, engine) DO UPDATE SET
 		input_tokens = input_tokens + excluded.input_tokens,
 		output_tokens = output_tokens + excluded.output_tokens,
-		turns = turns + 1`, e.User, e.Workspace, day, e.Source, e.Engine, e.Input, e.Output); err != nil {
+		turns = turns + excluded.turns`, e.User, e.Workspace, day, e.Source, e.Engine, e.Input, e.Output, e.Turns); err != nil {
 		return fmt.Errorf("record daily agent usage: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_usage_daily WHERE user_id = ? AND day < date('now', '-400 days')`, e.User); err != nil {

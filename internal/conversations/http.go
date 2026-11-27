@@ -319,7 +319,10 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
 	model, _ := rt.Model(r.Context(), c.agentID)
-	s.startUsageMark(r.Context(), c.ID, s.entryCursor(r.Context(), rt, c.agentID))
+	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
 	sub, err := rt.Submit(r.Context(), c.agentID, in)
 	if err != nil {
 		conversationError(w, r, c, err)

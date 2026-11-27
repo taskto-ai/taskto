@@ -64,28 +64,28 @@ type entryPage struct {
 	Before  *int64            `json:"before"`
 }
 
-func (s *Service) entryCursor(ctx context.Context, rt Runtime, agentID int64) int64 {
+func (s *Service) entryCursor(ctx context.Context, rt Runtime, agentID int64) (int64, error) {
 	raw, err := rt.Entries(ctx, agentID, 0, maxPageEntries)
 	if err != nil {
-		return -1
+		return 0, err
 	}
 	var page entryPage
-	if json.Unmarshal(raw, &page) != nil {
-		return -1
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return 0, err
 	}
 	var cursor int64
 	for _, raw := range page.Entries {
 		var entry struct {
 			ID int64 `json:"id"`
 		}
-		if json.Unmarshal(raw, &entry) != nil {
-			return -1
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return 0, err
 		}
 		if entry.ID > cursor {
 			cursor = entry.ID
 		}
 	}
-	return cursor
+	return cursor, nil
 }
 
 func (s *Service) markWhenSettled(rt Runtime, p Principal, engine string, sub int64) {
@@ -104,15 +104,23 @@ func (s *Service) markWhenSettled(rt Runtime, p Principal, engine string, sub in
 	}()
 }
 
-type usageTotals struct{ input, output int64 }
+type usageTotals struct{ input, output, turns int64 }
 
-func (s *Service) startUsageMark(ctx context.Context, conversation, cursor int64) {
-	if cursor < 0 {
-		return
+func (s *Service) ensureUsageMark(ctx context.Context, rt Runtime, conversation, agentID int64) error {
+	var mark sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT usage_mark FROM conversations WHERE id = ?`, conversation).Scan(&mark); err != nil || mark.Valid {
+		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE conversations SET usage_mark = ? WHERE id = ? AND usage_mark IS NULL`, cursor, conversation); err != nil {
-		slog.WarnContext(ctx, "conversations: starting agent usage counting", "conversation", conversation, "err", err)
+	cursor, err := s.entryCursor(ctx, rt, agentID)
+	if err != nil {
+		return err
 	}
+	return s.startUsageMark(ctx, conversation, cursor)
+}
+
+func (s *Service) startUsageMark(ctx context.Context, conversation, cursor int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET usage_mark = ? WHERE id = ? AND usage_mark IS NULL`, cursor, conversation)
+	return err
 }
 
 func (s *Service) recordAgentUsage(ctx context.Context, rt Runtime, p Principal, engine string) error {
@@ -153,7 +161,7 @@ func (s *Service) claimAgentUsage(ctx context.Context, p Principal, mark, top in
 		return false, err
 	}
 	for name, count := range totals {
-		if err := usage.RecordTx(ctx, tx, usage.Entry{User: p.User, Workspace: p.Workspace, Source: "agent", Engine: name, Input: count.input, Output: count.output, At: time.Now()}); err != nil {
+		if err := usage.RecordTx(ctx, tx, usage.Entry{User: p.User, Workspace: p.Workspace, Source: "agent", Engine: name, Input: count.input, Output: count.output, Turns: count.turns, At: time.Now()}); err != nil {
 			return false, err
 		}
 	}
@@ -162,8 +170,8 @@ func (s *Service) claimAgentUsage(ctx context.Context, p Principal, mark, top in
 
 func (s *Service) collectAgentUsage(ctx context.Context, rt Runtime, agentID int64, engine string, mark int64) (map[string]usageTotals, int64, error) {
 	totalsByEngine := map[string]usageTotals{}
-	top, before := int64(0), int64(0)
-	for pages := 0; pages < 1000; pages++ {
+	top, before, users, last := int64(0), int64(0), int64(0), ""
+	for {
 		raw, err := rt.Entries(ctx, agentID, before, maxPageEntries)
 		if err != nil {
 			return nil, 0, err
@@ -198,6 +206,9 @@ func (s *Service) collectAgentUsage(ctx context.Context, rt Runtime, agentID int
 				top = entry.ID
 			}
 			for _, message := range entry.Model {
+				if message.Role == "user" {
+					users++
+				}
 				if message.Role != "assistant" || message.Usage == nil {
 					continue
 				}
@@ -208,6 +219,9 @@ func (s *Service) collectAgentUsage(ctx context.Context, rt Runtime, agentID int
 				if name == "" || len(name) > 64 || message.Usage.Input < 0 || message.Usage.Output < 0 {
 					continue
 				}
+				if last == "" {
+					last = name
+				}
 				current := totalsByEngine[name]
 				current.input += message.Usage.Input
 				current.output += message.Usage.Output
@@ -217,7 +231,14 @@ func (s *Service) collectAgentUsage(ctx context.Context, rt Runtime, agentID int
 		if oldest == 0 || oldest <= mark || page.Before == nil || *page.Before <= 0 {
 			break
 		}
+		if before != 0 && oldest >= before {
+			return nil, 0, errors.New("the agent runtime's entries did not move back")
+		}
 		before = oldest
+	}
+	if current, ok := totalsByEngine[last]; ok {
+		current.turns = users
+		totalsByEngine[last] = current
 	}
 	return totalsByEngine, top, nil
 }
