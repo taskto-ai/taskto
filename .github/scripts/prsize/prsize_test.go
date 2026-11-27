@@ -198,26 +198,30 @@ func TestOnlyRevisionsReachGit(t *testing.T) {
 	r := newRepo(t)
 	r.write("a.go", "a\n")
 	r.commit("seed")
-	for _, bad := range []string{"--output=/tmp/x", "-p", "main..HEAD", "", "a b"} {
-		if _, err := diff(bad, "main"); err == nil {
-			t.Errorf("base %q was given to git", bad)
+	refusedBeforeGit := func(err error) bool {
+		return err != nil && strings.HasPrefix(err.Error(), "not a revision")
+	}
+	for _, bad := range []string{"--output=/tmp/x", "-p", "main..main", "main...main", "", "a b"} {
+		if _, err := diff(bad, "main"); !refusedBeforeGit(err) {
+			t.Errorf("base %q: %v, want it refused before git runs", bad, err)
 		}
-		if _, err := diff("main", bad); err == nil {
-			t.Errorf("head %q was given to git", bad)
+		if _, err := diff("main", bad); !refusedBeforeGit(err) {
+			t.Errorf("head %q: %v, want it refused before git runs", bad, err)
 		}
+	}
+	if _, err := diff("main", "main"); err != nil {
+		t.Errorf("a plain revision was refused: %v", err)
 	}
 }
 
 func TestTheLimitAndTheException(t *testing.T) {
-	at := tally{production: limit}
-	over := tally{production: limit + 1}
-	if v := judge(at, false); !v.pass {
-		t.Errorf("%d lines failed: %s", limit, v.message)
+	if v := judge(tally{production: 800}, false); !v.pass {
+		t.Errorf("800 lines failed: %s", v.message)
 	}
-	if v := judge(over, false); v.pass || !strings.HasPrefix(v.message, "::error") {
-		t.Errorf("%d lines without the label: %+v, want a failure", limit+1, v)
+	if v := judge(tally{production: 801}, false); v.pass || !strings.HasPrefix(v.message, "::error") {
+		t.Errorf("801 lines without the label: %+v, want a failure", v)
 	}
-	if v := judge(over, true); !v.pass || !strings.HasPrefix(v.message, "::warning") {
-		t.Errorf("%d lines with the label: %+v, want a pass with a warning", limit+1, v)
+	if v := judge(tally{production: 801}, true); !v.pass || !strings.HasPrefix(v.message, "::warning") {
+		t.Errorf("801 lines with the label: %+v, want a pass with a warning", v)
 	}
 }

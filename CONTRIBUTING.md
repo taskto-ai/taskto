@@ -56,9 +56,9 @@ workers' isolation, the worker's network, backups, the agent browser) and a secr
    then the screens; or one behaviour at a time behind code nothing calls yet. A maintainer
    can allow a larger one, such as a mechanical change across the tree, with the
    `size-exception` label. The check runs as it is on `main`, so a pull request can't
-   change its own limit, and it reads the label when the pull request is pushed or
-   labelled: once a pull request is in the merge queue, removing the label doesn't take it
-   out.
+   change its own limit. It reads the label each time the pull request is pushed or
+   labelled; the merge queue doesn't count again, so a maintainer removes the label before
+   the pull request is queued, not after.
 3. Say in the description which rules the change keeps and which test fails when each
    rule's guard is removed (the template's "Rules this PR keeps"). Reviewers check the
    change against those rules.
