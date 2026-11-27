@@ -4,7 +4,7 @@ import { builderPath } from '../apps/route'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { useMounted } from '../mounted'
-import { navigate, routePath } from '../router'
+import { routePath, useNavigate, usePlaceTitle } from '../router'
 import { steps } from '../session'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -29,6 +29,7 @@ export function ConversationsPage({
   streams?: EventSourceFactory
 }) {
   const t = useT()
+  const go = useNavigate()
   const f = useFormat()
   const [archived, setArchived] = useState(false)
   const [shared, setShared] = useState(false)
@@ -41,11 +42,12 @@ export function ConversationsPage({
       (r) => r.conversations,
     )
   }, [workspace, archived, shared])
-  const heading = shared
+  const title = shared
     ? t('conversations.sharedWithMe')
     : archived
       ? t('conversations.archived')
       : t('shell.sections.conversations')
+  usePlaceTitle(title)
   const [creating, setCreating] = useState(false)
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
@@ -61,7 +63,7 @@ export function ConversationsPage({
       const c = await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })
       if (!s.ok()) return
       list.reload()
-      navigate(link(c.id))
+      go(link(c.id))
     } catch (e) {
       if (s.ok()) setError(errorText(e))
     } finally {
@@ -74,7 +76,7 @@ export function ConversationsPage({
       <section className="ui-chat-list" aria-label={t('shell.sections.conversations')}>
         <div className="ui-chat-list-head">
           <Heading level={1} size="title" className="ui-chat-list-title">
-            {heading}
+            {title}
           </Heading>
           <Button variant="ghost" size="sm" aria-pressed={shared} onClick={() => setShared((s) => !s)}>
             {t('conversations.sharedWithMe')}
@@ -119,7 +121,7 @@ export function ConversationsPage({
           ))}
         {list.data && list.data.length > 0 && (
           <div className="ui-chat-rows">
-            <Rows label={heading}>
+            <Rows label={title}>
               {list.data.map((c) => (
                 <Row
                   key={c.id}

@@ -217,6 +217,14 @@ no extra process); it has no feature of its own.
   costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
   cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
   of stopping on it.
+- **Wall-clock calendars.** `schedule.Calendar` describes a local time or an interval of at least
+  an hour, an optional set of weekdays, and an IANA time zone. `Next` returns the next UTC
+  occurrence: a time in a spring-forward gap runs at the first instant after the gap, and a time
+  in a fall-back overlap runs once at its first instant. A feature stores the calendar with its own
+  settings, schedules a one-off job at `Calendar.Next`, and reschedules the following occurrence
+  in the handler's transaction after confirming the job is still current, as
+  `notifications.digestNext` does. The database job remains a single due time, so retries retain
+  the same occurrence and idempotency key.
 - **First user: due-date reminders.** A card with a due date and a person as its assignee has two
   jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
   moved and cancelled in the transaction of the card change that needs them, and their handlers

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText } from '../api'
 import { type Key, useFormat, useT } from '../i18n'
-import { Link, navigate, routePath } from '../router'
+import { Link, routePath, useNavigate } from '../router'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon } from '../ui/Icon'
@@ -207,6 +207,7 @@ function InboxSkeleton() {
 
 export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallbackWorkspace: number | null }) {
   const t = useT()
+  const go = useNavigate()
   const [outcome, setOutcome] = useState<'waiting' | 'gone' | 'failed'>('waiting')
   useEffect(() => {
     let live = true
@@ -217,14 +218,14 @@ export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallba
           () => window.dispatchEvent(new Event(INBOX_CHANGED)),
           () => {},
         )
-        navigate(routePath({ workspace: item.workspace_id, ...item.target }), { replace: true })
+        go(routePath({ workspace: item.workspace_id, ...item.target }), { replace: true })
       },
       (e) => live && setOutcome(e instanceof ApiError && (e.status === 404 || e.status === 403) ? 'gone' : 'failed'),
     )
     return () => {
       live = false
     }
-  }, [id])
+  }, [id, go])
   const inbox = fallbackWorkspace !== null && (
     <ButtonLink href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
       {t('notifications.openInbox')}
