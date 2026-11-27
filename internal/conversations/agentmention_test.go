@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -193,5 +194,27 @@ func TestAgentMentionFailureOfTheSwitchSendsNothing(t *testing.T) {
 	defer e.rt.mu.Unlock()
 	if len(e.rt.inputs[c.agentIDForTest(t, e)]) != 0 {
 		t.Fatalf("a message was sent after the switch failed")
+	}
+}
+
+func TestAMentionWhoseSendFailsLeavesTheConversationOnItsAgent(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	send := path(ws, fmt.Sprintf("/%d/messages", c.ID))
+	agent := c.agentIDForTest(t, e)
+
+	e.rt.mu.Lock()
+	e.rt.submitErr = errors.New("submit failed")
+	e.rt.mu.Unlock()
+	owner.expect(http.StatusServiceUnavailable, http.MethodPost, send, mention("cli-codex", "default", "hello"))
+
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	if got := e.rt.models[agent]; got != defaultModel {
+		t.Fatalf("a mention whose send failed left the model %+v, want %+v", got, defaultModel)
+	}
+	if len(e.rt.inputs[agent]) != 0 {
+		t.Fatalf("the failed send recorded %d inputs", len(e.rt.inputs[agent]))
 	}
 }

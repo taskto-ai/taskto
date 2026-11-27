@@ -321,7 +321,14 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if !s.stillWritable(w, r) {
 		return
 	}
+	var before agentrt.ModelRef
 	if switchTo != nil {
+		was, err := rt.Model(r.Context(), c.agentID)
+		if err != nil {
+			conversationError(w, r, c, err)
+			return
+		}
+		before = was
 		if err := rt.SetModel(r.Context(), c.agentID, *switchTo); err != nil {
 			conversationError(w, r, c, err)
 			return
@@ -338,6 +345,11 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	sub, err := rt.Submit(r.Context(), c.agentID, in)
 	if err != nil {
+		if switchTo != nil {
+			if back := rt.SetModel(context.WithoutCancel(r.Context()), c.agentID, before); back != nil {
+				slog.WarnContext(r.Context(), "conversations: putting back the model after a mention's send failed", "conversation", c.ID, "err", back)
+			}
+		}
 		conversationError(w, r, c, err)
 		return
 	}

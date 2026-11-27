@@ -27,20 +27,21 @@ import (
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu      sync.Mutex
-	next    int64
-	models  map[int64]agentrt.ModelRef
-	created []agentrt.ModelRef
-	inputs  map[int64][]agentrt.Input
-	calls   []string
-	watches []*fakeWatch
-	aborts  map[int64]int
-	err     error
-	onAbort func(ctx context.Context)
-	replies map[int64][]agentrt.Message
-	settle  chan struct{}
-	waited  atomic.Int64
-	waitErr error
+	mu        sync.Mutex
+	next      int64
+	models    map[int64]agentrt.ModelRef
+	created   []agentrt.ModelRef
+	inputs    map[int64][]agentrt.Input
+	calls     []string
+	watches   []*fakeWatch
+	aborts    map[int64]int
+	err       error
+	onAbort   func(ctx context.Context)
+	replies   map[int64][]agentrt.Message
+	settle    chan struct{}
+	waited    atomic.Int64
+	waitErr   error
+	submitErr error
 }
 
 var setupToken = auth.NewSetupToken()
@@ -71,6 +72,9 @@ func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (i
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
+	}
+	if f.submitErr != nil {
+		return 0, f.submitErr
 	}
 	f.inputs[conv] = append(f.inputs[conv], in)
 	f.calls = append(f.calls, "submit")
