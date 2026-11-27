@@ -246,7 +246,7 @@ func TestTurnCommandKeepsThePromptOutOfArgv(t *testing.T) {
 }
 
 func TestTurnSpecCheck(t *testing.T) {
-	ok := TurnSpec{ID: "t1", User: 1, CLI: Claude, Conversation: 2, Session: "s", Prompt: "hi"}
+	ok := TurnSpec{ID: "t1", User: 1, Identity: IdentityForTest(1), CLI: Claude, Conversation: 2, Session: "s", Prompt: "hi"}
 	if err := ok.check(); err != nil {
 		t.Fatal(err)
 	}

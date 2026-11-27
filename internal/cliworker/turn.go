@@ -12,7 +12,9 @@ const maxLogBytes = 4 << 20
 
 // Turn is one CLI turn: its spec and the log of its events.
 type Turn struct {
-	spec   TurnSpec
+	spec TurnSpec
+	// acct is the account it runs for, as the worker resolved it at its start.
+	acct   account
 	cancel context.CancelFunc
 
 	mu      sync.Mutex

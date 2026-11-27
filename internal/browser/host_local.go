@@ -9,15 +9,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // LocalHost runs the browsers' processes as this process's own OS user: local mode, where
-// there is no OS boundary between users (the CLI workers' one-user rule applies). Each user's
-// browser directory is Root/u<id>/browser.
+// there is no OS boundary between users (the CLI workers' one-user rule applies). Each account's
+// browser directory is <its CLI home>/browser, Home saying where its home is (the local CLI
+// worker's, cliworker.Worker.HomeDir); without Home, Root/<identity>/browser (tests).
 type LocalHost struct {
 	Root string
+	Home func(a cliowner.Account) (string, error)
 	Bins map[Program]string
 	// Path is $PATH for the browser's processes.
 	Path string
@@ -47,24 +50,34 @@ func FindBins(chromium string) map[Program]string {
 	return bins
 }
 
-// Paths is user's browser directory.
-func (h *LocalHost) Paths(user int64) Paths {
-	return Paths{Root: filepath.Join(h.Root, "u"+strconv.FormatInt(user, 10), "browser")}
+// Paths is a's browser directory.
+func (h *LocalHost) Paths(a cliowner.Account) (Paths, error) {
+	if !a.Valid() {
+		return Paths{}, errors.New("invalid account")
+	}
+	if h.Home == nil {
+		return Paths{Root: filepath.Join(h.Root, a.Identity, "browser")}, nil
+	}
+	home, err := h.Home(a)
+	if err != nil {
+		return Paths{}, err
+	}
+	return Paths{Root: filepath.Join(home, "browser")}, nil
 }
 
 // Bin implements Host.
 func (h *LocalHost) Bin(prog Program) string { return h.Bins[prog] }
 
 // Start implements Host.
-func (h *LocalHost) Start(user int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, error) {
-	if user <= 0 {
-		return nil, errors.New("invalid user")
-	}
+func (h *LocalHost) Start(a cliowner.Account, spec ProcSpec, extra []*os.File) (*exec.Cmd, error) {
 	bin := h.Bins[spec.Program]
 	if bin == "" {
 		return nil, ErrUnavailable
 	}
-	p := h.Paths(user)
+	p, err := h.Paths(a)
+	if err != nil {
+		return nil, err
+	}
 	if err := Prepare(p, spec); err != nil {
 		return nil, err
 	}
@@ -90,8 +103,12 @@ func (h *LocalHost) Start(user int64, spec ProcSpec, extra []*os.File) (*exec.Cm
 
 // DialVNC implements Host. x11vnc makes its socket a moment after it starts, so a refused
 // or missing socket is tried again for a few seconds.
-func (h *LocalHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	return DialRetry(ctx, h.Paths(user).VNCSocket())
+func (h *LocalHost) DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	p, err := h.Paths(a)
+	if err != nil {
+		return nil, err
+	}
+	return DialRetry(ctx, p.VNCSocket())
 }
 
 // DialRetry connects to the Unix socket path, trying again for up to 10 s while it isn't
@@ -114,12 +131,24 @@ func DialRetry(ctx context.Context, path string) (net.Conn, error) {
 }
 
 // Clean implements Host.
-func (h *LocalHost) Clean(user int64) error { return Clean(h.Paths(user)) }
+func (h *LocalHost) Clean(a cliowner.Account) error {
+	p, err := h.Paths(a)
+	if err != nil {
+		return err
+	}
+	return Clean(p)
+}
 
 // Purge implements Host.
-func (h *LocalHost) Purge(user int64) error {
-	if user <= 0 {
-		return errors.New("invalid user")
+// A purge from before identities were kept names none: the CLI worker's step removes the number's
+// directory from before homes, the browser's with it.
+func (h *LocalHost) Purge(a cliowner.Account) error {
+	if a.Identity == "" {
+		return nil
 	}
-	return Purge(h.Paths(user))
+	p, err := h.Paths(a)
+	if err != nil {
+		return err
+	}
+	return Purge(p)
 }

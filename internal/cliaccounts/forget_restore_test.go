@@ -16,6 +16,7 @@ import (
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/backup"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 	"taskto.ai/taskto/internal/db"
@@ -62,13 +63,22 @@ func purge(t *testing.T, svc *Service, sqlDB *sql.DB, user int64) {
 	}
 }
 
+// accountIn is user's account as svc names it.
+func accountIn(t *testing.T, svc *Service, user int64) cliowner.Account {
+	t.Helper()
+	a, err := svc.Account(context.Background(), user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
 // A restore of the server's data goes back in the database's history, while the CLI worker's own
-// directory (a volume of its own in container mode) is not part of the backup. What the worker
-// forgot must not be refused after it, or a live person is locked out for good: the numbers
-// after the backup are given again, and a person whose account was purged since may be back.
-// After the server has told the worker who is here (at every start), only the accounts that are
-// really gone stay refused.
-func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
+// directory (a volume of its own in container mode) is not part of the backup. An account a purge
+// retired is refused until a census says it is live again (the restore brought it back); an account
+// gone for good stays refused; and a new account given a number the lost history used is served at
+// once, before any census, in a home of its own.
+func TestARetiredAccountComesBackOnlyWithACensus(t *testing.T) {
 	ctx := context.Background()
 	dataA := t.TempDir()
 	dbA := openData(t, dataA)
@@ -80,24 +90,20 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 	one := newUser(t, dbA, "one@example.com")
 	gone := newUser(t, dbA, "gone@example.com")
 	back := newUser(t, dbA, "back@example.com")
+	goneAcct, backAcct := accountIn(t, svcA, gone), accountIn(t, svcA, back)
 	purge(t, svcA, dbA, gone) // purged before the backup: gone for good
 
 	var archive bytes.Buffer
 	if _, err := backup.Create(ctx, dataA, "test", &archive, backup.Options{}); err != nil {
 		t.Fatal(err)
 	}
-
 	// After the backup: a person is added and deleted, and the account that is in the backup is
 	// purged.
 	later := newUser(t, dbA, "later@example.com")
 	purge(t, svcA, dbA, later)
 	purge(t, svcA, dbA, back)
-	if next := newUser(t, dbA, "after@example.com"); next <= later {
-		t.Fatalf("fixture: the database gave %d again", next)
-	}
-	time.Sleep(20 * time.Millisecond) // the marks are older than the next server's read
+	time.Sleep(20 * time.Millisecond) // the retirements are older than the next server's read
 
-	// The operator restores the backup into a data directory and starts a server on it.
 	dataB := filepath.Join(t.TempDir(), "restored")
 	if _, err := backup.Restore(ctx, bytes.NewReader(archive.Bytes()), dataB); err != nil {
 		t.Fatal(err)
@@ -105,49 +111,40 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 	dbB := openData(t, dataB)
 	svcB := New(dbB, Container, LocalWorker(e.worker))
 	t.Cleanup(svcB.Close)
-	// A person is added in the restored database and gets the number the other history gave away.
 	fresh := newUser(t, dbB, "fresh@example.com")
 	if fresh != later {
 		t.Fatalf("fixture: the restored database gave %d, want %d (the number the lost history used)", fresh, later)
 	}
 
-	started := func(user int64) error {
-		_, err := e.worker.StartLogin(user, cliworker.Claude, "")
-		return err
+	// Before any census: the restored account is still refused, and the new person is served.
+	if _, err := svcB.worker.StartLogin(back, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Errorf("a retired account before the census said it is live: %v", err)
 	}
-	// Until the server has told the worker, it refuses: that is the moment the fix closes.
-	if err := started(fresh); !errors.Is(err, cliworker.ErrForgotten) {
-		t.Fatalf("before the server tells the worker: %v (fixture)", err)
+	if _, err := svcB.worker.StartLogin(fresh, cliworker.Claude, ""); err != nil {
+		t.Errorf("the new person, before any census: %v", err)
 	}
+	_ = svcB.worker.CancelLogin(fresh, cliworker.Claude, "")
+
 	if err := svcB.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// From now on as the server asks: it introduces each account first.
-	started = func(user int64) error {
-		_, err := svcB.worker.StartLogin(user, cliworker.Claude, "")
-		return err
-	}
-	for name, user := range map[string]int64{"the person given a number again": fresh, "the person whose purge the restore undid": back, "a person never forgotten": one} {
-		if err := started(user); err != nil {
-			t.Errorf("%s (user %d) is refused after the restore: %v", name, user, err)
+	for name, user := range map[string]int64{"the person whose purge the restore undid": back, "a person never forgotten": one, "the new person": fresh} {
+		if _, err := svcB.worker.StartLogin(user, cliworker.Claude, ""); err != nil {
+			t.Errorf("%s (user %d) is refused after the census: %v", name, user, err)
 		}
-		svcB.worker.CancelLogin(user, cliworker.Claude, "")
+		_ = svcB.worker.CancelLogin(user, cliworker.Claude, "")
 	}
-	// The account that was gone before the backup is still gone: the worker itself still refuses
-	// it (the service would refuse it anyway, with no account in its database).
-	if _, err := e.worker.StartLogin(gone, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
+	// The account gone before the backup stays refused, by the worker itself.
+	if _, err := e.worker.StartLogin(goneAcct, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("an account that is gone for good was let back: %v", err)
 	}
-	// And a turn runs on the restored person's own login, as it did.
-	if err := svcB.ReadyUser(ctx, back); err != nil {
-		t.Fatal(err)
-	}
-	dirs, err := e.layout.Ensure(back)
+	// And a turn runs on the restored person's own login.
+	dirs, err := e.worker.AccountDirs(backAcct, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
-	turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: "back-1", User: back, CLI: cliworker.Claude, Conversation: 1, Prompt: "hi", Session: "00000000-0000-4000-8000-000000000001"})
+	turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: "back-1", User: back, Identity: backAcct.Identity, CLI: cliworker.Claude, Conversation: 1, Prompt: "hi", Session: "00000000-0000-4000-8000-000000000001"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +196,6 @@ func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	if err := e.svc.Forget(ctx, 9); err != nil {
 		t.Fatal(err)
 	}
-	// The database has no user 9 and the next number is 1: the mark is for a number to come.
 	w := &flakyWorker{Worker: LocalWorker(e.worker), told: make(chan struct{})}
 	w.fails.Store(1)
 	svc := New(e.db, Container, w)
@@ -209,9 +205,6 @@ func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	case <-w.told:
 	case <-time.After(20 * time.Second):
 		t.Fatal("the worker was never told")
-	}
-	if _, err := e.worker.Status(ctx, 9, cliworker.Claude, ""); errors.Is(err, cliworker.ErrForgotten) {
-		t.Error("the mark of a number that comes next was kept")
 	}
 
 	rec := httptest.NewRecorder()
@@ -246,11 +239,11 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	if err := e.svc.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.worker.StartLogin(begun, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
+	if _, err := e.worker.StartLogin(e.acct(begun), cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the account whose purge began was let back: %v", err)
 	}
 	if _, err := e.svc.worker.StartLogin(other, cliworker.Claude, ""); err != nil {
 		t.Errorf("an account that is live and not being purged is refused: %v", err)
 	}
-	e.svc.worker.CancelLogin(other, cliworker.Claude, "")
+	_ = e.svc.worker.CancelLogin(other, cliworker.Claude, "")
 }

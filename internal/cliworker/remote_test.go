@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -47,44 +48,44 @@ func TestRemoteWorker(t *testing.T) {
 		t.Fatal("available CLIs")
 	}
 	// A login, through its code.
-	info, err := r.StartLogin(1, cliworker.Claude, "")
+	info, err := r.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil || info.State != cliworker.LoginWaiting || !info.NeedsCode {
 		t.Fatalf("login = %+v %v", info, err)
 	}
-	if err := r.SubmitLoginCode(1, cliworker.Claude, "", "has space"); !errors.Is(err, cliworker.ErrBadCode) {
+	if err := r.SubmitLoginCode(acct(1), cliworker.Claude, "", "has space"); !errors.Is(err, cliworker.ErrBadCode) {
 		t.Fatalf("bad code: %v", err)
 	}
-	if err := r.SubmitLoginCode(1, cliworker.Codex, "", "x"); !errors.Is(err, cliworker.ErrNoLogin) {
+	if err := r.SubmitLoginCode(acct(1), cliworker.Codex, "", "x"); !errors.Is(err, cliworker.ErrNoLogin) {
 		t.Fatalf("no login: %v", err)
 	}
-	if err := r.SubmitLoginCode(1, cliworker.Claude, "", clitest.GoodCode); err != nil {
+	if err := r.SubmitLoginCode(acct(1), cliworker.Claude, "", clitest.GoodCode); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the login didn't connect", func() bool {
-		info, ok := r.LoginInfo(1, cliworker.Claude, "")
-		return ok && info.State == cliworker.LoginConnected
+		info, lerr := r.LoginInfo(acct(1), cliworker.Claude, "")
+		return lerr == nil && info.State == cliworker.LoginConnected
 	})
-	if st, err := r.Status(ctx, 1, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+	if st, err := r.Status(ctx, acct(1), cliworker.Claude, ""); err != nil || !st.LoggedIn {
 		t.Fatalf("status = %+v %v", st, err)
 	}
-	if _, err := r.StartLogin(1, cliworker.Grok, ""); !errors.Is(err, cliworker.ErrUnavailable) {
+	if _, err := r.StartLogin(acct(1), cliworker.Grok, ""); !errors.Is(err, cliworker.ErrUnavailable) {
 		t.Fatalf("unavailable: %v", err)
 	}
 	// Another account of the same CLI is a login of its own.
-	if st, err := r.Status(ctx, 1, cliworker.Claude, "2"); err != nil || st.LoggedIn {
+	if st, err := r.Status(ctx, acct(1), cliworker.Claude, "2"); err != nil || st.LoggedIn {
 		t.Fatalf("second account's status = %+v %v", st, err)
 	}
-	if _, ok := r.LoginInfo(1, cliworker.Claude, "2"); ok {
+	if _, lerr := r.LoginInfo(acct(1), cliworker.Claude, "2"); lerr == nil {
 		t.Fatal("the second account has the first's login")
 	}
-	if info, err := r.StartLogin(1, cliworker.Claude, "2"); err != nil || info.Slot != "2" || info.State != cliworker.LoginWaiting {
+	if info, err := r.StartLogin(acct(1), cliworker.Claude, "2"); err != nil || info.Slot != "2" || info.State != cliworker.LoginWaiting {
 		t.Fatalf("second account's login = %+v %v", info, err)
 	}
-	r.CancelLogin(1, cliworker.Claude, "2")
-	if info, ok := r.LoginInfo(1, cliworker.Claude, ""); !ok || info.State != cliworker.LoginConnected {
+	_ = r.CancelLogin(acct(1), cliworker.Claude, "2")
+	if info, lerr := r.LoginInfo(acct(1), cliworker.Claude, ""); lerr != nil || info.State != cliworker.LoginConnected {
 		t.Fatalf("cancelling the second account's login touched the first's: %+v", info)
 	}
-	if _, err := r.Status(ctx, 1, cliworker.Claude, "../x"); err == nil {
+	if _, err := r.Status(ctx, acct(1), cliworker.Claude, "../x"); err == nil {
 		t.Fatal("a slot that isn't one was accepted")
 	}
 
@@ -108,18 +109,29 @@ func TestRemoteWorker(t *testing.T) {
 	if _, attached, err := r.StartTurn(s); err != nil || !attached {
 		t.Fatalf("re-attach = %v %v", attached, err)
 	}
-	if found, ok := r.FindTurn(1, "remote"); !ok || found.Spec().User != 1 {
+	if found, err := r.FindTurn(acct(1), "remote"); err != nil || found.Spec().User != 1 {
 		t.Fatal("find")
 	}
-	if _, ok := r.FindTurn(1, "nope"); ok {
+	if _, err := r.FindTurn(acct(1), "nope"); err == nil {
 		t.Fatal("found a turn that doesn't exist")
 	}
 	// Another user can't find it, nor stop it, knowing its ID: the worker checks whose it is.
-	if _, ok := r.FindTurn(2, "remote"); ok {
+	if _, err := r.FindTurn(acct(2), "remote"); err == nil {
 		t.Fatal("another user found the turn")
 	}
+	if _, err := r.FindTurn(otherAccount(1), "remote"); err == nil {
+		t.Fatal("another account of the same number found the turn")
+	}
+	// Nor read its events, knowing its ID.
+	for name, a := range map[string]cliowner.Account{"another number's": acct(2), "the number's other account's": otherAccount(1)} {
+		theirs := s
+		theirs.User, theirs.Identity = a.User, a.Identity
+		if events, _, err := r.TurnForTest(theirs).Wait(ctx, 0); err == nil || len(events) > 0 {
+			t.Errorf("%s handle read the turn's events: %d %v", name, len(events), err)
+		}
+	}
 	other := s
-	other.User = 2
+	other.User, other.Identity = 2, cliworker.IdentityForTest(2)
 	if _, _, err := r.StartTurn(other); !errors.Is(err, cliworker.ErrTurnClash) {
 		t.Fatalf("clash: %v", err)
 	}
@@ -130,7 +142,7 @@ func TestRemoteWorker(t *testing.T) {
 	}
 
 	// Stop, over the socket.
-	clitest.WriteScenario(t, h.layout.User(1).Config(cliworker.Claude), clitest.Scenario{SleepMS: 30_000})
+	clitest.WriteScenario(t, h.home(1).Config(cliworker.Claude), clitest.Scenario{SleepMS: 30_000})
 	long, _, err := r.StartTurn(spec("long", 1, cliworker.Claude, "slow"))
 	if err != nil {
 		t.Fatal(err)
@@ -138,12 +150,14 @@ func TestRemoteWorker(t *testing.T) {
 	if _, _, err := long.Wait(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	r.StopTurn(2, "long") // another user's stop reaches nothing
+	// Another account's stop reaches nothing: another number's, or the number's earlier owner's.
+	_ = r.StopTurn(acct(2), "long")
+	_ = r.StopTurn(otherAccount(1), "long")
 	time.Sleep(100 * time.Millisecond)
-	if found, ok := r.FindTurn(1, "long"); !ok || found.Over() {
+	if found, err := r.FindTurn(acct(1), "long"); err != nil || found.Over() {
 		t.Fatal("another user's stop stopped the turn")
 	}
-	r.StopTurn(1, "long")
+	_ = r.StopTurn(acct(1), "long")
 	events = nil
 	for done := false; !done; {
 		got, d, err := long.Wait(ctx, len(events))
@@ -156,21 +170,21 @@ func TestRemoteWorker(t *testing.T) {
 		t.Fatalf("stopped = %+v", d)
 	}
 
-	if err := r.Logout(ctx, 1, cliworker.Claude, ""); err != nil {
+	if err := r.Logout(ctx, acct(1), cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := r.Status(ctx, 1, cliworker.Claude, ""); st.LoggedIn {
+	if st, _ := r.Status(ctx, acct(1), cliworker.Claude, ""); st.LoggedIn {
 		t.Fatal("still signed in")
 	}
 
 	// A deleted account is forgotten, over the socket too.
-	if err := r.Forget(ctx, 1); err != nil {
+	if err := r.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(h.layout.User(1).Root); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(h.home(1).Root); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the user's directory remains: %v", err)
 	}
-	if err := r.Forget(ctx, 0); err == nil {
+	if err := r.Forget(ctx, acct(0)); err == nil {
 		t.Fatal("user 0 was accepted")
 	}
 }

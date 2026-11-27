@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // CLI names one of the supported CLIs.
@@ -174,7 +176,11 @@ type TurnSpec struct {
 	// finished returns that turn instead of starting another. 1–64 of [A-Za-z0-9_-].
 	ID   string `json:"id"`
 	User int64  `json:"user"`
-	CLI  CLI    `json:"cli"`
+	// Identity and Boot name the account the turn is for, with User (cliowner.Account): the worker
+	// runs it in that account's own home.
+	Identity string `json:"identity"`
+	Boot     string `json:"boot,omitempty"`
+	CLI      CLI    `json:"cli"`
 	// Slot is the account directory the turn runs in: the CLI's login and sessions there.
 	Slot Slot `json:"slot,omitempty"`
 	// Proxy points the CLI at the server's proxy instead of a login, for a workspace's shared
@@ -288,13 +294,18 @@ var errUnsupported = errors.New("CLI workers need a Unix system")
 // maxPrompt bounds a prompt: it is passed in argv, which the kernel limits too.
 const maxPrompt = 96 << 10
 
+// Account is the account the turn is for.
+func (s TurnSpec) Account() cliowner.Account {
+	return cliowner.Account{User: s.User, Identity: s.Identity, Boot: s.Boot}
+}
+
 func (s TurnSpec) check() error {
 	toolsErr := s.Tools.check()
 	switch {
 	case !turnIDPattern.MatchString(s.ID):
 		return fmt.Errorf("turn ID must be 1-64 of A-Z a-z 0-9 _ -")
-	case s.User <= 0:
-		return fmt.Errorf("a turn needs a user")
+	case !s.Account().Valid():
+		return fmt.Errorf("a turn needs an account")
 	case !s.CLI.Valid():
 		return fmt.Errorf("unknown CLI %q", s.CLI)
 	case !s.Slot.Valid():

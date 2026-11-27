@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -61,11 +62,7 @@ func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 // user prepares user's directories with cli signed in and the scenario s.
 func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Scenario, signedIn bool) cliworker.Dirs {
 	t.Helper()
-	// The server introduces a user before anything is made for them.
-	if err := h.w.Introduce(context.Background(), user, cliworker.IdentityForTest(user), cliworker.TestBoot); err != nil {
-		t.Fatal(err)
-	}
-	dirs, err := h.layout.Ensure(user)
+	dirs, err := h.layout.Ensure(h.w.HomeForTest(acct(user)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +77,18 @@ func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Sc
 func (h *harness) introduce(t *testing.T, users ...int64) {
 	t.Helper()
 	for _, user := range users {
-		if err := h.w.Introduce(context.Background(), user, cliworker.IdentityForTest(user), cliworker.TestBoot); err != nil {
-			t.Fatal(err)
-		}
+		h.w.HomeForTest(acct(user))
 	}
 }
 
+// acct is the account the tests give user.
+func acct(user int64) cliowner.Account { return cliworker.AccountForTest(user) }
+
+// home is the directories of user's account, which gets a home if it has none.
+func (h *harness) home(user int64) cliworker.Dirs { return h.layout.Home(h.w.HomeForTest(acct(user))) }
+
 func spec(id string, user int64, cli cliworker.CLI, prompt string) cliworker.TurnSpec {
-	s := cliworker.TurnSpec{ID: id, User: user, CLI: cli, Conversation: 7, Prompt: prompt}
+	s := cliworker.TurnSpec{ID: id, User: user, Identity: cliworker.IdentityForTest(user), Boot: cliworker.TestBoot, CLI: cli, Conversation: 7, Prompt: prompt}
 	if cli != cliworker.Codex {
 		s.Session = fmt.Sprintf("00000000-0000-4000-8000-%012d", user*1000+int64(len(id)))
 	}

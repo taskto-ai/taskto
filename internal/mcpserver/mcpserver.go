@@ -158,7 +158,8 @@ func authenticated(accounts *auth.Service, next http.Handler) http.Handler {
 }
 
 // handler runs a tool call for the request's caller. A refusal is a tool error, with the
-// message the conversation agent would get, so the model can correct itself.
+// message the conversation agent would get, so the model can correct itself, and its code when it
+// has one (cli_worker_not_ready: try again in a moment), which the conversation agent gets too.
 func handler(tools *agenttools.Service) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		c, ok := ctx.Value(callerKey{}).(agenttools.Caller)
@@ -169,7 +170,11 @@ func handler(tools *agenttools.Service) mcp.ToolHandler {
 		out, err := tools.Call(ctx, c, req.Params.Name, req.Params.Arguments)
 		var refused *agenttools.Refusal
 		if errors.As(err, &refused) {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "error: " + refused.Message}}}, nil
+			text := "error: " + refused.Message
+			if refused.Code != "" {
+				text += " (code: " + string(refused.Code) + ")"
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil
 		}
 		if err != nil {
 			return nil, err

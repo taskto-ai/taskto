@@ -241,7 +241,7 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})); d.Status != cliworker.StatusOK {
 		t.Fatalf("turn = %+v", d)
 	}
-	config := e.layout.User(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
+	config := e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
 	calls := turnCalls(t, config)
 	if len(calls) != 1 {
 		t.Fatalf("turns in the shared account's directory = %d", len(calls))
@@ -338,8 +338,8 @@ func TestModeChoosesTheAccount(t *testing.T) {
 	a := e.owner.addShared(e.ws, cliworker.Grok, p.URL)
 	e.other.connect(cliworker.Grok)
 	conv := e.conversation(e.other)
-	own := e.layout.User(e.other.id).Config(cliworker.Grok)
-	shared := e.layout.User(e.other.id).ConfigOf(cliworker.Grok, sharedSlot(a.ID))
+	own := e.dirs(e.other.id).Config(cliworker.Grok)
+	shared := e.dirs(e.other.id).ConfigOf(cliworker.Grok, sharedSlot(a.ID))
 	setMode := func(m any) {
 		t.Helper()
 		expect(t, e.owner.do(http.MethodPatch, sharedPath(e.ws)+"/modes", map[string]any{"members": map[string]any{itoa(e.other.id): m}}), http.StatusOK)
@@ -384,10 +384,8 @@ func TestSharedKeyRefused(t *testing.T) {
 	p := newProvider(t)
 	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
 	conv := e.conversation(e.other)
-	config := e.layout.User(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
-	if _, err := e.layout.EnsureSlot(e.other.id, cliworker.Claude, sharedSlot(a.ID)); err != nil {
-		t.Fatal(err)
-	}
+	config := e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
+	e.dirsSlot(e.other.id, cliworker.Claude, sharedSlot(a.ID))
 	clitest.WriteScenario(t, config, clitest.Scenario{Expired: true})
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})
 	d := done(events)

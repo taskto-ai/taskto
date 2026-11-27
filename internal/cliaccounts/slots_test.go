@@ -112,7 +112,7 @@ func TestTurnOnAnotherAccount(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
 	e.owner.connectAccount("claude-2")
-	dirs := e.layout.User(e.owner.id)
+	dirs := e.dirs(e.owner.id)
 	first, second := dirs.Config(cliworker.Claude), dirs.ConfigOf(cliworker.Claude, "2")
 	conv := e.conversation(e.owner)
 	history := []historyEntry{{Role: "user", Text: "remember zup"}, {Role: "assistant", Text: "ok: zup"}}

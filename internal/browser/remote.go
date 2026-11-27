@@ -23,15 +23,15 @@ import (
 type Browsers interface {
 	// Availability says which browsers can run.
 	Availability(ctx context.Context) map[Kind]bool
-	Status(ctx context.Context, user int64) (map[Kind]State, error)
-	Start(ctx context.Context, user int64, kind Kind) error
-	Stop(ctx context.Context, user int64, kind Kind) error
-	Do(ctx context.Context, user int64, a Action) (Result, error)
+	Status(ctx context.Context, a cliowner.Account) (map[Kind]State, error)
+	Start(ctx context.Context, a cliowner.Account, kind Kind) error
+	Stop(ctx context.Context, a cliowner.Account, kind Kind) error
+	Do(ctx context.Context, a cliowner.Account, act Action) (Result, error)
 	// OpenLive is the personal browser's display as an RFB stream, for a live view.
-	OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser, error)
-	// Forget stops user's browsers, closes their live views and removes their files, for a deleted
+	OpenLive(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error)
+	// Forget stops a's browsers, closes their live views and removes their files, for a deleted
 	// account (Manager.Forget). It returns nil only when the processes are gone and the files removed.
-	Forget(ctx context.Context, user int64) error
+	Forget(ctx context.Context, a cliowner.Account) error
 }
 
 var _ Browsers = (*Manager)(nil)
@@ -42,6 +42,9 @@ var _ Browsers = (*Remote)(nil)
 // (docs/cli-workers.md). Handler is the worker's side, Remote the server's:
 //
 //	GET  /browser/available                → {"personal": bool, "testing": bool}
+// Every route under /browser/users/{user} names the account by its number and by its identity and
+// the server's boot, in the X-Taskto-Identity and X-Taskto-Boot headers (cliowner.Account).
+//
 //	GET  /browser/users/{user}             → {"personal": State, "testing": State}
 //	POST /browser/users/{user}/start  {browser}
 //	POST /browser/users/{user}/stop   {browser}
@@ -76,17 +79,19 @@ func NewHandler(m *Manager) http.Handler {
 	mux.HandleFunc("GET /browser/available", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, m.Availability(r.Context()))
 	})
-	user := func(h func(w http.ResponseWriter, r *http.Request, user int64)) http.HandlerFunc {
+	user := func(h func(w http.ResponseWriter, r *http.Request, a cliowner.Account)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id, err := strconv.ParseInt(r.PathValue("user"), 10, 64)
-			if err != nil || id <= 0 {
-				refuse(w, badf("invalid user"))
+			a := cliowner.Account{User: id, Identity: r.Header.Get(identityHeader), Boot: r.Header.Get(bootHeader)}
+			// Only a purge from before identities were kept names none.
+			if err != nil || id <= 0 || (a.Identity != "" && !a.Valid()) || (a.Identity == "" && !strings.HasSuffix(r.URL.Path, "/forget")) {
+				refuse(w, badf("invalid account"))
 				return
 			}
-			h(w, r, id)
+			h(w, r, a)
 		}
 	}
-	mux.HandleFunc("GET /browser/users/{user}", user(func(w http.ResponseWriter, r *http.Request, id int64) {
+	mux.HandleFunc("GET /browser/users/{user}", user(func(w http.ResponseWriter, r *http.Request, id cliowner.Account) {
 		st, err := m.Status(r.Context(), id)
 		if err != nil {
 			refuse(w, err)
@@ -103,7 +108,7 @@ func NewHandler(m *Manager) http.Handler {
 		}
 		return req.Browser, true
 	}
-	mux.HandleFunc("POST /browser/users/{user}/start", user(func(w http.ResponseWriter, r *http.Request, id int64) {
+	mux.HandleFunc("POST /browser/users/{user}/start", user(func(w http.ResponseWriter, r *http.Request, id cliowner.Account) {
 		if kind, ok := kindOf(w, r); ok {
 			if err := m.Start(r.Context(), id, kind); err != nil {
 				refuse(w, err)
@@ -112,7 +117,7 @@ func NewHandler(m *Manager) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 		}
 	}))
-	mux.HandleFunc("POST /browser/users/{user}/stop", user(func(w http.ResponseWriter, r *http.Request, id int64) {
+	mux.HandleFunc("POST /browser/users/{user}/stop", user(func(w http.ResponseWriter, r *http.Request, id cliowner.Account) {
 		if kind, ok := kindOf(w, r); ok {
 			if err := m.Stop(r.Context(), id, kind); err != nil {
 				refuse(w, err)
@@ -121,21 +126,14 @@ func NewHandler(m *Manager) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 		}
 	}))
-	mux.HandleFunc("POST /browser/users/{user}/forget", user(func(w http.ResponseWriter, r *http.Request, id int64) {
-		var req struct {
-			// Identity is the account the call is meant for (internal/cliowner), if known.
-			Identity string `json:"identity,omitempty"`
-		}
-		if !decode(w, r, &req) {
-			return
-		}
-		if err := m.Forget(cliowner.With(r.Context(), req.Identity), id); err != nil {
+	mux.HandleFunc("POST /browser/users/{user}/forget", user(func(w http.ResponseWriter, r *http.Request, id cliowner.Account) {
+		if err := m.Forget(r.Context(), id); err != nil {
 			refuse(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	mux.HandleFunc("POST /browser/users/{user}/do", user(func(w http.ResponseWriter, r *http.Request, id int64) {
+	mux.HandleFunc("POST /browser/users/{user}/do", user(func(w http.ResponseWriter, r *http.Request, id cliowner.Account) {
 		var a Action
 		if !decode(w, r, &a) {
 			return
@@ -147,7 +145,7 @@ func NewHandler(m *Manager) http.Handler {
 		}
 		reply(w, res)
 	}))
-	mux.HandleFunc("GET /browser/users/{user}/live", user(func(w http.ResponseWriter, r *http.Request, id int64) {
+	mux.HandleFunc("GET /browser/users/{user}/live", user(func(w http.ResponseWriter, r *http.Request, id cliowner.Account) {
 		if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProtocol) || !headerHasToken(r.Header, "Connection", "upgrade") {
 			refuse(w, badf("the live view needs Connection: Upgrade and Upgrade: %s", upgradeProtocol))
 			return
@@ -268,7 +266,13 @@ func NewRemote(socket string) *Remote {
 	return &Remote{socket: socket, http: &http.Client{Transport: tr}}
 }
 
-func (c *Remote) do(ctx context.Context, method, path string, in, out any) error {
+// The headers that name a request's account by its identity and the server's boot.
+const (
+	identityHeader = "X-Taskto-Identity"
+	bootHeader     = "X-Taskto-Boot"
+)
+
+func (c *Remote) do(ctx context.Context, a cliowner.Account, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -284,6 +288,7 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	setAccount(req, a)
 	res, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrUnreachable, err)
@@ -333,10 +338,19 @@ func userPath(user int64, rest string) string {
 	return "/browser/users/" + strconv.FormatInt(user, 10) + rest
 }
 
+func setAccount(req *http.Request, a cliowner.Account) {
+	if a.Identity != "" {
+		req.Header.Set(identityHeader, a.Identity)
+	}
+	if a.Boot != "" {
+		req.Header.Set(bootHeader, a.Boot)
+	}
+}
+
 // Availability implements Browsers: none if the worker doesn't answer.
 func (c *Remote) Availability(ctx context.Context) map[Kind]bool {
 	out := map[Kind]bool{}
-	if err := c.do(ctx, http.MethodGet, "/browser/available", nil, &out); err != nil {
+	if err := c.do(ctx, cliowner.Account{}, http.MethodGet, "/browser/available", nil, &out); err != nil {
 		slog.Warn("browser: the CLI worker didn't say which browsers it has", "err", err)
 		return map[Kind]bool{Personal: false, Testing: false}
 	}
@@ -344,20 +358,20 @@ func (c *Remote) Availability(ctx context.Context) map[Kind]bool {
 }
 
 // Status implements Browsers.
-func (c *Remote) Status(ctx context.Context, user int64) (map[Kind]State, error) {
+func (c *Remote) Status(ctx context.Context, a cliowner.Account) (map[Kind]State, error) {
 	var out map[Kind]State
-	err := c.do(ctx, http.MethodGet, userPath(user, ""), nil, &out)
+	err := c.do(ctx, a, http.MethodGet, userPath(a.User, ""), nil, &out)
 	return out, err
 }
 
 // Start implements Browsers.
-func (c *Remote) Start(ctx context.Context, user int64, kind Kind) error {
-	return c.do(ctx, http.MethodPost, userPath(user, "/start"), map[string]Kind{"browser": kind}, nil)
+func (c *Remote) Start(ctx context.Context, a cliowner.Account, kind Kind) error {
+	return c.do(ctx, a, http.MethodPost, userPath(a.User, "/start"), map[string]Kind{"browser": kind}, nil)
 }
 
 // Stop implements Browsers.
-func (c *Remote) Stop(ctx context.Context, user int64, kind Kind) error {
-	return c.do(ctx, http.MethodPost, userPath(user, "/stop"), map[string]Kind{"browser": kind}, nil)
+func (c *Remote) Stop(ctx context.Context, a cliowner.Account, kind Kind) error {
+	return c.do(ctx, a, http.MethodPost, userPath(a.User, "/stop"), map[string]Kind{"browser": kind}, nil)
 }
 
 // ErrUnreachable is a Remote's answer when the CLI worker, where the browsers run, can't be
@@ -365,47 +379,48 @@ func (c *Remote) Stop(ctx context.Context, user int64, kind Kind) error {
 var ErrUnreachable = errors.New("the CLI worker is unreachable")
 
 // Forget implements Browsers.
-func (c *Remote) Forget(ctx context.Context, user int64) error {
-	body := map[string]string{}
-	if id, ok := cliowner.From(ctx); ok {
-		body["identity"] = id
-	}
-	return c.do(ctx, http.MethodPost, userPath(user, "/forget"), body, nil)
+func (c *Remote) Forget(ctx context.Context, a cliowner.Account) error {
+	return c.do(ctx, a, http.MethodPost, userPath(a.User, "/forget"), struct{}{}, nil)
 }
 
 // Do implements Browsers.
-func (c *Remote) Do(ctx context.Context, user int64, a Action) (Result, error) {
+func (c *Remote) Do(ctx context.Context, a cliowner.Account, act Action) (Result, error) {
 	var res Result
-	err := c.do(ctx, http.MethodPost, userPath(user, "/do"), a, &res)
+	err := c.do(ctx, a, http.MethodPost, userPath(a.User, "/do"), act, &res)
 	return res, err
 }
 
 // OpenLive implements Browsers: an HTTP upgrade on its own connection to the worker, which
 // then carries the RFB stream both ways.
-func (c *Remote) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
+func (c *Remote) OpenLive(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.socket)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://cli-worker"+userPath(user, "/live"), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://cli-worker"+userPath(a.User, "/live"), nil)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+	setAccount(req, a)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", upgradeProtocol)
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
+	// The worker going away before it answers is an outage too, not a server error.
 	if err := req.Write(conn); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	br := bufio.NewReader(conn)
 	res, err := http.ReadResponse(br, req)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	if res.StatusCode != http.StatusSwitchingProtocols {
 		defer res.Body.Close()

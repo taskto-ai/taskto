@@ -38,18 +38,18 @@ func TestRemote(t *testing.T) {
 		t.Fatalf("availability = %v", av)
 	}
 	// Refusals come back as the Manager's errors.
-	if _, err := c.OpenLive(ctx, 1); !errors.Is(err, ErrNotRunning) {
+	if _, err := c.OpenLive(ctx, acct(1)); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("a live view of no browser: %v", err)
 	}
 	var bad *BadAction
-	if _, err := c.Do(ctx, 1, Action{Op: OpOpen, Browser: Personal, URL: "file:///etc/passwd"}); !errors.As(err, &bad) {
+	if _, err := c.Do(ctx, acct(1), Action{Op: OpOpen, Browser: Personal, URL: "file:///etc/passwd"}); !errors.As(err, &bad) {
 		t.Fatalf("a file URL: %v", err)
 	}
-	if err := c.Start(ctx, 1, "other"); !errors.As(err, &bad) {
+	if err := c.Start(ctx, acct(1), "other"); !errors.As(err, &bad) {
 		t.Fatalf("an unknown browser: %v", err)
 	}
 
-	if err := c.Start(ctx, 1, Personal); err != nil {
+	if err := c.Start(ctx, acct(1), Personal); err != nil {
 		t.Fatal(err)
 	}
 	// An upgrade must say so in Connection too.
@@ -67,16 +67,16 @@ func TestRemote(t *testing.T) {
 		headerHasToken(http.Header{"Connection": {"keep-alive"}}, "Connection", "upgrade") {
 		t.Error("headerHasToken")
 	}
-	st, err := c.Status(ctx, 1)
+	st, err := c.Status(ctx, acct(1))
 	if err != nil || !st[Personal].Running || st[Testing].Running || st[Personal].StopsAt == nil {
 		t.Fatalf("status = %+v, %v", st, err)
 	}
-	if other, _ := c.Status(ctx, 2); other[Personal].Running {
+	if other, _ := c.Status(ctx, acct(2)); other[Personal].Running {
 		t.Fatal("user 2 sees user 1's browser running")
 	}
 
 	// The live view is an upgrade that then carries the stream both ways.
-	live, err := c.OpenLive(ctx, 1)
+	live, err := c.OpenLive(ctx, acct(1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,12 @@ func TestRemote(t *testing.T) {
 	if _, err := io.ReadFull(live, echo); err != nil || string(echo) != "ping" {
 		t.Fatalf("echo %q, %v", echo, err)
 	}
-	if st, _ := c.Status(ctx, 1); !st[Personal].Live || st[Personal].StopsAt != nil {
+	if st, _ := c.Status(ctx, acct(1)); !st[Personal].Live || st[Personal].StopsAt != nil {
 		t.Fatalf("with a live view: %+v", st[Personal])
 	}
 	live.Close()
 	deadline := time.Now().Add(5 * time.Second)
-	for st, _ := c.Status(ctx, 1); st[Personal].Live; st, _ = c.Status(ctx, 1) {
+	for st, _ := c.Status(ctx, acct(1)); st[Personal].Live; st, _ = c.Status(ctx, acct(1)) {
 		if time.Now().After(deadline) {
 			t.Fatal("the closed live view still counts")
 		}
@@ -105,19 +105,19 @@ func TestRemote(t *testing.T) {
 	// At most MaxLive views of one browser at once; closing one makes room.
 	var views []io.ReadWriteCloser
 	for range MaxLive {
-		v, err := c.OpenLive(ctx, 1)
+		v, err := c.OpenLive(ctx, acct(1))
 		if err != nil {
 			t.Fatal(err)
 		}
 		views = append(views, v)
 	}
-	if _, err := c.OpenLive(ctx, 1); !errors.Is(err, ErrTooManyLive) {
+	if _, err := c.OpenLive(ctx, acct(1)); !errors.Is(err, ErrTooManyLive) {
 		t.Fatalf("one view too many: %v", err)
 	}
 	views[0].Close()
 	deadline = time.Now().Add(5 * time.Second)
 	for {
-		v, err := c.OpenLive(ctx, 1)
+		v, err := c.OpenLive(ctx, acct(1))
 		if err == nil {
 			views[0] = v
 			break
@@ -131,14 +131,14 @@ func TestRemote(t *testing.T) {
 		v.Close()
 	}
 	// User 2 has no browser to watch.
-	if _, err := c.OpenLive(ctx, 2); !errors.Is(err, ErrNotRunning) {
+	if _, err := c.OpenLive(ctx, acct(2)); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("user 2's live view: %v", err)
 	}
 
-	if err := c.Stop(ctx, 1, Personal); err != nil {
+	if err := c.Stop(ctx, acct(1), Personal); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := c.Status(ctx, 1); st[Personal].Running {
+	if st, _ := c.Status(ctx, acct(1)); st[Personal].Running {
 		t.Fatal("still running after stop")
 	}
 }

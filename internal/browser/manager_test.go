@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // The test binary is also a fake Chromium: with TASKTO_FAKE_CHROMIUM set it answers DevTools
@@ -77,7 +79,7 @@ type fakeHost struct {
 
 func (h *fakeHost) Bin(Program) string { return "fake" }
 
-func (h *fakeHost) Start(_ int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, error) {
+func (h *fakeHost) Start(_ cliowner.Account, spec ProcSpec, extra []*os.File) (*exec.Cmd, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -89,7 +91,7 @@ func (h *fakeHost) Start(_ int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, e
 	return cmd, cmd.Start()
 }
 
-func (h *fakeHost) DialVNC(context.Context, int64) (io.ReadWriteCloser, error) {
+func (h *fakeHost) DialVNC(context.Context, cliowner.Account) (io.ReadWriteCloser, error) {
 	if h.vnc == nil {
 		return nil, ErrUnavailable
 	}
@@ -98,9 +100,9 @@ func (h *fakeHost) DialVNC(context.Context, int64) (io.ReadWriteCloser, error) {
 	return ours, nil
 }
 
-func (h *fakeHost) Clean(int64) error { return nil }
+func (h *fakeHost) Clean(cliowner.Account) error { return nil }
 
-func (h *fakeHost) Purge(int64) error { return nil }
+func (h *fakeHost) Purge(cliowner.Account) error { return nil }
 
 // A browser stopped for being idle may still be writing its profile when the next request
 // comes: the new one starts only once the old one is gone, so they never share the profile.
@@ -109,12 +111,12 @@ func TestRestartWaitsForTheOldBrowser(t *testing.T) {
 	m := NewManager(Config{Host: &fakeHost{log: log}, Idle: 50 * time.Millisecond, Tick: 10 * time.Millisecond})
 	t.Cleanup(m.Close)
 	ctx := context.Background()
-	if err := m.Start(ctx, 1, Testing); err != nil {
+	if err := m.Start(ctx, acct(1), Testing); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		st, _ := m.Status(ctx, 1)
+		st, _ := m.Status(ctx, acct(1))
 		if !st[Testing].Running {
 			break
 		}
@@ -124,7 +126,7 @@ func TestRestartWaitsForTheOldBrowser(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	// Stopped for the caller; the fake is still shutting down.
-	if err := m.Start(ctx, 1, Testing); err != nil {
+	if err := m.Start(ctx, acct(1), Testing); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(log)
@@ -138,4 +140,9 @@ func TestRestartWaitsForTheOldBrowser(t *testing.T) {
 	if strings.Join(events, " ") != "start exit start" {
 		t.Fatalf("the browsers' starts and exits: %v", events)
 	}
+}
+
+// acct is the account the tests give user: an identity made from the number.
+func acct(user int64) cliowner.Account {
+	return cliowner.Account{User: user, Identity: fmt.Sprintf("%032x", user)}
 }

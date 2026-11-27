@@ -22,6 +22,8 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
+	"taskto.ai/taskto/internal/cliworker"
 )
 
 // ErrOff is Usable's answer when the browser is off on this server.
@@ -29,15 +31,26 @@ var ErrOff = errors.New("the agent browser is off on this server (-browser)")
 
 // Service serves the agent browser to users and to the agent.
 type Service struct {
-	b      browser.Browsers
-	usable func(ctx context.Context, user int64) error
+	b       browser.Browsers
+	usable  func(ctx context.Context, user int64) error
+	account func(ctx context.Context, user int64) (cliowner.Account, error)
 }
 
 // New returns the service over b, usable for a user when usable says so (the CLI workers' rule:
 // the browser runs in their worker, under the same OS boundary, and the user's profile is in
-// their CLI directory). A nil b means the browser is off.
-func New(b browser.Browsers, usable func(ctx context.Context, user int64) error) *Service {
-	return &Service{b: b, usable: usable}
+// their CLI directory). account names a user's account to the browsers, by its identity
+// (cliaccounts.Service.Account): they keep everything under it, never under the number, which a
+// restore of the server's data may give to someone else. A nil b means the browser is off.
+func New(b browser.Browsers, usable func(ctx context.Context, user int64) error, account func(ctx context.Context, user int64) (cliowner.Account, error)) *Service {
+	return &Service{b: b, usable: usable, account: account}
+}
+
+// acct is user's account, for the browsers.
+func (s *Service) acct(ctx context.Context, user int64) (cliowner.Account, error) {
+	if s.account == nil {
+		return cliowner.Account{}, errors.New("agent browser: no account resolver")
+	}
+	return s.account(ctx, user)
 }
 
 // Usable reports whether user's browser can be used now: nil, ErrOff, or the CLI workers'
@@ -113,7 +126,11 @@ func (s *Service) status(ctx context.Context, user int64) (Status, error) {
 		out.Reason, out.ReasonCode = why.Error(), unusable(why)
 		return out, nil //nolint:nilerr // the reason is in the answer
 	}
-	st, err := s.b.Status(ctx, user)
+	acct, err := s.acct(ctx, user)
+	if err != nil {
+		return out, err
+	}
+	st, err := s.b.Status(ctx, acct)
 	if err != nil {
 		return out, err
 	}
@@ -183,7 +200,12 @@ func (s *Service) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := caller(r)
-	if err := s.b.Start(r.Context(), user, kind); err != nil {
+	acct, err := s.acct(r.Context(), user)
+	if err != nil {
+		browserError(w, r, err)
+		return
+	}
+	if err := s.b.Start(r.Context(), acct, kind); err != nil {
 		browserError(w, r, err)
 		return
 	}
@@ -199,7 +221,12 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.b.Stop(r.Context(), caller(r), kind); err != nil {
+	acct, err := s.acct(r.Context(), caller(r))
+	if err != nil {
+		browserError(w, r, err)
+		return
+	}
+	if err := s.b.Stop(r.Context(), acct, kind); err != nil {
 		browserError(w, r, err)
 		return
 	}
@@ -240,7 +267,12 @@ func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return
 	}
-	live, err := s.b.OpenLive(ctx, user)
+	acct, err := s.acct(ctx, user)
+	if err != nil {
+		browserError(w, r, err)
+		return
+	}
+	live, err := s.b.OpenLive(ctx, acct)
 	if err != nil {
 		browserError(w, r, err)
 		return
@@ -327,7 +359,7 @@ func browserError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserBusy, err.Error())
 	case errors.Is(err, browser.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserShuttingDown, err.Error())
-	case errors.Is(err, browser.ErrAccountClosing):
+	case errors.Is(err, browser.ErrAccountClosing), errors.Is(err, cliworker.ErrForgotten):
 		writeError(w, http.StatusConflict, apierr.CodeBrowserAccountClosing, err.Error())
 	case errors.Is(err, browser.ErrUnreachable):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())

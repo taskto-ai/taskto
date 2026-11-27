@@ -24,3 +24,5 @@ func killUIDs(int) (int, error) { return 0, nil }
 func (w *Worker) dropUnixUser(int64) {}
 
 func killUID(int, time.Duration) error { return nil }
+
+func checkPidfds() error { return nil }

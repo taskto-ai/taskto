@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -65,7 +66,7 @@ func TestForgetStopsARunningTurnBeforeTheFilesGo(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.w.Forget(ctx, 1); err != nil {
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	if !turn.Over() {
@@ -86,7 +87,7 @@ func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 			h := newHarness(t, nil)
 			h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 			dirs := h.user(t, 1, cli, clitest.Scenario{TermWriteMS: 300}, false)
-			l, err := h.w.StartLogin(1, cli, "")
+			l, err := h.w.StartLogin(acct(1), cli, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +96,7 @@ func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := h.w.Forget(ctx, 1); err != nil {
+			if err := h.w.Forget(ctx, acct(1)); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -114,15 +115,15 @@ func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
 	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
-	old, err := h.w.StartLogin(1, cliworker.Claude, "")
+	old, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.w.CancelLogin(1, cliworker.Claude, "")
+	h.w.CancelLogin(acct(1), cliworker.Claude, "")
 	// The replacement stops at once; only the cancelled one takes its time (it read its
 	// scenario when it started).
 	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{})
-	replacement, err := h.w.StartLogin(1, cliworker.Claude, "")
+	replacement, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.w.Forget(ctx, 1); err != nil {
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	for name, l := range map[string]*cliworker.Login{"the cancelled one": old, "its replacement": replacement} {
@@ -158,7 +159,7 @@ func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 	answered := make(chan struct{})
 	go func() {
 		defer close(answered)
-		_, _ = h.w.Status(context.Background(), 1, cliworker.Claude, "")
+		_, _ = h.w.Status(context.Background(), acct(1), cliworker.Claude, "")
 	}()
 	// The check is running: the fake says so by the file it writes first.
 	eventually(t, "the status check didn't start", func() bool {
@@ -167,7 +168,7 @@ func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.w.Forget(ctx, 1); err != nil {
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	// Whatever the check did on its way out, nothing of it is left once it ends.
@@ -198,7 +199,7 @@ func TestForgetEndsAQueuedTurnWithoutStartingIt(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.w.Forget(ctx, 1); err != nil {
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	if !first.Over() || !queued.Over() {
@@ -220,7 +221,7 @@ func TestNothingStartsForAForgottenUser(t *testing.T) {
 	ctx := context.Background()
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
 	h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true)
-	if err := r.Forget(ctx, 1); err != nil {
+	if err := r.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	gone(t, dirs.Root)
@@ -231,22 +232,22 @@ func TestNothingStartsForAForgottenUser(t *testing.T) {
 	if _, _, err := r.StartTurn(spec("late-remote", 1, cliworker.Claude, "hi")); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("a turn through the worker's API: %v", err)
 	}
-	if _, err := h.w.StartLogin(1, cliworker.Claude, ""); err == nil {
+	if _, err := h.w.StartLogin(acct(1), cliworker.Claude, ""); err == nil {
 		t.Error("a sign-in started for a forgotten user")
 	}
-	if _, err := h.w.Status(ctx, 1, cliworker.Claude, ""); err == nil {
+	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err == nil {
 		t.Error("a status check ran for a forgotten user")
 	}
-	if err := h.w.Logout(ctx, 1, cliworker.Claude, ""); err == nil {
+	if err := h.w.Logout(ctx, acct(1), cliworker.Claude, ""); err == nil {
 		t.Error("a sign-out ran for a forgotten user")
 	}
 	gone(t, dirs.Root)
 
 	// Forgetting is still idempotent, and others go on.
-	if err := h.w.Forget(ctx, 1); err != nil {
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Errorf("forgetting again: %v", err)
 	}
-	if st, err := h.w.Status(ctx, 2, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+	if st, err := h.w.Status(ctx, acct(2), cliworker.Claude, ""); err != nil || !st.LoggedIn {
 		t.Errorf("another user: %+v %v", st, err)
 	}
 	if done := last(run(t, h.w, spec("other", 2, cliworker.Claude, "hi"))); done.Status != cliworker.StatusOK {
@@ -259,7 +260,7 @@ func TestNothingStartsForAForgottenUser(t *testing.T) {
 func TestForgottenUserSurvivesARestart(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
-	if err := h.w.Forget(context.Background(), 1); err != nil {
+	if err := h.w.Forget(context.Background(), acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	h.w.Close()
@@ -274,45 +275,51 @@ func TestForgottenUserSurvivesARestart(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// Reconcile takes back the marks a restore of the server's data made wrong, and only those: the
-// marks of users that are live, of numbers that come next or later, and none made after the
-// server read the database (a purge running now).
-func TestReconcileTakesBackOnlyTheMarksARestoreMadeWrong(t *testing.T) {
+// A retired account is refused until a census says it is live again (a restore of the server's
+// data brought it back), and not when it was retired after the census was read (a deletion the
+// census can't know of). A retired account a census doesn't name stays refused for good: a new
+// account given its number has an identity, and a home, of its own.
+func TestARetiredAccountIsRefusedUntilACensusSaysItIsLive(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
-	for _, user := range []int64{2, 3, 4, 5} {
-		if err := h.w.Forget(ctx, user); err != nil {
+	for _, user := range []int64{2, 3, 4} {
+		if err := h.w.Forget(ctx, acct(user)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// 2 is a person whose account is back; 3 is gone for good; 4 and 5 come next and later; 5's
-	// purge ran after the server read its database.
+	// 2's account is back; 3 is gone for good; 4's number is a new account's now; 5's account is
+	// live, but was deleted after the server read its database.
+	h.introduce(t, 5)
 	time.Sleep(20 * time.Millisecond)
 	snapshot := time.Now()
-	time.Sleep(20 * time.Millisecond) // the mark's time is on the filesystem's clock
-	if err := h.w.Forget(ctx, 5); err != nil {
+	time.Sleep(20 * time.Millisecond)
+	if err := h.w.Forget(ctx, acct(5)); err != nil {
 		t.Fatal(err)
 	}
-	c := census(4, nil, 1, 2)
+	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: cliworker.TestBoot}
+	c := census(map[int64]string{4: next.Identity}, 1, 2, 5)
 	c.Before = snapshot
 	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	refused := func(user int64) bool {
-		_, err := h.w.Status(ctx, user, cliworker.Claude, "")
+	refused := func(a cliowner.Account) bool {
+		_, err := h.w.Status(ctx, a, cliworker.Claude, "")
 		return errors.Is(err, cliworker.ErrForgotten)
 	}
-	for user, want := range map[int64]bool{2: false, 3: true, 4: false, 5: true} {
-		if got := refused(user); got != want {
-			t.Errorf("user %d refused = %v, want %v", user, got, want)
+	for user, want := range map[int64]bool{2: false, 3: true, 4: true, 5: true} {
+		if got := refused(acct(user)); got != want {
+			t.Errorf("user %d's account refused = %v, want %v", user, got, want)
 		}
 	}
-	// A mark can't be read: the user stays refused rather than started.
-	if err := os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0); err != nil {
+	if refused(next) {
+		t.Error("the new account given number 4 is refused")
+	}
+	// A record that can't be read: refused, rather than given a new home.
+	if err := os.Chmod(filepath.Join(h.layout.Root, ".worker", "accounts"), 0); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0o700) //nolint:errcheck // the temporary directory is removed anyway
-	if os.Geteuid() != 0 && !refused(6) {
-		t.Error("a mark that can't be looked up counted as no mark")
+	defer os.Chmod(filepath.Join(h.layout.Root, ".worker", "accounts"), 0o700) //nolint:errcheck // the temporary directory is removed anyway
+	if _, err := h.w.Status(ctx, acct(9), cliworker.Claude, ""); os.Geteuid() != 0 && err == nil {
+		t.Error("an account whose record can't be looked up was served")
 	}
 }

@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // Config configures a Worker.
@@ -34,8 +36,13 @@ type Config struct {
 	// Helper is the taskto binary, run as `taskto cli-helper` to start every CLI (see
 	// RunHelper). Empty means this process's own executable.
 	Helper string
-	// Isolation, if set, runs each user's CLIs as a Unix user of their own (container mode).
+	// Isolation, if set, runs each account's CLIs as a Unix user of its own (container mode).
 	Isolation *Isolation
+	// AdoptLegacy moves a directory from before homes (Root/u<n>) to the home of the first account
+	// the worker sees with that number (local mode, where the server's backups hold the directories
+	// with the database, so u<n> is the account's of number n). Otherwise such a directory is
+	// removed (Reconcile).
+	AdoptLegacy bool
 	// UnsafePrivileged lets the helper start a CLI as root, which it otherwise refuses
 	// (docs/agent-safety.md). For development and tests that run as root only.
 	UnsafePrivileged bool
@@ -62,9 +69,9 @@ type Worker struct {
 	turns   map[string]*Turn
 	logins  map[loginKey]*Login
 	running int
-	perUser map[int64]int
-	freed   chan struct{} // closed and replaced when a running turn ends
-	named   chan struct{} // closed and replaced when a CLI names its session (waitTurnForHook)
+	perUser map[string]int // running turns per account identity
+	freed   chan struct{}  // closed and replaced when a running turn ends
+	named   chan struct{}  // closed and replaced when a CLI names its session (waitTurnForHook)
 	closed  bool
 	wg      sync.WaitGroup
 	// What a removal covers and waits for (removal.go): the accounts being disconnected, the
@@ -80,13 +87,20 @@ type Worker struct {
 	// passed every check.
 	helperLaunches atomic.Int64
 	helpersBuilt   atomic.Int64
-	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper;
-	// introduceHookForTest in an introduction once it has closed the user's gate.
-	dialHookForTest      func()
-	introduceHookForTest func()
-	loginRuns            map[*Login]struct{}
-	// marks serializes making a forgotten mark and Reconcile's removal of one (forget.go).
-	marks sync.Mutex
+	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
+	dialHookForTest func()
+	// handOffHookForTest, in tests, runs in a live view's dial once its helper said it is connected,
+	// before the connection's watch for a removal is set.
+	handOffHookForTest func()
+	loginRuns          map[*Login]struct{}
+	// accountsMu guards the account records (accounts.go) and accounts holds those read; it is
+	// never taken before mu.
+	accountsMu sync.Mutex
+	accounts   map[string]accountRecord
+	// allocateHookForTest, in tests, runs once a home number is taken, before it is recorded, and
+	// adoptHookForTest once a directory from before homes is moved, before its record says so.
+	allocateHookForTest func() error
+	adoptHookForTest    func() error
 	// browsers is the agent browsers that run in this worker (SetBrowsers), or nil.
 	browsers Browsers
 
@@ -102,8 +116,6 @@ var (
 	ErrUnavailable = errors.New("this CLI is not installed on the worker")
 	ErrTurnClash   = errors.New("a different turn has this ID")
 	ErrClosed      = errors.New("the worker is shutting down")
-	// ErrForgotten: the user was forgotten (Forget, for a deleted account): nothing starts for them.
-	ErrForgotten = errors.New("this user's CLI files were removed with their account")
 )
 
 // New returns a Worker. It first stops every CLI process group a previous worker on the same
@@ -166,12 +178,11 @@ func New(cfg Config) (*Worker, error) {
 		}
 		// Above every system and image uid (nobody is 65534): the start-up sweep kills every
 		// process from it up, so it must never reach anything but the CLI users.
-		if iso.UIDBase < minUIDBase {
-			return nil, fmt.Errorf("cliworker: the first uid must be %d or more", minUIDBase)
+		if err := checkUIDBase(iso.UIDBase); err != nil {
+			return nil, err
 		}
-		// Checked once, here: every user's uid (uidOf) is then a valid one below the 32-bit nobody.
-		if int64(iso.UIDBase)+maxIsolatedUser >= maxUID {
-			return nil, fmt.Errorf("cliworker: the first uid must be below %d", maxUID-maxIsolatedUser)
+		if err := checkPidfds(); err != nil {
+			return nil, fmt.Errorf("cliworker: %w", err)
 		}
 		if iso.UserFile == "" {
 			iso.UserFile = "/etc/passwd"
@@ -187,7 +198,7 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
-	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
+	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[string]int{}, accounts: map[string]accountRecord{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
 	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
 		return nil, err
 	}
@@ -207,8 +218,8 @@ func (w *Worker) stateDir() string { return filepath.Join(w.cfg.Layout.Root, ".w
 // the users' directories: removing a user's whole directory stops theirs first, and Reconcile takes
 // back their refusals as it takes back the marks.
 type Browsers interface {
-	StopAll(ctx context.Context, user int64) error
-	Unforget(again func(user int64) bool, before time.Time)
+	StopAll(ctx context.Context, a cliowner.Account) error
+	Unforget(again func(identity string) bool, before time.Time)
 }
 
 // SetBrowsers tells the worker about the agent browsers that run in it, through its BrowserHost.
@@ -280,30 +291,28 @@ func (w *Worker) Start(spec TurnSpec) (t *Turn, attached bool, err error) {
 	if bin == "" {
 		return nil, false, ErrUnavailable
 	}
+	acct, err := w.resolve(spec.Account(), true)
+	if err != nil {
+		return nil, false, err
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		return nil, false, ErrClosed
 	}
-	// Checked under the lock Forget takes after marking the user: a turn is either refused here
-	// or among the ones Forget stops and waits for.
-	if w.isForgotten(spec.User) {
-		return nil, false, ErrForgotten
-	}
-	if w.gated(spec.User, spec.CLI, spec.Slot) {
-		return nil, false, ErrRemoving
-	}
-	if !w.owned(spec.User) {
-		return nil, false, ErrUnknownOwner
+	// Checked under the lock a removal takes after closing the account's gate: a turn is either
+	// refused here or among the ones the removal stops and waits for.
+	if err := w.admissible(acct, spec.CLI, spec.Slot); err != nil {
+		return nil, false, err
 	}
 	if old, ok := w.turns[spec.ID]; ok {
-		if old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {
+		if old.acct.id != acct.id || old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {
 			return nil, false, ErrTurnClash
 		}
 		return old, true, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t = &Turn{spec: spec, cancel: cancel, changed: make(chan struct{}), ended: make(chan struct{})}
+	t = &Turn{spec: spec, acct: acct, cancel: cancel, changed: make(chan struct{}), ended: make(chan struct{})}
 	w.turns[spec.ID] = t
 	w.wg.Add(1)
 	go func() {
@@ -328,10 +337,27 @@ func (w *Worker) Turn(id string) (*Turn, bool) {
 	return t, ok
 }
 
+// TurnOf returns a's turn id: a turn of another account's, the number's earlier owner's too, is
+// none.
+func (w *Worker) TurnOf(a cliowner.Account, id string) (*Turn, bool) {
+	t, ok := w.Turn(id)
+	if !ok || t.acct.id != a.Identity || t.spec.User != a.User {
+		return nil, false
+	}
+	return t, true
+}
+
 // Stop stops turn id: its CLI gets SIGTERM, then SIGKILL after the grace time. A turn that
 // isn't running is no error.
 func (w *Worker) Stop(id string) {
 	if t, ok := w.Turn(id); ok {
+		t.stop()
+	}
+}
+
+// StopTurnOf stops a's turn id, and none of another account's.
+func (w *Worker) StopTurnOf(a cliowner.Account, id string) {
+	if t, ok := w.TurnOf(a, id); ok {
 		t.stop()
 	}
 }
@@ -360,9 +386,9 @@ func (w *Worker) acquire(ctx context.Context, t *Turn) error {
 	waiting := false
 	for {
 		w.mu.Lock()
-		if w.running < w.cfg.MaxTurns && w.perUser[t.spec.User] < w.cfg.MaxTurnsPerUser {
+		if w.running < w.cfg.MaxTurns && w.perUser[t.acct.id] < w.cfg.MaxTurnsPerUser {
 			w.running++
-			w.perUser[t.spec.User]++
+			w.perUser[t.acct.id]++
 			w.mu.Unlock()
 			return nil
 		}
@@ -380,12 +406,12 @@ func (w *Worker) acquire(ctx context.Context, t *Turn) error {
 	}
 }
 
-func (w *Worker) release(user int64) {
+func (w *Worker) release(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.running--
-	if w.perUser[user]--; w.perUser[user] <= 0 {
-		delete(w.perUser, user)
+	if w.perUser[id]--; w.perUser[id] <= 0 {
+		delete(w.perUser, id)
 	}
 	close(w.freed)
 	w.freed = make(chan struct{})
@@ -405,7 +431,7 @@ func (w *Worker) run(ctx context.Context, t *Turn, bin string) {
 		t.finish(Event{Type: EventDone, Status: StatusStopped, Text: "stopped before it started"})
 		return
 	}
-	defer w.release(t.spec.User)
+	defer w.release(t.acct.id)
 	spec := t.spec
 	done, missing := w.runCLI(ctx, t, bin, spec)
 	if missing && ctx.Err() == nil {
@@ -433,7 +459,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return Event{Type: EventDone, Status: StatusFailed, Text: "the CLI could not start: " + msg}, false
 	}
 	c := turnCommand(spec)
-	cmd, header, err := w.helperCommand(spec.User, helperRequest{
+	cmd, header, err := w.helperCommand(t.acct, helperRequest{
 		Op: "exec", CLI: spec.CLI, Slot: spec.Slot, Proxy: spec.Proxy, Tools: spec.Tools, Bin: bin, Args: c.args, Conversation: spec.Conversation, PromptFile: c.promptFile,
 	})
 	if err != nil {
@@ -454,7 +480,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return failed("%v", err)
 	}
 	pgid := cmd.Process.Pid
-	defer w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)()
+	defer w.trackGroup(pgid, t.acct.id, spec.CLI, spec.Slot)()
 	// The ID was checked with the spec; checked again where it names a file.
 	if !turnIDPattern.MatchString(spec.ID) {
 		return failed("invalid turn ID")
@@ -559,7 +585,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		if thread == "" {
 			thread = spec.Session
 		}
-		if limits := w.codexLimits(spec.User, spec.Slot, thread); len(limits) > 0 {
+		if limits := w.codexLimits(t.acct, spec.Slot, thread); len(limits) > 0 {
 			t.emit(Event{Type: EventUsage, Limits: limits})
 		}
 	}

@@ -129,7 +129,7 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		if cli == "claude" {
 			a.expect(http.StatusAccepted, http.MethodPost, "/api/me/cli-accounts/claude/login/code", map[string]string{"code": clitest.GoodCode})
 		} else {
-			clitest.Approve(t, layout.User(user).Config(cliworker.CLI(cli)))
+			clitest.Approve(t, homeOf(t, layout, user).Config(cliworker.CLI(cli)))
 		}
 		waitFor(t, cli+" to connect", func() bool { return state(a, cli) == "connected" })
 	}
@@ -205,7 +205,7 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		})
 		return got[len(got)-1]
 	}
-	claudeCalls := func(user int64) int { return len(clitest.Calls(t, layout.User(user).Config(cliworker.Claude))) }
+	claudeCalls := func(user int64) int { return len(clitest.Calls(t, homeOf(t, layout, user).Config(cliworker.Claude))) }
 
 	// A conversation on Claude Code: the answer is the CLI's, and the next turn resumes the
 	// same CLI session.
@@ -225,7 +225,7 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 
 	// A permission question (docs/agent-safety.md): the CLI asks before its command runs, the
 	// conversation shows it, only the owner sees and answers it, and the turn goes on.
-	ownerCodex := layout.User(ownerID).Config(cliworker.Codex)
+	ownerCodex := homeOf(t, layout, ownerID).Config(cliworker.Codex)
 	clitest.WriteScenario(t, ownerCodex, clitest.Scenario{Tool: &clitest.ToolUse{Name: "Bash", Input: map[string]any{"command": "touch proof.txt"}}})
 	codexBase := fmt.Sprintf("%s/%d", base, codexConv)
 	answered := len(answers(owner, codexConv))
@@ -275,7 +275,7 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	}
 
 	// An expired login: the turn waits for the Reconnect, then the conversation goes on.
-	ownerClaude := layout.User(ownerID).Config(cliworker.Claude)
+	ownerClaude := homeOf(t, layout, ownerID).Config(cliworker.Claude)
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{Expired: true})
 	n := len(answers(owner, conv))
 	owner.expect(http.StatusAccepted, http.MethodPost, fmt.Sprintf("%s/%d/messages", base, conv), map[string]string{"content": "after the expiry"})

@@ -23,14 +23,14 @@ type Host interface {
 	Bin(prog Program) string
 	// Start starts spec's process for user in a process group of its own, with extra as its
 	// fds 3, 4, …, and returns it running.
-	Start(user int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, error)
+	Start(a cliowner.Account, spec ProcSpec, extra []*os.File) (*exec.Cmd, error)
 	// DialVNC connects to user's VNC socket.
-	DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error)
+	DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error)
 	// Clean removes user's testing profile.
-	Clean(user int64) error
+	Clean(a cliowner.Account) error
 	// Purge removes everything kept for user's browsers, the personal profile included, for a
 	// deleted account. No process of theirs runs by then. Removing what isn't there is not an error.
-	Purge(user int64) error
+	Purge(a cliowner.Account) error
 }
 
 // Config configures a Manager.
@@ -51,30 +51,15 @@ type Config struct {
 	// Allow, when set, is asked before every operation on a user's browsers, the reading of a
 	// running one's state and tabs too, apart from stopping them: an error refuses it (the CLI
 	// worker's rule, cliworker.Worker.BrowserAllowed).
-	Allow func(user int64) error
+	Allow func(a cliowner.Account) error
 }
 
-// OwnedHost is a Host that knows who owns a user's directory (the CLI worker's). Forget then does
-// everything under Hold: nothing of the number changes owner meanwhile, and nothing is done once
-// the directory is another account's (ErrNotTheOwner), since a restore may give the number to
-// someone else.
-type OwnedHost interface {
-	// Owner is the identity recorded as the owner of user's directory, "" for none.
-	Owner(user int64) (string, error)
-	// Hold keeps user's directory from changing owner until release is called, and is
-	// ErrNotTheOwner when it is recorded as another account's than owner.
-	Hold(ctx context.Context, user int64, owner string) (release func(), err error)
-}
-
-// ErrNotTheOwner is Hold's answer when the user's directory is another account's.
-var ErrNotTheOwner = errors.New("the user's directory belongs to another account")
-
-// allowed asks Config.Allow about user.
-func (m *Manager) allowed(user int64) error {
+// allowed asks Config.Allow about a.
+func (m *Manager) allowed(a cliowner.Account) error {
 	if m.cfg.Allow == nil {
 		return nil
 	}
-	return m.cfg.Allow(user)
+	return m.cfg.Allow(a)
 }
 
 // Manager runs the users' browsers. Its methods are safe for concurrent use.
@@ -86,23 +71,26 @@ type Manager struct {
 	// stopping is the browsers of each key still being stopped: a new one on the same profile
 	// waits for them to be gone, so the old ones have written their cookies first.
 	stopping map[key][]*session
-	// forgotten is the users whose accounts are deleted (Forget), with when: no browser of theirs
-	// starts. It is kept as long as the Manager runs, since an account's id is never given to
-	// another account, unless a restore of the server's data goes back before it (Unforget).
-	forgotten map[int64]time.Time
+	// forgotten is the accounts that are deleted (Forget), by identity, with when: no browser of
+	// theirs starts. It is kept as long as the Manager runs, unless a restore of the server's data
+	// goes back before it (Unforget).
+	forgotten map[string]time.Time
 	closed    bool
 	stopTick  chan struct{}
 	wg        sync.WaitGroup
 }
 
+// key is a browser of one account, by its identity: never by its number, which a restore of the
+// server's data may give to another account.
 type key struct {
-	user int64
+	id   string
 	kind Kind
 }
 
 // session is one running (or starting) browser.
 type session struct {
 	key      key
+	acct     cliowner.Account
 	ready    chan struct{} // closed when the start is over; err says how
 	err      error
 	inst     *instance
@@ -135,7 +123,7 @@ func NewManager(cfg Config) *Manager {
 	if cfg.Tick <= 0 {
 		cfg.Tick = 15 * time.Second
 	}
-	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[int64]time.Time{}, stopTick: make(chan struct{})}
+	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[string]time.Time{}, stopTick: make(chan struct{})}
 	m.wg.Add(1)
 	go m.idleLoop()
 	return m
@@ -168,15 +156,15 @@ func (m *Manager) Availability(context.Context) map[Kind]bool {
 
 // Status is user's two browsers. The tabs are listed for a running browser that answers in a
 // few seconds.
-func (m *Manager) Status(ctx context.Context, user int64) (map[Kind]State, error) {
-	if err := m.allowed(user); err != nil {
+func (m *Manager) Status(ctx context.Context, a cliowner.Account) (map[Kind]State, error) {
+	if err := m.allowed(a); err != nil {
 		return nil, err
 	}
 	out := map[Kind]State{}
 	for _, kind := range []Kind{Personal, Testing} {
 		st := State{Available: m.Available(kind)}
 		m.mu.Lock()
-		s := m.sessions[key{user, kind}]
+		s := m.sessions[key{a.Identity, kind}]
 		var inst *instance
 		if s != nil && !s.ending && isClosed(s.ready) && s.err == nil {
 			st.Running, st.Live, inst = true, s.live > 0, s.inst
@@ -206,21 +194,21 @@ func isClosed(ch chan struct{}) bool {
 }
 
 // Start starts user's kind browser if it isn't running.
-func (m *Manager) Start(ctx context.Context, user int64, kind Kind) error {
+func (m *Manager) Start(ctx context.Context, a cliowner.Account, kind Kind) error {
 	if !kind.Valid() {
 		return badf("browser must be %q or %q", Personal, Testing)
 	}
-	_, err := m.session(ctx, user, kind, true)
+	_, err := m.session(ctx, a, kind, true)
 	return err
 }
 
 // Stop stops user's kind browser, and returns when it is gone.
-func (m *Manager) Stop(_ context.Context, user int64, kind Kind) error {
+func (m *Manager) Stop(_ context.Context, a cliowner.Account, kind Kind) error {
 	if !kind.Valid() {
 		return badf("browser must be %q or %q", Personal, Testing)
 	}
 	m.mu.Lock()
-	s := m.sessions[key{user, kind}]
+	s := m.sessions[key{a.Identity, kind}]
 	if s != nil {
 		m.endLocked(s)
 	}
@@ -243,38 +231,24 @@ func (m *Manager) Stop(_ context.Context, user int64, kind Kind) error {
 // account, unless a restore of the server's data goes back before the deletion (Unforget). A
 // Manager that restarts forgets it, and then the account's being switched off is what keeps its
 // browsers from starting.
-func (m *Manager) Forget(ctx context.Context, user int64) error {
-	if user <= 0 {
-		return badf("invalid user")
+func (m *Manager) Forget(ctx context.Context, a cliowner.Account) error {
+	if a.User <= 0 || (a.Identity != "" && !cliowner.IsIdentity(a.Identity)) {
+		return badf("invalid account")
 	}
-	// With a host that knows owners, all of it under Hold, for the account the call is meant for
-	// (internal/cliowner), or else the one that owns the directory now.
-	if owned, ok := m.cfg.Host.(OwnedHost); ok {
-		want, named := cliowner.From(ctx)
-		if !named {
-			var err error
-			if want, err = owned.Owner(user); err != nil {
-				return fmt.Errorf("reading who owns the browser files: %w", err)
-			}
-		}
-		release, err := owned.Hold(ctx, user, want)
-		if errors.Is(err, ErrNotTheOwner) {
-			return nil // nothing of that account's is left under the number
-		}
-		if err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A purge from before identities were kept names none: no session is keyed by it, and the
+	// host removes only the number's directory from before homes.
+	if a.Identity != "" {
+		if err := m.stopAll(ctx, a, true); err != nil {
 			return err
 		}
-		defer release()
-	} else if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := m.stopAll(ctx, user, true); err != nil {
-		return err
 	}
 	if m.cfg.Host == nil {
 		return nil
 	}
-	if err := m.cfg.Host.Purge(user); err != nil {
+	if err := m.cfg.Host.Purge(a); err != nil {
 		return fmt.Errorf("removing the browser files: %w", err)
 	}
 	return nil
@@ -284,38 +258,38 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 // neither refuses later starts nor removes a file: the CLI worker does both around it when it
 // removes a user's whole directory, the browser's profile with it (cliworker.Worker.Reconcile).
 // Other users' browsers are not touched.
-func (m *Manager) StopAll(ctx context.Context, user int64) error {
-	if user <= 0 {
-		return badf("invalid user")
+func (m *Manager) StopAll(ctx context.Context, a cliowner.Account) error {
+	if !a.Valid() {
+		return badf("invalid account")
 	}
-	return m.stopAll(ctx, user, false)
+	return m.stopAll(ctx, a, false)
 }
 
 // Unforget drops the refusals Forget made before `before` of the users again says yes to: an
 // account a restore of the server's data brought back, or a number it gives to someone again
 // (cliworker.Worker.Reconcile). A refusal made after it is a deletion the restored database can't
 // know of, and stays.
-func (m *Manager) Unforget(again func(user int64) bool, before time.Time) {
+func (m *Manager) Unforget(again func(identity string) bool, before time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for user, at := range m.forgotten {
-		if at.Before(before) && again(user) {
-			delete(m.forgotten, user)
+	for id, at := range m.forgotten {
+		if at.Before(before) && again(id) {
+			delete(m.forgotten, id)
 		}
 	}
 }
 
 // stopAll closes user's live views and stops their browsers, and waits for them to be gone (one
 // still starting or already stopping too). With forget, nothing of theirs starts any more.
-func (m *Manager) stopAll(ctx context.Context, user int64, forget bool) error {
+func (m *Manager) stopAll(ctx context.Context, a cliowner.Account, forget bool) error {
 	m.mu.Lock()
 	if forget {
-		m.forgotten[user] = time.Now()
+		m.forgotten[a.Identity] = time.Now()
 	}
 	var wait []*session
 	var conns []*liveConn
 	for _, kind := range []Kind{Personal, Testing} {
-		k := key{user, kind}
+		k := key{a.Identity, kind}
 		// Every browser already stopping is waited for too: a newer one whose start gave up waiting
 		// for them doesn't take their place.
 		wait = append(wait, m.stopping[k]...)
@@ -342,11 +316,11 @@ func (m *Manager) stopAll(ctx context.Context, user int64, forget bool) error {
 }
 
 // Do runs a on user's browser, starting it first unless a only lists the tabs.
-func (m *Manager) Do(ctx context.Context, user int64, a Action) (Result, error) {
+func (m *Manager) Do(ctx context.Context, acct cliowner.Account, a Action) (Result, error) {
 	if err := a.Check(); err != nil {
 		return Result{}, err
 	}
-	s, err := m.session(ctx, user, a.Browser, a.Op != OpTabs)
+	s, err := m.session(ctx, acct, a.Browser, a.Op != OpTabs)
 	if errors.Is(err, ErrNotRunning) && a.Op == OpTabs {
 		return Result{Tabs: []Tab{}}, nil
 	}
@@ -367,8 +341,8 @@ const MaxLive = 4
 
 // OpenLive connects to user's personal browser's display, for a live view: an RFB stream.
 // The browser must be running; while the view is open it doesn't stop for being idle.
-func (m *Manager) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	s, err := m.session(ctx, user, Personal, false)
+func (m *Manager) OpenLive(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	s, err := m.session(ctx, a, Personal, false)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +355,7 @@ func (m *Manager) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser,
 	s.live++
 	s.lastUse = time.Now()
 	m.mu.Unlock()
-	conn, err := m.cfg.Host.DialVNC(ctx, user)
+	conn, err := m.cfg.Host.DialVNC(ctx, a)
 	if err != nil {
 		m.mu.Lock()
 		s.live--
@@ -451,18 +425,21 @@ func (m *Manager) touch(s *session) {
 }
 
 // session returns user's kind browser, ready, starting it if start is set.
-func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool) (*session, error) {
-	k := key{user, kind}
+func (m *Manager) session(ctx context.Context, a cliowner.Account, kind Kind, start bool) (*session, error) {
+	if !a.Valid() {
+		return nil, badf("invalid account")
+	}
+	k := key{a.Identity, kind}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return nil, ErrClosed
 	}
-	if _, gone := m.forgotten[user]; gone {
+	if _, gone := m.forgotten[a.Identity]; gone {
 		m.mu.Unlock()
 		return nil, ErrAccountClosing
 	}
-	if err := m.allowed(user); err != nil {
+	if err := m.allowed(a); err != nil {
 		m.mu.Unlock()
 		return nil, err
 	}
@@ -480,7 +457,7 @@ func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool
 			m.mu.Unlock()
 			return nil, ErrBusy
 		}
-		s = &session{key: k, ready: make(chan struct{}), ended: make(chan struct{}), lastUse: time.Now()}
+		s = &session{key: k, acct: a, ready: make(chan struct{}), ended: make(chan struct{}), lastUse: time.Now()}
 		m.sessions[k] = s
 		prev := append([]*session(nil), m.stopping[k]...)
 		m.wg.Add(1)
@@ -514,7 +491,7 @@ func (m *Manager) evictLocked() bool {
 	if lru == nil {
 		return false
 	}
-	slog.Info("browser: stopping the least recently used browser to make room", "user", lru.key.user, "browser", lru.key.kind)
+	slog.Info("browser: stopping the least recently used browser to make room", "user", lru.acct.User, "browser", lru.key.kind)
 	m.endLocked(lru)
 	return true
 }
@@ -555,7 +532,7 @@ func (m *Manager) idleLoop() {
 			m.mu.Lock()
 			for _, s := range m.sessions {
 				if s.live == 0 && isClosed(s.ready) && now.Sub(s.lastUse) >= m.cfg.Idle {
-					slog.Info("browser: stopping an idle browser", "user", s.key.user, "browser", s.key.kind)
+					slog.Info("browser: stopping an idle browser", "user", s.acct.User, "browser", s.key.kind)
 					m.endLocked(s)
 				}
 			}
@@ -585,7 +562,7 @@ func (m *Manager) launch(s *session, prev []*session) {
 		err = m.start(ctx, s)
 	}
 	if err != nil {
-		slog.Warn("browser: could not start", "user", s.key.user, "browser", s.key.kind, "err", err)
+		slog.Warn("browser: could not start", "user", s.acct.User, "browser", s.key.kind, "err", err)
 		s.err = fmt.Errorf("the browser could not start: %w", err)
 		close(s.ready)
 		m.mu.Lock()
@@ -604,7 +581,7 @@ func (m *Manager) launch(s *session, prev []*session) {
 		}
 		m.mu.Lock()
 		if !s.ending {
-			slog.Warn("browser: it exited on its own", "user", s.key.user, "browser", s.key.kind)
+			slog.Warn("browser: it exited on its own", "user", s.acct.User, "browser", s.key.kind)
 		}
 		m.endLocked(s)
 		m.mu.Unlock()
@@ -612,14 +589,14 @@ func (m *Manager) launch(s *session, prev []*session) {
 }
 
 func (m *Manager) start(ctx context.Context, s *session) error {
-	h, user := m.cfg.Host, s.key.user
+	h, acct := m.cfg.Host, s.acct
 	display := 0
 	if s.key.kind == Personal {
 		r, w, err := os.Pipe()
 		if err != nil {
 			return err
 		}
-		err = m.add(s, h, user, ProcSpec{Program: Xvfb, Kind: Personal}, w)
+		err = m.add(s, h, acct, ProcSpec{Program: Xvfb, Kind: Personal}, w)
 		w.Close()
 		if err != nil {
 			r.Close()
@@ -642,7 +619,7 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 		cmdW.Close()
 		return err
 	}
-	err = m.add(s, h, user, ProcSpec{Program: Chromium, Kind: s.key.kind, Display: display, NoSandbox: m.cfg.NoSandbox}, cmdR, outW)
+	err = m.add(s, h, acct, ProcSpec{Program: Chromium, Kind: s.key.kind, Display: display, NoSandbox: m.cfg.NoSandbox}, cmdR, outW)
 	cmdR.Close()
 	outW.Close()
 	if err != nil {
@@ -657,7 +634,7 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 		return fmt.Errorf("the browser didn't answer: %w", err)
 	}
 	if s.key.kind == Personal {
-		if err := m.add(s, h, user, ProcSpec{Program: X11vnc, Kind: Personal, Display: display}); err != nil {
+		if err := m.add(s, h, acct, ProcSpec{Program: X11vnc, Kind: Personal, Display: display}); err != nil {
 			return fmt.Errorf("starting x11vnc: %w", err)
 		}
 	}
@@ -665,8 +642,8 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 }
 
 // add starts one process of s and keeps it.
-func (m *Manager) add(s *session, h Host, user int64, spec ProcSpec, extra ...*os.File) error {
-	cmd, err := h.Start(user, spec, extra)
+func (m *Manager) add(s *session, h Host, acct cliowner.Account, spec ProcSpec, extra ...*os.File) error {
+	cmd, err := h.Start(acct, spec, extra)
 	if err != nil {
 		return err
 	}
@@ -725,8 +702,8 @@ func (m *Manager) stop(s *session) {
 		stopGroup(s.procs[i], s.waits[i], wait, m.cfg.StopGrace)
 	}
 	if s.key.kind == Testing && m.cfg.Host != nil {
-		if err := m.cfg.Host.Clean(s.key.user); err != nil {
-			slog.Warn("browser: removing the testing profile", "user", s.key.user, "err", err)
+		if err := m.cfg.Host.Clean(s.acct); err != nil {
+			slog.Warn("browser: removing the testing profile", "user", s.acct.User, "err", err)
 		}
 	}
 }

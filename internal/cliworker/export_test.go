@@ -3,6 +3,8 @@ package cliworker
 import (
 	"fmt"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // SignInURLForTest exposes signInURL to the package's external tests.
@@ -28,10 +30,10 @@ func ToolsReadOnlyForTest(t *Tools, cli CLI, tool string, input []byte) bool {
 // HelperLaunchesForTest is how many helpers the worker has been asked to start.
 func (w *Worker) HelperLaunchesForTest() int64 { return w.helperLaunches.Load() }
 
-// TrackGroupForTest lists process group pgid as one the worker started for the account of
-// user's cli in slot.
+// TrackGroupForTest lists process group pgid as one the worker started for the CLI account of
+// cli in slot of the test account of user (AccountForTest).
 func (w *Worker) TrackGroupForTest(pgid int, user int64, cli CLI, slot Slot) {
-	w.trackGroup(pgid, user, cli, slot)
+	w.trackGroup(pgid, IdentityForTest(user), cli, slot)
 }
 
 // DropStaleGroupForTest is what a removal's wait does when it saw the record of group pgid, with
@@ -58,14 +60,44 @@ func (w *Worker) GroupSeqForTest(pgid int) uint64 {
 // waits for otherwise (a turn's end, a sign-in's) is not answered by the groups' wait.
 func (w *Worker) SetGroupWaitForTest(d time.Duration) { w.groupWait = d }
 
-// TestBoot is the server boot the tests introduce users with.
+// TestBoot is the server boot the tests' requests carry.
 const TestBoot = "00000000000000000000000000000b00"
 
 // IdentityForTest is the identity the tests give user's account.
 func IdentityForTest(user int64) string { return fmt.Sprintf("%032x", user) }
 
-// OwnerFileForTest is the path of user's owner record.
-func (w *Worker) OwnerFileForTest(user int64) string { return w.ownerFile(user) }
+// AccountForTest is the account the tests give user.
+func AccountForTest(user int64) cliowner.Account {
+	return cliowner.Account{User: user, Identity: IdentityForTest(user), Boot: TestBoot}
+}
+
+// HomeForTest is a's home number: its record's, retired or not, or a new one.
+func (w *Worker) HomeForTest(a cliowner.Account) int64 {
+	if r, ok, err := w.find(a.Identity); err == nil && ok {
+		return r.Home
+	}
+	acct, err := w.resolve(a, true)
+	if err != nil {
+		panic(err)
+	}
+	return acct.home
+}
+
+// AccountFileForTest is the path of identity's record.
+func (w *Worker) AccountFileForTest(identity string) string { return w.accountFile(identity) }
+
+// CounterFileForTest is the path of the home counter.
+func (w *Worker) CounterFileForTest() string { return w.counterFile() }
+
+// SetAllocateHookForTest has f run once a home number is taken, before it is recorded; an error
+// from it stops the allocation there, as a crash would.
+func (w *Worker) SetAllocateHookForTest(f func() error) { w.allocateHookForTest = f }
+
+// FirstHomeForTest is the first home number.
+const FirstHomeForTest = firstHome
+
+// LegacyDirForTest is the directory a worker from before homes made for user.
+func (l Layout) LegacyDirForTest(user int64) string { return l.legacy(user) }
 
 // GroupsForTest is how many process groups the worker lists.
 func (w *Worker) GroupsForTest() int {
@@ -83,12 +115,22 @@ func (w *Worker) SetDialHookForTest(f func()) { w.dialHookForTest = f }
 // HelpersBuiltForTest is how many helpers passed every check to be built.
 func (w *Worker) HelpersBuiltForTest() int64 { return w.helpersBuilt.Load() }
 
-// GatedForTest reports whether a removal of all of user's accounts has closed their gate.
+// GatedForTest reports whether a removal of all of the test account of user's CLI accounts has
+// closed its gate.
 func (w *Worker) GatedForTest(user int64) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.gated(user, "", "")
+	return w.gated(IdentityForTest(user), "", "")
 }
 
-// SetIntroduceHookForTest has f run in an introduction once it has closed the user's gate.
-func (w *Worker) SetIntroduceHookForTest(f func()) { w.introduceHookForTest = f }
+// SetAdoptHookForTest has f run once a directory from before homes is moved to its account's home,
+// before the account's record says so; an error from it stops there, as a crash would.
+func (w *Worker) SetAdoptHookForTest(f func() error) { w.adoptHookForTest = f }
+
+// TurnForTest is a client's handle on the turn spec names, as if the server had it: for a test of
+// what the worker answers a handle of another account's.
+func (c *Remote) TurnForTest(spec TurnSpec) *RemoteTurn { return &RemoteTurn{c: c, spec: spec} }
+
+// SetHandOffHookForTest has f run in a live view's dial once its helper is connected, before the
+// connection's watch for a removal is set.
+func (w *Worker) SetHandOffHookForTest(f func()) { w.handOffHookForTest = f }

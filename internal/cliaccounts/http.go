@@ -51,12 +51,8 @@ func (s *Service) withAccount(h accountHandler) http.HandlerFunc {
 		if !s.usable(w, r) {
 			return
 		}
-		// Before anything else of the worker's, its availability too: while it can't be reached,
-		// the answer is that it isn't ready, not that the CLI isn't installed.
-		if err := s.ReadyUser(r.Context(), caller(r)); err != nil {
-			workerError(w, r, a, err)
-			return
-		}
+		// While the worker can't be reached, the answer is that it isn't ready, not that the CLI
+		// isn't installed.
 		if ok, err := s.cliAvailable(a.cli); err != nil {
 			workerError(w, r, a, err)
 			return
@@ -102,9 +98,6 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 	switch err := s.Usable(r.Context()); {
 	case err == nil:
 		out.Enabled = true
-		// The accounts' sign-ins and checks are read from the worker once it knows the caller; until
-		// then they show as not signed in.
-		_ = s.ReadyUser(r.Context(), caller(r))
 	case errors.Is(err, ErrOff), errors.Is(err, ErrNoBoundary):
 		out.Reason, out.ReasonCode = err.Error(), unusableCode(err)
 	default:
@@ -119,6 +112,10 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, a := range refs {
 			acct, err := s.account(r.Context(), caller(r), a)
+			if outage(err) {
+				workerError(w, r, a, err) // an outage is the worker not being ready, not "not installed"
+				return
+			}
 			if err != nil {
 				serverError(w, r, err)
 				return
@@ -178,7 +175,11 @@ func (s *Service) handleStartLogin(w http.ResponseWriter, r *http.Request, user 
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request, user int64, a ref) {
-	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+	info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+	if err != nil {
+		workerError(w, r, a, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, apierr.CodeCLINoLogin, cliworker.ErrNoLogin.Error())
 		return
@@ -201,7 +202,11 @@ func (s *Service) handleCode(w http.ResponseWriter, r *http.Request, user int64,
 		workerError(w, r, a, err)
 		return
 	}
-	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+	info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+	if err != nil {
+		workerError(w, r, a, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, apierr.CodeCLINoLogin, cliworker.ErrNoLogin.Error())
 		return
@@ -209,8 +214,11 @@ func (s *Service) handleCode(w http.ResponseWriter, r *http.Request, user int64,
 	writeJSON(w, http.StatusAccepted, info)
 }
 
-func (s *Service) handleCancel(w http.ResponseWriter, _ *http.Request, user int64, a ref) {
-	s.worker.CancelLogin(user, a.cli, a.slot)
+func (s *Service) handleCancel(w http.ResponseWriter, r *http.Request, user int64, a ref) {
+	if err := s.worker.CancelLogin(user, a.cli, a.slot); err != nil {
+		workerError(w, r, a, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -296,7 +304,7 @@ func (s *Service) handleDisconnect(w http.ResponseWriter, r *http.Request, user 
 	unlock := s.lockAccount(key)
 	defer unlock()
 	// The login that connected it is done with: it must never connect it again.
-	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+	info, ok, _ := s.worker.LoginInfo(user, a.cli, a.slot) // the files are gone: a sign-in the worker can't tell of is none
 	s.forget(key, info, ok)
 	s.mu.Lock()
 	delete(s.started, key)
@@ -322,7 +330,7 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, err.Error(), apierr.Params{"cli": a.cli.Name()})
 	case errors.Is(err, cliworker.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerClosing, err.Error())
-	case errors.Is(err, ErrNotReady), errors.Is(err, cliworker.ErrUnknownOwner), errors.Is(err, cliworker.ErrUnreachable):
+	case outage(err):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, ErrNotReady.Error())
 	case errors.Is(err, cliworker.ErrForgotten):
 		writeError(w, http.StatusGone, apierr.CodeCLIAccountForgotten, err.Error())

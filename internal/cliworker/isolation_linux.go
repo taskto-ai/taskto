@@ -27,19 +27,18 @@ type isolationState struct {
 	known map[int64]bool
 }
 
-// uid is user's uid.
-// asUser makes cmd run as user's own Unix user, creating it first. Without isolation it
-// does nothing.
-func (w *Worker) asUser(cmd *exec.Cmd, user int64) error {
+// asUser makes cmd run as the Unix user of the account with home number home, creating it first.
+// Without isolation it does nothing.
+func (w *Worker) asUser(cmd *exec.Cmd, home int64) error {
 	iso := w.cfg.Isolation
 	if iso == nil {
 		return nil
 	}
-	uid, err := iso.uidOf(user)
+	uid, err := iso.uidOf(home)
 	if err != nil {
 		return err
 	}
-	if err := w.ensureUser(user, uid); err != nil {
+	if err := w.ensureUser(home, uid); err != nil {
 		return err
 	}
 	id := uint32(uid) //nolint:gosec // below maxUID: uidOf, and New's check of UIDBase
@@ -47,18 +46,18 @@ func (w *Worker) asUser(cmd *exec.Cmd, user int64) error {
 	return nil
 }
 
-// ensureUser adds user's Unix user and group if they aren't there, and creates their
-// directory, owned by them. It refuses a directory that is a symlink or someone else's.
-func (w *Worker) ensureUser(user int64, uid int) error {
+// ensureUser adds home's Unix user and group if they aren't there, and creates its directory,
+// owned by it. It refuses a directory that is a symlink or someone else's.
+func (w *Worker) ensureUser(home int64, uid int) error {
 	iso := w.cfg.Isolation
 	iso.state.mu.Lock()
 	defer iso.state.mu.Unlock()
-	if iso.state.known[user] {
+	if iso.state.known[home] {
 		return nil
 	}
-	dirs := w.cfg.Layout.User(user)
-	name := "tt" + strconv.FormatInt(user, 10)
-	if err := addLine(iso.UserFile, name, uid, fmt.Sprintf("%s:x:%d:%d:TaskTo user %d:%s:/bin/sh", name, uid, uid, user, dirs.Home)); err != nil {
+	dirs := w.cfg.Layout.Home(home)
+	name := "th" + strconv.FormatInt(home, 10)
+	if err := addLine(iso.UserFile, name, uid, fmt.Sprintf("%s:x:%d:%d:taskto account:%s:/bin/sh", name, uid, uid, dirs.Home)); err != nil {
 		return fmt.Errorf("adding the Unix user: %w", err)
 	}
 	if err := addLine(iso.Group, name, uid, fmt.Sprintf("%s:x:%d:", name, uid)); err != nil {
@@ -86,20 +85,35 @@ func (w *Worker) ensureUser(user int64, uid int) error {
 	if iso.state.known == nil {
 		iso.state.known = map[int64]bool{}
 	}
-	iso.state.known[user] = true
+	iso.state.known[home] = true
 	return nil
 }
 
-// dropUnixUser lets ensureUser make user's directory again, after it was removed: their Unix user
+// dropUnixUser lets ensureUser make home's directory again, after it was removed: its Unix user
 // stays, with the same uid.
-func (w *Worker) dropUnixUser(user int64) {
+func (w *Worker) dropUnixUser(home int64) {
 	iso := w.cfg.Isolation
 	if iso == nil {
 		return
 	}
 	iso.state.mu.Lock()
 	defer iso.state.mu.Unlock()
-	delete(iso.state.known, user)
+	delete(iso.state.known, home)
+}
+
+// checkPidfds makes sure this kernel and its system-call policy give the worker pidfds, which it
+// ends an account's processes with: a pid read earlier may be another process's by the time it
+// is signalled, a pidfd never.
+func checkPidfds() error {
+	fd, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		return fmt.Errorf("pidfd_open isn't allowed here (Linux 5.3 or later is needed, and a seccomp profile that allows it): %w", err)
+	}
+	defer unix.Close(fd)
+	if err := unix.PidfdSendSignal(fd, 0, nil, 0); err != nil {
+		return fmt.Errorf("pidfd_send_signal isn't allowed here (Linux 5.3 or later is needed, and a seccomp profile that allows it): %w", err)
+	}
+	return nil
 }
 
 // procRoot is where the processes are listed (a test's own, in tests).
@@ -159,16 +173,26 @@ func uidProcesses(uid int) ([]int, error) {
 	return out, nil
 }
 
-// procStatus is pid's real uid and whether it is a zombie.
+// procStatus is pid's real uid and whether it is a zombie: a zombie whose other threads still run
+// (its leader exited first) counts as running, as it is.
 func procStatus(pid int) (uid int, zombie bool, err error) {
 	b, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"))
 	if err != nil {
 		return 0, false, err
 	}
 	uid = -1
+	threads := 0
+	defer func() {
+		if zombie && threads > 1 {
+			zombie = false
+		}
+	}()
 	for _, line := range strings.Split(string(b), "\n") {
 		if rest, ok := strings.CutPrefix(line, "State:"); ok {
 			zombie = strings.HasPrefix(strings.TrimSpace(rest), "Z")
+		}
+		if rest, ok := strings.CutPrefix(line, "Threads:"); ok {
+			threads, _ = strconv.Atoi(strings.TrimSpace(rest))
 		}
 		if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
 			if fields := strings.Fields(rest); len(fields) > 0 {
@@ -188,17 +212,12 @@ func procStatus(pid int) (uid int, zombie bool, err error) {
 // sent the signal. It takes a pidfd, a reference to the
 // process that a pid given again can't take over, reads the uid, and checks through the reference
 // that the process still runs (a pid isn't given again while its process runs, so what was read is
-// that process's) before it signals it through the reference. On a kernel without pidfds (before
-// 5.3) the pid is signalled after its uid is read again.
+// that process's) before it signals it through the reference. A worker that isolates accounts
+// starts only where pidfds work (checkPidfds).
 func killIf(pid int, mine func(uid int) bool) (bool, error) {
 	fd, err := unix.PidfdOpen(pid, 0)
 	switch {
 	case errors.Is(err, unix.ESRCH):
-		return false, nil
-	case errors.Is(err, unix.ENOSYS):
-		if owner, zombie, err := procStatus(pid); err == nil && mine(owner) && !zombie {
-			return syscall.Kill(pid, syscall.SIGKILL) == nil, nil
-		}
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("opening process %d: %w", pid, err)

@@ -694,12 +694,12 @@ docker compose --profile cli up -d --build
   `TASKTO_CLI_WORKER_MEMORY` (default `4g`) and `TASKTO_CLI_WORKER_CPUS` (default `2`).
 - Each user's CLI logins and sessions are on the `cli-homes` volume, which `taskto backup`
   doesn't cover. If it is lost, users sign in again, and their conversations start new CLI
-  sessions with the conversation so far. After a restore of the server's data, the server tells
-  the worker at its start which accounts exist, by an identity each account keeps for good, and the
-  worker removes every directory that isn't a live account's own, so a new person given a number
-  again never gets someone else's logins ([cli-workers.md](cli-workers.md)). The directories the
-  worker made before it recorded identities are removed, not handed over: after upgrading to the
-  version that introduced them, each person signs in to their CLIs once more.
+  sessions with the conversation so far. The worker keeps each account's files in a home of its
+  own, by an identity the account keeps for good and no other is ever given, never by its user
+  number: after a restore of the server's data gives a number again, the new person gets a new,
+  empty home and never someone else's logins ([cli-workers.md](cli-workers.md#accounts-and-their-homes)).
+  At every start the server tells the worker which accounts exist, and the worker removes the
+  homes of the others.
 - The worker needs the internet to reach Anthropic, OpenAI and xAI. The server's egress
   policies don't apply to it. It reaches the internet and nothing else: it is alone on a
   network of its own (`worker`, the bridge `taskto-worker`), so the other services don't
@@ -717,6 +717,31 @@ docker compose --profile cli up -d --build
   its profile in their directory on `cli-homes`. `taskto cli-worker -browser-idle 5m` sets how
   long a browser runs unused, and `-browser-max 4` how many run at once. Chromium takes
   about 300–500 MB each, so raise `TASKTO_CLI_WORKER_MEMORY` with `-browser-max`.
+
+### Upgrading to account homes
+
+The version that keys the CLI worker's files by each account's identity (account homes,
+[cli-workers.md](cli-workers.md#accounts-and-their-homes)) changes the worker's directory once:
+
+- **Container mode** (`-cli-workers container`): the directories the worker made before
+  (`/homes/u<number>`) are removed at the first start, never handed to anyone, since nothing on
+  the volume can tell an upgrade from a restore of the server's data that gave numbers again.
+  Each person loses, once, their **CLI sign-ins** (they sign in to Claude Code, Codex and Grok
+  Build again in Settings), the **working files** the CLIs left in their conversations'
+  directories, and their **agent browser's personal profile** (its cookies and sign-ins to
+  websites). Conversations themselves are the server's and stay: their next CLI turn starts a new
+  session with the conversation so far.
+- **Local mode** (`-cli-workers local`): nothing is lost. The first request of each account moves
+  its directory (`<data>/cli/u<number>`) to its home, once, and a stop in the middle is finished
+  by the next request.
+
+To go back to an older version afterwards, in container mode, start it with the worker on a
+**new, empty** `cli-homes` volume and keep the upgraded one aside (detached, not mounted by
+anything): an older worker reads directories by user number and must never see the homes. People
+sign in to their CLIs again on the older version. When you upgrade again, give the new version
+the volume you kept: its homes are as they were left (the sign-ins made on the older version are
+on the other volume, which you can then delete). In local mode, move `<data>/cli` aside before
+starting the older version, for the same reason, and put it back before upgrading again.
 
 ### Agents never run as root
 
@@ -891,8 +916,8 @@ is a decision about the workspace's records, not an account's.
   deleted content zeroed in the file. It also rewrites the runtime's providers file, stops the
   person's agent browsers (none starts meanwhile, and their live views close) and, once their
   processes are gone, removes their profile, and then removes the CLI worker's directory of the
-  person, which is left alone while a browser step is still recorded: `<data>/cli/u<id>` if the
-  local worker ever ran here, and
+  person, which is left alone while a browser step is still recorded: the account's home in
+  `<data>/cli/` if the local worker ever ran here, and
   the worker container's own copy if the container worker ever did, which only that worker can
   remove, so that step waits for a start with `-cli-workers container` (a start in local mode doesn't
   clear it). The server records each kind of worker it starts (`cli_worker_history`); an install that

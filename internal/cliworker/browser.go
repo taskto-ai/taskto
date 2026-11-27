@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/browser"
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // The agent browser (docs/agent-browser.md) runs in the worker like a CLI turn: each process
@@ -23,9 +25,9 @@ import (
 // home: even the live view's connection to the user's VNC socket is made by the helper, as
 // the user, and bridged over its stdin and stdout.
 
-// BrowserPaths is user's browser directory: <their directory>/browser.
-func (l Layout) BrowserPaths(user int64) browser.Paths {
-	return browser.Paths{Root: filepath.Join(l.User(user).Root, "browser")}
+// BrowserPaths is the browser directory of the account with home number home: <its home>/browser.
+func (l Layout) BrowserPaths(home int64) browser.Paths {
+	return browser.Paths{Root: filepath.Join(l.Home(home).Root, "browser")}
 }
 
 // BrowserHost returns the browser.Host that runs the browsers' programs (bins) through the
@@ -41,15 +43,19 @@ type browserHost struct {
 
 func (h *browserHost) Bin(prog browser.Program) string { return h.bins[prog] }
 
-func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File) (*exec.Cmd, error) {
+func (h *browserHost) Start(a cliowner.Account, spec browser.ProcSpec, extra []*os.File) (*exec.Cmd, error) {
 	bin := h.bins[spec.Program]
 	if bin == "" {
 		return nil, browser.ErrUnavailable
 	}
-	if err := h.w.browserGate(user); err != nil {
+	acct, err := h.w.resolve(a, true)
+	if err != nil {
 		return nil, err
 	}
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser", Bin: bin, Browser: &spec})
+	if err := h.w.browserGate(acct); err != nil {
+		return nil, err
+	}
+	cmd, header, err := h.w.helperCommand(acct, helperRequest{Op: "browser", Bin: bin, Browser: &spec})
 	if err != nil {
 		return nil, err
 	}
@@ -69,31 +75,31 @@ func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File)
 		r.Close()
 		return nil, err
 	}
-	go logLines(r, user, spec.Program)
+	go logLines(r, a.User, spec.Program)
 	return cmd, nil
 }
 
-// browserGate refuses a browser's process while user's whole directory is being removed: the
-// removal stops their browsers after it closed the gate, so a process that passed here before is
+// browserGate refuses a browser's process while acct is retired or its home is being removed:
+// the removal stops its browsers after it closed the gate, so a process that passed here before is
 // one of those it stops (its session was registered first), and none starts after.
-func (w *Worker) browserGate(user int64) error {
+func (w *Worker) browserGate(acct account) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.gated(user, "", "") {
-		return ErrRemoving
-	}
-	return nil
+	return w.admissible(acct, "", "")
 }
 
-// BrowserAllowed is the agent browsers' per-user rule in the worker (browser.Config.Allow): every
-// operation on user's browsers, reading an open one's state and tabs too, is refused while they
-// are forgotten (a deleted account, or one whose old directory couldn't be removed yet), while
-// their whole directory is being removed, and until the server has introduced their account
-// (owner.go). The refusal is browser.ErrAccountClosing, which the server's API knows.
-func (w *Worker) BrowserAllowed(user int64) error {
+// BrowserAllowed is the agent browsers' per-account rule in the worker (browser.Config.Allow):
+// every operation on a's browsers, reading an open one's state and tabs too, is refused while the
+// account is retired (a deleted account, or one of a history a restore went back from) and while
+// its home is being removed. The refusal is browser.ErrAccountClosing, which the server's API
+// knows.
+func (w *Worker) BrowserAllowed(a cliowner.Account) error {
+	if !a.Valid() {
+		return browser.ErrAccountClosing
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.isForgotten(user) || w.gated(user, "", "") || !w.owned(user) {
+	if w.retired(a.Identity) || w.gated(a.Identity, "", "") {
 		return browser.ErrAccountClosing
 	}
 	return nil
@@ -120,27 +126,37 @@ func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 // The connection is a helper request of the user's from its first step to its close (admit): a
 // removal of their directory that begins meanwhile cancels it, and waits until it has ended, so
 // no helper of the dial's starts, or still runs, once their files go.
-func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	held, release, err := h.w.admit(context.Background(), user, "", "")
+func (h *browserHost) DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	acct, err := h.w.resolve(a, false)
+	if err != nil {
+		return nil, err
+	}
+	held, release, err := h.w.admit(context.Background(), acct, "", "")
 	if err != nil {
 		return nil, err
 	}
 	if hook := h.w.dialHookForTest; hook != nil {
 		hook()
 	}
-	c, err := h.dialVNC(ctx, held, user)
+	c, err := h.dialVNC(ctx, held, acct)
 	if err != nil {
 		release()
 		return nil, err
 	}
+	if hook := h.w.handOffHookForTest; hook != nil {
+		hook()
+	}
+	// A removal's cancel closes the connection, which ends the request. The watch is published
+	// under the connection's lock, so a cancel that fires at once waits for it.
+	c.mu.Lock()
 	c.release = release
-	// A removal's cancel closes the connection, which ends the request.
 	c.stopWatch = context.AfterFunc(held, func() { _ = c.Close() })
+	c.mu.Unlock()
 	return c, nil
 }
 
-func (h *browserHost) dialVNC(ctx, held context.Context, user int64) (*helperConn, error) {
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser-vnc"})
+func (h *browserHost) dialVNC(ctx, held context.Context, acct account) (*helperConn, error) {
+	cmd, header, err := h.w.helperCommand(acct, helperRequest{Op: "browser-vnc"})
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +207,7 @@ func (h *browserHost) dialVNC(ctx, held context.Context, user int64) (*helperCon
 		if err != nil {
 			c.Close()
 			if s := strings.TrimSpace(stderr.String()); s != "" {
-				slog.Warn("browser: the live view's helper", "user", user, "said", cut(s, 500))
+				slog.Warn("browser: the live view's helper", "user", acct.user, "said", cut(s, 500))
 			}
 			return nil, err
 		}
@@ -223,7 +239,8 @@ type helperConn struct {
 	r    *bufio.Reader
 	once sync.Once
 	// release ends the helper request the connection is (DialVNC), and stopWatch its watch for a
-	// removal's cancel; both are nil before the connection is handed out.
+	// removal's cancel; both are set under mu, and nil before the connection is handed out.
+	mu        sync.Mutex
 	release   func()
 	stopWatch func() bool
 }
@@ -238,76 +255,68 @@ func (c *helperConn) Close() error {
 		_ = c.cmd.Wait()
 		// A read still waiting ends now, with an error: the stream is over either way.
 		_ = c.out.Close()
-		if c.stopWatch != nil {
-			c.stopWatch()
+		c.mu.Lock()
+		stop, release := c.stopWatch, c.release
+		c.mu.Unlock()
+		if stop != nil {
+			stop()
 		}
-		if c.release != nil {
-			c.release()
+		if release != nil {
+			release()
 		}
 	})
 	return nil
 }
 
-// Clean removes the user's testing profile, as the user. It is a helper request of the user's
-// (admit): a removal of their directory that begins meanwhile cancels it and waits for it.
-func (h *browserHost) Clean(user int64) error {
-	held, release, err := h.w.admit(context.Background(), user, "", "")
+// Clean removes the account's testing profile, as its Unix user. It is a helper request of the
+// account's (admit): a removal of its home that begins meanwhile cancels it and waits for it.
+func (h *browserHost) Clean(a cliowner.Account) error {
+	acct, err := h.w.resolve(a, false)
+	if errors.Is(err, ErrUnknownAccount) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	held, release, err := h.w.admit(context.Background(), acct, "", "")
 	if err != nil {
 		return err
 	}
 	defer release()
-	return h.quickOpCtx(held, user, "browser-clean", "removing the testing profile")
+	return h.quickOpCtx(held, acct, "browser-clean", "removing the testing profile")
 }
 
-// Purge removes the user's whole browser directory, as the user, for a deleted account. The
-// Manager calls it under Hold. With the user's directory gone (Forget, Reconcile), the browser's
-// went with it, and nothing is made again.
-func (h *browserHost) Purge(user int64) error {
-	if !h.w.hasDir(user) {
+// Purge removes a deleted account's browser directory, as its Unix user, under the account's gate
+// (not beside a removal of its home): a directory with read-only parts too (browser.Purge). Only
+// that account's home is touched. A purge from before identities were kept names none: the CLI
+// worker's step removes the number's directory from before homes, the browser's with it.
+func (h *browserHost) Purge(a cliowner.Account) error {
+	if a.Identity == "" {
 		return nil
 	}
-	return h.quickOp(user, "browser-purge", "removing the browser's files")
-}
-
-// Owner is the identity recorded as the owner of user's directory, "" for none (owner.go).
-func (h *browserHost) Owner(user int64) (string, error) {
-	rec, _, err := h.w.owner(user)
-	return rec.identity, err
-}
-
-// Hold closes the user's gate for a deleted account's browser purge, whose account was owner, and
-// returns the function that opens it again: no removal or introduction of the number runs
-// meanwhile. It is browser.ErrNotTheOwner when the directory is recorded as another account's: a
-// restore gave the number to someone since, whose browsers and files are not the purge's.
-func (h *browserHost) Hold(ctx context.Context, user int64, owner string) (func(), error) {
-	end, err := h.w.beginGate(ctx, scope{user: user, all: true})
+	r, ok, err := h.w.find(a.Identity)
+	if err != nil || !ok {
+		return err
+	}
+	end, err := h.w.beginGate(context.Background(), scope{id: a.Identity, all: true})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := ctx.Err(); err != nil {
-		end()
-		return nil, err
+	defer end()
+	if _, err := os.Lstat(h.w.cfg.Layout.Home(r.Home).Root); errors.Is(err, fs.ErrNotExist) {
+		return nil
 	}
-	now, err := h.Owner(user)
-	if err != nil {
-		end()
-		return nil, err
-	}
-	if now != "" && now != owner {
-		end()
-		return nil, browser.ErrNotTheOwner
-	}
-	return end, nil
+	return h.quickOp(account{id: a.Identity, user: a.User, home: r.Home}, "browser-purge", "removing the browser's files")
 }
 
 // quickOp runs one of the helper's short browser ops as the user, stopping it after 30 s.
-func (h *browserHost) quickOp(user int64, op, what string) error {
-	return h.quickOpCtx(context.Background(), user, op, what)
+func (h *browserHost) quickOp(acct account, op, what string) error {
+	return h.quickOpCtx(context.Background(), acct, op, what)
 }
 
 // quickOpCtx is quickOp, stopped at once when ctx ends (a removal cancelled the request).
-func (h *browserHost) quickOpCtx(ctx context.Context, user int64, op, what string) error {
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: op})
+func (h *browserHost) quickOpCtx(ctx context.Context, acct account, op, what string) error {
+	cmd, header, err := h.w.helperCommand(acct, helperRequest{Op: op})
 	if err != nil {
 		return err
 	}
@@ -340,7 +349,7 @@ func (h *browserHost) quickOpCtx(ctx context.Context, user int64, op, what strin
 
 // runBrowserOp is the helper's side, as the user.
 func runBrowserOp(req helperRequest, layout Layout, stdout io.Writer) error {
-	p := layout.BrowserPaths(req.User)
+	p := layout.BrowserPaths(req.Home)
 	switch req.Op {
 	case "browser":
 		if req.Browser == nil || !filepath.IsAbs(req.Bin) {

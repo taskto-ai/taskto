@@ -133,11 +133,11 @@ func TestRealCLIs(t *testing.T) {
 							return
 						case <-time.After(100 * time.Millisecond):
 						}
-						for _, q := range w.Permissions(1, 7) {
+						for _, q := range w.Permissions(acct(1), 7) {
 							if !seen[q.ID] {
 								seen[q.ID] = true
 								asked <- q
-								_ = w.Answer(1, 7, q.ID, allow)
+								_ = w.Answer(acct(1), 7, q.ID, allow)
 								// A model told no may try again and again: a minute after the first
 								// denial, the owner stops the turn.
 								if !allow && len(seen) == 1 {
@@ -157,7 +157,7 @@ func TestRealCLIs(t *testing.T) {
 				default:
 					t.Fatalf("%s didn't ask: %+v", cli, events)
 				}
-				_, statErr := os.Stat(filepath.Join(w.LayoutForTest().User(1).Conversation(7), file))
+				_, statErr := os.Stat(filepath.Join(w.LayoutForTest().Home(w.HomeForTest(cliworker.AccountForTest(1))).Conversation(7), file))
 				if allow && statErr != nil {
 					t.Errorf("allowed, but the command didn't run: %v", statErr)
 				}

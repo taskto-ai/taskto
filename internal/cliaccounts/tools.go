@@ -150,8 +150,8 @@ func (s *Service) turnRunning(c toolsClaims) bool {
 	if s.worker == nil {
 		return false
 	}
-	t, ok := s.worker.FindTurn(c.User, c.Turn)
-	if !ok || t.Over() {
+	t, ok, err := s.worker.FindTurn(c.User, c.Turn)
+	if err != nil || !ok || t.Over() {
 		return false
 	}
 	spec := t.Spec()

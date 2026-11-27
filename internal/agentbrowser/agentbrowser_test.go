@@ -24,6 +24,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/drain"
 )
@@ -57,7 +58,8 @@ func (f *fakeBrowsers) Availability(context.Context) map[browser.Kind]bool {
 	return map[browser.Kind]bool{browser.Personal: true, browser.Testing: true}
 }
 
-func (f *fakeBrowsers) Status(_ context.Context, user int64) (map[browser.Kind]browser.State, error) {
+func (f *fakeBrowsers) Status(_ context.Context, a cliowner.Account) (map[browser.Kind]browser.State, error) {
+	user := a.User
 	if err := f.unreachable(); err != nil {
 		return nil, err
 	}
@@ -83,7 +85,8 @@ func (f *fakeBrowsers) set(user int64, kind browser.Kind, on bool) {
 	f.running[user][kind] = on
 }
 
-func (f *fakeBrowsers) Start(_ context.Context, user int64, kind browser.Kind) error {
+func (f *fakeBrowsers) Start(_ context.Context, a cliowner.Account, kind browser.Kind) error {
+	user := a.User
 	if err := f.unreachable(); err != nil {
 		return err
 	}
@@ -91,12 +94,14 @@ func (f *fakeBrowsers) Start(_ context.Context, user int64, kind browser.Kind) e
 	return nil
 }
 
-func (f *fakeBrowsers) Stop(_ context.Context, user int64, kind browser.Kind) error {
+func (f *fakeBrowsers) Stop(_ context.Context, a cliowner.Account, kind browser.Kind) error {
+	user := a.User
 	f.set(user, kind, false)
 	return nil
 }
 
-func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (browser.Result, error) {
+func (f *fakeBrowsers) Do(_ context.Context, acct cliowner.Account, a browser.Action) (browser.Result, error) {
+	user := acct.User
 	if err := f.unreachable(); err != nil {
 		return browser.Result{}, err
 	}
@@ -124,10 +129,11 @@ func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (brow
 }
 
 // Forget is not used by the routes: the account's purge calls it.
-func (f *fakeBrowsers) Forget(context.Context, int64) error { return nil }
+func (f *fakeBrowsers) Forget(context.Context, cliowner.Account) error { return nil }
 
 // OpenLive serves a display that says whose it is, then echoes.
-func (f *fakeBrowsers) OpenLive(_ context.Context, user int64) (io.ReadWriteCloser, error) {
+func (f *fakeBrowsers) OpenLive(_ context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	user := a.User
 	f.mu.Lock()
 	running := f.running[user][browser.Personal]
 	if running {
@@ -170,7 +176,7 @@ func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context, int64
 	if _, err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, db: sqlDB, svc: New(b, usable)}
+	e := &env{t: t, db: sqlDB, svc: New(b, usable, testAccount)}
 	if f, ok := b.(*fakeBrowsers); ok {
 		e.b = f
 	}
@@ -586,7 +592,7 @@ func refusedWith(err error, status int, text string) bool {
 
 func TestTools(t *testing.T) {
 	f := newFake()
-	s := New(f, nil)
+	s := New(f, nil, testAccount)
 	ctx := context.Background()
 	call := func(name, args string) (map[string]any, error) {
 		out, err := s.Call(ctx, 7, 3, name, json.RawMessage(args))
@@ -742,7 +748,7 @@ func TestNotReadyKeepsItsCode(t *testing.T) {
 			t.Errorf("readiness was asked for user %d, not the caller %d", user, owner.id)
 		}
 	}
-	if _, err := New(e.b, func(context.Context, int64) error { return notReady }).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !refusedWith(err, http.StatusServiceUnavailable, "isn't ready") {
+	if _, err := New(e.b, func(context.Context, int64) error { return notReady }, testAccount).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !refusedWith(err, http.StatusServiceUnavailable, "isn't ready") {
 		t.Errorf("a tool while the worker isn't ready: %v", err)
 	}
 	if len(e.b.actions) != 0 || len(e.b.running) != 0 {
@@ -769,14 +775,19 @@ func TestAnUnreachableWorkerIsNotReady(t *testing.T) {
 			t.Errorf("%s %s = %d %s, want 503 %s", r.method, r.path, rec.Code, rec.Body.String(), apierr.CodeCLIWorkerNotReady)
 		}
 	}
-	_, err := New(f, nil).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`))
+	_, err := New(f, nil, testAccount).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`))
 	var refused *agenttools.Refusal
 	if !errors.As(err, &refused) || refused.Status != http.StatusServiceUnavailable || refused.Code != apierr.CodeCLIWorkerNotReady {
 		t.Errorf("a tool with the worker unreachable: %#v", err)
 	}
 	if _, err := New(e.b, func(context.Context, int64) error {
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, "not ready")
-	}).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !errors.As(err, &refused) || refused.Code != apierr.CodeCLIWorkerNotReady {
+	}, testAccount).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !errors.As(err, &refused) || refused.Code != apierr.CodeCLIWorkerNotReady {
 		t.Errorf("a tool before the worker is ready keeps no code: %#v", err)
 	}
+}
+
+// testAccount is the account the tests give a user: an identity made from the number.
+func testAccount(_ context.Context, user int64) (cliowner.Account, error) {
+	return cliowner.Account{User: user, Identity: fmt.Sprintf("%032x", user)}, nil
 }

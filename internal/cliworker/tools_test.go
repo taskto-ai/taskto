@@ -190,7 +190,7 @@ func TestTaskToToolsPermissions(t *testing.T) {
 				if q.Tool != wantTool || !strings.Contains(q.Input, "notes.md") {
 					t.Errorf("question = %+v", q)
 				}
-				if err := h.w.Answer(1, 7, q.ID, allow); err != nil {
+				if err := h.w.Answer(acct(1), 7, q.ID, allow); err != nil {
 					t.Fatal(err)
 				}
 				done := last(waitDone(t, turn, 20*time.Second))
@@ -251,7 +251,7 @@ func TestTaskToToolsPerUser(t *testing.T) {
 		if got := mcpOutcome(done.Text, "list_spaces"); got != "ok list_spaces for Bearer "+token {
 			t.Errorf("user %d: %s", turn.Spec().User, got)
 		}
-		config := h.layout.User(turn.Spec().User).Config(cliworker.Claude)
+		config := h.home(turn.Spec().User).Config(cliworker.Claude)
 		calls := clitest.Calls(t, config)
 		env := strings.Join(calls[len(calls)-1].Env, "\n")
 		if !strings.Contains(env, token) || strings.Contains(env, other) {
@@ -289,8 +289,8 @@ func TestRemoteHidesTheToolsToken(t *testing.T) {
 	if _, _, err := r.StartTurn(s); err != nil {
 		t.Fatal(err)
 	}
-	found, ok := r.FindTurn(s.User, s.ID)
-	if !ok {
+	found, err := r.FindTurn(acct(s.User), s.ID)
+	if err != nil {
 		t.Fatal("turn not found")
 	}
 	if tools := found.Spec().Tools; tools == nil || tools.Token != "" || tools.URL != s.Tools.URL {

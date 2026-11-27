@@ -157,16 +157,16 @@ func (w *Worker) serveApproval(conn net.Conn) {
 	deny := func(reason string) {
 		_ = json.NewEncoder(conn).Encode(approveReply{Reason: reason})
 	}
-	// The user who asks: by the peer uid with isolation; anyone (0) in local mode, where all
-	// turns are the server's user's.
-	var user int64
+	// The account that asks: by the peer uid with isolation, which is its home's (uidOf) and no
+	// other account's; any (home 0) in local mode, where all turns are the server's user's.
+	var home int64
 	if iso := w.cfg.Isolation; iso != nil {
 		uid, err := peerUID(conn)
-		if err != nil || uid < iso.UIDBase+1 {
+		if err != nil || uid < iso.UIDBase+firstHome || uid >= iso.UIDBase+maxHome {
 			deny("only a CLI user may ask")
 			return
 		}
-		user = int64(uid - iso.UIDBase)
+		home = int64(uid - iso.UIDBase)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	line, err := bufio.NewReaderSize(io.LimitReader(conn, 1<<20), 64<<10).ReadBytes('\n')
@@ -181,7 +181,7 @@ func (w *Worker) serveApproval(conn net.Conn) {
 		deny("unreadable request")
 		return
 	}
-	t := w.waitTurnForHook(user, req.CLI, h.Session)
+	t := w.waitTurnForHook(home, req.CLI, h.Session)
 	if t == nil {
 		deny("no running turn of this user has this session")
 		return
@@ -196,17 +196,17 @@ func (w *Worker) serveApproval(conn net.Conn) {
 const sessionWait = 10 * time.Second
 
 // waitTurnForHook is turnForHook, and, while the session isn't one of a turn's yet but a
-// running turn of user's on cli hasn't named its own, it waits for that turn to name it, up
+// running turn of home's on cli hasn't named its own, it waits for that turn to name it, up
 // to sessionWait or until a turn ends. Codex names a new thread on its stdout before it runs
 // a tool, but the hook asks on another channel: the worker may not have read that line yet.
-func (w *Worker) waitTurnForHook(user int64, cli CLI, session string) *Turn {
+func (w *Worker) waitTurnForHook(home int64, cli CLI, session string) *Turn {
 	deadline := time.NewTimer(sessionWait)
 	defer deadline.Stop()
 	for {
 		w.mu.Lock()
 		named, freed := w.named, w.freed
 		w.mu.Unlock()
-		t, unnamed := w.turnForHook(user, cli, session)
+		t, unnamed := w.turnForHook(home, cli, session)
 		if t != nil || !unnamed {
 			return t
 		}
@@ -219,17 +219,18 @@ func (w *Worker) waitTurnForHook(user int64, cli CLI, session string) *Turn {
 	}
 }
 
-// turnForHook finds the running turn a hook's question belongs to: user's (any user's in
-// local mode, user 0) on cli with session; or, from a hook that names no session, user's only
-// running turn on cli. A session no running turn of user's on cli has is no turn. unnamed
-// reports whether a running turn of user's on cli runs a session it hasn't named yet.
-func (w *Worker) turnForHook(user int64, cli CLI, session string) (turn *Turn, unnamed bool) {
+// turnForHook finds the running turn a hook's question belongs to: the account's with home (any
+// account's in local mode, home 0) on cli with session; or, from a hook that names no session,
+// that account's only running turn on cli. A session no running turn of the account's on cli has
+// is no turn. unnamed reports whether a running turn of the account's on cli runs a session it
+// hasn't named yet.
+func (w *Worker) turnForHook(home int64, cli CLI, session string) (turn *Turn, unnamed bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var only *Turn
 	count := 0
 	for _, t := range w.turns {
-		if user != 0 && t.spec.User != user {
+		if home != 0 && t.acct.home != home {
 			continue
 		}
 		running, has, waiting := t.running(session)
@@ -270,7 +271,7 @@ func (w *Worker) decide(t *Turn, h hookInput) (bool, string) {
 	if t.spec.Tools.readOnly(t.spec.CLI, h.Tool, h.Input) {
 		return true, ""
 	}
-	if h.Event == hookPreToolUse && readOnly(h.Tool, h.Input, w.cfg.Layout.User(t.spec.User).Conversation(t.spec.Conversation)) {
+	if h.Event == hookPreToolUse && readOnly(h.Tool, h.Input, w.cfg.Layout.Home(t.acct.home).Conversation(t.spec.Conversation)) {
 		return true, ""
 	}
 	return w.ask(t, h.Tool, describeInput(h.Input))

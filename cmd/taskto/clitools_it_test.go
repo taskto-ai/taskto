@@ -179,7 +179,7 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 	}
 
 	// The owner's turn: a read that doesn't ask, then a write that does, and runs once allowed.
-	ownerClaude := layout.User(ownerID).Config(cliworker.Claude)
+	ownerClaude := homeOf(t, layout, ownerID).Config(cliworker.Claude)
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "list_spaces"},
 		{Tool: "write_doc", Args: map[string]any{"space_id": ownerPrivate, "path": "from-claude.md", "content": "# Written by the CLI\n"}},
@@ -275,7 +275,7 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 
 	// The member's turn reaches nothing of the owner's: not their private space, not their
 	// document, whatever the model asks for.
-	clitest.WriteScenario(t, layout.User(memberID).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
+	clitest.WriteScenario(t, homeOf(t, layout, memberID).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "list_spaces"},
 		{Tool: "read_doc", Args: map[string]any{"space_id": ownerPrivate, "path": "from-claude.md"}},
 		{Tool: "read_doc", Args: map[string]any{"space_id": memberPrivate, "path": "secret.md"}},
@@ -321,11 +321,41 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 	}
 
 	// Each user's CLI got its own token, never the other's.
-	memberCalls := clitest.Calls(t, layout.User(memberID).Config(cliworker.Claude))
+	memberCalls := clitest.Calls(t, homeOf(t, layout, memberID).Config(cliworker.Claude))
 	if len(memberCalls) == 0 {
 		t.Fatal("the member's CLI never ran")
 	}
 	if env := strings.Join(memberCalls[len(memberCalls)-1].Env, "\n"); strings.Contains(env, ended) || !strings.Contains(env, "TASKTO_TOOLS_TOKEN=ttm1.") {
 		t.Fatal("the member's CLI didn't get a token of its own")
 	}
+}
+
+// homeOf is the directories of user's account in the CLI worker at layout: the home its records
+// give the account of that number (the worker keeps an account under its identity).
+func homeOf(t *testing.T, layout cliworker.Layout, user int64) cliworker.Dirs {
+	t.Helper()
+	dir := filepath.Join(layout.Root, ".worker", "accounts")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // G304: the test's own data directory
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r struct {
+			Home    int64 `json:"home"`
+			User    int64 `json:"user"`
+			Retired bool  `json:"retired"`
+		}
+		if err := json.Unmarshal(b, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.User == user && !r.Retired {
+			return layout.Home(r.Home)
+		}
+	}
+	t.Fatalf("the CLI worker has no account of user %d", user)
+	return cliworker.Dirs{}
 }

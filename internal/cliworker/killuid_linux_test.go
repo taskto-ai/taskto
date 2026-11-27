@@ -5,6 +5,7 @@ package cliworker
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -48,13 +49,13 @@ func TestKillUIDCountsOnlyAFullLookAsNoneLeft(t *testing.T) {
 // user's uid is valid wherever it is used.
 func TestUIDOfStaysInRange(t *testing.T) {
 	iso := &Isolation{UIDBase: 100000}
-	for _, user := range []int64{0, -1, maxIsolatedUser} {
-		if _, err := iso.uidOf(user); err == nil {
-			t.Errorf("user %d was given a uid", user)
+	for _, home := range []int64{0, -1, 5, firstHome - 1, maxHome} {
+		if _, err := iso.uidOf(home); err == nil {
+			t.Errorf("home %d was given a uid", home)
 		}
 	}
-	if uid, err := iso.uidOf(5); err != nil || uid != 100005 {
-		t.Errorf("uidOf(5) = %d %v", uid, err)
+	if uid, err := iso.uidOf(firstHome + 5); err != nil || uid != 100000+firstHome+5 {
+		t.Errorf("uidOf(firstHome+5) = %d %v", uid, err)
 	}
 }
 
@@ -73,5 +74,34 @@ func TestTheStartUpSweepCountsOnlyAFullLook(t *testing.T) {
 	}
 	if _, err := killUIDs(1234567); err == nil {
 		t.Error("a process whose state couldn't be read was left out of the sweep")
+	}
+}
+
+// A zombie holds nothing only when it is alone: a thread group's leader that exited while other
+// threads of its run is a zombie in its status and still runs code as its uid, so it counts.
+func TestAZombieLeaderWithLiveThreadsCounts(t *testing.T) {
+	old := procRoot
+	t.Cleanup(func() { procRoot = old })
+	procRoot = t.TempDir()
+	for pid, c := range map[int]struct {
+		state, threads string
+		zombie         bool
+	}{
+		4250: {"Z (zombie)", "1", true},
+		4251: {"Z (zombie)", "3", false},
+		4252: {"S (sleeping)", "1", false},
+	} {
+		dir := filepath.Join(procRoot, strconv.Itoa(pid))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		status := "Name:\tx\nState:\t" + c.state + "\nUid:\t1000\t1000\t1000\t1000\nThreads:\t" + c.threads + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "status"), []byte(status), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		uid, zombie, err := procStatus(pid)
+		if err != nil || uid != 1000 || zombie != c.zombie {
+			t.Errorf("%s with %s threads: uid %d, zombie %v, %v; want zombie %v", c.state, c.threads, uid, zombie, err, c.zombie)
+		}
 	}
 }

@@ -25,17 +25,14 @@ func TestDisconnectStopsTheTurnUsingTheLogin(t *testing.T) {
 	conv := e.conversation(e.owner)
 	start := func(id string, user int64, slot cliworker.Slot, s clitest.Scenario) *cliworker.Turn {
 		t.Helper()
-		if err := e.svc.ReadyUser(t.Context(), user); err != nil {
-			t.Fatal(err)
-		}
-		dirs, err := e.layout.EnsureSlot(user, cliworker.Claude, slot)
+		dirs, err := e.dirsSlot(user, cliworker.Claude, slot), error(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		config := dirs.ConfigOf(cliworker.Claude, slot)
 		clitest.SignIn(t, "claude", config)
 		clitest.WriteScenario(t, config, s)
-		turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: id, User: user, CLI: cliworker.Claude, Slot: slot, Conversation: conv,
+		turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: id, User: user, Identity: e.acct(user).Identity, CLI: cliworker.Claude, Slot: slot, Conversation: conv,
 			Session: fmt.Sprintf("00000000-0000-4000-8000-%012d", len(id)*100+int(user)), Prompt: "work"})
 		if err != nil {
 			t.Fatal(err)
@@ -63,7 +60,7 @@ func TestDisconnectStopsTheTurnUsingTheLogin(t *testing.T) {
 	if !mine.Over() {
 		t.Fatal("the account was disconnected while a turn still ran on its login")
 	}
-	config := e.layout.User(e.owner.id).Config(cliworker.Claude)
+	config := e.dirs(e.owner.id).Config(cliworker.Claude)
 	if _, err := os.Stat(filepath.Join(config, clitest.LateWrite)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the stopped turn wrote into the disconnected account's directory: %v", err)
 	}

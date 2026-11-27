@@ -77,7 +77,7 @@ func mcpResult(answer, tool string) string {
 // toolsToken returns the tools token the last run of c's cli was given.
 func (e *turnEnv) toolsToken(c *client, cli cliworker.CLI) string {
 	e.t.Helper()
-	calls := clitest.Calls(e.t, e.layout.User(c.id).Config(cli))
+	calls := clitest.Calls(e.t, e.dirs(c.id).Config(cli))
 	if len(calls) == 0 {
 		e.t.Fatal("the CLI never ran")
 	}
@@ -123,7 +123,7 @@ func TestTurnsUseTaskToTools(t *testing.T) {
 		who         *client
 		mine, other int64
 	}{{e.owner, ownerSpace, otherSpace}, {e.other, otherSpace, ownerSpace}} {
-		clitest.WriteScenario(t, e.layout.User(c.who.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
+		clitest.WriteScenario(t, e.dirs(c.who.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
 			{Tool: "list_spaces"},
 			{Tool: "write_doc", Args: map[string]any{"space_id": c.mine, "path": "from-the-cli.md", "content": "# Mine\n"}},
 			{Tool: "read_doc", Args: map[string]any{"space_id": c.other, "path": "from-the-cli.md"}},
@@ -174,17 +174,14 @@ func TestToolsTokenRefusals(t *testing.T) {
 	conv := e.conversation(e.owner)
 	ctx := t.Context()
 	// A turn the worker is running: the fake works for a while.
-	if err := e.svc.ReadyUser(ctx, e.owner.id); err != nil {
-		t.Fatal(err)
-	}
-	dirs, err := e.layout.Ensure(e.owner.id)
+	dirs, err := e.dirs(e.owner.id), error(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
 	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{SleepMS: 20000})
 	id := fmt.Sprintf("c%d-running", conv)
-	turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: id, User: e.owner.id, CLI: cliworker.Claude, Conversation: conv,
+	turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: id, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, CLI: cliworker.Claude, Conversation: conv,
 		Session: "00000000-0000-4000-8000-000000000042", Prompt: "work"})
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +327,7 @@ func waitOver(t *testing.T, turn *cliworker.Turn) {
 func TestTurnsWithoutTaskToTools(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{{Tool: "list_spaces"}}})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{{Tool: "list_spaces"}}})
 	answer := done(e.turn(e.conversation(e.owner), turnBody{Turn: "bare", CLI: "claude", Model: "default", Prompt: "go"})).Text
 	if got := mcpResult(answer, "list_spaces"); got != "error no MCP settings" {
 		t.Errorf("a turn without tools: %s", got)

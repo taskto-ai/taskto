@@ -285,7 +285,7 @@ func (s *Service) agentTimeout() time.Duration {
 // The kinds of CLI worker, as cli_worker_history names them (migration 0059): where a worker keeps
 // a user's files.
 const (
-	cliLocal     = "local"     // under the data directory, <data>/cli/u<id>
+	cliLocal     = "local"     // under the data directory, <data>/cli/h<home>
 	cliContainer = "container" // in the container worker's own volume
 	cliUnknown   = "unknown"   // either may have run, before the record was kept
 )

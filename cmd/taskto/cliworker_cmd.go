@@ -34,7 +34,7 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 	socket := fs.String("socket", "/run/taskto-cli/worker.sock", "the socket the server connects to")
 	owner := fs.String("socket-owner", "65532:65532", "uid:gid of the server, the only one who may open the socket")
 	homes := fs.String("homes", "/homes", "where each user's directory is (a volume of its own)")
-	uidBase := fs.Int("uid-base", 100000, "the first uid: taskto user N runs as this plus N")
+	uidBase := fs.Int("uid-base", 100000, "the first uid: the account with home number H runs as this plus H (docs/cli-workers.md)")
 	path := fs.String("path", os.Getenv("PATH"), "PATH for the CLIs and the commands they run")
 	unsafe := fs.Bool(privcheck.OverrideFlag, false, "development only: start even if the image has setuid or setgid programs")
 	browserIdle := fs.Duration("browser-idle", 5*time.Minute, "how long an agent browser runs unused before it stops")
@@ -96,8 +96,8 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		Idle:      *browserIdle,
 		Max:       *browserMax,
 		NoSandbox: true,
-		// Every operation on a user's browsers follows the worker's rule for the user: none while
-		// they are refused, being removed, or not yet introduced by the server.
+		// Every operation on an account's browsers follows the worker's rule for it: none while
+		// it is retired or its home is being removed.
 		Allow: w.BrowserAllowed,
 	})
 	defer browsers.Close()

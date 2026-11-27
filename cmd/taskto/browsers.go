@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 
 	"taskto.ai/taskto/internal/agentbrowser"
-	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
 )
@@ -20,29 +19,31 @@ import (
 // account's purge stops and removes the files of (nil when there are none to stop), and a stop that
 // ends every browser. It runs where the CLIs do and under the same rule (cli.Usable):
 //
-//   - in container mode, in the CLI worker, as each user's Unix user (a Remote client);
-//   - in local mode, in this process, as the server's own OS user, each user's browser in
-//     their CLI directory (<data>/cli/u<id>/browser), with Chromium's sandbox on.
+//   - in container mode, in the CLI worker, as each account's Unix user (a Remote client);
+//   - in local mode, in this process, as the server's own OS user, each account's browser in its
+//     CLI home (<data>/cli/h<home>/browser), with Chromium's sandbox on.
 //
-// Off (the default), its API and tools say so. A container worker keeps its browsers whatever the
-// server's setting (one may still run from when it was on, and its files are in the worker), so the
-// purge of an account reaches it anyway.
-func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.Service, browser.Browsers, func()) {
+// The browsers know an account by its identity (cli.Account), never by its number alone. Off (the
+// default), its API and tools say so. A container worker keeps its browsers whatever the server's
+// setting (one may still run from when it was on, and its files are in the worker), so the purge of
+// an account reaches it anyway.
+func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.Service, purgeBrowsers, func()) {
 	container := cli.Mode() == string(cliaccounts.Container)
 	if !cfg.Browser {
 		if container {
-			return agentbrowser.New(nil, nil), browser.NewRemote(cfg.CLIWorkerSocket), func() {}
+			return agentbrowser.New(nil, nil, cli.Account), purgeBrowsers{browser.NewRemote(cfg.CLIWorkerSocket), cli}, func() {}
 		}
-		return agentbrowser.New(nil, nil), nil, func() {}
+		return agentbrowser.New(nil, nil, cli.Account), purgeBrowsers{}, func() {}
 	}
 	if container {
 		slog.Info("agent browser on, in the CLI worker")
 		remote := browser.NewRemote(cfg.CLIWorkerSocket)
-		return agentbrowser.New(remote, browserUsable(cli)), remote, func() {}
+		return agentbrowser.New(remote, browserUsable(cli), cli.Account), purgeBrowsers{remote, cli}, func() {}
 	}
 	bins := browser.FindBins(cfg.BrowserChromium)
 	m := browser.NewManager(browser.Config{Host: &browser.LocalHost{
 		Root: filepath.Join(cfg.DataDir, "cli"),
+		Home: cli.LocalHome,
 		Bins: bins,
 		Path: os.Getenv("PATH"),
 	}})
@@ -50,27 +51,34 @@ func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.S
 	if !m.Available(browser.Testing) {
 		slog.Warn("agent browser: no Chromium found (chromium on the PATH, or -browser-chromium)")
 	}
-	return agentbrowser.New(m, browserUsable(cli)), m, m.Close
+	return agentbrowser.New(m, browserUsable(cli), cli.Account), purgeBrowsers{m, cli}, m.Close
 }
 
-// browserUsable is the CLI workers' rule for the agent browser, and, since a user's profile is in
-// their CLI directory, that the worker has been told who exists since this server started and who
-// the user is (cliaccounts.Service.ReadyUser): until then a directory a restore left there may be
-// someone else's. Its refusals carry their own status and code, for the web app.
-func browserUsable(cli *cliaccounts.Service) func(context.Context, int64) error {
-	return func(ctx context.Context, user int64) error {
-		if err := cli.Usable(ctx); err != nil {
-			return err
-		}
-		switch err := cli.ReadyUser(ctx, user); {
-		case err == nil:
-			return nil
-		case errors.Is(err, cliworker.ErrForgotten):
-			return apierr.New(http.StatusGone, apierr.CodeCLIAccountForgotten, cliworker.ErrForgotten.Error())
-		case errors.Is(err, cliworker.ErrBusy):
-			return apierr.New(http.StatusConflict, apierr.CodeCLIAccountBusy, cliworker.ErrBusy.Error())
-		default:
-			return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())
-		}
+// purgeBrowsers is the browsers as a deleted account's purge reaches them (accountdeletion.Browsers),
+// by user number: the account named is the one the purge's step keeps (internal/cliowner), or else
+// the account's if it is still there, or else none (a purge from before identities were kept).
+type purgeBrowsers struct {
+	b   browser.Browsers
+	cli *cliaccounts.Service
+}
+
+// Forget implements accountdeletion.Browsers.
+func (p purgeBrowsers) Forget(ctx context.Context, user int64) error {
+	if p.b == nil {
+		return nil
 	}
+	a := cliowner.Account{User: user}
+	if id, ok := cliowner.From(ctx); ok {
+		a.Identity = id
+	} else if found, err := p.cli.Account(ctx, user); err == nil {
+		a = found
+	} else if !errors.Is(err, cliworker.ErrForgotten) {
+		return err
+	}
+	return p.b.Forget(ctx, a)
+}
+
+// browserUsable is the CLI workers' rule for the agent browser (cli.Usable).
+func browserUsable(cli *cliaccounts.Service) func(context.Context, int64) error {
+	return func(ctx context.Context, _ int64) error { return cli.Usable(ctx) }
 }

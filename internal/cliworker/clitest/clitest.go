@@ -431,6 +431,10 @@ func probe(p string) string {
 			}
 		}
 		return "ok unknown"
+	case "self":
+		// What the CLI itself is given: its environment, its arguments and its working directory.
+		cwd, _ := os.Getwd()
+		return "ok " + strings.Join(append(append(os.Environ(), os.Args...), cwd), " ")
 	case "uid":
 		return fmt.Sprintf("ok %d %d", os.Getuid(), os.Getgid())
 	case "connect":

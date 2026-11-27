@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sort"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // Permissions inside a turn (docs/agent-safety.md): by default a CLI asks before it runs a
@@ -137,9 +139,9 @@ func (t *Turn) removePending(p *pending, allowed bool, reason string) {
 }
 
 // Permissions returns the questions waiting in user's conversation, oldest first.
-func (w *Worker) Permissions(user, conversation int64) []PermissionRequest {
+func (w *Worker) Permissions(a cliowner.Account, conversation int64) []PermissionRequest {
 	out := []PermissionRequest{}
-	for _, t := range w.turnsOf(user, conversation) {
+	for _, t := range w.turnsOf(a, conversation) {
 		t.mu.Lock()
 		for _, p := range t.pending {
 			out = append(out, p.req)
@@ -152,8 +154,8 @@ func (w *Worker) Permissions(user, conversation int64) []PermissionRequest {
 
 // Answer answers question id in user's conversation: the CLI goes on with the tool, or is
 // told the user denied it. A question that isn't waiting there is ErrNoPermission.
-func (w *Worker) Answer(user, conversation int64, id string, allow bool) error {
-	for _, t := range w.turnsOf(user, conversation) {
+func (w *Worker) Answer(a cliowner.Account, conversation int64, id string, allow bool) error {
+	for _, t := range w.turnsOf(a, conversation) {
 		t.mu.Lock()
 		p, ok := t.pending[id]
 		t.mu.Unlock()
@@ -168,13 +170,14 @@ func (w *Worker) Answer(user, conversation int64, id string, allow bool) error {
 	return ErrNoPermission
 }
 
-// turnsOf returns user's turns in conversation.
-func (w *Worker) turnsOf(user, conversation int64) []*Turn {
+// turnsOf returns a's turns in conversation: never another account's, the number's earlier
+// owner's included.
+func (w *Worker) turnsOf(a cliowner.Account, conversation int64) []*Turn {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var out []*Turn
 	for _, t := range w.turns {
-		if t.spec.User == user && t.spec.Conversation == conversation {
+		if t.acct.id == a.Identity && t.spec.User == a.User && t.spec.Conversation == conversation {
 			out = append(out, t)
 		}
 	}

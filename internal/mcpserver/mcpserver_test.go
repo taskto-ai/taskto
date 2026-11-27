@@ -17,6 +17,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
@@ -552,5 +553,24 @@ func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 		if code, refused, text := callTool(t, f.endpoint, c.token, "list_integrations", c.args); code != http.StatusOK || !refused || text != "error: not found" {
 			t.Errorf("%s: %d %v %q, want not found", c.why, code, refused, text)
 		}
+	}
+}
+
+// notReadyBrowser is the agent browser's tools while the CLI worker can't be reached.
+type notReadyBrowser struct{}
+
+func (notReadyBrowser) Call(context.Context, int64, int64, string, json.RawMessage) (any, error) {
+	return nil, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady, Message: "the CLI worker isn't ready yet: try again in a moment"}
+}
+
+// A CLI turn's tool call that the worker's outage refuses says so by its code, as the conversation
+// agent's does, so the CLI's model knows to try again rather than give up.
+func TestForTurnsKeepsARefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	tools := agenttools.New(agenttools.Options{DB: f.db, Browser: notReadyBrowser{}})
+	h := ForTurns("test", f.callerA, tools, true)
+	_, isError, text := callTool(t, h, "any-turn-token", "browser_tabs", map[string]any{})
+	if !isError || !strings.Contains(text, string(apierr.CodeCLIWorkerNotReady)) {
+		t.Errorf("browser_tabs = %v %q, want an error with the code %s", isError, text, apierr.CodeCLIWorkerNotReady)
 	}
 }

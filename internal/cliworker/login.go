@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // LoginState is where a login is.
@@ -89,7 +91,7 @@ func logoutCommand(cli CLI) []string {
 
 // Login is one login in progress, or recently finished.
 type Login struct {
-	user int64
+	acct account
 	cli  CLI
 	slot Slot
 
@@ -124,46 +126,42 @@ const loginTimeout = 15 * time.Minute
 
 // loginKey names a login: one per user, CLI and account slot.
 type loginKey struct {
-	user int64
+	id   string
 	cli  CLI
 	slot Slot
 }
 
-// StartLogin starts cli's login for user, or returns the one in progress. It waits a little
+// StartLogin starts cli's login for a, or returns the one in progress. It waits a little
 // for the CLI to print its URL, so the answer usually has it.
-func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
-	if user <= 0 || !cli.Valid() || !slot.Valid() || slot.Shared() {
-		return nil, fmt.Errorf("invalid user, CLI or account")
+func (w *Worker) StartLogin(a cliowner.Account, cli CLI, slot Slot) (*Login, error) {
+	if !cli.Valid() || !slot.Valid() || slot.Shared() {
+		return nil, fmt.Errorf("invalid CLI or account")
 	}
 	bin := w.cfg.Bins[cli]
 	if bin == "" {
 		return nil, ErrUnavailable
+	}
+	acct, err := w.resolve(a, true)
+	if err != nil {
+		return nil, err
 	}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
 		return nil, ErrClosed
 	}
-	if w.isForgotten(user) {
+	if err := w.admissible(acct, cli, slot); err != nil {
 		w.mu.Unlock()
-		return nil, ErrForgotten
+		return nil, err
 	}
-	if w.gated(user, cli, slot) {
-		w.mu.Unlock()
-		return nil, ErrRemoving
-	}
-	if !w.owned(user) {
-		w.mu.Unlock()
-		return nil, ErrUnknownOwner
-	}
-	key := loginKey{user, cli, slot}
+	key := loginKey{acct.id, cli, slot}
 	if old := w.logins[key]; old != nil && !old.Info().State.Final() {
 		w.mu.Unlock()
 		return old, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	l := &Login{
-		user: user, cli: cli, slot: slot, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{}),
+		acct: acct, cli: cli, slot: slot, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{}),
 		info: LoginInfo{CLI: cli, Slot: slot, State: LoginStarting, StartedAt: time.Now().UTC(), NeedsCode: cli == Claude},
 	}
 	w.logins[key] = l
@@ -187,17 +185,21 @@ func (w *Worker) StartLogin(user int64, cli CLI, slot Slot) (*Login, error) {
 	return l, nil
 }
 
-// Login returns user's login for cli's account in slot, in progress or finished.
-func (w *Worker) Login(user int64, cli CLI, slot Slot) (*Login, bool) {
+// Login returns a's login for cli's account in slot, in progress or finished: one of another
+// account's, the number's earlier owner's too, is none.
+func (w *Worker) Login(a cliowner.Account, cli CLI, slot Slot) (*Login, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	l := w.logins[loginKey{user, cli, slot}]
-	return l, l != nil
+	l := w.logins[loginKey{a.Identity, cli, slot}]
+	if l == nil || l.acct.user != a.User {
+		return nil, false
+	}
+	return l, true
 }
 
-// SubmitLoginCode passes the code the sign-in page showed to user's Claude Code login.
-func (w *Worker) SubmitLoginCode(user int64, cli CLI, slot Slot, code string) error {
-	l, ok := w.Login(user, cli, slot)
+// SubmitLoginCode passes the code the sign-in page showed to a's Claude Code login.
+func (w *Worker) SubmitLoginCode(a cliowner.Account, cli CLI, slot Slot, code string) error {
+	l, ok := w.Login(a, cli, slot)
 	if !ok || l.Info().State.Final() {
 		return ErrNoLogin
 	}
@@ -218,8 +220,8 @@ func (w *Worker) SubmitLoginCode(user int64, cli CLI, slot Slot, code string) er
 }
 
 // CancelLogin stops user's login for cli's account in slot, if one is in progress.
-func (w *Worker) CancelLogin(user int64, cli CLI, slot Slot) {
-	if l, ok := w.Login(user, cli, slot); ok {
+func (w *Worker) CancelLogin(a cliowner.Account, cli CLI, slot Slot) {
+	if l, ok := w.Login(a, cli, slot); ok {
 		l.stop()
 	}
 }
@@ -257,7 +259,7 @@ func (w *Worker) runLogin(ctx context.Context, l *Login, bin string) {
 			l.info.State, l.info.Message = state, msg
 		}
 	}
-	cmd, header, err := w.helperCommand(l.user, helperRequest{Op: "exec", CLI: l.cli, Slot: l.slot, Bin: bin, Args: loginCommand(l.cli)})
+	cmd, header, err := w.helperCommand(l.acct, helperRequest{Op: "exec", CLI: l.cli, Slot: l.slot, Bin: bin, Args: loginCommand(l.cli)})
 	if err != nil {
 		finish(LoginFailed, "the worker could not start the sign-in")
 		slog.Error("cliworker: login", "cli", l.cli, "err", err)
@@ -274,7 +276,7 @@ func (w *Worker) runLogin(ctx context.Context, l *Login, bin string) {
 		finish(LoginFailed, "the CLI could not start: "+err.Error())
 		return
 	}
-	defer w.trackGroup(cmd.Process.Pid, l.user, l.cli, l.slot)()
+	defer w.trackGroup(cmd.Process.Pid, l.acct.id, l.cli, l.slot)()
 	// The helper's request first; what follows is the CLI's stdin (the pasted code).
 	if _, err := stdin.Write(header); err != nil {
 		finish(LoginFailed, "the CLI could not start: "+err.Error())
@@ -342,7 +344,7 @@ func (w *Worker) runLogin(ctx context.Context, l *Login, bin string) {
 	}
 	statusCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st, err := w.Status(statusCtx, l.user, l.cli, l.slot)
+	st, err := w.status(statusCtx, l.acct, l.cli, l.slot)
 	switch {
 	case err != nil:
 		finish(LoginFailed, "the CLI finished, but its status could not be read: "+err.Error())
@@ -440,7 +442,15 @@ func (l *Login) lastWords() string {
 // Status asks cli whether user is signed in: `claude auth status --json`, `codex login
 // status`; Grok Build has no status command, so its credentials file is looked for. Each runs
 // as the user, through the helper.
-func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (AuthStatus, error) {
+func (w *Worker) Status(ctx context.Context, a cliowner.Account, cli CLI, slot Slot) (AuthStatus, error) {
+	acct, err := w.resolve(a, true)
+	if err != nil {
+		return AuthStatus{}, err
+	}
+	return w.status(ctx, acct, cli, slot)
+}
+
+func (w *Worker) status(ctx context.Context, acct account, cli CLI, slot Slot) (AuthStatus, error) {
 	bin := w.cfg.Bins[cli]
 	if bin == "" {
 		return AuthStatus{}, ErrUnavailable
@@ -451,7 +461,7 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 	switch cli {
 	case Claude:
 		// Signed out, it exits 1 on Linux (0 on macOS) with the same JSON: read the JSON.
-		out, errOut, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"auth", "status", "--json"}})
+		out, errOut, err := w.runQuick(ctx, acct, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"auth", "status", "--json"}})
 		var ee *exec.ExitError
 		if err != nil && !errors.As(err, &ee) {
 			return AuthStatus{}, err
@@ -471,7 +481,7 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 	case Codex:
 		// Exit 0 means signed in ("Logged in using ChatGPT", on stderr), 1 not.
 		// Its answer is text, which it prints on stderr: read both streams, here only.
-		out, errOut, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"login", "status"}})
+		out, errOut, err := w.runQuick(ctx, acct, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"login", "status"}})
 		var ee *exec.ExitError
 		switch {
 		case err == nil:
@@ -486,7 +496,7 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 			return AuthStatus{}, err
 		}
 	default:
-		out, _, err := w.runQuick(ctx, user, helperRequest{Op: "authfile", CLI: cli, Slot: slot})
+		out, _, err := w.runQuick(ctx, acct, helperRequest{Op: "authfile", CLI: cli, Slot: slot})
 		if err != nil {
 			return AuthStatus{}, err
 		}
@@ -505,22 +515,29 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 
 // Logout signs user out of cli with its own logout command, then removes everything the CLI
 // kept for them (sessions, settings): disconnecting starts over.
-func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) error {
+func (w *Worker) Logout(ctx context.Context, a cliowner.Account, cli CLI, slot Slot) error {
 	if !slot.Valid() {
 		return errors.New("invalid account")
+	}
+	acct, err := w.resolve(a, false)
+	if errors.Is(err, ErrUnknownAccount) {
+		return nil // nothing of the account's is here
+	}
+	if err != nil {
+		return err
 	}
 	// Nothing starts on the account while its files go, and what runs on it is stopped and waited
 	// for first: a CLI that went on would hold the login it was started with and write its
 	// session back into the directory, and a sign-in that ends while the files go could write its
 	// credentials back. Only this account: the user's others, and their other CLIs, go on.
-	sc := scope{user: user, cli: cli, slot: slot}
+	sc := scope{id: acct.id, cli: cli, slot: slot}
 	end, err := w.beginGate(ctx, sc)
 	if err != nil {
 		return err
 	}
 	defer end()
-	// A user forgotten while this waited for the gate (a Forget has the gate, and ends first).
-	if w.isForgotten(user) {
+	// An account retired while this waited for the gate (a Forget has the gate, and ends first).
+	if w.retired(acct.id) {
 		return ErrForgotten
 	}
 	if err := w.quiesce(ctx, sc); err != nil {
@@ -528,7 +545,7 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 	}
 	// A shared account's directory holds no login to sign out of.
 	if bin := w.cfg.Bins[cli]; bin != "" && !slot.Shared() {
-		if _, _, err := w.runHelper(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: logoutCommand(cli)}); err != nil {
+		if _, _, err := w.runHelper(ctx, acct, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: logoutCommand(cli)}); err != nil {
 			var ee *exec.ExitError
 			if !errors.As(err, &ee) { // "not logged in" is fine
 				slog.Warn("cliworker: logout", "cli", cli, "err", err)
@@ -540,18 +557,18 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 	if err := w.waitGroups(ctx, sc); err != nil {
 		return err
 	}
-	_, _, err = w.runHelper(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
+	_, _, err = w.runHelper(ctx, acct, helperRequest{Op: "reset", CLI: cli, Slot: slot})
 	return err
 }
 
 // codexLimits asks the helper, as the user, for the usage limits in thread's session file.
-func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
+func (w *Worker) codexLimits(acct account, slot Slot, thread string) []Limit {
 	if thread == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, _, err := w.runQuick(ctx, user, helperRequest{Op: "limits", CLI: Codex, Slot: slot, Thread: thread})
+	out, _, err := w.runQuick(ctx, acct, helperRequest{Op: "limits", CLI: Codex, Slot: slot, Thread: thread})
 	if err != nil {
 		slog.Warn("cliworker: reading Codex's usage limits", "err", err)
 		return nil
@@ -568,25 +585,25 @@ func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
 // warning on stderr (a runtime's, a CLI's) must never be parsed with them. A caller reads
 // stderr only for a CLI that answers there, or to say why. It is stopped after 30 s or when
 // ctx ends.
-func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
+func (w *Worker) runQuick(ctx context.Context, acct account, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
 	// Counted, so that a removal cancels it and waits for it: it would make the directory again.
-	ctx, release, err := w.admit(ctx, user, req.CLI, req.Slot)
+	ctx, release, err := w.admit(ctx, acct, req.CLI, req.Slot)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer release()
-	return w.runHelper(ctx, user, req)
+	return w.runHelper(ctx, acct, req)
 }
 
 // runHelper runs the helper request itself, with no check of the removals: runQuick's, after its
 // own, and the requests a removal makes (the sign-out, the reset, the removal of the files).
-func (w *Worker) runHelper(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
+func (w *Worker) runHelper(ctx context.Context, acct account, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
 	// Nothing starts for a caller that has given up: a helper that deletes would run before the
 	// cancellation was seen.
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	cmd, header, err := w.helperCommand(user, req)
+	cmd, header, err := w.helperCommand(acct, req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -599,7 +616,7 @@ func (w *Worker) runHelper(ctx context.Context, user int64, req helperRequest) (
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
-	defer w.trackGroup(cmd.Process.Pid, user, req.CLI, req.Slot)()
+	defer w.trackGroup(cmd.Process.Pid, acct.id, req.CLI, req.Slot)()
 	done := make(chan struct{})
 	go func() {
 		select {

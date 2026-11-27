@@ -29,21 +29,22 @@ var ErrRemoving = errors.New("this account's CLI files are being removed: try ag
 // stopped and waited for: the files are kept, and the removal can be tried again.
 var ErrBusy = errors.New("a process of this account is still running: its files are kept, try again")
 
-// scope is what a removal covers: all of a user's accounts, or the one account of cli in slot.
+// scope is what a removal covers, of the taskto account with identity id: all of its CLI accounts,
+// or the one of cli in slot.
 type scope struct {
-	user int64
+	id   string
 	all  bool
 	cli  CLI
 	slot Slot
 }
 
-func (s scope) covers(user int64, cli CLI, slot Slot) bool {
-	return s.user == user && (s.all || (s.cli == cli && s.slot == slot))
+func (s scope) covers(id string, cli CLI, slot Slot) bool {
+	return s.id == id && (s.all || (s.cli == cli && s.slot == slot))
 }
 
 // overlaps reports whether s and o cover an account in common.
 func (s scope) overlaps(o scope) bool {
-	return s.user == o.user && (s.all || o.all || (s.cli == o.cli && s.slot == o.slot))
+	return s.id == o.id && (s.all || o.all || (s.cli == o.cli && s.slot == o.slot))
 }
 
 // gate is an account whose files are being removed by a Logout.
@@ -88,36 +89,42 @@ func (w *Worker) dropGroups(seen []groupSeen) {
 	}
 }
 
-// gated reports whether a removal's gate covers the account of user's cli in slot. The caller
-// holds w.mu.
-func (w *Worker) gated(user int64, cli CLI, slot Slot) bool {
+// gated reports whether a removal's gate covers the CLI account of cli in slot of the account
+// with identity id. The caller holds w.mu.
+func (w *Worker) gated(id string, cli CLI, slot Slot) bool {
 	for _, g := range w.gates {
-		if g.covers(user, cli, slot) {
+		if g.covers(id, cli, slot) {
 			return true
 		}
 	}
 	return false
 }
 
-// admit lets a helper request for the account of user's cli in slot start, or refuses it: for a
-// user that was forgotten (ErrForgotten) or an account that is being removed (ErrRemoving). A
-// removal that begins while it runs cancels the returned context and waits until release is
-// called. A request that names no CLI (the user's own files) is covered by a removal of all of
-// the user's accounts only.
-func (w *Worker) admit(ctx context.Context, user int64, cli CLI, slot Slot) (context.Context, func(), error) {
+// admissible says whether something may start for acct's CLI account of cli in slot: not for an
+// account that is retired (ErrForgotten), nor while a removal covers it (ErrRemoving). The caller
+// holds w.mu, which a removal holds as it closes its gate.
+func (w *Worker) admissible(acct account, cli CLI, slot Slot) error {
+	if w.retired(acct.id) {
+		return ErrForgotten
+	}
+	if w.gated(acct.id, cli, slot) {
+		return ErrRemoving
+	}
+	return nil
+}
+
+// admit lets a helper request for acct's CLI account of cli in slot start, or refuses it (see
+// admissible). A removal that begins while it runs cancels the returned context and waits until
+// release is called. A request that names no CLI (the account's own files) is covered by a removal
+// of all of the account's CLI accounts only.
+func (w *Worker) admit(ctx context.Context, acct account, cli CLI, slot Slot) (context.Context, func(), error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.isForgotten(user) {
-		return nil, nil, ErrForgotten
-	}
-	if w.gated(user, cli, slot) {
-		return nil, nil, ErrRemoving
-	}
-	if !w.owned(user) {
-		return nil, nil, ErrUnknownOwner
+	if err := w.admissible(acct, cli, slot); err != nil {
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	h := &helperRun{scope: scope{user: user, cli: cli, slot: slot}, cancel: cancel, done: make(chan struct{})}
+	h := &helperRun{scope: scope{id: acct.id, cli: cli, slot: slot}, cancel: cancel, done: make(chan struct{})}
 	w.helpers[h] = struct{}{}
 	return ctx, func() {
 		w.mu.Lock()
@@ -138,14 +145,14 @@ const maxGroups = 256
 // process, so a group ID the system gives again later isn't taken for this account's (a removal
 // of it would wait for an unrelated group). A group is not forgotten only because its turn is
 // over: what a turn left behind may still be running, and then a removal waits for it.
-func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) (ended func()) {
+func (w *Worker) trackGroup(pgid int, id string, cli CLI, slot Slot) (ended func()) {
 	if pgid <= 1 || w.groupWait < 0 {
 		return func() {}
 	}
 	w.mu.Lock()
 	w.groupSeq++
 	seq := w.groupSeq
-	w.groups[pgid] = groupRec{scope: scope{user: user, cli: cli, slot: slot}, seq: seq}
+	w.groups[pgid] = groupRec{scope: scope{id: id, cli: cli, slot: slot}, seq: seq}
 	var old []groupSeen
 	if len(w.groups) > maxGroups {
 		for p, rec := range w.groups {
@@ -219,13 +226,13 @@ func (w *Worker) quiesce(ctx context.Context, sc scope) error {
 	w.mu.Lock()
 	var turns []*Turn
 	for _, t := range w.turns {
-		if sc.covers(t.spec.User, t.spec.CLI, t.spec.Slot) && !t.Over() {
+		if sc.covers(t.acct.id, t.spec.CLI, t.spec.Slot) && !t.Over() {
 			turns = append(turns, t)
 		}
 	}
 	var helpers []*helperRun
 	for h := range w.helpers {
-		if sc.covers(h.user, h.cli, h.slot) {
+		if sc.covers(h.id, h.cli, h.slot) {
 			helpers = append(helpers, h)
 		}
 	}
@@ -233,7 +240,7 @@ func (w *Worker) quiesce(ctx context.Context, sc scope) error {
 	// sign-in replaced is a process until it exits.
 	var logins []*Login
 	for l := range w.loginRuns {
-		if sc.covers(l.user, l.cli, l.slot) {
+		if sc.covers(l.acct.id, l.cli, l.slot) {
 			logins = append(logins, l)
 		}
 	}
@@ -292,7 +299,7 @@ func (w *Worker) waitGroups(ctx context.Context, sc scope) error {
 		w.mu.Lock()
 		var seen []groupSeen
 		for p, g := range w.groups {
-			if sc.covers(g.user, g.cli, g.slot) {
+			if sc.covers(g.id, g.cli, g.slot) {
 				seen = append(seen, groupSeen{p, g.seq})
 			}
 		}

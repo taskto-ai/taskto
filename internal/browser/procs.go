@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -116,12 +117,44 @@ func Prepare(p Paths, spec ProcSpec) error {
 }
 
 // Clean removes the testing browser's profile, when it stops.
-func Clean(p Paths) error { return os.RemoveAll(p.Testing()) }
+func Clean(p Paths) error { return removeAll(p.Testing()) }
 
-// Purge removes everything of a user's browsers: the personal profile (cookies, logins, history)
-// and the rest of the browser directory. It is for a deleted account, once no process of theirs is
-// left; a file a process still wrote meanwhile makes it fail, and it is tried again.
-func Purge(p Paths) error { return os.RemoveAll(p.Root) }
+// Purge removes everything of an account's browsers: the personal profile (cookies, logins,
+// history) and the rest of the browser directory. It is for a deleted account, once no process of
+// its is left; a file a process still wrote meanwhile makes it fail, and it is tried again. It runs
+// as the directory's owner, so a read-only part (a page's, a tool's) is no obstacle (removeAll).
+func Purge(p Paths) error { return removeAll(p.Root) }
+
+// removeAll deletes path and everything under it, as their owner: each directory is opened up to
+// its owner (0700) before it is read, so a read-only one doesn't stop it, and a link is removed,
+// never followed.
+func removeAll(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return os.Remove(path)
+	}
+	if info.Mode().Perm()&0o700 != 0o700 {
+		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // G302: a directory needs x; 0700 is owner-only
+			return err
+		}
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := removeAll(filepath.Join(path, e.Name())); err != nil {
+			return err
+		}
+	}
+	return os.Remove(path)
+}
 
 // ownerOnlyDir makes dir (mode 700), or tightens it if it is there.
 func ownerOnlyDir(dir string) error {

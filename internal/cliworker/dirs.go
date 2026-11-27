@@ -7,7 +7,8 @@ import (
 	"strconv"
 )
 
-// Layout is where the users' CLI directories are: Root/u<user>/ for each user, mode 700.
+// Layout is where the accounts' CLI directories are: Root/h<home>/ for each account's home number
+// (accounts.go), mode 700.
 type Layout struct{ Root string }
 
 // Dirs are one user's CLI directories.
@@ -42,9 +43,9 @@ func (d Dirs) Conversation(id int64) string {
 	return filepath.Join(d.Work, "c"+strconv.FormatInt(id, 10))
 }
 
-// User returns user's directories, without creating them.
-func (l Layout) User(user int64) Dirs {
-	root := filepath.Join(l.Root, "u"+strconv.FormatInt(user, 10))
+// Home returns the directories of the account with home number home, without creating them.
+func (l Layout) Home(home int64) Dirs {
+	root := filepath.Join(l.Root, "h"+strconv.FormatInt(home, 10))
 	return Dirs{
 		Root: root,
 		Home: filepath.Join(root, "home"),
@@ -53,14 +54,19 @@ func (l Layout) User(user int64) Dirs {
 	}
 }
 
-// Ensure creates user's directories (mode 700) and returns them. A directory that exists with
-// a looser mode is tightened: these hold the user's logins.
-func (l Layout) Ensure(user int64) (Dirs, error) { return l.EnsureSlot(user, "", "") }
+// legacy is the directory a worker from before homes made for user number user: Root/u<user>.
+func (l Layout) legacy(user int64) string {
+	return filepath.Join(l.Root, "u"+strconv.FormatInt(user, 10))
+}
+
+// Ensure creates home's directories (mode 700) and returns them. A directory that exists with
+// a looser mode is tightened: these hold the account's logins.
+func (l Layout) Ensure(home int64) (Dirs, error) { return l.EnsureSlot(home, "", "") }
 
 // EnsureSlot is Ensure, and also creates cli's config directory for slot (none for an empty cli).
-func (l Layout) EnsureSlot(user int64, cli CLI, slot Slot) (Dirs, error) {
-	if user <= 0 {
-		return Dirs{}, fmt.Errorf("invalid user %d", user)
+func (l Layout) EnsureSlot(home int64, cli CLI, slot Slot) (Dirs, error) {
+	if home < firstHome || home >= maxHome {
+		return Dirs{}, fmt.Errorf("invalid home %d", home)
 	}
 	if !slot.Valid() {
 		return Dirs{}, fmt.Errorf("invalid account slot")
@@ -68,7 +74,7 @@ func (l Layout) EnsureSlot(user int64, cli CLI, slot Slot) (Dirs, error) {
 	if err := os.MkdirAll(l.Root, 0o700); err != nil {
 		return Dirs{}, err
 	}
-	d := l.User(user)
+	d := l.Home(home)
 	dirs := []string{d.Root, d.Home, d.Tmp, d.Work, d.Config(Claude), d.Config(Codex), d.Config(Grok)}
 	if cli.Valid() && slot != "" {
 		dirs = append(dirs, d.ConfigOf(cli, slot))

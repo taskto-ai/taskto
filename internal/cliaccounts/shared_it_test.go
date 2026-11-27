@@ -63,7 +63,7 @@ func TestRealCLIsThroughTheProxy(t *testing.T) {
 				t.Logf("answer %q (the model's wording, not checked strictly)", d.Text)
 			}
 			// The CLI's own files never hold the key.
-			dir := e.layout.User(e.other.id).ConfigOf(cli, sharedSlot(a.ID))
+			dir := e.dirs(e.other.id).ConfigOf(cli, sharedSlot(a.ID))
 			_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 				if err == nil && !d.IsDir() {
 					if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), key) { //nolint:gosec // G304: the test's own directory

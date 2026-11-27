@@ -11,12 +11,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 	"taskto.ai/taskto/internal/conversations"
@@ -146,7 +151,7 @@ func TestTurnOnTheOwnersAccount(t *testing.T) {
 	if d := done(events); d.Status != cliworker.StatusOK || !strings.Contains(d.Text, "turn 2 of this session") {
 		t.Fatalf("second turn = %+v", d)
 	}
-	calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Claude))
+	calls := clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Claude))
 	if len(calls) != 2 || !contains(calls[0].Args, "--session-id", session) || !contains(calls[1].Args, "--resume", session) || !contains(calls[1].Args, "--model", "opus") {
 		t.Fatalf("calls = %+v", calls)
 	}
@@ -177,22 +182,22 @@ func TestTurnNeverUsesAnotherUsersLogin(t *testing.T) {
 	if d := done(events); d.Status != cliworker.StatusFailed || !strings.Contains(d.Text, "isn't connected") {
 		t.Fatalf("the other user's turn = %+v", d)
 	}
-	if calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Claude)); len(calls) != 0 {
+	if calls := clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Claude)); len(calls) != 0 {
 		t.Fatalf("the owner's CLI ran for the other user: %+v", calls)
 	}
 
 	// Once connected, the other user's turns run in their own directories.
 	e.other.connect(cliworker.Claude)
 	e.turn(theirs, turnBody{Turn: "t2", CLI: "claude", Model: "default", Prompt: "mine now"})
-	if calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Claude)); len(calls) != 0 {
+	if calls := clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Claude)); len(calls) != 0 {
 		t.Fatalf("the owner's CLI ran for the other user: %+v", calls)
 	}
-	if calls := clitest.Calls(t, e.layout.User(e.other.id).Config(cliworker.Claude)); len(calls) != 1 {
+	if calls := clitest.Calls(t, e.dirs(e.other.id).Config(cliworker.Claude)); len(calls) != 1 {
 		t.Fatalf("the other user's calls = %+v", calls)
 	}
 
 	// A turn of the owner's that the other user's capability names by its ID: not reachable.
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{SleepMS: 1500})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{SleepMS: 1500})
 	result := make(chan []cliworker.Event, 1)
 	go func() {
 		_, events, _ := e.post(mine, "/cli/turn", turnBody{Turn: "long", CLI: "claude", Model: "default", Prompt: "slow"})
@@ -217,7 +222,7 @@ func TestTurnNeverUsesAnotherUsersLogin(t *testing.T) {
 func TestStopOwnTurn(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Codex)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 30_000})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 30_000})
 	conv := e.conversation(e.owner)
 	result := make(chan []cliworker.Event, 1)
 	go func() {
@@ -245,7 +250,7 @@ func TestStopOwnTurn(t *testing.T) {
 func TestCodexThreadRecorded(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Codex)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Codex), clitest.Scenario{RateLimits: true})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{RateLimits: true})
 	conv := e.conversation(e.owner)
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "codex", Model: "default", Prompt: "hi"})
 	var thread string
@@ -274,7 +279,7 @@ func TestHandOff(t *testing.T) {
 	history := []historyEntry{{Role: "user", Text: "remember zup"}, {Role: "assistant", Text: "ok: zup"}, {Role: "toolResult", Text: "skipped"}}
 	e.turn(conv, turnBody{Turn: "t1", CLI: "grok", Model: "default", Prompt: "what was it?", History: history})
 	e.turn(conv, turnBody{Turn: "t2", CLI: "grok", Model: "default", Prompt: "and now?", History: history})
-	calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Grok))
+	calls := clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Grok))
 	if len(calls) != 2 {
 		t.Fatalf("calls = %d", len(calls))
 	}
@@ -299,13 +304,13 @@ func TestReplayAfterAWorkerRestart(t *testing.T) {
 	if err := e.db.QueryRow(`SELECT id FROM cli_accounts WHERE user_id = ? AND cli = 'claude'`, e.owner.id).Scan(&account); err != nil {
 		t.Fatal(err)
 	}
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{})
 	e.turn(conv, turnBody{Turn: "first", CLI: "claude", Model: "default", Prompt: "start the task"})
 	events := e.turn(conv, turnBody{Turn: "lost", CLI: "claude", Model: "default", Prompt: "do the task", Replay: true})
 	if events[0].Type != cliworker.EventInterrupted {
 		t.Fatalf("events = %+v", events)
 	}
-	calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Claude))
+	calls := clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Claude))
 	last := calls[len(calls)-1]
 	if !contains(last.Args, "--resume", e.sessionOf(conv, "claude")) || !strings.Contains(last.Prompt, "interrupted by a restart") {
 		t.Fatalf("resumed call = %+v", last)
@@ -313,7 +318,7 @@ func TestReplayAfterAWorkerRestart(t *testing.T) {
 	// A replay the worker still has is read from its start, not run again.
 	before := len(calls)
 	events = e.turn(conv, turnBody{Turn: "lost", CLI: "claude", Model: "default", Prompt: "do the task", Replay: true})
-	if d := done(events); d.Status != cliworker.StatusOK || len(clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Claude))) != before {
+	if d := done(events); d.Status != cliworker.StatusOK || len(clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Claude))) != before {
 		t.Fatalf("re-attach ran the CLI again: %+v", events)
 	}
 }
@@ -323,7 +328,7 @@ func TestReplayAfterAWorkerRestart(t *testing.T) {
 func TestExpiredLoginAndReconnect(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
-	cfg := e.layout.User(e.owner.id).Config(cliworker.Claude)
+	cfg := e.dirs(e.owner.id).Config(cliworker.Claude)
 	clitest.WriteScenario(t, cfg, clitest.Scenario{Expired: true})
 	conv := e.conversation(e.owner)
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hi"})
@@ -442,7 +447,7 @@ func TestProvidersListsInstalledCLIs(t *testing.T) {
 func TestTurnRecordedAfterTheClientLeft(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Codex)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 800, RateLimits: true})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 800, RateLimits: true})
 	conv := e.conversation(e.owner)
 	raw, _ := json.Marshal(turnBody{Turn: "gone", CLI: "codex", Model: "default", Prompt: "hi"})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -496,7 +501,7 @@ func TestWaitWakesOnConnect(t *testing.T) {
 func TestTurnAsksTheOwner(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Codex)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Codex), clitest.Scenario{
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{
 		Tool: &clitest.ToolUse{Name: "Bash", Input: map[string]any{"command": "touch proof.txt"}},
 	})
 	ctx := context.Background()
@@ -566,5 +571,127 @@ func TestTurnAsksTheOwner(t *testing.T) {
 		if ev.Type == cliworker.EventPermission {
 			t.Errorf("allow_all asked: %+v", ev)
 		}
+	}
+}
+
+// halfReconcile is a worker whose next Reconcile stops part way, as a census the worker couldn't
+// finish does: its context is over before the first removal it makes.
+type halfReconcile struct {
+	Worker
+	half atomic.Bool
+}
+
+func (h *halfReconcile) Reconcile(ctx context.Context, c cliworker.Census) error {
+	if h.half.CompareAndSwap(true, false) {
+		cut, cancel := context.WithCancel(ctx)
+		cancel()
+		ctx = cut
+	}
+	return h.Worker.Reconcile(ctx, c)
+}
+
+// A census, one the worker could only partly apply and then a full one, leaves a live account's
+// running turn as it was, and the turn's stop stops it: never a 204 for a turn left running.
+func TestACensusLeavesARunningTurnToItsStop(t *testing.T) {
+	e := newTurnEnv(t)
+	ctx := context.Background()
+	w := &halfReconcile{Worker: LocalWorker(e.worker)}
+	e.svc.worker = accountWorker{w: w, s: e.svc}
+	// An account of another history, whose home the census removes: the part the worker stops in.
+	stranger := cliowner.Account{User: 77, Identity: strings.Repeat("7", 32), Boot: strings.Repeat("8", 32)}
+	if _, err := e.worker.AccountDirs(stranger, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	e.owner.connect(cliworker.Codex)
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 30_000})
+	conv := e.conversation(e.owner)
+	result := make(chan []cliworker.Event, 1)
+	go func() {
+		_, events, _ := e.post(conv, "/cli/turn", turnBody{Turn: "long", CLI: "codex", Model: "default", Prompt: "slow"})
+		result <- events
+	}()
+	id := fmt.Sprintf("c%d-long", conv)
+	eventually(t, "the turn didn't start", func() bool {
+		_, ok := e.worker.Turn(id)
+		return ok
+	})
+	w.half.Store(true)
+	if err := e.svc.ReconcileForgotten(ctx); err == nil {
+		t.Fatal("fixture: the census wasn't cut short")
+	}
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if turn, ok := e.worker.Turn(id); !ok || turn.Over() {
+		t.Fatal("the census ended a live account's turn")
+	}
+	if code, _, _ := e.post(conv, "/cli/stop", map[string]string{"turn": "long"}); code != http.StatusNoContent {
+		t.Fatalf("stop = %d", code)
+	}
+	select {
+	case events := <-result:
+		if d := done(events); d.Status != cliworker.StatusStopped {
+			t.Fatalf("done = %+v", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stop answered 204 and the turn runs on")
+	}
+}
+
+// A worker that can't be reached is "not ready" everywhere it is asked: the settings' list, a
+// sign-in, its check, a turn and a turn's stop each answer 503 with cli_worker_not_ready, which the
+// web app and the CLIs' tools tell apart from a CLI that isn't installed or a turn that failed.
+func TestAnUnreachableWorkerIsNotReadyEverywhere(t *testing.T) {
+	e := newTurnEnv(t)
+	e.owner.connect(cliworker.Claude)
+	conv := e.conversation(e.owner)
+	dir, err := os.MkdirTemp("", "gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	e.svc.worker = accountWorker{w: RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))), s: e.svc}
+	notReady := func(what string, code int, body string) {
+		t.Helper()
+		var reply struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal([]byte(body), &reply)
+		if code != http.StatusServiceUnavailable || reply.Code != string(apierr.CodeCLIWorkerNotReady) {
+			t.Errorf("%s = %d %s, want 503 %s", what, code, body, apierr.CodeCLIWorkerNotReady)
+		}
+	}
+	for _, r := range []struct{ method, path string }{
+		{http.MethodGet, base},
+		{http.MethodPost, base + "/claude/login"},
+		{http.MethodGet, base + "/claude/login"},
+		{http.MethodPost, base + "/claude/check"},
+	} {
+		rec := e.owner.do(r.method, r.path, map[string]any{})
+		notReady(r.method+" "+r.path, rec.Code, rec.Body.String())
+	}
+	code, _, body := e.post(conv, "/cli/turn", turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hi"})
+	notReady("a turn", code, body)
+	code, _, body = e.post(conv, "/cli/stop", map[string]string{"turn": "t1"})
+	notReady("a stop", code, body)
+}
+
+// startOutage is a worker that answers everything but a turn's start, which finds it gone.
+type startOutage struct{ Worker }
+
+func (startOutage) StartTurn(cliworker.TurnSpec) (Turn, bool, error) {
+	return nil, false, fmt.Errorf("%w: the socket closed", cliworker.ErrUnreachable)
+}
+
+// A turn run again after a restart says it resumes only once the worker has it: a worker gone
+// just as it starts is the answer, cli_worker_not_ready, with nothing streamed before it.
+func TestATurnRunAgainSaysSoOnlyOnceItStarted(t *testing.T) {
+	e := newTurnEnv(t)
+	e.owner.connect(cliworker.Claude)
+	conv := e.conversation(e.owner)
+	e.svc.worker = accountWorker{w: startOutage{LocalWorker(e.worker)}, s: e.svc}
+	code, events, body := e.post(conv, "/cli/turn", turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hi", Replay: true})
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, string(apierr.CodeCLIWorkerNotReady)) || len(events) > 0 {
+		t.Errorf("a turn run again on a worker gone at its start = %d %+v %s, want 503 %s and no events", code, events, body, apierr.CodeCLIWorkerNotReady)
 	}
 }

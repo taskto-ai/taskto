@@ -44,8 +44,9 @@ const promptFilePlaceholder = "{prompt-file}"
 type helperRequest struct {
 	Op         string `json:"op"`
 	LayoutRoot string `json:"layout_root"`
-	User       int64  `json:"user"`
-	CLI        CLI    `json:"cli"`
+	// Home is the account's home number (accounts.go): never its identity, which no CLI sees.
+	Home int64 `json:"home"`
+	CLI  CLI   `json:"cli"`
 	// Slot is the account directory: the CLI's config directory for it.
 	Slot Slot `json:"slot,omitempty"`
 	// Proxy, for a turn on a shared account (see TurnSpec.Proxy).
@@ -97,7 +98,7 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	if err := json.Unmarshal(line, &req); err != nil {
 		return fmt.Errorf("reading the request: %w", err)
 	}
-	if req.User <= 0 || !filepath.IsAbs(req.LayoutRoot) {
+	if req.Home < firstHome || req.Home >= maxHome || !filepath.IsAbs(req.LayoutRoot) {
 		return errors.New("invalid request")
 	}
 	layout := Layout{Root: req.LayoutRoot}
@@ -109,19 +110,19 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	}
 	switch req.Op {
 	case "limits":
-		dirs := layout.User(req.User)
+		dirs := layout.Home(req.Home)
 		return json.NewEncoder(stdout).Encode(codexLimits(dirs.ConfigOf(Codex, req.Slot), req.Thread))
 	case "authfile":
-		dirs := layout.User(req.User)
+		dirs := layout.Home(req.Home)
 		info, err := os.Stat(filepath.Join(dirs.ConfigOf(req.CLI, req.Slot), credentials(req.CLI)))
 		return json.NewEncoder(stdout).Encode(map[string]bool{"exists": err == nil && info.Mode().IsRegular() && info.Size() > 0})
 	case "reset":
 		// Disconnecting: everything the CLI kept for the account goes, then the empty
 		// directories are made again (the first account's; another's is made when used).
-		if err := os.RemoveAll(layout.User(req.User).ConfigOf(req.CLI, req.Slot)); err != nil {
+		if err := os.RemoveAll(layout.Home(req.Home).ConfigOf(req.CLI, req.Slot)); err != nil {
 			return err
 		}
-		_, err := layout.Ensure(req.User)
+		_, err := layout.Ensure(req.Home)
 		if err == nil {
 			_, err = io.WriteString(stdout, "{}\n")
 		}
@@ -134,7 +135,7 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	if err := unprivileged(req); err != nil {
 		return err
 	}
-	dirs, err := layout.EnsureSlot(req.User, req.CLI, req.Slot)
+	dirs, err := layout.EnsureSlot(req.Home, req.CLI, req.Slot)
 	if err != nil {
 		return err
 	}
@@ -234,35 +235,25 @@ func credentials(cli CLI) string {
 	return "auth.json"
 }
 
-// helperCommand returns the command that runs req for user through the helper: as the user's
+// helperCommand returns the command that runs req for acct through the helper: as the account's
 // own Unix user in container mode. Its stdin starts with the request; extra follows it (the
 // CLI's stdin), unless the caller wires stdin itself (then extra is nil and it must write
 // header() first).
-func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
+func (w *Worker) helperCommand(acct account, req helperRequest) (*exec.Cmd, []byte, error) {
 	w.helperLaunches.Add(1)
-	// Every op but the browser's removal makes the directory (and a login's files in it): none
-	// runs for a forgotten user (forget.go), nor for one whose account the server hasn't
-	// introduced, so whose directory has no owner recorded (owner.go). The browser's removal is a
-	// purge's step, which may come after the user was forgotten; it checks the owner itself, under
-	// the user's gate (browserHost.PurgeOwned).
-	// And none while their whole directory is being removed: a removal's own steps make no helper,
-	// apart from the browser's removal, which runs under the gate it holds (browserHost.Hold).
+	// No helper runs for a retired account, nor while its home is being removed: a removal's own
+	// steps make none, apart from the browser's removal, a purge's step, which runs under the gate
+	// it holds (browserHost.Purge) and may come after the account was retired.
 	if req.Op != "browser-purge" {
 		w.mu.Lock()
-		removing := w.gated(user, "", "")
+		err := w.admissible(acct, "", "")
 		w.mu.Unlock()
-		if removing {
-			return nil, nil, ErrRemoving
-		}
-		if w.isForgotten(user) {
-			return nil, nil, ErrForgotten
-		}
-		if !w.owned(user) {
-			return nil, nil, ErrUnknownOwner
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	w.helpersBuilt.Add(1)
-	req.LayoutRoot, req.User = w.cfg.Layout.Root, user
+	req.LayoutRoot, req.Home = w.cfg.Layout.Root, acct.home
 	if req.Path == "" {
 		req.Path = w.cfg.Path
 	}
@@ -283,7 +274,7 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 	// The helper builds the CLI's environment itself; it needs none of ours.
 	cmd.Env = []string{"PATH=" + w.cfg.Path}
 	newGroup(cmd)
-	if err := w.asUser(cmd, user); err != nil {
+	if err := w.asUser(cmd, acct.home); err != nil {
 		return nil, nil, err
 	}
 	return cmd, append(header, '\n'), nil

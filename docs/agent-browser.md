@@ -106,7 +106,7 @@ browser page ── WebSocket /api/me/browser/live (session, Origin check) ─�
 - **Container mode.** The worker image adds Debian's `chromium`, `xvfb`, `x11vnc` and
   `fonts-liberation`. The worker reports whether it has them (`GET /available`).
 - **Local mode.** The browsers run in the server process (`browser.LocalHost`), as its own OS
-  user, in each user's CLI directory (`<data>/cli/u<id>/browser`). That is the same boundary
+  user, in each user's CLI directory (`<data>/cli/h<home>/browser`, [cli-workers.md](cli-workers.md#accounts-and-their-homes)). That is the same boundary
   the helper gives CLIs in this mode, which is none between users, hence the one-user rule.
   - The personal browser needs `chromium` (or `chromium-browser`), `Xvfb` and `x11vnc` on the
     PATH. The testing browser needs only Chromium.

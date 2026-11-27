@@ -140,13 +140,14 @@ browser ─▶ Go server ─▶ agent sidecar (Pi Durable)
   tools need a shell, so the distroless server image can't host them anyway.
 - It mounts only its own volume (`cli-homes`) and a socket volume. It never sees the
   server's data directory, `server.key`, the database or the sidecar's socket.
-- It runs as root with every capability dropped except `SETUID`, `SETGID`, `CHOWN`, `FOWNER`
-  and `KILL`. It needs those to create users, create their homes and run each turn as the
+- It runs as root with every capability dropped except `SETUID`, `SETGID`, `CHOWN` and `KILL`. It needs those to create users, create their homes and run each turn as the
   user.
-- **Each taskto user gets a Unix user** in the worker container:
-  - uid `100000 + user id`, a group of its own, no supplementary groups;
-  - an `/etc/passwd` entry, since Node's `os.userInfo()` needs one;
-  - home `/homes/u<id>`, mode 700, owned by that uid. It holds the CLIs' config directories
+- **Each taskto account gets a Unix user** in the worker container, by its home number
+  ([below](#accounts-and-their-homes)), never its user number:
+  - uid `-uid-base` (100000 by default) plus the home number, a group of its own, no
+    supplementary groups;
+  - an `/etc/passwd` entry (`th<home>`), since Node's `os.userInfo()` needs one;
+  - home `/homes/h<home>`, mode 700, owned by that uid. It holds the CLIs' config directories
     (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`), which hold the login, and a working
     directory per conversation.
 - Every login, status check and turn runs as that uid, through a small helper
@@ -175,7 +176,7 @@ browser ─▶ Go server ─▶ agent sidecar (Pi Durable)
 **`local`**: development, macOS, and a personal install without the worker container.
 
 - The worker runs inside the server process. The CLIs run as the server's own OS user, with
-  a home per taskto user under `<data>/cli/u<id>/` (mode 700) and the same clean
+  a home per taskto account under `<data>/cli/h<home>/` (mode 700) and the same clean
   environment.
 - **There is no OS boundary between taskto users in this mode.** Any user's CLI, or a command
   it runs, can read every other user's CLI login, the server's data directory with
@@ -322,7 +323,7 @@ run also wrote to. The rules:
   - In `container` mode, the worker's first act is to kill every process owned by a CLI uid
     (walk `/proc`, match the uid range, `SIGKILL`), before it accepts a request. Nothing can
     be legitimately running then. Matching by uid can't hit an unrelated process the way a
-    reused PID can. The range (100000 and up) is used only for CLI users, and the worker
+    reused PID can. The range (`-uid-base` and up) is used only for CLI users, and the worker
     container runs nothing else: the worker itself is uid 0, outside it.
   - In `local` mode, the worker records each turn's process group with the leader's start
     time (`<home>/turns/<turn>.pid`). At start it kills only groups whose leader still has
@@ -402,101 +403,121 @@ The UI shows what the command prints.
   common run one after the other (a disconnect, a second one, a `Forget` of the user): the helper
   requests of one, the sign-out and the removal of the files, never overlap another's. A caller
   that has already given up (its context ended) starts none.
-- **Who owns a directory.** A user number names an account only within one history of the
+- **Accounts and their homes.** A user number names an account only within one history of the
   server's database: a restore of the server's data goes back in it and gives the numbers after
   the backup again, while the worker's directory (the `cli-homes` volume in container mode) is not
-  part of the backup. So the worker never decides by number alone, nor by any clock. Each account
-  has an identity that never changes and is never given to another (`users.cli_identity`, random,
-  set when the account is made). Before the server asks anything of the worker for a user in its
-  life (a sign-in, a status check, a sign-out, a turn, permission questions, the agent browser), it
-  **introduces** them (`POST /introduce` on the worker's API, `Worker.Introduce`): the worker
-  records the identity as the owner of the number's directory (`.worker/owner-u<user>`, the
-  worker's own file, written before anything of the user's is made). If the directory belongs to
-  someone else (another identity, or none recorded), it is removed first. Nothing starts for a
-  user without an owner record (`ErrUnknownOwner`, `unknown_owner` over the worker's API). The
-  server introduces each user again after each start; introducing the owner again changes nothing.
-- **Removing a user's directory** (`Forget`, an introduction of someone else, `Reconcile`) closes
-  everything of the user's to new starts, then, in order:
-  - stops their agent browsers and waits for them (the profile is in the directory);
-  - stops what runs for them and waits for it: their turns (the ones waiting for a place too),
-    their sign-ins, their helper requests and the process groups those started. In container mode
-    it then kills every process of their Unix user and waits until none is left: one a CLI
-    detached into a group or session of its own too, which would otherwise reach the next
-    account's directory under the same uid. The browser processes are included;
-  - takes the directory away from its path at once, into the worker's own `.worker/trash/`, where
-    no user can reach it. In container mode it first makes the directory the worker's
-    (`CAP_CHOWN`), since moving a directory writes its `..`;
+  part of the backup. So the worker keys nothing by a user number. Each account has an identity
+  that never changes and is never given to another (`users.cli_identity`, 128 random bits, set
+  when the account is made), and every user-scoped request to the worker carries it, with the
+  server's boot (a random value taken at each start), in `X-Taskto-Identity` and `X-Taskto-Boot`.
+  - The first time the worker sees an identity, it gives it a **home number** from a counter that
+    only goes up (`.worker/next-home`), and records the two together
+    (`.worker/accounts/<identity>.json`, with the user number for logs and the boot). The counter
+    is moved on, and the record written, each as a new file synced and renamed into a synced
+    directory, before anything of the account's is made: a crash in between skips a number,
+    never gives one twice.
+  - The home is `h<home>` under the layout's root; with isolation its Unix user is `-uid-base`
+    plus the home number. So everything an account leaves behind (files, temporary files,
+    sockets, processes) belongs to a home and a uid no other account is ever given, and a request
+    of an account that is gone, however late, can only reach that account's own home.
+  - The identity is never in a path, and never reaches a CLI: not its environment, its arguments,
+    its working directory or a file in its home. The helper is told the home number only.
+  - What the worker holds in memory (sign-ins, turns, permission questions, the agent browsers and
+    their refusals) is keyed by identity too, and a turn is found, read and stopped only for the
+    account that started it: the worker's API answers none of another account's, the number's
+    earlier owner's included.
+  - Home numbers start at 2^29, above every user number a worker gave out before homes, so no
+    home's uid is one an older worker used. There are 2^29 of them (about 537 million accounts
+    per worker volume). When they run out the worker refuses new accounts (`ErrFull`, `507`,
+    `full` over the worker's API) and every existing one goes on. An operator near that point
+    (the counter in `.worker/next-home` near 1073741824) starts a fresh worker volume: everyone
+    then signs in to their CLIs once more. `-uid-base` must leave room for every home below the
+    32-bit `nobody`: the worker refuses to start with one below 65536 or above 3221225470.
+- **Retired accounts.** An account that is gone (`Forget`, `Reconcile`) is **retired**: its record
+  says so, durably, and keeps its home number, so the number is never given again. Every request
+  for a retired identity is refused (`ErrForgotten`, `410 Gone` with the code `forgotten` over the
+  worker's API, `cli_account_forgotten` in the server's): turns, sign-ins, status checks, helper
+  requests and every agent-browser operation, an open browser's state and tabs too. None makes its
+  home again. A retirement is taken back only by a census that names the identity as live (a
+  restore brought the account back) and was read after it; the account then finds its home as it
+  was left, which a removal has usually emptied.
+- **Before the first census.** A request that comes before this server's first census reaches the
+  worker is served for its own identity only: the worker's record of it, or a new home it is
+  given now. It can never be handed another account's home, whatever its number, so nothing waits
+  for the census.
+- **Removing an account's home** (`Forget`, `Reconcile`) closes everything of the account's to new
+  starts, then, in order:
+  - stops its agent browsers and waits for them (the profile is in the home);
+  - stops what runs for it and waits for it: its turns (the ones waiting for a place too), its
+    sign-ins, its helper requests and the process groups those started. In container mode it then
+    kills every process of its Unix user and waits until none is left (five seconds at most: a
+    removal that doesn't finish is tried again), one a CLI detached into a group or session of
+    its own too. The browser processes are included;
+  - takes the home away from its path at once, into the worker's own `.worker/trash/`, where no
+    user can reach it. In container mode it first makes the directory the worker's (`CAP_CHOWN`),
+    since moving a directory writes its `..`;
   - deletes it there as the worker: each directory is taken over before it is read, so a
     read-only part is no obstacle, and a link is removed, never followed;
-  - drops what the worker remembers of the user: their owner record, their sign-ins, and their
-    finished turns with the permission questions those held.
+  - drops what the worker remembers of the account: its sign-ins, and its finished turns with the
+    permission questions those held.
 
-  If something doesn't end in time, nothing is removed (`ErrBusy`), and the removal can be tried
-  again. A process a CLI detached is not tracked in local mode, which has no Unix user per person.
+  If something doesn't end in time, nothing more is removed (`ErrBusy`), and the removal can be
+  tried again; the account stays retired meanwhile. A process a CLI detached is not tracked in
+  local mode, which has no Unix user per person.
 
   The processes of a Unix user are ended through a pidfd: the uid is read while the reference is
   held, and the signal goes through it, so a pid given again to another process is never
-  signalled. The worker's start-up sweep of every CLI user's processes works the same way, and a
-  worker whose sweep couldn't look at every process doesn't start. The testing profile's cleanup
-  is a request of the user's, which a removal cancels and waits for, as a live view's dial is. Only a full look at the processes counts as "none left": one that can't be made, or a
-  process whose state can't be read, fails the removal. The uid range is checked once, when the
-  worker starts, and starting and ending a user's processes use the same number-to-uid rule.
+  signalled. There is no fallback to a signal by pid: a worker that isolates accounts checks at
+  start that pidfds work (Linux 5.3) and doesn't start without them. A thread group's leader that
+  exited while other threads of its run still counts as running. The start-up sweep of every CLI
+  user's processes works the same way, and a worker whose sweep couldn't look at every process
+  doesn't start. Only a full look at the processes counts as "none left": one that can't be made,
+  or a process whose state can't be read, fails the removal.
 
-  While the removal's gate is closed, no helper is made for the user, and a live view's connection
-  is a request of the user's from its first step to its close: a removal cancels it and waits for
-  it, like a status check. A deleted account's purge names the account its steps are for (its
-  identity, kept with the steps when the purge began, `purge_cleanups.cli_identity`), and the
-  worker's `Forget` and the agent browsers' refusal, stop and profile removal act only under the
-  number's gate, and only while the directory isn't recorded as another account's. A caller that
-  has given up does nothing, and marks nothing.
+  While a removal runs, no helper is made for the account, and a live view's connection is a
+  request of the account's from its first step to its close: a removal cancels it and waits for
+  it, like a status check, and a cancel that comes as the connection is handed out still closes
+  it. The testing profile's cleanup is such a request too. A browser start that raced the removal
+  finds the account retired (or its gate closed) and starts nothing; one that got through before
+  is stopped with the others, and its processes are its home's uid, which the removal kills. A
+  deleted account's purge names the account its steps are for (its identity, kept with the steps
+  when the purge began, `purge_cleanups.cli_identity`), so its steps act on that account's home
+  only, never on the home of an account a restore gave the number to meanwhile. A caller that has
+  given up does nothing.
 - **Forget** (`POST /forget` on the worker's API, `Worker.Forget`) is for a deleted account. It
-  first records the user as forgotten in the worker's own state directory
-  (`.worker/forgotten-u<user>`, so it outlives a worker's restart). That refuses every turn,
-  sign-in, status check, helper request, introduction and agent-browser operation for them
-  (`ErrForgotten`, `410 Gone` with the code `forgotten` over the worker's API,
-  `cli_account_forgotten` in the server's). It then removes their directory as above. If that
-  fails, the purge tries again (the purge gives each attempt two minutes), and the mark stays. A
-  purge's own browser step (`browser-purge`) runs under the user's gate, and only while the
-  directory's owner is the one recorded when the purge began, so it never reaches the files of an
-  account a restore gave the number to meanwhile. It is done when the directory is already gone.
-- **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) brings the worker in
-  line with the server's database after a restore of the server's data. At every start, before it
-  asks anything else for a user, the server tells the worker which numbers are live, each live
-  account's identity, which number comes next, its own boot (a random value taken at each start,
-  which it introduces users with) and whether the data was restored since the worker was last
-  told. These are read in one transaction (`Service.StartReconcile`, retried in the background
-  until it succeeds, with a warning at the first failure and every tenth). The worker then:
-  - deletes what an earlier removal left in its trash;
-  - keeps a user's directory and owner record only when the recorded owner is the live account
-    of its number, by identity; or, for a number from the next up, when this server introduced
-    its owner after it read its database (the record's boot is the census's). A directory with no
-    owner recorded, from before the worker recorded owners, is adopted for the live account of its
-    number only in local mode, where the directories are in the data directory and a backup brings
-    back the ones that go with its database. In container mode nothing can tell an upgrade from a
-    restore made by any version, so such a directory is removed, never handed over: after the
-    upgrade that introduced owners, each person signs in to their CLIs once more;
-  - removes everything else as above. A number below the next that isn't live is an account gone
-    for good: it is forgotten as `Forget` does, and stays refused;
-  - removes the marks of the live users and of the numbers from the next up, apart from a mark made
-    after the server read its database (a purge running now), and takes back the agent browsers'
-    own refusals the same way. The marks of accounts that are gone for good stay, and so do those
-    of accounts whose purge has begun (it forgets the worker's files before it deletes the
-    account).
+  first retires the identity, then removes its home as above. If that fails, the purge tries again
+  (it gives each attempt two minutes), and the account stays retired. A purge's own browser step
+  (`browser-purge`) runs under the account's gate. It is done when the home is already gone.
+- **Reconcile** (`POST /reconcile` on the worker's API, `Worker.Reconcile`) is tidying up, not what
+  keeps accounts apart. At every start the server sends the worker a census: each live account's
+  number and identity, its boot, and when it read them (`Service.StartReconcile`, retried in the
+  background until it succeeds, with a warning at the first failure and every tenth). The worker
+  then:
+  - takes back the retirement of a live account made before the census was read;
+  - keeps an account the census doesn't name if this server made it since it read its database
+    (the record's boot is the census's);
+  - retires every other account it has a record of and removes its home as above;
+  - removes the directories a worker from before homes made (`u<number>`), in container mode: nothing
+    can tell an upgrade from a restore made by any version, so they are never handed to anyone
+    ([install.md](install.md#upgrading-to-account-homes)). In local mode the first account of a
+    number to make a request adopts its old directory instead (below);
+  - deletes what an earlier removal left in its trash, and takes back the agent browsers' refusals
+    of the live accounts.
 
-  A directory that can't be removed yet (a process of it doesn't end in time) is kept and its user
-  refused, the agent browser included, even an open one's state and tabs, until a later attempt
-  removes it. The answer is then `ErrIncomplete` (`409`, `incomplete`), and the server goes on and
-  tries again.
-
-  Until the worker has been told, since this server started, and the user has been introduced, the
-  server asks nothing of it for them. Every user-scoped call waits for it, and the first such
-  request tells the worker if the start couldn't. Calls that can't wait (reading a sign-in's
-  progress, cancelling it, finding a turn by its ID) answer as if there were nothing, and a turn is
-  looked up and stopped for its user only: the worker's API answers none of another user's. One attempt
-  at telling the worker runs at a time, and a request waiting for it gives up with its own context.
-  While the worker can't be reached, at a start or later, the API answers `cli_worker_not_ready`
-  (`503`) first, before it says whether a CLI is installed and before a turn's stream starts. The
-  agent browser's routes and the agent's browser tools give the same answer, with its code.
+  A home that can't be removed yet (a process of it doesn't end in time) is kept, its account
+  retired, and the answer is `ErrIncomplete` (`409`, `incomplete`): the server tries again later.
+- **Local mode's directories from before homes.** A local install's directories are in its data
+  directory, so a backup brings back the ones that go with its database. The first request of an
+  account whose number has a `u<number>` directory moves it to the account's new home, once: the
+  record says a move is due before the rename and stops saying so after it, so a stop in between
+  is finished by the next request, and a later account of the number finds nothing to adopt. A
+  local install keeps its CLI sign-ins, working files and browser profiles.
+- **Outages.** While the worker can't be reached, at a start or later, the server's API answers
+  `cli_worker_not_ready` (`503`) first: before it says whether a CLI is installed, in the settings'
+  list, a sign-in and its check, a turn (before its stream starts, and before a resumed turn says
+  it resumes) and a turn's stop. The agent browser's routes, the live view's handshake and the
+  agent's browser tools give the same answer, with its code, and a CLI turn's tool calls through
+  `/cli-mcp` say it in the error they return (`(code: cli_worker_not_ready)`).
 
 Table `cli_accounts`, one row per user, CLI and account (a user may connect several per CLI,
 [account-switching.md](account-switching.md)):

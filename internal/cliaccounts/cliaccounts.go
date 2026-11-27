@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -56,37 +57,38 @@ func ParseMode(s string) (Mode, error) {
 	return Off, errors.New("cli workers: unknown mode " + s)
 }
 
-// Worker is the CLI worker as accounts use it: Local's adapter of a *cliworker.Worker, or a
-// fake in tests.
+// Worker is the CLI worker as accounts use it: Local's adapter of a *cliworker.Worker, Remote's
+// of the worker in its own container, or a fake in tests. Every call names the taskto account it
+// is for by its number, its identity (users.cli_identity) and this server's boot
+// (cliowner.Account): the worker keeps everything under the identity, never the number, which a
+// restore of the server's data may give to another account. The service fills them in
+// (accountWorker).
 type Worker interface {
 	Available(cli cliworker.CLI) bool
-	StartLogin(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error)
-	LoginInfo(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, bool)
-	SubmitLoginCode(user int64, cli cliworker.CLI, slot cliworker.Slot, code string) error
-	CancelLogin(user int64, cli cliworker.CLI, slot cliworker.Slot)
-	Status(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.AuthStatus, error)
-	Logout(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) error
-	// Forget removes everything the worker keeps for a deleted user: logins, sessions, working
-	// directories and the browser's profile.
-	Forget(ctx context.Context, user int64) error
-	// Reconcile tells the worker which users exist, who each is, which number the next user gets
-	// and when that was read, so that it removes the directories and takes back the forgotten
-	// marks a restore made wrong (cliworker.Worker.Reconcile).
+	StartLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error)
+	// LoginInfo is cliworker.ErrNoLogin when there is none.
+	LoginInfo(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error)
+	SubmitLoginCode(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot, code string) error
+	CancelLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) error
+	Status(ctx context.Context, a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.AuthStatus, error)
+	Logout(ctx context.Context, a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) error
+	// Forget retires a deleted account and removes everything the worker keeps of it: logins,
+	// sessions, working directories and the browser's profile.
+	Forget(ctx context.Context, a cliowner.Account) error
+	// Reconcile tells the worker which accounts exist (cliworker.Worker.Reconcile).
 	Reconcile(ctx context.Context, census cliworker.Census) error
-	// Introduce tells the worker who user is (their identity), before anything is asked of it for
-	// them (cliworker.Worker.Introduce).
-	Introduce(ctx context.Context, user int64, identity, boot string) error
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
-	// FindTurn returns user's turn id, and StopTurn stops it: a turn of another user's is none.
-	FindTurn(user int64, id string) (Turn, bool)
-	StopTurn(user int64, id string)
+	// FindTurn returns a's turn id (cliworker.ErrNotFound if it has none), and StopTurn stops it:
+	// a turn of another account's is none.
+	FindTurn(a cliowner.Account, id string) (Turn, error)
+	StopTurn(a cliowner.Account, id string) error
 
-	// Permissions lists the permission questions waiting in user's conversation, and Answer
+	// Permissions lists the permission questions waiting in a's conversation, and Answer
 	// answers one (cliworker.ErrNoPermission if it isn't waiting there).
-	Permissions(ctx context.Context, user, conversation int64) ([]cliworker.PermissionRequest, error)
-	Answer(ctx context.Context, user, conversation int64, id string, allow bool) error
+	Permissions(ctx context.Context, a cliowner.Account, conversation int64) ([]cliworker.PermissionRequest, error)
+	Answer(ctx context.Context, a cliowner.Account, conversation int64, id string, allow bool) error
 }
 
 // RecordWorker notes, in sqlDB, that CLI workers of mode's kind run on this data directory
@@ -123,28 +125,33 @@ func LocalWorker(w *cliworker.Worker) Worker { return localWorker{w} }
 
 type localWorker struct{ *cliworker.Worker }
 
-func (l localWorker) StartLogin(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
-	login, err := l.Worker.StartLogin(user, cli, slot)
+func (l localWorker) StartLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
+	login, err := l.Worker.StartLogin(a, cli, slot)
 	if err != nil {
 		return cliworker.LoginInfo{}, err
 	}
 	return login.Info(), nil
 }
 
-func (l localWorker) LoginInfo(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, bool) {
-	login, ok := l.Login(user, cli, slot)
+func (l localWorker) LoginInfo(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
+	login, ok := l.Login(a, cli, slot)
 	if !ok {
-		return cliworker.LoginInfo{}, false
+		return cliworker.LoginInfo{}, cliworker.ErrNoLogin
 	}
-	return login.Info(), true
+	return login.Info(), nil
 }
 
-func (l localWorker) Permissions(_ context.Context, user, conversation int64) ([]cliworker.PermissionRequest, error) {
-	return l.Worker.Permissions(user, conversation), nil
+func (l localWorker) CancelLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) error {
+	l.Worker.CancelLogin(a, cli, slot)
+	return nil
 }
 
-func (l localWorker) Answer(_ context.Context, user, conversation int64, id string, allow bool) error {
-	return l.Worker.Answer(user, conversation, id, allow)
+func (l localWorker) Permissions(_ context.Context, a cliowner.Account, conversation int64) ([]cliworker.PermissionRequest, error) {
+	return l.Worker.Permissions(a, conversation), nil
+}
+
+func (l localWorker) Answer(_ context.Context, a cliowner.Account, conversation int64, id string, allow bool) error {
+	return l.Worker.Answer(a, conversation, id, allow)
 }
 
 // RemoteWorker adapts the client of a worker in its own process (container mode).
@@ -160,31 +167,37 @@ func (r remoteWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	return t, attached, nil
 }
 
-func (r remoteWorker) FindTurn(user int64, id string) (Turn, bool) {
-	t, ok := r.Remote.FindTurn(user, id)
-	if !ok {
-		return nil, false
+func (r remoteWorker) FindTurn(a cliowner.Account, id string) (Turn, error) {
+	t, err := r.Remote.FindTurn(a, id)
+	if err != nil {
+		return nil, err
 	}
-	return t, true
+	return t, nil
+}
+
+func (r remoteWorker) LoginInfo(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
+	info, err := r.Remote.LoginInfo(a, cli, slot)
+	if errors.Is(err, cliworker.ErrNotFound) {
+		return info, cliworker.ErrNoLogin
+	}
+	return info, err
 }
 
 // Service keeps the users' CLI accounts and serves their API.
 type Service struct {
 	db     *sql.DB
 	mode   Mode
-	worker Worker // nil when Off; what acts for a user waits for ready (ready.go)
+	worker userWorker // nil when Off: the worker, as the service calls it (account.go)
 
-	// reconcileMu serializes telling the worker who exists (ReconcileForgotten); reconciled is
-	// set once it has been told since this server started; attempt is the attempt that Ready and
-	// StartReconcile wait for, while one runs (ready.go).
+	// reconcileMu serializes telling the worker who exists (ReconcileForgotten); attempt is the
+	// attempt StartReconcile waits for, while one runs.
 	reconcileMu sync.Mutex
-	reconciled  atomic.Bool
 	attemptMu   sync.Mutex
 	attempt     *reconcileAttempt
-	// boot is this server's own random value, which it introduces users with; introduced holds
-	// the users it has introduced to the worker since it started (under mu).
+	// boot is this server's own random value, which every request to the worker carries;
+	// identities holds the identities of the users read so far (they never change).
 	boot       string
-	introduced map[int64]bool
+	identities map[int64]string
 
 	// watching holds the logins a goroutine is following to their end, and started when each
 	// account's last login started: an account that isn't connected yet is listed while its
@@ -285,9 +298,9 @@ func New(sqlDB *sql.DB, mode Mode, worker Worker) *Service {
 	if mode == Off {
 		worker = nil
 	}
-	s := &Service{db: sqlDB, mode: mode, boot: newBoot(), introduced: map[int64]bool{}, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	s := &Service{db: sqlDB, mode: mode, boot: newBoot(), identities: map[int64]string{}, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
 	if worker != nil {
-		s.worker = readyWorker{Worker: worker, s: s}
+		s.worker = accountWorker{w: worker, s: s}
 	}
 	return s
 }
@@ -355,41 +368,26 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	return nil
 }
 
-// ReconcileForgotten tells the worker which users the database has, who each is (their identity,
-// users.cli_identity) and which number the next one gets, so that it removes what a restore of
-// the database left wrong there: every directory whose recorded owner isn't the live account of
-// its number (the person who had the number in the history the restore went back from left their
-// logins in it, and the number is given again), and the marks of users it forgot (Forget) that
-// are live again or whose numbers are given again. The worker's own directory, in container mode,
-// isn't part of the backup, so it can't know; the database can. Call it at every start
-// (StartReconcile); nothing is asked of the worker for a user before it has been told (Ready). An
-// account whose purge has begun is not live here: its mark stays until the purge deletes it.
+// ReconcileForgotten tells the worker which accounts the database has: each live user's identity
+// (users.cli_identity). The worker retires every account it keeps that isn't one of them (one of
+// a history a restore of the database went back from, or one deleted while the worker couldn't be
+// reached), apart from those made since by this server, and removes their files; it takes back
+// the retirement of an account a restore brought back. This is tidying up, not what keeps
+// accounts apart (each has a home and a uid of its own in the worker), so nothing waits for it.
+// Call it at every start (StartReconcile). An account whose purge has begun is not live here.
 //
-// It returns cliworker.ErrIncomplete when the worker was told but couldn't remove everything yet:
-// it refuses those users meanwhile, and the call is made again.
+// It returns cliworker.ErrIncomplete when the worker couldn't remove everything yet: those
+// accounts are refused all the same, and the call is made again.
 func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	if s.worker == nil {
 		return nil
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	// A directory with no owner recorded (from before the worker recorded owners) is adopted for
-	// the live account of its number only in local mode, where the directories are in the data
-	// directory and a backup brings back the ones that go with its database. The container
-	// worker's volume isn't in any backup, and nothing tells a restore an older version made
-	// apart from an upgrade: there it goes, and its person signs in to their CLIs again.
-	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot, AdoptUnowned: s.mode != Container}
-	// One transaction: the users and the next number describe the same state, or a person added
-	// in between would be neither live nor below the next number.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // a read: nothing to keep
-	// Not the accounts whose purge has begun: it forgets the CLI files before it deletes the
-	// account, and one that stopped between the two is made again from its start, which forgets
-	// them again; until the account is gone its mark must stay.
-	rows, err := tx.QueryContext(ctx, `SELECT id, cli_identity FROM users
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot}
+	// Not the accounts whose purge has begun: it retires them in the worker before it deletes
+	// them, and one that stopped between the two is made again from its start.
+	rows, err := s.db.QueryContext(ctx, `SELECT id, cli_identity FROM users
 		WHERE id NOT IN (SELECT user_id FROM account_deletions WHERE purge_started_at IS NOT NULL)`)
 	if err != nil {
 		return err
@@ -401,28 +399,13 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 		if err := rows.Scan(&id, &identity); err != nil {
 			return err
 		}
-		census.Live = append(census.Live, id)
 		census.Owners[id] = identity
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	rows.Close()
-	// What auth's insertUser gives the next user: above every number there has been.
-	if err := tx.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&census.Next); err != nil {
-		return err
-	}
-	_ = tx.Rollback() // the worker is called without the read open
-	err = s.worker.Reconcile(ctx, census)
-	if err == nil || errors.Is(err, cliworker.ErrIncomplete) {
-		// The worker may have removed the directory, and owner record, of a user introduced
-		// before: they are introduced again.
-		s.mu.Lock()
-		clear(s.introduced)
-		s.mu.Unlock()
-		s.reconciled.Store(true)
-	}
-	return err
+	return s.worker.Reconcile(ctx, census)
 }
 
 // reconcileTimeout bounds one attempt at telling the worker: it may stop what still runs for a
@@ -602,12 +585,21 @@ func (s *Service) own(ctx context.Context, user int64, cli cliworker.CLI) ([]row
 	return out, rows.Err()
 }
 
-// account returns user's account a, with its login if the worker has one.
+// account returns user's account a, with its login if the worker has one. A worker that can't be
+// asked is the error (ErrNotReady), not an account with no CLI.
 func (s *Service) account(ctx context.Context, user int64, a ref) (Account, error) {
 	out := Account{ID: a.handle(), CLI: a.cli, Slot: a.number(), Name: a.cli.Name(), State: Disconnected, Limits: []cliworker.Limit{}}
 	if s.worker != nil {
-		out.Available = s.worker.Available(a.cli)
-		if info, ok := s.worker.LoginInfo(user, a.cli, a.slot); ok {
+		available, err := s.cliAvailable(a.cli)
+		if err != nil {
+			return Account{}, err
+		}
+		out.Available = available
+		info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+		if err != nil {
+			return Account{}, fmt.Errorf("%w: %w", ErrNotReady, err)
+		}
+		if ok {
 			if err := s.settle(ctx, user, info, false); err != nil {
 				return Account{}, err
 			}
@@ -850,7 +842,10 @@ func (s *Service) watch(user int64, a ref) {
 				return
 			case <-tick.C:
 			}
-			info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+			info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+			if err != nil {
+				continue // the worker can't be asked now: the sign-in isn't over for that
+			}
 			if !ok || !info.State.Final() {
 				if !ok {
 					return
