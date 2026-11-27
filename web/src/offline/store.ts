@@ -426,7 +426,15 @@ export class OfflineStore {
     if (!retired) return new OfflineStore(user, db)
     db.close()
     await deleteDatabase(name)
-    return new OfflineStore(user, await openDatabase(name, SCHEMA_VERSION, MIGRATIONS))
+    // The same after the deletion's wait: it isn't made again once the lock was let go (another tab
+    // may have signed the account out meanwhile), and a database opened late is closed, not left.
+    if (expired()) throw new StorageUnavailable('the offline database took too long')
+    const fresh = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
+    if (expired()) {
+      fresh.close()
+      throw new StorageUnavailable('the offline database took too long')
+    }
+    return new OfflineStore(user, fresh)
   }
 
   // Called after every change made through this store, and when another tab of the account says it

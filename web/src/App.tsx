@@ -111,6 +111,13 @@ type Asked = Leaving & Unsent
 // What a certain sign-out still has to do, for whom, as the person decided.
 type Tail = Leaving & Decision
 
+// Whether the browser holds a newer login of the same person than `session`: a sign-out of that older
+// login then holds nothing of the device, and is never recorded as one that holds its queue back.
+function newerLoginHolds(user: number, session: string): boolean {
+  const now = browserLogin()
+  return !!session && now?.user === user && now.session !== session
+}
+
 export function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' })
   const { runtime, foreign, problem } = useRuntime()
@@ -381,7 +388,7 @@ export function App() {
       // Marked as on its way before it is sent, for a Back in another tab meanwhile (pendingSignOut.ts).
       // This page is still signing out: its decision is the login's, even if another tab went back
       // from it meanwhile (which let it go): kept again before anything is sent.
-      ensureSignOut(user, session, tail)
+      if (!newerLoginHolds(user, session)) ensureSignOut(user, session, tail)
       const attempt = beginLogout(user, session)
       let answered = true
       const outcome = await api('/api/logout', {
@@ -466,7 +473,11 @@ export function App() {
       // (the tab may close), the session ends, the queue sends nothing more for this account (no tab's
       // does, while the record is there), and the shell goes: nothing of it is kept for a sign-out the
       // server doesn't confirm, whose Back starts the app afresh.
-      const at = recordSignOut(user, session, keep, approved, discardUnreadable)
+      // Not recorded for a login the browser has moved past (the same person signed in again in
+      // another tab): its logout is refused, or ends what is left of it, and it holds nothing here.
+      const at = newerLoginHolds(user, session)
+        ? Date.now()
+        : recordSignOut(user, session, keep, approved, discardUnreadable)
       endSession()
       const queue = runtimeState().runtime
       if (queue?.user === user) queue.engine.pause('signing-out')
@@ -519,7 +530,10 @@ export function App() {
         if (heard !== undefined || me.user.id !== tail.user || !tail.session || me.session !== tail.session) {
           // The browser is the same person's on a newer login: this older one's sign-out holds nothing
           // of the device (that login's), so it doesn't hold its queue back.
-          if (me.user.id === tail.user && tail.session && me.session && me.session !== tail.session)
+          if (
+            (me.user.id === tail.user && tail.session && me.session && me.session !== tail.session) ||
+            newerLoginHolds(tail.user, tail.session)
+          )
             settleSignOut(tail.user, tail.session)
           return accountChanged()
         }
@@ -597,7 +611,11 @@ export function App() {
       // in the app again), and then this start signs in as any other does.
       if (!signOutToResume(me)) return false
       await setPreferences({ user: me.user.locale ?? null })
-      // And after the language's wait, from the record as it is then.
+      // And after the language's wait, from the record as it is then, for the browser's login only.
+      if (!loginIsCurrent(me.user.id, me.session)) {
+        staleStart.current()
+        return true
+      }
       const still = signOutToResume(me)
       if (!still) return false
       const tail: Tail = { user: still.user, session: still.session, next, ...decisionOf(still) }
@@ -680,8 +698,8 @@ export function App() {
       const known = new Set(before?.workspaces.map((w) => w.id))
       const workspace = me.workspaces.find((w) => !known.has(w.id)) ?? me.workspaces[0]
       navigate(workspace ? `/w/${workspace.id}/conversations` : '/', { replace: true })
-      void setPreferences({ user: me.user.locale ?? null })
-      void signIn(me)
+      // The language once the claim held, as at any start.
+      void signIn(me, undefined, true)
     },
     [signIn],
   )
@@ -689,8 +707,7 @@ export function App() {
   const resetDone = useCallback(
     (me: Me) => {
       navigate('/', { replace: true })
-      void setPreferences({ user: me.user.locale ?? null })
-      void signIn(me)
+      void signIn(me, undefined, true)
     },
     [signIn],
   )

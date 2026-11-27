@@ -1075,3 +1075,265 @@ test('a start that takes a sign-out up signs in instead when another tab went ba
   await screen.findByRole('navigation', { name: 'Sections' })
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
 })
+
+// Another account's offline data left on this browser, with a download and nothing unsent.
+async function samsDataHere() {
+  const sams = await OfflineStore.open(8)
+  await sams.putDownload(samDownload)
+  sams.close()
+  localStorage.setItem('taskto:offline-users', JSON.stringify([8]))
+}
+const samDownload = {
+  workspace: 1,
+  space: 2,
+  app: 1,
+  key: '1/2/1',
+  user: 8,
+  name: 'Expenses',
+  release: 3,
+  definition: { definition_version: 1, requires: [], collection: { fields: [] }, actions: {} },
+  messages: [],
+  scopeOf: 'all',
+  records: 0,
+  total: 0,
+  truncated: false,
+  canInsert: true,
+  capturedAt: '2026-11-02T10:00:00.000Z',
+  bytes: 1,
+} as never
+
+test("a start's sweep of another account's data stops when that person signs in again meanwhile", async () => {
+  await samsDataHere()
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  const real = OfflineStore.open.bind(OfflineStore)
+  vi.spyOn(OfflineStore, 'open').mockImplementation(async (user: number) => {
+    const opened = await real(user)
+    // While this start opens the second person's data to sweep it, they sign in in another tab.
+    if (user === 8 && lastUser()?.id !== 8) {
+      rememberLogin(8, 't1', Date.now() + 1)
+      localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Sam' }))
+    }
+    return opened
+  })
+  const retire = vi.spyOn(OfflineStore.prototype, 'retireOrKeepUnsent')
+  render(<App />)
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(runtimeState().runtime).toBeNull())
+  // Nothing was even begun on their database.
+  expect(retire.mock.contexts.some((store) => (store as OfflineStore).user === 8)).toBe(false)
+  vi.restoreAllMocks()
+  // The second person's data is as it was.
+  const sams = await OfflineStore.open(8)
+  expect(await sams.listDownloads()).toHaveLength(1)
+  sams.close()
+})
+
+test("a start that another tab signs out while it sweeps creates nothing of the account's", async () => {
+  await samsDataHere()
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  const real = OfflineStore.open.bind(OfflineStore)
+  vi.spyOn(OfflineStore, 'open').mockImplementation(async (user: number) => {
+    // While the start sweeps another account's data, another tab finishes this login's sign-out
+    // (its marker isn't cleared yet).
+    if (user === 8) forgetLogin(7, 's1')
+    return real(user)
+  })
+  render(<App />)
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(runtimeState().runtime).toBeNull())
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test('a start whose login another tab replaces while it opens the database starts no queue or writer for it', async () => {
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  const { OfflineWriter } = await import('./writer')
+  const writer = vi.spyOn(OfflineWriter.prototype, 'start')
+  const real = OfflineStore.open.bind(OfflineStore)
+  vi.spyOn(OfflineStore, 'open').mockImplementationOnce(async (user: number) => {
+    rememberLogin(7, 's2', Date.now() + 1)
+    return real(user)
+  })
+  render(<App />)
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(writer).not.toHaveBeenCalled()
+})
+
+test('a database open whose lock ran out while it deleted a retired database never makes it again', async () => {
+  const store = await OfflineStore.open(7)
+  await store.retireOrKeepUnsent()
+  store.close()
+  fakeLocks()
+  // The holder's time runs out just as the retired database is being deleted.
+  const overs: (() => void)[] = []
+  lockTimes.holdOver = (_ms, over) => {
+    overs.push(over)
+    return () => {}
+  }
+  const real = IDBFactory.prototype.deleteDatabase
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(function (this: IDBFactory, name: string) {
+    for (const over of overs.splice(0)) over()
+    return real.call(this, name)
+  })
+  await expect(OfflineStore.open(7)).rejects.toThrow()
+  await new Promise((r) => setTimeout(r, 0))
+  await new Promise((r) => setTimeout(r, 0))
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test('a cleanup whose verification a newer login of the account overtook is over, not failed', async () => {
+  recordSignOut(7, 's1', false, new Map(), true)
+  await finishUnfinishedSignOuts(me)
+  recordSignOut(7, 's1', false, new Map(), true)
+  await activate(7, 'Pat')
+  runtimeState().runtime?.engine.pause('manual')
+  await deactivate({ purge: false, user: 7 })
+  vi.spyOn(OfflineStore.prototype, 'retireOrKeepUnsent').mockRejectedValue(new Error('read failed'))
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(() => {
+    const request = { error: new DOMException('refused', 'UnknownError') } as unknown as IDBOpenDBRequest
+    setTimeout(() => request.onerror?.(new Event('error')), 0)
+    return request
+  })
+  const listing = indexedDB.databases.bind(indexedDB)
+  vi.spyOn(indexedDB, 'databases').mockImplementation(async () => {
+    // The same person signs in again in another tab while the cleanup checks what is left.
+    rememberLogin(7, 's2', Date.now() + 1)
+    return listing()
+  })
+  expect(await cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map(), discardUnreadable: true })).toBe(true)
+  expect(pendingSignOuts().find((p) => p.session === 's1')).toBeUndefined()
+})
+
+test('a start that takes a sign-out up opens nothing when another login started while its language was set', async () => {
+  recordSignOut(7, 's1', false, new Map())
+  const calls = fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  let release: () => void = () => {}
+  hold.reached = false
+  hold.preferences = new Promise((done) => {
+    release = () => {
+      hold.preferences = null
+      done()
+    }
+  })
+  render(<App />)
+  await waitFor(() => expect(hold.reached).toBe(true))
+  rememberLogin(8, 't1', Date.now() + 1)
+  await act(async () => release())
+  await waitFor(() => expect(screen.queryByText('Signing out…')).toBeNull())
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+})
+
+test('an answer asked in the same moment a login was seen to end is not taken for that login', () => {
+  rememberLogin(7, 's1', 1_000)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(2_000)
+  forgetLogin(7, 's1')
+  clock.mockRestore()
+  expect(rememberLogin(7, 's1', 2_000)).toBe('stale')
+})
+
+test("the time zone's report names the account it is for", async () => {
+  const fresh = { ...me, user: { ...me.user, time_zone: '' } } as Me
+  const calls = fakeFetch({
+    ...signedIn,
+    'GET /api/me': { body: fresh },
+    'PATCH /api/me': { body: { ...fresh, user: { ...fresh.user, time_zone: 'UTC' } } },
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/api/me')
+  expect(patch?.headers['x-taskto-expected-user']).toBe('7')
+})
+
+test("a start's sweep whose transaction the other person's sign-in overtakes removes nothing of theirs", async () => {
+  await samsDataHere()
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  const real = IDBObjectStore.prototype.delete
+  let taken = false
+  vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (
+    this: IDBObjectStore,
+    key: IDBValidKey | IDBKeyRange,
+  ) {
+    // The second person signs in in another tab just as the sweep removes their first download.
+    if (this.name === 'downloads' && this.transaction.db.name === 'taskto-offline-8' && !taken) {
+      taken = true
+      rememberLogin(8, 't1', Date.now() + 1)
+      localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Sam' }))
+    }
+    return real.call(this, key)
+  })
+  render(<App />)
+  await waitFor(() => expect(taken).toBe(true))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(runtimeState().runtime).toBeNull())
+  vi.restoreAllMocks()
+  const sams = await OfflineStore.open(8)
+  expect(await sams.listDownloads()).toHaveLength(1)
+  sams.close()
+})
+
+test("a start's sweep never deletes what the other person saved after its database was retired", async () => {
+  await samsDataHere()
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  let saved = false
+  const retire = OfflineStore.prototype.retireOrKeepUnsent
+  vi.spyOn(OfflineStore.prototype, 'retireOrKeepUnsent').mockImplementation(async function (
+    this: OfflineStore,
+    ...args: Parameters<typeof retire>
+  ) {
+    const out = await retire.apply(this, args)
+    if (this.user === 8 && !saved) {
+      // Right after their database was retired, the second person signs in in another tab, which
+      // makes it again, and saves a record there.
+      rememberLogin(8, 't1', Date.now() + 1)
+      localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Sam' }))
+      const theirs = await OfflineStore.open(8)
+      await theirs.enqueue({ ...queued('sams'), user: 8 }, [])
+      theirs.close()
+      saved = true
+    }
+    return out
+  })
+  render(<App />)
+  // The sweep reached them, and the start has stopped since.
+  await waitFor(() => expect(saved).toBe(true))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(runtimeState().runtime).toBeNull())
+  vi.restoreAllMocks()
+  const sams = await OfflineStore.open(8)
+  expect((await sams.listItems()).map((i) => i.id)).toEqual(['sams'])
+  sams.close()
+})
+
+test('a sign-in in a tab whose runtime is still open lets it go when another login overtakes it', async () => {
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': { body: me },
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { ...me, session: 's3' } },
+  })
+  await signedInAs()
+  await act(async () => {})
+  // The session ends (it expired): the login screen, with the account's runtime still open here.
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': { status: 401, body: { error: 'not logged in' } },
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { ...me, session: 's3' } },
+  })
+  await act(async () => {
+    await api('/api/me').catch(() => {})
+  })
+  await screen.findByLabelText('Password')
+  expect(runtimeState().runtime?.user).toBe(7)
+  // The person signs in again here; just as the account is taken up, a newer login of theirs starts
+  // in another tab.
+  during.activate = () => {
+    rememberLogin(7, 's4', Date.now() + 1)
+  }
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'pat@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(runtimeState().runtime).toBeNull())
+})

@@ -305,15 +305,22 @@ const LOGIN = 'taskto:login'
 
 export type BrowserLogin = { user: number; session: string; at: number }
 
-function readLogin(): BrowserLogin | null {
+// `ended`: with `session` '', the login seen to end.
+function readLogin(): (BrowserLogin & { ended?: string }) | null {
   try {
     const v = JSON.parse(window.localStorage.getItem(LOGIN) ?? 'null') as {
       user?: unknown
       session?: unknown
       at?: unknown
+      ended?: unknown
     } | null
     return v && Number.isInteger(v.user) && typeof v.session === 'string'
-      ? { user: v.user as number, session: v.session, at: Number.isFinite(v.at) ? (v.at as number) : 0 }
+      ? {
+          user: v.user as number,
+          session: v.session,
+          at: Number.isFinite(v.at) ? (v.at as number) : 0,
+          ...(typeof v.ended === 'string' ? { ended: v.ended } : {}),
+        }
       : null
   } catch {
     return null
@@ -328,7 +335,10 @@ export function rememberLogin(
   asked = Date.now(),
 ): 'ok' | 'stale' | 'unkept' {
   const known = readLogin()
-  if (known && known.at > asked) return 'stale'
+  // The very login seen to end in the same moment as the question: the ending holds (another login
+  // asked about in that moment is news).
+  const endedNow = known?.session === '' && known.user === user && !!session && known.ended === session
+  if (known && (known.at > asked || (endedNow && known.at === asked))) return 'stale'
   try {
     window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: session ?? '', at: asked }))
     return 'ok'
@@ -344,7 +354,7 @@ export function forgetLogin(user: number, session: string | undefined): void {
   const now = browserLogin()
   if (!now || now.user !== user || !session || now.session !== session) return
   try {
-    window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: '', at: Date.now() }))
+    window.localStorage.setItem(LOGIN, JSON.stringify({ user, session: '', ended: session, at: Date.now() }))
   } catch {
     try {
       window.localStorage.removeItem(LOGIN)

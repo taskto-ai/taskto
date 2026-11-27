@@ -173,3 +173,13 @@ test('a sign-out put back from a decision with no time (an earlier version kept 
   ensureSignOut(1, 's1', { keep: false, approved: new Map() }, 'confirmed')
   expect(pendingSignOuts().find((p) => p.session === 's1')?.at).toBeUndefined()
 })
+
+test("recording one login's sign-out keeps another login's record of the same account", () => {
+  recordSignOut(1, 's2', false, new Map([['r2', { version: 1, operation: 'op-2' }]]))
+  recordSignOut(1, 's1', false, new Map())
+  expect(
+    pendingSignOuts()
+      .map((p) => p.session)
+      .sort(),
+  ).toEqual(['s1', 's2'])
+})

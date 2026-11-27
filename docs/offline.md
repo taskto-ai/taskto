@@ -590,7 +590,12 @@ signing in is dealt with when it signs in:
   language and time zone of another account are never set. A Try again in a tab whose sign-out
   another tab went back from records it again before sending, and a confirmed logout puts its
   record back before its cleanup, so a cleanup that fails is still finished later. Back from an
-  older login, the browser on a newer login of the same person, lets that older sign-out go. Only a login learned after a sign-out was
+  older login, the browser on a newer login of the same person, lets that older sign-out go, and a
+  tab of such an older login never records (nor records again) a sign-out of it, which would hold
+  the newer login's queue and offline start. A sign-in's sweep of other accounts' data asks after
+  every wait whether it is still the browser's sign-in, aborts its transaction whole once it isn't,
+  and deletes another account's database only under that account's lock and only as the database it
+  retired, so that person signing in again meanwhile keeps everything of theirs. Only a login learned after a sign-out was
   recorded counts as newer than it. A sign-out's record and decision are kept **per login**: a stale
   tab signing out an older login never replaces or removes a newer login's (one gone back from and
   still waiting on a logout that got no answer keeps the person's decision for when it ends). Every step of the cleanup asks again, after each wait, whether a

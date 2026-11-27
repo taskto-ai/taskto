@@ -7,7 +7,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Me } from './api'
-import { backFromSignOut, pendingSignOuts } from './offline/pendingSignOut'
+import { backFromSignOut, pendingSignOuts, rememberLogin } from './offline/pendingSignOut'
+import { finishUnfinishedSignOuts } from './signOut'
 import { fakeFetch } from './test/fakes'
 
 // The sign-out waits a short time here, and the device's cleanup can be made to fail.
@@ -700,4 +701,83 @@ test("Back answered 401 after another tab let the sign-out go keeps it when the 
   fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
   await screen.findByRole('heading', { name: 'Log in' })
   await waitFor(() => expect(pendingOf()).toEqual(['1:s1']))
+})
+
+test("Try again in a tab of an older login, the browser on a newer login of the same person, doesn't hold that login's queue", async () => {
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': { status: 503, body: { error: 'unavailable', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // The same person signs in again in another tab: its start settles the older login's sign-out.
+  await finishUnfinishedSignOuts({ ...first_, session: 's2' } as Me)
+  expect(pendingOf()).toEqual([])
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  await new Promise((r) => setTimeout(r, 0))
+  expect(pendingOf()).toEqual([])
+})
+
+test("Log out in a tab of an older login, the browser on a newer login of the same person, doesn't hold that login's queue", async () => {
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': { status: 503, body: { error: 'unavailable', code: 'internal' } },
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  // The same person signs in again in another tab.
+  await finishUnfinishedSignOuts({ ...first_, session: 's2' } as Me)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  expect(pendingOf()).toEqual([])
+})
+
+test("Back from an older login's sign-out, answered for it while a newer login started, lets that older sign-out go", async () => {
+  let me: { body: Me } | Promise<{ body: Me }> = { body: { ...first_, session: 's1' } }
+  let answer: (() => void) | undefined
+  fakeFetch({
+    ...pages,
+    'GET /api/me': () => me,
+    'POST /api/logout': { status: 503, body: { error: 'unavailable', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  me = new Promise((done) => {
+    answer = () => done({ body: { ...first_, session: 's1' } })
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  await waitFor(() => expect(answer).toBeDefined())
+  // The same person signs in again in another tab, which says so, while Back's answer is on its way.
+  rememberLogin(1, 's2', Date.now() + 1)
+  const marker = JSON.stringify({ id: 1, name: 'First' })
+  localStorage.setItem('taskto:offline-last', marker)
+  window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last', newValue: marker }))
+  await act(async () => answer?.())
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+})
+
+test('Try again refused because a newer login of the same person holds the browser lets that older sign-out go', async () => {
+  let logout: { status: number; body?: unknown } = { status: 503, body: { error: 'unavailable', code: 'internal' } }
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': () => logout,
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  expect(pendingOf()).toEqual(['1:s1'])
+  // A newer login of the same person is the browser's now, learned by a start that asked before this
+  // sign-out was recorded (so it didn't settle it).
+  rememberLogin(1, 's2', Date.now() + 1)
+  logout = { status: 409, body: { error: 'not this login', code: 'session_account_changed' } }
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  await waitFor(() => expect(pendingOf()).toEqual([]))
 })

@@ -122,21 +122,34 @@ async function sweep(user: number, current: () => boolean): Promise<Foreign | nu
       keep.push(id)
       continue
     }
+    // Asked again after every wait: that person may have signed in again meanwhile (in another tab),
+    // and their data is theirs then, as it is.
+    if (!current()) {
+      store.close()
+      throw new Lapsed()
+    }
     try {
       // One transaction decides: nothing unsent and the database is marked and deleted, or only
       // the unsent records stay. A record a stale tab commits meanwhile is counted, never deleted.
-      const unsent = await store.retireOrKeepUnsent()
+      // It is aborted whole once this sign-in isn't the browser's any more.
+      const unsent = await store.retireOrKeepUnsent(new Map(), true, current)
       if (unsent.length === 0) {
-        await store.destroy()
+        store.close()
+        // Deleted under the account's lock, and only as the database this retired: one that person
+        // made again since (signed in again) stays with what was saved in it.
+        const outcome = await OfflineStore.deleteRetired(id, { still: current }).catch(() => 'failed' as const)
+        if (outcome === 'stopped') throw new Lapsed()
+        if (outcome !== 'removed') keep.push(id)
       } else {
         keep.push(id)
         foreign.users.push(id)
         foreign.count += unsent.length
         store.close()
       }
-    } catch {
-      // Not read, cut down or deleted: whatever it holds stays, and is never opened for this person.
+    } catch (e) {
       store.close()
+      if (e instanceof Lapsed || e instanceof Superseded) throw new Lapsed()
+      // Not read, cut down or deleted: whatever it holds stays, and is never opened for this person.
       if (!keep.includes(id)) keep.push(id)
     }
   }
@@ -183,13 +196,14 @@ function watch() {
 // Makes user's database the one in use, and starts sending their queue. `name` says who signed in
 // (online); without it this is an offline start, for the account the browser's marker names.
 // `still`: whether the sign-in this is for is still the browser's (its login wasn't replaced or ended
-// in another tab), asked once the earlier activation is over, before anything of this one is done:
-// the marker isn't written, nor anything opened, for a login that isn't the browser's any more. A
-// change later, while this one waits, is the account epoch's (`current`) or its caller's to undo.
+// in another tab), asked right before the marker is written and with the account epoch (`current`)
+// after every wait: nothing is written, opened or started for a login that isn't the browser's any
+// more. (A runtime this tab still has for the account is taken up as it is: a sign-out or another
+// account's sign-in elsewhere retires it first, and a newer login of the same account changes
+// nothing of it.)
 export async function activate(user: number, name?: string, still: () => boolean = () => true): Promise<RuntimeState> {
   watch()
   if (opening) await opening.catch(() => {})
-  if (!still()) return state
   if (state.runtime?.user === user) {
     if (name) rememberUser({ id: user, name })
     // Not while a sign-out of the account is unresolved (Back starting the app again): the queue goes
@@ -220,6 +234,7 @@ export async function activate(user: number, name?: string, still: () => boolean
     // another tab: this tab has no runtime yet to hear it with) is never acted against or shown
     // this account's database.
     const current = () => {
+      if (!still()) return false
       const who = lastUser()
       return marker === 'ok' ? who?.id === user : who === null || who.id === user
     }

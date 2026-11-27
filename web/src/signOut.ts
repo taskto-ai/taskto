@@ -135,12 +135,14 @@ export async function cleanUpAfterSignOut(
     )
     if (superseded()) return true
     if (unreadable) return false
-    if (!(await bounded(verifiedClear(user, { keep, approved, discardUnreadable })))) return false
+    const clear = await bounded(verifiedClear(user, { keep, approved, discardUnreadable }))
+    // A newer login that started meanwhile has the device: this sign-out is over, not failed.
     if (superseded()) return true
+    if (!clear) return false
     settleSignOut(user, session)
     return true
   } catch {
-    return false
+    return superseded()
   }
 }
 
