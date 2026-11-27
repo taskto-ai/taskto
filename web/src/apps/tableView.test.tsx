@@ -174,3 +174,22 @@ test('a column with a key the table does not know is refused, so nothing is draw
   await waitFor(() => expect(screen.queryByRole('table')).toBeNull())
   expect(screen.queryByText('Pay rent')).toBeNull()
 })
+
+test('the 200 rows shown are the first 200 after sorting, not the first 200 received', async () => {
+  const many = Array.from({ length: 250 }, (_, i) => ({ id: i + 1, _revision: 1, n: i + 1 }))
+  render(
+    app(
+      tableSurface(many, {
+        columns: [{ field: 'n', label: 'Number', type: 'number' }],
+        open: undefined,
+        sort: 'n',
+        dir: 'desc',
+      }),
+    ),
+  )
+  await screen.findByRole('table')
+  const cells = bodyRows().map((r) => within(r).getAllByRole('cell')[0].textContent)
+  expect(cells).toHaveLength(200)
+  expect(cells[0]).toBe('250')
+  expect(cells.at(-1)).toBe('51')
+})
