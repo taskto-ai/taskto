@@ -2783,6 +2783,19 @@
     "openApp": "Abrir o app",
     "replyStopped": "A resposta foi interrompida.",
     "replyFailed": "A resposta falhou.",
+    "changes": {
+      "title": "Alterado neste turno ({count})",
+      "created": "Criado",
+      "edited": "Editado",
+      "moved": "Movido",
+      "deleted": "Excluído",
+      "restored": "Restaurado",
+      "archived": "Arquivado",
+      "commented": "Comentado",
+      "card": "Cartão {id}",
+      "record": "Registro {id} em {app}",
+      "recordBare": "Registro {id}"
+    },
     "tool": {
       "help": "Pediu para você assumir o navegador",
       "used": "Usou {name}",
