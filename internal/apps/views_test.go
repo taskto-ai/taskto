@@ -225,3 +225,14 @@ func TestAScreenlessAppTellsEachColumnItsFieldTypeToo(t *testing.T) {
 		t.Fatalf("the stored definition holds a column type: %s", stored)
 	}
 }
+
+func TestATableWithTwelveColumnsIsAccepted(t *testing.T) {
+	twelve := make([]string, 12)
+	for i := range twelve {
+		twelve[i] = `{"field":"title","label":"Title"}`
+	}
+	table := `{"id":"tasks-table","component":"Table","items":{"path":"/items"},"label":"Tasks","columns":[` + strings.Join(twelve, ",") + `]}`
+	if _, err := withTable(t, table, nil); err != nil {
+		t.Fatalf("12 columns: %v", err)
+	}
+}
