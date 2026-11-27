@@ -1,10 +1,14 @@
 package search
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strings"
 	"testing"
 
 	"taskto.ai/taskto/internal/access"
@@ -177,5 +181,193 @@ func TestPaletteDoesNotReturnAnotherUsersPrivateResults(t *testing.T) {
 	if status != http.StatusOK || len(got.Places.Spaces) != 0 || len(got.Places.Apps) != 0 || len(got.Places.Boards) != 0 ||
 		len(got.Docs) != 0 || len(got.Cards) != 0 || len(got.Records) != 0 || len(got.Conversations) != 0 {
 		t.Fatalf("palette status %d, leaked results %+v", status, got)
+	}
+}
+
+func (w *world) readableSpaces(u *user) []access.Space {
+	w.e.t.Helper()
+	spaces, err := w.e.spaces.Readable(ctx, u.id, w.ws)
+	if err != nil {
+		w.e.t.Fatal(err)
+	}
+	for i := range spaces {
+		spaces[i] = w.generationOf(spaces[i])
+	}
+	return spaces
+}
+
+func (w *world) placesIn(u *user, spaces []access.Space, text string) PlaceResults {
+	w.e.t.Helper()
+	got, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, u.id, w.ws, spaces, text, 10)
+	if err != nil {
+		w.e.t.Fatal(err)
+	}
+	return got
+}
+
+func noPlaces(p PlaceResults) bool {
+	return len(p.Spaces) == 0 && len(p.Apps) == 0 && len(p.Boards) == 0
+}
+
+func TestPalettePlacesOfASpaceLostBetweenReadingAndAnsweringAreNotReleased(t *testing.T) {
+	w := newWorld(t)
+	w.newApp(w.alice, w.team, "Café reports", false)
+	w.teamBoard(w.alice, w.team, "Café planning")
+	w.exec(`UPDATE spaces SET name = 'Café team' WHERE id = ?`, w.team.ID)
+	spaces := w.readableSpaces(w.alice)
+	if got := w.placesIn(w.alice, spaces, "cafe"); len(got.Spaces) != 1 || len(got.Apps) != 1 || len(got.Boards) != 1 {
+		t.Fatalf("fixture: places before the removal = %+v", got)
+	}
+
+	w.removeMember(w.team, w.alice)
+	if got := w.placesIn(w.alice, spaces, "cafe"); !noPlaces(got) {
+		t.Fatalf("places of a space alice no longer reads = %+v", got)
+	}
+}
+
+func TestPalettePlacesOfAnArchivedSpaceAreNotReleasedEvenFromAnEarlierList(t *testing.T) {
+	w := newWorld(t)
+	w.newApp(w.alice, w.team, "Café reports", false)
+	w.exec(`UPDATE spaces SET name = 'Café team' WHERE id = ?`, w.team.ID)
+	spaces := w.readableSpaces(w.alice)
+	w.exec(`UPDATE spaces SET archived_at = CURRENT_TIMESTAMP WHERE id = ?`, w.team.ID)
+	if got := w.placesIn(w.alice, spaces, "cafe"); !noPlaces(got) {
+		t.Fatalf("places of a space archived since the list = %+v", got)
+	}
+}
+
+func TestPaletteDoesNotNameAReplacedSpaceAfterItsIDIsGivenAgain(t *testing.T) {
+	w := newWorld(t)
+	gone := w.createShared("Café gone")
+	w.addMember(gone, w.alice, access.RoleViewer)
+	spaces := w.readableSpaces(w.alice)
+	if got := w.placesIn(w.alice, spaces, "cafe gone"); len(got.Spaces) != 1 {
+		t.Fatalf("fixture: places before the replacement = %+v", got)
+	}
+
+	fresh := w.replace(gone, false)
+	w.exec(`INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, 'viewer')`, fresh.ID, w.alice.id)
+	if got := w.placesIn(w.alice, spaces, "cafe gone"); !noPlaces(got) {
+		t.Fatalf("a removed space's name came back under the ID it had: %+v", got)
+	}
+	if got := w.placesIn(w.alice, w.readableSpaces(w.alice), "replacement"); len(got.Spaces) != 1 || got.Spaces[0].ID != fresh.ID {
+		t.Fatalf("the replacement is not found: %+v", got)
+	}
+}
+
+func TestPaletteDoesNotSearchPrivateSpaceNamesButSearchesTheirApps(t *testing.T) {
+	w := newWorld(t)
+	private := w.private[w.alice]
+	if private.Name == "" {
+		t.Fatal("fixture: the private space has no name")
+	}
+	w.newApp(w.alice, private, "Mine to count", false)
+	_, got := w.searchPalette(w.alice, private.Name)
+	if len(got.Places.Spaces) != 0 {
+		t.Fatalf("a private space was found by its name: %+v", got.Places.Spaces)
+	}
+	if _, got := w.searchPalette(w.alice, "mine to"); len(got.Places.Apps) != 1 {
+		t.Fatalf("alice's own private app: %+v", got.Places)
+	}
+}
+
+func TestPlaceNamesAreRankedByPrefixThenLengthThenName(t *testing.T) {
+	names := []string{"Big Café", "Café reports", "Cafés", "Café", "Cafe b", "Cafe a"}
+	got := sortPlaces(slices.Clone(names), func(s string) string { return s }, "cafe", 10)
+	want := []string{"Café", "Cafés", "Cafe a", "Cafe b", "Café reports", "Big Café"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ranked %v, want %v", got, want)
+	}
+	if got := sortPlaces(slices.Clone(names), func(s string) string { return s }, "cafe", 2); !slices.Equal(got, want[:2]) {
+		t.Fatalf("limited to two: %v", got)
+	}
+}
+
+func TestPlaceNamesMatchWithoutCaseOrAccents(t *testing.T) {
+	for _, c := range []struct{ name, query string }{
+		{"Crème brûlée", "creme BRULEE"},
+		{"Cafe", "café"},
+		{"CAFÉ", "cafe"},
+		{"Ångström lab", "angstrom"},
+	} {
+		if !placeMatches(c.name, folded(c.query)) {
+			t.Errorf("%q was not found by %q", c.name, c.query)
+		}
+	}
+	if placeMatches("Cafe", folded("cafes")) {
+		t.Error("a longer query found a shorter name")
+	}
+}
+
+func TestPaletteGivesFiveOfEachKindByDefaultAndWhatLimitAsksFor(t *testing.T) {
+	w := newWorld(t)
+	for i := 0; i < 12; i++ {
+		w.newApp(w.alice, w.team, fmt.Sprintf("Orchard app %d", i), false)
+		w.teamBoard(w.alice, w.team, fmt.Sprintf("Orchard board %d", i))
+	}
+	for _, c := range []struct {
+		query string
+		want  int
+	}{{"orchard", 5}, {"orchard&limit=2", 2}, {"orchard&limit=10", 10}, {"orchard&limit=0", 5}} {
+		rec := w.alice.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/palette?q=%s", w.ws, c.query), nil)
+		expect(t, rec, http.StatusOK)
+		if got := decode[paletteReply](t, rec); len(got.Places.Apps) != c.want || len(got.Places.Boards) != c.want {
+			t.Fatalf("query %q: %d apps and %d boards, want %d of each", c.query, len(got.Places.Apps), len(got.Places.Boards), c.want)
+		}
+	}
+}
+
+func TestPaletteIsOnlyForAMemberOfTheWorkspaceWithASession(t *testing.T) {
+	w := newWorld(t)
+	target := fmt.Sprintf("/api/workspaces/%d/search/palette?q=orchard", w.ws)
+	anonymous := &user{e: w.e}
+	expect(t, anonymous.do(http.MethodGet, target, nil), http.StatusUnauthorized)
+	expect(t, w.stranger.do(http.MethodGet, target, nil), http.StatusOK)
+	w.finish()
+	if rec := w.stranger.do(http.MethodGet, target, nil); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Fatalf("a person who left the workspace: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPaletteSaysWhenIndexingIsBehindAndAnswersEmptyKindsAsLists(t *testing.T) {
+	w := newWorld(t)
+	rec := w.alice.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/palette?q=nothingmatches", w.ws), nil)
+	expect(t, rec, http.StatusOK)
+	for _, empty := range []string{`"spaces":[]`, `"apps":[]`, `"boards":[]`, `"docs":[]`, `"cards":[]`, `"records":[]`, `"conversations":[]`, `"incomplete":false`} {
+		if !strings.Contains(rec.Body.String(), empty) {
+			t.Fatalf("the reply lacks %s: %s", empty, rec.Body)
+		}
+	}
+
+	board := w.teamBoard(w.alice, w.team, "Work")
+	c := w.addCard(w.alice, w.team, board, "Tapir", "")
+	if _, err := w.e.idx.db.Exec(`CREATE TRIGGER sync_fails BEFORE DELETE ON search_card_queue BEGIN SELECT RAISE(ABORT, 'no'); END`); err != nil {
+		t.Fatal(err)
+	}
+	w.patchCard(w.alice, w.team, board, c, map[string]any{"body": "tapir, changed"})
+	if _, got := w.searchPalette(w.bob, "tapir"); !got.Incomplete {
+		t.Fatalf("a palette whose card index could not catch up did not say so: %+v", got)
+	}
+}
+
+func TestAFailedQueryEmbeddingLogsOnlyThatItFailed(t *testing.T) {
+	w := newWorld(t)
+	var logged bytes.Buffer
+	w.e.idx.log = slog.New(slog.NewTextHandler(&logged, nil))
+	w.setModel()
+	w.put(w.alice, w.team, "orchard.md", "orchard")
+	if _, err := w.e.idx.Sync(ctx, w.team); err != nil {
+		t.Fatal(err)
+	}
+	w.e.embed.fail.Store(true)
+	expect(t, w.search(w.alice, nil, "orchard"), http.StatusOK)
+	out := logged.String()
+	if !strings.Contains(out, "embedding a query failed") {
+		t.Fatalf("nothing was logged for the failure: %q", out)
+	}
+	for _, leak := range []string{fakeKey, "answered", "503", w.e.embed.srv.URL} {
+		if strings.Contains(out, leak) {
+			t.Errorf("the log holds %q: %s", leak, out)
+		}
 	}
 }
