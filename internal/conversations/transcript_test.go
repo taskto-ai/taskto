@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,28 @@ import (
 
 	"taskto.ai/taskto/internal/agentrt"
 )
+
+func TestAgentTurnRecordsAssistantUsageFromDurableEntries(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: {
+		json.RawMessage(`{"id":1,"kind":"pi.user","model":[{"role":"user","content":"hi"}]}`),
+		json.RawMessage(`{"id":2,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":3,"output":2}}]}`),
+		json.RawMessage(`{"id":3,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":4,"output":3}}]}`),
+	}}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}, "script", 1); err != nil {
+		t.Fatal(err)
+	}
+	var input, output, turns int64
+	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens, turns FROM agent_usage_daily WHERE user_id = ? AND workspace_id = ? AND source = 'agent' AND engine = 'provider-a'`, owner.id, ws).Scan(&input, &output, &turns); err != nil {
+		t.Fatal(err)
+	}
+	if input != 7 || output != 5 || turns != 1 {
+		t.Fatalf("recorded usage = %d input, %d output, %d turns", input, output, turns)
+	}
+}
 
 func TestTranscriptIsWhatWasSaid(t *testing.T) {
 	e := newEnv(t, false)

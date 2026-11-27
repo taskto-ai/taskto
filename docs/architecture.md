@@ -49,6 +49,10 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   naming their conversation with a capability the server issued for it; the server acts
   for the conversation's owner, checking their access on every call
   ([agent-tools.md](agent-tools.md)).
+- **Agent usage:** `internal/usage` records each person's daily input and output token totals by
+  workspace, source and engine. CLI turns are recorded by the Go turn handler; sidecar turns are
+  read from the assistant message usage stored in Pi Durable. Rows contain no conversation text
+  or cost and are kept for 400 days.
 - **Spaces and access:** a workspace contains spaces: a private one per member, and shared
   ones with editors and viewers. Everything people store lives in a space, and one
   package, `internal/access`, decides who may read and write each, for the API and for
