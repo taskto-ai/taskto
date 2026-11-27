@@ -1,7 +1,3 @@
-// A table of data: column headers, numbers aligned to the end in tabular figures, and, when it is
-// wider than its place (a phone), it scrolls sideways in its own box, which can then be reached
-// and scrolled with the keyboard. Put it in a Panel for an edge.
-
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
 import { VisuallyHidden } from './VisuallyHidden'
@@ -11,17 +7,10 @@ import './VisuallyHidden.css'
 export interface Column<T> {
   key: string
   header: ReactNode
-  // Numbers: aligned to the end, in tabular figures.
   numeric?: boolean
-  // The header is read by a screen reader but not shown (a column of actions).
   hiddenHeader?: boolean
-  // The column that names each row (a person, a plan): its cells are the rows' headers, so a screen
-  // reader says which row a cell further along is in.
   rowHeader?: boolean
   cell: (row: T) => ReactNode
-  // A column the rows can be put in order by: the order it is in now ('none' when the rows are in
-  // another column's), and what choosing it does. Its header is then a button, and the header cell
-  // says the order to assistive technology (aria-sort).
   sort?: ColumnSort
 }
 
@@ -31,7 +20,6 @@ export interface ColumnSort {
 }
 
 export interface TableProps<T> {
-  // What the table is: its caption, read by a screen reader (and shown when `showCaption`).
   caption: string
   showCaption?: boolean
   columns: readonly Column<T>[]
@@ -43,8 +31,6 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
   const box = useRef<HTMLDivElement>(null)
   const scrolls = useOverflows(box)
   return (
-    // A box that scrolls is a region with a name and a tab stop, so it can be scrolled without a
-    // pointer; one that doesn't is neither.
     <div
       ref={box}
       className="ui-table-scroll"
@@ -60,7 +46,6 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
                 scope="col"
                 className="ui-table-head"
                 data-numeric={c.numeric || undefined}
-                // Only the column the rows are in order by says an order (WAI-ARIA: one header at a time).
                 aria-sort={c.sort && c.sort.direction !== 'none' ? c.sort.direction : undefined}
               >
                 {c.sort ? (
@@ -101,9 +86,6 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
   )
 }
 
-// Whether an element's content is wider than it, kept up to date as either changes size.
-// A sortable column's header: its name, and a mark of the order it is in (the mark is not read out:
-// the cell's aria-sort says it).
 function SortButton({ sort, children }: { sort: ColumnSort; children: ReactNode }) {
   const icon = sort.direction === 'ascending' ? 'chevron-up' : sort.direction === 'descending' ? 'chevron-down' : null
   return (

@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// taskto-update --check: what a run would install next, found the same way and published for
-// Settings → About, with nothing pulled, installed or changed, and no run's status written.
-
-// releasedAt sets when a fake release was published.
 func (e *updEnv) releasedAt(tag, at string) {
 	e.gh.locked(func() {
 		for _, r := range e.gh.releases {
@@ -23,8 +19,6 @@ func (e *updEnv) releasedAt(tag, at string) {
 	})
 }
 
-// wantOnlyLooked: a check changed nothing but what it found: no pull, no run's status, no
-// notification, the install as it was.
 func (e *updEnv) wantOnlyLooked() {
 	e.t.Helper()
 	e.wantUntouched()
@@ -61,19 +55,16 @@ func TestUpdateCheckFindsTheNextReleaseAndChangesNothing(t *testing.T) {
 	if s.Looked.IsZero() || s.LastRun != nil || s.RecordedVersion != updOld || s.Running != nil {
 		t.Fatalf("status = %+v", s)
 	}
-	// It looked at the images in the registry, and pulled none.
 	if e.count(`^manifest inspect \S+:`+updNew+` @`) == 0 {
 		t.Error("the check didn't look for the images")
 	}
 
-	// The run that installs it leaves nothing available, and when it looked.
 	if code, _ := e.run(); code != 0 {
 		t.Fatal("update")
 	}
 	if s := e.public(); s.Available != nil || s.Looked.IsZero() || s.RecordedVersion != updNew {
 		t.Fatalf("after the update: available %+v, looked %v", s.Available, s.Looked)
 	}
-	// Nothing newer: none, and the check says when it looked.
 	if code, _ := e.run("--check"); code != 0 {
 		t.Fatal("check")
 	}
@@ -92,14 +83,12 @@ func TestUpdateCheckMarksAReleaseThatNeedsAPerson(t *testing.T) {
 	}
 	e.wantOnlyLooked()
 	s := e.public()
-	// The newest is what a person installs, past the release that needs steps by hand.
 	if s.Available == nil || s.Available.Version != "v0.4.0" || !s.Available.ManualUpgrade {
 		t.Fatalf("available = %+v", s.Available)
 	}
 	if s.NeedsPerson == nil || s.NeedsPerson.Kind != "manual-upgrade" {
 		t.Fatalf("needs = %+v", s.NeedsPerson)
 	}
-	// A run says the same.
 	if code, _ := e.run(); code != 0 {
 		t.Fatal("run")
 	}
@@ -143,8 +132,6 @@ func TestUpdateCheckOnTheMainChannel(t *testing.T) {
 	}
 }
 
-// What can't be told keeps what was found; what was found for another version is not shown; the
-// channel off shows nothing.
 func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -161,7 +148,6 @@ func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
 	}
 	e.gh.locked(func() { e.gh.failPages = nil })
 
-	// Found from another version: not this install's.
 	e.write("state/available.json", `{"from":"v0.1.0","looked":"2026-11-26T06:00:00Z","version":"v0.3.0","sha":"","published":"","manual_upgrade":false,"repo":"taskto-ai/taskto"}`)
 	if code, _ := e.run("--publish-status"); code != 0 {
 		t.Fatal("publish")
@@ -179,8 +165,6 @@ func TestUpdateCheckKeepsOnlyWhatStillHolds(t *testing.T) {
 	}
 }
 
-// A check never waits for a run or keeps one from starting: while a run holds the lock it records
-// what it found, and the run publishes it.
 func TestUpdateCheckDoesNotWaitForARun(t *testing.T) {
 	t.Parallel()
 	needTools(t, "flock")
@@ -223,8 +207,6 @@ func TestUpdateCheckTakesNoOtherOption(t *testing.T) {
 	}
 }
 
-// The check's units: a timer every few hours, a service that runs --check and nothing else, and
-// the runbook installs both.
 func TestUpdateCheckUnits(t *testing.T) {
 	t.Parallel()
 	timer := readRepoFile(t, "deploy/taskto-update-check.timer")
@@ -245,8 +227,6 @@ func TestUpdateCheckUnits(t *testing.T) {
 	}
 }
 
-// An install that isn't on a version (a build of no release or commit) can't be told what is
-// newer: that is not "nothing newer", so the check records no look.
 func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -263,8 +243,6 @@ func TestUpdateCheckOnAnInstallWithNoVersionRecordsNoLook(t *testing.T) {
 	}
 }
 
-// Step 16 copies the check's units only when the version has them, and stops before the VM's
-// part when a copy fails.
 func TestRunbookCheckUnitsAreOptionalAndACopyFailureStops(t *testing.T) {
 	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")

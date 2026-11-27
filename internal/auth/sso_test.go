@@ -24,13 +24,10 @@ import (
 
 const (
 	testClientID     = "taskto-test-client"
-	testClientSecret = "fake-client-secret" //nolint:gosec // G101: a fake, for the test provider
+	testClientSecret = "fake-client-secret"
 	testPublicURL    = "https://taskto.example.com"
 )
 
-// fakeIdP is an OpenID Connect provider: discovery, keys, a token endpoint that checks PKCE
-// and signs ID tokens with RS256, and a UserInfo endpoint. There is no authorize page: tests
-// play the browser and call issue with what the authorization URL asked for.
 type fakeIdP struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -39,10 +36,8 @@ type fakeIdP struct {
 	mu           sync.Mutex
 	codes        map[string]issuedCode
 	userinfo     map[string]any
-	badSignature bool // sign with a key the JWKS doesn't list
+	badSignature bool
 
-	// Set before the first request: serve over TLS, change what discovery says, or take over
-	// an endpoint.
 	useTLS    bool
 	discovery map[string]any
 	handlers  map[string]http.HandlerFunc
@@ -55,7 +50,6 @@ type issuedCode struct {
 
 func newFakeIdP(t *testing.T) *fakeIdP { return newFakeIdPWith(t, nil) }
 
-// newFakeIdPWith is newFakeIdP with setup run before the server starts.
 func newFakeIdPWith(t *testing.T, setup func(*fakeIdP)) *fakeIdP {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -68,7 +62,6 @@ func newFakeIdPWith(t *testing.T, setup func(*fakeIdP)) *fakeIdP {
 		setup(f)
 	}
 	mux := http.NewServeMux()
-	// route registers a handler, which a test may have replaced.
 	route := func(path string, h http.HandlerFunc) {
 		if o := f.handlers[path]; o != nil {
 			h = o
@@ -115,8 +108,6 @@ func writeTestJSON(w http.ResponseWriter, v any) {
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// issue is the provider's side of the authorization step: it makes a code for the nonce and
-// PKCE challenge the request carried. claims override (or, as nil, remove) the ID token's.
 func (f *fakeIdP) issue(nonce, challenge string, claims map[string]any) string {
 	code, _ := randomToken()
 	all := map[string]any{"nonce": nonce}
@@ -191,10 +182,9 @@ func (f *fakeIdP) sign(claims map[string]any) string {
 	return signing + "." + b64(sig)
 }
 
-// browser keeps cookies by name, as a real one does: the session's and the sign-in's.
 type browser struct {
 	e       *env
-	mu      sync.Mutex // a test may have two requests of one browser in flight
+	mu      sync.Mutex
 	cookies map[string]*http.Cookie
 }
 
@@ -210,7 +200,6 @@ func (b *browser) do(method, path string, body any) *httptest.ResponseRecorder {
 		r = httptest.NewRequest(method, path, bytes.NewReader(raw))
 		r.Header.Set("Content-Type", "application/json")
 	}
-	// The provider's redirect is a cross-site navigation; the app's own calls are same-origin.
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	if method == http.MethodGet && strings.Contains(path, "/callback") {
 		r.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -253,16 +242,14 @@ func newSSOEnvWith(t *testing.T, idp *fakeIdP, tweak ...func(*SSOProvider, *Opti
 	for _, f := range tweak {
 		f(&p, &opts)
 	}
-	opts.SSO = append([]SSOProvider{p}, opts.SSO...) // a tweak may add providers
+	opts.SSO = append([]SSOProvider{p}, opts.SSO...)
 	e := &ssoEnv{env: newEnv(t, opts), idp: idp}
 	if idp.useTLS {
-		// The test server's certificate is the only one trusted.
 		e.svc.sso.byID[p.ID].guard.base = idp.srv.Client().Transport
 	}
 	return e
 }
 
-// start asks for the sign-in and returns the authorization URL's parameters.
 func (s *ssoEnv) start(b *browser, next string) url.Values {
 	s.t.Helper()
 	var body any
@@ -285,8 +272,6 @@ func (s *ssoEnv) start(b *browser, next string) url.Values {
 	return q
 }
 
-// signIn runs a whole sign-in as browser b, with the provider vouching for claims, and
-// returns the callback's answer.
 func (s *ssoEnv) signIn(b *browser, next string, claims map[string]any) *httptest.ResponseRecorder {
 	s.t.Helper()
 	q := s.start(b, next)
@@ -319,7 +304,7 @@ func verified(email string) map[string]any {
 
 func TestSSOLinksByVerifiedEmailThenLogsInBySubject(t *testing.T) {
 	s := newSSOEnv(t)
-	s.setup() // owner@example.com, with a password
+	s.setup()
 
 	b := s.browser()
 	rec := s.signIn(b, "/boards#x", verified("Owner@Example.com"))
@@ -331,7 +316,6 @@ func TestSSOLinksByVerifiedEmailThenLogsInBySubject(t *testing.T) {
 		t.Fatalf("users = %d", n)
 	}
 
-	// Linked: the subject is the key, so the address may have changed or be unverified.
 	b2 := s.browser()
 	rec = s.signIn(b2, "", map[string]any{"email": "changed@example.com", "email_verified": false})
 	s.wantLogin(b2, rec, "/", "owner@example.com")
@@ -343,7 +327,6 @@ func TestSSOCreatesAnInvitedAccountAndAcceptsEveryInvite(t *testing.T) {
 	ownerID := s.count(`SELECT id FROM users`)
 	ws2 := s.addWorkspace(int64(ownerID), "Second")
 	s.invite(owner, ws1, "new@example.com", RoleMember)
-	// The second workspace's invite is made directly: owner's client is only an admin of the first.
 	if _, err := s.db.Exec(`INSERT INTO invites (workspace_id, token_hash, email, role, created_by, expires_at)
 		VALUES (?, 'h2', 'new@example.com', 'admin', ?, ?)`, ws2, ownerID, stamp(s.svc.now().Add(time.Hour))); err != nil {
 		t.Fatal(err)
@@ -351,8 +334,6 @@ func TestSSOCreatesAnInvitedAccountAndAcceptsEveryInvite(t *testing.T) {
 
 	b := s.browser()
 	rec := s.signIn(b, "/invite#tok", map[string]any{"email": "New@Example.com", "email_verified": true, "name": "  Nia  "})
-	// Its invites are used up, so the invite screen would find nothing: it goes to the first
-	// workspace joined.
 	s.wantLogin(b, rec, fmt.Sprintf("/w/%d/conversations", ws1), "new@example.com")
 
 	var name, hash string
@@ -376,9 +357,7 @@ func TestSSOWithoutAnInviteMakesNoAccount(t *testing.T) {
 	s.invite(owner, ws, "invited@example.com", RoleMember)
 	s.invite(owner, ws, "late@example.com", RoleMember)
 
-	// Someone else's invite doesn't count.
 	s.wantFailure(s.signIn(s.browser(), "", verified("stranger@example.com")), apierr.CodeSSONoAccount)
-	// Nor does an invite that has expired.
 	s.advance(8 * 24 * time.Hour)
 	s.wantFailure(s.signIn(s.browser(), "", verified("late@example.com")), apierr.CodeSSONoAccount)
 
@@ -439,7 +418,6 @@ func TestSSOUserInfoFillsAMissingEmail(t *testing.T) {
 	b := s.browser()
 	s.wantLogin(b, s.signIn(b, "", map[string]any{}), "/", "owner@example.com")
 
-	// UserInfo for another subject is refused.
 	s2 := newSSOEnv(t)
 	s2.setup()
 	s2.idp.setUserinfo(map[string]any{"sub": "someone-else", "email": "owner@example.com", "email_verified": true})
@@ -459,8 +437,6 @@ func TestSSOStateIsBoundToTheBrowserAndWorksOnce(t *testing.T) {
 		b := s.browser()
 		q := s.start(b, "")
 		s.wantFailure(callback(b, q, "another-state"), apierr.CodeSSOExpired)
-		// A callback that doesn't match leaves the cookie alone: it belongs to a sign-in that
-		// may still be going on.
 		if _, ok := b.cookies[s.svc.ssoCookieName()]; !ok {
 			t.Fatal("the sign-in cookie was cleared by a callback that didn't match")
 		}
@@ -469,7 +445,6 @@ func TestSSOStateIsBoundToTheBrowserAndWorksOnce(t *testing.T) {
 		victim, attacker := s.browser(), s.browser()
 		s.start(victim, "")
 		qa := s.start(attacker, "")
-		// The attacker sends the victim a callback with the attacker's own state.
 		s.wantFailure(callback(victim, qa, qa.Get("state")), apierr.CodeSSOExpired)
 	})
 	t.Run("no cookie", func(t *testing.T) {
@@ -494,7 +469,6 @@ func TestSSOStateIsBoundToTheBrowserAndWorksOnce(t *testing.T) {
 		q := s.start(b, "")
 		saved := *b.cookies[s.svc.ssoCookieName()]
 		s.wantLogin(b, callback(b, q, q.Get("state")), "/", "owner@example.com")
-		// The same cookie and state again, as a replayed link in the same browser.
 		b.cookies[saved.Name] = &saved
 		s.wantFailure(callback(b, q, q.Get("state")), apierr.CodeSSOExpired)
 	})
@@ -505,7 +479,6 @@ func TestSSOStateIsBoundToTheBrowserAndWorksOnce(t *testing.T) {
 		defer delete(s.svc.sso.byID, "other")
 		rec := b.do(http.MethodGet, "/api/sso/other/callback?state="+url.QueryEscape(q.Get("state"))+"&code=x", nil)
 		s.wantFailure(rec, apierr.CodeSSOExpired)
-		// The wrong provider's callback consumed nothing: the right one still works.
 		s.wantLogin(b, callback(b, q, q.Get("state")), "/", "owner@example.com")
 	})
 }
@@ -528,7 +501,6 @@ func TestSSOStartAndCallbackAnswers(t *testing.T) {
 	}
 	s.wantFailure(b.do(http.MethodGet, "/api/sso/nope/callback?state=a&code=b", nil), apierr.CodeSSOUnknownProvider)
 
-	// The start is a POST: the CSRF guard refuses it from another site, and a form's type.
 	r := httptest.NewRequest(http.MethodPost, "/api/sso/fake/start", strings.NewReader(`{}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -541,7 +513,6 @@ func TestSSOStartAndCallbackAnswers(t *testing.T) {
 	s.h.ServeHTTP(form, r)
 	expect(t, form, http.StatusUnsupportedMediaType)
 
-	// A body is optional, and a malformed one is refused.
 	s.start(s.browser(), "\x00")
 	expect(t, s.browser().do(http.MethodPost, "/api/sso/fake/start", map[string]any{"next": 5}), http.StatusBadRequest)
 }
@@ -605,7 +576,6 @@ func TestSSOWontLinkAnotherSubjectOfTheSameIssuer(t *testing.T) {
 	b := s.browser()
 	s.wantLogin(b, s.signIn(b, "", verified("owner@example.com")), "/", "owner@example.com")
 
-	// The same address under a new subject, say a recreated or second account at the provider.
 	claims := verified("owner@example.com")
 	claims["sub"] = "sub-2"
 	s.wantFailure(s.signIn(s.browser(), "", claims), apierr.CodeSSOAccountLinkedElsewhere)
@@ -632,7 +602,7 @@ func TestSSOReplacesTheBrowsersSession(t *testing.T) {
 func TestSSODiscoveryIsLazy(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	dead.Close()
-	s := newSSOEnv(t, func(p *SSOProvider, _ *Options) { p.Issuer = dead.URL }) // New didn't touch it
+	s := newSSOEnv(t, func(p *SSOProvider, _ *Options) { p.Issuer = dead.URL })
 	rec := s.browser().do(http.MethodPost, "/api/sso/fake/start", map[string]string{})
 	expect(t, rec, http.StatusBadGateway)
 	if got := decode[map[string]string](t, rec)["code"]; got != "sso_failed" {
@@ -750,13 +720,11 @@ func TestPasswordLoginDisabled(t *testing.T) {
 	want(s.client().do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}))
 	want(s.client().do(http.MethodPost, "/api/invites/accept", map[string]string{"token": inviteToken, "name": "New", "password": otherPassword}))
 	want(s.client().do(http.MethodPost, "/api/password-reset", map[string]string{"token": resetToken, "password": otherPassword}))
-	// Making a reset link is refused too: nobody could use it.
 	want(owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/password-reset", ws, memberID), nil))
 	if n := s.count(`SELECT count(*) FROM password_resets`); n != 1 {
 		t.Fatalf("reset links = %d, want only the first", n)
 	}
 
-	// Nothing was used up by the refusals.
 	if n := s.count(`SELECT count(*) FROM invites WHERE accepted_at IS NULL`); n != 1 {
 		t.Fatalf("pending invites = %d", n)
 	}
@@ -764,7 +732,6 @@ func TestPasswordLoginDisabled(t *testing.T) {
 	expect(t, s.client().do(http.MethodPost, "/api/password-reset", map[string]string{"token": resetToken, "password": otherPassword}), http.StatusOK)
 }
 
-// addMember adds a user with a password to workspace as a member, and returns their ID.
 func (e *env) addMember(email string, workspace int64) int64 {
 	e.t.Helper()
 	hash, err := e.svc.hasher.hash(context.Background(), otherPassword)
@@ -790,21 +757,18 @@ func TestSSOOnlyUsersHaveNoPassword(t *testing.T) {
 	s.wantLogin(b, s.signIn(b, "", verified("new@example.com")), "/", "new@example.com")
 	userID := s.count(`SELECT id FROM users WHERE email = 'new@example.com'`)
 
-	// Logging in with a password fails like a wrong one: never a 500, and nothing to tell it from an unknown address.
 	rec := s.client().do(http.MethodPost, "/api/login", map[string]string{"email": "new@example.com", "password": otherPassword})
 	expect(t, rec, http.StatusUnauthorized)
 	if got := decode[map[string]string](t, rec)["code"]; got != "wrong_credentials" {
 		t.Fatalf("code %q", got)
 	}
 
-	// Changing the password needs a current one they don't have.
 	rec = b.do(http.MethodPost, "/api/me/password", map[string]string{"current_password": "anything-at-all", "new_password": otherPassword})
 	expect(t, rec, http.StatusForbidden)
 	if got := decode[map[string]string](t, rec)["code"]; got != "wrong_password" {
 		t.Fatalf("code %q", got)
 	}
 
-	// An admin's reset link still gives them one.
 	reset := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/password-reset", ws, userID), nil)
 	expect(t, reset, http.StatusCreated)
 	expect(t, s.client().do(http.MethodPost, "/api/password-reset",

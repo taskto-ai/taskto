@@ -19,17 +19,11 @@ import (
 	"time"
 )
 
-// deploy/taskto-update.sh, the host's updater (docs/install.md#automatic-updates), run for
-// real against fakes: a GitHub API and raw-file server, and a `docker` that records its calls
-// and fails on demand (testdata/fake-docker). The tests need bash, curl, jq and flock, which
-// CI's runner has; elsewhere they skip.
-
 const (
 	updOld = "v0.2.0"
 	updNew = "v0.3.0"
 )
 
-// shaOf is the commit a ref is: a full SHA is itself, a tag is a made-up one.
 func shaOf(ref string) string {
 	if regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(ref) {
 		return ref
@@ -38,20 +32,18 @@ func shaOf(ref string) string {
 	return hex.EncodeToString(sum[:20])
 }
 
-// fakeGitHub serves the few GitHub routes the updater reads, the files of each commit, and the
-// /healthz of the server the fake docker "started", and of the proxy in front of it.
 type fakeGitHub struct {
 	mu        sync.Mutex
 	fakeDir   string
 	releases  []map[string]any
 	runs      []map[string]any
-	compare   map[string]string            // head -> status
-	files     map[string]map[string]string // by commit SHA
+	compare   map[string]string
+	files     map[string]map[string]string
 	requests  []string
-	failPages map[int]bool // pages of the releases that answer 500
+	failPages map[int]bool
 
-	notifications []notification // what was POSTed to /notify/...
-	notifyStatus  int            // the status /notify/... answers with (default 200)
+	notifications []notification
+	notifyStatus  int
 }
 
 type notification struct {
@@ -76,8 +68,6 @@ func (g *fakeGitHub) health(w http.ResponseWriter, file string) {
 	fmt.Fprintf(w, `{"status":"ok","version":%q,"database":"ok","agent":"ready"}`, strings.TrimSpace(string(b)))
 }
 
-// locked runs f with g's lock held: the test's goroutine changes what g serves, or reads what it
-// was sent, while g's handlers may run.
 func (g *fakeGitHub) locked(f func()) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -170,8 +160,6 @@ type updEnv struct {
 	extra                                []string
 }
 
-// needTools skips the test when a program it runs isn't on PATH, and fails it on CI, whose
-// runner has them: a missing program is never taken for the result of what it should have run.
 func needTools(t *testing.T, tools ...string) {
 	t.Helper()
 	for _, tool := range tools {
@@ -186,7 +174,6 @@ func needTools(t *testing.T, tools ...string) {
 
 func newUpdEnv(t *testing.T) *updEnv { return newUpdEnvIn(t, t.TempDir()) }
 
-// newUpdEnvIn is newUpdEnv with everything under dir.
 func newUpdEnvIn(t *testing.T, dir string) *updEnv {
 	t.Helper()
 	needTools(t, "bash", "curl", "jq", "flock")
@@ -210,8 +197,6 @@ func newUpdEnvIn(t *testing.T, dir string) *updEnv {
 	}
 	e.write("bin/docker", string(fakeDocker))
 	e.write("bin/systemctl", "#!/bin/sh\necho \"systemctl $*\" >>\"$FAKE_DIR/calls\"\n")
-	// curl, with the proxy's public address answered by the fake server: what it was asked for
-	// is in $FAKE_DIR/curl-calls.
 	e.write("bin/curl", `#!/bin/bash
 echo "$*" >>"$FAKE_DIR/curl-calls"
 args=()
@@ -237,7 +222,6 @@ exec /usr/bin/env curl "${args[@]}"
 	e.server = httptest.NewServer(e.gh)
 	t.Cleanup(e.server.Close)
 
-	// An install on updOld, as deploy/INSTALL.md leaves one.
 	e.write("srv/compose.yaml", "# compose "+updOld+"\n# TASKTO_IMAGE_PREFIX\n")
 	e.write("srv/deploy/Caddyfile", "caddy\n")
 	e.setVersion(updOld)
@@ -279,7 +263,6 @@ func (e *updEnv) exists(name string) bool {
 	return err == nil
 }
 
-// setVersion writes the install's .env (Compose's settings) for a version.
 func (e *updEnv) setVersion(v string) {
 	e.write("srv/.env", "# Written by deploy/INSTALL.md (step 6)\nCOMPOSE_PROFILES=cli,https\nTASKTO_IMAGE_PREFIX=ghcr.io/taskto-ai/\nTASKTO_VERSION="+v+"\nTASKTO_DOMAIN=tasks.example.com\n")
 }
@@ -290,8 +273,6 @@ func (e *updEnv) setInstallVersion(v string) {
 	e.write("etc/install.env", b+"TASKTO_VERSION='"+v+"'\n")
 }
 
-// firewallScript is the worker's firewall script of every version here (a version that changes
-// it is a manual upgrade); its check fails while $FAKE_DIR/no-rules exists.
 const firewallScript = "#!/bin/sh\n# firewall\n[ \"$1\" != check ] || [ ! -e \"$FAKE_DIR/no-rules\" ]\n"
 
 func (e *updEnv) writeFirewall(v string) {
@@ -301,8 +282,6 @@ func (e *updEnv) writeFirewall(v string) {
 	}
 }
 
-// publish puts a ref's commit on the fake raw server, and its images' revision label on the
-// fake docker. The safety script is the real one.
 func (e *updEnv) publish(ref string) {
 	files := map[string]string{
 		"compose.yaml":              "# compose " + ref + "\n# TASKTO_IMAGE_PREFIX\n",
@@ -314,12 +293,10 @@ func (e *updEnv) publish(ref string) {
 	e.write("fake/revision-"+ref, shaOf(ref))
 }
 
-// file of the commit of a ref, to change it.
 func (e *updEnv) commitFile(ref, name, content string) {
 	e.gh.locked(func() { e.gh.files[shaOf(ref)][name] = content })
 }
 
-// mutate makes a version's running containers break a safety rule.
 func (e *updEnv) mutate(version string, kinds ...string) {
 	var b strings.Builder
 	for _, k := range kinds {
@@ -328,7 +305,6 @@ func (e *updEnv) mutate(version string, kinds ...string) {
 	e.write("fake/mutate", b.String())
 }
 
-// setRunning is the version the fake server answers as.
 func (e *updEnv) setRunning(v string) { e.write("fake/running", v+"\n") }
 
 func (e *updEnv) release(tag, body string, draft, pre bool) {
@@ -338,12 +314,10 @@ func (e *updEnv) release(tag, body string, draft, pre bool) {
 	e.publish(tag)
 }
 
-// failCalls makes the fake docker fail every call whose line matches one of the patterns.
 func (e *updEnv) failCalls(patterns ...string) {
 	e.write("fake/fail", strings.Join(patterns, "\n")+"\n")
 }
 
-// unpublish makes a tag's images missing from the registry.
 func (e *updEnv) unpublish(tag string) {
 	e.failCalls(`^manifest inspect \S+:` + regexp.QuoteMeta(tag) + ` @`)
 }
@@ -361,14 +335,11 @@ func (e *updEnv) command(args ...string) *exec.Cmd {
 		"TASKTO_UPDATE_NOTIFY_FILE=" + filepath.Join(e.etc, "update-notify-url"),
 		"TASKTO_UPDATE_API=" + e.server.URL, "TASKTO_UPDATE_RAW=" + e.server.URL + "/raw", "TASKTO_UPDATE_HEALTH=" + e.server.URL + "/healthz",
 		"TASKTO_UPDATE_HELPER=helper:test", "TASKTO_UPDATE_VERIFY_TIMEOUT=2", "TASKTO_UPDATE_POLL=1",
-		// The public directory must be its owner's, as root's on a host: here, the test's, and the
-		// check of the directories above it stops at the test's own.
 		"TASKTO_UPDATE_OWNER=" + strconv.Itoa(os.Getuid()), "TASKTO_UPDATE_TRUSTED_ROOT=" + e.dir,
 	}, e.extra...)
 	return cmd
 }
 
-// run the updater; its exit status and what it printed.
 func (e *updEnv) run(args ...string) (int, string) {
 	e.t.Helper()
 	out, err := e.command(args...).CombinedOutput()
@@ -381,7 +352,6 @@ func (e *updEnv) run(args ...string) (int, string) {
 		code = ee.ExitCode()
 	}
 	e.t.Logf("taskto-update %v: exit %d\n%s", args, code, out)
-	// Its staging directory is gone, whatever happened.
 	if left, _ := os.ReadDir(e.tmp); len(left) != 0 {
 		e.t.Errorf("the updater left %d files in its temporary directory", len(left))
 	}
@@ -402,7 +372,6 @@ func (e *updEnv) calls() []string {
 	return strings.Split(strings.TrimSpace(string(b)), "\n")
 }
 
-// count is how many recorded calls match the pattern.
 func (e *updEnv) count(pattern string) int {
 	re := regexp.MustCompile(pattern)
 	n := 0
@@ -414,7 +383,6 @@ func (e *updEnv) count(pattern string) int {
 	return n
 }
 
-// index is the position of a call in the record, -1 when there is none.
 func (e *updEnv) index(pattern string) int {
 	re := regexp.MustCompile(pattern)
 	for i, c := range e.calls() {
@@ -440,7 +408,6 @@ func (e *updEnv) wantStatus(result, reasonPart string) map[string]any {
 	return st
 }
 
-// wantOld: the install is as it was: files, .env, firewall, no backup, no change made.
 func (e *updEnv) wantUntouched() {
 	e.t.Helper()
 	for name, want := range map[string]string{
@@ -471,7 +438,6 @@ func TestUpdateNothingNewer(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updOld, "", false, false)
-	// None of these is a release to install: a pre-release, a draft, tags that aren't vX.Y.Z.
 	e.release("v0.4.0", "", false, true)
 	e.release("v0.4.1", "", true, false)
 	e.release("v0.4.2-rc1", "", false, false)
@@ -497,7 +463,6 @@ func TestUpdateImagesNotPublishedYet(t *testing.T) {
 	e.wantStatus("skipped", "images aren't published")
 	e.wantUntouched()
 
-	// An older release that is published, and newer than this install, is the one to take.
 	e.release("v0.2.5", "", false, false)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
@@ -538,7 +503,6 @@ func TestUpdateSucceeds(t *testing.T) {
 			t.Errorf("digest of %s = %q", name, d)
 		}
 	}
-	// The new files, the same settings with the new version, the runbook's inputs on the VM.
 	if got := e.read("srv/compose.yaml"); got != "# compose "+updNew+"\n# TASKTO_IMAGE_PREFIX\n" {
 		t.Errorf("compose.yaml = %q", got)
 	}
@@ -551,7 +515,6 @@ func TestUpdateSucceeds(t *testing.T) {
 	if got := e.read("etc/install.env"); got != "TASKTO_MODE='caddy'\nTASKTO_REGISTRY='ghcr.io/taskto-ai'\nTASKTO_VERSION='"+updNew+"'\n" {
 		t.Errorf("install.env = %q", got)
 	}
-	// The firewall is never touched by the updater, only checked.
 	if got := e.read("taskto-worker-firewall"); got != firewallScript+"# "+updOld+"\n" {
 		t.Errorf("firewall = %q", got)
 	}
@@ -564,7 +527,6 @@ func TestUpdateSucceeds(t *testing.T) {
 	if e.exists("state/transaction") {
 		t.Error("the update's record is left after a success")
 	}
-	// Every file came from the one commit, never by the tag; the images are the commit's.
 	e.gh.mu.Lock()
 	for _, r := range e.gh.requests {
 		if strings.HasPrefix(r, "/raw/") && !strings.HasPrefix(r, "/raw/taskto-ai/taskto/"+shaOf(updNew)+"/") && !strings.HasPrefix(r, "/raw/taskto-ai/taskto/"+shaOf(updOld)+"/") {
@@ -575,15 +537,12 @@ func TestUpdateSucceeds(t *testing.T) {
 	if st["sha"] != shaOf(updNew) {
 		t.Errorf("status sha = %v", st["sha"])
 	}
-	// The proxy was asked over HTTPS for its own domain, from this machine.
 	if b, _ := os.ReadFile(filepath.Join(e.fake, "curl-calls")); !strings.Contains(string(b), "--resolve tasks.example.com:443:127.0.0.1 https://tasks.example.com/healthz") {
 		t.Errorf("the proxy wasn't checked: %s", b)
 	}
-	// An unchanged Caddyfile leaves Caddy as it is.
 	if e.count(`force-recreate`) != 0 {
 		t.Error("Caddy was recreated for an unchanged Caddyfile")
 	}
-	// The old files are kept for a way back, the order is backup, then switch.
 	if got := e.read("state/previous/.env"); !strings.Contains(got, "TASKTO_VERSION="+updOld) {
 		t.Errorf("previous .env = %q", got)
 	}
@@ -591,8 +550,6 @@ func TestUpdateSucceeds(t *testing.T) {
 	if backedUp < 0 || up < 0 || backedUp > up {
 		t.Errorf("backup at %d, up at %d: want the backup first", backedUp, up)
 	}
-	// The old images, as the running containers have them (by id), are kept under tags of
-	// their own before anything changes.
 	for _, n := range []string{"taskto", "taskto-cli-worker"} {
 		svc := strings.TrimPrefix(n, "taskto-")
 		if n == "taskto" {
@@ -605,13 +562,11 @@ func TestUpdateSucceeds(t *testing.T) {
 	if e.count(`^compose stop|^compose down|^compose run|^volume (rm|create|prune)|^run |^update |^rm `) != 0 {
 		t.Errorf("a command the updater never runs here was run\n%s", strings.Join(e.calls(), "\n"))
 	}
-	// Every named volume of the new settings was looked at, and none made.
 	for _, v := range []string{"taskto_data", "taskto_cli-run", "taskto_cli-homes", "taskto_caddy-data", "taskto_caddy-config"} {
 		if e.count(`^volume inspect `+v+`( |$)`) < 1 {
 			t.Errorf("the volume %s wasn't looked at before the switch", v)
 		}
 	}
-	// The containers were made, checked and only then started; one explicit list of Compose files.
 	if made, started := e.index(`^compose create `), e.index(`^compose start `); made < 0 || started < made || e.count(`^compose up`) != 0 {
 		t.Errorf("create at %d, start at %d, up %d: the containers are made before they start, never by up", made, started, e.count(`^compose up`))
 	}
@@ -621,7 +576,6 @@ func TestUpdateSucceeds(t *testing.T) {
 	if last, _ := e.status()["last_change"].(map[string]any); last["result"] != "updated" {
 		t.Errorf("last_change = %v", last)
 	}
-	// A run with nothing new keeps what the last change was.
 	e.gh.locked(func() { e.gh.releases = e.gh.releases[:0] })
 	e.release(updNew, "", false, false)
 	if code, _ := e.run(); code != 0 {
@@ -680,7 +634,6 @@ func TestUpdateHoldAndOff(t *testing.T) {
 	e.wantStatus("skipped", "are off")
 	e.wantUntouched()
 
-	// An operator's own --to goes ahead of both.
 	e.write("etc/update.hold", "")
 	if code, _ := e.run("--to", updNew); code != 0 {
 		t.Fatal("--to didn't update")
@@ -693,7 +646,6 @@ func TestUpdateSkipsManualUpgrades(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
 	e.release("v0.4.0", "Nothing special.\n", false, false)
-	// The newer release is fine, but the one it passes needs a person.
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -702,7 +654,6 @@ func TestUpdateSkipsManualUpgrades(t *testing.T) {
 	if e.count(`^pull`) != 0 {
 		t.Error("an image was pulled for a release that needs manual steps")
 	}
-	// The person did them: --to goes ahead.
 	if code, _ := e.run("--to", "v0.4.0"); code != 0 {
 		t.Fatal("--to didn't update")
 	}
@@ -757,8 +708,6 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 			func(e *updEnv) { e.write("fake/config-volname", "other_data") },
 			"the /data of taskto is 'other_data', not 'taskto_data'",
 		},
-		// The volume's name in the file is kept, and the server mounts another: the effective
-		// volume of the mount is what counts, not volumes.data.
 		"a candidate that keeps volumes.data.name and mounts another volume on the server": {
 			func(e *updEnv) {
 				e.write("fake/config-edit", `.services.taskto.volumes[0].source = "replacement" | .volumes.replacement = {name: "replacement"}`)
@@ -826,7 +775,6 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 	}
 }
 
-// Without the firewall's script there is nothing to hold the worker in: the update is refused.
 func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -843,7 +791,6 @@ func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
 	}
 }
 
-// A version that changes the worker's firewall is for a person: the run is skipped, whole.
 func TestUpdateChangedFirewallIsAManualUpgrade(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -857,7 +804,6 @@ func TestUpdateChangedFirewallIsAManualUpgrade(t *testing.T) {
 	if e.count(`^pull`) != 0 {
 		t.Error("an image was pulled")
 	}
-	// --to doesn't apply it either; once a person has, it goes ahead.
 	if code, _ := e.run("--to", updNew); code != 1 {
 		t.Fatalf("--to: exit %d", code)
 	}
@@ -879,7 +825,7 @@ func TestUpdateRunsOneAtATime(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	e.write("fake/block", "") // the first run waits in its first pull
+	e.write("fake/block", "")
 	first := e.command()
 	var firstOut strings.Builder
 	first.Stdout, first.Stderr = &firstOut, &firstOut
@@ -895,7 +841,7 @@ func TestUpdateRunsOneAtATime(t *testing.T) {
 		}
 	}
 	before := len(e.calls())
-	out, err := e.command().CombinedOutput() // not run(): the first run's staging directory is in use
+	out, err := e.command().CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "already running") || len(e.calls()) != before || e.exists("state/status.json") {
 		t.Errorf("the second run: %v, calls %d -> %d\n%s", err, before, len(e.calls()), out)
 	}
@@ -920,7 +866,6 @@ func TestUpdateDryRunChangesNothing(t *testing.T) {
 	if e.exists("state") && len(mustReadDir(t, e.state)) != 0 {
 		t.Error("a dry run wrote to the state directory")
 	}
-	// It makes no backup directory, and doesn't change the mode of one that is there.
 	fresh := filepath.Join(e.dir, "not", "yet", "backups")
 	e.extra = []string{"TASKTO_UPDATE_BACKUPS=" + fresh}
 	if code, out := e.run("--dry-run"); code != 0 {
@@ -939,7 +884,6 @@ func TestUpdateDryRunChangesNothing(t *testing.T) {
 	if fi, _ := os.Stat(e.backups); fi.Mode().Perm() != 0o755 {
 		t.Errorf("a dry run changed the backup directory's mode to %v", fi.Mode().Perm())
 	}
-	// It pulls: the three images, and the other image of the enabled services (Caddy).
 	if e.count(`^pull`) != 4*3 || e.count(`^compose --project-directory \S+ config --quiet @`+updNew+`$`) != 3 {
 		t.Errorf("a dry run checks the images and the Compose settings\n%s", strings.Join(e.calls(), "\n"))
 	}
@@ -968,8 +912,6 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 	run := func(sha, conclusion string) map[string]any {
 		return map[string]any{"head_sha": sha, "head_branch": "main", "conclusion": conclusion}
 	}
-	// Newest first: a commit whose CI failed, one off a side branch, one whose images aren't
-	// published, the one to take, and the install's own.
 	e.gh.locked(func() {
 		e.gh.runs = []map[string]any{run(red, "failure"), run(diverged, "success"), run(unpublished, "success"), run(green, "success"), run(a, "success")}
 		e.gh.compare = map[string]string{red: "ahead", diverged: "diverged", unpublished: "ahead", green: "ahead", a: "identical"}
@@ -998,7 +940,6 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 		t.Error("the CI runs weren't asked for by success")
 	}
 
-	// Now on it: nothing newer.
 	e.gh.locked(func() {
 		e.gh.runs = []map[string]any{run(green, "success"), run(a, "success")}
 		e.gh.compare[green] = "identical"
@@ -1013,9 +954,6 @@ func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	// Five of the updater's own, and what isn't its own: a runbook's by-hand backup, another
-	// file, a symbolic link and a directory with its name, and a restic repository's directory.
-	// The order is the time in the name, not the file's.
 	now := time.Now()
 	old := func(name string, age time.Duration) {
 		p := filepath.Join(e.backups, name)
@@ -1025,7 +963,6 @@ func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
 		}
 	}
 	for i := 1; i <= 5; i++ {
-		// The oldest by name is the newest by file time.
 		old(fmt.Sprintf("before-update-from-v0.1.%d-to-v0.1.%d-2020010%d-000000.tar.gz", i, i+1, i), time.Duration(i)*24*time.Hour)
 	}
 	old("before-update-from-v0.1.0-20200101-030405.tar.gz", 100*24*time.Hour)
@@ -1047,7 +984,6 @@ func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
 		left = append(left, f.Name())
 	}
 	got := strings.Join(left, " ")
-	// The new one, and the two newest by name of the five (4 and 5); nothing else of the updater's.
 	for _, want := range []string{"-to-v0.1.5-", "-to-v0.1.6-", "-to-v0.3.0-", "before-update-from-v0.1.0-20200101-030405.tar.gz", "notes.txt", "restic",
 		"before-update-from-v0.0.1-to-v0.0.2-20190101-000000.tar.gz", "before-update-from-v0.0.3-to-v0.0.4-20190101-000000.tar.gz"} {
 		if !strings.Contains(got, want) {
@@ -1061,8 +997,6 @@ func TestUpdatePruneKeepsOnlyItsOwnLatest(t *testing.T) {
 	}
 }
 
-// The updater is a host program, not the server's: nothing in the Compose file gives a
-// container the Docker socket, and the units run it as a nightly one-shot that catches up.
 func TestUpdaterIsOnTheHostOnly(t *testing.T) {
 	t.Parallel()
 	if strings.Contains(readRepoFile(t, "compose.yaml"), "docker.sock") {
@@ -1097,13 +1031,11 @@ func TestUpdaterIsOnTheHostOnly(t *testing.T) {
 	}
 }
 
-// The server that answers as another version than the .env says was changed outside the
-// updater: nothing runs until a person has looked.
 func TestUpdateBlocksWhenTheServerIsNotTheVersionOnRecord(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	e.setVersion(updNew) // the .env says the new one; the server still runs the old
+	e.setVersion(updNew)
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
@@ -1114,25 +1046,21 @@ func TestUpdateBlocksWhenTheServerIsNotTheVersionOnRecord(t *testing.T) {
 	if e.count(`.`) != 0 {
 		t.Error("docker was called")
 	}
-	// It stays blocked, for --to too; a dry run reports it, and writes nothing.
 	if code, out := e.run(); code != 1 || !strings.Contains(out, "blocked") {
 		t.Fatalf("second run: exit %d\n%s", code, out)
 	}
 }
 
-// tagOfLength is a vMAJOR.MINOR.PATCH of n characters (a patch of many digits).
 func tagOfLength(n int) string { return "v1.0.1" + strings.Repeat("0", n-len("v1.0.1")) }
 
 func TestUpdateOnlyTheCanonicalVersionGrammar(t *testing.T) {
 	t.Parallel()
-	// Leading zeros, pre-releases and build metadata aren't releases, or --to values.
 	for _, to := range []string{"v01.0.0", "v1.02.0", "v1.0.0-rc1", "v1.0.0+build", "1.0.0", "v1.0", "V1.0.0", "main", "abc123"} {
 		e := newUpdEnv(t)
 		if code, out := e.run("--to", to); code != 2 || !strings.Contains(out, "--to takes") {
 			t.Errorf("--to %q: exit %d\n%s", to, code, out)
 		}
 	}
-	// The longest tag is 100 characters, in the updater and in release.yml: one more isn't a release.
 	if code, out := newUpdEnv(t).run("--to", tagOfLength(101)); code != 2 || !strings.Contains(out, "--to takes") {
 		t.Errorf("--to a tag of 101 characters: exit %d\n%s", code, out)
 	}
@@ -1151,7 +1079,6 @@ func TestUpdateOnlyTheCanonicalVersionGrammar(t *testing.T) {
 	e.wantUntouched()
 }
 
-// Versions compare as numbers, which no shell arithmetic or float would get right.
 func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ installed, release string }{
@@ -1169,7 +1096,6 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 			e.setInstallVersion(tc.installed)
 			e.setRunning(tc.installed)
 			e.publish(tc.installed)
-			// Releases are listed by creation date: not in order of version.
 			e.release(tc.release, "", false, false)
 			e.release(tc.installed, "", false, false)
 			if code, _ := e.run(); code != 0 {
@@ -1180,7 +1106,6 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 			}
 		})
 	}
-	// And never the other way.
 	e := newUpdEnv(t)
 	e.setVersion("v1.10.0")
 	e.setInstallVersion("v1.10.0")
@@ -1193,7 +1118,6 @@ func TestUpdateComparesVersionsAsDecimalStrings(t *testing.T) {
 	e.wantStatus("up-to-date", "")
 }
 
-// The registry login is in a Docker config of the updater's own, which is gone after.
 func TestUpdateLogsInWithAConfigOfItsOwn(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -1220,7 +1144,6 @@ func TestUpdateLogsInWithAConfigOfItsOwn(t *testing.T) {
 	}
 }
 
-// workflowStep is the shell script of a step of a workflow, by the step's name.
 func workflowStep(t *testing.T, workflow, name string) string {
 	t.Helper()
 	lines := strings.Split(readRepoFile(t, workflow), "\n")
@@ -1249,14 +1172,11 @@ func workflowStep(t *testing.T, workflow, name string) string {
 	return ""
 }
 
-// Anything the updater does, the workflow that cuts a release makes possible: one commit,
-// the tag made by the API's create-a-reference call at it (which can't take over a tag that
-// exists), the notes complete before the release counts.
 func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 	t.Parallel()
 	wf := readRepoFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{
-		`--method POST "repos/$GH_REPO/git/refs"`, // the API creates the reference only if there is none
+		`--method POST "repos/$GH_REPO/git/refs"`,
 		`-f "ref=refs/tags/$VERSION"`, `-f "sha=$GITHUB_SHA"`,
 		`--verify-tag`,
 		`manual_upgrade:`, `notes:`,
@@ -1267,7 +1187,6 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 			t.Errorf("release.yml doesn't have %q", want)
 		}
 	}
-	// No git push of the tag (which succeeds for a tag that exists at the same commit), no force.
 	for _, never := range []string{"git push", "--target", "--force", "push -f"} {
 		if strings.Contains(wf, never) {
 			t.Errorf("release.yml has %q: the tag is made by the API, never pushed or forced", never)
@@ -1276,7 +1195,6 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 	if i, j := strings.Index(wf, `git/refs`), strings.Index(wf, `gh release create`); i < 0 || j < i {
 		t.Error("release.yml doesn't make the tag before it creates the release")
 	}
-	// The job's permissions: contents (the tag and the release) and actions (the images), and nothing broader.
 	job := wf[strings.Index(wf, "  release:\n"):]
 	perms := job[strings.Index(job, "    permissions:\n"):]
 	perms = perms[:strings.Index(perms, "    env:")]
@@ -1292,13 +1210,11 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 	if !strings.Contains(wf, "\npermissions:\n  contents: read\n") {
 		t.Error("the workflow's default permission isn't contents: read")
 	}
-	// An input reaches a shell only as an environment variable.
 	for i, line := range strings.Split(wf, "\n") {
 		if strings.Contains(line, "${{ inputs.") && !regexp.MustCompile(`^\s+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}$`).MatchString(line) {
 			t.Errorf("release.yml:%d uses an input outside an env: %s", i+1, line)
 		}
 	}
-	// The tag's own commit is what the images are built from, and say so.
 	if !strings.Contains(readRepoFile(t, ".github/scripts/images.sh"), `--label org.opencontainers.image.revision="$sha"`) {
 		t.Error("images.sh doesn't label the images with their commit")
 	}
@@ -1308,9 +1224,6 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 	}
 }
 
-// The tag step, run as written, with a gh that records what it is asked: it creates the
-// reference through the API, at the commit and for the version, and it stops, with nothing
-// else made, when the API refuses (the tag exists).
 func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 	t.Parallel()
 	needTools(t, "bash")
@@ -1321,7 +1234,6 @@ func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 		wantFail bool
 	}{{"the tag is new", false, false}, {"the API says the reference exists", true, true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			// A directory with a space in its name: the stub's log is quoted, whatever TMPDIR is.
 			dir := filepath.Join(t.TempDir(), "a directory")
 			if err := os.Mkdir(dir, 0o755); err != nil {
 				t.Fatal(err)
@@ -1356,9 +1268,6 @@ func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 	}
 }
 
-// The version check of release.yml, run as it is written there, and the updater's grammar
-// agree: vMAJOR.MINOR.PATCH, at most 100 characters, and the whole input is the version: a
-// second line that isn't, whatever the first says, is refused.
 func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 	t.Parallel()
 	needTools(t, "bash")
@@ -1379,7 +1288,6 @@ func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 		cmd := exec.Command("bash", "-c", `fail() { exit 1; }; `+check)
 		cmd.Env = append(os.Environ(), "VERSION="+tag)
 		err := cmd.Run()
-		// Only the check's own refusal (a plain exit status) is a result; bash not starting is not.
 		var exit *exec.ExitError
 		if err != nil && !errors.As(err, &exit) {
 			t.Fatalf("release.yml's check couldn't be run on %q: %v", tag, err)
@@ -1390,8 +1298,6 @@ func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 	}
 }
 
-// Step 12 of the runbook and the updater run one script, and the updater won't update with
-// the rules unchecked.
 func TestSafetyChecksAreOneScript(t *testing.T) {
 	t.Parallel()
 	runbook := readRepoFile(t, "deploy/INSTALL.md")
@@ -1405,7 +1311,6 @@ func TestSafetyChecksAreOneScript(t *testing.T) {
 	if !strings.Contains(script, "deploy/safety-check.sh") || strings.Contains(script, "CapDrop") || strings.Contains(script, "cap_add") {
 		t.Error("the updater doesn't run deploy/safety-check.sh, or checks rules of its own")
 	}
-	// It runs it twice: on the new settings before anything starts, and live after.
 	if !strings.Contains(script, `safety-check.sh" --static "$stage"`) {
 		t.Error("the updater doesn't check the new settings statically before it starts anything")
 	}

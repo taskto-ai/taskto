@@ -1,12 +1,3 @@
-// An app used without the server: what a downloaded release shows, and what an insert made
-// offline does to it, worked out here from the download and the queue.
-//
-// This never decides anything. The server checks every record again when it comes in (its
-// answer is the only one that says a record was accepted), so what is checked here is only what
-// saves the person a wait: a required field, a number that isn't one, a photo's limits. The
-// counts and sums the app shows are computed over the downloaded records and the records queued
-// on this device, and the page says so (OfflineBanner): they are never the server's totals.
-
 import { ApiError, type OfflineApp } from '../api'
 import { holds, type Rule } from '../apps/rules'
 import { type ChangeKind, type Download, kindOf, type OutboxItem } from './store'
@@ -21,14 +12,10 @@ type Field = Definition['collection']['fields'][number] & {
 
 export type Message = Record<string, unknown>
 
-// A refusal made on the device, shaped as the server's so the page says it the same way
-// (errors.<code> in the locale files).
 function refused(code: string, params?: Record<string, unknown>): ApiError {
   return new ApiError(422, code, { error: code, code, ...(params ? { params } : {}) })
 }
 
-// The record the context would make, each value as the server stores it, or the first thing wrong
-// with it. A mirror of the server's Field.parse for the insert's fields.
 export function parseInsert(def: Definition, context: Record<string, unknown>): Record<string, unknown> {
   const fields = def.collection.fields as Field[]
   const byName = new Map(fields.map((f) => [f.name, f]))
@@ -44,7 +31,6 @@ export function parseInsert(def: Definition, context: Record<string, unknown>): 
   return values
 }
 
-// The first required field a record lacks: always required, or required when its rule holds.
 export function requireFields(def: Definition, values: Record<string, unknown>): void {
   for (const f of def.collection.fields as Field[]) {
     const missing = values[f.name] === undefined
@@ -55,9 +41,6 @@ export function requireFields(def: Definition, values: Record<string, unknown>):
   }
 }
 
-// What an update sets, each value as the server stores it, and null for a field it clears. A
-// mirror of the server's Plan for an update: only the fields the context names (and not its id),
-// each of which must be one the collection declares.
 export function parseUpdate(def: Definition, context: Record<string, unknown>): Record<string, unknown> {
   const byName = new Map((def.collection.fields as Field[]).map((f) => [f.name, f]))
   const changes: Record<string, unknown> = {}
@@ -70,16 +53,12 @@ export function parseUpdate(def: Definition, context: Record<string, unknown>): 
   return changes
 }
 
-// The record's own fields: an item without its id and the keys the device adds (`_revision`,
-// `_pending`).
 export function fieldsOf(item: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(item)) if (k !== 'id' && !k.startsWith('_')) out[k] = v
   return out
 }
 
-// Applies an update's changes to a record's fields and checks the result against the collection,
-// as the server does before it writes: a required field must not end up missing.
 export function applyUpdate(
   def: Definition,
   fields: Record<string, unknown>,
@@ -95,8 +74,6 @@ export function applyUpdate(
 }
 
 export function parseField(f: Field, raw: unknown): unknown {
-  // A scanner's text is taken as it was read: a line break or a tab around a code is no padding to
-  // trim but a character that isn't part of one (the server refuses it too).
   if (f.type === 'barcode' && typeof raw === 'string' && raw.trim() !== '' && CONTROL.test(raw)) {
     throw refused('app_field_not_barcode', { field: f.name, format: f.format ?? '' })
   }
@@ -162,25 +139,18 @@ export function parseField(f: Field, raw: unknown): unknown {
   return undefined
 }
 
-// The fields of an app's collection that hold pictures made on this device: photos and signatures.
-// Both are sent as the queue's attachments: uploaded first, then named by their server ids.
 export function attachmentFields(def: Definition): string[] {
   return def.collection.fields.filter((f) => f.type === 'attachment' || f.type === 'signature').map((f) => f.name)
 }
 
-// The attachment ids a value of such a field holds: a list of photos, or the one a signature has.
 export function attachmentIdsOf(value: unknown): string[] {
   if (typeof value === 'string') return [value]
   return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []
 }
 
-// ---- the capture fields: mirrors of the server's checks (internal/apps/capture.go) ----------------------
-
 const CONTROL = /\p{Cc}/u
 const ATTACHMENT_ID = /^[0-9a-f]{32}$/
 
-// The formats whose text is a number the server checks: its length, and whether the last digit is a
-// check digit (GS1: the weights 3 and 1 alternate from the digit before it).
 const CHECKED: Record<string, { lengths: number[]; check: boolean }> = {
   ean_13: { lengths: [13], check: true },
   ean_8: { lengths: [8], check: true },
@@ -207,9 +177,6 @@ function parseBarcode(f: Field, v: unknown): string {
   return v
 }
 
-// A location, as the server stores it: a position within the globe, how sure the device was, when it
-// said so (RFC 3339, from 2000 on, and not later than the clock by more than five minutes) and where it
-// came from. An object with no keys is no value.
 const LOCATION_KEYS = ['lat', 'lon', 'accuracy_m', 'captured_at', 'source']
 const MAX_ACCURACY = 1_000_000
 const MAX_CLOCK_SKEW = 5 * 60 * 1000
@@ -238,7 +205,6 @@ function parseLocation(f: Field, v: unknown): Record<string, unknown> | undefine
   if (!time) throw bad()
   const [year, month, day, hour, minute, second] = time.slice(1, 7).map(Number)
   const stamp = Date.UTC(year, month - 1, day, hour, minute, second)
-  // A date that isn't one (the 30th of February) is no time.
   const check = new Date(stamp)
   if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) throw bad()
   const instant = Date.parse(at as string)
@@ -248,8 +214,6 @@ function parseLocation(f: Field, v: unknown): Record<string, unknown> | undefine
   return out
 }
 
-// A signature is one attachment id: the id of the picture staged on this device (which the queue
-// uploads and replaces with the server's), as text or as a list of one.
 function parseSignature(f: Field, v: unknown): string | undefined {
   const bad = () => refused('app_field_not_signature', { field: f.name })
   let id = v
@@ -262,29 +226,17 @@ function parseSignature(f: Field, v: unknown): string | undefined {
   return id
 }
 
-// Items as the data model holds them: id, then the values.
 type Item = Record<string, unknown>
 
-// The records an app shows offline: the downloaded ones with the changes waiting on this device
-// applied, then the records queued here. A record the person changed is shown as they left it and
-// says so (`_pending`); one they deleted is not shown. `_revision` stays the revision the change
-// was based on, so a further change is based on it too; once the server acknowledged a change the
-// record is the server's, as it answered (unknown, and so with no revision, if its answer didn't
-// say).
 export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
   const base = dataModelOf(download.messages)
   let items = (Array.isArray(base?.items) ? (base.items as Item[]) : []).slice()
   const created: Item[] = []
   for (const q of [...queue].sort((a, b) => a.seq - b.seq)) {
     if (!(q.action.name in download.definition.actions)) continue
-    // A record this device sent is among the downloaded ones once a download was taken after the
-    // server had it (the download names the operation that made each of the person's records):
-    // it is the server's, shown once, and never again as the device's own.
     if (q.operation in (download.operations ?? {})) continue
     const kind = kindOf(q)
     if (kind === 'insert') {
-      // What the server will store: the values the context gives, parsed. (The queue holds the
-      // context as sent; a context that parsed when it was queued parses again.)
       let values: Record<string, unknown> = {}
       try {
         values = parseInsert(download.definition, q.action.context)
@@ -299,8 +251,6 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
   return [...items, ...created].map((i) => withLabels(download.definition, i))
 }
 
-// The item with how its choices read (`_labels`, as the server's items have it): worked out here from
-// the downloaded definition, so a record changed or made on this device reads as the server's do.
 function withLabels(def: Definition, item: Item): Item {
   const { _labels: _was, ...rest } = item
   const labels: Record<string, string> = {}
@@ -313,16 +263,6 @@ function withLabels(def: Definition, item: Item): Item {
   return Object.keys(labels).length > 0 ? { ...rest, _labels: labels } : rest
 }
 
-// One waiting change to a downloaded record, applied to what is shown. A change is applied only to
-// the revision it was based on: the downloaded record is at that revision (or says none), so the
-// values the change was made on, the values it sets and the revision shown are one record's. A
-// record the copy holds at another revision (a download was taken since) is not mixed with it:
-//   - a change the server has acknowledged is the server's word at its revision, and shows only
-//     if no newer copy of the record is held (a no-op that left no revision of its own, or an
-//     answer older than the copy, never masks the copy);
-//   - a change still waiting shows the record as downloaded, marked for review (`_pending:
-//     'review'`): sending it will say what became of it (a conflict, mostly), and no revision it
-//     wasn't made on is stamped on its values.
 function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind): Item[] {
   const at = items.findIndex((i) => i.id === q.record.id)
   if (at < 0) return items
@@ -330,13 +270,10 @@ function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind
   const based = held === undefined || q.record.revision === null || held === q.record.revision
   const replace = (next: Item) => items.map((it, i) => (i === at ? next : it))
   if (q.state === 'synced') {
-    // What the server answered for an update it acknowledged is the record as it has it: its
-    // revision is only ever shown with its values, never with the ones this device made.
     const ackRevision = typeof q.ack?._revision === 'number' ? q.ack._revision : undefined
     if (kind === 'update' && q.ack && ackRevision !== undefined) {
       return held === undefined || ackRevision >= held ? replace({ ...q.ack, id: q.record.id }) : items
     }
-    // Without the server's word the copy is the only record there is: a newer one is never covered.
     if (!based) return items
   } else if (!based) {
     return replace({ ...items[at], _pending: 'review' })
@@ -354,7 +291,6 @@ function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind
     else next[k] = v
   }
   if (q.state === 'synced') {
-    // The server didn't say what it has: the person's values, and no revision to base a change on.
     delete next._revision
   } else {
     next._pending = 'update'
@@ -363,14 +299,11 @@ function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind
   return replace(next)
 }
 
-// The downloaded record, as the server had it (before any change waiting here).
 export function downloadedItem(download: Download, id: number): Item | undefined {
   const base = dataModelOf(download.messages)
   return (Array.isArray(base?.items) ? (base.items as Item[]) : []).find((i) => i.id === id)
 }
 
-// The download with one record replaced by the server's (an item), or, with null, removed: what a
-// conflict's resolution makes the copy hold. The counts follow.
 export function withRecord(download: Download, id: number, record: Item | null): Download {
   let found = false
   const messages = (download.messages as Message[]).map((m) => {
@@ -395,7 +328,6 @@ export function withRecord(download: Download, id: number, record: Item | null):
   }
 }
 
-// The first updateDataModel at the root: the whole data model the download was taken with.
 function dataModelOf(messages: unknown[]): Record<string, unknown> | undefined {
   for (const m of messages as Message[]) {
     const update = m.updateDataModel as { path?: string; value?: unknown } | undefined
@@ -406,7 +338,6 @@ function dataModelOf(messages: unknown[]): Record<string, unknown> | undefined {
   return undefined
 }
 
-// A summary over rows, as the server formats one: the count as a number, a sum with two decimals.
 function summarize(s: { kind: string; field?: string; where?: unknown; month_of?: string }, rows: Item[]): string {
   const month = new Date().toISOString().slice(0, 7)
   const dated = s.month_of
@@ -440,8 +371,6 @@ function surfaceOf(messages: unknown[]): string {
   return 'app'
 }
 
-// The messages that draw the downloaded app with what is queued on top: the download's own, with
-// the data model's records and summaries replaced.
 export function viewOf(download: Download, queue: OutboxItem[]): unknown[] {
   const surface = surfaceOf(download.messages)
   const items = itemsOf(download, queue)
@@ -454,11 +383,6 @@ export function viewOf(download: Download, queue: OutboxItem[]): unknown[] {
   })
 }
 
-// What the screen is sent after a change was queued: as the server answers it. An app with one
-// screen has its whole data model drawn again (the form emptied); an app with screens has the
-// records, the summaries (and, for an insert, the form) replaced, the record a detail screen shows
-// shown again after an update and emptied after a delete, and goes on to the screen the action
-// names.
 export function answerChange(
   download: Download,
   queue: OutboxItem[],
@@ -485,8 +409,6 @@ export function answerChange(
 export const answerInsert = (download: Download, queue: OutboxItem[], actionName: string): unknown[] =>
   answerChange(download, queue, actionName, 'insert')
 
-// A navigate action, which changes no record: the screen to show and, for one that shows a record,
-// the record.
 export function answerNavigate(
   download: Download,
   queue: OutboxItem[],

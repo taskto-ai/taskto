@@ -19,10 +19,8 @@ func TestSegment(t *testing.T) {
 		{"iPhone手机2台", "iPhone" + z + "手" + z + "机" + z + "2" + z + "台"},
 		{"「東京」", "「東" + z + "京」"},
 		{"コーヒー", "コ" + z + "ー" + z + "ヒ" + z + "ー"},
-		// A Thai character keeps its vowel and tone marks.
 		{"ที่นี่กิน", "ที่" + z + "นี่" + z + "กิ" + z + "น"},
 		{"ລາວ ខ្មែរ မြန်မာ", "ລ" + z + "າ" + z + "ວ " + "ខ្" + z + "មែ" + z + "រ " + "မြ" + z + "န်" + z + "မာ"},
-		// Korean is written with spaces: left as it is.
 		{"한국어 검색", "한국어 검색"},
 	} {
 		if got := segment(c.in); got != c.want {
@@ -32,11 +30,9 @@ func TestSegment(t *testing.T) {
 			t.Errorf("unsegment(segment(%q)) = %q", c.in, got)
 		}
 	}
-	// A document's own separators are spaces to the index.
 	if got := cleanBody([]byte("a" + z + "b")); got != "a b" {
 		t.Fatalf("cleanBody: %q", got)
 	}
-	// The bound on its growth, at its worst.
 	worst := strings.Repeat("a東", 1000)
 	if got := segment(worst); len(got) > len(worst)*3/2 {
 		t.Fatalf("%d bytes from %d", len(got), len(worst))
@@ -57,8 +53,6 @@ func TestMatchExpr(t *testing.T) {
 		}
 	}
 
-	// A query of as many characters as fit is bounded in the words it asks FTS5 for, in
-	// a phrase or not, and so is one of many words.
 	tokens := func(match string) int {
 		return len(strings.FieldsFunc(match, func(r rune) bool { return r == ' ' || r == '"' || r == '*' }))
 	}
@@ -74,8 +68,6 @@ func TestMatchExpr(t *testing.T) {
 	}
 }
 
-// TestUnspacedScripts checks that a word in Chinese, Japanese or Thai is found in the
-// middle of a sentence, as is a query of one or two characters.
 func TestUnspacedScripts(t *testing.T) {
 	w := newWorld(t)
 	sp := w.team
@@ -94,26 +86,22 @@ func TestUnspacedScripts(t *testing.T) {
 		q, path, matched string
 	}{
 		{"北京", "zh.md", "北京"},
-		// Two words next to each other are marked as one.
 		{"北京 开会", "zh.md", "北京开会"},
 		{"项目计划", "zh.md", "项目计划"},
-		{"东京", "", ""}, // simplified 东 is another character than 東
+		{"东京", "", ""},
 		{"東京", "ja.md", "東京"},
 		{"京都", "ja.md", "京都"},
 		{"都庁の近く", "ja.md", "都庁の近く"},
 		{"กินข้าว", "th.md", "กินข้าว"},
 		{"ร้านอาหาร", "th.md", "ร้านอาหาร"},
-		// Thai marks count: กิน, eat, isn't ก้น.
 		{"กิน", "th.md", "กิน"},
 		{"ก้น", "th-other.md", "ก้น"},
-		// One and two characters: anywhere they are.
 		{"庁", "ja.md", "庁"},
 		{"明天", "zh.md", "明天"},
 		{"会议", "zh.md", "会议"},
 		{"手机", "mixed.md", "手机"},
 		{"iphone", "mixed.md", "iPhone"},
 		{"季度", "报告/季度.md", ""},
-		// Words of a quoted phrase in a row, in any script.
 		{`"会开 北京"`, "", ""},
 		{`"北京开会"`, "zh.md", "北京开会"},
 	} {
@@ -133,9 +121,6 @@ func TestUnspacedScripts(t *testing.T) {
 	}
 }
 
-// TestIndexedAgainInANewTextFormat checks the upgrade to a new textFormat as a migration
-// makes it: the full-text index emptied, and every space marked for a full sync. The next
-// sync indexes the text again, and keeps the embeddings, which are of the same versions.
 func TestIndexedAgainInANewTextFormat(t *testing.T) {
 	w := newWorld(t)
 	w.setModel()
@@ -148,7 +133,6 @@ func TestIndexedAgainInANewTextFormat(t *testing.T) {
 		t.Fatalf("embedded %q", w.e.embed.inputs)
 	}
 	chunks := w.e.spaceChunks(sp)
-	// One more, indexed but not embedded yet when the migration runs.
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, sp, "zh.md", []byte("我们明天在北京开会。"), "", by, ""))
 	must[string](t)(w.e.idx.Sync(ctx, sp))
 
@@ -158,7 +142,6 @@ func TestIndexedAgainInANewTextFormat(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Until the sync, the embeddings worker has nothing to do (it would find no text).
 	if n, err := w.e.idx.embedPending(ctx); n != 0 || err != nil {
 		t.Fatalf("the embeddings worker took %d documents: %v", n, err)
 	}
@@ -175,8 +158,6 @@ func TestIndexedAgainInANewTextFormat(t *testing.T) {
 			t.Fatalf("%s: %+v", q, res)
 		}
 	}
-	// Since, the new document and the searches' queries: each other document's text was
-	// sent once in all.
 	for _, text := range []string{"来週の会議", "The orchard plan."} {
 		n := 0
 		for _, in := range w.e.embed.inputs {
@@ -190,9 +171,6 @@ func TestIndexedAgainInANewTextFormat(t *testing.T) {
 	}
 }
 
-// TestSyncWithNothingToWrite checks syncs that find every file already indexed: of a space
-// whose files were all deleted before it was ever indexed, and of one marked for a full
-// sync, as a migration marks every space. Each records the commit and ends.
 func TestSyncWithNothingToWrite(t *testing.T) {
 	w := newWorld(t)
 	sp := w.team

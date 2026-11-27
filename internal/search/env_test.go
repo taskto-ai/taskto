@@ -32,13 +32,11 @@ import (
 
 var ctx = context.Background()
 
-// Test passwords and keys: obviously fake.
 const (
 	fakePassword = "fake-test-password"
 	fakeKey      = "fake-embeddings-key"
 )
 
-// setupToken is the first-run setup token the server would print to its log.
 var setupToken = auth.NewSetupToken()
 
 type env struct {
@@ -52,9 +50,6 @@ type env struct {
 	embed   *fakeEmbeddings
 }
 
-// newEnv serves the account, space, provider, knowledge-base and search routes, as the
-// server does, with a fake embeddings endpoint. The index's background work isn't
-// started: searches sync lazily, and tests embed with embedPending.
 func newEnv(t testing.TB) *env {
 	t.Helper()
 	dir := t.TempDir()
@@ -87,7 +82,6 @@ func newEnv(t testing.TB) *env {
 	return &env{t: t, h: auth.CSRF(mux, knowledge.RawBodyRoutes...), db: sqlDB, spaces: spaces, idx: idx, kb: kb, dataDir: dir, embed: fake}
 }
 
-// user is a logged-in browser.
 type user struct {
 	e      *env
 	id     int64
@@ -129,7 +123,6 @@ func expect(t testing.TB, rec *httptest.ResponseRecorder, status int) {
 	}
 }
 
-// expectCode checks an error's status, code and params (nil for none).
 func expectCode(t testing.TB, rec *httptest.ResponseRecorder, status int, code string, params map[string]any) {
 	t.Helper()
 	expect(t, rec, status)
@@ -157,13 +150,6 @@ type meReply struct {
 	Workspaces []auth.Membership
 }
 
-// world is a workspace with people in every relation to its spaces:
-//
-//   - owner: admin, editor of team, secret and old (archived);
-//   - alice: editor of team, viewer of old;
-//   - bob: viewer of team;
-//   - mallory: a member of the workspace, of no shared space;
-//   - stranger: was a member, and left: their private space is closed to everyone.
 type world struct {
 	e                                    *env
 	ws                                   int64
@@ -202,8 +188,6 @@ func newWorld(t testing.TB) *world {
 	return w
 }
 
-// finish archives old and has the stranger leave, once the tests have written to their
-// spaces.
 func (w *world) finish() {
 	w.e.t.Helper()
 	expect(w.e.t, w.owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/spaces/%d", w.ws, w.old.ID),
@@ -252,7 +236,6 @@ func (w *world) privateOf(u *user) access.Space {
 	return access.Space{}
 }
 
-// put writes a document as u, through the API.
 func (w *world) put(u *user, sp access.Space, name, content string) {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPut, fmt.Sprintf("/api/workspaces/%d/spaces/%d/docs/%s", sp.WorkspaceID, sp.ID, name),
@@ -260,7 +243,6 @@ func (w *world) put(u *user, sp access.Space, name, content string) {
 	expect(w.e.t, rec, http.StatusCreated)
 }
 
-// search searches the workspace, or one space, as u.
 func (w *world) search(u *user, sp *access.Space, q string) *httptest.ResponseRecorder {
 	w.e.t.Helper()
 	target := fmt.Sprintf("/api/workspaces/%d/search?q=%s", w.ws, url.QueryEscape(q))
@@ -270,8 +252,6 @@ func (w *world) search(u *user, sp *access.Space, q string) *httptest.ResponseRe
 	return u.do(http.MethodGet, target, nil)
 }
 
-// addAccount creates a workspace provider account on the fake embeddings endpoint and
-// returns its ID.
 func (w *world) addAccount(name string) int64 {
 	w.e.t.Helper()
 	rec := w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/providers", w.ws), map[string]any{
@@ -282,8 +262,6 @@ func (w *world) addAccount(name string) int64 {
 	return decode[providers.Account](w.e.t, rec).ID
 }
 
-// setModel makes the fake endpoint the workspace's embeddings model, and consents to it
-// for the team space, as its editor the owner.
 func (w *world) setModel() int64 {
 	w.e.t.Helper()
 	account := w.addAccount("embed")
@@ -294,14 +272,11 @@ func (w *world) setModel() int64 {
 	return account
 }
 
-// consent consents, as u, to the workspace's embeddings model for sp.
 func (w *world) consent(u *user, sp access.Space) {
 	w.e.t.Helper()
 	expect(w.e.t, u.do(http.MethodPut, embeddingURL(sp), map[string]bool{"enabled": true}), http.StatusOK)
 }
 
-// embedAll runs the embeddings worker until nothing is waiting; a worker that never gets
-// there fails the test.
 func (e *env) embedAll() {
 	e.t.Helper()
 	for range 100 {
@@ -321,18 +296,12 @@ const (
 	fakeDims  = 64
 )
 
-// fakeEmbeddings is an OpenAI-compatible /embeddings endpoint whose vectors count words
-// by meaning: the words of each concept below share a dimension, so "car" is near a text
-// about an automobile that full-text search can't find; other words get a dimension by
-// their hash.
 type fakeEmbeddings struct {
-	srv   *httptest.Server
-	calls atomic.Int64
-	// fail, while set, answers 503; block, while not nil, holds every request until closed.
-	fail  atomic.Bool
-	mu    sync.Mutex
-	block chan struct{}
-	// inputs is every text it was sent.
+	srv    *httptest.Server
+	calls  atomic.Int64
+	fail   atomic.Bool
+	mu     sync.Mutex
+	block  chan struct{}
 	inputs []string
 }
 
@@ -379,7 +348,6 @@ func newFakeEmbeddings(t testing.TB) *fakeEmbeddings {
 			Embedding []float64 `json:"embedding"`
 		}
 		var data []item
-		// In reverse, so the client has to order them by index.
 		for i := len(req.Input) - 1; i >= 0; i-- {
 			data = append(data, item{Index: i, Embedding: fakeVector(req.Input[i])})
 		}
@@ -390,7 +358,6 @@ func newFakeEmbeddings(t testing.TB) *fakeEmbeddings {
 	return f
 }
 
-// sent reports whether any text the endpoint was sent contains s.
 func (f *fakeEmbeddings) sent(s string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -412,7 +379,7 @@ func (f *fakeEmbeddings) hold() (release func()) {
 
 func fakeVector(text string) []float64 {
 	v := make([]float64, fakeDims)
-	v[fakeDims-1] = 0.01 // never all zero
+	v[fakeDims-1] = 0.01
 	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) }) {
 		if d, ok := concepts[w]; ok {
 			v[d] += 3
@@ -425,7 +392,6 @@ func fakeVector(text string) []float64 {
 	return v
 }
 
-// waitFor waits until cond holds, or fails the test.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

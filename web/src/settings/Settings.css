@@ -1,7 +1,4 @@
-/* Settings: the side list of tabs in groups beside the tab's page, and what the tabs share. */
 @layer screens {
-  /* The layout follows the room the shell gives it, not the window: beside the shell's sidebar on a
-     tablet, the side list would leave the tab too narrow. */
   .settings-layout {
     container-type: inline-size;
     block-size: 100%;
@@ -78,12 +75,10 @@
     font: var(--type-ui-strong);
   }
 
-  /* On a phone, a choice of tab at the top of the page in place of the side list. */
   .settings-picker {
     display: none;
   }
 
-  /* "Settings" above a tab's title, where the side list's own title is not shown. */
   .settings-page .ui-page-header-path:has(> .settings-path) {
     display: none;
   }
@@ -114,7 +109,6 @@
     }
   }
 
-  /* A section of a tab. */
   .settings-section {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -153,7 +147,6 @@
     gap: var(--space-2);
   }
 
-  /* A form: its fields one under another, its actions at the end. */
   .settings-form {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -161,7 +154,6 @@
     min-inline-size: 0;
   }
 
-  /* Fields side by side on a wide screen, the button at their foot. */
   .settings-form-row {
     display: flex;
     flex-wrap: wrap;
@@ -198,7 +190,6 @@
     color: var(--color-text);
   }
 
-  /* A form's error that takes the focus (FormError): the ring is the notice's own edge. */
   .settings-form-error:focus {
     outline: none;
   }
@@ -209,8 +200,6 @@
     border-radius: var(--radius-md);
   }
 
-  /* A long list of choices (a payment's currencies): several columns in a bounded box that
-     scrolls, so the form's fields, its error and its actions stay near each other. */
   .settings-many-choices {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-16) + var(--space-6)), 1fr));
@@ -242,7 +231,6 @@
     font: var(--type-code);
   }
 
-  /* A term and its value per line. */
   .settings-facts {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -274,7 +262,6 @@
     }
   }
 
-  /* Plain text in a tab: a paragraph, a list of points, code. */
   .settings-text {
     margin: 0;
     font: var(--type-ui);
@@ -296,7 +283,6 @@
     font: var(--type-ui);
   }
 
-  /* A setup's text. Its face and size come from the old stylesheet's rule for pre. */
   .settings-page pre {
     margin: 0;
     padding: var(--space-3);
@@ -305,7 +291,6 @@
     overflow-x: auto;
   }
 
-  /* A row's details under its title: a line of facts, a status, a meter. */
   .settings-row-extra {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -335,7 +320,6 @@
     accent-color: var(--color-accent);
   }
 
-  /* A panel's inside, for a form or text. */
   .settings-panel-body {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -344,7 +328,6 @@
 }
 
 @layer screens {
-  /* A person in a table: their avatar, name with badges, and address. */
   .settings-person {
     display: flex;
     align-items: center;
@@ -395,8 +378,6 @@
 }
 
 @layer screens {
-  /* A check's outcome, always in the row and in the accessibility tree, so a screen reader hears
-     it arrive; empty, it is out of sight and takes no room, but still there. */
   .settings-check-status:empty {
     position: absolute;
     inline-size: 1px;
@@ -416,7 +397,6 @@
     gap: var(--space-1);
   }
 
-  /* The audit log's filters: as many in a row as fit. */
   .settings-filters {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--space-10) * 4)), 1fr));
@@ -494,7 +474,6 @@
     color: var(--color-text-muted);
   }
 
-  /* Automatic switching's queue: a numbered list, each with its moves. */
   .settings-queue {
     margin: 0;
     padding: 0;
@@ -516,7 +495,6 @@
     border-block-end: 0;
   }
 
-  /* A CLI account's usage limits. */
   .settings-limits {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -538,7 +516,6 @@
     gap: var(--space-1);
   }
 
-  /* Email notifications: one choice per kind, two side by side where they fit. */
   .settings-choices {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--space-16) * 4)), 1fr));
@@ -578,15 +555,12 @@
 }
 
 @layer screens {
-  /* A role in a row: wide enough for its longest name. */
   .settings-role {
     min-inline-size: calc(var(--space-10) * 3);
   }
 }
 
 @layer screens {
-  /* Which accounts each member's turns use: the person, and the choice beside them, which wraps
-     under the name and shrinks on a narrow screen rather than run off the panel. */
   .settings-modes {
     margin: 0;
     padding: 0;

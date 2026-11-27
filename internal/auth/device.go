@@ -6,14 +6,8 @@ import (
 	"strings"
 )
 
-// A session remembers what made its login, as two short names (a browser and a system) taken from
-// the User-Agent header and nothing else: the header itself and the client's address are not
-// kept. The names are the products' own, so the web app puts them in a sentence of its language.
-
 type userAgentKey struct{}
 
-// withUserAgent puts the request's User-Agent on its context, where insertSession finds it for a
-// login made while serving the request. CSRF, which wraps the whole server, does it.
 func withUserAgent(r *http.Request) *http.Request {
 	ua := r.UserAgent()
 	if ua == "" {
@@ -22,15 +16,11 @@ func withUserAgent(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), userAgentKey{}, ua))
 }
 
-// deviceOf returns the browser and the system the context's request names, "" for what it doesn't
-// recognise.
 func deviceOf(ctx context.Context) (browser, os string) {
 	ua, _ := ctx.Value(userAgentKey{}).(string)
 	return parseUserAgent(ua)
 }
 
-// parseUserAgent reads the names of the browser and the system out of a User-Agent header. The
-// order of the checks matters: most browsers' headers name several others.
 func parseUserAgent(ua string) (browser, os string) {
 	if len(ua) > 1024 {
 		ua = ua[:1024]

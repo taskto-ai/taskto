@@ -17,13 +17,8 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// The permission prompts (docs/agent-safety.md): each fake CLI asks its permission hook the
-// way the real one does, the hook asks the worker, and the worker asks the conversation's
-// owner, here the test.
-
 var touch = &clitest.ToolUse{Name: "Bash", Input: map[string]any{"command": "touch proof.txt"}}
 
-// question waits for the one question in user's conversation 7.
 func question(t *testing.T, w *cliworker.Worker, user int64) cliworker.PermissionRequest {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -75,7 +70,6 @@ func TestPermissionAskedAndAnswered(t *testing.T) {
 				if q.Tool != "Bash" || q.Input != "touch proof.txt" || q.CLI != cli || q.Turn != "ask-"+name {
 					t.Errorf("question = %+v", q)
 				}
-				// Nobody else answers it: another user, or the same user in another conversation.
 				if err := h.w.Answer(2, 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
 					t.Errorf("another user's answer: %v", err)
 				}
@@ -116,7 +110,6 @@ func TestPermissionAskedAndAnswered(t *testing.T) {
 	}
 }
 
-// With allow_all nothing asks; and reads in the working directory don't ask either.
 func TestPermissionNotAsked(t *testing.T) {
 	h := newHarness(t, nil)
 	cases := []struct {
@@ -148,7 +141,6 @@ func TestPermissionNotAsked(t *testing.T) {
 	}
 }
 
-// A question nobody answers is denied in time, and one whose turn is stopped goes with it.
 func TestPermissionUnanswered(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.AskTimeout = 300 * time.Millisecond })
 	h.user(t, 1, cliworker.Codex, clitest.Scenario{Tool: touch}, true)
@@ -165,9 +157,6 @@ func TestPermissionUnanswered(t *testing.T) {
 	}
 	question(t, h.w, 1)
 	h.w.Stop("stopped")
-	// The stop kills the turn's process group, its hook with it. The CLI can read the dead hook
-	// as a denial, answer and exit 0 before it is killed too, and a CLI that finished is
-	// reported done (TestStopRacingTheEnd). Either way the tool didn't run.
 	done := last(waitDone(t, turn, 20*time.Second))
 	denied := done.Status == cliworker.StatusOK && strings.HasPrefix(toolOutcome(done.Text), "denied: ")
 	if done.Status != cliworker.StatusStopped && !denied {
@@ -178,8 +167,6 @@ func TestPermissionUnanswered(t *testing.T) {
 	}
 }
 
-// The hook program denies whenever it can't get an answer, in each event's format, and exits
-// 2, which every CLI reads as "block".
 func TestApproveFailsClosed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no.sock")
 	cases := []struct {
@@ -196,14 +183,12 @@ func TestApproveFailsClosed(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
 			code := cliworker.RunApproveForTest(c.args, strings.NewReader(c.input), &out, &errOut)
-			// Codex ignores an exit 2 with nothing on stderr: the reason must be there too.
 			if code != 2 || !strings.Contains(out.String(), c.want) || !json.Valid(bytes.TrimSpace(out.Bytes())) || !strings.Contains(errOut.String(), "Not allowed") {
 				t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
 			}
 		})
 	}
 
-	// A running worker that knows no such session denies too.
 	h := newHarness(t, nil)
 	var out bytes.Buffer
 	sock := h.approveSocket(t)
@@ -213,8 +198,6 @@ func TestApproveFailsClosed(t *testing.T) {
 	}
 }
 
-// approveSocket finds the worker's approval socket from the hook it writes into a CLI's
-// settings.
 func (h *harness) approveSocket(t *testing.T) string {
 	t.Helper()
 	h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
@@ -260,9 +243,9 @@ func TestReadOnlyPolicy(t *testing.T) {
 		{"Bash", `{"command":"ls -la"}`, true},
 		{"Bash", `{"command":"cat README.md"}`, true},
 		{"Bash", `{"command":"rg -n 'func main' --type go"}`, true},
-		{"Bash", `{"command":"git status"}`, false}, // .git/config can run commands
+		{"Bash", `{"command":"git status"}`, false},
 		{"Bash", `{"command":"git log --oneline -5"}`, false},
-		{"Bash", `{"command":"git diff HEAD~1"}`, false}, // ~ is refused anywhere
+		{"Bash", `{"command":"git diff HEAD~1"}`, false},
 		{"Bash", `{"command":"git branch -a"}`, false},
 		{"Bash", `{"command":"git branch evil"}`, false},
 		{"Bash", `{"command":"git -c core.pager=sh status"}`, false},
@@ -313,7 +296,6 @@ func TestReadOnlyPolicy(t *testing.T) {
 	}
 }
 
-// The server lists and answers a conversation's questions through the worker's API too.
 func TestPermissionsThroughTheRemote(t *testing.T) {
 	h := newHarness(t, nil)
 	remote := serve(t, h)
@@ -339,7 +321,6 @@ func TestPermissionsThroughTheRemote(t *testing.T) {
 	}
 }
 
-// A hook's question reaches a turn only if both its session and its CLI are the turn's.
 func TestApproveNeedsTheTurnsCLI(t *testing.T) {
 	h := newHarness(t, nil)
 	sock := h.approveSocket(t)
@@ -361,8 +342,6 @@ func TestApproveNeedsTheTurnsCLI(t *testing.T) {
 	waitDone(t, turn, 20*time.Second)
 }
 
-// A layout root too long for a socket path puts the socket in a directory of its own, which
-// every CLI user can pass through when each has a Unix user of their own.
 func TestApprovalSocketFallback(t *testing.T) {
 	long := filepath.Join(t.TempDir(), strings.Repeat("d", 120))
 	if path, dir, err := cliworker.ApprovalSocketForTest("/homes", true); err != nil || dir != "" || filepath.Base(path) != ".approve.sock" {
@@ -381,8 +360,6 @@ func TestApprovalSocketFallback(t *testing.T) {
 	}
 }
 
-// A turn on a user's second account asks too: its hook is written into that account's own
-// config directory, where the CLI reads it.
 func TestPermissionOnAnotherAccountSlot(t *testing.T) {
 	h := newHarness(t, nil)
 	for _, cli := range cliworker.CLIs {

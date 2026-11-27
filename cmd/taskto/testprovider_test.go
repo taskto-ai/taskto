@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-// internal/integrations/testprovider is a fake Stripe for tests, with a signed-event sender. It
-// is a normal package, so nothing but the compiler keeps it out of the server's binary: this test
-// does. It lists the packages the binary is built from, on each platform the server ships for,
-// and fails if the fake is one of them, and then lists every package's own imports (a test
-// file's imports aren't among them) to name the one that imports it.
 func TestTheServerDoesNotLinkTheTestProvider(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("the go tool isn't installed")

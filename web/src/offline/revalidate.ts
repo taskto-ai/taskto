@@ -1,5 +1,3 @@
-// Asking the server whether what the device holds may still be held.
-
 import { ApiError, type App, api, forAccount, type Space } from '../api'
 import { AccountChanged, assertSignedIn } from './account'
 import { downloadApp } from './download'
@@ -9,17 +7,6 @@ const appBase = (s: Scope) => `/api/workspaces/${s.workspace}/spaces/${s.space}/
 
 type Verdict = 'keep' | 'revoked' | 'narrowed'
 
-// Asks the server whether each downloaded copy may still be kept, and removes those it may not:
-// the app can't be opened any more (the person was removed from the space or the app, it was
-// moved or deleted), or an admin turned downloads off for the space. A copy that holds more than
-// the person may read now (all of the app's records, where they now read only their own) is
-// downloaded again, which is the server's own answer to what they read; if that can't be done it
-// goes, since it can't be kept as it is. Network trouble removes nothing. What was queued for the
-// app stays: it is the person's work, and it needs attention.
-//
-// Every request is made for the database's owner (`X-Taskto-Expected-User`): a session that is
-// another account's is refused by the server, and nothing is decided or written from it: the
-// revalidation stops, and the copy stays as it is.
 export async function revalidate(store: OfflineStore): Promise<Download[]> {
   const removed: Download[] = []
   try {
@@ -32,7 +19,6 @@ export async function revalidate(store: OfflineStore): Promise<Download[]> {
           continue
         } catch (e) {
           if (isWrongAccount(e)) throw e
-          // Not refreshed: what the person no longer reads is not kept.
         }
       }
       assertSignedIn(store.user)
@@ -48,7 +34,6 @@ export async function revalidate(store: OfflineStore): Promise<Download[]> {
 const isWrongAccount = (e: unknown) =>
   e instanceof AccountChanged || (e instanceof ApiError && e.code === 'session_account_changed')
 
-// How much of an app's records a download holds, against what the person reads.
 const RANK = { none: 0, own: 1, all: 2 } as const
 
 async function check(user: number, d: Download): Promise<Verdict> {

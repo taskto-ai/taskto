@@ -10,7 +10,6 @@ import (
 
 const serverKind Kind = "test.server"
 
-// fillKind gives alice n waiting jobs of kind.
 func (w *world) fillKind(kind Kind, n int) {
 	w.t.Helper()
 	exec(w.t, w.db, `
@@ -24,9 +23,6 @@ func (w *world) serverJob(key string) Job {
 	return Job{Kind: serverKind, UserID: w.alice, WorkspaceID: w.ws, DedupeKey: key, RunAt: w.clock.now().Add(time.Hour)}
 }
 
-// A person with as many jobs of their own as they may have still gets the server's work about them
-// (the purge of their deleted account): scheduled, rescheduled, and made pending again after its
-// tries ran out.
 func TestTheServersJobsHaveRoomWhenThePersonIsAtTheBound(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -50,7 +46,6 @@ func TestTheServersJobsHaveRoomWhenThePersonIsAtTheBound(t *testing.T) {
 	}
 }
 
-// The server's jobs about a person take none of the room of the person's own, and are bounded too.
 func TestTheServersJobsAreBoundedApartFromThePersons(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -86,8 +81,6 @@ func TestTheServersJobsAreBoundedApartFromThePersons(t *testing.T) {
 	}
 }
 
-// The server's jobs take their turn by due time like any other: a busy queue neither passes them by
-// nor lets them pass the jobs due before them.
 func TestTheServersJobsRunInTheirTurn(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -116,9 +109,6 @@ func TestTheServersJobsRunInTheirTurn(t *testing.T) {
 	}
 }
 
-// The other way round: a server job about the person takes none of their room. With 999 jobs of
-// their own and the purge waiting, they can still make their 1,000th, by a new job or by making a
-// finished one wait again.
 func TestTheServersJobTakesNoneOfThePersonsRoom(t *testing.T) {
 	ctx := context.Background()
 	for _, how := range []string{"schedule", "reactivate"} {

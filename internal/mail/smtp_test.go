@@ -59,8 +59,6 @@ func TestSendWithSTARTTLSAndSignIn(t *testing.T) {
 	if subject != "Olá, mundo" {
 		t.Fatalf("subject = %q", subject)
 	}
-	// The display name and the address are checked apart: the name is the product's, and the
-	// address contains it too, so a substring check could not tell a missing name.
 	if from, err := netmail.ParseAddress(msg.Header.Get("From")); err != nil || from.Name != "taskto" || from.Address != "taskto@example.com" {
 		t.Fatalf("From = %q (%+v, %v)", msg.Header.Get("From"), from, err)
 	}
@@ -68,7 +66,6 @@ func TestSendWithSTARTTLSAndSignIn(t *testing.T) {
 		t.Fatalf("headers: %v", msg.Header)
 	}
 	body, _ := io.ReadAll(msg.Body)
-	// Quoted-printable decodes to the text, dot-stuffed line included.
 	text := decodeQP(t, string(body))
 	if text != strings.ReplaceAll(hello.Text, "\n", "\r\n") {
 		t.Fatalf("body = %q", text)
@@ -158,7 +155,7 @@ func TestSTARTTLSIsNeverOptional(t *testing.T) {
 func TestCertificateIsChecked(t *testing.T) {
 	s := newFakeSMTP(t, false)
 	m := s.sender(SMTPConfig{})
-	m.tlsConfig = nil // the system's roots don't know the fake server's certificate
+	m.tlsConfig = nil
 	assertStage(t, m.Send(ctx(t), hello), StageTLS, 0)
 	if len(s.messages()) != 0 {
 		t.Fatal("a message went to a server whose certificate wasn't trusted")
@@ -174,7 +171,6 @@ func TestAuthFailureNamesTheStageAndNeverThePassword(t *testing.T) {
 		t.Fatalf("the error holds the password: %v", err)
 	}
 
-	// A server that offers no sign-in at all.
 	s2 := newFakeSMTP(t, false)
 	assertStage(t, s2.sender(SMTPConfig{Username: "u", Password: "p"}).Send(ctx(t), hello), StageAuth, 0)
 }
@@ -189,8 +185,6 @@ func TestRejections(t *testing.T) {
 	assertStage(t, s.sender(SMTPConfig{}).Send(ctx(t), hello), StageRejected, 554)
 }
 
-// A connection lost after the message was sent says nothing of whether the server took it: that,
-// and only that, is ambiguous, so a caller that must not send twice can tell it from a refusal.
 func TestOnlyALostAnswerToTheMessageIsAmbiguous(t *testing.T) {
 	s := newFakeSMTP(t, false)
 	s.DropAfterData = true
@@ -229,7 +223,6 @@ func TestEgressPolicyRefusesTheConnection(t *testing.T) {
 		t.Fatalf("the server was reached: %v", s.commands())
 	}
 
-	// An allowlist that names the address lets it through.
 	m = s.sender(SMTPConfig{Egress: egress.MustParse("127.0.0.1")})
 	if err := m.Send(ctx(t), hello); err != nil {
 		t.Fatal(err)
@@ -240,7 +233,6 @@ func TestEgressPolicyChecksTheResolvedAddress(t *testing.T) {
 	s := newFakeSMTP(t, false)
 	m := s.sender(SMTPConfig{Egress: egress.MustParse("public")})
 	m.cfg.Host = "smtp.example.com"
-	// A public name that resolves to a loopback address: refused after resolution.
 	m.resolve = func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 	}
@@ -331,14 +323,11 @@ func TestNewSMTPChecksItsSettings(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// A sign-in is never sent in clear text, not even to localhost: the host's name says
-	// nothing about where the connection goes.
 	for _, host := range []string{"127.0.0.1", "localhost", "::1", "[::1]"} {
 		if _, err := NewSMTP(SMTPConfig{Host: host, From: "a@example.com", Security: None, Username: "u", Password: "p"}); err == nil {
 			t.Errorf("a password in clear text to %s: accepted", host)
 		}
 	}
-	// A relay that needs no sign-in works without encryption.
 	if _, err := NewSMTP(SMTPConfig{Host: "127.0.0.1", From: "a@example.com", Security: None}); err != nil {
 		t.Fatalf("a relay without sign-in: %v", err)
 	}
@@ -363,8 +352,6 @@ func assertStage(t *testing.T, err error, stage Stage, code int) {
 	}
 }
 
-// A relay can repeat what it was sent in a rejection. The error keeps the stage and the reply's
-// code and nothing the relay said, so neither the API answer nor the log can leak it.
 func TestTheRelaysReplyTextIsNeverKept(t *testing.T) {
 	const secret = "s3cret-wrong"
 	check := func(t *testing.T, err error, stage Stage, code int, leaks ...string) {
@@ -424,9 +411,6 @@ func fmtV(err error) string {
 	return strings.Join([]string{err.Error(), strings.TrimSpace(errors.Unwrap(err).Error())}, " ")
 }
 
-// Sign-in needs an encrypted connection by the connection's own state, with PLAIN as with
-// LOGIN: net/smtp's PLAIN lets a host *named* localhost skip it, which says nothing about
-// where the connection went.
 func TestSignInMechanismsNeedAnEncryptedConnection(t *testing.T) {
 	for _, name := range []string{"localhost", "127.0.0.1", "smtp.example.com"} {
 		for mech, auth := range map[string]smtp.Auth{
@@ -441,15 +425,12 @@ func TestSignInMechanismsNeedAnEncryptedConnection(t *testing.T) {
 			}
 		}
 	}
-	// PLAIN's initial response is the standard one.
 	_, resp, _ := (&plainAuth{username: "u", password: "p"}).Start(&smtp.ServerInfo{TLS: true})
 	if string(resp) != "\x00u\x00p" {
 		t.Fatalf("initial response = %q", resp)
 	}
 }
 
-// A sender with a quoted local part keeps its quotes in the envelope, and the Message-ID's
-// domain is what follows the last "@".
 func TestEnvelopeKeepsQuotedLocalParts(t *testing.T) {
 	s := newFakeSMTP(t, false)
 	m := hello
@@ -465,7 +446,6 @@ func TestEnvelopeKeepsQuotedLocalParts(t *testing.T) {
 		t.Fatalf("RCPT TO = %q", got.To)
 	}
 
-	// An address without a quote is as it was.
 	s = newFakeSMTP(t, false)
 	if err := s.sender(SMTPConfig{}).Send(ctx(t), hello); err != nil {
 		t.Fatal(err)
@@ -530,8 +510,6 @@ func TestNewSMTPTakesIPv6Literals(t *testing.T) {
 	}
 }
 
-// The LOGIN prompts' words are the server's: the first challenge asks for the user name and the
-// second for the password, whatever they say, and a third is refused.
 func TestLoginAnswersByStepNotByPromptText(t *testing.T) {
 	for _, prompts := range [][]string{{"Username:", "Password:"}, {"User Name", "Password"}, {"VXNlcm5hbWU6", "UGFzc3dvcmQ6"}, {"", ""}} {
 		a := &loginAuth{username: "user-x", password: "pw-y"}
@@ -552,8 +530,6 @@ func TestLoginAnswersByStepNotByPromptText(t *testing.T) {
 	}
 }
 
-// A message with many recipients folds its To line: no line is over 998 characters (78 is the
-// advice), and every recipient is still there.
 func TestLongRecipientListsAreFolded(t *testing.T) {
 	from, _ := netmail.ParseAddress("taskto@example.com")
 	m := Message{Subject: "s", Text: "t"}

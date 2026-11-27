@@ -12,94 +12,43 @@ import (
 	"taskto.ai/taskto/internal/apps"
 )
 
-// App records. The records of personal apps are searched in full text only, and apart from
-// documents and cards: the values of a record's string, choice and barcode fields, as the
-// app's live release declares them (apps.SearchText), and a search finds the records the caller
-// may read, in the apps of the spaces they may read. Semantic search does not take records in:
-// that needs consent of its own, since a record's text would go to the embeddings endpoint.
-//
-// What a person may read of an app's records is the apps' to say, once: the roles of the app
-// (access.Checker.App), and in them the scope of what they read, every record or only those
-// they made (apps.RecordScope, apps.ReadsRecord: what lists, histories and queries of records
-// go by). The index holds text only, never who may read it: a search first asks which apps the
-// caller reads in whole and which only their own records of, and finds in those. Not in it, as
-// in no other read of the records: a draft (only a live release declares fields to people), a
-// deleted record, an archived app, a field the live release doesn't declare, and any field's
-// name (the index holds values only, and a result names the app and its space, which the caller
-// reads, and nothing of its definition).
-//
-// The apps' rows are the truth, as the boards' cards are for card search (cards.go). Triggers
-// (migration search_records_conversations) queue a record, in the transaction that changes it,
-// when it is added, its data changes or it is deleted or restored, and every record of an app
-// when another release goes live; a search first indexes the queue's records of the apps it
-// looks in (syncRecords), each batch in a transaction of its own that reads the records and
-// writes what it read and takes them off the queue. A record in the queue is never quoted, since
-// its indexed text may be old: a search that finds some behind tries once more, and says its
-// results may be incomplete if it still does. So the index is right whatever wrote the records,
-// and a crash leaves nothing behind.
-//
-// Records are ordered by when they changed last, newest first, never by a score: a ranking
-// with statistics of the whole index would let records the caller can't read change what they
-// can.
-
-// recordBatch is how many records one transaction of a sync indexes.
 const recordBatch = 200
 
-// recordSyncMax is the most records a search indexes before it answers; the rest are left for the
-// background sync, and the answer says it may be incomplete if the caller reads any of them.
 const recordSyncMax = 2000
 
-// recordSyncBudget is how long a search spends indexing before it answers.
 const recordSyncBudget = 20 * time.Second
 
-// recordSyncTries is how many times a search indexes the records it looks in, and looks
-// again, before it says its results may be incomplete.
 const recordSyncTries = 2
 
-// RecordResult is a record found.
 type RecordResult struct {
-	SpaceID   int64  `json:"space_id"`
-	SpaceName string `json:"space_name"`
-	AppID     int64  `json:"app_id"`
-	AppName   string `json:"app_name"`
-	RecordID  int64  `json:"record_id"`
-	// Snippet is the passage of the record's values that matched, as plain text in pieces:
-	// never markup.
-	Snippet []Segment `json:"snippet"`
+	SpaceID   int64     `json:"space_id"`
+	SpaceName string    `json:"space_name"`
+	AppID     int64     `json:"app_id"`
+	AppName   string    `json:"app_name"`
+	RecordID  int64     `json:"record_id"`
+	Snippet   []Segment `json:"snippet"`
 
-	// creator made the record: what decides, with the caller's roles, whether they read it.
 	creator sql.NullInt64
 }
 
-// RecordResults are a page of records found, newest change first.
 type RecordResults struct {
-	Results []RecordResult `json:"results"`
-	// NextOffset is the next page's offset, if there are more results; never with Incomplete.
-	NextOffset *int `json:"next_offset,omitempty"`
-	// Incomplete is true when records changed that the index couldn't catch up with: those
-	// are left out, and a later search finds them. Such a reply has no NextOffset.
-	Incomplete bool `json:"incomplete,omitempty"`
+	Results    []RecordResult `json:"results"`
+	NextOffset *int           `json:"next_offset,omitempty"`
+	Incomplete bool           `json:"incomplete,omitempty"`
 }
 
-// recordReach is which apps a caller reads the records of: in whole, or only those they made.
 type recordReach struct {
 	all, own []int64
 }
 
 func (r recordReach) none() bool { return len(r.all) == 0 && len(r.own) == 0 }
 
-// ids are every app in reach.
 func (r recordReach) ids() []int64 { return append(append([]int64{}, r.all...), r.own...) }
 
-// queryer is what the reads of a search are made on: the database, or a snapshot of it.
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// reachOf asks checker, for each live and unarchived app in the spaces in (a JSON array of IDs),
-// what userID may read of its records, as of now, and returns the access it found for each app
-// in reach. Given a snapshot's checker and transaction (access.Checker.Snapshot), what it reads
-// of the apps and what the checker says of them are of one state.
 func (x *Index) reachOf(ctx context.Context, checker *access.Checker, db queryer, userID int64, in string) (recordReach, map[int64]access.AppAccess, error) {
 	rows, err := db.QueryContext(ctx, `SELECT id, space_id FROM apps
 		WHERE space_id IN (SELECT value FROM json_each(?)) AND archived_at IS NULL AND live_release IS NOT NULL
@@ -142,16 +91,6 @@ func (x *Index) reachOf(ctx context.Context, checker *access.Checker, db queryer
 	return reach, accs, nil
 }
 
-// SearchRecords finds the records matching q in the apps of spaces, which must be of
-// workspaceID and readable by userID, as for Search: the space RequireSpace checked, or the
-// user's Readable spaces. Of those apps, only the records userID may read are searched.
-//
-// Indexing takes time, and who may read what can change meanwhile, or an app can move to
-// another space or be archived: so after the records are indexed, what the caller reads, the
-// records found, whether any were behind and the names of their spaces are all read in one
-// snapshot of the database (access.Checker.Snapshot), and the answer is made from that alone.
-// Nothing is asked again after it, so nothing can have changed between a check and what it
-// checked.
 func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, userID, workspaceID int64, spaces []access.Space, q Query) (RecordResults, error) {
 	match, err := checkQuery(&q)
 	if err != nil {
@@ -159,7 +98,6 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	}
 	ids := []int64{}
 	for _, sp := range spaces {
-		// Never anything else, whatever the caller passes.
 		if sp.WorkspaceID != workspaceID || !sp.Access.Allows(access.Read) {
 			continue
 		}
@@ -173,8 +111,6 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	if err != nil {
 		return RecordResults{}, err
 	}
-	// What the caller reads before indexing: which apps to index records of, and what a later
-	// page's offset counted.
 	before, _, err := x.reachOf(ctx, checker, x.db, userID, string(spacesJSON))
 	if err != nil {
 		return RecordResults{}, err
@@ -182,7 +118,6 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	if before.none() {
 		return res, nil
 	}
-	// What the caller reads, as the statements ask for it: the apps of each kind.
 	scopeOf := func(r recordReach) (recordScope, error) {
 		all, err := json.Marshal(r.all)
 		if err != nil {
@@ -205,8 +140,6 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	var found []RecordResult
 	var accs map[int64]access.AppAccess
 	names := map[int64]string{}
-	// One allowance of records and one deadline for all the search's attempts: what is left when
-	// they are used stays queued for the background sync, and the search says it is incomplete.
 	allowance := x.recordSyncLimit
 	syncCtx, stopSync := context.WithTimeout(ctx, recordSyncBudget)
 	defer stopSync()
@@ -218,9 +151,7 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 			case ctx.Err() != nil:
 				return RecordResults{}, ctx.Err()
 			case err != nil && syncCtx.Err() != nil:
-				// Out of time: the rest is for the background sync, and found behind.
 			case err != nil:
-				// What is indexed is still searched: some records may be missing.
 				x.log.Error("search: syncing records before a search; its results may be behind", "err", err)
 			}
 		}
@@ -234,9 +165,6 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 			if now, accs, err = x.reachOf(ctx, snap, tx, userID, string(spacesJSON)); err != nil {
 				return err
 			}
-			// A later page's offset counts the records read under the access of the first look:
-			// it can't be applied to other access, or the records between would be skipped and
-			// the page called complete.
 			if q.Offset > 0 && (!slices.Equal(now.all, before.all) || !slices.Equal(now.own, before.own)) {
 				changed = true
 				return nil
@@ -260,7 +188,7 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 				sp, err := snap.Check(ctx, userID, r.SpaceID)
 				switch {
 				case errors.Is(err, access.ErrNotFound) || (err == nil && sp.WorkspaceID != workspaceID):
-					names[r.SpaceID] = "" // dropped below
+					names[r.SpaceID] = ""
 				case err != nil:
 					return err
 				default:
@@ -286,19 +214,14 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 			res.Incomplete = true
 			break
 		}
-		// Index again what the caller reads now, which may be more than before.
 		if appsJSON, err = syncIn(now); err != nil {
 			return RecordResults{}, err
 		}
 	}
-	// One more than asked for was read, to know whether a page follows: that one is never
-	// returned, whatever is left out of the others, or the next page would repeat it.
 	more := len(found) > q.Limit
 	if more {
 		found = found[:q.Limit]
 	}
-	// The snapshot already holds only what the caller reads; this is the same rule, applied to
-	// each record with the access the snapshot found, so a result is never one it would refuse.
 	dropped := false
 	for _, r := range found {
 		acc, ok := accs[r.AppID]
@@ -310,54 +233,34 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 		r.SpaceName = name
 		res.Results = append(res.Results, r)
 	}
-	// An offset counts the records the caller read when the search began: if any were left out, one
-	// continued from here could skip a record. Say so instead, and let them search again.
 	if dropped {
 		res.Incomplete = true
 	}
-	// No next page past the deepest offset asked for: it would be refused. And none after an
-	// incomplete one: an offset counts the records indexed now, and once the queued ones are
-	// the same offset would repeat a record or skip one.
 	if next := q.Offset + q.Limit; more && !res.Incomplete && next <= MaxOffset {
 		res.NextOffset = &next
 	}
 	return res, nil
 }
 
-// recordScope is whose records a search may find: those of the apps in all, and of the apps in
-// own that user made, in the spaces in spaces (each a JSON array of IDs). The spaces are said
-// too, so an app that moved since reach was asked for isn't found in the space it is in now.
 type recordScope struct {
 	spaces, all, own string
 	user             int64
 }
 
-// recordScopeSQL is the condition on a row r of an app a that scope allows, and its arguments.
 const recordScopeSQL = `a.space_id IN (SELECT value FROM json_each(?))
 	AND (r.app_id IN (SELECT value FROM json_each(?))
 		OR (r.created_by = ? AND r.app_id IN (SELECT value FROM json_each(?))))`
 
 func (s recordScope) args() []any { return []any{s.spaces, s.all, s.user, s.own} }
 
-// queuedRecordsSQL is the queued live records that scope allows: only those the caller may
-// read, so a record someone else's roles keep from them never says anything to them, not even
-// that it changed.
 const queuedRecordsSQL = `FROM search_record_queue sq
 	JOIN app_rows r ON r.id = sq.row_id
 	JOIN apps a ON a.id = r.app_id
 	WHERE r.deleted_at IS NULL AND a.archived_at IS NULL AND a.live_release IS NOT NULL AND ` + recordScopeSQL
 
-// recordSnippetSQL is the record's snippet, matches marked. It is 24 words long, or 64 in a
-// text with an unspaced script (see snippetSQL).
 const recordSnippetSQL = `snippet(search_record_fts, 0, char(2), char(3), '…',
 	CASE WHEN instr(search_record_fts.body, char(31)) THEN 64 ELSE 24 END)`
 
-// findRecords returns one page of the records that match the FTS5 query match and scope allows,
-// newest change first, and one more if a page follows; and whether any record scope allows was
-// in the queue. A record whose indexed text may be old, since it is in the queue, is left out
-// of the page, so a page found while some were queued may be short, or empty. Both come from
-// one statement, so they are of one state of the database: a record queued at the moment of the
-// page is never missed by the flag, even when the page has no rows.
 func (x *Index) findRecords(ctx context.Context, db queryer, scope recordScope, match string, q Query) ([]RecordResult, bool, error) {
 	args := append(scope.args(), match)
 	args = append(args, scope.args()...)
@@ -376,7 +279,6 @@ func (x *Index) findRecords(ctx context.Context, db queryer, scope recordScope, 
 				AND NOT EXISTS (SELECT 1 FROM search_record_queue WHERE row_id = r.id)
 			ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?) p ON true
 		ORDER BY p.updated_at DESC, p.id DESC`,
-		// The flag's scope, then the page's match and scope, limit and offset.
 		args...)
 	if err != nil {
 		return nil, false, err
@@ -399,16 +301,12 @@ func (x *Index) findRecords(ctx context.Context, db queryer, scope recordScope, 
 	return found, behind, rows.Err()
 }
 
-// queuedRecordIDsSQL is a batch of the queue's records after an ID, of every app or of those
-// in a JSON array: it starts from the queue, never from every record.
 const queuedRecordIDsSQL = `SELECT sq.row_id
 	FROM search_record_queue sq
 	JOIN app_rows r ON r.id = sq.row_id
 	WHERE sq.row_id > ? AND (? OR r.app_id IN (SELECT value FROM json_each(?)))
 	ORDER BY sq.row_id LIMIT ?`
 
-// queueRecords puts in the queue the live records of unarchived apps with a live release that were never
-// indexed, or in an older textFormat: what the migration, or a change of the format, leaves.
 func (x *Index) queueRecords(ctx context.Context) error {
 	return x.write(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO search_record_queue (row_id)
@@ -420,23 +318,16 @@ func (x *Index) queueRecords(ctx context.Context) error {
 	})
 }
 
-// syncRecords indexes again the queued records of the apps in (a JSON array of IDs; every app
-// if it is empty), a batch at a time, until none is left.
 func (x *Index) syncRecords(ctx context.Context, in string) error {
 	_, err := x.syncRecordsWithin(ctx, in, 0)
 	return err
 }
 
-// syncRecordsWithin is syncRecords for at most limit records (0: all), leaving the rest queued:
-// a search that is over its allowance, or its time (ctx's deadline), leaves them to the background
-// sync, and finds them behind. It returns how many it indexed.
 func (x *Index) syncRecordsWithin(ctx context.Context, in string, limit int) (indexed int, err error) {
 	all := in == ""
 	if all {
 		in = "[]"
 	}
-	// Batches go by ID, each from where the last stopped, so a record changed again meanwhile
-	// can't keep a sync going: the search that wanted it finds it behind.
 	var after int64
 	for limit == 0 || indexed < limit {
 		size := recordBatch
@@ -478,8 +369,6 @@ func (x *Index) syncRecordsWithin(ctx context.Context, in string, limit int) (in
 	return indexed, nil
 }
 
-// indexRecord puts the record as it is now in the index, or takes it out of it if it is gone,
-// deleted, or of an app with no live release.
 func indexRecord(ctx context.Context, tx *sql.Tx, id int64) error {
 	text, indexed, err := apps.SearchText(ctx, tx, id)
 	if err != nil {
@@ -500,7 +389,6 @@ func indexRecord(ctx context.Context, tx *sql.Tx, id int64) error {
 	} else if _, err := tx.ExecContext(ctx, `DELETE FROM search_records WHERE row_id = ?`, id); err != nil {
 		return err
 	}
-	// Read and written in this transaction, so a change made after it queues the record again.
 	_, err = tx.ExecContext(ctx, `DELETE FROM search_record_queue WHERE row_id = ?`, id)
 	return err
 }

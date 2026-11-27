@@ -48,8 +48,8 @@ func TestSpecial(t *testing.T) {
 		"1.1.1.1":              "",
 		"2606:4700:4700::1111": "",
 		"::ffff:8.8.8.8":       "",
-		"64:ff9b::808:808":     "", // NAT64 of 8.8.8.8
-		"2002:808:808::1":      "", // 6to4 of 8.8.8.8
+		"64:ff9b::808:808":     "",
+		"2002:808:808::1":      "",
 		"127.0.0.1":            "loopback",
 		"127.255.0.9":          "loopback",
 		"::1":                  "loopback",
@@ -70,13 +70,13 @@ func TestSpecial(t *testing.T) {
 		"255.255.255.255":      "reserved",
 		"224.0.0.1":            "multicast",
 		"ff02::1":              "multicast",
-		"64:ff9b::a00:1":       "private",    // NAT64 of 10.0.0.1
-		"64:ff9b::a9fe:a9fe":   "link-local", // NAT64 of 169.254.169.254
-		"2002:7f00:1::1":       "loopback",   // 6to4 of 127.0.0.1
+		"64:ff9b::a00:1":       "private",
+		"64:ff9b::a9fe:a9fe":   "link-local",
+		"2002:7f00:1::1":       "loopback",
 		"2001:db8::1":          "documentation",
-		"2001::1":              "reserved", // Teredo
-		"fec0::1":              "reserved", // site-local, outside 2000::/3
-		"::127.0.0.1":          "reserved", // IPv4-compatible, deprecated
+		"2001::1":              "reserved",
+		"fec0::1":              "reserved",
+		"::127.0.0.1":          "reserved",
 		"172.32.0.1":           "",
 		"100.128.0.1":          "",
 	} {
@@ -101,13 +101,10 @@ func TestCheckAddr(t *testing.T) {
 		{"public, 10.0.0.0/8", "10.0.0.1", true},
 		{"public, 10.0.0.0/8", "192.168.0.1", false},
 		{"public, 10.0.0.0/8", "8.8.8.8", true},
-		{"ollama.internal", "10.0.0.1", false}, // a name allows only itself, not its addresses
-		// Azure's WireServer looks public but serves metadata and managed identities.
+		{"ollama.internal", "10.0.0.1", false},
 		{"public", "168.63.129.16", false},
-		// An IPv4-mapped prefix of /96 or more is that IPv4 prefix...
 		{"::ffff:10.0.0.0/104", "10.1.2.3", true},
 		{"::ffff:10.0.0.0/104", "11.0.0.1", false},
-		// ...and a shorter one never widens to all of IPv4.
 		{"::ffff:10.0.0.0/64", "8.8.8.8", false},
 		{"::ffff:10.0.0.0/64", "127.0.0.1", false},
 		{"::ffff:10.0.0.0/64", "169.254.169.254", false},
@@ -123,8 +120,6 @@ func TestCheckAddr(t *testing.T) {
 	}
 }
 
-// fakeNet is a resolver and a dialer under the test's control: it answers each lookup with
-// the next of answers, and connects every dial, to whatever address, to a test server.
 type fakeNet struct {
 	server  *httptest.Server
 	answers [][]string
@@ -138,7 +133,6 @@ func newFakeNet(t *testing.T, answers ...[]string) *fakeNet {
 	f.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"data":[]}`)
 	}))
-	// A new connection for every request, as a client that's careful about rebinding sees.
 	f.server.Config.SetKeepAlivesEnabled(false)
 	f.server.Start()
 	t.Cleanup(f.server.Close)
@@ -195,7 +189,7 @@ func TestDialerModes(t *testing.T) {
 	cases := []struct {
 		name, policy, url string
 		answer            []string
-		wantDial          string // "" for a refusal
+		wantDial          string
 	}{
 		{"any allows a private address", "any", "http://models.example:8000/v1", []string{"10.0.0.5"}, "models.example:8000"},
 		{"any allows metadata", "any", "http://169.254.169.254/latest", nil, "169.254.169.254:80"},
@@ -230,8 +224,6 @@ func TestDialerModes(t *testing.T) {
 	}
 }
 
-// DNS rebinding: a name answers a public address to the first connection and a private one
-// to the next. The second is refused before it connects.
 func TestDNSRebinding(t *testing.T) {
 	f := newFakeNet(t, []string{"8.8.8.8"}, []string{"169.254.169.254"})
 	c := f.client(MustParse("public"))
@@ -250,8 +242,6 @@ func TestDNSRebinding(t *testing.T) {
 	}
 }
 
-// With the real network: a refused address is never connected to, so the server never hears
-// of the request or the key, and the socket-level check holds on its own.
 func TestRealConnections(t *testing.T) {
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
@@ -274,7 +264,6 @@ func TestRealConnections(t *testing.T) {
 		t.Fatalf("hits = %d; a refused request reached the server", hits.Load())
 	}
 
-	// The socket's own check, whatever resolved the address.
 	d := &Dialer{Policy: MustParse("public")}
 	if err := d.control("tcp4", "127.0.0.1:80", nil); !errors.Is(err, ErrRefused) {
 		t.Errorf("control(127.0.0.1) = %v; want a refusal", err)

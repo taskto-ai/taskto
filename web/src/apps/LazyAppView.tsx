@@ -1,15 +1,3 @@
-// The app's screen, its renderer loaded when it is first drawn: Home and the Apps list draw one
-// only when there is an app to show (a widget, an app opened), so a Home without an app widget and
-// the list with no app open never load the renderer (A2UI and its schema libraries). While it
-// loads, the frame AppView draws (a panel, or bare in a widget) with the shape AppView shows while
-// its screen loads, so nothing moves when it arrives.
-//
-// The renderer's code can fail to arrive (a first visit before the service worker took over, a
-// server reached over plain HTTP, a tab left open across an update): that is said in the app's own
-// frame, with Try again, never as the widget's or the page's failure. A failed import is forgotten
-// at once, so Try again, and any later draw elsewhere (another widget, an app opened), imports
-// again: React.lazy keeps a rejection for good, so the lazy component itself is made anew.
-
 import { Component, type ComponentProps, lazy, type ReactNode, Suspense, useState } from 'react'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -21,11 +9,8 @@ import './AppLoading.css'
 
 type Props = ComponentProps<typeof AppViewType>
 
-// The renderer's code could not be fetched: told apart from an app that fails while it is drawn,
-// which is the boundary above's to say (a widget's, the page's).
 class RendererMissing extends Error {}
 
-// How the renderer is loaded: a new lazy component after each failure.
 export const rendererLoad = {
   import: () => import('./AppView'),
 }
@@ -43,7 +28,6 @@ function makeLazy() {
 let LazyView = makeLazy()
 
 export function LazyAppView(props: Props) {
-  // Each Try again draws anew, with whatever lazy component is current (a new one after a failure).
   const [attempt, setAttempt] = useState(0)
   const View = LazyView
   return (
@@ -55,7 +39,6 @@ export function LazyAppView(props: Props) {
   )
 }
 
-// Catches only the renderer's missing code; any other error goes on to the boundary above.
 class Missing extends Component<
   { frame: 'panel' | 'bare'; label: string; onRetry: () => void; children: ReactNode },
   { missing: boolean; error: unknown }

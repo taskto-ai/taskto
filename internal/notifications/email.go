@@ -16,79 +16,27 @@ import (
 	"taskto.ai/taskto/internal/schedule"
 )
 
-// Email is the third way to be told, after the inbox and Web Push, for the people who opt in. It
-// is off for everyone until they choose, in a workspace, for each kind of notification:
-//
-//   - instant: a mail soon after the notification is made, one for each (email_deliveries, sent by
-//     the email worker, a loop of its own so a slow SMTP server can't hold back a push);
-//   - digest: one mail a day, at the hour of the person's own time zone, that counts what
-//     happened since the last one (the general scheduler's job KindDigest, one per person and
-//     workspace; each run schedules the next from the local date, so daylight saving time
-//     moves nothing).
-//
-// # At most once
-//
-// A mail that went out twice is worse than one that never did, since the inbox has it either way.
-// Before a message is submitted to the relay, the attempt is written to the ledger
-// (notification_email_ledger) under a key that names what it is for: the notification for an
-// instant mail, the job's occurrence (schedule.Job.Occurrence) for a summary. A key with a row is
-// never submitted again, except when the relay definitely refused it before taking it (a reply
-// code, a refused connection or sign-in): then and only then a later try may send it. When the
-// outcome is unknown (the process stopped with the attempt written and no result, or the
-// connection was lost after the message was sent: mail.SendError.Ambiguous) the mail is counted
-// as sent and never sent again. The same ledger is what the hourly limit counts, so the limit
-// holds for concurrent workers and survives the notifications it counted being deleted.
-//
-// What may be mailed is checked again at the last point before the submission that can still
-// cancel it: the person's choice, their address's confirmation, their membership, their access to
-// what the notification is about and, for a summary, that the job is still this occurrence.
-//
-// # Confirmed addresses
-//
-// Nothing is mailed to an address until its owner has confirmed it (emailverify.go).
-//
-// A mail says what a push says and no more: the kind of thing that happened, in the person's
-// language, and a link back to the app. It never holds a title, a name, a comment or an ID of a
-// record. The digest says how many notifications are waiting and links to the inbox. What a mail
-// may say is decided when it is sent, from what the person may read then, exactly as for a push:
-// a notification of something they can no longer read sends nothing and is not counted.
-//
-// Nothing is sent unless the server can send mail (docs/install.md#email) and knows its own
-// address for the links (the public URL): without them the choices can't be turned on, and the
-// worker leaves what is queued alone until it is old.
-
-// The modes of a kind's email choice. A kind with no choice is off.
 const (
 	ModeOff     = "off"
 	ModeInstant = "instant"
 	ModeDigest  = "digest"
 )
 
-// KindDigest is the scheduler's kind of the daily summary.
 const KindDigest schedule.Kind = "notifications.digest"
 
-// Email's bounds and timings.
 const (
-	// DefaultDigestHour is when the summary is sent unless the person chose.
 	DefaultDigestHour = 8
-	// DefaultTimezone is the time zone of a person who chose none.
-	DefaultTimezone = "UTC"
-	// emailTTL is how old a notification may be and still be mailed as it happens.
-	emailTTL = 24 * time.Hour
-	// digestWindow is how far back a summary looks: a notification older than that is not counted.
-	digestWindow = 48 * time.Hour
-	// maxInstantPerHour bounds the mails as they happen to one person: the rest stay in the inbox.
+	DefaultTimezone   = "UTC"
+	emailTTL          = 24 * time.Hour
+	digestWindow      = 48 * time.Hour
 	maxInstantPerHour = 20
 	emailMaxAttempts  = 5
 	emailSendTimeout  = 30 * time.Second
 	emailBackoffBase  = time.Minute
 	emailBackoffMax   = time.Hour
-	// digestTries is how many times a run of the summary is tried when sending it fails for a reason
-	// that may pass; after them what is waiting is left for the next summary.
-	digestTries = 3
+	digestTries       = 3
 )
 
-// EmailKinds are the kinds a person may choose email for.
 func EmailKinds() []string {
 	return []string{KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue, KindAppEffectFailed}
 }
@@ -102,50 +50,34 @@ func emailKind(kind string) bool {
 	return false
 }
 
-// EmailChoices are a person's email settings in one workspace.
 type EmailChoices struct {
-	// Available says whether the server can send mail at all, and links back to itself.
-	Available bool `json:"available"`
-	// Address is where mail would go and whether its owner has confirmed it: nothing is sent
-	// before.
-	Address EmailAddress `json:"address"`
-	// Kinds says each kind's mode: off, instant or digest.
-	Kinds  map[string]string `json:"kinds"`
-	Digest EmailDigest       `json:"digest"`
+	Available bool              `json:"available"`
+	Address   EmailAddress      `json:"address"`
+	Kinds     map[string]string `json:"kinds"`
+	Digest    EmailDigest       `json:"digest"`
 }
 
-// EmailDigest says when the daily summary is sent: the hour (0 to 23) of the time zone, an IANA name.
 type EmailDigest struct {
 	Hour     int    `json:"hour"`
 	Timezone string `json:"timezone"`
-	// Chosen says the person has set the time themselves, so their zone, UTC included, is theirs;
-	// before, it is the default, which the settings page may replace with the browser's. Answers
-	// only: a change of it is ignored.
-	Chosen bool `json:"chosen"`
+	Chosen   bool   `json:"chosen"`
 }
 
-// EmailUpdate is a change to a person's choices: what is nil stays.
 type EmailUpdate struct {
 	Kinds  map[string]string `json:"kinds"`
 	Digest *EmailDigest      `json:"digest"`
 }
 
-// ErrEmailInvalid is a choice the server refuses.
 var ErrEmailInvalid = errors.New("notifications: invalid email choice")
 
-// ErrNotMember is a change for someone who left the workspace meanwhile.
 var ErrNotMember = errors.New("notifications: not a member of the workspace")
 
-// ErrEmailUnavailable is turning email on where the server can't send it.
 var ErrEmailUnavailable = errors.New("notifications: the server can't send email")
 
-// emailReady says whether mail can be sent now: an SMTP server and the address links go to.
 func (s *Service) emailReady() bool {
 	return s.mail.Configured() && s.publicURL != ""
 }
 
-// AttachScheduler registers the daily summary's handler and lets the service schedule it. Call it
-// before the scheduler starts.
 func (s *Service) AttachScheduler(sch *schedule.Service) error {
 	if err := sch.Register(KindDigest, s.sendDigest); err != nil {
 		return err
@@ -154,7 +86,6 @@ func (s *Service) AttachScheduler(sch *schedule.Service) error {
 	return nil
 }
 
-// EmailChoices returns what userID chose in the workspace.
 func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (EmailChoices, error) {
 	out := EmailChoices{Available: s.emailReady(), Kinds: map[string]string{}, Digest: EmailDigest{Hour: DefaultDigestHour, Timezone: DefaultTimezone}}
 	for _, k := range EmailKinds() {
@@ -183,7 +114,6 @@ func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (
 	}
 	err = s.db.QueryRowContext(ctx, digestSettingsSQL, userID, workspaceID).Scan(&out.Digest.Hour, &out.Digest.Timezone, &out.Digest.Chosen)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Nothing saved yet: the summary would go out at the default hour of the person's own zone.
 		err = nil
 		if zone, zerr := auth.UserTimeZone(ctx, s.db, userID); zerr != nil {
 			err = zerr
@@ -197,9 +127,6 @@ func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (
 	return out, nil
 }
 
-// digestSettingsSQL reads a person's summary settings in a workspace (hour, zone, whether they
-// chose the time themselves; the arguments are the user and the workspace). The zone is the one they
-// chose for it, or until they do, the time zone of their profile (package auth) if they have one.
 const digestSettingsSQL = `
 	SELECT s.digest_hour,
 	       CASE WHEN s.timezone_chosen = 0 AND u.time_zone <> '' THEN u.time_zone ELSE s.timezone END,
@@ -207,9 +134,6 @@ const digestSettingsSQL = `
 	FROM notification_email_settings s JOIN users u ON u.id = s.user_id
 	WHERE s.user_id = ? AND s.workspace_id = ?`
 
-// SyncTimeZone moves the daily summaries of userID that follow their profile's time zone (those
-// whose zone they haven't chosen for the summary) to the new zone, in tx. It is auth's
-// TimeZoneHook (auth.Service.OnTimeZoneChanged).
 func (s *Service) SyncTimeZone(ctx context.Context, tx *sql.Tx, userID int64) error {
 	if s.sched == nil {
 		return nil
@@ -244,11 +168,6 @@ func (s *Service) SyncTimeZone(ctx context.Context, tx *sql.Tx, userID int64) er
 	return nil
 }
 
-// SetEmailChoices changes what userID chose in the workspace, and schedules (or ends) the daily
-// summary to match. Turning anything on needs a server that can send mail (ErrEmailUnavailable);
-// turning things off never does. The first time anything is turned on for an address that isn't
-// confirmed, a link to confirm it is mailed (emailverify.go), and nothing else is sent until it is
-// opened. The caller has checked that userID is a member.
 func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64, u EmailUpdate) error {
 	turnsOn := false
 	for kind, mode := range u.Kinds {
@@ -271,8 +190,6 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 		}
 	}
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// Membership is checked again here: leaving deletes the person's choices in the same
-		// write lock, so a choice can't be stored for someone who has just left.
 		var member bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = ? AND workspace_id = ?)`,
 			userID, workspaceID).Scan(&member); err != nil {
@@ -294,8 +211,6 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 			if mode == ModeOff {
 				_, err = tx.ExecContext(ctx, `DELETE FROM notification_email_prefs WHERE user_id = ? AND workspace_id = ? AND kind = ?`, userID, workspaceID, kind)
 			} else {
-				// since is where the notifications are when a kind turns to a summary: it counts what
-				// comes after, never what was already there or was mailed as it happened.
 				_, err = tx.ExecContext(ctx, `
 					INSERT INTO notification_email_prefs (user_id, workspace_id, kind, mode, since)
 					VALUES (?, ?, ?, ?, (SELECT coalesce(max(id), 0) FROM notifications WHERE user_id = ? AND workspace_id = ?))
@@ -337,8 +252,6 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 			}
 			return err
 		}
-		// A change that leaves the time as it was leaves the waiting occurrence alone: saving
-		// another choice must not push today's summary to tomorrow.
 		moved := u.Digest != nil && known && (u.Digest.Hour != prevHour || u.Digest.Timezone != prevZone)
 		if job, err := s.sched.Find(ctx, tx, userID, KindDigest, digestKey(workspaceID)); err == nil && job.State == schedule.StatePending && !moved {
 			return nil
@@ -350,9 +263,6 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 	if err != nil || !turnsOn {
 		return err
 	}
-	// The first choice for an address that isn't confirmed sends the link that confirms it. A link
-	// that can't be sent doesn't undo the choice: the settings say the address is unconfirmed, and
-	// ask for another.
 	if a, err := s.addressOf(ctx, s.db, userID); err == nil && a.State == AddressUnverified {
 		if err := s.SendVerification(ctx, userID, workspaceID); err != nil {
 			var soon *TooSoonError
@@ -366,9 +276,6 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 
 func digestKey(workspaceID int64) string { return "workspace:" + strconv.FormatInt(workspaceID, 10) }
 
-// scheduleDigest sets the person's summary to run at the next hour o'clock of their own time zone.
-// There is one job and no fixed interval: each run schedules the next (nextDigestRun) from the local
-// date, so the summary stays at the hour across the change to and from daylight saving time.
 func (s *Service) scheduleDigest(ctx context.Context, q schedule.DBTX, userID, workspaceID int64) error {
 	var hour int
 	var zone string
@@ -381,7 +288,6 @@ func (s *Service) scheduleDigest(ctx context.Context, q schedule.DBTX, userID, w
 		if chosen {
 			return err
 		}
-		// A profile zone this machine's zone database doesn't know: the summary still goes out, in UTC.
 		slog.WarnContext(ctx, "notifications: a time zone is unknown here, using UTC for a summary", "user", userID, "zone", zone)
 		loc = time.UTC
 	}
@@ -399,11 +305,6 @@ func loadZone(name string) (*time.Location, error) {
 	return time.LoadLocation(name)
 }
 
-// nextDigest is the next time after now that it is hour o'clock in loc, from the local date: the
-// day after today is the date plus one, however long that day is.
-//
-// An hour that doesn't exist on a day (the clocks skip it) is the first moment after the gap, and one
-// that happens twice (they go back) is its first time.
 func nextDigest(now time.Time, hour int, loc *time.Location) time.Time {
 	local := now.In(loc)
 	at := schedule.LocalHour(local.Year(), local.Month(), local.Day(), hour, loc)
@@ -419,14 +320,10 @@ func (s *Service) usesDigest(ctx context.Context, q queryer, userID, workspaceID
 	return n > 0, err
 }
 
-// recipientOf is who a mail goes to and in which language: the person's own, else their workspace's.
 func (s *Service) recipientOf(ctx context.Context, q queryer, userID, workspaceID int64) (address, locale string, err error) {
 	return s.recipient(ctx, q, userID, workspaceID, false)
 }
 
-// confirmedRecipientOf is recipientOf for a notification: read in one statement with the proof that
-// the address is the one the person confirmed, so no other is returned. sql.ErrNoRows is "nobody
-// may be mailed" (not a member, or no confirmed address).
 func (s *Service) confirmedRecipientOf(ctx context.Context, q queryer, userID, workspaceID int64) (address, locale string, err error) {
 	return s.recipient(ctx, q, userID, workspaceID, true)
 }
@@ -445,7 +342,6 @@ func (s *Service) recipient(ctx context.Context, q queryer, userID, workspaceID 
 	return address, workspaceLocale, err
 }
 
-// The ledger's states (notification_email_ledger).
 const (
 	ledgerSending   = "sending"
 	ledgerSent      = "sent"
@@ -454,22 +350,14 @@ const (
 	ledgerCancelled = "cancelled"
 )
 
-// slot is what reserving a mail's place in the ledger came to.
 type slot int
 
 const (
-	// slotReserved: the caller may submit the mail, and must record the outcome.
 	slotReserved slot = iota
-	// slotDone: the mail was submitted before (or may have been): it is never submitted again.
 	slotDone
-	// slotFull: the person has had the most instant mails in the hour.
 	slotFull
 )
 
-// reserve writes the attempt to key's row, in one transaction with the count the hourly limit
-// takes, before anything is submitted. An existing row decides: a mail that was sent, or whose
-// outcome is unknown (a try that was started and never recorded one is that) is done, with the
-// newest notification it covered; one the relay refused or that was cancelled gets a new try.
 func (s *Service) reserve(ctx context.Context, userID int64, key, kind string, upto int64) (slot, int64, error) {
 	out, covered := slotReserved, upto
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -483,7 +371,6 @@ func (s *Service) reserve(ctx context.Context, userID int64, key, kind string, u
 			out, covered = slotDone, prev
 			return nil
 		case err == nil && state == ledgerSending:
-			// A worker wrote the attempt and died without a result: the relay may have taken it.
 			out, covered = slotDone, prev
 			_, err = tx.ExecContext(ctx, `UPDATE notification_email_ledger SET state = ?, updated_at = ? WHERE key = ?`, ledgerUnknown, now, key)
 			return err
@@ -513,26 +400,18 @@ func (s *Service) reserve(ctx context.Context, userID int64, key, kind string, u
 	return out, covered, err
 }
 
-// settleLedger records what came of the attempt under key. It is written even when the server is
-// stopping, since an attempt with no outcome is read as "may have been sent".
 func (s *Service) settleLedger(ctx context.Context, key, state string, upto int64) error {
 	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `
 		UPDATE notification_email_ledger SET state = ?, upto = ?, updated_at = ? WHERE key = ? AND state = 'sending'`, state, upto, s.now(), key)
 	return err
 }
 
-// submission is how a send came out, for the ledger and for what to do next.
 type submission struct {
-	// state is the ledger's: sent, unknown (it may have been taken), refused (it was not) or
-	// cancelled (the server has no mail any more).
-	state string
-	// permanent: sending again can't help.
+	state     string
 	permanent bool
 	cause     error
 }
 
-// submitted classifies the result of mail.Service.Send. A failure of the relay's answer to the
-// message itself is the one case in which it is not known whether the mail was taken.
 func submitted(err error) submission {
 	var se *mail.SendError
 	switch {
@@ -542,28 +421,22 @@ func submitted(err error) submission {
 		return submission{state: ledgerCancelled}
 	case errors.As(err, &se):
 		slog.Warn("notifications: an email wasn't sent", "stage", se.Stage, "smtp_code", se.Code, "ambiguous", se.Ambiguous)
-		// The reply's code and the stage, never its words: they can name hosts and addresses.
 		cause := fmt.Errorf("mail: %s: %d", se.Stage, se.Code)
 		if se.Ambiguous {
 			return submission{state: ledgerUnknown, permanent: true, cause: cause}
 		}
 		return submission{state: ledgerRefused, permanent: se.Stage == mail.StageRejected && se.Code >= 500, cause: cause}
 	}
-	// Nothing reached the relay: the message could not be made.
 	slog.Warn("notifications: an email couldn't be made", "err", err)
 	return submission{state: ledgerRefused, cause: err}
 }
 
-// digestPlan is what a summary would say now.
 type digestPlan struct {
 	count           int
 	upto            int64
 	address, locale string
 }
 
-// digestPlanFor works out the summary of job's person as it stands now, in a transaction of its
-// own (the whole plan is one state, and a notification with nothing to say is passed over). ok is
-// false when there is nothing to say, or nothing may be sent.
 func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digestPlan, ok bool, err error) {
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		p, ok, err = s.digestPlanIn(ctx, tx, job)
@@ -572,12 +445,6 @@ func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digest
 	return p, ok && err == nil, err
 }
 
-// digestPlanIn is digestPlanFor in tx, which the caller holds: the unread notifications of the
-// kinds the person chose for the summary that came after its cursor and after the kind was turned
-// to a summary, and that they may still read, are counted by one reader on tx, so the count, the
-// address and the choices are of one state; the caller acts on the plan in the same transaction.
-// ok is false when there is nothing to say, or nothing may be sent: no mail, an unconfirmed
-// address, no longer a member.
 func (s *Service) digestPlanIn(ctx context.Context, tx *sql.Tx, job schedule.Job) (p digestPlan, ok bool, err error) {
 	if !s.emailReady() {
 		return p, false, nil
@@ -620,8 +487,6 @@ func (s *Service) digestPlanIn(ctx context.Context, tx *sql.Tx, job schedule.Job
 	if len(found) == 0 {
 		return p, false, nil
 	}
-	// Only what the person may read now, and what is still true (a card that is due), is counted,
-	// and so told: the reader renders each as the inbox does, on this transaction.
 	reader := s.readerOn(s.access.On(tx), job.UserID)
 	for _, n := range found {
 		it, err := reader.item(ctx, n)
@@ -634,7 +499,6 @@ func (s *Service) digestPlanIn(ctx context.Context, tx *sql.Tx, job schedule.Job
 	}
 	p.upto = found[len(found)-1].id
 	if p.count == 0 {
-		// Nothing to tell, and nothing to count again: they are passed over.
 		return p, false, advanceDigestIn(ctx, tx, job, p.upto)
 	}
 	p.address, p.locale, err = s.confirmedRecipientOf(ctx, tx, job.UserID, job.WorkspaceID)
@@ -657,8 +521,6 @@ func advanceDigestIn(ctx context.Context, x interface {
 	return err
 }
 
-// current says whether job is still the occurrence of its person's summary: it is not once the
-// person has turned the summary off or changed its time (which schedules it anew).
 func (s *Service) current(ctx context.Context, q schedule.DBTX, job schedule.Job) (bool, error) {
 	if s.sched == nil {
 		return false, nil
@@ -670,16 +532,10 @@ func (s *Service) current(ctx context.Context, q schedule.DBTX, job schedule.Job
 	return err == nil && found.Occurrence() == job.Occurrence(), err
 }
 
-// sendDigest is the handler of the daily summary, run as the person it is for: it counts their
-// unread notifications of the kinds they chose for the summary that came after the last one and
-// that they may still read, and mails the count with a link to the inbox, at most once for the
-// occurrence however many times it is tried. Nothing is sent when there is none, when the server
-// can't send mail or when the address isn't confirmed. Whatever comes of it, the next summary is
-// scheduled, at the same hour of the person's own day.
 func (s *Service) sendDigest(ctx context.Context, job schedule.Job) error {
 	err := s.digestOnce(ctx, job)
 	if err != nil && ctx.Err() == nil && job.Attempts < digestTries {
-		return err // tried again, with the scheduler's waits
+		return err
 	}
 	if err != nil {
 		slog.Warn("notifications: a summary was left for the next one", "job", job.ID, "err", err)
@@ -687,9 +543,7 @@ func (s *Service) sendDigest(ctx context.Context, job schedule.Job) error {
 	return s.digestNext(ctx, job)
 }
 
-// digestNext schedules the person's next summary, unless this occurrence has been replaced.
 func (s *Service) digestNext(ctx context.Context, job schedule.Job) error {
-	// On a context of its own: the handler's may have ended, and the chain of summaries must not.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), emailSendTimeout)
 	defer cancel()
 	return s.write(ctx, func(tx *sql.Tx) error {
@@ -714,22 +568,14 @@ func (s *Service) digestOnce(ctx context.Context, job schedule.Job) error {
 		return err
 	}
 	if got == slotDone {
-		// An earlier try of this occurrence submitted it, or died trying: it is not sent again, and
-		// what it covered is not counted again.
 		return s.advanceDigest(ctx, job, covered)
 	}
-	// The last point that can still cancel it: the occurrence, the choices, the address and the
-	// person's access are asked again.
 	if s.afterReserve != nil {
 		s.afterReserve()
 	}
 	if cur, err := s.current(ctx, s.db, job); err != nil || !cur {
 		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
 	}
-	// The final plan, the occurrence and what the message covers are one transaction: the writers
-	// wait while it is made, so what was counted is what the person may read when it is written to
-	// the ledger, before anything is submitted, and an attempt that stops after the relay took the
-	// mail advances the cursor over everything it counted.
 	cancelled := false
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if cur, err := s.current(ctx, tx, job); err != nil || !cur {
@@ -771,18 +617,13 @@ func (s *Service) digestOnce(ctx context.Context, job schedule.Job) error {
 	return res.cause
 }
 
-// emailDelivery is a queued mail.
 type emailDelivery struct {
 	id, notificationID int64
 	attempts           int
 }
 
-// DrainEmailOnce sends the mails that are due now and returns when none is: for tests, which have
-// no worker.
 func (s *Service) DrainEmailOnce(ctx context.Context) { s.drainEmail(ctx) }
 
-// drainEmail sends the queued mails that are due, one after another. Without a server that can send
-// mail it leaves them as they are.
 func (s *Service) drainEmail(ctx context.Context) {
 	for ctx.Err() == nil && s.emailReady() {
 		d, found, err := s.claimEmail(ctx)
@@ -801,8 +642,6 @@ func (s *Service) drainEmail(ctx context.Context) {
 	}
 }
 
-// claimEmail takes the next mail that is due, counting the try and moving the next one out, as
-// claim does for pushes; a mail that has used all its tries is given up.
 func (s *Service) claimEmail(ctx context.Context) (emailDelivery, bool, error) {
 	t := s.clock()
 	if _, err := s.db.ExecContext(ctx, `
@@ -827,20 +666,12 @@ func (s *Service) settleEmail(ctx context.Context, d emailDelivery, state string
 	return err
 }
 
-// instantTarget is a notification that may be mailed now, and where.
 type instantTarget struct {
 	userID          int64
 	kind            string
 	address, locale string
 }
 
-// instantEligible decides whether the mail of notification id may go out now: it drops what must not
-// be mailed (gone, read meanwhile, old, no longer chosen, an address that isn't confirmed, the person
-// gone from the workspace, something they may no longer read or that is no longer true). An error is a
-// failure to find out. What is decided and where the mail goes are read in one transaction (the
-// writers wait while it is open), the confirmed address in one statement and what the person may
-// read last, so a mail goes to a confirmed address of someone who may read what it tells, as of
-// the moment it is submitted.
 func (s *Service) instantEligible(ctx context.Context, id int64) (t instantTarget, ok bool, err error) {
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		t, ok, err = s.instantEligibleIn(ctx, tx, id)
@@ -863,7 +694,7 @@ func (s *Service) instantEligibleIn(ctx context.Context, tx *sql.Tx, id int64) (
 			EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = n.workspace_id AND m.user_id = n.user_id)
 		FROM notifications n WHERE n.id = ?`, id).Scan(&n.id, &n.userID, &n.workspaceID, &n.kind, &ref, &n.createdAt, &n.read, &mode, &member)
 	if errors.Is(err, sql.ErrNoRows) {
-		return t, false, nil // the notification is gone
+		return t, false, nil
 	}
 	if err != nil {
 		return t, false, err
@@ -872,12 +703,10 @@ func (s *Service) instantEligibleIn(ctx context.Context, tx *sql.Tx, id int64) (
 	if !readable || n.read || !member || mode.String != ModeInstant || s.clock().Sub(created) > emailTTL || !emailKind(n.kind) || !s.emailReady() {
 		return t, false, nil
 	}
-	// The confirmed address is read first, and what the person may read last: the last read is the
-	// one nearest the submission, and the one that revocation of access must be seen by.
 	t = instantTarget{userID: n.userID, kind: n.kind}
 	t.address, t.locale, err = s.confirmedRecipientOf(ctx, tx, n.userID, n.workspaceID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return instantTarget{}, false, nil // not a member any more, or no confirmed address
+		return instantTarget{}, false, nil
 	}
 	if err != nil {
 		return instantTarget{}, false, err
@@ -892,8 +721,6 @@ func (s *Service) instantEligibleIn(ctx context.Context, tx *sql.Tx, id int64) (
 	return t, true, nil
 }
 
-// readStored reads the reference and the time of a stored notification; a notification that can't
-// be read is not mailed.
 func readStored(ref string, n *stored) (created time.Time, ok bool) {
 	if err := json.Unmarshal([]byte(ref), &n.ref); err != nil {
 		return time.Time{}, false
@@ -902,10 +729,6 @@ func readStored(ref string, n *stored) (created time.Time, ok bool) {
 	return created, err == nil
 }
 
-// runEmail makes one try of an instant mail: it checks that it may be mailed, reserves its place in
-// the ledger (the hourly limit is counted there, and a mail that was submitted before is not
-// submitted again), checks again at the last point that can still cancel it, and sends the kind's
-// message with a link to the notification.
 func (s *Service) runEmail(ctx context.Context, d emailDelivery) error {
 	target, ok, err := s.instantEligible(ctx, d.notificationID)
 	if err != nil {
@@ -923,7 +746,6 @@ func (s *Service) runEmail(ctx context.Context, d emailDelivery) error {
 	case slotFull:
 		return s.settleEmail(ctx, d, "failed")
 	case slotDone:
-		// It was submitted by an earlier try, which may have died before it noted so.
 		return s.settleEmail(ctx, d, "sent")
 	}
 	if s.afterReserve != nil {
@@ -961,7 +783,6 @@ func (s *Service) runEmail(ctx context.Context, d emailDelivery) error {
 	return s.retryEmail(ctx, d, res.cause)
 }
 
-// retryEmail moves a failed try's next one out, or gives the mail up after its last.
 func (s *Service) retryEmail(ctx context.Context, d emailDelivery, cause error) error {
 	if d.attempts >= emailMaxAttempts {
 		return s.settleEmail(ctx, d, "failed")

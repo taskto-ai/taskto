@@ -1,7 +1,3 @@
-// The user's conversations in a workspace: the list beside the open one. On a phone it is
-// one or the other, with a way back to the list. The list shows the active conversations, or
-// the archived ones.
-
 import { useState } from 'react'
 import { api, type Conversation, errorText, ws } from '../api'
 import { builderPath } from '../apps/route'
@@ -43,7 +39,6 @@ export function ConversationsPage({
     [workspace, archived],
   )
   const [creating, setCreating] = useState(false)
-  // A conversation made after the page went (another workspace, the session ended) isn't opened.
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
   const openId = open && /^\d+$/.test(open) ? Number(open) : null
@@ -75,7 +70,6 @@ export function ConversationsPage({
           </Heading>
           <IconButton
             icon="archive"
-            // A toggle: its name stays, and pressed says the archived ones are shown.
             label={t('conversations.showArchivedTitle')}
             aria-pressed={archived}
             onClick={() => setArchived((a) => !a)}
@@ -99,8 +93,6 @@ export function ConversationsPage({
           (archived ? (
             <EmptyState title={t('conversations.nothingArchived')} />
           ) : (
-            // The words say what each button does: the header's New starts one, this one asks the
-            // agent for an app.
             <EmptyState
               title={t('conversations.none')}
               actions={

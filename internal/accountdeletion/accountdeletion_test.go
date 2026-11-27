@@ -34,8 +34,8 @@ type fakeAgent struct {
 	mu      sync.Mutex
 	retired []int64
 	purged  []int64
-	gone    map[int64]bool // conversations the runtime no longer has: 404
-	down    error          // what the runtime answers to every request, while set
+	gone    map[int64]bool
+	down    error
 }
 
 func (f *fakeAgent) Conversations(context.Context) ([]agentrt.ConversationInfo, error) {
@@ -49,7 +49,7 @@ func (f *fakeAgent) PurgeConversation(_ context.Context, id int64) error {
 		return f.down
 	}
 	if f.gone[id] {
-		return nil // as the sidecar answers for one it no longer has
+		return nil
 	}
 	if !slices.Contains(f.retired, id) {
 		return &agentrt.StatusError{Code: http.StatusConflict}
@@ -75,7 +75,7 @@ type fakeCLI struct {
 	mu    sync.Mutex
 	users []int64
 	fail  error
-	kind  string // the worker this server runs: "local", "container" or "" (off)
+	kind  string
 }
 
 func (f *fakeCLI) WorkerKind() string {
@@ -88,7 +88,7 @@ func (f *fakeCLI) Forget(_ context.Context, user int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.kind == "" {
-		return cliaccounts.ErrOff // as the service answers with no worker
+		return cliaccounts.ErrOff
 	}
 	if f.fail != nil {
 		return f.fail
@@ -97,8 +97,6 @@ func (f *fakeCLI) Forget(_ context.Context, user int64) error {
 	return nil
 }
 
-// world: a workspace with an admin (bob), a member who leaves (leaver), and a bystander (carol),
-// a shared space everyone writes in, and the leaver's private space with a document in it.
 type world struct {
 	t        *testing.T
 	db       *sql.DB
@@ -115,7 +113,7 @@ type world struct {
 	carol    int64
 	team     access.Space
 	private  access.Space
-	otherPrv access.Space // carol's private space, which must survive
+	otherPrv access.Space
 	card     int64
 	comment  int64
 }
@@ -180,25 +178,21 @@ func newWorld(t *testing.T) *world {
 	put(w.private, "diary.md", "# Diary\nprivate thoughts\n", leaverName, leaverEmail)
 	put(w.otherPrv, "notes.md", "# Carol's notes\n", "Carol", "carol@example.com")
 	put(w.team, "plan.md", "# Plan\nv1\n", leaverName, leaverEmail)
-	put(w.team, "plan.md", "# Plan\nv2\n", "Bob", "bob@example.com") // a later version by someone else, kept
+	put(w.team, "plan.md", "# Plan\nv2\n", "Bob", "bob@example.com")
 	put(w.team, "minutes.md", "# Minutes\n", leaverName, leaverEmail)
 
-	// A shared board with a card the leaver made and is assigned to, and comments: theirs, and
-	// Bob's that mentions them.
 	board := exec(t, sqlDB, `INSERT INTO boards (space_id, kind, name, created_by) VALUES (?, 'team', 'Work', ?)`, w.team.ID, w.leaver)
 	w.card = exec(t, sqlDB, `INSERT INTO cards (board_id, title, col, rank, assignee_id, created_by, updated_by) VALUES (?, 'Ship it', 'todo', 'a', ?, ?, ?)`,
 		board, w.leaver, w.leaver, w.leaver)
 	exec(t, sqlDB, `INSERT INTO card_comments (card_id, author_id, body) VALUES (?, ?, 'I will do it')`, w.card, w.leaver)
 	w.comment = exec(t, sqlDB, `INSERT INTO card_comments (card_id, author_id, body) VALUES (?, ?, ?)`, w.card, w.bob,
 		fmt.Sprintf("thanks @[%s](user:%d), and @[Carol](user:%d) too", leaverName, w.leaver, w.carol))
-	// Their private board, with a card.
 	var pboard int64
 	if err := sqlDB.QueryRow(`SELECT id FROM boards WHERE space_id = ?`, w.private.ID).Scan(&pboard); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, sqlDB, `INSERT INTO cards (board_id, title, col, rank) VALUES (?, 'Secret errand', 'todo', 'a')`, pboard)
 
-	// Things that are only theirs.
 	sess := exec(t, sqlDB, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, 'h1', '2099-01-01T00:00:00.000Z')`, w.leaver)
 	exec(t, sqlDB, `INSERT INTO push_subscriptions (user_id, session_id, endpoint, p256dh, auth_sealed) VALUES (?, ?, 'https://push.example.test/x', x'01', x'02')`, w.leaver, sess)
 	exec(t, sqlDB, `INSERT INTO access_tokens (user_id, workspace_id, name, token_hash) VALUES (?, ?, 'laptop', 'th1')`, w.leaver, w.ws)
@@ -215,9 +209,8 @@ func newWorld(t *testing.T) *world {
 		TargetType: audit.TargetUser, Target: w.carol, Details: audit.Details{"from": "member", "to": "admin"}}); err != nil {
 		t.Fatal(err)
 	}
-	exec(t, sqlDB, `UPDATE audit_events SET client_addr = '203.0.113.9'`) // as events made over HTTP carry
+	exec(t, sqlDB, `UPDATE audit_events SET client_addr = '203.0.113.9'`)
 
-	// The server runs the container worker, which has run before (as the server records at start).
 	exec(t, sqlDB, `INSERT INTO cli_worker_history (worker, since) VALUES ('container', '2025-01-01T00:00:00.000Z')`)
 
 	w.sched = schedule.New(sqlDB, access.New(sqlDB, nil), schedule.Options{Poll: 10 * time.Millisecond})
@@ -236,15 +229,12 @@ func (w *world) count(query string, args ...any) int {
 	return n
 }
 
-// deleteAccount does what a deletion request does to the rows, without the HTTP: the account is
-// disabled and waits.
 func (w *world) deleteAccount() {
 	w.t.Helper()
 	exec(w.t, w.db, `UPDATE users SET disabled_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.leaver)
 	exec(w.t, w.db, `INSERT INTO account_deletions (user_id, requested_at, purge_at) VALUES (?, '2026-01-01T00:00:00.000Z', '2026-01-15T00:00:00.000Z')`, w.leaver)
 }
 
-// everythingAbout scans every table of the database for text that holds needle, and reports where.
 func (w *world) everythingAbout(needle string) []string {
 	w.t.Helper()
 	var tables []string
@@ -265,10 +255,8 @@ func (w *world) everythingAbout(needle string) []string {
 	_ = rows.Close()
 	var found []string
 	for _, tbl := range tables {
-		r, err := w.db.Query(`SELECT * FROM "` + tbl + `"`) //nolint:gosec // G202: a table name read from sqlite_master
+		r, err := w.db.Query(`SELECT * FROM "` + tbl + `"`)
 		if err != nil {
-			// Only a full-text index's shadow tables may be unreadable by name; any other table
-			// that can't be read could hold the needle, so the scan can't say it is gone.
 			if strings.HasPrefix(tbl, "search_") {
 				continue
 			}
@@ -318,7 +306,6 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The account and everything that was theirs alone.
 	if n := w.count(`SELECT count(*) FROM users WHERE id = ?`, w.leaver); n != 0 {
 		t.Fatalf("the account remains")
 	}
@@ -344,15 +331,12 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 			t.Errorf("%s = %d, want 0", q, n)
 		}
 	}
-	// Nothing in the database names them any more, in any table.
 	for _, needle := range []string{leaverEmail, leaverName} {
 		if found := w.everythingAbout(needle); len(found) > 0 {
 			t.Errorf("%q is still in %v", needle, found)
 		}
 	}
 
-	// The runtime's copies were retired and then purged from its database (the one it no longer
-	// has isn't an error), and the CLI worker's files forgotten.
 	if len(w.agent.retired) != 1 || w.agent.retired[0] != 101 {
 		t.Errorf("retired = %v, want [101]", w.agent.retired)
 	}
@@ -366,7 +350,6 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 		t.Errorf("the CLI worker forgot %v", w.cli.users)
 	}
 
-	// Someone else's: their private space, conversation and files, untouched.
 	if n := w.count(`SELECT count(*) FROM conversations WHERE owner_id = ?`, w.carol); n != 1 {
 		t.Errorf("the bystander's conversations = %d", n)
 	}
@@ -374,7 +357,6 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 		t.Errorf("the bystander's private document: %v", err)
 	}
 
-	// What they made for others stays, without them.
 	var assignee, creator sql.NullInt64
 	var deleted bool
 	if err := w.db.QueryRow(`SELECT assignee_id, created_by, assignee_deleted FROM cards WHERE id = ?`, w.card).Scan(&assignee, &creator, &deleted); err != nil {
@@ -393,7 +375,6 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 	if want := fmt.Sprintf("thanks @[Deleted user](user:0), and @[Carol](user:%d) too", w.carol); body != want {
 		t.Errorf("the mention reads %q, want %q", body, want)
 	}
-	// The documents they wrote in the shared space are there, now by "a deleted user".
 	for name, text := range map[string]string{"plan.md": "v2", "minutes.md": "# Minutes"} {
 		doc, err := w.kb.Read(ctx, w.team, name, "")
 		if err != nil || !strings.Contains(string(doc.Content), text) {
@@ -413,8 +394,6 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 		t.Errorf("plan.md's history: %v", authors)
 	}
 
-	// The log: their events have no actor and say a deleted account did them; the purge is an
-	// event of its own, with numbers and no names.
 	var actorDeleted, actorNull int
 	if err := w.db.QueryRow(`SELECT count(*), sum(actor_id IS NULL) FROM audit_events WHERE actor_deleted = 1`).Scan(&actorDeleted, &actorNull); err != nil {
 		t.Fatal(err)
@@ -440,8 +419,6 @@ func TestPurgeIsIdempotentAndResumesAfterAFailure(t *testing.T) {
 	w := newWorld(t)
 	w.deleteAccount()
 
-	// A step that fails stops the purge before the account goes; the deletion can't be cancelled
-	// any more, and nothing but what that step had reached is deleted.
 	w.cli.fail = errors.New("the worker is down")
 	if err := w.svc.Purge(ctx, w.leaver); err == nil {
 		t.Fatal("the purge went on over a failed step")
@@ -460,7 +437,6 @@ func TestPurgeIsIdempotentAndResumesAfterAFailure(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM users WHERE id = ?`, w.leaver); n != 0 {
 		t.Fatal("the account remains after the retry")
 	}
-	// Run again, for an account that is gone: nothing happens, no error.
 	if err := w.svc.Purge(ctx, w.leaver); err != nil {
 		t.Fatalf("a second purge: %v", err)
 	}
@@ -472,7 +448,6 @@ func TestPurgeIsIdempotentAndResumesAfterAFailure(t *testing.T) {
 func TestPurgeLeavesAnAccountWhoseDeletionWasCancelled(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
-	// No deletion row: it was cancelled, or never made. The job may still run.
 	if err := w.svc.Purge(ctx, w.leaver); err != nil {
 		t.Fatal(err)
 	}
@@ -487,8 +462,6 @@ func TestPurgeLeavesAnAccountWhoseDeletionWasCancelled(t *testing.T) {
 	}
 }
 
-// The scheduler runs the purge when it is due, for an account that is disabled (by design), and
-// not before.
 func TestTheSchedulerRunsThePurgeForADisabledAccountWhenItIsDue(t *testing.T) {
 	w := newWorld(t)
 	if err := w.svc.Attach(); err != nil {
@@ -513,7 +486,6 @@ func TestTheSchedulerRunsThePurgeForADisabledAccountWhenItIsDue(t *testing.T) {
 		t.Fatal("purged before it was due")
 	}
 
-	// Due now.
 	tx, err = w.db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -556,7 +528,6 @@ func TestReconcileSchedulesAPurgeThatHasNoJob(t *testing.T) {
 	if runAt != "2026-01-15T00:00:00.000Z" {
 		t.Errorf("run_at = %s", runAt)
 	}
-	// Again: nothing changes.
 	if err := w.svc.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -67,7 +67,6 @@ const MODELS = {
   },
 }
 
-// A conversation on Claude Code: the user's message and the driver's cli_turn call.
 const cliEntries = [
   { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'Fix the tests' }] },
   {
@@ -120,10 +119,8 @@ test('the banner shows only for a conversation on a CLI whose login needs signin
   expect(reconnectAccount({ provider: 'cli-claude', model_id: 'default' }, list)?.cli).toBe('claude')
   expect(reconnectAccount({ provider: 'cli-codex', model_id: 'default' }, list)).toBeNull()
   expect(reconnectAccount({ provider: 'cli-grok', model_id: 'default' }, list)).toBeNull()
-  // Another model, even with a CLI account to reconnect: no banner.
   expect(reconnectAccount({ provider: 'script', model_id: 'script-1' }, list)).toBeNull()
   expect(reconnectAccount({ provider: 'u2-cli-claude', model_id: 'x' }, list)).toBeNull()
-  // Nothing known yet, or CLI workers off.
   expect(reconnectAccount(undefined, list)).toBeNull()
   expect(reconnectAccount({ provider: 'cli-claude', model_id: 'default' }, null)).toBeNull()
   expect(reconnectAccount({ provider: 'cli-claude', model_id: 'default' }, { ...list, enabled: false })).toBeNull()
@@ -152,7 +149,6 @@ test("a CLI's turn shows as that CLI's work, its output as plain text", async ()
   const pre = document.querySelector('pre')
   expect(pre?.textContent).toBe(output)
   expect(pre?.querySelector('img, strong')).toBeNull()
-  // Open while the CLI works.
   expect(pre?.closest('details')?.open).toBe(true)
   expect(document.querySelector('img')).toBeNull()
   expect(screen.queryByRole('region', { name: /Reconnect/ })).toBeNull()
@@ -250,7 +246,6 @@ test('a turn waiting for a new login shows the banner; Reconnect signs in right 
   const before = count(calls, 'GET', '/api/me/cli-accounts')
   expect(screen.queryByRole('region', { name: 'Reconnect Claude Code' })).toBeNull()
 
-  // The turn finds the login expired: the account is read again.
   state = 'reconnect'
   act(() =>
     es.send(
@@ -319,7 +314,6 @@ test('CLI models are their own group; one not connected is still offered, with a
   expect(within(hint).getByRole('link', { name: 'Settings → CLI accounts' }).getAttribute('href')).toBe(
     '/w/1/settings/cli-accounts',
   )
-  // Not a reconnect: no banner.
   expect(screen.queryByRole('region', { name: /Reconnect/ })).toBeNull()
 })
 
@@ -372,11 +366,8 @@ test("a CLI's question shows with Allow and Deny; the answer goes to the server 
     running('Looking at the tests\n'),
   )
   await screen.findByLabelText('Model')
-  // The CLI asks: its output says so, and the question is read again.
   act(() => es.send(running('Looking at the tests\n? Claude Code asks to use Bash: rm -rf build\n')))
   const question = await screen.findByRole('region', { name: 'Claude Code asks to use Bash' })
-  // It names the tool it asks for (not its placeholder), and what it would run shows as plain
-  // text, never as HTML.
   expect(question.textContent).toContain('Claude Code asks to use Bash:')
   expect(question.textContent).not.toContain('{tool}')
   expect(within(question).getByText('Bash').tagName).toBe('STRONG')
@@ -406,7 +397,6 @@ test('allowing everything in a conversation asks first, and only for that conver
   const box = (await screen.findByLabelText('Let Codex act without asking in this conversation')) as HTMLInputElement
   expect(box.checked).toBe(false)
 
-  // It asks first, in the app's own dialog, saying what it means. Declined: nothing changes.
   const ask = () => screen.findByRole('alertdialog', { name: 'Let Codex act without asking?' })
   fireEvent.click(box)
   const question = await ask()
@@ -421,7 +411,6 @@ test('allowing everything in a conversation asks first, and only for that conver
   await waitFor(() => expect(box.checked).toBe(true))
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ cli_permissions: 'allow_all' }])
 
-  // Turning the questions back on needs no confirmation.
   fireEvent.click(box)
   await waitFor(() => expect(box.checked).toBe(false))
   expect(screen.queryByRole('alertdialog')).toBeNull()
@@ -429,6 +418,30 @@ test('allowing everything in a conversation asks first, and only for that conver
     { cli_permissions: 'allow_all' },
     { cli_permissions: 'ask' },
   ])
+})
+
+test("a CLI's questions are read again once for each new question line, and not for other output", async () => {
+  const { calls, es } = await open(
+    {
+      'GET /api/workspaces/1/models': MODELS,
+      'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'cli-claude', model_id: 'default' } },
+      'GET /api/me/cli-accounts': { body: accounts(account('claude', 'Claude Code', 'connected')) },
+      'GET /api/workspaces/1/conversations/7/cli-permissions': { body: { requests: [] } },
+    },
+    running('Looking at the tests\n'),
+  )
+  await screen.findByLabelText('Model')
+  const reads = () => count(calls, 'GET', '/api/workspaces/1/conversations/7/cli-permissions')
+  await waitFor(() => expect(reads()).toBeGreaterThan(0))
+  await new Promise((done) => setTimeout(done, 50))
+  const before = reads()
+  act(() => es.send(running('Looking at the tests\n? Claude Code asks to use Bash: ls\n')))
+  await waitFor(() => expect(reads()).toBe(before + 1))
+  act(() => es.send(running('Looking at the tests\n? Claude Code asks to use Bash: ls\nStill looking\n')))
+  act(() => es.send(running('Looking at the tests\n? Claude Code asks to use Bash: ls\nStill looking\n  ✓ Allowed\n')))
+  await waitFor(() => expect(reads()).toBe(before + 2))
+  await new Promise((done) => setTimeout(done, 50))
+  expect(reads()).toBe(before + 2)
 })
 
 test('while a CLI works, its questions are read again now and then, even without a line saying so', async () => {
@@ -483,17 +496,14 @@ test("a CLI's request to take over the browser is shown as the built-in agent's"
   ])
   expect(pendingHelp(t.messages)).toEqual(help)
 
-  // A request without a message, or of another shape, is no request.
   expect(pendingHelp(result({ help: { reason: 'login', message: '  ' } }).messages)).toBeNull()
   expect(pendingHelp(result({ help: 'sign in' }).messages)).toBeNull()
 
-  // The user's next message answers it.
   const answered = result({ help }).messages
   answered.push({ key: '5.0', role: 'user', text: 'Done', tools: [] })
   expect(pendingHelp(answered)).toBeNull()
 })
 
-// The turn's entries once it is done: its result keeps what the CLI did.
 const done = (kept: string) => ({
   type: 'value',
   value: {
@@ -530,7 +540,6 @@ test("a CLI's output is open while it works and folds once it is done", async ()
   act(() => es.send(done('$ go test\nok')))
   await waitFor(() => expect(screen.getByText('Claude Code worked')).toBeTruthy())
   expect(details().open).toBe(false)
-  // Still there, to open.
   expect(document.querySelector('pre')?.textContent).toBe('$ go test\nok')
 })
 
@@ -550,7 +559,6 @@ test('the answer on its way shows on its own button', async () => {
       'GET /api/workspaces/1/conversations/7/cli-permissions': {
         body: { requests: [{ id: 'q1', turn: 't1', cli: 'claude', tool: 'Bash', asked_at: '2026-11-19T15:10:00Z' }] },
       },
-      // Held open: the answer is on its way.
       'POST /api/workspaces/1/conversations/7/cli-permissions/q1': () => new Promise(() => {}),
     },
     running(''),

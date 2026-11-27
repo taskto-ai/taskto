@@ -23,7 +23,6 @@ test("a heading's #, bold, emphasis, code and strikethrough marks are left out",
 test('marks around a match, and a mark the snippet was cut in the middle of, go too', () => {
   expect(plain(cleanSnippet([{ text: '**' }, { text: 'orchard', match: true }, { text: '**' }]))).toBe('orchard')
   expect(marked(cleanSnippet([{ text: '**' }, { text: 'orchard', match: true }, { text: '**' }]))).toEqual(['orchard'])
-  // Cut after the opening of a bold run.
   expect(plain(cleanSnippet([{ text: 'a **b ' }, { text: 'c', match: true }]))).toBe('a b c')
 })
 
@@ -54,20 +53,16 @@ test("a match inside a link's destination is never removed: the destination stay
   const pieces = cleanSnippet([{ text: 'see [the guide](docs/' }, { text: 'setup', match: true }, { text: '.md) now' }])
   expect(marked(pieces)).toEqual(['setup'])
   expect(plain(pieces)).toBe('see the guide (docs/setup.md) now')
-  // The same for an image, and for a match in the words, which always stay.
   expect(marked(cleanSnippet([{ text: '![a ' }, { text: 'map', match: true }, { text: '](m.png)' }]))).toEqual(['map'])
 })
 
 test('a highlight that spans a formatting mark is kept whole, and a mark whose partner would stay stays too', () => {
-  // A phrase match covers the bold run's opening mark.
   const spans = cleanSnippet([{ text: 'a ' }, { text: 'red **apple', match: true }, { text: '** pie' }])
   expect(marked(spans)).toEqual(['red **apple'])
   expect(plain(spans)).toBe('a red **apple** pie')
-  // A match across the words of bold text: the marks around go.
   const across = cleanSnippet([{ text: 'a **' }, { text: 'red apple', match: true }, { text: '** pie' }])
   expect(plain(across)).toBe('a red apple pie')
   expect(marked(across)).toEqual(['red apple'])
-  // A match across a link's closing bracket.
   const link = cleanSnippet([{ text: 'see [the ' }, { text: 'plan](notes/pl', match: true }, { text: 'an.md) now' }])
   expect(marked(link)).toEqual(['plan](notes/pl'])
 })
@@ -78,7 +73,6 @@ test("a file that is not Markdown is shown literally: an upload's name keeps its
   expect(plain(cleanSnippet([{ text: '# not a heading **x** `y` [a](b)' }], { markdown: false }))).toBe(
     '# not a heading **x** `y` [a](b)',
   )
-  // And Markdown's own rule for words: marks inside a word are text.
   expect(plain(cleanSnippet([{ text: 'my__file__name.pdf and a*b*c and snake_case_' }]))).toBe(
     'my__file__name.pdf and a*b*c and snake_case_',
   )
@@ -93,7 +87,6 @@ test('nothing inside inline code or a code block is formatting', () => {
   )
   const block = ['```md', '# not a heading', '**bold** and [l](u)', '- item', '```', 'after'].join('\n')
   expect(plain(cleanSnippet([{ text: block }]))).toBe('# not a heading **bold** and [l](u) - item after')
-  // Backticks that are never closed are text.
   expect(plain(cleanSnippet([{ text: 'one ` tick and ``two' }]))).toBe('one ` tick and ``two')
 })
 
@@ -104,52 +97,19 @@ test('a snippet is cut to a window around its first match, which survives the cu
   const shown = plain(pieces)
   expect(shown.length).toBeLessThanOrEqual(1202)
   expect(shown.startsWith('…') && shown.endsWith('…')).toBe(true)
-  // A match longer than the window is cut, and is still the highlight.
   const long = cleanSnippet([{ text: 'x'.repeat(5000), match: true }])
   expect(marked(long)).toHaveLength(1)
   expect(marked(long)[0].length).toBeGreaterThan(1000)
-  // The window doesn't split a character made of two units.
   const wide = cleanSnippet([{ text: '😀'.repeat(2000) }])
   expect(plain(wide)).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
 })
 
-// SQLite's FTS5 limits a snippet by tokens, not characters: brackets are no tokens, so a snippet
-// can be as long as the document. A cleaner that backtracks takes time that grows with the
-// square of that length, and once froze the page.
-//
-// The test shows the work is linear, not that it is quick: a clock bound fails on a busy machine
-// with the code right. Each input is cleaned at three sizes, in two stages, and the time of one
-// size is compared with the time of the one before it. Linear work takes about as many times as
-// long as the size grew (8 times, in each stage); quadratic work takes the square of that, 64
-// times. A quadratic step with a small constant (a native search for a closing bracket from each
-// opening one) hides under the linear work at the first sizes and takes over only at the last,
-// where the old test's 300,000 repeats caught it; so the second stage goes up to 320,000.
-//
-// What is measured is the process's CPU time, not the wall clock: on a machine with more work
-// than cores a short run can find a quiet moment while a long one is paused again and again,
-// which makes the long one look too slow. That relies on the process being this test file's
-// alone (Vitest's default pool, `forks`: a process per file, checked below): CPU time counts
-// every thread of the process, the compiler's and the garbage collector's too. A time below
-// FLOOR_MS counts as FLOOR_MS, so for an input whose smallest size is that quick, stage one is
-// really a bound of 40 × FLOOR_MS = 80 ms of CPU for 40,000 repeats.
-//
-// Each size is timed a few times after a warm-up and the fastest counts. A ratio over the limit
-// is measured again, but only while the larger run is short (under RETRY_MS), where a pause can
-// explain it; a run of seconds over the limit is a cleaner that is not linear, and it fails at
-// once, as does every input after it, so a regression is reported in seconds.
 const NASTY = ['[', '(', '*', '_', '`', '~', '](', '[](', '*a', '_a_', '`a', '![', '>', '- ']
 const SMALL = 5_000
 const MID = 40_000
 const BIG = 320_000
-// Linear is 8 and quadratic is 64 or more. Stage one is far from both; measured, an unmutated
-// cleaner is at most 11.4 here. Stage two: an unmutated cleaner is between 2 and 23.3 (the most
-// is for "- ", whose result is the biggest), and a cleaner that is quadratic in a small way
-// between 44 and 59; 30 is between them, and a ratio over it gets more attempts.
 const MAX_RATIO = { first: 40, second: 30 }
-// Below this, the timer's own noise is most of a run.
 const FLOOR_MS = 2
-// A run of CPU time longer than this is not noise (a linear cleaner takes at most a fifth of
-// it at 320,000 repeats): it stops the measuring, and fails if the ratio is over the limit.
 const RETRY_MS = 1000
 const ATTEMPTS = 3
 
@@ -164,8 +124,6 @@ const snippetOf = (unit: string, times: number) => {
   ]
 }
 
-// The fastest of a few runs of fn, in milliseconds of CPU time; it stops at once for a run over
-// RETRY_MS, which is then the answer's lower bound, however many more runs there would be.
 function fastest(fn: () => void, runs = 3): number {
   let best = Number.POSITIVE_INFINITY
   for (let i = 0; i < runs; i++) {
@@ -181,7 +139,6 @@ function fastest(fn: () => void, runs = 3): number {
 
 type Growth = { ok: boolean; decisive: boolean; message: string }
 
-// Whether the time of large is less than max times the time of small.
 function grows(small: () => void, large: () => void, max: number, sizes: string): Growth {
   let message = ''
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
@@ -197,7 +154,6 @@ function grows(small: () => void, large: () => void, max: number, sizes: string)
   return { ok: false, decisive: false, message }
 }
 
-// The input that failed beyond doubt: the others would only take longer to say the same.
 let decisiveFailure = ''
 
 test('the cleaner runs in a process of its own, which its timing relies on', () => {
@@ -206,9 +162,6 @@ test('the cleaner runs in a process of its own, which its timing relies on', () 
 
 test.for(NASTY)(
   'a snippet of repeated %j between two words is cleaned in linear time',
-  // Vitest can't interrupt code that doesn't wait, so this bounds only a run that ends: what
-  // stops a cleaner that is far too slow is RETRY_MS above. It is long because a busy machine
-  // stretches the wall time of a test that is quick in CPU time.
   { timeout: 60_000 },
   (unit, { skip }) => {
     if (decisiveFailure !== '') skip(`not linear for ${decisiveFailure}`)
@@ -216,8 +169,7 @@ test.for(NASTY)(
     const small = snippetOf(unit, SMALL)
     const mid = snippetOf(unit, MID)
     const big = snippetOf(unit, BIG)
-    // The scanner itself, on all of it (no window).
-    cleanSnippet(snippetOf(unit, SMALL / 10), whole) // warm-up: the first run pays for compiling
+    cleanSnippet(snippetOf(unit, SMALL / 10), whole)
 
     const first = grows(
       () => cleanSnippet(small, whole),
@@ -229,7 +181,6 @@ test.for(NASTY)(
     expect(first.ok, first.message).toBe(true)
     expect(marked(cleanSnippet(mid, whole))).toEqual(['orchard'])
 
-    // The last stage, only for a cleaner that passed the first.
     const second = grows(
       () => cleanSnippet(mid, whole),
       () => cleanSnippet(big, whole),
@@ -239,8 +190,6 @@ test.for(NASTY)(
     if (second.decisive) decisiveFailure = JSON.stringify(unit)
     expect(second.ok, second.message).toBe(true)
 
-    // The window: by default only a piece around the first match is worked on, so the same input
-    // costs a fraction of all of it, and shows the match.
     const wholeMs = fastest(() => cleanSnippet(mid, whole))
     const windowMs = fastest(() => cleanSnippet(mid))
     expect(windowMs).toBeLessThan(Math.max(wholeMs / 2, FLOOR_MS))
@@ -271,6 +220,5 @@ test('a link destination may hold balanced parentheses, and a backslash escapes 
   expect(plain(cleanSnippet([{ text: 'Keep \\*literal\\* near ' }, { text: 'orchard', match: true }]))).toBe(
     'Keep *literal* near orchard',
   )
-  // An escaped backslash is one backslash, and the mark after it is a mark.
   expect(plain(cleanSnippet([{ text: 'a \\\\ and *b*, \\[x\\](y) and \\`z\\`' }]))).toBe('a \\ and b, [x](y) and `z`')
 })

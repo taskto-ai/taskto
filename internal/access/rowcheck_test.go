@@ -8,9 +8,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// The check tells a space from one made later with its ID: by workspace and by generation, which
-// no space has twice. Two spaces with one ID can have the same creation time (it has the precision
-// of a millisecond), so it is not what tells them apart.
 func TestSpaceRowCheckTellsTheSameSpaceFromOneThatTookItsID(t *testing.T) {
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
@@ -52,8 +49,6 @@ func TestSpaceRowCheckTellsTheSameSpaceFromOneThatTookItsID(t *testing.T) {
 	check(Space{ID: 7, WorkspaceID: 2, Generation: first}, false, "another workspace's space of the same ID")
 	check(Space{ID: 8, WorkspaceID: 1, Generation: first}, false, "another ID")
 
-	// The space is deleted and another takes its ID, in the same millisecond as far as its
-	// creation time says.
 	if _, err := sqlDB.Exec(`DELETE FROM spaces WHERE id = 7`); err != nil {
 		t.Fatal(err)
 	}

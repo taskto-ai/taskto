@@ -1,7 +1,5 @@
 @layer components {
   .ui-table-scroll {
-    /* The box of what is out of sight inside (a hidden header, the caption): positioned against
-       the page it would widen the page on a phone; here it stays in the scrolling box. */
     position: relative;
     max-inline-size: 100%;
     overflow-x: auto;
@@ -20,7 +18,6 @@
     color: var(--color-text);
   }
 
-  /* The rows of headers and of data: aligned in the middle, as each cell is. */
   .ui-table-header,
   .ui-table-body {
     vertical-align: middle;
@@ -39,7 +36,6 @@
     vertical-align: middle;
   }
 
-  /* A row's header: a data cell's box, in the strong weight. */
   .ui-table-rowhead {
     font: var(--type-ui-strong);
   }
@@ -55,8 +51,6 @@
     white-space: nowrap;
   }
 
-  /* A sortable column's header: the header's own type, a button that fills it, the order's mark
-     after the name (muted until the column is the one the rows are in order by). */
   .ui-table-sort {
     display: inline-flex;
     align-items: center;

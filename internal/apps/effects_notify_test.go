@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// An entry that fails for good waits for the user who acted, so the notification inbox tells them
-// (internal/notifications); one that may still pass, or that succeeds, tells nobody.
-
 func (f *fx) failedNotices(userID int64) (refs []string) {
 	f.e.t.Helper()
 	rows, err := f.e.db.Query(`SELECT ref FROM notifications WHERE user_id = ? AND kind = 'app_effect_failed' AND workspace_id = ? ORDER BY id`, userID, f.ws)
@@ -31,14 +28,12 @@ func (f *fx) failedNotices(userID int64) (refs []string) {
 func TestAnEffectThatFailsForGoodTellsTheUserWhoActed(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-notify-01", "East gate", "fail")
-	// A done entry tells nobody.
 	f.work()
 	if n := len(f.failedNotices(f.alice.id)); n != 0 {
 		t.Fatalf("%d notifications for entries that were done", n)
 	}
 
 	f.mustSubmit(f.alice, "op-notify-02", "West gate", "fail")
-	// Alice loses the board's space: the entries fail at once, and only she is told.
 	expect(t, f.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", f.ws, f.maint.ID, f.alice.id), nil), http.StatusNoContent)
 	f.work()
 	refs := f.failedNotices(f.alice.id)
@@ -74,7 +69,6 @@ func TestAnEntryThatGivesUpAfterItsTriesTellsTheUserOnceAndAgainAfterARetry(t *t
 		return nil
 	}
 	f.work()
-	// It may still pass: nobody is told while there are tries left.
 	if n := len(f.failedNotices(f.alice.id)); n != 0 {
 		t.Fatalf("%d notifications while the entry still had tries", n)
 	}

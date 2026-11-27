@@ -1,6 +1,3 @@
-/* The offline shell (OfflineShell): the page shown without the server, with the apps downloaded on
-   this device, one of them open, and what waits to be sent. */
-
 @layer screens {
   .ui-offline-shell {
     block-size: 100%;

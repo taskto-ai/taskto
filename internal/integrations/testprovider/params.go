@@ -10,21 +10,12 @@ import (
 	"unicode/utf8"
 )
 
-// Stripe's v1 API takes form-encoded bodies with bracket notation (line_items[0][quantity]=1)
-// and refuses a parameter it doesn't know (parameter_unknown). The fake does the same, with the
-// lists below: the parameters the integration may use. A real parameter that is missing from the
-// lists is refused here, so add it (and a test) when a card starts to send one.
 const metaKey = `[^\[\]]{1,200}`
 
-// idx is an array index in its one spelling: 0, 1, 2, … and not 00 or 01, which would be another
-// key for the same line.
 const idx = `(?:0|[1-9]\d*)`
 
-// completedSessionsLimit is the parameter that limits how many times a Payment Link is paid, on
-// create and on update.
 const completedSessionsLimit = `restrictions\[completed_sessions\]\[limit\]`
 
-// limitParam is its name, as errors name it.
 const limitParam = "restrictions[completed_sessions][limit]"
 
 var (
@@ -55,7 +46,6 @@ var (
 		`metadata\[` + metaKey + `\]`,
 	}, lineItemParams...))
 
-	// `metadata` on its own, with an empty value, clears all of a link's metadata.
 	linkUpdateParamRes = compileAll([]string{`active`, completedSessionsLimit, `metadata`, `metadata\[` + metaKey + `\]`})
 
 	lineItemIndex = regexp.MustCompile(`^line_items\[(` + idx + `)\]`)
@@ -69,8 +59,6 @@ func compileAll(patterns []string) []*regexp.Regexp {
 	return out
 }
 
-// unknownParam answers Stripe's parameter_unknown for the first (in sorted order) parameter of
-// form that no pattern allows.
 func unknownParam(form url.Values, allowed []*regexp.Regexp) *reply {
 	keys := make([]string, 0, len(form))
 	for k := range form {
@@ -90,7 +78,6 @@ next:
 	return nil
 }
 
-// boolParam refuses a boolean parameter that is present and isn't "true" or "false".
 func boolParam(form url.Values, name string) *reply {
 	if v, ok := form[name]; ok && v[len(v)-1] != "true" && v[len(v)-1] != "false" {
 		rp := invalid("", "Invalid boolean: "+v[len(v)-1], name)
@@ -99,8 +86,6 @@ func boolParam(form url.Values, name string) *reply {
 	return nil
 }
 
-// completedSessionsLimitOf reads the link's limit: a whole number of at least 1, in its one
-// spelling (not 01). ok is false when the parameter wasn't sent.
 func completedSessionsLimitOf(form url.Values) (limit int, ok bool, rp *reply) {
 	v, sent := form[limitParam]
 	if !sent {
@@ -128,8 +113,6 @@ func badInteger(param, value string) *reply {
 	return &rp
 }
 
-// metadataOf collects the key-value pairs under prefix (such as "metadata"), within Stripe's
-// limits: 50 keys, keys of at most 40 characters, values of at most 500.
 func metadataOf(form url.Values, prefix string) (map[string]string, *reply) {
 	out := map[string]string{}
 	if rp := mergeMetadata(out, form, prefix); rp != nil {
@@ -138,16 +121,13 @@ func metadataOf(form url.Values, prefix string) (map[string]string, *reply) {
 	return out, nil
 }
 
-// mergeMetadata applies the pairs under prefix to into, which a caller passes as a copy of what
-// it keeps: an empty value unsets the key, and the limits (see metadataOf) are checked on the
-// result. On a refusal into may be half changed.
 func mergeMetadata(into map[string]string, form url.Values, prefix string) *reply {
 	p := prefix + "["
 	keys := make([]string, 0, len(form))
 	for k := range form {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys) // the first refusal is the same on every run
+	sort.Strings(keys)
 	for _, k := range keys {
 		if !strings.HasPrefix(k, p) || !strings.HasSuffix(k, "]") {
 			continue
@@ -176,15 +156,12 @@ func mergeMetadata(into map[string]string, form url.Values, prefix string) *repl
 	return nil
 }
 
-// lineItem is one line of a session or a link, from price_data (the integration's way: the
-// amount isn't known ahead of time). A price id is refused: the fake has no price catalogue.
 type lineItem struct {
 	Name, Description string
 	UnitAmount        int64
 	Quantity          int64
 }
 
-// Line limits: a Checkout Session in payment mode takes 100 lines, a Payment Link 20.
 const (
 	maxSessionLines = 100
 	maxLinkLines    = 20
@@ -278,7 +255,6 @@ func parseLineItems(form url.Values, maxLines int) (items []lineItem, currency s
 	return items, currency, nil
 }
 
-// total adds up the lines and applies the amount limits of a payment.
 func total(items []lineItem, currency string) (int64, *reply) {
 	var sum int64
 	for _, it := range items {
@@ -296,14 +272,8 @@ func total(items []lineItem, currency string) (int64, *reply) {
 	return sum, nil
 }
 
-// maxAmount is the most a line or a total may be, in the smallest unit: 8 digits, Stripe's limit
-// for every currency but IDR, COP and INR (and for cards, which take more).
 const maxAmount = 99999999
 
-// minimumCharges are Stripe's documented minimum charge amounts, in the smallest unit of the
-// currency, for an account that settles in the charge's own currency (https://docs.stripe.com/currencies,
-// "Minimum charge amount by currency"). Others that settle elsewhere need the equivalent in
-// the settlement currency, which the fake doesn't model.
 var minimumCharges = map[string]int64{
 	"usd": 50, "aed": 200, "ars": 50, "aud": 50, "brl": 50, "cad": 50, "chf": 50, "cop": 50,
 	"czk": 1500, "dkk": 250, "eur": 50, "gbp": 30, "hkd": 400, "huf": 17500, "idr": 50, "ils": 50,
@@ -311,9 +281,6 @@ var minimumCharges = map[string]int64{
 	"pln": 200, "ron": 200, "rub": 50, "sek": 300, "sgd": 50, "thb": 1000, "zar": 50,
 }
 
-// fallbackMinimum is what the fake asks for a currency the documentation lists no minimum for.
-// It is the fake's own choice and not Stripe's rule: a test that depends on a currency's minimum
-// should use one of minimumCharges.
 const fallbackMinimum = 50
 
 func minimumCharge(currency string) int64 {
@@ -324,16 +291,10 @@ func minimumCharge(currency string) int64 {
 }
 
 var (
-	// zeroDecimal currencies take their amount as it is (500 is 500 yen).
-	zeroDecimal = set("bif clp djf gnf jpy kmf krw mga pyg rwf vnd vuv xaf xof xpf")
-	// wholeUnits currencies are zero-decimal at Stripe, but for backward compatibility an amount
-	// is written with two decimals that are always 00: 500 is 5 shillings, and 501 is refused.
-	wholeUnits = set("isk ugx")
-	// threeDecimal currencies take amounts whose last digit is 0 at Stripe.
+	zeroDecimal  = set("bif clp djf gnf jpy kmf krw mga pyg rwf vnd vuv xaf xof xpf")
+	wholeUnits   = set("isk ugx")
 	threeDecimal = set("bhd jod kwd omr tnd")
-	// twoDecimal currencies take any amount. HUF and TWD payouts must be whole units, but the
-	// fake has no payouts: a charge in either may have any amount.
-	twoDecimal = set("usd eur gbp cad aud nzd chf sek nok dkk pln czk huf ron bgn brl mxn ars cop pen " +
+	twoDecimal   = set("usd eur gbp cad aud nzd chf sek nok dkk pln czk huf ron bgn brl mxn ars cop pen " +
 		"inr idr myr php rub sgd thb twd hkd cny aed sar ils zar try uah egp ngn kes mad")
 )
 

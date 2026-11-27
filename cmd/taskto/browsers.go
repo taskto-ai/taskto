@@ -11,17 +11,6 @@ import (
 	"taskto.ai/taskto/internal/config"
 )
 
-// startBrowsers returns the agent browser (docs/agent-browser.md) for cfg, the browsers a deleted
-// account's purge stops and removes the files of (nil when there are none to stop), and a stop that
-// ends every browser. It runs where the CLIs do and under the same rule (cli.Usable):
-//
-//   - in container mode, in the CLI worker, as each user's Unix user (a Remote client);
-//   - in local mode, in this process, as the server's own OS user, each user's browser in
-//     their CLI directory (<data>/cli/u<id>/browser), with Chromium's sandbox on.
-//
-// Off (the default), its API and tools say so. A container worker keeps its browsers whatever the
-// server's setting (one may still run from when it was on, and its files are in the worker), so the
-// purge of an account reaches it anyway.
 func startBrowsers(cfg config.Config, cli *cliaccounts.Service) (*agentbrowser.Service, browser.Browsers, func()) {
 	container := cli.Mode() == string(cliaccounts.Container)
 	if !cfg.Browser {

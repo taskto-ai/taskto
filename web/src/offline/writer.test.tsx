@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-//
-// One tab at a time changes existing records offline (docs/offline.md, "One writer"): the tab that
-// holds the offline writer (a Web Lock, or a lease in the database where there are none) edits,
-// deletes, chooses about a conflict and discards; the other tabs of the account show the queue and
-// the records and say that changes are made elsewhere, with a button that takes the right over.
-// The database, not what a tab believes, decides who writes: a tab that lost the right is refused
-// in the transaction it writes in.
 
 import 'fake-indexeddb/auto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -41,8 +34,6 @@ afterEach(async () => {
   await deactivate({ purge: false })
 })
 
-// A small Web Locks: exclusive locks by name, the ones that ask to wait queued, `ifAvailable` answered
-// with null when held, `signal` cancelling a wait.
 class FakeLocks {
   private held = new Set<string>()
   private queue = new Map<string, (() => void)[]>()
@@ -82,7 +73,6 @@ class FakeLocks {
   }
 }
 
-// The channel the tabs of an account hear each other on, delivered to the others.
 function channels() {
   const all = new Set<{ onmessage: ((e: MessageEvent) => void) | null }>()
   return (_name: string) => {
@@ -112,7 +102,6 @@ function clock() {
   }
 }
 
-// Two tabs of one account: two connections to one database, each with its own writer.
 async function tabs(deps: (c: ReturnType<typeof clock>) => WriterDeps) {
   const c = clock()
   const channel = channels()
@@ -172,14 +161,12 @@ for (const withLocks of [true, false]) {
     expect(wa.holds()).toBe(true)
     expect(wb.holds()).toBe(false)
     const saved = await a.enqueue(itemOf(), [])
-    // The reader changes nothing of the existing queue, whatever its screen says.
     await expect(discardOf(b, saved)).rejects.toBeInstanceOf(NotWriter)
     expect(await b.listItems()).toHaveLength(1)
 
     await wb.takeOver()
     expect(wb.holds()).toBe(true)
     await waitFor(() => expect(wa.holds()).toBe(false))
-    // The one that let go is refused by the database, and the new one writes.
     await expect(discardOf(a, saved)).rejects.toBeInstanceOf(NotWriter)
     await discardOf(b, saved)
     expect(await a.listItems()).toEqual([])
@@ -196,7 +183,6 @@ for (const withLocks of [true, false]) {
 }
 
 test('without Web Locks a holder that vanished loses the lease when it runs out, and is refused by the database even if it never heard', async () => {
-  // No channel: the holder is never asked to let go, and its heartbeat has stopped (the tab froze).
   const c = clock()
   const a = await OfflineStore.open(7)
   const b = await OfflineStore.open(7)
@@ -219,7 +205,6 @@ test('without Web Locks a holder that vanished loses the lease when it runs out,
     took = true
   })
   await waitFor(() => expect(timers.length).toBe(1))
-  // Not yet: the lease is the holder's until it runs out.
   timers.shift()?.()
   await waitFor(() => expect(timers.length).toBe(1))
   expect(took).toBe(false)
@@ -227,7 +212,6 @@ test('without Web Locks a holder that vanished loses the lease when it runs out,
   timers.shift()?.()
   await waiting
   expect(wb.holds()).toBe(true)
-  // The first tab still believes it holds the right: the database says it doesn't.
   expect(wa.holds()).toBe(true)
   await expect(discardOf(a, saved)).rejects.toBeInstanceOf(NotWriter)
   await discardOf(b, saved)
@@ -270,7 +254,6 @@ test('a tab that is not the writer shows the queue read-only, says so, and its b
   })
   const reader = runtimeOf(b, wb)
   render(<Harness runtime={reader} />)
-  // The item is there, and nothing in this tab changes it.
   await screen.findByText(/Expenses: Tea/)
   expect(screen.getByText(/Changes are being made in another tab/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: /Discard/ })).toBeNull()
@@ -278,7 +261,6 @@ test('a tab that is not the writer shows the queue read-only, says so, and its b
   expect(screen.queryByRole('button', { name: /Try again/ })).toBeNull()
 
   fireEvent.click(screen.getByRole('button', { name: 'Make changes here' }))
-  // While it waits it says so, and once it holds the right the notice is gone.
   await waitFor(() => expect(wb.holds()).toBe(true))
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Make changes here' })).toBeNull())
   expect(screen.queryByText(/Changes are being made in another tab/)).toBeNull()
@@ -286,10 +268,8 @@ test('a tab that is not the writer shows the queue read-only, says so, and its b
   expect(wa.holds()).toBe(false)
 })
 
-// Two tabs with different ways to take turns: one with Web Locks, one with the lease in the database.
 async function mixed(tell = true) {
   const c = clock()
-  // `tell: false`: the tabs never hear one another (a tab that froze), so only the row says who holds.
   const channel = tell ? channels() : () => null
   const common = { now: c.now, heartbeat: () => () => {}, channel, setTimer: (fn: () => void) => setTimeout(fn, 0) }
   const a = await OfflineStore.open(7)
@@ -306,7 +286,6 @@ test('a tab with Web Locks does not take the right from a tab that holds it by t
   expect([lease.holds(), locked.holds()]).toEqual([true, false])
   expect(await a.writerIs(lease.owner)).toBe(true)
   expect(await a.writerIs(locked.owner)).toBe(false)
-  // Asked to, it waits for the lease holder to let go, and then it holds the right alone.
   await locked.takeOver()
   expect(locked.holds()).toBe(true)
   await waitFor(() => expect(lease.holds()).toBe(false))
@@ -319,8 +298,6 @@ test('a tab with the lease does not take the right from a tab that holds a Web L
   await lease.start()
   expect([locked.holds(), lease.holds()]).toEqual([true, false])
   expect(await a.writerIs(locked.owner)).toBe(true)
-  // The lock's holder froze: its lease runs out, and the other tab may take the row. The database
-  // then refuses the first one's writes, whatever it believes.
   c.advance(WRITER_LEASE_MS + 1)
   await lease.takeOver()
   expect(lease.holds()).toBe(true)
@@ -338,7 +315,6 @@ test('stopping while the lock is being taken lets the lock go: no Web Lock is le
   const gate = new Promise<void>((resolve) => {
     open = resolve
   })
-  // The database is slow to answer the writer's claim: the tab stops meanwhile.
   const claim = store.claimWriter.bind(store)
   const slow = vi.spyOn(store, 'claimWriter').mockImplementation(async (...args) => {
     await gate
@@ -352,15 +328,12 @@ test('stopping while the lock is being taken lets the lock go: no Web Lock is le
   await starting
   expect(writer.holds()).toBe(false)
   expect(await store.writerIs(writer.owner)).toBe(false)
-  // The lock is free: another tab can have it.
   let free = false
   await locks.request(`taskto-offline-writer-7`, { ifAvailable: true }, async (lock) => {
     free = lock !== null
   })
   expect(free).toBe(true)
 })
-
-// --- the screen a press is bound to
 
 const definition: OfflineApp['definition'] = {
   definition_version: 1,
@@ -424,20 +397,16 @@ test('a screen drawn before a hand-over cannot queue a change over the previous 
     ({ user: 7, store, writer, engine: { run: async () => {} }, stop: () => {} }) as unknown as Runtime
   const first = offlineTransport(runtime(a, wa), copy)
   const second = offlineTransport(runtime(b, wb), copy)
-  // The second tab draws its screen (as a reader), and then the first one, the writer, edits.
   await second.load()
   await first.load()
   await first.act(press({ id: 1, amount: '9' }))
   const [mine] = await a.listItems()
-  // The right is handed over. The second tab's screen was drawn before, and doesn't show that edit.
   await wb.takeOver()
   expect(wb.holds()).toBe(true)
   await expect(second.act(press({ id: 1, description: 'Stale' }))).rejects.toMatchObject({
     code: 'offline_record_changed',
   })
-  // Nothing was merged into the edit the screen never showed.
   expect(await b.listItems()).toEqual([mine])
-  // Drawn again, the screen shows it, and a change then is made knowing it.
   await second.load()
   await second.act(press({ id: 1, description: 'Later' }))
   const [merged] = await b.listItems()
@@ -453,16 +422,13 @@ test('a writer whose lease has run out is refused by the database, even before a
   expect(wa.holds()).toBe(true)
   const saved = await a.enqueue(itemOf(), [])
   c.advance(WRITER_LEASE_MS + 1)
-  // Nobody took the row, but the right was not renewed: a guarded write is refused.
   await expect(discardOf(a, saved)).rejects.toBeInstanceOf(NotWriter)
   expect(await a.listItems()).toHaveLength(1)
-  // Renewed (the heartbeat), it writes again.
   expect(await a.claimWriter(wa.owner, c.now() + WRITER_LEASE_MS, () => false)).toBe(true)
   await discardOf(a, saved)
   expect(await a.listItems()).toEqual([])
 })
 
-// A tab that is not the writer, with an item waiting for the person, and the sign-out guard open on it.
 async function signingOut(takeOver: 'real' | 'refused') {
   const c = clock()
   const { a, b, wb } = await tabs((cl) => ({
@@ -496,6 +462,5 @@ test('"Sync now" in a tab that could not take the right says so in words, and at
   expect(out).not.toHaveBeenCalled()
   expect(calls).toHaveLength(0)
   expect((await b.listItems())[0].state).toBe('attention')
-  // The button works again, and the dialog is still there.
   expect(screen.getByRole('button', { name: 'Sync now' })).toHaveProperty('disabled', false)
 })

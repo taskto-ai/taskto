@@ -1,7 +1,3 @@
-// Shared spaces, for admins: create, rename, archive, and who is in each. Admins manage a
-// space's members without reading it; one who wants to read it adds themselves, which every
-// member sees in the list. Private spaces are nobody else's business and aren't listed.
-
 import { type FormEvent, useState } from 'react'
 import { api, type Member, type Space, type SpaceMember, ws } from '../api'
 import { type T, useT } from '../i18n'
@@ -23,7 +19,6 @@ import { Alert, Loading, Section, SettingsTab, useAction } from './parts'
 
 type SpaceRole = SpaceMember['role']
 
-// "You: editor", a whole phrase per role.
 function yourRole(t: T, role: string): string {
   if (role === 'owner') return t('settings.spaces.you.owner')
   if (role === 'viewer') return t('settings.spaces.you.viewer')
@@ -196,7 +191,6 @@ function SpaceMembers({ workspace, url, onChange }: { workspace: number; url: st
   const t = useT()
   const action = useAction()
   const [confirmDialog, confirm] = useConfirm()
-  // The caller's own role shows in the space list: it changes with these.
   const done = () => {
     members.reload()
     onChange()

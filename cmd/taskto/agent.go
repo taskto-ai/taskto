@@ -19,28 +19,13 @@ import (
 	"taskto.ai/taskto/internal/providers"
 )
 
-// agentDist is the sidecar's built entry point, relative to the repository or install.
 var agentDist = filepath.Join("agent", "dist", "index.js")
 
-// agentPaths returns where the agent runtime keeps its state: the agent/ directory in the
-// data directory, holding its database and, in the owner-only run/, its socket. Neither is
-// configured separately, so one database always has one socket: a sidecar a crashed server
-// left behind is always on the socket the next sidecar probes before it opens the database.
 func agentPaths(dataDir string) (dir, socketDir, db string) {
 	dir = filepath.Join(dataDir, "agent")
 	return dir, filepath.Join(dir, "run"), filepath.Join(dir, "agent.db")
 }
 
-// startAgent starts the agent runtime's supervisor without waiting for the sidecar to
-// answer, and returns it with the feed that keeps its providers in step with the provider
-// accounts; its stop stops both. It fails at once if the Node.js
-// executable, the entry point or the providers file is missing, or the providers file is
-// unusable, rather than leaving the supervisor to restart a sidecar that can never start.
-//
-// The sidecar reads the providers file the feed writes under <data>/agent/: the operator's
-// providers (-agent-providers) first, then the accounts in the database. Its tools call
-// back into the server through tools, served on a socket next to the sidecar's own. The
-// variables in dropEnv are kept out of its environment.
 func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, tools http.Handler, cli []providers.CLIProvider, dropEnv []string) (agentRuntime, error) {
 	node, err := exec.LookPath(cfg.AgentNode)
 	if err != nil {
@@ -79,13 +64,9 @@ func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, 
 		Entry:     entry,
 		SocketDir: socketDir,
 		DB:        db,
-		// Secrets the server read from its environment: the sidecar never sees them.
-		DropEnv: dropEnv,
-		// Always set, so the sidecar never picks up a different file from elsewhere. The
-		// browser tools are offered only while the agent browser is on.
-		Env: []string{"TASKTO_AGENT_PROVIDERS=" + feed.Path(), "TASKTO_AGENT_BROWSER=" + strconv.FormatBool(cfg.Browser)},
-		// The channel the agent's tools call back into the server through.
-		Tools: tools,
+		DropEnv:   dropEnv,
+		Env:       []string{"TASKTO_AGENT_PROVIDERS=" + feed.Path(), "TASKTO_AGENT_BROWSER=" + strconv.FormatBool(cfg.Browser)},
+		Tools:     tools,
 	})
 	if errors.Is(err, agentrt.ErrSocketPathTooLong) {
 		return agentRuntime{}, fmt.Errorf("agent runtime: %w; the socket lives in the data directory, so choose a shorter data directory", err)
@@ -93,7 +74,6 @@ func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, 
 	if err != nil {
 		return agentRuntime{}, err
 	}
-	// Before the sidecar starts: it reads the file once at startup, then on every reload.
 	if err := feed.Write(ctx); err != nil {
 		return agentRuntime{}, fmt.Errorf("agent runtime: providers: %w", err)
 	}
@@ -111,7 +91,6 @@ func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, 
 	stop := func() error {
 		stopFeed()
 		<-feedDone
-		// The sidecar gets its StopTimeout (15 s) after SIGTERM; then it is killed.
 		ctx, cancel := context.WithTimeout(context.Background(), sidecarStopWait)
 		defer cancel()
 		err := sup.Stop(ctx)
@@ -126,9 +105,6 @@ func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, 
 	return agentRuntime{state: sup.State, ready: sup.Ready, feed: feed, stop: stop}, nil
 }
 
-// agentEntry returns the sidecar's entry point: the configured one, or else agent/dist/index.js
-// next to the binary, one directory above it (bin/taskto in a checkout), or in the working
-// directory (go run in a checkout).
 func agentEntry(configured string) (string, error) {
 	if configured != "" {
 		if err := regularFile(configured); err != nil {
@@ -154,7 +130,6 @@ func agentEntry(configured string) (string, error) {
 		strings.Join(candidates, ", "))
 }
 
-// regularFile checks that path is an existing regular file (or a symlink to one).
 func regularFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {

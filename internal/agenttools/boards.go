@@ -9,17 +9,14 @@ import (
 	"taskto.ai/taskto/internal/boards"
 )
 
-// Bounds of the board tools: a card's body or a comment can be 32 KiB, so lists and
-// threads cut them, and say so.
 const (
-	listBodyLen    = 500       // a card's body in list_cards, in bytes
-	threadBodyLen  = 16 << 10  // a card's body in show_card
-	commentLen     = 2 << 10   // each comment in show_card
-	maxTextFilter  = 200       // list_cards' text, in characters
-	truncatedNotes = " […cut]" // marks a cut text
+	listBodyLen    = 500
+	threadBodyLen  = 16 << 10
+	commentLen     = 2 << 10
+	maxTextFilter  = 200
+	truncatedNotes = " […cut]"
 )
 
-// ref names a board, or a card of one, in a space.
 type ref struct {
 	SpaceID int64 `json:"space_id"`
 	BoardID int64 `json:"board_id"`
@@ -30,12 +27,8 @@ type cardRef struct {
 	CardID int64 `json:"card_id"`
 }
 
-// actor is the call's user, as the agent working for them, marked with the access token
-// the call came with, if any.
 func actor(c *call) boards.Actor { return boards.Actor{UserID: c.User, Agent: true, Via: c.Token} }
 
-// boardSpace checks the call's user may read spaceID, in the call's workspace.
-// The boards' methods check the user's access again themselves.
 func (s *Service) boardSpace(ctx context.Context, c *call, spaceID int64) error {
 	_, err := s.space(ctx, c, spaceID)
 	return err
@@ -67,19 +60,17 @@ func (s *Service) listBoards(ctx context.Context, c *call, args json.RawMessage)
 		return nil, err
 	}
 	if a.After != 0 {
-		// The page after the board `after`, in the list's order.
 		i := slices.IndexFunc(list, func(b boards.Board) bool { return b.ID == a.After })
 		if i < 0 {
 			return nil, errInvalid("after is not a board of this list: use the next of the previous page, with the same archived")
 		}
 		list = list[i+1:]
 	}
-	// truncated and next are part of what is measured, so the page fits with them.
 	_, res, err := fitting(len(list), func(n int) any {
 		if n == len(list) {
 			return map[string]any{"boards": list[:n]}
 		}
-		next := a.After // nothing fit: no progress, which a board's size makes impossible
+		next := a.After
 		if n > 0 {
 			next = list[n-1].ID
 		}
@@ -133,7 +124,6 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 		return nil, err
 	}
 	if a.After != 0 {
-		// The page after the card `after`, in the list's order.
 		i := slices.IndexFunc(cards, func(c boards.Card) bool { return c.ID == a.After })
 		if i < 0 {
 			return nil, errInvalid("after is not a card of this list: use the next of the previous page, with the same filters")
@@ -145,7 +135,6 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 		cards[i].Body = cutText(cards[i].Body, listBodyLen)
 		replies[i] = cardReply{Card: cards[i]}
 	}
-	// page is the reply with the cards shown; when more is set, next is where it stopped.
 	page := func(shown []cardReply, next int64, more bool) any {
 		if !more {
 			return map[string]any{"cards": shown}
@@ -153,9 +142,8 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 		return map[string]any{"cards": shown, "truncated": true, "next": next,
 			"notice": "more cards than fit: continue with after set to next, or narrow the list with column, assignee, blocked, labels, due dates, overdue or text"}
 	}
-	// truncated and next are part of what is measured, so the page fits with them.
 	n, res, err := fitting(len(replies), func(n int) any {
-		next := a.After // nothing fit: the first card is cut below
+		next := a.After
 		if n > 0 {
 			next = replies[n-1].ID
 		}
@@ -164,9 +152,6 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 	if err != nil || n > 0 || len(replies) == 0 {
 		return res, err
 	}
-	// Not even the first card fits, with all its docs: it is cut as the other tools' cards
-	// are (the last docs, then the body, marked), so a page always has a card and next
-	// moves past it.
 	first, marks, err := fitCard(replies[0].Card, func(c boards.Card, m cutMarks) any {
 		return page([]cardReply{{c, m}}, c.ID, len(replies) > 1)
 	})
@@ -200,43 +185,34 @@ func (s *Service) showCard(ctx context.Context, c *call, args json.RawMessage) (
 		shown.Comments = all[len(all)-n:]
 		return threadReply{Thread: shown, cutMarks: m, Omitted: len(all) - n}
 	}
-	// The card is cut first, to what fits with no comment at all...
 	card, marks, err := fitCard(t.Card, func(c boards.Card, m cutMarks) any {
-		m.BodyTruncated = m.BodyTruncated || bodyCut // the 16 KiB cut is in the reply too
+		m.BodyTruncated = m.BodyTruncated || bodyCut
 		return reply(c, m, 0)
 	})
 	if err != nil {
 		return nil, err
 	}
 	marks.BodyTruncated = marks.BodyTruncated || bodyCut
-	// ...then the newest comments that fit.
 	_, res, err := fitting(len(all), func(n int) any { return reply(card, marks, n) })
 	return res, err
 }
 
-// cutMarks say what a reply left out to fit in a result.
 type cutMarks struct {
 	BodyTruncated bool `json:"body_truncated,omitempty"`
 	DocsTruncated bool `json:"docs_truncated,omitempty"`
 }
 
-// threadReply is show_card's result: the card with its newest comments, and what was left out.
 type threadReply struct {
 	boards.Thread
 	cutMarks
 	Omitted int `json:"older_comments_omitted,omitempty"`
 }
 
-// cardReply is a card changed by a tool, its body and links cut if it would not fit in a result.
 type cardReply struct {
 	boards.Card
 	cutMarks
 }
 
-// cardResult shapes the result of a tool that changed a card, after the change was made:
-// a body of 32 KiB, or 50 doc paths, can be more than MaxResult once escaped as JSON, and
-// the caller must still be told the card changed, so the body, then the last docs, are
-// cut, with body_truncated and docs_truncated: true.
 func cardResult(c boards.Card, err error) (any, error) {
 	if err != nil {
 		return nil, err
@@ -248,9 +224,6 @@ func cardResult(c boards.Card, err error) (any, error) {
 	return cardReply{c, marks}, nil
 }
 
-// fitCard returns c with fewer docs, then a shorter body, until build(c, marks) marshals
-// to at most MaxResult bytes, and what it cut (the docs that fit leave room for a body cut to its marker). build gets all the marks it may be given
-// while measuring, so the size it fits includes them.
 func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card, cutMarks, error) {
 	fits := func(c boards.Card, m cutMarks) (bool, error) {
 		out, err := json.Marshal(build(c, m))
@@ -261,14 +234,13 @@ func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card,
 	}
 	all := cutMarks{BodyTruncated: true, DocsTruncated: true}
 	var marks cutMarks
-	// The docs that fit with the least body...
 	docs := c.Docs
 	bare := c
-	bare.Body = truncatedNotes // the least a cut body is
+	bare.Body = truncatedNotes
 	if ok, err := fits(bare, all); err != nil {
 		return c, cutMarks{}, err
 	} else if !ok {
-		lo, hi := 0, len(docs) // docs[:hi] doesn't fit; docs[:lo] fits, if anything does
+		lo, hi := 0, len(docs)
 		for lo < hi-1 {
 			mid := (lo + hi) / 2
 			bare.Docs = docs[:mid]
@@ -285,7 +257,6 @@ func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card,
 		c.Docs = docs[:lo]
 		marks.DocsTruncated = true
 	}
-	// ...then the start of the body that fits with them.
 	body, bodyCut, err := fitBody(c.Body, func(b string) any {
 		shown := c
 		shown.Body = b
@@ -299,14 +270,11 @@ func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card,
 	return c, marks, nil
 }
 
-// commentReply is a comment added by comment_card, its body cut if it would not fit.
 type commentReply struct {
 	boards.Comment
 	BodyTruncated bool `json:"body_truncated,omitempty"`
 }
 
-// fitBody returns body, or the longest start of it, marked as cut, for which build(body)
-// marshals to at most MaxResult bytes, and whether it cut.
 func fitBody(body string, build func(body string) any) (string, bool, error) {
 	fits := func(b string) (bool, error) {
 		out, err := json.Marshal(build(b))
@@ -319,7 +287,7 @@ func fitBody(body string, build func(body string) any) (string, bool, error) {
 		short, _ := cut(body, n)
 		return short + truncatedNotes
 	}
-	lo, hi := 0, len(body) // cutTo(hi) is too long; cutTo(lo) fits if anything does
+	lo, hi := 0, len(body)
 	for lo < hi-1 {
 		mid := (lo + hi) / 2
 		ok, err := fits(cutTo(mid))
@@ -477,7 +445,6 @@ func (s *Service) restoreCard(ctx context.Context, c *call, args json.RawMessage
 	return cardResult(s.o.Boards.RestoreCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Column))
 }
 
-// cutText shortens s to n bytes, marking the cut.
 func cutText(s string, n int) string {
 	if short, cut := cut(s, n); cut {
 		return short + truncatedNotes

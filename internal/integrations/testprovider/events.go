@@ -11,10 +11,8 @@ import (
 	"time"
 )
 
-// eventRetention is how far back GET /v1/events reaches.
 const eventRetention = 30 * 24 * time.Hour
 
-// emit records an event of type typ about obj, created at time at. The caller holds s.mu.
 func (s *Stripe) emit(typ string, obj any, at time.Time) *Event {
 	raw, err := json.Marshal(obj)
 	if err != nil {
@@ -28,7 +26,6 @@ func (s *Stripe) emit(typ string, obj any, at time.Time) *Event {
 	return ev
 }
 
-// Events returns every event the fake has made, oldest first, as copies.
 func (s *Stripe) Events() []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -36,13 +33,10 @@ func (s *Stripe) Events() []Event {
 	for i, e := range s.events {
 		out[i] = e.clone()
 	}
-	// Oldest first by creation time: a session that expired by the clock is recorded when it is
-	// noticed, which may be after a later-made event. Equal times keep the order of making.
 	slices.SortStableFunc(out, func(a, b Event) int { return cmp.Compare(a.Created, b.Created) })
 	return out
 }
 
-// EventsOfType returns the events of one type, oldest first.
 func (s *Stripe) EventsOfType(typ string) []Event {
 	var out []Event
 	for _, e := range s.Events() {
@@ -62,13 +56,13 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, eventListParams); rp != nil {
 		return *rp
 	}
-	var types []string // names that must match exactly: Stripe's `types` takes specific event names
+	var types []string
 	for k, v := range form {
 		if strings.HasPrefix(k, "types[") {
 			types = append(types, v...)
 		}
 	}
-	var pattern string // `type` takes a name or a prefix followed by *
+	var pattern string
 	if form.Get("type") != "" {
 		if len(types) > 0 {
 			return invalid("", "You may pass one of `type` and `types`, not both.", "type")
@@ -126,9 +120,6 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 		}
 		eligible = append(eligible, e)
 	}
-	// Newest first by creation time; events made at the same time keep the later one first. A
-	// session that expired by the clock is recorded when it is noticed, not when it expired, so
-	// the order of making isn't always the order of time.
 	slices.SortStableFunc(eligible, func(a, b *Event) int { return cmp.Compare(b.Created, a.Created) })
 	byID := make(map[string]*Event, len(eligible))
 	ids := make([]string, 0, len(eligible))
@@ -147,7 +138,6 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 	return jsonReply(http.StatusOK, listOf("/v1/events", more, data))
 }
 
-// matchesPattern is Stripe's `type` filter: an exact name, or a prefix followed by a * wildcard.
 func matchesPattern(pattern, typ string) bool {
 	if pattern == typ {
 		return true
@@ -169,7 +159,6 @@ func (s *Stripe) retrieveEvent(_ *http.Request, form url.Values, id string) repl
 	return noSuch("event", id, "id")
 }
 
-// balance is the one harmless authenticated call a connection check makes.
 func (s *Stripe) balance(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, nil); rp != nil {
 		return *rp
@@ -180,8 +169,6 @@ func (s *Stripe) balance(_ *http.Request, form url.Values, _ string) reply {
 	})
 }
 
-// retrieveAccount is the account of the key: Stripe's "Retrieve account" with no id, which answers
-// the account the key belongs to (https://docs.stripe.com/api/accounts/retrieve).
 func (s *Stripe) retrieveAccount(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, nil); rp != nil {
 		return *rp

@@ -2,10 +2,6 @@
 
 package agentrt
 
-// Supervisor tests against a fake sidecar: this test binary, re-executed with
-// TASKTO_FAKE_SIDECAR set. The fake records what happens to it in fake.log next to its
-// database, and holds fake.lock while it runs, so two at once would be caught.
-
 import (
 	"bufio"
 	"bytes"
@@ -39,8 +35,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fakeServer stands in for the server: it supervises a serving fake sidecar with its
-// database in dir, prints the sidecar's PID, and waits to be killed.
 func fakeServer(dir string) int {
 	exe, err := os.Executable()
 	if err != nil {
@@ -65,22 +59,11 @@ func fakeServer(dir string) int {
 	select {}
 }
 
-// fakeSidecar runs one fake sidecar. modes is a comma-separated list: the nth start runs
-// the nth mode, and the last one repeats.
-//
-//	serve     answer /healthz; exit 0 on SIGTERM
-//	crash     answer /healthz, then exit 1 after 100 ms
-//	linger    answer /healthz, close the socket after 100 ms, exit 1 300 ms later
-//	mute      never listen; on SIGTERM take 300 ms to exit
-//	stubborn  answer /healthz; ignore SIGTERM
-//	probe     like the real sidecar: start up for 300 ms (Node loading), then exit 1 if
-//	          something already answers on the socket, otherwise serve
-//	callback  serve, after recording a call to the tools socket named in ToolsEnv
 func fakeSidecar(modes string) int {
 	socket, db := os.Getenv("TASKTO_AGENT_SOCKET"), os.Getenv("TASKTO_AGENT_DB")
 	dir := filepath.Dir(db)
 	record := func(format string, args ...any) {
-		f, err := os.OpenFile(filepath.Join(dir, "fake.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G703: the test's own temp dir
+		f, err := os.OpenFile(filepath.Join(dir, "fake.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			panic(err)
 		}
@@ -90,7 +73,7 @@ func fakeSidecar(modes string) int {
 	terms := make(chan os.Signal, 1)
 	signal.Notify(terms, syscall.SIGTERM)
 
-	lock, err := os.OpenFile(filepath.Join(dir, "fake.lock"), os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // G703: the test's own temp dir
+	lock, err := os.OpenFile(filepath.Join(dir, "fake.lock"), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		panic(err)
 	}
@@ -98,14 +81,13 @@ func fakeSidecar(modes string) int {
 		record("overlap")
 		return 3
 	}
-	starts := len(fakeEvents(dir, "start")) // this one not counted yet
+	starts := len(fakeEvents(dir, "start"))
 	list := strings.Split(modes, ",")
 	mode := list[min(starts, len(list)-1)]
 	record("start %s", mode)
 	record("secret %q", os.Getenv("TASKTO_TEST_DROPPED_SECRET"))
 	fmt.Fprintf(os.Stderr, "fake sidecar up: %s\n", mode)
 	if os.Getenv(ExitOnEOFEnv) == "1" {
-		// Like the real sidecar: the end of stdin means the supervisor's process is gone.
 		go func() {
 			_, _ = io.Copy(io.Discard, os.Stdin)
 			record("eof")
@@ -120,15 +102,14 @@ func fakeSidecar(modes string) int {
 		return 0
 	}
 	if mode == "probe" {
-		// The window in which a supervisor's health checks could reach a stray sidecar.
 		time.Sleep(300 * time.Millisecond)
-		if c, err := net.DialTimeout("unix", socket, 200*time.Millisecond); err == nil { //nolint:gosec // G704: the test's own temp socket
+		if c, err := net.DialTimeout("unix", socket, 200*time.Millisecond); err == nil {
 			_ = c.Close()
 			record("probe found another runtime")
 			return 1
 		}
 	}
-	_ = os.Remove(socket) //nolint:gosec // G703: the test's own temp dir
+	_ = os.Remove(socket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		record("listen failed: %v", err)
@@ -163,7 +144,6 @@ func fakeSidecar(modes string) int {
 	return 0
 }
 
-// callTools makes one request to the tools socket at path and returns what it got.
 func callTools(path string) string {
 	if path == "" {
 		return "no socket"
@@ -171,7 +151,7 @@ func callTools(path string) string {
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return new(net.Dialer).DialContext(ctx, "unix", path)
 	}}}
-	res, err := c.Get("http://tools/ping") //nolint:noctx // a test's one-off call
+	res, err := c.Get("http://tools/ping")
 	if err != nil {
 		return "error " + err.Error()
 	}
@@ -186,9 +166,8 @@ type fakeEvent struct {
 	what string
 }
 
-// fakeEvents returns the fake's records whose text starts with prefix ("" for all).
 func fakeEvents(dir, prefix string) []fakeEvent {
-	f, err := os.Open(filepath.Join(dir, "fake.log")) //nolint:gosec // G703: the test's own temp dir
+	f, err := os.Open(filepath.Join(dir, "fake.log"))
 	if err != nil {
 		return nil
 	}
@@ -208,15 +187,13 @@ func fakeEvents(dir, prefix string) []fakeEvent {
 }
 
 type fakeEnv struct {
-	dir string // holds the database, fake.log and fake.lock
+	dir string
 	cfg SupervisorConfig
 	log *syncBuffer
 }
 
-// newFake returns a config that runs the fake sidecar with the given modes.
 func newFake(t *testing.T, modes string) *fakeEnv {
 	t.Helper()
-	// A short directory: Unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "taskto-sup-")
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +217,6 @@ func newFake(t *testing.T, modes string) *fakeEnv {
 	}}
 }
 
-// start starts a supervisor with the fake's config and stops it when the test ends.
 func (f *fakeEnv) start(t *testing.T) *Supervisor {
 	t.Helper()
 	s, err := NewSupervisor(f.cfg)
@@ -267,7 +243,6 @@ func (f *fakeEnv) checkNoOverlap(t *testing.T) {
 	}
 }
 
-// waitFor polls cond until it holds or 10 s pass.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -279,17 +254,14 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// processGone reports whether pid has exited. A zombie has: an orphan whose server was
-// killed waits for PID 1 to reap it, which some containers' PID 1 never does.
 func processGone(pid int) bool {
 	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 		return true
 	}
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)) // Linux only; elsewhere the reaper is reliable
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return false
 	}
-	// "pid (comm) state ...": comm may hold spaces and parentheses, so the state follows the last ')'.
 	i := bytes.LastIndexByte(stat, ')')
 	return i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z'
 }
@@ -329,7 +301,6 @@ func TestSupervisorStartsAndStops(t *testing.T) {
 	if pid == 0 {
 		t.Fatal("no PID while running")
 	}
-	// The sidecar's output goes to the logger.
 	waitFor(t, "the sidecar's output in the log", func() bool {
 		return strings.Contains(f.log.String(), "fake sidecar up: serve")
 	})
@@ -354,10 +325,8 @@ func TestSupervisorStartsAndStops(t *testing.T) {
 	}
 }
 
-// Launch returns without waiting for the sidecar; State follows it from starting to ready
-// to stopped.
 func TestSupervisorLaunchAndState(t *testing.T) {
-	f := newFake(t, "probe") // takes 300 ms to answer
+	f := newFake(t, "probe")
 	s, err := NewSupervisor(f.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +359,7 @@ func TestSupervisorLaunchAndState(t *testing.T) {
 func TestSupervisorLaunchFailureIsStopped(t *testing.T) {
 	f := newFake(t, "serve")
 	f.start(t)
-	s, err := NewSupervisor(f.cfg) // the same database
+	s, err := NewSupervisor(f.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,8 +381,6 @@ func TestSupervisorSocketPathTooLong(t *testing.T) {
 	}
 }
 
-// The sidecar's stdin is a pipe only the supervising process holds: when that process is
-// killed with SIGKILL, so nothing of it runs, the sidecar still sees the pipe close and exits.
 func TestSidecarExitsWhenTheServerIsKilled(t *testing.T) {
 	dir, err := os.MkdirTemp("", "taskto-sup-")
 	if err != nil {
@@ -467,7 +434,6 @@ func TestSupervisorRestartsWithBackoff(t *testing.T) {
 	if len(exits) != 3 {
 		t.Fatalf("exits = %v, want 3", exits)
 	}
-	// Each restart waits at least the backoff, which doubles: 100, 200, 400 ms.
 	backoff := f.cfg.MinBackoff
 	for i, exit := range exits {
 		if gap := starts[i+1].at.Sub(exit.at); gap < backoff {
@@ -480,17 +446,14 @@ func TestSupervisorRestartsWithBackoff(t *testing.T) {
 	}
 }
 
-// A sidecar that never gets healthy must not reset the backoff, however long each failed
-// attempt takes: only time spent ready counts toward StableAfter.
 func TestSupervisorBackoffGrowsWhenNeverReady(t *testing.T) {
 	f := newFake(t, "mute")
 	f.cfg.ReadyTimeout = 300 * time.Millisecond
-	f.cfg.StableAfter = 200 * time.Millisecond // shorter than one failed attempt (~600 ms)
+	f.cfg.StableAfter = 200 * time.Millisecond
 	s, err := NewSupervisor(f.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Start waits for a ready sidecar, which never comes here: run it until the test ends.
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
 	go func() {
@@ -506,8 +469,6 @@ func TestSupervisorBackoffGrowsWhenNeverReady(t *testing.T) {
 
 	waitFor(t, "the fourth start", func() bool { return len(fakeEvents(f.dir, "start")) == 4 })
 	starts, terms := fakeEvents(f.dir, "start"), fakeEvents(f.dir, "term")
-	// After each SIGTERM the mute fake takes 300 ms to exit, then the backoff runs: 100, 200,
-	// 400 ms. A backoff reset each time would leave every gap near 400 ms.
 	backoff := f.cfg.MinBackoff
 	for i := range 3 {
 		want := 300*time.Millisecond + backoff
@@ -518,9 +479,6 @@ func TestSupervisorBackoffGrowsWhenNeverReady(t *testing.T) {
 	}
 }
 
-// A sidecar left behind by a crashed server still answers on the socket. The supervisor
-// must not take its answer for its own sidecar's: it waits, and becomes ready only once the
-// stray one is gone and its own sidecar answers.
 func TestSupervisorIgnoresAStraySidecarOnTheSocket(t *testing.T) {
 	f := newFake(t, "probe")
 	if err := os.MkdirAll(f.cfg.SocketDir, 0o700); err != nil {
@@ -539,8 +497,6 @@ func TestSupervisorIgnoresAStraySidecarOnTheSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Start waits until ready, which can't happen while the stray answers: run it in the
-	// background and look at readiness with short waits.
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
 	go func() {
@@ -557,7 +513,7 @@ func TestSupervisorIgnoresAStraySidecarOnTheSocket(t *testing.T) {
 		}
 	})
 	waitFor(t, "the fake to find the stray sidecar", func() bool {
-		return len(fakeEvents(f.dir, "probe")) >= 2 // it found it, exited, and was restarted
+		return len(fakeEvents(f.dir, "probe")) >= 2
 	})
 	short, cancelShort := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancelShort()
@@ -577,21 +533,16 @@ func TestSupervisorIgnoresAStraySidecarOnTheSocket(t *testing.T) {
 }
 
 func TestSupervisorNeverRunsTwoAtOnce(t *testing.T) {
-	// mute: never ready, so the supervisor stops it after ReadyTimeout, and it takes 300 ms
-	// to exit. linger: closes its socket 300 ms before it exits. Either way a supervisor that
-	// started the next sidecar before the last one exited would make the fake record an overlap.
 	f := newFake(t, "mute,linger,mute,linger,serve")
 	f.cfg.ReadyTimeout = 200 * time.Millisecond
 	f.cfg.MinBackoff = 10 * time.Millisecond
 	f.cfg.MaxBackoff = 10 * time.Millisecond
-	s := f.start(t) // ready at the first linger
+	s := f.start(t)
 
 	waitFor(t, "the fifth start", func() bool { return len(fakeEvents(f.dir, "start")) == 5 })
 	if _, err := s.Ready(ctxFor(t)); err != nil {
 		t.Fatal(err)
 	}
-	// f.start's cleanup fails the test if any of them found the fake's lock taken.
-	// And by the records: each sidecar starts after everything the previous one recorded.
 	var order []int
 	first, last := map[int]time.Time{}, map[int]time.Time{}
 	for _, ev := range fakeEvents(f.dir, "") {
@@ -613,7 +564,7 @@ func TestSupervisorOneSupervisorPerDatabase(t *testing.T) {
 	first := f.start(t)
 
 	second := f.cfg
-	second.SocketDir = filepath.Join(f.dir, "run2") // a different socket, the same database
+	second.SocketDir = filepath.Join(f.dir, "run2")
 	s, err := NewSupervisor(second)
 	if err != nil {
 		t.Fatal(err)
@@ -622,7 +573,6 @@ func TestSupervisorOneSupervisorPerDatabase(t *testing.T) {
 		t.Fatalf("second supervisor: err = %v, want ErrDatabaseInUse", err)
 	}
 
-	// Once the first has stopped, the database is free again.
 	if err := first.Stop(ctxFor(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -643,18 +593,12 @@ func TestSupervisorStopKillsAStubbornSidecar(t *testing.T) {
 	if took := time.Since(began); took < f.cfg.StopTimeout {
 		t.Fatalf("Stop returned after %s, before the %s SIGTERM grace", took, f.cfg.StopTimeout)
 	}
-	// The supervisor says it sent SIGTERM and waited out the grace before it killed. What the
-	// sidecar did with the signal is not checked here: it is the child's to record, and a child
-	// that the machine doesn't schedule for StopTimeout after SIGTERM is killed before it has
-	// written anything, however correctly the supervisor behaved. That SIGTERM reaches a
-	// sidecar is checked where Stop waits for it to exit (TestSupervisorStartsAndStops).
 	if !strings.Contains(f.log.String(), "agent sidecar ignored SIGTERM; killing it") {
 		t.Fatalf("the supervisor never reported killing a sidecar that ignored SIGTERM; log:\n%s", f.log.String())
 	}
 	if !processGone(pid) {
 		t.Fatal("the sidecar survived Stop")
 	}
-	// The supervisor reaped it and logged how it ended: by SIGKILL, not an exit of its own.
 	killed := ""
 	for _, line := range strings.Split(f.log.String(), "\n") {
 		if strings.Contains(line, `msg="agent sidecar killed"`) {
@@ -698,7 +642,6 @@ func TestSupervisorStartRespectsContext(t *testing.T) {
 	if _, err := s.Start(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("start = %v, want DeadlineExceeded", err)
 	}
-	// A failed Start stops what it started.
 	starts := fakeEvents(f.dir, "start")
 	if len(starts) != 1 || !processGone(starts[0].pid) {
 		t.Fatalf("after a failed Start: starts %v, want one, gone", starts)
@@ -783,7 +726,6 @@ func TestLockFileSymlinkIsNotFollowed(t *testing.T) {
 	}
 }
 
-// A line longer than the cap is split even when it arrives whole, newline included.
 func TestLogWriterSplitsALongCompleteLine(t *testing.T) {
 	var out syncBuffer
 	w := &logWriter{log: slog.New(slog.NewTextHandler(&out, nil))}
@@ -811,7 +753,6 @@ func TestToolsSocket(t *testing.T) {
 		}
 	})
 	tools := filepath.Join(f.cfg.SocketDir, toolsSocketName)
-	// A stale socket a crashed server left behind is replaced.
 	if err := os.MkdirAll(f.cfg.SocketDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -844,7 +785,7 @@ func TestToolsSocket(t *testing.T) {
 
 func TestNoToolsSocketWithoutTools(t *testing.T) {
 	f := newFake(t, "callback")
-	f.cfg.Env = append(f.cfg.Env, ToolsEnv+"=/somewhere/else.sock") // as if the server's environment had one
+	f.cfg.Env = append(f.cfg.Env, ToolsEnv+"=/somewhere/else.sock")
 	f.start(t)
 	waitFor(t, "the sidecar's record", func() bool { return len(fakeEvents(f.dir, "tools")) > 0 })
 	if got := fakeEvents(f.dir, "tools")[0].what; got != "tools no socket" {
@@ -874,7 +815,6 @@ func TestToolsSocketRefusesAFileInItsPlace(t *testing.T) {
 	if s.State() != StateStopped {
 		t.Fatalf("state = %s after a failed Launch", s.State())
 	}
-	// The lock was released: another supervisor can start.
 	f.cfg.Tools = nil
 	f.start(t)
 }
@@ -898,8 +838,6 @@ func TestDropEnvKeepsServerSecretsFromTheSidecar(t *testing.T) {
 	}
 }
 
-// Stop waits for a call on the tools socket that is still running, after ending its context: the
-// call uses the server's database, which is closed once Stop returns.
 func TestStopJoinsAToolsCallInFlight(t *testing.T) {
 	f := newFake(t, "serve")
 	started := make(chan struct{})
@@ -907,7 +845,7 @@ func TestStopJoinsAToolsCallInFlight(t *testing.T) {
 	f.cfg.Tools = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(started)
 		<-r.Context().Done()
-		time.Sleep(300 * time.Millisecond) // winding down
+		time.Sleep(300 * time.Millisecond)
 		finished.Store(true)
 	})
 	s := f.start(t)
@@ -922,7 +860,6 @@ func TestStopJoinsAToolsCallInFlight(t *testing.T) {
 	}
 }
 
-// A call that never returns is given up on after toolsWait, and Stop says so.
 func TestStopReportsAToolsCallThatNeverReturns(t *testing.T) {
 	old := toolsWait
 	toolsWait = 200 * time.Millisecond
@@ -932,7 +869,7 @@ func TestStopReportsAToolsCallThatNeverReturns(t *testing.T) {
 	defer close(release)
 	f.cfg.Tools = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		close(started)
-		<-release // deaf to its context
+		<-release
 	})
 	s := f.start(t)
 	go func() { _ = callTools(filepath.Join(f.cfg.SocketDir, toolsSocketName)) }()

@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The General tab's save waits twice: for the server, then for the new language's file. What it
-// says after the second wait is said only on the tab, in the session that saved.
-
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Me, Workspace } from '../api'
@@ -10,7 +7,6 @@ import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { resetToasts } from '../ui/Toast'
 
-// The language's file, held until the test lets it come.
 const files = vi.hoisted(() => ({ release: [] as (() => void)[] }))
 vi.mock('../i18n', async (original) => ({
   ...(await original<typeof import('../i18n')>()),

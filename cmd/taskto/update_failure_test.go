@@ -12,12 +12,6 @@ import (
 	"testing"
 )
 
-// How deploy/taskto-update.sh fails: before the new server has started it puts the old version
-// back; after, it stops the stack, keeps the backup and the record, and leaves the rest to a
-// person; and it never restores data, empties or copies a volume. Plus what it checks before it
-// starts anything, how it pages through the releases, and how it alerts.
-
-// installAt makes the install, the server and the published files a version.
 func (e *updEnv) installAt(v string) {
 	e.setVersion(v)
 	e.setInstallVersion(v)
@@ -48,8 +42,6 @@ func (e *updEnv) wantOldFilesBack() {
 	}
 }
 
-// wantNeverRestores: whatever happened, the updater never restored data, emptied, copied or
-// removed a volume, or took the stack down.
 func (e *updEnv) wantNeverRestores() {
 	e.t.Helper()
 	if n := e.count(`restore|^compose down|^compose run|^run |^volume (rm|create|prune)|^rm |-v `); n != 0 {
@@ -60,8 +52,6 @@ func (e *updEnv) wantNeverRestores() {
 	}
 }
 
-// The updater's lines of code never restore a backup or touch a volume: the failure of an
-// update is a person's to put right, with deploy/INSTALL.md's Rollback.
 func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 	t.Parallel()
 	script := readRepoFile(t, "deploy/taskto-update.sh")
@@ -80,7 +70,6 @@ func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 			t.Errorf("the updater has %q", never)
 		}
 	}
-	// The one thing it does with a volume is read where it is, for the disk check.
 	for _, m := range regexp.MustCompile(`(?:"\$DOCKER"|docker) volume (\w+)`).FindAllStringSubmatch(body, -1) {
 		if m[1] != "inspect" {
 			t.Errorf("the updater runs docker volume %s", m[1])
@@ -91,7 +80,6 @@ func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 			t.Errorf("the updater doesn't have %q", want)
 		}
 	}
-	// The notification's URL never reaches a command line, where ps would show it.
 	for _, want := range []string{`"$CURL" -q -K -`, "connect-timeout", "max-time"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the notification doesn't use %q", want)
@@ -117,24 +105,19 @@ func TestSafetyCheckTakesOnlyItsOwnArguments(t *testing.T) {
 
 func asExit(err error, target **exec.ExitError) bool { return errors.As(err, target) }
 
-// The new Compose settings are checked against the safety rules before anything starts: a
-// candidate that breaks one is refused with nothing changed, and its servers are never started.
 func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		edit, reason string
-		imageUser    string
-		// volumeOptions is a line of fake-docker's volume-options: an existing volume that binds a path.
+		edit, reason  string
+		imageUser     string
 		volumeOptions string
 	}{
-		"the server runs as root":         {edit: `.services.taskto.user = "0"`, reason: "the server wouldn't run as 65532"},
-		"the server runs as root by name": {edit: `.services.taskto.user = "root:root"`, reason: "the server wouldn't run as 65532"},
-		"the server runs as another user": {edit: `.services.taskto.user = "1000"`, reason: "the server wouldn't run as 65532"},
-		// The live check wants exactly 65532:65532; so does this one.
-		"the server's user has no group":      {edit: `.services.taskto.user = "65532"`, reason: "the server wouldn't run as 65532:65532"},
-		"the server's user has another group": {edit: `.services.taskto.user = "65532:0"`, reason: "the server wouldn't run as 65532:65532"},
-		"the image's user has no group":       {imageUser: "65532", reason: "the server wouldn't run as 65532:65532"},
-		// Mounts inherited or made by Compose's other means.
+		"the server runs as root":                         {edit: `.services.taskto.user = "0"`, reason: "the server wouldn't run as 65532"},
+		"the server runs as root by name":                 {edit: `.services.taskto.user = "root:root"`, reason: "the server wouldn't run as 65532"},
+		"the server runs as another user":                 {edit: `.services.taskto.user = "1000"`, reason: "the server wouldn't run as 65532"},
+		"the server's user has no group":                  {edit: `.services.taskto.user = "65532"`, reason: "the server wouldn't run as 65532:65532"},
+		"the server's user has another group":             {edit: `.services.taskto.user = "65532:0"`, reason: "the server wouldn't run as 65532:65532"},
+		"the image's user has no group":                   {imageUser: "65532", reason: "the server wouldn't run as 65532:65532"},
 		"the worker takes the server's mounts":            {edit: `.services["cli-worker"].volumes_from = ["taskto"]`, reason: "volumes_from"},
 		"another service takes the server's mounts":       {edit: `.services.extra = {image: "caddy:2", volumes_from: ["taskto"]}`, reason: "volumes_from"},
 		"a config mounted into the worker":                {edit: `.services["cli-worker"].configs = [{source: "c", target: "/c"}]`, reason: "a config or a secret mounted"},
@@ -169,7 +152,6 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		"the CLI workers off in the server":               {edit: `.services.taskto.environment.TASKTO_CLI_WORKERS = "off"`, reason: "CLI workers aren't in container mode"},
 		"no worker at all":                                {edit: `del(.services["cli-worker"])`, reason: "the server or the CLI worker isn't in the Compose settings"},
 
-		// The same paths, by other names: a symbolic link is the place it leads to.
 		"the state through a symbolic link":                  {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkstate}", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
 		"a link to a directory under the state":              {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkprev}", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
 		"a link followed by ..":                              {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkstate}/..", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
@@ -201,7 +183,6 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 			if st := e.status(); !strings.Contains(fmt.Sprint(st["reason"]), tc.reason) {
 				t.Errorf("reason %q doesn't say %q", st["reason"], tc.reason)
 			}
-			// Nothing was started, backed up, or kept as a way back: the candidate was never run.
 			e.wantUntouched()
 			if e.count(`^compose start`) != 0 || e.exists("state/previous") {
 				t.Errorf("an unsafe candidate was started\n%s", strings.Join(e.calls(), "\n"))
@@ -213,9 +194,6 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 	}
 }
 
-// Before the new server has started, the old files, .env and images are put back, the old
-// version is started and checked, and the release is recorded as failed. The data is never
-// touched, so there is nothing to restore.
 func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -223,11 +201,9 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 		reason string
 	}{
 		"docker compose start fails before the server starts": {func(e *updEnv) { e.failCalls(`^compose start .* @` + updNew + `$`) }, "docker compose create and start failed"},
-		// An image tag moved after the checks, before the start: the start never happens.
 		"a tag moves between the checks and the start": {func(e *updEnv) {
 			e.write("fake/retag-on-backup", "ghcr.io/taskto-ai/taskto-cli-worker:"+updNew+"\n")
 		}, "checking the images failed"},
-		// The old tags moved too: the old images come back by the ids the containers had.
 		"the old version's tags have moved": {func(e *updEnv) {
 			e.write("fake/retagged", "ghcr.io/taskto-ai/taskto:"+updOld+"\nghcr.io/taskto-ai/taskto-cli-worker:"+updOld+"\n")
 			e.failCalls(`^compose start .* @` + updNew + `$`)
@@ -255,7 +231,6 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 			if !strings.Contains(e.read("state/failed"), updNew+"\n") {
 				t.Error("the release isn't recorded as failed")
 			}
-			// The old images are the old tags again, by the ids the running containers had.
 			for _, c := range []string{"taskto", "cli-worker"} {
 				img := map[string]string{"taskto": "taskto", "cli-worker": "taskto-cli-worker"}[c]
 				if e.count(`^tag sha256:run-`+c+`-`+updOld+` ghcr.io/taskto-ai/`+img+`:`+updOld+` @`+updOld+`$`) != 1 {
@@ -265,8 +240,6 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 			if e.count(`swapped`) != 0 {
 				t.Error("an image was put back by what a moved tag points at")
 			}
-			// The new server never ran, so nothing but the old version was started and the stack
-			// was never stopped.
 			if e.count(`^compose stop`) != 0 {
 				t.Error("the stack was stopped for a failure before the new server started")
 			}
@@ -274,7 +247,6 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 			if b, _ := st["backup"].(string); b == "" || !e.exists(strings.TrimPrefix(b, e.dir+"/")) {
 				t.Error("the backup isn't kept")
 			}
-			// The release that failed isn't tried again every night.
 			ups, backups := e.count(`^compose start`), e.count(`^compose exec -T taskto taskto backup`)
 			if code, _ := e.run(); code != 0 {
 				t.Fatalf("next run: exit %d", code)
@@ -285,7 +257,6 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 			}
 		})
 	}
-	// The tag that moved is never started.
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/retag-on-backup", "ghcr.io/taskto-ai/taskto:"+updNew+"\n")
@@ -297,9 +268,6 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 	}
 }
 
-// After the new server has started (it may have migrated the data) nothing is undone: the stack
-// is stopped, the backup and the record are kept, the next runs are blocked, and the status
-// says which backup to restore.
 func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 	t.Parallel()
 	for name, setup := range map[string]func(e *updEnv){
@@ -345,7 +313,6 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 			if got := e.read(strings.TrimPrefix(backup, e.dir+"/")); got != "BACKUP-OF-"+updOld+"\n" {
 				t.Errorf("the backup holds %q", got)
 			}
-			// The stack was stopped, nothing was rolled back, nothing was started again.
 			if e.count(`^compose stop`) != 1 {
 				t.Errorf("the stack wasn't stopped once\n%s", strings.Join(e.calls(), "\n"))
 			}
@@ -359,7 +326,6 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 			if !strings.Contains(e.read("srv/.env"), "TASKTO_VERSION="+updNew+"\n") {
 				t.Error("the files were put back, though the new server ran")
 			}
-			// The record stays, in its phase; the marker and the failed release are written.
 			tx := e.transaction()
 			if tx["phase"] != "stopped" || tx["backup"] != backup || tx["from"] != updOld || tx["to"] != updNew || tx["why"] == "" {
 				t.Errorf("the record = %v", tx)
@@ -373,7 +339,6 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 			if last, _ := st["last_change"].(map[string]any); last["result"] != "stopped" {
 				t.Errorf("last_change = %v", last)
 			}
-			// Nothing runs again, whatever it is asked, and the status stays what the failed run said.
 			calls := len(e.calls())
 			for _, args := range [][]string{nil, {"--to", updNew}, {"--to", "v0.9.0"}, {"--dry-run"}} {
 				code, out := e.run(args...)
@@ -389,14 +354,11 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 	}
 }
 
-// A marker that can't be written changes nothing: the transaction record alone blocks the next
-// run, even when the old version answers, healthy, at /healthz.
 func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
-	// A link to nowhere: writing the marker fails, and the marker doesn't "exist".
 	if err := os.Symlink(filepath.Join(e.dir, "nowhere", "blocked"), filepath.Join(e.state, "blocked")); err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +372,6 @@ func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
 	if !e.exists("state/transaction") {
 		t.Fatal("no record")
 	}
-	// Someone starts the old version again, healthy; the files say the new one.
 	_ = os.Remove(filepath.Join(e.fake, "health-bad"))
 	e.setRunning(updOld)
 	calls := len(e.calls())
@@ -422,13 +383,10 @@ func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
 	}
 }
 
-// When putting the old version back fails too, the install is left as it is, with the record
-// and the marker, and nothing runs again until a person has cleared it.
 func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	// The new version can't be started, and neither can the old.
 	e.failCalls(`^compose start .* @`+updNew+`$`, `^compose start .* @`+updOld+`$`)
 	code, out := e.run()
 	if code != 2 {
@@ -458,10 +416,6 @@ func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 	e.wantStatus("rollback-failed", "")
 }
 
-// The revert never depends on the bookkeeping: a `failed` file that can't be written (here, a
-// directory) still ends in the old version running. But a release that can't be recorded as
-// failed is not forgotten: the update's record stays, which blocks the next run, whatever it is
-// asked, with no candidate started, until a person has looked and cleared it.
 func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -484,7 +438,6 @@ func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 	if tx := e.transaction(); tx["phase"] != "rolled-back" {
 		t.Errorf("the record = %v", tx)
 	}
-	// The next runs, whatever they are asked, start nothing.
 	starts, calls := e.count(`^compose (create|start)`), len(e.calls())
 	for _, args := range [][]string{nil, {"--to", updNew}} {
 		code, out := e.run(args...)
@@ -495,11 +448,9 @@ func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 	if e.count(`^compose (create|start)`) != starts || len(e.calls()) != calls {
 		t.Errorf("a candidate was started by a run that is blocked\n%s", strings.Join(e.calls(), "\n"))
 	}
-	// Clearing refuses while the failure still can't be recorded, and keeps the record.
 	if code, out := e.run("--clear-block"); code != 1 || !strings.Contains(out, "can't record "+updNew+" as failed") || !e.exists("state/transaction") {
 		t.Fatalf("clear-block with the record still unwritable: exit %d\n%s", code, out)
 	}
-	// Once a person has put the state right, clearing records the release, and it isn't tried again.
 	if err := os.Remove(filepath.Join(e.state, "failed")); err != nil {
 		t.Fatal(err)
 	}
@@ -518,10 +469,6 @@ func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 	}
 }
 
-// An update killed between writing that the release failed and removing the update's record
-// leaves both: the next run is blocked (interrupted), and once cleared the release is not
-// tried again. The failed list is written to a file of its own and moved into place, before
-// the record goes.
 func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -550,8 +497,6 @@ func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
 	if e.count(`^compose (create|start)`) != 0 {
 		t.Error("the release that failed was tried again")
 	}
-	// The order, in the script: the failure is recorded (durably, through a file of its own that is
-	// moved into place) before the record of the update is removed, in the revert and in the clearing.
 	script := readRepoFile(t, "deploy/taskto-update.sh")
 	revert := script[strings.Index(script, "if revert; then"):]
 	if i, j := strings.Index(revert, `record_failed "$to"`), strings.Index(revert, `rm -f "$TX"`); i < 0 || j < i {
@@ -566,7 +511,6 @@ func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
 	}
 }
 
-// The data volume is the one the running server has mounted, not a name assumed.
 func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -582,8 +526,6 @@ func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
 	e.wantNeverRestores()
 }
 
-// An update killed between putting the old version back and writing what it did is found by the
-// next run, which is blocked; once a person clears it, the release that failed isn't tried again.
 func TestClearBlock(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -602,11 +544,9 @@ func TestClearBlock(t *testing.T) {
 		t.Fatalf("exit %d, want 2", code)
 	}
 	e.wantStatus("stopped", "")
-	// It refuses while the server isn't up as the version in .env (here, the stack is stopped).
 	if code, out := e.run("--clear-block"); code != 1 || !strings.Contains(out, "refusing: the server isn't healthy as "+updNew) {
 		t.Fatalf("clear-block on a stopped stack: exit %d\n%s", code, out)
 	}
-	// A person restores the backup with the old version, by hand: the files and the server are the old.
 	e.setVersion(updOld)
 	e.setRunning(updOld)
 	if code, out := e.run("--clear-block"); code != 1 || !strings.Contains(out, "refusing: "+e.install+" says "+updNew) {
@@ -620,7 +560,6 @@ func TestClearBlock(t *testing.T) {
 		t.Error("the record or the marker is left")
 	}
 	e.wantStatus("cleared", "")
-	// The release that failed isn't tried again by itself.
 	ups := e.count(`^compose start`)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("the next run: exit %d", code)
@@ -630,7 +569,6 @@ func TestClearBlock(t *testing.T) {
 		t.Error("the next run tried the failed release again")
 	}
 
-	// A person who finishes the update by hand clears it too, and the release isn't "failed".
 	e = newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -651,9 +589,6 @@ func TestClearBlock(t *testing.T) {
 	e.wantStatus("up-to-date", "")
 }
 
-// Pruning is for after a success, and never touches this run's archive: an older one named
-// or dated in the future, with the least to keep, doesn't cost the update its way back, and a
-// stopped update keeps every archive.
 func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -669,7 +604,6 @@ func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
 	if b, _ := st["backup"].(string); !e.exists(strings.TrimPrefix(b, e.dir+"/")) || !e.exists("backups/"+future) {
 		t.Error("an archive is gone after a failed update: nothing is pruned before a success")
 	}
-	// After a success, KEEP=1 is this run's archive and no other of the updater's.
 	e2 := newUpdEnv(t)
 	e2.release(updNew, "", false, false)
 	e2.extra = []string{"TASKTO_UPDATE_KEEP=1"}
@@ -686,17 +620,12 @@ func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
 	}
 }
 
-// Every page of the releases is read, since GitHub lists them by date and not by version: a
-// manual-upgrade release can be on a page after the newest ones, and a page that can't be read
-// stops the update.
 func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 	t.Parallel()
 	setup := func() *updEnv {
 		e := newUpdEnv(t)
 		e.installAt("v1.0.0")
 		e.extra = []string{"TASKTO_UPDATE_PER_PAGE=2"}
-		// Page 1: the newest by version, and an old one. Page 2: a release between, which needs
-		// a person, and the release this install is on.
 		e.release("v3.0.0", "", false, false)
 		e.release("v0.9.0", "", false, false)
 		e.release("v2.0.0", "Needs a person.\n\nmanual-upgrade: true\n", false, false)
@@ -723,7 +652,6 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 		t.Errorf("the pages asked for: %v, want 1, 2 and the empty 3", asked)
 	}
 
-	// A page after the first that can't be read: nothing is installed.
 	e = setup()
 	e.gh.locked(func() { e.gh.failPages = map[int]bool{2: true} })
 	if code, _ := e.run(); code != 0 {
@@ -734,7 +662,6 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 		t.Error("something was pulled, backed up or started")
 	}
 
-	// The same list without the marker is taken: the newest by version.
 	e = setup()
 	e.gh.locked(func() { e.gh.releases[2]["body"] = "" })
 	if code, _ := e.run(); code != 0 {
@@ -750,9 +677,6 @@ func (e *updEnv) traefik() {
 	e.write("srv/.env", strings.Replace(e.read("srv/.env"), "cli,https", "cli", 1))
 }
 
-// In traefik mode the public address, as a visitor reaches it, is checked as well as the LAN
-// port: before the update (a broken proxy isn't the update's fault, so nothing is changed) and
-// after it (a stop).
 func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -771,7 +695,6 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 		t.Error("Caddy was recreated though it isn't in use")
 	}
 
-	// Broken before: refused, with nothing changed.
 	e = newUpdEnv(t)
 	e.traefik()
 	e.release(updNew, "", false, false)
@@ -782,8 +705,6 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 	e.wantStatus("failed", "the public address doesn't answer as "+updOld+" before the update")
 	e.wantUntouched()
 
-	// A healthy LAN port, and a public address that is stale or failing after the start: the
-	// new server ran, so the stack is stopped.
 	for name, setup := range map[string]func(e *updEnv){
 		"a stale public address": func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 		"a stale LAN port":       func(e *updEnv) { e.write("fake/lan-version", updOld) },
@@ -805,8 +726,6 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 	}
 }
 
-// A changed Caddyfile recreates Caddy after the switch, and again when the old version is put
-// back.
 func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 	t.Parallel()
 	e := newUpdEnv(t)
@@ -816,20 +735,16 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("updated", "")
-	// Compose's own options for `create` (the fake docker refuses the others, --no-deps among them),
-	// before the create of all, and before anything is started.
 	if e.count(`^compose create --no-build --pull never --force-recreate caddy @`+updNew+`$`) != 1 || e.count(`--no-deps`) != 0 {
 		t.Errorf("Caddy wasn't recreated\n%s", strings.Join(e.calls(), "\n"))
 	}
 	if c, all, start := e.index(`^compose create .*caddy @`+updNew+`$`), e.index(`^compose create --no-build --pull never --remove-orphans @`+updNew+`$`), e.index(`^compose start `); c < 0 || c > all || all > start {
 		t.Errorf("Caddy created at %d, all at %d, start at %d: want that order", c, all, start)
 	}
-	// Caddy's other image is pulled, and its image is the one the staged files name.
 	if e.index(`^pull --quiet caddy:2.11.9-alpine@sha256:`) < 0 || e.index(`^pull --quiet caddy:`) > e.index(`^compose exec -T taskto taskto backup`) {
 		t.Errorf("Caddy's image wasn't pulled before the backup\n%s", strings.Join(e.calls(), "\n"))
 	}
 
-	// Put back before the new server started: the old Caddyfile is back, and Caddy recreated again.
 	e = newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/Caddyfile", "caddy changed\n")
@@ -846,9 +761,6 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 	}
 }
 
-// Every outcome but up-to-date, skipped and a dry run is POSTed to the URL in the notify file,
-// as JSON; the URL is never in a command line, the journal or the status; and a notification
-// that fails never changes the outcome.
 func TestUpdateNotifies(t *testing.T) {
 	t.Parallel()
 	const secret = "SECRET-TOKEN-123"
@@ -859,7 +771,6 @@ func TestUpdateNotifies(t *testing.T) {
 		return append([]notification(nil), e.gh.notifications...)
 	}
 
-	// A success, and what the body is.
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	notify(e)
@@ -876,7 +787,6 @@ func TestUpdateNotifies(t *testing.T) {
 	if b["result"] != "updated" || b["from"] != updOld || b["to"] != updNew || b["backup"] != st["backup"] || b["reason"] != "" || !strings.Contains(fmt.Sprint(b["text"]), "updated, "+updOld+" to "+updNew) {
 		t.Errorf("the body = %v", b)
 	}
-	// The URL is read from the file and handed to curl on its standard input.
 	curl, _ := os.ReadFile(filepath.Join(e.fake, "curl-calls"))
 	if strings.Contains(string(curl), secret) || strings.Contains(out, secret) || strings.Contains(e.read("state/status.json"), secret) {
 		t.Error("the notification's URL is in curl's arguments, the journal or the status")
@@ -885,7 +795,6 @@ func TestUpdateNotifies(t *testing.T) {
 		t.Errorf("curl wasn't given its settings on its standard input: %s", curl)
 	}
 
-	// A stop, a failed check, a revert and a blocked run are reported; their reasons come with them.
 	e = newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	notify(e)
@@ -897,7 +806,7 @@ func TestUpdateNotifies(t *testing.T) {
 	if len(got) != 1 || got[0].Body["result"] != "stopped" || !strings.Contains(fmt.Sprint(got[0].Body["reason"]), "restore the backup") || got[0].Body["backup"] == "" {
 		t.Fatalf("notifications = %+v", got)
 	}
-	if code, _ := e.run(); code != 1 { // blocked, every night until a person clears it
+	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
 	if got = posts(e); len(got) != 2 || got[1].Body["result"] != "blocked" {
@@ -929,7 +838,6 @@ func TestUpdateNotifies(t *testing.T) {
 		})
 	}
 
-	// None for an outcome that is nothing to act on, a dry run or a clearing.
 	for name, run := range map[string]func(e *updEnv){
 		"up to date": func(e *updEnv) { e.run() },
 		"a hold":     func(e *updEnv) { e.write("etc/update.hold", ""); e.run() },
@@ -951,8 +859,6 @@ func TestUpdateNotifies(t *testing.T) {
 		})
 	}
 
-	// A notification that fails never changes the outcome: an error from the server, nothing
-	// listening, and a file that isn't an address.
 	for name, setup := range map[string]func(e *updEnv){
 		"the server answers 500": func(e *updEnv) { notify(e); e.gh.locked(func() { e.gh.notifyStatus = 500 }) },
 		"nothing listens":        func(e *updEnv) { e.write("etc/update-notify-url", "http://127.0.0.1:1/notify/"+secret+"\n") },

@@ -13,25 +13,18 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// ----- helpers -----
-
-// pollNow runs one pass of the polling worker and then the event worker, as the two run in the server.
 func (p *pay) pollNow() {
 	p.t.Helper()
 	p.svc.pollPass(context.Background())
 	p.drain()
 }
 
-// due moves the clock past the first wait of every ref made so far.
 func (p *pay) due() { p.later(pollFirst + time.Second) }
 
-// mark is where the fake's request log stands now; readsSince returns the requests made after it.
 func (p *pay) mark() int { return len(p.fake.Requests()) }
 
 func (p *pay) requestsSince(mark int) []testprovider.Request { return p.fake.Requests()[mark:] }
 
-// readsSince are the requests made after the mark. It fails if any of them isn't a read: the polling
-// never makes, changes or deletes anything at the provider.
 func (p *pay) readsSince(mark int) []testprovider.Request {
 	p.t.Helper()
 	reqs := p.requestsSince(mark)
@@ -77,8 +70,6 @@ func (p *pay) refPolls(id int64) (polls int, next string) {
 	return polls, next
 }
 
-// openRef adds a ref that is open at the provider's, as far as the server knows: an object of the mode
-// that the fake has no such session of, so its read finds nothing, but is made.
 func (p *pay) openRef(record int64, mode string, age time.Duration) (id int64, object string) {
 	p.t.Helper()
 	object = "cs_" + mode + "_" + token()
@@ -97,8 +88,6 @@ func (p *pay) openRef(record int64, mode string, age time.Duration) (id int64, o
 	return id, object
 }
 
-// ----- the schedule -----
-
 func TestPollWaitsDoubleToAMaximum(t *testing.T) {
 	for _, c := range []struct {
 		reads  int
@@ -115,18 +104,15 @@ func TestPollWaitsDoubleToAMaximum(t *testing.T) {
 	}
 }
 
-// ----- a payment found by polling is applied once -----
-
 func TestPollingMarksAnInvoicePaidWithoutAnyWebhook(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
-	p.fake.SetAccount("acct_1PollTest") // whatever the fake says of itself is no concern of the poll
+	p.fake.SetAccount("acct_1PollTest")
 	if _, err := p.fake.Pay(ref.object); err != nil {
-		t.Fatal(err) // paid at Stripe; no event is delivered to the server
+		t.Fatal(err)
 	}
 	mark := p.mark()
 
-	// Not due yet: a ref is first read a minute after it was made.
 	p.pollNow()
 	if n := len(p.readsSince(mark)); n != 0 {
 		t.Fatalf("%d reads before the first wait ran out", n)
@@ -151,12 +137,10 @@ func TestPollingMarksAnInvoicePaidWithoutAnyWebhook(t *testing.T) {
 	if len(evs) != 1 || evs[0].source != SourcePoll || evs[0].provider != "poll:"+ref.object+":paid" || evs[0].kind != EventPaymentSucceeded || evs[0].state != EventApplied {
 		t.Fatalf("events = %+v", evs)
 	}
-	// A poll says nothing of whether the webhook arrives: the admins' "last event" stays as it was.
 	var last *string
 	if err := p.db.QueryRow(`SELECT last_event_at FROM integrations WHERE id = ?`, p.in.ID).Scan(&last); err != nil || last != nil {
 		t.Fatalf("last_event_at = %v, %v", last, err)
 	}
-	// A paid ref is never read again.
 	rev := p.revision(record)
 	p.later(24 * time.Hour)
 	p.pollNow()
@@ -165,15 +149,11 @@ func TestPollingMarksAnInvoicePaidWithoutAnyWebhook(t *testing.T) {
 	}
 }
 
-// A polled payment is dated when it was paid, as its webhook event is, and not when the poll found it:
-// a payment made at 23:59:30 and found at 00:00:10 is paid on the day it was made. Both shapes are read
-// with the provider's time of the payment in the same request.
 func TestAPolledPaymentIsDatedWhenItWasPaidNotWhenItWasFound(t *testing.T) {
 	for _, public := range []string{publicURL, ""} {
 		name := map[string]string{publicURL: "a checkout session", "": "a payment link"}[public]
 		t.Run(name, func(t *testing.T) {
 			p := newPayOnOneClock(t, public)
-			// The invoice is sent at 23:50:00 UTC of a day to come.
 			now := p.svc.now().UTC()
 			midnight := now.Truncate(24 * time.Hour).Add(24 * time.Hour)
 			if midnight.Sub(now) < 15*time.Minute {
@@ -182,7 +162,7 @@ func TestAPolledPaymentIsDatedWhenItWasPaidNotWhenItWasFound(t *testing.T) {
 			p.later(midnight.Add(-10 * time.Minute).Sub(now))
 			record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 
-			p.later(midnight.Add(-30 * time.Second).Sub(p.svc.now())) // 23:59:30
+			p.later(midnight.Add(-30 * time.Second).Sub(p.svc.now()))
 			paidAt := p.svc.now().UTC().Truncate(time.Second)
 			var err error
 			if public != "" {
@@ -193,7 +173,7 @@ func TestAPolledPaymentIsDatedWhenItWasPaidNotWhenItWasFound(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p.later(40 * time.Second) // 00:00:10, the next day
+			p.later(40 * time.Second)
 			mark := p.mark()
 			p.pollNow()
 			if n := len(p.readsSince(mark)); n != 1 {
@@ -214,8 +194,6 @@ func TestAPolledPaymentIsDatedWhenItWasPaidNotWhenItWasFound(t *testing.T) {
 	}
 }
 
-// Without a public address the server's links are Payment Links, whose payments are sessions of the link:
-// this is the case polling is for, since no webhook can reach the server.
 func TestPollingFindsAPaymentThroughAPaymentLinkWithNoPublicURL(t *testing.T) {
 	p := newPay(t, "")
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -244,13 +222,11 @@ func TestPollingFindsAPaymentThroughAPaymentLinkWithNoPublicURL(t *testing.T) {
 	if err := p.db.QueryRow(`SELECT paid_object_id FROM integration_refs WHERE id = ?`, ref.id).Scan(&paidObject); err != nil || paidObject != evs[0].object {
 		t.Fatalf("paid object %q, %v", paidObject, err)
 	}
-	// The one-use link was paid through its own session: it is used up, and the money is free again.
 	if yes, _, err := p.svc.MayBePaid(context.Background(), p.db, p.app.ID, record); err != nil || yes {
 		t.Fatalf("the paid link may still be paid: %v, %v", yes, err)
 	}
 }
 
-// A link nobody has paid is read, and nothing changes.
 func TestPollingAnUnpaidLinkChangesNothingAndWaitsLonger(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -292,9 +268,9 @@ func TestAPaymentTheWebhookAndThePollBothSeeIsAppliedExactlyOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p.deliver(p.sender(p.hookID(), stripeHook), evs) // stored, not applied yet
+		p.deliver(p.sender(p.hookID(), stripeHook), evs)
 		p.due()
-		p.svc.pollPass(context.Background()) // the poll stores its own
+		p.svc.pollPass(context.Background())
 		p.drain()
 
 		n, rest := applied(p)
@@ -345,8 +321,6 @@ func TestAPaymentTheWebhookAndThePollBothSeeIsAppliedExactlyOnce(t *testing.T) {
 		}
 	})
 	t.Run("a payment told twice by the poll", func(t *testing.T) {
-		// A poll that finds the same payment again (its first note of the read was lost) stores the same
-		// event: the unique id, then the ref's state, make it once.
 		p := newPay(t, publicURL)
 		record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 		if _, err := p.fake.Pay(ref.object); err != nil {
@@ -366,14 +340,12 @@ func TestAPaymentTheWebhookAndThePollBothSeeIsAppliedExactlyOnce(t *testing.T) {
 	})
 }
 
-// A polled payment is checked as a webhook's is: the apply step is the same.
 func TestAPolledPaymentOfAnotherAmountIsNotAppliedAndIsNotToldAgain(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	if _, err := p.fake.Pay(ref.object); err != nil {
 		t.Fatal(err)
 	}
-	// The ref asked for something else than what was paid.
 	p.exec(`UPDATE integration_refs SET amount_minor = 9000 WHERE id = ?`, ref.id)
 	before := p.fields(record)
 	p.due()
@@ -389,7 +361,6 @@ func TestAPolledPaymentOfAnotherAmountIsNotAppliedAndIsNotToldAgain(t *testing.T
 	if all, nonAdmin := p.adminNotices(); all == 0 || nonAdmin != 0 {
 		t.Fatalf("the admins were told %d times, %d others", all, nonAdmin)
 	}
-	// Read again later, the same payment is the same event: no second failure, no second notice.
 	notices := func() int { all, _ := p.adminNotices(); return all }
 	before2 := notices()
 	for range 3 {
@@ -419,7 +390,6 @@ func TestPollingEndsARefWhoseLinkExpired(t *testing.T) {
 	if len(evs) != 1 || evs[0].kind != EventPaymentExpired || evs[0].source != SourcePoll || evs[0].provider != "poll:"+ref.object+":expired" {
 		t.Fatalf("events = %+v", evs)
 	}
-	// The app declared nothing for an expired link: the ref ends and the record is left alone.
 	if fmt.Sprint(p.fields(record)) != fmt.Sprint(before) {
 		t.Fatalf("the invoice changed: %v", p.fields(record))
 	}
@@ -431,26 +401,24 @@ func TestPollingEndsARefWhoseLinkExpired(t *testing.T) {
 	}
 }
 
-// ----- bounded and polite -----
-
 func TestPollingBacksOffPerRefAndStopsAtAMaximumAge(t *testing.T) {
-	p := newPay(t, "") // no webhooks arrive: the poll is the only way a payment is found
+	p := newPay(t, "")
 	_, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	mark := p.mark()
 	reads := func() int { return len(p.readsSince(mark)) }
 
 	p.due()
 	p.pollNow()
-	p.pollNow() // nothing is due a moment later
+	p.pollNow()
 	if reads() != 1 {
 		t.Fatalf("%d reads", reads())
 	}
-	p.later(pollWait(0, false) + time.Second) // the second read comes after a minute
+	p.later(pollWait(0, false) + time.Second)
 	p.pollNow()
 	if reads() != 2 {
 		t.Fatalf("%d reads", reads())
 	}
-	p.later(pollWait(1, false) - time.Second) // and the third after two
+	p.later(pollWait(1, false) - time.Second)
 	p.pollNow()
 	if reads() != 2 {
 		t.Fatalf("%d reads, the third came early", reads())
@@ -463,7 +431,6 @@ func TestPollingBacksOffPerRefAndStopsAtAMaximumAge(t *testing.T) {
 	if polls, _ := p.refPolls(ref.id); polls != 3 {
 		t.Fatalf("polls = %d", polls)
 	}
-	// Past its maximum age a ref is read no more, though it is still open.
 	p.later(maxPollAge)
 	p.pollNow()
 	p.later(pollMax + time.Second)
@@ -476,20 +443,18 @@ func TestPollingBacksOffPerRefAndStopsAtAMaximumAge(t *testing.T) {
 	}
 }
 
-// Where the provider's webhooks arrive as well, the poll is a safety net and reads rarely.
 func TestPollingWhereWebhooksArriveIsASlowSafetyNet(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(100, "EUR", "op-a-0001")
 	if _, err := p.fake.Pay(ref.object); err != nil {
-		t.Fatal(err) // the webhook never arrives
+		t.Fatal(err)
 	}
 	mark := p.mark()
 	p.due()
-	p.pollNow() // the first read comes after a minute whatever the install
+	p.pollNow()
 	if len(p.readsSince(mark)) != 1 || p.fields(record)["status"] != "paid" {
 		t.Fatalf("reads %d, invoice %v", len(p.readsSince(mark)), p.fields(record))
 	}
-	// A second ref: after its first read it waits half an hour.
 	p.sentInvoice(100, "EUR", "op-b-0001")
 	mark = p.mark()
 	p.due()
@@ -513,7 +478,7 @@ func TestPollingKeepsToAnIntegrationsBudgetOfReadsAMinute(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, _ := p.sentInvoice(100, "EUR", "op-a-0001")
 	var extra []int64
-	for range pollCallsPerMinute + 4 { // more open refs than a minute's reads
+	for range pollCallsPerMinute + 4 {
 		id, _ := p.openRef(record, ModeTest, time.Hour)
 		extra = append(extra, id)
 	}
@@ -522,7 +487,7 @@ func TestPollingKeepsToAnIntegrationsBudgetOfReadsAMinute(t *testing.T) {
 	if n := len(p.readsSince(mark)); n != pollCallsPerMinute {
 		t.Fatalf("%d reads in one pass, the budget is %d", n, pollCallsPerMinute)
 	}
-	p.pollNow() // the same minute
+	p.pollNow()
 	if n := len(p.readsSince(mark)); n != pollCallsPerMinute {
 		t.Fatalf("%d reads in the same minute", n)
 	}
@@ -532,7 +497,6 @@ func TestPollingKeepsToAnIntegrationsBudgetOfReadsAMinute(t *testing.T) {
 	if n <= pollCallsPerMinute || n > 2*pollCallsPerMinute {
 		t.Fatalf("%d reads after the minute", n)
 	}
-	// The refs that waited longest were read first: every one has been read by now.
 	for _, id := range extra {
 		if polls, _ := p.refPolls(id); polls == 0 {
 			t.Errorf("ref %d was never read", id)
@@ -554,7 +518,6 @@ func TestPollingHonoursARateLimitOfTheProvider(t *testing.T) {
 	if len(reads) != 1 || reads[0].Status != http.StatusTooManyRequests {
 		t.Fatalf("the first pass made %d reads: %+v", len(reads), reads)
 	}
-	// Nothing of the integration is read while Stripe asked to wait, though its other refs are due.
 	p.later(2 * time.Minute)
 	p.pollNow()
 	p.later(2 * time.Minute)
@@ -562,13 +525,12 @@ func TestPollingHonoursARateLimitOfTheProvider(t *testing.T) {
 	if n := len(p.readsSince(mark)); n != 1 {
 		t.Fatalf("%d reads inside the wait Stripe asked for", n)
 	}
-	// A refused read is no read of the ref: it waits as it did.
 	for _, id := range []int64{ref.id} {
 		if polls, _ := p.refPolls(id); polls != 0 {
 			t.Errorf("ref %d counts %d reads", id, polls)
 		}
 	}
-	p.later(2 * time.Minute) // five minutes passed
+	p.later(2 * time.Minute)
 	p.pollNow()
 	if n := len(p.readsSince(mark)); n < 2 {
 		t.Fatalf("%d reads after the wait", n)
@@ -594,8 +556,6 @@ func TestAnAnswerWithNoWaitNamedStillHoldsTheIntegrationAMinute(t *testing.T) {
 		t.Fatalf("%d reads", n)
 	}
 }
-
-// ----- what is switched off is not read -----
 
 func TestPollingStopsForADisabledIntegrationAndGoesOnWhenItIsEnabled(t *testing.T) {
 	p := newPay(t, publicURL)
@@ -626,7 +586,6 @@ func TestAnEventFoundForAnIntegrationSwitchedOffMeanwhileIsNotStored(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The poll read the payment, and the integration was switched off before it stored what it found.
 	p.exec(`UPDATE integrations SET disabled_at = ? WHERE id = ?`, time.Now().UTC().Format(timeFormat), p.in.ID)
 	r, _, err := p.svc.refByToken(context.Background(), ref.token)
 	if err != nil {
@@ -655,7 +614,6 @@ func TestPollingStopsWhenTheAppsApprovalIsRevoked(t *testing.T) {
 	if p.fields(record)["status"] != "sent" || p.refOf(record).state != "open" || len(p.polledEvents()) != 0 {
 		t.Fatal("something was applied")
 	}
-	// It is looked at again later, with nothing counted as a read, and nothing sent in the meantime.
 	if polls, next := p.refPolls(ref.id); polls != 0 || next == "" {
 		t.Fatalf("polls %d, next %q", polls, next)
 	}
@@ -665,8 +623,6 @@ func TestPollingStopsWhenTheAppsApprovalIsRevoked(t *testing.T) {
 		t.Fatalf("%d requests inside the wait", n)
 	}
 }
-
-// ----- the right key, and only its own -----
 
 func TestPollingNeverReadsARefOfTheOtherModeWithTheIntegrationsKey(t *testing.T) {
 	p := newPay(t, publicURL)
@@ -691,7 +647,6 @@ func TestPollingReadsAnotherWorkspacesRefsOnlyWithTheirOwnIntegrationsKey(t *tes
 	p := newPay(t, publicURL)
 	recordA, refA := p.sentInvoice(100, "EUR", "op-a-0001")
 
-	// A second workspace, with an integration, an app and an invoice of its own.
 	owner, ws, space, in, app, approval := p.owner, p.ws, p.space, p.in, p.app, p.approval
 	_, foreignWs := p.otherWorkspace(owner)
 	p.ws = foreignWs
@@ -707,8 +662,6 @@ func TestPollingReadsAnotherWorkspacesRefsOnlyWithTheirOwnIntegrationsKey(t *tes
 	foreignIn := p.in
 	p.owner, p.ws, p.space, p.in, p.app, p.approval = owner, ws, space, in, app, approval
 
-	// The second workspace's key is another one now: the fake takes only the first one's, so a read with
-	// it is refused, and a read of the second workspace's object with the first one's key would succeed.
 	expect(t, owner.do(http.MethodPatch, wsPath(foreignWs, fmt.Sprintf("integrations/%d", foreignIn.ID)),
 		map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey}}), http.StatusOK)
 	for _, obj := range []string{refA.object, refB.object} {
@@ -747,8 +700,6 @@ func TestPollingReadsAnotherWorkspacesRefsOnlyWithTheirOwnIntegrationsKey(t *tes
 	}
 }
 
-// A ref whose integration isn't allowed in its app's space (the app is in another workspace's, here) is
-// never read, with whatever key.
 func TestPollingNeverReadsARefOfAnAppTheIntegrationIsNotAllowedIn(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, _ := p.sentInvoice(100, "EUR", "op-a-0001")
@@ -756,7 +707,6 @@ func TestPollingNeverReadsARefOfAnAppTheIntegrationIsNotAllowedIn(t *testing.T) 
 	body := stripeBody("foreign")
 	body["secrets"] = map[string]string{"api_key": p.fake.APIKey(), "webhook_secret": hookFor("foreign")}
 	foreignIn := p.create(p.owner, foreignWs, body)
-	// A ref of the foreign integration that points at the first workspace's app and record.
 	p.exec(`INSERT INTO integration_refs (token, integration_id, app_id, record_id, slot, provider_object_id, url, amount_minor, currency,
 			state, created_at, account_id, account_mode, success_url, cancel_url)
 		VALUES (?, ?, ?, ?, 'payments', 'cs_test_crossed', 'https://checkout.stripe.com/c/pay/x', 10000, 'EUR', 'open', ?, 'acct_x', 'test', ?, ?)`,

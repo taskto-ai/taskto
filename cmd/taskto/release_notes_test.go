@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// .github/scripts/release-notes.sh groups GitHub's generated list by the pull requests' title
-// prefixes, as the Release workflow uses it.
 func TestReleaseNotesAreGroupedByTitle(t *testing.T) {
 	needTools(t, "bash", "awk")
 	script, _ := filepath.Abs(filepath.Join("..", "..", ".github", "scripts", "release-notes.sh"))
@@ -45,14 +43,11 @@ func TestReleaseNotesAreGroupedByTitle(t *testing.T) {
 	if got != want {
 		t.Errorf("grouped notes:\n%s\nwant:\n%s", got, want)
 	}
-	// No pull request: only the link; no empty group.
 	if got := run("**Full Changelog**: https://github.com/o/r/compare/v0.1.0...v0.1.1\n"); got != "**Full Changelog**: https://github.com/o/r/compare/v0.1.0...v0.1.1\n" {
 		t.Errorf("no pull requests: %q", got)
 	}
 }
 
-// The Release workflow writes the grouped list itself, after the operator's notes, and never
-// GitHub's ungrouped one.
 func TestReleaseWorkflowGroupsTheNotes(t *testing.T) {
 	step := workflowStep(t, ".github/workflows/release.yml", "Create the release, and publish its images")
 	for _, want := range []string{`releases/generate-notes`, `-f "tag_name=$VERSION"`, `bash .github/scripts/release-notes.sh`} {

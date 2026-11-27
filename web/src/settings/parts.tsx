@@ -1,7 +1,3 @@
-// What the settings pages share: a tab's frame (its page and header) and its sections, running a
-// change and showing its error, the shape of what is loading, a read-only value to copy, a list of
-// facts, and dates. Every tab is built from these and the components in ../ui, so they read alike.
-
 import { type ReactNode, type Ref, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { format, useT } from '../i18n'
@@ -16,13 +12,8 @@ import { PageHeader } from '../ui/PageHeader'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import './Settings.css'
+import { placeholders } from '../byPlace'
 
-// Runs one change at a time; a failure is kept, to show next to what failed.
-// It says the change was made only while the tab is still on the screen: one that ends after the
-// person left it, or after their session ended, shows nothing and writes nothing more (no toast,
-// no preference), as what it would say may be the next person's to see.
-// `labels` names a form's fields as the person sees them, for an error the server says of one
-// ("the api_key isn't valid" reads "the Secret key isn't valid").
 export function useAction(labels?: ReadonlyMap<string, string>) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,15 +40,11 @@ export function useAction(labels?: ReadonlyMap<string, string>) {
   return { busy, error, run }
 }
 
-// What failed, where it failed: a danger notice, said at once.
 export function Alert({ error }: { error: string | null | undefined }) {
   if (!error) return null
   return <Notice tone="danger">{error}</Notice>
 }
 
-// A form's error, in a long form (a dialog that scrolls): the notice takes the focus when it
-// appears, which also scrolls it into view, so a refused save is seen wherever the form was
-// scrolled to, and a screen reader is taken to it.
 export function FormError({ error }: { error: string | null | undefined }) {
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -71,9 +58,6 @@ export function FormError({ error }: { error: string | null | undefined }) {
   )
 }
 
-// A tab: the page at the reading width, its name and a line on what it is for, then its sections.
-// Above its name, "Settings", shown only where the side list (whose title says it) gives way to the
-// picker: on a phone the page's head is the one place the section's name appears.
 export function SettingsTab({
   title,
   help,
@@ -99,8 +83,6 @@ export function SettingsTab({
   )
 }
 
-// A part of a tab: its heading, a line of help under it, the section's own actions at the end, and
-// what it holds. `level` 3 for a section inside another.
 export function Section({
   title,
   help,
@@ -113,11 +95,8 @@ export function Section({
   title?: ReactNode
   help?: ReactNode
   actions?: ReactNode
-  // The section's name when it has no visible title.
   label?: string
   level?: 2 | 3
-  // The title, to move the keyboard to when what had it is gone (a row removed, an empty state
-  // replaced); given one, the title takes the focus from a script, not from Tab.
   headingRef?: Ref<HTMLHeadingElement>
   children?: ReactNode
 }) {
@@ -154,31 +133,26 @@ export function Section({
   )
 }
 
-// The shape of what is still loading, with "Loading" said to a screen reader.
 export function Loading({ lines = 3 }: { lines?: number }) {
   const t = useT()
   return (
     <div className="settings-loading" role="status" aria-busy="true">
       <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
-      {Array.from({ length: lines }, (_, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: placeholders with no identity of their own.
-        <Skeleton key={i} width={i === lines - 1 ? '60%' : '100%'} />
+      {placeholders(lines).map(({ key, place: i }) => (
+        <Skeleton key={key} width={i === lines - 1 ? '60%' : '100%'} />
       ))}
     </div>
   )
 }
 
-// A date, in the user's language.
 export function day(time: string): string {
   const d = new Date(time)
   return Number.isNaN(d.getTime()) ? time : format().date(d)
 }
 
-// Copies text to the clipboard; without one (plain http, or refused) the text is still selectable.
 export function CopyButton({ text, name, size = 'md' }: { text: string; name?: string; size?: 'md' | 'sm' }) {
   const t = useT()
   const [copied, setCopied] = useState(false)
-  // "Copied" is for that copy, not from then on; the timer goes with the button.
   useEffect(() => {
     if (!copied) return
     const timer = setTimeout(() => setCopied(false), 2000)
@@ -188,9 +162,7 @@ export function CopyButton({ text, name, size = 'md' }: { text: string; name?: s
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-    } catch {
-      // No clipboard (plain http, or refused): the text is selectable.
-    }
+    } catch {}
   }
   return (
     <Button
@@ -204,7 +176,6 @@ export function CopyButton({ text, name, size = 'md' }: { text: string; name?: s
   )
 }
 
-// A value shown once, to copy: a read-only field that selects itself, and the copy button.
 export function CopyField({ value, label, name }: { value: string; label: string; name?: string }) {
   return (
     <div className="settings-copy">
@@ -214,7 +185,6 @@ export function CopyField({ value, label, name }: { value: string; label: string
   )
 }
 
-// Facts about a thing, a term and its value per line: an endpoint, the server's email.
 export function Facts({ items }: { items: { term: ReactNode; value: ReactNode; key?: string }[] }) {
   return (
     <dl className="settings-facts">
@@ -228,22 +198,17 @@ export function Facts({ items }: { items: { term: ReactNode; value: ReactNode; k
   )
 }
 
-// A form's actions: its one primary button first, then the rest.
 export function FormActions({ children }: { children: ReactNode }) {
   return <div className="settings-actions">{children}</div>
 }
 
-// After a change that takes away what had the keyboard (a row removed, the empty state replaced by
-// the first row), the keyboard goes to a section's title once the list has been read again: call
-// `after()` with the change; the title is focused when `data` next changes.
 export function useRefocus(data: unknown) {
   const heading = useRef<HTMLHeadingElement>(null)
-  const [pending, setPending] = useState(false)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the list is read again
+  const [pending, setPending] = useState<{ shown: unknown } | null>(null)
   useEffect(() => {
-    if (!pending) return
-    setPending(false)
+    if (!pending || Object.is(pending.shown, data)) return
+    setPending(null)
     heading.current?.focus()
-  }, [data])
-  return { heading, after: () => setPending(true) }
+  }, [pending, data])
+  return { heading, after: () => setPending({ shown: data }) }
 }

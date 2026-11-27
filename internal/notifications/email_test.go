@@ -21,23 +21,16 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 )
 
-// mailbox is the SMTP server: it keeps what the server sends, and fails as told.
 type mailbox struct {
-	mu   sync.Mutex
-	sent []mail.Message
-	// verify are the mails that confirm an address, kept apart from the notifications.
-	verify []mail.Message
-	fail   error
-	// hold, when set, keeps a send waiting until it is closed (or the send's context ends).
-	hold chan struct{}
-	// pause is how long each send takes.
-	pause time.Duration
-	// onSend runs as a send begins, before it answers.
-	onSend func()
-	// entered counts the sends begun.
+	mu      sync.Mutex
+	sent    []mail.Message
+	verify  []mail.Message
+	fail    error
+	hold    chan struct{}
+	pause   time.Duration
+	onSend  func()
 	entered int
-	// last is the newest message handed to the relay, whether it took it or not.
-	last mail.Message
+	last    mail.Message
 }
 
 func (m *mailbox) Send(ctx context.Context, msg mail.Message) error {
@@ -77,7 +70,6 @@ func (m *mailbox) confirmations() []mail.Message {
 	return append([]mail.Message(nil), m.verify...)
 }
 
-// lastToken is the token in the newest confirmation mail's link.
 func (m *mailbox) lastToken(t *testing.T) string {
 	t.Helper()
 	all := m.confirmations()
@@ -99,7 +91,6 @@ func (m *mailbox) messages() []mail.Message {
 
 const publicURL = "https://taskto.example.com"
 
-// withMail gives the service a server that can send mail, into the env's box.
 func withMail(e *env, o *notifications.Options) {
 	e.box = &mailbox{}
 	o.Mail = mail.NewService(e.box, mail.Info{Host: "smtp.example.com"})
@@ -113,7 +104,6 @@ func newMailWorld(t *testing.T) *world {
 
 func (w *world) emailPath() string { return fmt.Sprintf("/api/workspaces/%d/notification-email", w.ws) }
 
-// put changes u's choices, as they are, and answers the new ones.
 func (w *world) put(u *user, body map[string]any) notifications.EmailChoices {
 	w.t.Helper()
 	rec := u.do(http.MethodPut, w.emailPath(), body)
@@ -121,14 +111,11 @@ func (w *world) put(u *user, body map[string]any) notifications.EmailChoices {
 	return decode[notifications.EmailChoices](w.t, rec)
 }
 
-// confirm opens the link of the newest confirmation mail as u.
 func (w *world) confirm(u *user) {
 	w.t.Helper()
 	expect(w.t, u.do(http.MethodPost, "/api/me/notification-email/confirm", map[string]string{"token": w.box.lastToken(w.t)}), http.StatusNoContent)
 }
 
-// choose changes u's choices and, as a person who opens the link they are mailed would, confirms
-// their address if it isn't yet.
 func (w *world) choose(u *user, body map[string]any) notifications.EmailChoices {
 	w.t.Helper()
 	got := w.put(u, body)
@@ -167,7 +154,6 @@ func TestAnInstantMailSaysOnlyWhatHappenedAndLinksBack(t *testing.T) {
 		t.Fatalf("choices = %+v", got)
 	}
 	card := w.assign("Quarterly layoffs plan", w.bob)
-	// Another kind, which bob left off, makes no mail.
 	tx, _ := w.db.Begin()
 	if err := notifications.Add(ctx, tx, notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: notifications.KindAppEffectFailed, Ref: notifications.Ref{Space: w.space.ID}}); err != nil {
 		t.Fatal(err)
@@ -175,7 +161,6 @@ func TestAnInstantMailSaysOnlyWhatHappenedAndLinksBack(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	// Someone else who didn't opt in is told by the inbox only.
 	w.assign("Another one", w.owner)
 
 	w.svc.DrainEmailOnce(ctx)
@@ -193,7 +178,6 @@ func TestAnInstantMailSaysOnlyWhatHappenedAndLinksBack(t *testing.T) {
 			t.Fatalf("the mail says %q: %s", leak, all)
 		}
 	}
-	// Sent once, even when the worker comes again.
 	w.svc.DrainEmailOnce(ctx)
 	if len(w.box.messages()) != 1 {
 		t.Fatal("the mail was sent twice")
@@ -213,7 +197,6 @@ func TestNoMailForWhatWasReadOrCanNoLongerBeReadOrWasTurnedOff(t *testing.T) {
 		t.Fatalf("%d mails for a read notification and one bob can't read now: %+v", n, w.box.messages())
 	}
 
-	// And turning it off before it is sent.
 	expect(t, w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members", w.ws, w.space.ID), map[string]any{"user_id": w.bob.id, "role": access.RoleEditor}), http.StatusNoContent)
 	w.assign("Turned off", w.bob)
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "off"}})
@@ -226,7 +209,6 @@ func TestNoMailForWhatWasReadOrCanNoLongerBeReadOrWasTurnedOff(t *testing.T) {
 func TestADigestBatchesWhatHappenedAndSaysOnlyHowMany(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
-	// Something from before the choice isn't counted.
 	w.assign("Before", w.bob)
 	w.choose(w.bob, map[string]any{
 		"kinds":  map[string]string{notifications.KindCardAssigned: "digest"},
@@ -235,7 +217,6 @@ func TestADigestBatchesWhatHappenedAndSaysOnlyHowMany(t *testing.T) {
 	if n := w.count("scheduled_jobs", "user_id = ? AND kind = 'notifications.digest'", w.bob.id); n != 1 {
 		t.Fatalf("%d summaries scheduled", n)
 	}
-	// It is due at 8 in the morning, Tokyo's time, within a day.
 	var runAt string
 	if err := w.db.QueryRow(`SELECT run_at FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&runAt); err != nil {
 		t.Fatal(err)
@@ -269,7 +250,6 @@ func TestADigestBatchesWhatHappenedAndSaysOnlyHowMany(t *testing.T) {
 			t.Fatalf("the summary says %q", leak)
 		}
 	}
-	// What was counted isn't counted again, and with nothing new nothing is sent.
 	w.later(25 * time.Hour)
 	w.sched.RunDue(ctx)
 	if len(w.box.messages()) != 1 {
@@ -293,7 +273,6 @@ func TestADigestCountsNothingThePersonMayNoLongerRead(t *testing.T) {
 func TestEmailChoicesAreTheCallersOwnInTheirWorkspace(t *testing.T) {
 	w := newMailWorld(t)
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
-	// The owner and mallory see their own, not bob's.
 	for _, u := range []*user{w.owner, w.mallory} {
 		got := decode[notifications.EmailChoices](t, w.get(u))
 		if got.Kinds[notifications.KindCardAssigned] != "off" {
@@ -304,7 +283,6 @@ func TestEmailChoicesAreTheCallersOwnInTheirWorkspace(t *testing.T) {
 	if got := decode[notifications.EmailChoices](t, w.bob.do(http.MethodGet, w.emailPath(), nil)); got.Kinds[notifications.KindCardAssigned] != "digest" {
 		t.Fatalf("bob's = %+v", got)
 	}
-	// A workspace the caller isn't in, and no session at all.
 	for _, c := range []struct {
 		u    *user
 		path string
@@ -344,7 +322,6 @@ func TestEmailCannotBeTurnedOnWithoutAServerThatSendsMail(t *testing.T) {
 			if !strings.Contains(rec.Body.String(), `"mail_not_configured"`) {
 				t.Fatal(rec.Body.String())
 			}
-			// Turning things off always works, and nothing was stored or queued.
 			w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "off"}})
 			w.assign("x", w.bob)
 			w.svc.DrainEmailOnce(context.Background())
@@ -391,7 +368,6 @@ func TestAFailedSendIsTriedAgainWithBoundsAndNeverShowsTheServersWords(t *testin
 	if err := w.db.QueryRow(`SELECT state, attempts FROM email_deliveries`).Scan(&state, &attempts); err != nil || state != "pending" || attempts != 1 {
 		t.Fatalf("state %q after %d tries (%v)", state, attempts, err)
 	}
-	// Not at once again, then again after the wait, and given up after its tries.
 	w.svc.DrainEmailOnce(ctx)
 	for range 6 {
 		w.later(2 * time.Hour)
@@ -400,7 +376,6 @@ func TestAFailedSendIsTriedAgainWithBoundsAndNeverShowsTheServersWords(t *testin
 	if err := w.db.QueryRow(`SELECT state, attempts FROM email_deliveries`).Scan(&state, &attempts); err != nil || state != "failed" || attempts != 5 {
 		t.Fatalf("state %q after %d tries (%v)", state, attempts, err)
 	}
-	// A server that recovers is not sent the dropped one.
 	w.box.fail = nil
 	w.svc.DrainEmailOnce(ctx)
 	if len(w.box.messages()) != 0 {
@@ -420,7 +395,6 @@ func TestLeavingTheWorkspaceEndsEmailChoicesAndTheSummary(t *testing.T) {
 			t.Fatalf("%s still has %d rows for bob", table, n)
 		}
 	}
-	// Turning the digest off ends the summary too.
 	w.choose(w.mallory, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	w.choose(w.mallory, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "off"}})
 	if n := w.count("scheduled_jobs", "user_id = ?", w.mallory.id); n != 0 {
@@ -435,9 +409,6 @@ func (w *world) get(u *user) *httptest.ResponseRecorder {
 	return rec
 }
 
-// ---- At most once ----
-
-// ledger puts a row in the ledger as the server leaves it when it stops after it wrote the attempt.
 func (w *world) ledger(userID int64, key, kind, state string, upto int64) {
 	w.t.Helper()
 	now := time.Now().Add(w.skew).UTC().Format("2006-01-02T15:04:05.000Z")
@@ -460,7 +431,6 @@ func TestAnAttemptThatStoppedAfterTheRelayMayHaveTakenItIsNotSentAgain(t *testin
 	ctx := context.Background()
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant", notifications.KindAppEffectFailed: "digest"}})
 
-	// The server was stopped after the attempt was written and before its outcome was.
 	w.assign("Instant", w.bob)
 	w.ledger(w.bob.id, fmt.Sprintf("instant:%d", w.maxNotification()), "instant", "sending", 0)
 	w.svc.DrainEmailOnce(ctx)
@@ -471,8 +441,6 @@ func TestAnAttemptThatStoppedAfterTheRelayMayHaveTakenItIsNotSentAgain(t *testin
 		t.Fatalf("%d deliveries still wait to be tried again", n)
 	}
 
-	// The same for the summary: its occurrence is what the key names, and what it covered is
-	// not counted again.
 	addEffectFailure(t, w, w.bob)
 	upto := w.maxNotification()
 	job, err := w.sched.Find(ctx, w.db, w.bob.id, notifications.KindDigest, fmt.Sprintf("workspace:%d", w.ws))
@@ -496,7 +464,6 @@ func TestAnAttemptThatStoppedAfterTheRelayMayHaveTakenItIsNotSentAgain(t *testin
 	}
 }
 
-// addEffectFailure makes an unread notification of the kind of an app action that failed.
 func addEffectFailure(t *testing.T, w *world, u *user) {
 	t.Helper()
 	var app int64
@@ -517,8 +484,6 @@ func addEffectFailure(t *testing.T, w *world, u *user) {
 	w.stampNow()
 }
 
-// stampNow dates the newest notification at the service's clock, which a test moves on: Add dates
-// them at the real time.
 func (w *world) stampNow() {
 	w.t.Helper()
 	if _, err := w.db.Exec(`UPDATE notifications SET created_at = ? WHERE id = (SELECT max(id) FROM notifications)`,
@@ -532,7 +497,6 @@ func TestALostAnswerToTheMessageIsNeverRetriedButARefusalIs(t *testing.T) {
 	ctx := context.Background()
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}})
 
-	// The connection was lost after the message was sent: the relay may have it.
 	w.box.fail = &mail.SendError{Stage: mail.StageRejected, Ambiguous: true, Err: fmt.Errorf("connection reset")}
 	w.assign("Lost answer", w.bob)
 	w.svc.DrainEmailOnce(ctx)
@@ -549,7 +513,6 @@ func TestALostAnswerToTheMessageIsNeverRetriedButARefusalIs(t *testing.T) {
 		t.Fatalf("ledger state %q (%v)", state, err)
 	}
 
-	// A refusal before the message was taken is tried again, and sent once.
 	w.box.fail = &mail.SendError{Stage: mail.StageRejected, Code: 451, Err: fmt.Errorf("try later")}
 	w.assign("Refused first", w.bob)
 	w.svc.DrainEmailOnce(ctx)
@@ -561,7 +524,6 @@ func TestALostAnswerToTheMessageIsNeverRetriedButARefusalIs(t *testing.T) {
 		t.Fatalf("%d mails after a refusal and a retry", n)
 	}
 
-	// The same for a summary: a lost answer is not retried (nor repeated the next time).
 	w2 := newMailWorld(t)
 	w2.choose(w2.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	w2.assign("One", w2.bob)
@@ -581,8 +543,6 @@ func TestALostAnswerToTheMessageIsNeverRetriedButARefusalIs(t *testing.T) {
 	}
 }
 
-// ---- A slow SMTP server ----
-
 func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
@@ -592,7 +552,7 @@ func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 	hold := make(chan struct{})
 	w.box.mu.Lock()
 	w.box.hold = hold
-	base := w.box.entered // the confirmation mail was a send too
+	base := w.box.entered
 	w.box.mu.Unlock()
 	w.assign("First", w.bob)
 
@@ -608,7 +568,6 @@ func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	// The mail server holds the first mail; a notification made meanwhile is still pushed.
 	wait("the mail server was never asked", func() bool {
 		w.box.mu.Lock()
 		defer w.box.mu.Unlock()
@@ -616,7 +575,6 @@ func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 	})
 	w.assign("Second", w.bob)
 	wait("the push waited for the mail server", func() bool { p, _ := w.pushed(d); return len(p) == 2 })
-	// And one more, while the first mail is still held and the second waits behind it.
 	w.assign("Third", w.bob)
 	wait("a later push waited for the mail server", func() bool { p, _ := w.pushed(d); return len(p) == 3 })
 	if n := len(w.box.messages()); n != 0 {
@@ -625,8 +583,6 @@ func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 	close(hold)
 	wait("the mails were never sent", func() bool { return len(w.box.messages()) == 3 })
 }
-
-// ---- The hourly limit ----
 
 func TestTheHourlyLimitHoldsForConcurrentWorkersAndForgetsNothing(t *testing.T) {
 	w := newMailWorld(t)
@@ -650,7 +606,6 @@ func TestTheHourlyLimitHoldsForConcurrentWorkersAndForgetsNothing(t *testing.T) 
 	if n := len(w.box.messages()); n != notifications.MaxInstantPerHour {
 		t.Fatalf("%d mails in the hour, the most is %d", n, notifications.MaxInstantPerHour)
 	}
-	// Deleting the notifications (retention, or leaving a workspace) doesn't free slots.
 	if _, err := w.db.Exec(`DELETE FROM notifications WHERE user_id = ?`, w.bob.id); err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +616,6 @@ func TestTheHourlyLimitHoldsForConcurrentWorkersAndForgetsNothing(t *testing.T) 
 	if n := len(w.box.messages()); n != notifications.MaxInstantPerHour {
 		t.Fatalf("%d mails after the history was deleted", n)
 	}
-	// An hour later the slots are free again.
 	w.later(61 * time.Minute)
 	w.assign("Next hour", w.bob)
 	w.svc.DrainEmailOnce(ctx)
@@ -669,8 +623,6 @@ func TestTheHourlyLimitHoldsForConcurrentWorkersAndForgetsNothing(t *testing.T) 
 		t.Fatalf("%d mails an hour later", n)
 	}
 }
-
-// ---- The last point that can cancel ----
 
 func TestWhatChangesJustBeforeTheSubmissionCancelsIt(t *testing.T) {
 	ctx := context.Background()
@@ -727,13 +679,9 @@ func TestWhatChangesJustBeforeTheSubmissionCancelsIt(t *testing.T) {
 	}
 }
 
-// ---- Daylight saving time ----
-
 func TestTheSummaryStaysAtTheLocalHourWhenTheClocksChange(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
-	// The evening before the clocks go back in Lisbon (the last Sunday of October, 2027): 8 o'clock
-	// is 07:00 UTC on the 30th, and 08:00 UTC on the 31st. A fixed 24 hours would say 07:00 again.
 	w.skew = time.Until(time.Date(2027, 10, 30, 6, 0, 0, 0, time.UTC))
 	w.choose(w.bob, map[string]any{
 		"kinds":  map[string]string{notifications.KindCardAssigned: "digest"},
@@ -754,8 +702,6 @@ func TestTheSummaryStaysAtTheLocalHourWhenTheClocksChange(t *testing.T) {
 	if got := runAt(); got != "2027-10-31T08:00:00.000Z" {
 		t.Fatalf("the summary after the clocks went back is at %s, want 08:00 local (08:00 UTC)", got)
 	}
-	// And forward again in spring: 08:00 local is 07:00 UTC in summer (the 28th of March 2027 is
-	// the day they go forward; the 27th is 08:00 UTC, the 28th 07:00 UTC).
 	w2 := newMailWorld(t)
 	w2.skew = time.Until(time.Date(2027, 3, 27, 7, 0, 0, 0, time.UTC))
 	w2.choose(w2.bob, map[string]any{
@@ -770,13 +716,10 @@ func TestTheSummaryStaysAtTheLocalHourWhenTheClocksChange(t *testing.T) {
 	}
 }
 
-// ---- The summary's start ----
-
 func TestASummaryOfAKindStartsWhereTheChoiceWasMade(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
-	// A notification of a kind that is not in the summary yet, unread and old by the time it is.
 	addEffectFailure(t, w, w.bob)
 	w.later(time.Hour)
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindAppEffectFailed: "digest"}})
@@ -785,7 +728,6 @@ func TestASummaryOfAKindStartsWhereTheChoiceWasMade(t *testing.T) {
 	if n := len(w.box.messages()); n != 0 {
 		t.Fatalf("a summary of what came before the choice: %+v", w.box.messages())
 	}
-	// What mailed as it happened isn't counted either when the kind moves to the summary.
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindAppEffectFailed: "instant"}})
 	addEffectFailure(t, w, w.bob)
 	w.svc.DrainEmailOnce(ctx)
@@ -798,7 +740,6 @@ func TestASummaryOfAKindStartsWhereTheChoiceWasMade(t *testing.T) {
 	if n := len(w.box.messages()); n != 1 {
 		t.Fatalf("what was mailed already was counted in a summary: %d mails", n)
 	}
-	// But what comes after is.
 	addEffectFailure(t, w, w.bob)
 	w.later(25 * time.Hour)
 	w.sched.RunDue(ctx)
@@ -806,8 +747,6 @@ func TestASummaryOfAKindStartsWhereTheChoiceWasMade(t *testing.T) {
 		t.Fatalf("mails = %+v", w.box.messages())
 	}
 }
-
-// ---- Confirming the address ----
 
 func TestNothingIsMailedBeforeTheAddressIsConfirmed(t *testing.T) {
 	w := newMailWorld(t)
@@ -820,7 +759,6 @@ func TestNothingIsMailedBeforeTheAddressIsConfirmed(t *testing.T) {
 	if len(links) != 1 || links[0].To[0] != "bob@example.com" || !strings.Contains(links[0].Text, publicURL+"/confirm-notification-email#") {
 		t.Fatalf("confirmation mails = %+v", links)
 	}
-	// Turning something else on doesn't send another link while one waits.
 	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	if n := len(w.box.confirmations()); n != 1 {
 		t.Fatalf("%d links", n)
@@ -836,11 +774,9 @@ func TestNothingIsMailedBeforeTheAddressIsConfirmed(t *testing.T) {
 		t.Fatalf("%d mails to an address nobody confirmed", n)
 	}
 
-	// A link that waited past its day is replaced by asking for another.
 	expect(t, w.bob.do(http.MethodPost, w.emailPath()+"/verification", nil), http.StatusNoContent)
 	token := w.box.lastToken(t)
 
-	// The token is stored only as its hash.
 	sum := sha256.Sum256([]byte(token))
 	if n := w.count("notification_email_verification", "token_hash = ?", hex.EncodeToString(sum[:])); n != 1 {
 		t.Fatal("the token isn't stored as its SHA-256")
@@ -849,7 +785,6 @@ func TestNothingIsMailedBeforeTheAddressIsConfirmed(t *testing.T) {
 		t.Fatal("the token is stored as it is")
 	}
 
-	// Someone else, signed in, can't use it; it stays good for its owner, once.
 	rec := w.mallory.do(http.MethodPost, "/api/me/notification-email/confirm", map[string]string{"token": token})
 	expect(t, rec, http.StatusBadRequest)
 	if !strings.Contains(rec.Body.String(), `"notification_email_verification_invalid"`) {
@@ -865,7 +800,6 @@ func TestNothingIsMailedBeforeTheAddressIsConfirmed(t *testing.T) {
 		t.Fatalf("address = %+v", got.Address)
 	}
 
-	// From then on mail goes out.
 	w.assign("After", w.bob)
 	w.stampNow()
 	w.svc.DrainEmailOnce(ctx)
@@ -879,7 +813,6 @@ func TestAConfirmationLinkExpiresIsReplacedAndIsLimited(t *testing.T) {
 	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}})
 	first := w.box.lastToken(t)
 
-	// Asking again at once is refused, with the wait.
 	rec := w.bob.do(http.MethodPost, w.emailPath()+"/verification", nil)
 	expect(t, rec, http.StatusTooManyRequests)
 	if !strings.Contains(rec.Body.String(), `"notification_email_verification_too_soon"`) || rec.Header().Get("Retry-After") == "" {
@@ -888,7 +821,6 @@ func TestAConfirmationLinkExpiresIsReplacedAndIsLimited(t *testing.T) {
 	if n := len(w.box.confirmations()); n != 1 {
 		t.Fatalf("%d links", n)
 	}
-	// Later a new one is sent, and the old link no longer works.
 	w.later(6 * time.Minute)
 	expect(t, w.bob.do(http.MethodPost, w.emailPath()+"/verification", nil), http.StatusNoContent)
 	if n := len(w.box.confirmations()); n != 2 {
@@ -896,7 +828,6 @@ func TestAConfirmationLinkExpiresIsReplacedAndIsLimited(t *testing.T) {
 	}
 	expect(t, w.bob.do(http.MethodPost, "/api/me/notification-email/confirm", map[string]string{"token": first}), http.StatusBadRequest)
 
-	// A link expires.
 	second := w.box.lastToken(t)
 	w.later(25 * time.Hour)
 	expect(t, w.bob.do(http.MethodPost, "/api/me/notification-email/confirm", map[string]string{"token": second}), http.StatusBadRequest)
@@ -906,7 +837,6 @@ func TestAConfirmationLinkExpiresIsReplacedAndIsLimited(t *testing.T) {
 	expect(t, w.bob.do(http.MethodPost, w.emailPath()+"/verification", nil), http.StatusNoContent)
 	w.confirm(w.bob)
 
-	// A confirmed address is sent nothing more, however often it is asked.
 	expect(t, w.bob.do(http.MethodPost, w.emailPath()+"/verification", nil), http.StatusNoContent)
 	if n := len(w.box.confirmations()); n != 3 {
 		t.Fatalf("%d links", n)
@@ -928,7 +858,6 @@ func TestAChangedAddressIsConfirmedAgain(t *testing.T) {
 	if n := len(w.box.messages()); n != 0 {
 		t.Fatalf("%d mails to a changed address", n)
 	}
-	// The next choice sends the link, to the new address.
 	w.later(6 * time.Minute)
 	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindAppEffectFailed: "instant"}})
 	links := w.box.confirmations()
@@ -945,7 +874,6 @@ func TestAConfirmationThatCouldNotBeSentLeavesNoLinkAndLogsNoToken(t *testing.T)
 
 	w := newMailWorld(t)
 	w.box.fail = &mail.SendError{Stage: mail.StageConnect, Err: fmt.Errorf("dial tcp 10.1.2.3:25: refused")}
-	// The choice is kept; the link isn't sent, and the settings say so.
 	got := w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}})
 	if got.Kinds[notifications.KindCardAssigned] != "instant" || got.Address.State != notifications.AddressUnverified {
 		t.Fatalf("choices = %+v", got)
@@ -961,7 +889,6 @@ func TestAConfirmationThatCouldNotBeSentLeavesNoLinkAndLogsNoToken(t *testing.T)
 	if !strings.Contains(rec.Body.String(), `"notification_email_verification_unavailable"`) || strings.Contains(rec.Body.String(), "10.1.2.3") {
 		t.Fatal(rec.Body.String())
 	}
-	// A failure doesn't use up the wait: the next try is allowed at once.
 	w.box.fail = nil
 	expect(t, w.bob.do(http.MethodPost, w.emailPath()+"/verification", nil), http.StatusNoContent)
 	if n := len(w.box.confirmations()); n != 1 {
@@ -987,19 +914,15 @@ func TestOnlyMembersAskForAConfirmationOfTheirOwnAddress(t *testing.T) {
 	if n := len(w.box.confirmations()); n != 0 {
 		t.Fatalf("%d links sent", n)
 	}
-	// Nobody else's address gets the link: mallory asks, and it goes to mallory.
 	expect(t, w.mallory.do(http.MethodPost, w.emailPath()+"/verification", nil), http.StatusNoContent)
 	if links := w.box.confirmations(); len(links) != 1 || links[0].To[0] != "mallory@example.com" {
 		t.Fatalf("links = %+v", links)
 	}
 }
 
-// ---- Turning it off ----
-
 func TestWhereMailCannotBeSentTheChoicesCanStillBeTurnedOff(t *testing.T) {
 	w := newMailWorld(t)
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}})
-	// The same data on a server that lost its mail: reading it says so, and off still works.
 	w.svc.SetMail(nil)
 	got := decode[notifications.EmailChoices](t, w.get(w.bob))
 	if got.Available || got.Kinds[notifications.KindCardAssigned] != "instant" {
@@ -1011,14 +934,11 @@ func TestWhereMailCannotBeSentTheChoicesCanStillBeTurnedOff(t *testing.T) {
 	}
 }
 
-// ---- Review fixes ----
-
 func TestSavingAnotherChoiceLeavesADueSummaryWhereItWas(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	w.assign("Today", w.bob)
-	// It is due, and another kind is chosen (and an empty save) before the worker comes to it.
 	w.later(26 * time.Hour)
 	var before int64
 	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&before); err != nil {
@@ -1034,7 +954,6 @@ func TestSavingAnotherChoiceLeavesADueSummaryWhereItWas(t *testing.T) {
 	if n := len(w.box.messages()); n != 1 {
 		t.Fatalf("%d summaries", n)
 	}
-	// A change of the hour does move it, to the next 09:00 UTC.
 	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
@@ -1050,7 +969,6 @@ func TestSavingAnotherChoiceLeavesADueSummaryWhereItWas(t *testing.T) {
 
 func TestAnHourThatTheClocksSkipIsTheFirstMomentAfterTheGap(t *testing.T) {
 	w := newMailWorld(t)
-	// The US clocks skip 02:00 on 14 March 2027 (02:00 EST is 03:00 EDT).
 	w.skew = time.Until(time.Date(2027, 3, 13, 12, 0, 0, 0, time.UTC))
 	w.choose(w.bob, map[string]any{
 		"kinds":  map[string]string{notifications.KindCardAssigned: "digest"},
@@ -1060,7 +978,6 @@ func TestAnHourThatTheClocksSkipIsTheFirstMomentAfterTheGap(t *testing.T) {
 	if err := w.db.QueryRow(`SELECT run_at FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&at); err != nil || at != "2027-03-14T07:00:00.000Z" {
 		t.Fatalf("run_at %s (%v), want 03:00 EDT", at, err)
 	}
-	// An ordinary hour keeps its wall-clock hour across the change: today's 08:00 is EST, tomorrow's EDT.
 	w.skew = time.Until(time.Date(2027, 3, 13, 14, 0, 0, 0, time.UTC))
 	w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "America/New_York"}})
 	if err := w.db.QueryRow(`SELECT run_at FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&at); err != nil || at != "2027-03-14T12:00:00.000Z" {
@@ -1090,7 +1007,6 @@ func TestASummaryRecordsWhatItCoversBeforeItIsSubmitted(t *testing.T) {
 	w := newMailWorld(t)
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	w.assign("One", w.bob)
-	// One more arrives between the plan that reserved the attempt and the last check.
 	w.svc.AfterReserve(func() { w.assign("Two", w.bob) })
 	var upto, covered int64
 	w.box.mu.Lock()
@@ -1109,7 +1025,6 @@ func TestASummaryRecordsWhatItCoversBeforeItIsSubmitted(t *testing.T) {
 func TestAnAmbiguousConfirmationSendKeepsTheLink(t *testing.T) {
 	w := newMailWorld(t)
 	w.box.fail = &mail.SendError{Stage: mail.StageRejected, Ambiguous: true, Err: fmt.Errorf("connection reset")}
-	// The relay took it and lost its answer: the link it holds must work, and the wait stands.
 	got := w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}})
 	if got.Address.State != notifications.AddressPending {
 		t.Fatalf("address = %+v", got.Address)
@@ -1127,7 +1042,6 @@ func TestAnAmbiguousConfirmationSendKeepsTheLink(t *testing.T) {
 func TestAChoiceIsNotStoredForSomeoneWhoLeftMeanwhileOrFromNull(t *testing.T) {
 	w := newMailWorld(t)
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", w.ws, w.bob.id), nil), http.StatusNoContent)
-	// The route's check passed before the removal; the write is the last word.
 	err := w.svc.SetEmailChoices(context.Background(), w.bob.id, w.ws, notifications.EmailUpdate{Kinds: map[string]string{notifications.KindCardAssigned: "instant"}})
 	if !errors.Is(err, notifications.ErrNotMember) {
 		t.Fatalf("err = %v", err)
@@ -1135,7 +1049,6 @@ func TestAChoiceIsNotStoredForSomeoneWhoLeftMeanwhileOrFromNull(t *testing.T) {
 	if n := w.count("notification_email_prefs", "user_id = ?", w.bob.id) + w.count("notification_email_settings", "user_id = ?", w.bob.id); n != 0 {
 		t.Fatalf("%d rows for someone who left", n)
 	}
-	// And a JSON null is not an update.
 	rec := w.mallory.do(http.MethodPut, w.emailPath(), json.RawMessage("null"))
 	expect(t, rec, http.StatusBadRequest)
 	if !strings.Contains(rec.Body.String(), `"invalid_json"`) || w.count("notification_email_settings", "user_id = ?", w.mallory.id) != 0 {
@@ -1148,7 +1061,6 @@ func TestTheSummarysZoneIsTheDefaultUntilThePersonSetsTheTime(t *testing.T) {
 	if got := decode[notifications.EmailChoices](t, w.get(w.bob)); got.Digest.Chosen {
 		t.Fatalf("digest = %+v", got.Digest)
 	}
-	// A choice of a kind alone doesn't set it.
 	if got := w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}}); got.Digest.Chosen {
 		t.Fatalf("digest = %+v", got.Digest)
 	}
@@ -1156,13 +1068,10 @@ func TestTheSummarysZoneIsTheDefaultUntilThePersonSetsTheTime(t *testing.T) {
 	if !got.Digest.Chosen || got.Digest.Timezone != "UTC" {
 		t.Fatalf("digest = %+v", got.Digest)
 	}
-	// A client can't set it by itself: it is an answer.
 	if got := w.put(w.mallory, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "UTC", "chosen": false}}); !got.Digest.Chosen {
 		t.Fatalf("digest = %+v", got.Digest)
 	}
 }
-
-// ---- The person's own time zone ----
 
 func (w *world) setZone(u *user, zone string) {
 	w.t.Helper()
@@ -1180,16 +1089,13 @@ func (w *world) summaryRunAt(u *user) string {
 
 func TestTheSummaryFollowsTheProfilesTimeZoneUntilItsOwnIsChosen(t *testing.T) {
 	w := newMailWorld(t)
-	// 2027-10-30, 06:00 UTC: 07:00 in Lisbon (summer time still), 03:00 in São Paulo.
 	w.skew = time.Until(time.Date(2027, 10, 30, 6, 0, 0, 0, time.UTC))
 
-	// Before anything is saved, the choices show the hour in the zone of the profile.
 	w.setZone(w.bob, "Europe/Lisbon")
 	if got := w.put(w.bob, map[string]any{}); got.Digest.Timezone != "Europe/Lisbon" || got.Digest.Chosen {
 		t.Fatalf("digest before any choice = %+v, want Lisbon, not chosen", got.Digest)
 	}
 
-	// A summary with no zone of its own is at 08:00 there: 07:00 UTC.
 	got := w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	if got.Digest.Timezone != "Europe/Lisbon" || got.Digest.Chosen {
 		t.Fatalf("digest = %+v", got.Digest)
@@ -1198,7 +1104,6 @@ func TestTheSummaryFollowsTheProfilesTimeZoneUntilItsOwnIsChosen(t *testing.T) {
 		t.Fatalf("summary at %s, want 08:00 in Lisbon", at)
 	}
 
-	// A change of the profile's zone moves it, and the choices say so.
 	w.setZone(w.bob, "America/Sao_Paulo")
 	if at := w.summaryRunAt(w.bob); at != "2027-10-30T11:00:00.000Z" {
 		t.Fatalf("summary at %s after the zone changed, want 08:00 in São Paulo", at)
@@ -1206,15 +1111,12 @@ func TestTheSummaryFollowsTheProfilesTimeZoneUntilItsOwnIsChosen(t *testing.T) {
 	if got := w.put(w.bob, map[string]any{}); got.Digest.Timezone != "America/Sao_Paulo" {
 		t.Fatalf("digest = %+v", got.Digest)
 	}
-	// Saving another choice leaves it where it is.
 	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardComment: "digest"}})
 	if at := w.summaryRunAt(w.bob); at != "2027-10-30T11:00:00.000Z" {
 		t.Fatalf("summary at %s after another choice", at)
 	}
 
-	// A zone chosen for the summary is theirs: the profile no longer moves it.
 	w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "Asia/Tokyo"}})
-	// It is 15:00 in Tokyo now, so the next 08:00 there is tomorrow's: 23:00 UTC today.
 	if at := w.summaryRunAt(w.bob); at != "2027-10-30T23:00:00.000Z" {
 		t.Fatalf("summary at %s, want 08:00 in Tokyo", at)
 	}
@@ -1236,14 +1138,12 @@ func TestAZoneChangeMakesNoSummaryForSomeoneWhoHasNone(t *testing.T) {
 	if err := w.db.QueryRow(`SELECT count(*) FROM scheduled_jobs WHERE kind = ?`, notifications.KindDigest).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("summaries after zone changes = %d, %v; want none", n, err)
 	}
-	// Someone's change reaches only their own summary.
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	bob := w.summaryRunAt(w.bob)
 	w.setZone(w.mallory, "America/Sao_Paulo")
 	if at := w.summaryRunAt(w.bob); at != bob {
 		t.Fatalf("bob's summary moved from %s to %s with mallory's zone", bob, at)
 	}
-	// And a summary of someone who turned theirs off isn't made again by a zone change.
 	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "off"}})
 	w.setZone(w.bob, "Europe/Lisbon")
 	if err := w.db.QueryRow(`SELECT count(*) FROM scheduled_jobs WHERE kind = ?`, notifications.KindDigest).Scan(&n); err != nil || n != 0 {

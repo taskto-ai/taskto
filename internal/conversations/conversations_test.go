@@ -26,7 +26,6 @@ import (
 
 const password = "a-long-enough-password"
 
-// fakeRuntime is the agent runtime in memory. Its watches are fed by the test.
 type fakeRuntime struct {
 	mu      sync.Mutex
 	next    int64
@@ -35,21 +34,14 @@ type fakeRuntime struct {
 	inputs  map[int64][]agentrt.Input
 	watches []*fakeWatch
 	aborts  map[int64]int
-	err     error // returned by every call, when set
-	// onAbort, when set, runs inside Abort with its context, before it returns.
+	err     error
 	onAbort func(ctx context.Context)
-	// replies are what the agent answered in each conversation, after the inputs. A tool's
-	// result and the system's own text are in the transcript too, which Transcript leaves out.
 	replies map[int64][]agentrt.Message
-	// settle, when set, holds Wait until it is closed or its context ends.
-	settle chan struct{}
-	// waited counts the submissions Wait was called for.
-	waited atomic.Int64
-	// waitErr, when set, is what Wait returns, whatever else works.
+	settle  chan struct{}
+	waited  atomic.Int64
 	waitErr error
 }
 
-// setupToken is the first-run setup token the tests' server is given.
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
@@ -143,7 +135,6 @@ func (f *fakeRuntime) Abort(ctx context.Context, conv int64) error {
 	return nil
 }
 
-// Entries answers each input as an entry, its ID its position from 1, so a test can page them.
 func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -183,7 +174,6 @@ func (f *fakeRuntime) Watch(_ context.Context, conv int64) (Watch, error) {
 	return w, nil
 }
 
-// watch returns the n-th watch opened, waiting for it.
 func (f *fakeRuntime) watch(t *testing.T, n int) *fakeWatch {
 	t.Helper()
 	var w *fakeWatch
@@ -198,7 +188,6 @@ func (f *fakeRuntime) watch(t *testing.T, n int) *fakeWatch {
 	return w
 }
 
-// fakeWatch passes on the lines the test sends; closing lines ends it with io.EOF.
 type fakeWatch struct {
 	conv   int64
 	lines  chan string
@@ -242,7 +231,6 @@ func (w *fakeWatch) isClosed() bool {
 	}
 }
 
-// send passes line on, failing the test if the handler doesn't read it in time.
 func (w *fakeWatch) send(t *testing.T, line string) {
 	t.Helper()
 	select {
@@ -271,7 +259,6 @@ type env struct {
 	h   http.Handler
 }
 
-// newEnv serves the API with a fake agent runtime; with off, without one.
 func newEnv(t *testing.T, off bool) *env {
 	t.Helper()
 	ctx := context.Background()
@@ -298,7 +285,6 @@ func newEnv(t *testing.T, off bool) *env {
 	return e
 }
 
-// client is a browser with a session.
 type client struct {
 	e      *env
 	cookie *http.Cookie
@@ -359,7 +345,6 @@ type me struct {
 	} `json:"workspaces"`
 }
 
-// setup creates the owner, admin of the first workspace, and returns them and its ID.
 func (e *env) setup() (*client, int64) {
 	e.t.Helper()
 	c := &client{e: e}
@@ -370,7 +355,6 @@ func (e *env) setup() (*client, int64) {
 	return c, m.Workspaces[0].ID
 }
 
-// invite adds a new person to the workspace as a member, and returns them logged in.
 func (e *env) invite(admin *client, ws int64, email string) *client {
 	e.t.Helper()
 	token := decode[struct {
@@ -382,8 +366,6 @@ func (e *env) invite(admin *client, ws int64, email string) *client {
 	return c
 }
 
-// workspace creates another workspace with the given users as members; the server has no
-// route for that yet.
 func (e *env) workspace(members ...*client) int64 {
 	e.t.Helper()
 	var id int64
@@ -398,7 +380,6 @@ func (e *env) workspace(members ...*client) int64 {
 	return id
 }
 
-// agentIDForTest reads the agent runtime's ID of c, which the API never shows.
 func (c Conversation) agentIDForTest(t *testing.T, e *env) int64 {
 	t.Helper()
 	var id int64
@@ -432,7 +413,6 @@ func TestCreateListRenameArchive(t *testing.T) {
 	if second.Title != "" {
 		t.Fatalf("created %+v, want no title", second)
 	}
-	// The API's IDs are the server's, not the agent runtime's.
 	if raw := owner.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d", first.ID)), nil).Body.String(); bytes.Contains([]byte(raw), []byte("agent")) {
 		t.Fatalf("the reply shows the agent runtime's ID: %s", raw)
 	}
@@ -449,8 +429,7 @@ func TestCreateListRenameArchive(t *testing.T) {
 		t.Fatalf("list = %v, want the newest first", got)
 	}
 
-	// A message moves a conversation to the top.
-	time.Sleep(2 * time.Millisecond) // updated_at has millisecond resolution
+	time.Sleep(2 * time.Millisecond)
 	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", first.ID)), map[string]any{"content": "hi"})
 	if got := list(""); fmt.Sprint(got) != fmt.Sprint([]int64{first.ID, second.ID}) {
 		t.Fatalf("list after a message = %v", got)
@@ -476,7 +455,6 @@ func TestCreateListRenameArchive(t *testing.T) {
 		t.Fatalf("archived list = %v", got)
 	}
 
-	// Archived: readable, not writable.
 	owner.expect(http.StatusOK, http.MethodGet, one+"/messages", nil)
 	owner.expect(http.StatusConflict, http.MethodPost, one+"/messages", map[string]any{"content": "hi"})
 	owner.expect(http.StatusConflict, http.MethodPut, one+"/model", map[string]any{"provider": "script", "model_id": "script-1"})
@@ -528,8 +506,6 @@ func TestSend(t *testing.T) {
 	}
 }
 
-// Stop reaches the agent runtime for the conversation, archived or not, since archiving doesn't
-// stop a running turn.
 func TestStop(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -545,7 +521,6 @@ func TestStop(t *testing.T) {
 	}
 }
 
-// Entries pages back through the history, passing the agent runtime's page on unchanged.
 func TestEntries(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -593,7 +568,6 @@ func TestModelChoiceFollowsWhoMayUseTheProvider(t *testing.T) {
 	thisWS := fmt.Sprintf("ws%d-gateway", ws)
 	otherWS := fmt.Sprintf("ws%d-gateway", other)
 
-	// Usable: the operator's providers, the caller's own, and the workspace's.
 	for _, p := range []string{"script", "gateway", mine, thisWS} {
 		c := decode[Conversation](t, owner.expect(http.StatusCreated, http.MethodPost, path(ws, ""), map[string]any{"model": ref(p)}))
 		got := decode[modelRef](t, owner.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d/model", c.ID)), nil))
@@ -601,8 +575,6 @@ func TestModelChoiceFollowsWhoMayUseTheProvider(t *testing.T) {
 			t.Fatalf("model = %+v, want %s/m", got, p)
 		}
 	}
-	// Refused, the same as a model that doesn't exist: someone else's personal provider,
-	// another workspace's, and malformed choices.
 	conv := owner.create(ws, nil)
 	model := path(ws, fmt.Sprintf("/%d/model", conv.ID))
 	for _, p := range []string{theirs, otherWS, "u0-x", "ws0-x"} {
@@ -616,14 +588,12 @@ func TestModelChoiceFollowsWhoMayUseTheProvider(t *testing.T) {
 		owner.expect(http.StatusBadRequest, http.MethodPut, model, body)
 		owner.expect(http.StatusBadRequest, http.MethodPost, path(ws, ""), map[string]any{"model": body})
 	}
-	// The other workspace's provider is usable there, and the member's in their own conversation.
 	owner.expect(http.StatusCreated, http.MethodPost, path(other, ""), map[string]any{"model": ref(otherWS)})
 	owner.expect(http.StatusBadRequest, http.MethodPost, path(other, ""), map[string]any{"model": ref(thisWS)})
 	memberConv := member.create(ws, map[string]any{"model": ref(theirs)})
 	member.expect(http.StatusBadRequest, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", memberConv.ID)), ref(mine))
 	member.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", memberConv.ID)), ref(thisWS))
 
-	// Only the allowed choices reached the agent runtime.
 	e.rt.mu.Lock()
 	defer e.rt.mu.Unlock()
 	var got []string
@@ -638,16 +608,12 @@ func TestModelChoiceFollowsWhoMayUseTheProvider(t *testing.T) {
 	}
 }
 
-// Every route on someone else's conversation answers 404, as for one that doesn't exist:
-// another member of the workspace, a member of another workspace, the owner through another
-// workspace's path, and the owner once they have left the workspace.
 func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
 	member := e.invite(owner, ws, "member@example.com")
 	stranger := &client{e: e}
 	strangerWS := func() int64 {
-		// A user who is in another workspace only.
 		c := e.invite(owner, ws, "stranger@example.com")
 		other := e.workspace(c)
 		owner.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, c.id), nil)
@@ -685,7 +651,7 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 		}
 	}
 	denied(member, ws, conv.ID)
-	denied(owner, ws, memberConv.ID) // admins too
+	denied(owner, ws, memberConv.ID)
 	denied(stranger, ws, conv.ID)
 	denied(stranger, strangerWS, conv.ID)
 	other := e.workspace(owner)
@@ -698,7 +664,6 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 	stranger.expect(http.StatusNotFound, http.MethodPost, path(ws, ""), map[string]any{})
 	(&client{e: e}).expect(http.StatusUnauthorized, http.MethodGet, path(ws, ""), nil)
 
-	// Nothing changed, and the agent runtime got nothing.
 	got := decode[Conversation](t, owner.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d", conv.ID)), nil))
 	if got.Title != "secret" || got.ArchivedAt != nil {
 		t.Fatalf("the conversation changed: %+v", got)
@@ -709,7 +674,6 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 	}
 	e.rt.mu.Unlock()
 
-	// A member who leaves loses their conversations, and gets them back on rejoining.
 	owner.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, member.id), nil)
 	denied(member, ws, memberConv.ID)
 	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, ws, member.id); err != nil {
@@ -725,7 +689,6 @@ func TestAgentRuntimeOff(t *testing.T) {
 	if msg := decode[map[string]string](t, rec)["error"]; msg != "the agent runtime is off: start the server with -agent" {
 		t.Fatalf("error = %q", msg)
 	}
-	// A conversation from when it was on: what needs only the database still works.
 	if _, err := e.db.Exec(`INSERT INTO conversations (workspace_id, owner_id, agent_id) VALUES (?, ?, 7)`, ws, owner.id); err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +706,6 @@ func TestAgentRuntimeOff(t *testing.T) {
 	} {
 		owner.expect(http.StatusServiceUnavailable, r[0].(string), path(ws, r[1].(string)), r[2])
 	}
-	// Access comes first: someone else's conversation is still a 404.
 	member := e.invite(owner, ws, "member@example.com")
 	member.expect(http.StatusNotFound, http.MethodGet, path(ws, "/1/messages"), nil)
 }
@@ -754,7 +716,7 @@ func TestAgentRuntimeNotReady(t *testing.T) {
 	conv := owner.create(ws, nil)
 	e.svc.readyWait = 20 * time.Millisecond
 	e.svc.agent = func(ctx context.Context) (Runtime, error) {
-		<-ctx.Done() // restarting, for longer than a request waits
+		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	rec := owner.expect(http.StatusServiceUnavailable, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", conv.ID)), map[string]any{"content": "hi"})
@@ -795,8 +757,6 @@ func TestAgentRuntimeErrors(t *testing.T) {
 	}
 }
 
-// The update re-checks access in its own statement: someone removed from the workspace
-// after the lookup can't rename or archive their old conversation.
 func TestUpdateRechecksAccess(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -813,7 +773,6 @@ func TestUpdateRechecksAccess(t *testing.T) {
 	}
 }
 
-// captureLogs sends the default logger to a buffer for the rest of the test.
 func captureLogs(t *testing.T) *lockedBuffer {
 	t.Helper()
 	logs := &lockedBuffer{}
@@ -840,8 +799,6 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// A conversation the agent runtime has lost (its data wiped, or restored apart from the
-// server's) is 410 on every route that reaches it, and the mismatch is logged with both IDs.
 func TestLostConversationIsGone(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -868,12 +825,9 @@ func TestLostConversationIsGone(t *testing.T) {
 	if got := logs.String(); strings.Count(got, want) != 7 {
 		t.Fatalf("logs = %s; want the mismatch logged for each request with %q", got, want)
 	}
-	// What needs only the database still works.
 	owner.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d", conv.ID)), nil)
 }
 
-// Send and model switch check the conversation again once the agent runtime is ready: an
-// archive or a removal from the workspace while the request waited for it is honoured.
 func TestSendAndModelSwitchRecheckBeforeTheCall(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -913,7 +867,6 @@ func TestSendAndModelSwitchRecheckBeforeTheCall(t *testing.T) {
 	}
 }
 
-// A stop carries on when the client goes away mid-way: its outcome must not be left unknown.
 func TestStopOutlivesTheRequest(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -921,7 +874,7 @@ func TestStopOutlivesTheRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var abortErr error
 	e.rt.onAbort = func(actx context.Context) {
-		cancel() // the client leaves while the agent runtime is stopping the work
+		cancel()
 		abortErr = actx.Err()
 	}
 	r := httptest.NewRequest(http.MethodPost, path(ws, fmt.Sprintf("/%d/stop", c.ID)), bytes.NewReader([]byte("{}"))).WithContext(ctx)

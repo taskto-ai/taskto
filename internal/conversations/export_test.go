@@ -25,8 +25,6 @@ func exportIDs(t *testing.T, e *env, ws int64, c *client) []int64 {
 	return ids
 }
 
-// The export lists a person's own conversations in one workspace, archived ones too, and no one
-// else's.
 func TestExportListIsTheCallersOwnInOneWorkspace(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -48,7 +46,6 @@ func TestExportListIsTheCallersOwnInOneWorkspace(t *testing.T) {
 	if got := exportIDs(t, e, second, owner); fmt.Sprint(got) != fmt.Sprint([]int64{elsewhere.ID}) {
 		t.Errorf("owner's list in the other workspace = %v", got)
 	}
-	// Someone who left the workspace has no conversations in it to export.
 	if _, err := e.db.Exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, ws, other.id); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +54,6 @@ func TestExportListIsTheCallersOwnInOneWorkspace(t *testing.T) {
 	}
 }
 
-// A long history is read a page at a time, back from the newest, and comes out oldest first, whole.
 func TestExportEntriesJoinsThePages(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -100,7 +96,6 @@ func TestExportEntriesSaysWhenTheHistoryIsOutOfReach(t *testing.T) {
 			e := newEnv(t, tc.off)
 			owner, ws := e.setup()
 			e.rt.err = tc.err
-			// Made straight in the database: with the agent runtime off or failing, the API can't.
 			if _, err := e.db.Exec(`INSERT INTO conversations (workspace_id, owner_id, agent_id, title) VALUES (?, ?, 7, 'x')`, ws, owner.id); err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +112,6 @@ func TestExportEntriesSaysWhenTheHistoryIsOutOfReach(t *testing.T) {
 	}
 }
 
-// hookRuntime is the fake agent runtime with a hook on each read of the history.
 type hookRuntime struct {
 	Runtime
 	onEntries func(ctx context.Context, before int64) error
@@ -132,8 +126,6 @@ func (h hookRuntime) Entries(ctx context.Context, conv, before int64, limit int)
 	return h.Runtime.Entries(ctx, conv, before, limit)
 }
 
-// Entries added to a history while it is exported neither repeat nor cut the entries before them:
-// the export is of the history as it was when it began.
 func TestExportEntriesIgnoresEntriesAddedMeanwhile(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
@@ -146,7 +138,7 @@ func TestExportEntriesIgnoresEntriesAddedMeanwhile(t *testing.T) {
 	added := false
 	e.svc.agent = func(context.Context) (Runtime, error) {
 		return hookRuntime{Runtime: e.rt, onEntries: func(_ context.Context, before int64) error {
-			if before != 0 && !added { // while the first read goes back through the history
+			if before != 0 && !added {
 				added = true
 				e.rt.mu.Lock()
 				defer e.rt.mu.Unlock()
@@ -177,8 +169,6 @@ func TestExportEntriesIgnoresEntriesAddedMeanwhile(t *testing.T) {
 	}
 }
 
-// An agent runtime that doesn't answer doesn't hold an export: it is out of reach after the time
-// each read, and its readiness, is given.
 func TestExportEntriesGivesUpOnAStalledAgentRuntime(t *testing.T) {
 	for name, stall := range map[string]func(*env, *hookRuntime){
 		"a page that never comes": func(e *env, h *hookRuntime) {

@@ -17,87 +17,46 @@ import (
 	"taskto.ai/taskto/internal/quota"
 )
 
-// Actor is who makes a change: a user, or the agent working for one. The agent has
-// exactly its user's access, and changes it makes are marked as the agent's. An agent of
-// the user's own reaching the server with an access token is one too: Via is then the
-// token's name.
 type Actor struct {
 	UserID int64
 	Agent  bool
 	Via    string
 }
 
-// Author is who made something: a user, through the agent if Agent is set, and with the
-// access token named Via if one was used. It is nil in replies if the user's account no
-// longer exists. A change the server made on its own (the system writer, system.go) has no
-// user: ID is 0, Name is empty and System says who it was.
 type Author struct {
-	ID    int64  `json:"id"`
-	Name  string `json:"name"`
-	Agent bool   `json:"agent"`
-	Via   string `json:"via,omitempty"`
-	// System is set for a change made by the server, and then only it identifies the author.
+	ID     int64         `json:"id"`
+	Name   string        `json:"name"`
+	Agent  bool          `json:"agent"`
+	Via    string        `json:"via,omitempty"`
 	System *SystemAuthor `json:"system,omitempty"`
 }
 
-// SystemAuthor is the server acting on its own, as a record's history shows it: an integration.
-// Provider and Name label it for people once the integration is known to the store that names
-// it (empty until then: the web app says "an integration"), and Removed is set instead if the
-// integration no longer exists.
 type SystemAuthor struct {
-	// Kind is what acted: "integration".
-	Kind string `json:"kind"`
-	ID   int64  `json:"id"`
-	// Provider is the label of the integration's provider, such as "Stripe".
+	Kind     string `json:"kind"`
+	ID       int64  `json:"id"`
 	Provider string `json:"provider,omitempty"`
-	// Name is the integration's own name in its workspace.
-	Name    string `json:"name,omitempty"`
-	Removed bool   `json:"removed,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Removed  bool   `json:"removed,omitempty"`
 }
 
-// App is an app as a list shows it; Live and Draft carry definitions when one app is read.
-//
-// An app has a draft, the definition people with the design capability edit, and releases,
-// immutable copies of drafts that were published (release.go). It serves its live release:
-// editing never changes what people use, publishing does.
 type App struct {
-	ID      int64  `json:"id"`
-	SpaceID int64  `json:"space_id"`
-	Name    string `json:"name"`
-	// ArchivedAt is when the app was taken offline, or nil.
-	ArchivedAt *string `json:"archived_at"`
-	// Version is the app's version for optimistic changes: bumped by every change to the
-	// app, the draft's, a publish and a rollback included.
-	Version int64 `json:"version"`
-	// Rows is how many rows its collection has that the caller may read: all of them, only
-	// their own, or none (see Access.ReadRecords).
-	Rows      int     `json:"rows"`
-	CreatedAt string  `json:"created_at"`
-	CreatedBy *Author `json:"created_by"`
-	UpdatedAt string  `json:"updated_at"`
-	UpdatedBy *Author `json:"updated_by"`
-	// Access is what the caller may do in the app: their roles and capabilities.
-	Access access.AppAccess `json:"access"`
-	// Live is the release the app serves, or nil before its first publish (it can't be
-	// launched). Its Definition is in a single app's reply.
-	Live *Release `json:"live"`
-	// UnpublishedChanges is whether the draft is not the live release's definition (it is
-	// always so before the first publish). Only callers who may design or publish are told.
-	UnpublishedChanges bool `json:"unpublished_changes"`
-	// NeedsBoard is whether the draft has effects with no board chosen yet, which can't be
-	// published until one is (a template's, or a copy's whose boards its copier can't write).
-	// Only callers who may design or publish are told.
-	NeedsBoard bool `json:"needs_board"`
-	// Draft is the definition being edited, in a single app's reply, for callers who may design
-	// or publish: others see the live release's definition alone.
-	Draft *Definition `json:"draft,omitempty"`
-	// EffectTargets names the spaces and boards the draft's effects act on, as far as the caller may
-	// read them, so what the publish panel says about them can say which ones (effects_api.go). It
-	// comes with Draft, for the same callers.
-	EffectTargets []EffectTarget `json:"effect_targets,omitempty"`
+	ID                 int64            `json:"id"`
+	SpaceID            int64            `json:"space_id"`
+	Name               string           `json:"name"`
+	ArchivedAt         *string          `json:"archived_at"`
+	Version            int64            `json:"version"`
+	Rows               int              `json:"rows"`
+	CreatedAt          string           `json:"created_at"`
+	CreatedBy          *Author          `json:"created_by"`
+	UpdatedAt          string           `json:"updated_at"`
+	UpdatedBy          *Author          `json:"updated_by"`
+	Access             access.AppAccess `json:"access"`
+	Live               *Release         `json:"live"`
+	UnpublishedChanges bool             `json:"unpublished_changes"`
+	NeedsBoard         bool             `json:"needs_board"`
+	Draft              *Definition      `json:"draft,omitempty"`
+	EffectTargets      []EffectTarget   `json:"effect_targets,omitempty"`
 
-	// What the store read, for the service's own use: the draft, the live release's definition
-	// and whether they differ. They reach a reply only through present, by the caller's access.
 	draftDef     Definition
 	liveDef      *Definition
 	draftDiffers bool
@@ -105,28 +64,15 @@ type App struct {
 }
 
 var (
-	// ErrNotFound is the answer for a space or app that doesn't exist or that the user
-	// can't read: callers must not tell the two apart.
-	ErrNotFound = errors.New("not found")
-	// ErrReadOnly is for a write to a space the user may only read.
-	ErrReadOnly = errors.New("you can only read this space")
-	// ErrOffline is for launching an app that is offline, or running its actions.
-	ErrOffline = errors.New("this app is offline: restore it to launch it")
-	// ErrStale is for an update made against a version that is no longer the current
-	// one: someone else changed the app in between.
-	ErrStale = errors.New("it changed since you read it: reload and try again")
-	// ErrConflict is for an update, delete or restore of a record that has changed since
-	// the caller read it (or, for a restore, isn't deleted).
-	ErrConflict = errors.New("the record changed since you read it")
-	// ErrFull is for a row that would take an app over MaxRows or MaxDataSize, or an app
-	// that would take a space over maxApps.
-	ErrFull = errors.New("full")
-	// ErrForbidden is for something the caller's roles in the app don't allow, though the
-	// space does: a user who may submit records may not change the app, for instance.
+	ErrNotFound  = errors.New("not found")
+	ErrReadOnly  = errors.New("you can only read this space")
+	ErrOffline   = errors.New("this app is offline: restore it to launch it")
+	ErrStale     = errors.New("it changed since you read it: reload and try again")
+	ErrConflict  = errors.New("the record changed since you read it")
+	ErrFull      = errors.New("full")
 	ErrForbidden = errors.New("your role in this app doesn't allow this")
 )
 
-// forbiddenError is ErrForbidden, saying which capability the caller lacks.
 type forbiddenError struct{ capability string }
 
 func (e *forbiddenError) Error() string        { return ErrForbidden.Error() + " (" + e.capability + ")" }
@@ -134,13 +80,11 @@ func (e *forbiddenError) Is(target error) bool { return target == ErrForbidden }
 
 func forbidden(capability string) error { return &forbiddenError{capability: capability} }
 
-// records names the capability of reading or changing the app's records, for ErrForbidden.
 const (
 	capReadRecords   = "read_records"
 	capModifyRecords = "modify_records"
 )
 
-// need checks that acc has capability c.
 func need(acc access.AppAccess, c access.Capability) error {
 	if !acc.Has(c) {
 		return forbidden(string(c))
@@ -148,9 +92,6 @@ func need(acc access.AppAccess, c access.Capability) error {
 	return nil
 }
 
-// visibility says which of an app's rows a caller reads: all of them, those they created, or
-// none. Every way to read rows goes through it, so what a screen shows, its summaries, the
-// counts in lists and the agent's reads agree.
 type visibility struct {
 	scope access.Scope
 	user  int64
@@ -160,11 +101,8 @@ func readable(acc access.AppAccess, userID int64) visibility {
 	return visibility{scope: acc.ReadRecords, user: userID}
 }
 
-// everything is the view of the server's own checks, which read every row.
 var everything = visibility{scope: access.ScopeAll}
 
-// sees reports whether the caller reads a row created by creator (nil: its creator's
-// account is gone, which only a caller who reads all rows sees).
 func (v visibility) sees(creator sql.NullInt64) bool {
 	switch v.scope {
 	case access.ScopeAll:
@@ -175,8 +113,6 @@ func (v visibility) sees(creator sql.NullInt64) bool {
 	return false
 }
 
-// conflictError is ErrConflict for record id. Current is the record as it is now, as an
-// item, only if the caller may read it: a refusal gives away nothing they couldn't see.
 type conflictError struct {
 	id      int64
 	current map[string]any
@@ -185,7 +121,6 @@ type conflictError struct {
 func (e *conflictError) Error() string        { return ErrConflict.Error() }
 func (e *conflictError) Is(target error) bool { return target == ErrConflict }
 
-// fullError is ErrFull, saying which limit, with the API's code for it.
 type fullError struct {
 	msg    string
 	code   apierr.Code
@@ -195,75 +130,48 @@ type fullError struct {
 func (e *fullError) Error() string        { return ErrFull.Error() + ": " + e.msg }
 func (e *fullError) Is(target error) bool { return target == ErrFull }
 
-// errTooManyApps is a space at maxApps.
 var errTooManyApps = &fullError{
 	msg:  fmt.Sprintf("a space has at most %d apps", maxApps),
 	code: apierr.CodeTooManyApps, params: apierr.Params{"max": maxApps},
 }
 
-// appFull is an app at MaxRows or MaxDataSize; msg says which.
 func appFull(msg string) error {
 	return &fullError{msg: msg, code: apierr.CodeAppFull, params: apierr.Params{"max_rows": MaxRows, "max_mib": MaxDataSize >> 20}}
 }
 
-// maxApps bounds the apps of one space, offline ones included.
 const maxApps = 500
 
 const maxNameLen = 100
 
-// Service stores apps and their rows, and checks access to them through package access.
 type Service struct {
-	db     *sql.DB
-	access *access.Checker
-	// platform is what the app's effects act on (outbox.go).
-	platform Platform
-	// clock is the time the outbox's worker goes by: the real one, a test's own otherwise.
-	clock func() time.Time
-	// wake tells the worker, if it runs in this process, that an entry was queued.
-	wake chan struct{}
-	// poll is how often the worker looks for due entries when nothing wakes it: outboxPoll,
-	// or a test's own (WithOutboxPoll).
-	poll  time.Duration
-	hooks outboxHooks
-	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
-	// the service keeps no files.
-	dataDir string
-	// holder orders the writes in a space's directory against its removal (WithSpaceHolder); nil for none.
-	holder SpaceHolder
-	locks  fileLocks
-	thumbs chan struct{}
-	// quota refuses an upload that would take its space or workspace over a storage quota
-	// (WithQuota); nil for none.
-	quota *quota.Service
-	// deletedRetention is how long a deleted record is kept before PurgeDeleted removes it; zero
-	// keeps them for ever (retention.go).
+	db               *sql.DB
+	access           *access.Checker
+	platform         Platform
+	clock            func() time.Time
+	wake             chan struct{}
+	poll             time.Duration
+	hooks            outboxHooks
+	dataDir          string
+	holder           SpaceHolder
+	locks            fileLocks
+	thumbs           chan struct{}
+	quota            *quota.Service
 	deletedRetention time.Duration
-	// budget limits the actions run with access tokens (tokenbudget.go).
-	budget *tokenBudget
+	budget           *tokenBudget
 }
 
-// outboxHooks are for tests to stop the worker where a crash would.
 type outboxHooks struct {
-	// afterWork is called once an entry's work is done and before it is noted as done.
-	afterWork func(effectRow) error
-	// beforeDocument is called once a document entry has passed its checks, right before it asks
-	// for the space's write lock to commit.
-	beforeDocument func(effectRow)
-	// afterActionsAccess is called by Actions once it has read what the user may do, before it
-	// reads the release.
-	afterActionsAccess func()
-	// afterPaymentSnapshotRead is called by a payment link entry's pre-call authorization once it has
-	// read where the app is, inside its read transaction, before the rest of its checks.
+	afterWork                func(effectRow) error
+	beforeDocument           func(effectRow)
+	afterActionsAccess       func()
 	afterPaymentSnapshotRead func()
 }
 
-// New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
 	return &Service{db: sqlDB, access: c, clock: time.Now, budget: sharedBudget(sqlDB), wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails),
 		deletedRetention: DefaultDeletedRetention}
 }
 
-// timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
 func now() string { return time.Now().UTC().Format(timeFormat) }
@@ -275,18 +183,10 @@ type queryer interface {
 
 type scanner interface{ Scan(dest ...any) error }
 
-// write runs fn in a transaction. Transactions take the write lock when they begin (see
-// package db), so the checks in fn (versions, bounds) hold for its writes.
 func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// The transaction's own context is never cancelled. database/sql rolls a transaction back on a
-	// goroutine of its own when its context ends, and the connection stays busy until that has
-	// finished: the deferred Rollback below then answers sql.ErrTxDone at once, and a caller that
-	// closes the database or begins another write (a worker at shutdown) can't tell. Cancelling
-	// ctx still stops fn's statements, which take ctx themselves, and fn's error is rolled back here,
-	// before write returns. A BEGIN waiting for the write lock gives up after busy_timeout.
 	tx, err := s.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
@@ -301,20 +201,12 @@ func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error)
 	if err := fn(tx); err != nil {
 		return err
 	}
-	// Commit no longer sees the caller's cancellation (the transaction's context is detached): a
-	// caller that gave up is told so, and its writes are rolled back, not committed behind it.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// may checks that sp, as its caller sees it, allows need: ErrNotFound if it can't be
-// read, ErrReadOnly if it can't be written.
-// recheck checks again, inside a write transaction, that a may still write the spaces ids. A
-// transaction begins with BEGIN IMMEDIATE, so the write lock is held: a membership change or
-// an archive made since the request was checked has committed by now, and none can until this
-// write has. The request's snapshot of the space may be stale; this can't be.
 func (s *Service) recheck(ctx context.Context, a Actor, ids ...int64) error {
 	for _, id := range ids {
 		now, err := s.access.Check(ctx, a.UserID, id)
@@ -331,15 +223,10 @@ func (s *Service) recheck(ctx context.Context, a Actor, ids ...int64) error {
 	return nil
 }
 
-// appAccess returns what a may do in appID of spaceID now: ErrNotFound if they can't read
-// the space, it has no such app, or they hold no role in it (an app restricted to others is
-// as unseen as one of a space they can't open). It asks package access, which answers for
-// requests and the agent alike.
 func (s *Service) appAccess(ctx context.Context, a Actor, spaceID, appID int64) (access.AppAccess, error) {
 	return appAccessBy(ctx, s.access, a, spaceID, appID)
 }
 
-// appAccessBy is appAccess asked of checker, which may read inside a snapshot (access.Snapshot).
 func appAccessBy(ctx context.Context, checker *access.Checker, a Actor, spaceID, appID int64) (access.AppAccess, error) {
 	acc, err := checker.App(ctx, a.UserID, spaceID, appID)
 	if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
@@ -351,8 +238,6 @@ func appAccessBy(ctx context.Context, checker *access.Checker, a Actor, spaceID,
 	return acc, err
 }
 
-// recheckApp is recheck for one app: a may still write its space, and what they may do in it
-// is returned, as of now.
 func (s *Service) recheckApp(ctx context.Context, a Actor, spaceID, appID int64) (access.AppAccess, error) {
 	if err := s.recheck(ctx, a, spaceID); err != nil {
 		return access.AppAccess{}, err
@@ -360,8 +245,6 @@ func (s *Service) recheckApp(ctx context.Context, a Actor, spaceID, appID int64)
 	return s.appAccess(ctx, a, spaceID, appID)
 }
 
-// present fills in what only the caller's access decides about an app they were handed: what
-// they may do in it, and how many of its rows they may read.
 func (s *Service) present(ctx context.Context, a Actor, ap *App) error {
 	acc, err := s.appAccess(ctx, a, ap.SpaceID, ap.ID)
 	if err != nil {
@@ -379,12 +262,8 @@ func (s *Service) present(ctx context.Context, a Actor, ap *App) error {
 	return err
 }
 
-// reviews is whether acc may see what is not live yet: the draft and the releases before it.
 func reviews(acc access.AppAccess) bool { return acc.Design || acc.Publish }
 
-// finish puts in a reply what the caller's access lets them know of the app's drafts: the
-// draft and whether it differs only for those who may design or publish, the definition of
-// the live release for everyone who may view the app.
 func (a *App) finish(acc access.AppAccess) {
 	a.UnpublishedChanges = reviews(acc) && a.draftDiffers
 	a.NeedsBoard = reviews(acc) && len(a.draftDef.unsetTargets()) > 0
@@ -401,7 +280,6 @@ func (a *App) finish(acc access.AppAccess) {
 	}
 }
 
-// countRows counts the live rows of appID that v reads: deleted ones are not rows.
 func countRows(ctx context.Context, q queryer, appID int64, v visibility) (int, error) {
 	var n int
 	switch v.scope {
@@ -427,7 +305,6 @@ func may(sp access.Space, need access.Access) error {
 	return nil
 }
 
-// errSpaceArchived is ErrReadOnly, saying why.
 var errSpaceArchived = readOnlyError("this space is archived: it is read-only")
 
 type readOnlyError string
@@ -442,7 +319,6 @@ func author(id sql.NullInt64, name string, agent bool, via sql.NullString) *Auth
 	return &Author{ID: id.Int64, Name: name, Agent: agent, Via: via.String}
 }
 
-// via is the column value of an actor's access token: NULL without one.
 func via(a Actor) any {
 	if a.Via == "" {
 		return nil
@@ -450,9 +326,6 @@ func via(a Actor) any {
 	return a.Via
 }
 
-// appColumns selects what scanApp reads, from apps a; appListColumns the same with empty
-// definitions in their place, so a listing of up to maxApps apps doesn't read each one's (up to
-// 48 KiB, twice) only to throw them away.
 const (
 	appFields = `a.id, a.space_id, a.name, a.archived_at, a.version,
 		a.created_at, a.created_by, coalesce(cu.name, ''), a.created_by_agent, a.created_via,
@@ -468,7 +341,6 @@ const (
 	appListColumns = appFields + `'', ''` + appFrom
 )
 
-// scanApp reads an app; withDefinition decodes its draft and live definitions too.
 func scanApp(row scanner, withDefinition bool) (App, error) {
 	var a App
 	var createdBy, updatedBy, relNumber, relVersion, relBy sql.NullInt64
@@ -509,7 +381,6 @@ func scanApp(row scanner, withDefinition bool) (App, error) {
 	return a, nil
 }
 
-// app returns an app of space spaceID, with its definition, or ErrNotFound.
 func app(ctx context.Context, q queryer, spaceID, appID int64) (App, error) {
 	a, err := scanApp(q.QueryRowContext(ctx, `SELECT `+appColumns+` WHERE a.id = ? AND a.space_id = ?`, appID, spaceID), true)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -540,8 +411,6 @@ func (s *Service) listApps(ctx context.Context, sp access.Space, a Actor, withAr
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// What the caller may do in each app, and so how many of its rows they may count: a
-	// total over rows they can't read would tell them what those hold.
 	accs, err := s.access.AppsIn(ctx, a.UserID, sp)
 	if err != nil {
 		return nil, err
@@ -550,7 +419,6 @@ func (s *Service) listApps(ctx context.Context, sp access.Space, a Actor, withAr
 	if err != nil {
 		return nil, err
 	}
-	// Apps the caller holds no role in are left out, as appAccess answers them ErrNotFound.
 	visible := all[:0]
 	for _, ap := range all {
 		if accs[ap.ID].View {
@@ -574,7 +442,6 @@ func (s *Service) listApps(ctx context.Context, sp access.Space, a Actor, withAr
 
 type rowCount struct{ all, own int }
 
-// rowCounts counts each app of spaceID's rows: all of them, and those userID created.
 func (s *Service) rowCounts(ctx context.Context, spaceID, userID int64) (map[int64]rowCount, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.app_id, count(*), coalesce(sum(r.created_by = ?), 0)
@@ -610,8 +477,6 @@ func (s *Service) getApp(ctx context.Context, sp access.Space, a Actor, appID in
 	return ap, nil
 }
 
-// NewApp is a new app: its name and its first draft. It has no release, so it can't be
-// launched, until someone who may publish it does.
 type NewApp struct {
 	Name       string     `json:"name"`
 	Definition Definition `json:"definition"`
@@ -621,8 +486,6 @@ func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na Ne
 	return s.createAppWith(ctx, sp, a, na, nil)
 }
 
-// createAppWith is createApp that also makes the app's first role assignments, in the same
-// transaction as the app, so there is no moment the app exists without them.
 func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, na NewApp, grants []access.AppGrant) (App, error) {
 	if err := may(sp, access.Write); err != nil {
 		return App{}, err
@@ -669,7 +532,7 @@ func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, n
 				}
 			}
 		}
-		created, err = app(ctx, tx, sp.ID, id) // as this change left it, not as a later one did
+		created, err = app(ctx, tx, sp.ID, id)
 		return err
 	})
 	if err != nil {
@@ -681,16 +544,10 @@ func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, n
 	return created, nil
 }
 
-// Changes is an update of an app. Nil fields stay as they are.
 type Changes struct {
-	// Version is the app's version the change was made against.
-	Version int64   `json:"version"`
-	Name    *string `json:"name"`
-	// Archived takes the app offline (true) or brings it back (false).
-	Archived *bool `json:"archived"`
-	// Definition replaces the app's DRAFT: the screen, collection, actions and summaries
-	// builders edit. It is checked against the catalog, not against the rows, and changes
-	// nothing people use until it is published (Publish, which checks the rows).
+	Version    int64       `json:"version"`
+	Name       *string     `json:"name"`
+	Archived   *bool       `json:"archived"`
 	Definition *Definition `json:"definition"`
 }
 
@@ -704,7 +561,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 	if err := checkVersion(ch.Version); err != nil {
 		return App{}, err
 	}
-	var name, def any // nil: unchanged
+	var name, def any
 	if ch.Name != nil {
 		n, err := appName(*ch.Name)
 		if err != nil {
@@ -727,7 +584,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		}
 		def = string(raw)
 	}
-	var archivedAt any // nil: unchanged; "": restored
+	var archivedAt any
 	if ch.Archived != nil {
 		archivedAt = ""
 		if *ch.Archived {
@@ -740,7 +597,6 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if err != nil {
 			return err
 		}
-		// Changing what the app is, and taking it offline or back, are different rights.
 		if ch.Name != nil || ch.Definition != nil {
 			if err := need(acc, access.CapDesign); err != nil {
 				return err
@@ -758,9 +614,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if cur.Version != ch.Version {
 			return ErrStale
 		}
-		// Only the draft changes: the live release, and so what people use, stays as it is.
-		// Whether the draft still differs from it is kept for the lists.
-		var differs any // nil: unchanged
+		var differs any
 		if ch.Definition != nil {
 			differs = cur.liveDef == nil || !sameDefinition(*cur.liveDef, checked)
 		}
@@ -777,7 +631,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if err != nil {
 			return err
 		}
-		updated, err = app(ctx, tx, sp.ID, appID) // as this change left it, not as a later one did
+		updated, err = app(ctx, tx, sp.ID, appID)
 		return err
 	})
 	if err != nil {
@@ -789,8 +643,6 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 	return updated, nil
 }
 
-// moveApp moves an app to another space of the same workspace, with its rows: the caller
-// must be able to write both.
 func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, version int64, to access.Space) (App, error) {
 	if err := may(sp, access.Write); err != nil {
 		return App{}, err
@@ -810,7 +662,6 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 		if err != nil {
 			return err
 		}
-		// Moving an app changes who can reach it: it is the builder's to do.
 		if err := need(acc, access.CapDesign); err != nil {
 			return err
 		}
@@ -824,13 +675,9 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 		if cur.Version != version {
 			return ErrStale
 		}
-		// What the space's publishers set as defaults for its members stays in the space: the
-		// app's new members never chose it.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM home_defaults WHERE app_id = ?`, appID); err != nil {
 			return err
 		}
-		// Once the app is known to be there (an unknown one is a 404 first): a move to where it
-		// is would change nothing but its version.
 		if to.ID == sp.ID {
 			return invalidf("the app is already in that space")
 		}
@@ -847,14 +694,12 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 		if err != nil {
 			return err
 		}
-		moved, err = app(ctx, tx, to.ID, appID) // as this move left it, not as a later change did
+		moved, err = app(ctx, tx, to.ID, appID)
 		return err
 	})
 	if err != nil {
 		return App{}, err
 	}
-	// The files follow the app to its new space. The app already works meanwhile, and if this
-	// stops half way Sweep goes on (attachments.go).
 	if err := s.relocate(ctx, appID); err != nil {
 		slog.Warn("apps: moving an app's attachments", "app", appID, "err", err)
 	}
@@ -864,8 +709,6 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 	return moved, nil
 }
 
-// loadRows returns the live rows of an app that v reads, oldest first: deleted ones are
-// left out, so they are in no screen, summary or check.
 func loadRows(ctx context.Context, q queryer, appID int64, v visibility) ([]Row, error) {
 	var rows *sql.Rows
 	var err error
@@ -896,8 +739,6 @@ func loadRows(ctx context.Context, q queryer, appID int64, v visibility) ([]Row,
 	return all, rows.Err()
 }
 
-// loadSpaceRows is loadRows for an app that must be in space spaceID: the same statement checks
-// it, so rows of an app that moved to another space are not read as this space's.
 func loadSpaceRows(ctx context.Context, q queryer, spaceID, appID int64, v visibility) ([]Row, error) {
 	var rows *sql.Rows
 	var err error
@@ -930,7 +771,6 @@ func loadSpaceRows(ctx context.Context, q queryer, spaceID, appID int64, v visib
 	return all, rows.Err()
 }
 
-// launchable returns an app with its definition, refusing one that is offline.
 func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, error) {
 	a, err := app(ctx, q, spaceID, appID)
 	if err == nil && a.ArchivedAt != nil {
@@ -939,14 +779,6 @@ func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, erro
 	return a, err
 }
 
-// surface returns the messages that draw an app with its rows. which is the screen: "" for
-// the live release (ErrNotPublished before the first publish), "draft" for the draft, or a
-// release number; the draft and releases that are not live are for those who may design or
-// publish. Every screen is drawn with the same rows, those the caller reads.
-//
-// screen, for an app with screens, is the screen it opens on instead of its entry (what a pin
-// that names one asks for); a name that isn't one of the screens that don't show a record is
-// refused.
 func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which, screen string) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
@@ -966,7 +798,6 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 	if err != nil {
 		return nil, err
 	}
-	// The screen's rows, and with them its summaries, are those the caller reads.
 	rows, err := loadRows(ctx, s.db, appID, readable(acc, actor.UserID))
 	if err != nil {
 		return nil, err
@@ -980,45 +811,14 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 	return openedAt(Surface(SurfaceID(a.ID), def, rows), SurfaceID(a.ID), def, rows, screen), nil
 }
 
-// act runs a client action and returns the message that updates the screen. Errors in
-// the action itself (an unknown action or row, a value that doesn't fit) match
-// ErrInvalid.
-//
-// An action names the release its screen was drawn from (ClientAction.Release; left out, the
-// live one). From the live release it is run as the live definition says. From another one,
-// older because someone published or rolled back since the screen was drawn, it is run as that
-// release defines it, and applied only if the live release can take it as it is: the live
-// release declares the same action, and every field the action sets is one the live collection
-// declares, of the same type. The row it would write must still fit the live collection (a
-// field the live release requires and that release's screen doesn't send is the usual
-// reason: the client gets the field's own error). Otherwise nothing changes and the answer
-// is ErrReleaseOutdated, which tells the client to reload the app. A release the app doesn't
-// have is ErrReleaseNotFound, but only to a caller who may run actions at all. The data model
-// sent back is drawn by the release the action came from, limited to the fields the live
-// release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
 	if err := s.spendTokenAction(actor, sp.WorkspaceID); err != nil {
-		// A request that committed before is answered with its receipt even over the budget: a
-		// client that lost the answer must be able to learn that it is in, and the receipt
-		// costs nothing but one lookup. Only a new operation is refused.
 		if IsRateLimited(err) && s.committed(ctx, sp.ID, actor, appID, action) {
 			return []Message{}, nil
 		}
 		return nil, err
 	}
 	msgs, err := s.actOnce(ctx, sp, actor, appID, action)
-	// A request this caller made before, under the same operation and release, and that committed,
-	// is answered with its receipt even when what they may do has changed since: a client that
-	// sent it and lost the answer (a device that was offline) must be able to learn that it is
-	// in, or a refusal of the access they have now would leave it not knowing whether it is. The
-	// receipt is no data: the rows are the caller's to read, and aren't sent.
-	//
-	// An app archived since is the same: the change is in, and the device learns it from the receipt
-	// rather than from a refusal that says nothing of it (ErrOffline).
-	//
-	// The receipt answers on the route it was made on only: the space and the app of the route are
-	// the ones it was made in (a caller who lost their access to that space does not get it through
-	// any other space they can reach).
 	if err != nil &&
 		(errors.Is(err, ErrNotFound) || errors.Is(err, ErrReadOnly) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrOffline)) &&
 		s.committed(ctx, sp.ID, actor, appID, action) {
@@ -1027,9 +827,6 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	return msgs, err
 }
 
-// committed reports whether the operation the action names was made by actor, in this app and
-// this space, under the same request (the release it names, the action and its context): it is
-// recorded in the transaction of the change it made, so a record of it is a change that committed.
 func (s *Service) committed(ctx context.Context, spaceID int64, actor Actor, appID int64, action ClientAction) bool {
 	if action.Operation == "" || action.Release == nil || !operationPattern.MatchString(action.Operation) {
 		return false
@@ -1056,12 +853,6 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 	if err != nil {
 		return nil, err
 	}
-	// The screen's data is read after the change commits, outside the write lock, which every
-	// write on the server waits for: an app's rows can be up to MaxDataSize, and the next
-	// writer needn't wait while they are read and encoded. It shows the latest rows, a change
-	// committed meanwhile included.
-	// The answer carries the rows, and summaries, the caller reads: a user who adds a record
-	// to an app where they read only their own is not shown anyone else's.
 	rows, err := loadRows(ctx, s.db, appID, readable(done.acc, actor.UserID))
 	if err != nil {
 		return nil, err
@@ -1069,24 +860,15 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 	return answer(appID, shownBy(done.live, done.def), rows, done.change), nil
 }
 
-// changeDone is what a change action did: the access the caller had when it ran, the live release's
-// definition and the one the action came from (the same unless it came from an older release),
-// the change planned and what it did to the record.
 type changeDone struct {
 	acc       access.AppAccess
 	def, live Definition
 	change    Change
 	ap        applied
-	// replayed is a request made before under its operation key: nothing was done again.
-	replayed bool
-	// effects is how many effects the change queued.
-	effects int
+	replayed  bool
+	effects   int
 }
 
-// runChange runs a client action that changes a record, in one transaction: the caller's rights are
-// checked again inside it, the change planned from the action and applied, the operation noted and
-// the action's effects queued. It is the whole of what an action does, for the web app and for the
-// agent alike. The caller has checked the space and that the action is not a navigation.
 func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) (changeDone, error) {
 	var out changeDone
 	queued := false
@@ -1107,24 +889,18 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 		def := live
 		fromOlder := action.Release != nil && *action.Release != a.Live.Number
 		if fromOlder {
-			// Whether a release exists is for those who may run actions at all: the 404 for one
-			// that doesn't must not reach a caller the app refuses (what the action does is
-			// checked below against the right it needs).
 			if !acc.Submit && acc.ModifyRecords == access.ScopeNone {
 				return forbidden(string(access.CapSubmit))
 			}
 			rel, err := loadRelease(ctx, tx, appID, *action.Release, true)
 			if err != nil {
 				if action.Exact && errors.Is(err, ErrReleaseNotFound) {
-					// Not told which releases exist: it isn't the live one, which is all it says.
 					return &outdatedError{release: *action.Release, live: a.Live.Number}
 				}
 				return err
 			}
 			def = *rel.Definition
 		}
-		// What the action does decides which right it needs: adding a row is the user's,
-		// changing or removing one is the user's own or the data manager's all.
 		if kind := def.Actions[action.Name].Kind; kind == ActionInsert && !acc.Submit {
 			return forbidden(string(access.CapSubmit))
 		} else if (kind == ActionUpdate || kind == ActionDelete) && acc.ModifyRecords == access.ScopeNone {
@@ -1140,8 +916,6 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 			}
 		}
 		out.def, out.live, out.change = def, live, ch
-		// What the action sets going besides the change is the live release's: an action of an
-		// older release was taken as the live one defines it (liveTakes).
 		effects := live.Actions[action.Name].Effects
 		key, err := operationKey(action, len(effects) > 0)
 		if err != nil {
@@ -1149,7 +923,6 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 		}
 		var opID int64
 		if key != "" {
-			// A key is for one request: the release it runs from is part of it.
 			release := a.Live.Number
 			if action.Release != nil {
 				release = *action.Release
@@ -1159,9 +932,6 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 				return err
 			}
 			if replay {
-				// Made before: the change and its effects are in already, and the answer is the
-				// first one's, whatever the live release has become since: it is asked of the
-				// live release's compatibility only for a request not yet made.
 				out.replayed = true
 				return nil
 			}
@@ -1174,9 +944,6 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 		if err != nil {
 			return err
 		}
-		// The operation remembers the record it made: a download says which of the caller's
-		// operations its records are (offline.go), so a device doesn't count a record it sent
-		// twice, once as sent and once as the server's.
 		if opID != 0 && ap.changed {
 			if _, err := tx.ExecContext(ctx, `UPDATE app_operations SET record_id = ? WHERE id = ?`, ap.id, opID); err != nil {
 				return err
@@ -1200,11 +967,6 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 	return out, nil
 }
 
-// answer is the messages that update a screen once change has been made to rows: the rows and
-// summaries as they are now and, for an app with screens, what the action does to the screen the
-// person is on. The record a detail screen shows is shown again after an update and emptied after
-// a delete, and the screen the action says it goes on to (Then) is opened. The live app and the
-// draft's preview (preview.go) answer alike.
 func answer(appID int64, shown Definition, rows []Row, change Change) []Message {
 	msgs := Refreshed(SurfaceID(appID), shown, rows, change.Kind == ActionInsert)
 	if !shown.hasScreens() {
@@ -1228,9 +990,6 @@ func answer(appID int64, shown Definition, rows []Row, change Change) []Message 
 	return msgs
 }
 
-// navigates reports whether the action is a navigate action of the release it comes from, which
-// the caller may take as the app's reader. Anything it can't tell is left to act, which gives
-// the errors it always did.
 func (s *Service) navigates(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) bool {
 	if _, err := s.appAccess(ctx, actor, sp.ID, appID); err != nil {
 		return false
@@ -1250,12 +1009,6 @@ func (s *Service) navigates(ctx context.Context, sp access.Space, actor Actor, a
 	return def.Actions[action.Name].Kind == ActionNavigate
 }
 
-// navigate runs a navigate action: it changes no row, so it is the reader's, and answers with
-// the screen to show and, for one that shows a record, the record, as the caller may read it
-// (one they may not is answered as one the app doesn't have). The form at /draft, the rows
-// and everything else in the data model are left alone. From a release that is not the live one
-// it is read as that release defines it; a release that can't be found is answered as an
-// outdated screen, so which releases exist isn't told.
 func (s *Service) navigate(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
 	acc, err := s.appAccess(ctx, actor, sp.ID, appID)
 	if err != nil {
@@ -1294,7 +1047,6 @@ func (s *Service) navigate(ctx context.Context, sp access.Space, actor Actor, ap
 	return Opened(SurfaceID(appID), ch.Screen, record), nil
 }
 
-// loadRow returns the live row id of an app, if v reads it.
 func loadRow(ctx context.Context, q queryer, appID, id int64, v visibility) (Row, bool, error) {
 	var r Row
 	var data string
@@ -1313,12 +1065,6 @@ func loadRow(ctx context.Context, q queryer, appID, id int64, v visibility) (Row
 	return r, true, nil
 }
 
-// shownBy is the definition an action's answer is drawn from: from, the release the action
-// came from, narrowed to what the live release shows. Its collection holds only the fields the
-// live release declares, as the live release declares them, and a summary is kept only if it
-// reads one of them that has kept its type, so the answer to an action of an older release
-// shows no value the live app doesn't (a field the live release removed, or the values stored
-// before it retyped one, in whoever's row they are).
 func shownBy(live, from Definition) Definition {
 	shown := from
 	shown.Collection = Collection{}
@@ -1350,14 +1096,8 @@ func shownBy(live, from Definition) Definition {
 	return shown
 }
 
-// apply makes a change to an app's rows, within its bounds, and records it in their history.
-// modify is the rows the actor may change: a row outside it is answered as one the app doesn't
-// have, so which rows exist isn't told to someone who may not touch them. read is the rows
-// they may read, which decides whether a conflict shows the row as it is now.
 func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, payments paylink.Opener, modify, read visibility) (applied, error) {
 	var count, size int
-	// Only live rows count against the limits. In bytes, as len() counts below: length() of
-	// TEXT counts characters, which would let non-ASCII rows hold more than MaxDataSize.
 	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(length(CAST(data AS BLOB))), 0) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, appID).
 		Scan(&count, &size); err != nil {
 		return applied{}, err
@@ -1365,8 +1105,6 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 	at := now()
 	switch ch.Kind {
 	case ActionInsert:
-		// The row is stored as the live release's collection allows, whichever release's screen
-		// the action came from: its required fields and limits are the live ones.
 		if err := def.Collection.Fits(ch.Data); err != nil {
 			return applied{}, err
 		}
@@ -1411,14 +1149,10 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			return applied{id: ch.ID, revision: cur.revision + 1, data: cur.fields, changed: true},
 				remember(ctx, tx, appID, ch.ID, cur.revision+1, opDelete, cur.data, at, actor, ch)
 		}
-		// A captured location and a signature stay as they were captured, whoever asks to change them
-		// and by whichever screen, release or the records explorer. That is told first: clearing a
-		// required one is a change that is refused for what it is, not for the field's being required.
 		next := merged(cur.fields, ch.Data)
 		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
 			return applied{}, err
 		}
-		// The money a payment link of the record asks stays as it is while the link may be paid.
 		if err := paymentMoneyLocked(ctx, tx, payments, appID, ch.ID, def, cur.fields, next); err != nil {
 			return applied{}, err
 		}
@@ -1433,7 +1167,6 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			return applied{}, appFull(fmt.Sprintf("an app holds at most %d MiB", MaxDataSize>>20))
 		}
 		if string(raw) == cur.canonical {
-			// Nothing changed: no new revision, nothing to remember, no effects.
 			return applied{id: ch.ID, revision: cur.revision, data: next}, nil
 		}
 		if err := claimAttachments(ctx, tx, actor, appID, ch.ID, def, cur.fields, next); err != nil {
@@ -1454,7 +1187,6 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 	return applied{}, invalidf("unknown kind of action %q", ch.Kind)
 }
 
-// The operations a record's history lists.
 const (
 	opInsert  = "insert"
 	opUpdate  = "update"
@@ -1462,8 +1194,6 @@ const (
 	opRestore = "restore"
 )
 
-// actionColumn is the column value of the action that made a change: NULL for one that wasn't an
-// app's action (a restore).
 func actionColumn(ch Change) any {
 	if ch.Name == "" {
 		return nil
@@ -1471,7 +1201,6 @@ func actionColumn(ch Change) any {
 	return ch.Name
 }
 
-// remember adds one version of a record to its history.
 func remember(ctx context.Context, tx *sql.Tx, appID, rowID, revision int64, op, data, at string, actor Actor, ch Change) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO app_row_history (app_id, row_id, revision, operation, data, at, actor, actor_agent, actor_via, action)
@@ -1480,23 +1209,17 @@ func remember(ctx context.Context, tx *sql.Tx, appID, rowID, revision int64, op,
 	if err != nil || revision <= MaxRevisions {
 		return err
 	}
-	// Only the newest MaxRevisions versions are kept, so a record edited in a loop doesn't grow
-	// its history without bound (retention.go). The row's own data is the newest, always kept.
 	_, err = tx.ExecContext(ctx, `DELETE FROM app_row_history WHERE row_id = ? AND revision <= ?`, rowID, revision-MaxRevisions)
 	return err
 }
 
-// liveRecord is a live row as an update or delete finds it.
 type liveRecord struct {
 	revision  int64
-	data      string         // as stored
-	fields    map[string]any // data, decoded
-	canonical string         // data, encoded as a change encodes it
+	data      string
+	fields    map[string]any
+	canonical string
 }
 
-// liveRow reads the live row ch names for a change. A row that doesn't exist, is deleted or
-// is outside modify is answered as one the app doesn't have; one whose revision isn't the
-// one the change expected is a conflict.
 func liveRow(ctx context.Context, tx *sql.Tx, appID int64, ch Change, modify, read visibility, def Definition) (liveRecord, error) {
 	var rec liveRecord
 	var creator sql.NullInt64
@@ -1522,8 +1245,6 @@ func liveRow(ctx context.Context, tx *sql.Tx, appID int64, ch Change, modify, re
 	return rec, nil
 }
 
-// conflict is the error for a record whose revision isn't the one expected: with the record
-// as it is now if the caller reads it.
 func conflict(id int64, rec liveRecord, creator sql.NullInt64, read visibility, def Definition) error {
 	e := &conflictError{id: id}
 	if read.sees(creator) {
@@ -1532,7 +1253,6 @@ func conflict(id int64, rec liveRecord, creator sql.NullInt64, read visibility, 
 	return e
 }
 
-// checkVersion refuses a missing version: versions start at 1.
 func checkVersion(v int64) error {
 	if v < 1 {
 		return invalidf("version is required: the version you last read")

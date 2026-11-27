@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// templateWith returns the id of a bundled template that does (or doesn't) need a board.
 func templateWith(t *testing.T, w *world, needsBoard bool) string {
 	t.Helper()
 	list := w.ok(w.aliceConv, "list_app_templates", map[string]any{})["templates"].([]any)
@@ -21,8 +20,6 @@ func templateWith(t *testing.T, w *world, needsBoard bool) string {
 	return ""
 }
 
-// Installing a template and copying an app make drafts only: nothing is published, no rows,
-// releases or roles of the source come along, and the user's own access decides where.
 func TestTemplatesAndCopiesAreDraftsOnly(t *testing.T) {
 	w := newWorld(t)
 	plain, boarded := templateWith(t, w, false), templateWith(t, w, true)
@@ -38,8 +35,6 @@ func TestTemplatesAndCopiesAreDraftsOnly(t *testing.T) {
 	if err := w.db.QueryRow(`SELECT count(*) FROM app_releases WHERE app_id = ?`, id(got["id"])).Scan(&live); err != nil || live != 0 {
 		t.Fatalf("releases = %d, %v", live, err)
 	}
-	// The default name, and the template's own rules: a template needing a board names one
-	// the user may write, and one that doesn't refuses a board.
 	if def := w.ok(w.aliceConv, "install_app_template", map[string]any{"space_id": w.alicePrivate, "template_id": plain}); def["name"] == "" {
 		t.Fatalf("install_app_template = %v", def)
 	}
@@ -52,16 +47,14 @@ func TestTemplatesAndCopiesAreDraftsOnly(t *testing.T) {
 	if ok["live"] != nil {
 		t.Fatalf("install with a board = %v", ok)
 	}
-	// Bob's board is not alice's to aim an app at, and a viewer installs nothing.
 	w.status(http.StatusBadRequest, w.aliceConv, "install_app_template", map[string]any{"space_id": w.alicePrivate, "template_id": boarded,
 		"board": map[string]any{"space_id": w.bobPrivate, "board_id": w.bobPersonal}})
 	w.status(http.StatusForbidden, w.bobConv, "install_app_template", map[string]any{"space_id": w.shared, "template_id": plain})
 
-	// A copy: the draft only, with no rows, releases or roles, and its own life.
 	src := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team expenses", "definition": expenses(t)})
 	app := id(src["id"])
 	w.exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "row", "amount": 1}', ?)`, app, w.alice)
-	w.status(http.StatusBadRequest, w.aliceConv, "duplicate_app", map[string]any{"space_id": w.shared, "app_id": app, "source": "live"}) // not published
+	w.status(http.StatusBadRequest, w.aliceConv, "duplicate_app", map[string]any{"space_id": w.shared, "app_id": app, "source": "live"})
 	w.publish(app)
 	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'builder')`, app, w.alice)
 	cp := w.ok(w.aliceConv, "duplicate_app", map[string]any{"space_id": w.shared, "app_id": app, "name": "Copy", "destination_space_id": w.alicePrivate})
@@ -79,12 +72,9 @@ func TestTemplatesAndCopiesAreDraftsOnly(t *testing.T) {
 	if same["name"] != "Team expenses" || id(same["space_id"]) != w.shared {
 		t.Fatalf("duplicate_app in the same space = %v", same)
 	}
-	// The source is untouched.
 	if shown := w.ok(w.aliceConv, "show_app", map[string]any{"space_id": w.shared, "app_id": app}); id(shown["version"]) != 1 {
 		t.Fatalf("source = %v", shown)
 	}
-	// Bob views the space: he may read the live release, but not write a copy there; and his
-	// own private space is his to copy into.
 	w.status(http.StatusForbidden, w.bobConv, "duplicate_app", map[string]any{"space_id": w.shared, "app_id": app})
 	w.status(http.StatusForbidden, w.bobConv, "duplicate_app", map[string]any{"space_id": w.shared, "app_id": app, "source": "draft"})
 	w.exec(`DELETE FROM app_roles WHERE app_id = ?`, app)
@@ -95,8 +85,6 @@ func TestTemplatesAndCopiesAreDraftsOnly(t *testing.T) {
 	w.status(http.StatusForbidden, w.bobConv, "duplicate_app", map[string]any{"space_id": w.shared, "app_id": app, "destination_space_id": w.bobPrivate, "source": "draft"})
 }
 
-// Templates, copies and diagnostics reach only what the user reaches: other people's private
-// spaces, other workspaces and missing ones are "not found" alike, and nothing is made.
 func TestAppManagementToolsCannotReachOtherUsersApps(t *testing.T) {
 	w := newWorld(t)
 	plain := templateWith(t, w, false)
@@ -123,8 +111,6 @@ func TestAppManagementToolsCannotReachOtherUsersApps(t *testing.T) {
 			}
 		}
 	}
-	// An app is found only through its own space; a copy goes only where the user may write,
-	// in the call's workspace.
 	for tool, args := range map[string]map[string]any{
 		"duplicate_app":    {"app_id": id(bobs["id"])},
 		"list_app_effects": {"app_id": id(bobs["id"])},
@@ -136,9 +122,7 @@ func TestAppManagementToolsCannotReachOtherUsersApps(t *testing.T) {
 	for _, dest := range []int64{w.bobPrivate, w.alicePrivate2, missing} {
 		w.status(http.StatusNotFound, w.aliceConv, "duplicate_app", map[string]any{"space_id": w.alicePrivate, "app_id": id(mine["id"]), "destination_space_id": dest})
 	}
-	// Her conversation in workspace two can't copy workspace one's app either.
 	w.status(http.StatusNotFound, w.aliceConv2, "duplicate_app", map[string]any{"space_id": w.alicePrivate, "app_id": id(mine["id"])})
-	// The templates list is the server's, the same for everyone.
 	if list := w.ok(w.bobConv, "list_app_templates", map[string]any{})["templates"].([]any); len(list) == 0 {
 		t.Fatal("no templates")
 	}
@@ -149,7 +133,6 @@ func TestAppManagementToolsCannotReachOtherUsersApps(t *testing.T) {
 	}
 }
 
-// The diagnostic tools show what the user's roles in the app show, and only read.
 func TestAppDiagnosticTools(t *testing.T) {
 	w := newWorld(t)
 	for _, d := range Definitions() {
@@ -181,7 +164,6 @@ func TestAppDiagnosticTools(t *testing.T) {
 		return out
 	}
 
-	// Releases: none yet, then the one a person published, without its definition.
 	if rel := w.ok(w.aliceConv, "list_app_releases", ref)["releases"].([]any); len(rel) != 0 {
 		t.Fatalf("releases = %v", rel)
 	}
@@ -190,11 +172,8 @@ func TestAppDiagnosticTools(t *testing.T) {
 	if len(rel) != 1 || rel[0].(map[string]any)["number"] != float64(1) || rel[0].(map[string]any)["live"] != true || rel[0].(map[string]any)["definition"] != nil {
 		t.Fatalf("releases = %v", rel)
 	}
-	// Bob, a viewer who can't design or publish, is refused; once he is a reader of the app
-	// he is still refused, though he sees its data.
 	w.status(http.StatusForbidden, w.bobConv, "list_app_releases", ref)
 
-	// Roles: unrestricted, no grants; then the grants a person set. A viewer can't manage them.
 	roles := w.ok(w.aliceConv, "show_app_roles", ref)
 	if g, _ := roles["grants"].([]any); len(g) != 0 || len(roles["roles"].([]any)) == 0 {
 		t.Fatalf("show_app_roles = %v", roles)
@@ -207,7 +186,6 @@ func TestAppDiagnosticTools(t *testing.T) {
 	w.status(http.StatusForbidden, w.bobConv, "show_app_roles", ref)
 	w.status(http.StatusForbidden, w.bobConv, "list_app_releases", ref)
 
-	// Effects: those of records the user may read, as the API shows them.
 	aliceRow := w.insert(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "a", "amount": 1}', ?) RETURNING id`, app, w.alice)
 	bobRow := w.insert(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "b", "amount": 2}', ?) RETURNING id`, app, w.bob)
 	effect := func(row, user int64, op, state string) {
@@ -240,7 +218,6 @@ func TestAppDiagnosticTools(t *testing.T) {
 	w.status(http.StatusBadRequest, w.aliceConv, "list_app_effects", with(map[string]any{"status": "bogus"}))
 	w.status(http.StatusBadRequest, w.aliceConv, "list_app_effects", with(map[string]any{"limit": 1000}))
 
-	// Alice, a plain user of the app, sees only the effects of her own records.
 	w.exec(`DELETE FROM app_roles WHERE app_id = ?`, app)
 	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user'), (?, NULL, 'user')`, app, w.alice, app)
 	own := w.ok(w.aliceConv, "list_app_effects", ref)
@@ -248,7 +225,6 @@ func TestAppDiagnosticTools(t *testing.T) {
 	if len(own["effects"].([]any)) != 2 || strings.Contains(string(raw), `"record":`+jsonInt(bobRow)+`,`) {
 		t.Fatalf("a user's effects = %s", raw)
 	}
-	// Bob, with the same role, sees his own and not alice's.
 	bobs := w.ok(w.bobConv, "list_app_effects", ref)
 	if eff := bobs["effects"].([]any); len(eff) != 1 || id(eff[0].(map[string]any)["record"]) != bobRow {
 		t.Fatalf("bob's effects = %v", bobs)
@@ -260,18 +236,12 @@ func jsonInt(n int64) string {
 	return string(b)
 }
 
-// A long list of releases comes in pages that each fit the bound, whatever their size: the
-// keys that say a page is cut short count toward it, and next is the before of the next page.
 func TestListAppReleasesPages(t *testing.T) {
 	w := newWorld(t)
 	const total = 400
 	var app int64
 	var ref map[string]any
-	// Every release is a little longer than the last variant, so some page ends within the
-	// few bytes the "truncated" and "next" keys take, which a size measured without them
-	// would let through.
 	for pad := range 30 {
-		// A release stays as long as its app does, so each variant is an app of its own.
 		created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Many releases", "definition": expenses(t)})
 		app = id(created["id"])
 		ref = map[string]any{"space_id": w.shared, "app_id": app}
@@ -313,7 +283,6 @@ func TestListAppReleasesPages(t *testing.T) {
 			}
 		}
 	}
-	// A cursor past the oldest is an empty list, and a negative one is refused.
 	if rel := w.ok(w.aliceConv, "list_app_releases", map[string]any{"space_id": w.shared, "app_id": app, "before": 1})["releases"].([]any); len(rel) != 0 {
 		t.Fatalf("before 1 = %v", rel)
 	}

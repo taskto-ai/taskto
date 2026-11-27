@@ -1,6 +1,3 @@
-/* Dictation's controls, in the chat box and beside an app's text fields: while it records, the
-   clock and the stop button are in the danger tone, so it's plain the microphone is on. */
-
 @layer screens {
   .ui-dictation {
     display: inline-flex;

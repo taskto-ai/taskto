@@ -11,14 +11,11 @@ import (
 
 const supported = true
 
-// newGroup makes cmd's process the leader of a process group of its own, so the CLI and
-// everything it starts can be signalled at once.
 func newGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	dieWithParent(cmd.SysProcAttr)
 }
 
-// signalGroup sends sig to every process in group pgid. A group that is gone is no error.
 func signalGroup(pgid int, sig syscall.Signal) error {
 	if pgid <= 1 {
 		return errors.New("refusing to signal an invalid process group")
@@ -30,8 +27,6 @@ func signalGroup(pgid int, sig syscall.Signal) error {
 	return err
 }
 
-// groupExists reports whether any process of group pgid still exists, a zombie (killed, not yet
-// reaped by its parent) included. Whether one of them is alive is groupLive's question.
 func groupExists(pgid int) bool {
 	return !errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH)
 }
@@ -41,12 +36,10 @@ const (
 	sigKill = syscall.SIGKILL
 )
 
-// execve replaces this process with bin.
 func execve(bin string, argv, env []string) error {
-	return syscall.Exec(bin, argv, env) //nolint:gosec // G204: the configured CLI, run by the helper as its user
+	return syscall.Exec(bin, argv, env)
 }
 
-// closeStdin points stdin at /dev/null, so the CLI exec'd next sees it closed.
 func closeStdin() error {
 	f, err := os.Open(os.DevNull)
 	if err != nil {
@@ -56,5 +49,4 @@ func closeStdin() error {
 	return dup2(int(f.Fd()), 0)
 }
 
-// setUmask sets the helper's umask before it execs a browser's program.
 func setUmask(mask int) { syscall.Umask(mask) }

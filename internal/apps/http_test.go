@@ -20,20 +20,16 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Test passwords: obviously fake, and long enough for the account rules.
 const fakePassword = "fake-test-password"
 
 var setupToken = auth.NewSetupToken()
 
-// env serves the account, space and app routes behind the CSRF guard, as the server does.
 type env struct {
-	t  *testing.T
-	db *sql.DB
-	s  *Service
-	h  http.Handler
-	// dataDir is where the spaces' files are.
+	t       *testing.T
+	db      *sql.DB
+	s       *Service
+	h       http.Handler
 	dataDir string
-	// dbHooks run what a test sets at chosen moments of the database's use.
 	dbHooks *db.Hooks
 }
 
@@ -68,7 +64,6 @@ func newEnv(t *testing.T) *env {
 	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir, dbHooks: dbHooks}
 }
 
-// user is a logged-in browser.
 type user struct {
 	e      *env
 	id     int64
@@ -80,7 +75,6 @@ func (u *user) do(method, path string, body any) *httptest.ResponseRecorder {
 	return u.doWith(nil, method, path, body)
 }
 
-// doWith is do with more request headers.
 func (u *user) doWith(headers map[string]string, method, path string, body any) *httptest.ResponseRecorder {
 	u.e.t.Helper()
 	var r *http.Request
@@ -191,15 +185,6 @@ func appPath(s access.Space, app int64, rest string) string {
 	return appsPath(s, fmt.Sprintf("/%d%s", app, rest))
 }
 
-// world is a workspace with people in every relation to its spaces:
-//
-//   - owner: admin, editor of shared;
-//   - alice: editor of shared and of old (an archived space);
-//   - bob: viewer of shared;
-//   - mallory: a member of the workspace, of no shared space;
-//   - stranger: admin of another workspace, other, with a shared space of its own.
-//
-// Each private space of alice and bob has an app with a row, and so do shared and old.
 type world struct {
 	e                                   *env
 	ws, other                           int64
@@ -258,8 +243,6 @@ func (w *world) create(u *user, s access.Space, name string) App {
 	rec := u.do(http.MethodPost, appsPath(s, ""), exampleBody(w.e.t, name))
 	expect(w.e.t, rec, http.StatusCreated)
 	a := w.publish(u, s, decode[App](w.e.t, rec))
-	// The tests that count versions count from the app as it was made, live: publishing it was
-	// only their setup.
 	if _, err := w.e.db.Exec(`UPDATE apps SET version = 1 WHERE id = ?`, a.ID); err != nil {
 		w.e.t.Fatal(err)
 	}
@@ -267,7 +250,6 @@ func (w *world) create(u *user, s access.Space, name string) App {
 	return a
 }
 
-// draft creates an app and leaves it as a draft: it has no release, so it can't be launched.
 func (w *world) draft(u *user, s access.Space, name string) App {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, appsPath(s, ""), exampleBody(w.e.t, name))
@@ -275,7 +257,6 @@ func (w *world) draft(u *user, s access.Space, name string) App {
 	return decode[App](w.e.t, rec)
 }
 
-// publish publishes a's draft as u, who must be allowed to, and returns the app as it is then.
 func (w *world) publish(u *user, s access.Space, a App) App {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, appPath(s, a.ID, "/publish"), map[string]any{"version": a.Version, "acknowledge": []SchemaChange{}})
@@ -283,7 +264,6 @@ func (w *world) publish(u *user, s access.Space, a App) App {
 	return decode[App](w.e.t, rec)
 }
 
-// action is what the screen sends for event name with ctx.
 func action(a App, name string, ctx map[string]any) ClientAction {
 	return ClientAction{Name: name, SurfaceID: SurfaceID(a.ID), SourceComponentID: "add", Context: ctx}
 }
@@ -294,7 +274,6 @@ func (w *world) add(u *user, s access.Space, a App, description, amount string) 
 		action(a, "add_expense", map[string]any{"description": description, "amount": amount})), http.StatusOK)
 }
 
-// items reads the rows a launched app shows.
 func (w *world) items(u *user, s access.Space, a App) []map[string]any {
 	w.e.t.Helper()
 	rec := u.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil)
@@ -315,7 +294,6 @@ func (w *world) items(u *user, s access.Space, a App) []map[string]any {
 	return nil
 }
 
-// in returns s as addressed through workspace ws, which may not be its own.
 func in(ws int64, s access.Space) access.Space {
 	s.WorkspaceID = ws
 	return s
@@ -328,12 +306,10 @@ func TestAppLifecycle(t *testing.T) {
 		t.Fatalf("created = %+v", a)
 	}
 
-	// Launch: the screen with its rows, each with its ID.
 	items := w.items(w.alice, s, a)
 	if len(items) != 1 || items[0]["description"] != "alice-secret" {
 		t.Fatalf("items = %v", items)
 	}
-	// Delete it from the screen, add two more.
 	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": items[0]["id"]})), http.StatusOK)
 	w.add(w.alice, s, a, "Coffee", "4.5")
 	rec := w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "Lunch", "amount": "12.25"}))
@@ -342,14 +318,12 @@ func TestAppLifecycle(t *testing.T) {
 		t.Fatalf("after adding: %s", rec.Body.String())
 	}
 
-	// Rename.
 	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "name": "Spending"})
 	expect(t, rec, http.StatusOK)
 	a = decode[App](t, rec)
 	if a.Name != "Spending" || a.Version != 2 || a.Rows != 2 {
 		t.Fatalf("renamed = %+v", a)
 	}
-	// A stale version changes nothing, and says what is current.
 	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "name": "Stale"})
 	expect(t, rec, http.StatusConflict)
 	if reply := decode[struct {
@@ -359,7 +333,6 @@ func TestAppLifecycle(t *testing.T) {
 		t.Fatalf("409 reply = %+v", reply)
 	}
 
-	// Offline: it can't be launched and its actions don't run, but its rows are kept.
 	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 2, "archived": true})
 	expect(t, rec, http.StatusOK)
 	a = decode[App](t, rec)
@@ -377,7 +350,6 @@ func TestAppLifecycle(t *testing.T) {
 		t.Fatalf("with archived = %+v", list)
 	}
 
-	// Restored, it launches with the same rows.
 	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": a.Version, "archived": false}), http.StatusOK)
 	if items := w.items(w.alice, s, a); len(items) != 2 || items[0]["description"] != "Coffee" || items[1]["description"] != "Lunch" {
 		t.Fatalf("items after restoring = %v", items)
@@ -413,18 +385,14 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 		u      *user
 		s      access.Space
 		a      App
-		own    bool // the space is the user's: listing it and adding to it are theirs
+		own    bool
 		status int
 	}{
-		// Someone else's private space: not found, admins included.
 		{"bob in alice's private space", w.bob, w.alicePrivate, w.aliceApp, false, http.StatusNotFound},
 		{"the admin in alice's private space", w.owner, w.alicePrivate, w.aliceApp, false, http.StatusNotFound},
-		// A shared space they aren't a member of.
 		{"mallory in the team space", w.mallory, w.shared, w.sharedApp, false, http.StatusNotFound},
-		// Someone who left the workspace, and their own workspace's address for it.
 		{"the stranger in the team space", w.stranger, w.shared, w.sharedApp, false, http.StatusNotFound},
 		{"the team space through another workspace", w.stranger, in(w.other, w.shared), w.sharedApp, false, http.StatusNotFound},
-		// Their own space, but someone else's app in the path: an app is found only in its space.
 		{"alice's app through bob's space", w.bob, w.bobPrivate, w.aliceApp, true, http.StatusNotFound},
 		{"the team app through alice's space", w.alice, w.alicePrivate, w.sharedApp, true, http.StatusNotFound},
 	}
@@ -441,7 +409,6 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 		})
 	}
 
-	// Nothing changed for anyone.
 	for _, check := range []struct {
 		u    *user
 		s    access.Space
@@ -457,7 +424,6 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			t.Fatalf("%s changed: %+v", check.a.Name, got)
 		}
 	}
-	// Lists show only the space's own apps.
 	if list := decode[struct{ Apps []App }](t, w.bob.do(http.MethodGet, appsPath(w.bobPrivate, ""), nil)).Apps; len(list) != 1 || list[0].ID != w.bobApp.ID {
 		t.Fatalf("bob's apps = %+v", list)
 	}
@@ -466,22 +432,18 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 func TestViewersLaunchButDontChange(t *testing.T) {
 	w := newWorld(t)
 	a, s := w.sharedApp, w.shared
-	// Bob, a viewer of the team space, sees its app and its rows.
 	if items := w.items(w.bob, s, a); len(items) != 1 || items[0]["description"] != "team-lunch" {
 		t.Fatalf("bob sees %v", items)
 	}
 	expect(t, w.bob.do(http.MethodGet, appPath(s, a.ID, ""), nil), http.StatusOK)
-	// But changes nothing: not its rows, not the app, and adds no app.
 	expect(t, w.bob.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})), http.StatusForbidden)
 	expect(t, w.bob.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": a.Version, "archived": true}), http.StatusForbidden)
 	expect(t, w.bob.do(http.MethodPost, appsPath(s, ""), exampleBody(t, "Bob's")), http.StatusForbidden)
-	// The editors do: the owner adds a row alice then sees.
 	w.add(w.owner, s, a, "owner-row", "5")
 	if items := w.items(w.alice, s, a); len(items) != 2 {
 		t.Fatalf("alice sees %v", items)
 	}
 
-	// An archived space's apps launch, read-only, for everyone.
 	if items := w.items(w.alice, w.old, w.oldApp); len(items) != 1 {
 		t.Fatalf("old rows = %v", items)
 	}
@@ -496,22 +458,17 @@ func TestMoveSharesAnAppWithItsRows(t *testing.T) {
 	move := func(u *user, from access.Space, to int64, version int64) *httptest.ResponseRecorder {
 		return u.do(http.MethodPost, appPath(from, a.ID, "/move"), map[string]any{"version": version, "space_id": to})
 	}
-	// Not to a space alice may only read (old is archived), nor one she can't see.
 	expect(t, move(w.alice, w.alicePrivate, w.old.ID, 1), http.StatusForbidden)
 	expect(t, move(w.alice, w.alicePrivate, w.bobPrivate.ID, 1), http.StatusNotFound)
 	expect(t, move(w.alice, w.alicePrivate, w.otherShared.ID, 1), http.StatusNotFound)
-	// Nor to her own private space of another workspace: an app stays in its workspace.
 	if _, err := w.e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, w.other, w.alice.id); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, move(w.alice, w.alicePrivate, w.e.private(w.alice, w.other).ID, 1), http.StatusNotFound)
-	// Bob, a viewer, can't move the team's app to his private space.
 	expect(t, w.bob.do(http.MethodPost, appPath(w.shared, w.sharedApp.ID, "/move"), map[string]any{"version": 1, "space_id": w.bobPrivate.ID}), http.StatusForbidden)
 
-	// Not to the space it's in: nothing would move, so nothing changes, its version included.
 	expect(t, move(w.alice, w.alicePrivate, w.alicePrivate.ID, 1), http.StatusBadRequest)
 
-	// To the team space: bob now sees it, with its row; it's no longer in alice's space.
 	expect(t, w.bob.do(http.MethodGet, appPath(w.shared, a.ID, ""), nil), http.StatusNotFound)
 	rec := move(w.alice, w.alicePrivate, w.shared.ID, 1)
 	expect(t, rec, http.StatusOK)
@@ -545,14 +502,11 @@ func TestSavedAppsAreCheckedOnTheServer(t *testing.T) {
 			expect(t, rec, http.StatusBadRequest)
 		})
 	}
-	// A definition update is checked the same way.
 	rec := w.alice.do(http.MethodPatch, appPath(s, w.aliceApp.ID, ""), map[string]any{"version": 1,
 		"definition": withComponent(map[string]any{"id": "x", "component": "Image", "url": "https://elsewhere.example/p.png"})["definition"]})
 	expect(t, rec, http.StatusBadRequest)
 
-	// Rows are checked against the schema: the screen can't store what the collection refuses.
 	a := w.aliceApp
-	// Each with the code and params the web app says it with.
 	for name, tt := range map[string]struct {
 		ctx    map[string]any
 		code   string
@@ -576,20 +530,16 @@ func TestSavedAppsAreCheckedOnTheServer(t *testing.T) {
 			}
 		})
 	}
-	// Another app's row can't be deleted through this one.
 	bobRow := w.items(w.bob, w.bobPrivate, w.bobApp)[0]["id"]
 	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": bobRow})), http.StatusUnprocessableEntity)
 	if items := w.items(w.bob, w.bobPrivate, w.bobApp); len(items) != 1 {
 		t.Fatalf("bob's rows = %v", items)
 	}
 
-	// A new collection the rows don't fit is a draft like any other: saving it is checked against
-	// the catalog, and the rows are checked when it is published (release_test.go).
 	def := example(t)
 	def.Collection.Fields = append(def.Collection.Fields, Field{Name: "category", Type: TypeString, Required: true})
 	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": def})
 	expect(t, rec, http.StatusOK)
-	// The catalog is checked at once.
 	bad := example(t)
 	bad.Components = append(bad.Components, json.RawMessage(`{"id":"pic","component":"Image","url":"https://example.com/x.png"}`))
 	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 2, "definition": bad}), http.StatusBadRequest)
@@ -619,7 +569,6 @@ func TestRoutesNeedASessionAndSameOrigin(t *testing.T) {
 		if r.method == http.MethodGet {
 			continue
 		}
-		// Alice's own session, from another site, or as a form: refused before any handler.
 		raw, _ := json.Marshal(r.body)
 		for _, attack := range []struct {
 			site, contentType string
@@ -640,7 +589,6 @@ func TestRoutesNeedASessionAndSameOrigin(t *testing.T) {
 			}
 		}
 	}
-	// Nothing changed.
 	got := decode[App](t, w.alice.do(http.MethodGet, appPath(s, a.ID, ""), nil))
 	if got.Name != a.Name || got.Version != 1 || got.Rows != 1 || got.SpaceID != s.ID {
 		t.Fatalf("app = %+v", got)
@@ -679,8 +627,6 @@ func TestEveryWriteChecksAccessAgainUnderTheWriteLock(t *testing.T) {
 	} {
 		t.Run(op, func(t *testing.T) {
 			w := newWorld(t)
-			// Alice's view of the team space as a request checked it: an editor. Then, before
-			// the write runs, she becomes a viewer.
 			team, err := w.e.s.access.Check(ctx, w.alice.id, w.shared.ID)
 			if err != nil || !team.Access.Allows(access.Write) {
 				t.Fatalf("team space for alice: %+v, %v", team, err)
@@ -698,7 +644,6 @@ func TestEveryWriteChecksAccessAgainUnderTheWriteLock(t *testing.T) {
 func TestMoveChecksAccessAgainUnderTheWriteLock(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	// Alice's view of the team space, as a request checked it: an editor.
 	to, err := w.e.s.access.Check(ctx, w.alice.id, w.shared.ID)
 	if err != nil || !to.Access.Allows(access.Write) {
 		t.Fatalf("team space for alice: %+v, %v", to, err)
@@ -707,7 +652,6 @@ func TestMoveChecksAccessAgainUnderTheWriteLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Then, before the move runs, she becomes a viewer of it.
 	if _, err := w.e.db.Exec(`UPDATE space_members SET role = 'viewer' WHERE space_id = ? AND user_id = ?`, w.shared.ID, w.alice.id); err != nil {
 		t.Fatal(err)
 	}
@@ -720,8 +664,6 @@ func TestMoveChecksAccessAgainUnderTheWriteLock(t *testing.T) {
 func TestDataSizeIsCountedInBytes(t *testing.T) {
 	w := newWorld(t)
 	a := w.aliceApp
-	// One row of 2.5 million characters that are 2 bytes each: 5 MB, over MaxDataSize, though
-	// under it counted in characters.
 	big, err := json.Marshal(map[string]any{"description": strings.Repeat("é", 5<<19), "amount": 1})
 	if err != nil {
 		t.Fatal(err)

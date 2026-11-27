@@ -14,7 +14,6 @@ import (
 	"taskto.ai/taskto/internal/lockfile"
 )
 
-// fakeClock is a clock tests move by hand; sleeping moves it.
 type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time { return c.t }
@@ -27,14 +26,11 @@ func (c *fakeClock) sleep(ctx context.Context, d time.Duration) error {
 	return nil
 }
 
-// fakeRunner fails its checks or its backups while told to, and records what it ran,
-// when. A backup writes into the data directory, as `taskto backup` does, and leaves it
-// there when it fails, as a killed one does.
 type fakeRunner struct {
 	dir       string
 	clock     *fakeClock
-	unreached bool // the repository doesn't answer
-	failing   int  // backups still to fail
+	unreached bool
+	failing   int
 	checks    []time.Time
 	backups   []time.Time
 	onBackup  func()
@@ -60,7 +56,6 @@ func (r *fakeRunner) Backup(ctx context.Context) (string, error) {
 	if err := os.WriteFile(filepath.Join(staging, "snapshot.db"), []byte("x"), 0o600); err != nil {
 		return "", err
 	}
-	// As Create does; the lock goes with the process.
 	lock, err := lockfile.Lock(filepath.Join(staging, lockName))
 	if err != nil {
 		return "", err
@@ -69,7 +64,6 @@ func (r *fakeRunner) Backup(ctx context.Context) (string, error) {
 	r.clock.t = r.clock.t.Add(5 * time.Minute)
 	if r.failing > 0 {
 		r.failing--
-		// Killed: nothing removes the staging directory, and nothing holds its lock.
 		return "", errors.New("restic backup: Fatal: unable to save snapshot (exit status 1)")
 	}
 	if err := os.RemoveAll(staging); err != nil {
@@ -205,9 +199,6 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-// A failed night is retried every RetryEvery, Retries times, then left for the next
-// night, which starts afresh. The status counts the failures, so a restart neither
-// forgets them nor tries more often; a success clears them and says when the next is due.
 func TestRetriesAndTheMarkerOfTheLastSuccess(t *testing.T) {
 	s, clock, runner := newTestScheduler(t, at("2026-03-10T03:15:00Z"))
 	runner.failing = 100
@@ -223,7 +214,6 @@ func TestRetriesAndTheMarkerOfTheLastSuccess(t *testing.T) {
 		if st.Failures != i || !st.Night.Equal(night) || st.LastError == "" {
 			t.Fatalf("attempt %d: status %+v", i, st)
 		}
-		// A restart: a new scheduler reads the same marker.
 		s = &Scheduler{DataDir: s.DataDir, Schedule: s.Schedule, Runner: runner, Log: quiet, now: clock.now, sleep: clock.sleep}
 		next := s.Schedule.next(s.read(), clock.now())
 		if i < 7 {
@@ -239,7 +229,6 @@ func TestRetriesAndTheMarkerOfTheLastSuccess(t *testing.T) {
 		t.Fatalf("%d backups for one night, want 1 and 6 retries", len(runner.backups))
 	}
 
-	// The next night succeeds: the failures are cleared, and the one after is due.
 	runner.failing = 0
 	st, err := s.Attempt(context.Background())
 	if err != nil {
@@ -257,14 +246,11 @@ func TestRetriesAndTheMarkerOfTheLastSuccess(t *testing.T) {
 	if got := readStatus(t, s.DataDir); got.LastSnapshot != "0123abcd" || got.Health(clock.now()) != HealthOK {
 		t.Fatalf("written status: %+v", got)
 	}
-	// What the failed backups left was removed after each of them.
 	if left := staging(t, s.DataDir); len(left) != 0 {
 		t.Fatalf("left in the data directory: %v", left)
 	}
 }
 
-// When the repository doesn't answer, the backup isn't started at all, so nothing is
-// written in the data directory, and the error says why.
 func TestAnUnreachableRepositoryStopsEarly(t *testing.T) {
 	s, clock, runner := newTestScheduler(t, at("2026-03-10T03:15:00Z"))
 	runner.unreached = true
@@ -284,14 +270,12 @@ func TestAnUnreachableRepositoryStopsEarly(t *testing.T) {
 	if got := readStatus(t, s.DataDir); got.Health(clock.now()) != HealthFailing || got.Failures != 1 {
 		t.Fatalf("status = %+v", got)
 	}
-	// Once the night's time is up, the night is late.
 	clock.t = clock.t.Add(8 * time.Hour)
 	if got := readStatus(t, s.DataDir); got.Health(clock.now()) != HealthLate {
 		t.Fatalf("health 8 hours on = %s, want late", got.Health(clock.now()))
 	}
 }
 
-// What a killed backup left is removed, unless a running backup holds it.
 func TestCleanStale(t *testing.T) {
 	dir := t.TempDir()
 	mk := func() string {
@@ -308,7 +292,7 @@ func TestCleanStale(t *testing.T) {
 	if f, err := lockfile.Lock(filepath.Join(killed, lockName)); err != nil {
 		t.Fatal(err)
 	} else {
-		_ = f.Close() // its process is gone
+		_ = f.Close()
 	}
 	running := mk()
 	held, err := lockfile.Lock(filepath.Join(running, lockName))
@@ -316,8 +300,8 @@ func TestCleanStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	fresh := mk() // just made, not locked yet
-	old := mk()   // from a version without the lock file, long ago
+	fresh := mk()
+	old := mk()
 	long := time.Now().Add(-2 * staleAge)
 	if err := os.Chtimes(old, long, long); err != nil {
 		t.Fatal(err)
@@ -335,8 +319,6 @@ func TestCleanStale(t *testing.T) {
 	}
 }
 
-// A backup that started and never recorded its end (the schedule was killed) counts as a
-// failure, so a backup that keeps killing the schedule doesn't run at every restart.
 func TestAnUnfinishedBackupCountsAsFailed(t *testing.T) {
 	s, clock, runner := newTestScheduler(t, at("2026-03-10T03:15:00Z"))
 	runner.onBackup = func() { panic("killed") }
@@ -353,7 +335,6 @@ func TestAnUnfinishedBackupCountsAsFailed(t *testing.T) {
 	}
 }
 
-// Run sleeps until the night, backs up, and on failure retries on time.
 func TestRun(t *testing.T) {
 	s, clock, runner := newTestScheduler(t, at("2026-03-10T03:15:00Z"))
 	if err := writeStatus(s.DataDir, Status{LastSuccess: at("2026-03-10T03:20:00Z")}); err != nil {
@@ -365,7 +346,7 @@ func TestRun(t *testing.T) {
 	defer cancel()
 	runner.onBackup = func() {
 		if len(runner.backups) == 3 {
-			cancel() // the third is the last the test waits for
+			cancel()
 		}
 	}
 	if err := s.Run(ctx); err != nil {
@@ -381,7 +362,6 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// Two backups of one data directory never run at once.
 func TestOneAttemptAtATime(t *testing.T) {
 	s, _, runner := newTestScheduler(t, at("2026-03-10T03:15:00Z"))
 	runner.onBackup = func() {
@@ -419,7 +399,6 @@ func TestLastMessage(t *testing.T) {
 	}
 }
 
-// The server's side only adds: the schedule never asks restic to remove anything.
 func TestBackupArgsOnlyAdd(t *testing.T) {
 	args := BackupArgs("/usr/local/bin/taskto", "/data")
 	if args[0] != "backup" || !slices.Contains(args, "--stdin-from-command") || !slices.Contains(args, "-uncompressed") {
@@ -432,7 +411,6 @@ func TestBackupArgsOnlyAdd(t *testing.T) {
 	}
 }
 
-// The schedule's status is about this server, not data: a backup leaves it out.
 func TestTheStatusIsLeftOut(t *testing.T) {
 	f := newFixture(t)
 	if err := writeStatus(f.dir, Status{LastSuccess: time.Now()}); err != nil {

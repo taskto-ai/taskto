@@ -19,16 +19,13 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Test passwords: obviously fake, and long enough for checkPassword.
 const (
 	ownerPassword = "fake-owner-password"
 	otherPassword = "fake-other-password"
 )
 
-// testSetupToken is the setup token newEnv gives a server that has none set.
 var testSetupToken = NewSetupToken()
 
-// cheap keeps argon2id fast in tests, the race detector included.
 var cheap = Params{Memory: 64, Time: 1, Threads: 1}
 
 type env struct {
@@ -83,17 +80,15 @@ func (e *env) advance(d time.Duration) {
 	e.mu.Unlock()
 }
 
-// client is a browser: it keeps the session cookie and sends same-origin requests.
 type client struct {
 	e      *env
 	ip     string
-	xff    string // X-Forwarded-For, if not empty
+	xff    string
 	cookie *http.Cookie
 }
 
 func (e *env) client() *client { return &client{e: e, ip: "192.0.2.1:1234"} }
 
-// req builds a same-origin request; a non-nil body is sent as JSON.
 func (c *client) req(method, path string, body any) *http.Request {
 	c.e.t.Helper()
 	var r *http.Request
@@ -154,7 +149,6 @@ func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 	return v
 }
 
-// setup runs first-run setup and returns the owner's client and workspace ID.
 func (e *env) setup() (*client, int64) {
 	e.t.Helper()
 	owner := e.client()
@@ -166,7 +160,6 @@ func (e *env) setup() (*client, int64) {
 	return owner, decode[me](e.t, rec).Workspaces[0].WorkspaceID
 }
 
-// invite has admin invite email to workspace and returns the token.
 func (e *env) invite(admin *client, workspace int64, email string, role Role) string {
 	e.t.Helper()
 	rec := admin.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", workspace),
@@ -175,7 +168,6 @@ func (e *env) invite(admin *client, workspace int64, email string, role Role) st
 	return decode[struct{ Token string }](e.t, rec).Token
 }
 
-// join accepts an invite as a new person and returns their logged-in client.
 func (e *env) join(token, name string) (*client, me) {
 	e.t.Helper()
 	c := e.client()
@@ -184,8 +176,6 @@ func (e *env) join(token, name string) (*client, me) {
 	return c, decode[me](e.t, rec)
 }
 
-// addWorkspace makes a second workspace with userID as its admin, as a later card's
-// "create workspace" would.
 func (e *env) addWorkspace(userID int64, name string) int64 {
 	e.t.Helper()
 	res, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES (?)`, name)
@@ -225,8 +215,8 @@ func TestSetup(t *testing.T) {
 	got := decode[me](t, owner.do(http.MethodGet, "/api/me", nil))
 	want := me{User: meUser{User: User{ID: got.User.ID, Email: "owner@example.com", Name: "Owner"}},
 		Workspaces:         []Membership{{WorkspaceID: ws, WorkspaceName: "Home", Role: RoleAdmin}},
-		CanCreateWorkspace: true, // the owner administers a workspace, and the default lets admins make more
-		IsOperator:         true, // and it is the one setup made
+		CanCreateWorkspace: true,
+		IsOperator:         true,
 		Session:            got.Session}
 	if got.Session == "" {
 		t.Fatal("GET /api/me names no session")
@@ -280,7 +270,6 @@ func TestSetupValidation(t *testing.T) {
 	}
 }
 
-// TestConcurrentSetup races several setups: exactly one may create the owner.
 func TestConcurrentSetup(t *testing.T) {
 	e := newEnv(t, Options{})
 	const n = 12
@@ -317,8 +306,6 @@ func TestConcurrentSetup(t *testing.T) {
 	}
 }
 
-// TestErrorsHaveCodes checks that errors carry their stable code and params, which the web
-// app translates (internal/apierr).
 func TestErrorsHaveCodes(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -363,7 +350,6 @@ func TestLoginAndLogout(t *testing.T) {
 		t.Fatal("a failed login set a cookie")
 	}
 
-	// The address is matched without regard to case or surrounding space.
 	rec := c.do(http.MethodPost, "/api/login", map[string]string{"email": " OWNER@example.com ", "password": ownerPassword})
 	expect(t, rec, http.StatusOK)
 	if got := decode[me](t, rec); got.User.Email != "owner@example.com" || len(got.Workspaces) != 1 {
@@ -371,7 +357,6 @@ func TestLoginAndLogout(t *testing.T) {
 	}
 	expect(t, c.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// Logging in again replaces the browser's previous session.
 	before := c.cookie
 	expect(t, c.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
 	stale := &client{e: e, ip: c.ip, cookie: before}
@@ -379,14 +364,11 @@ func TestLoginAndLogout(t *testing.T) {
 
 	current := c.cookie
 	expect(t, c.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
-	// The revoked session doesn't work, though the browser keeps the cookie (logout never expires it).
 	revoked := &client{e: e, ip: c.ip, cookie: current}
 	expect(t, revoked.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 
-	// Other sessions of the same user are untouched.
 	other := &client{e: e, ip: c.ip, cookie: setupCookie}
 	expect(t, other.do(http.MethodGet, "/api/me", nil), http.StatusOK)
-	// Logging out without a session is fine.
 	expect(t, e.client().do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
 }
 
@@ -405,13 +387,10 @@ func TestSessionsAreStoredHashedAndExpire(t *testing.T) {
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	e.advance(time.Minute)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	// The answer leaves the cookie alone: an expired session's is inert, and expiring it would
-	// wipe a newer one set by a sign-in in the same browser.
 	if owner.cookie == nil {
 		t.Fatal("an expired session's 401 cleared the cookie")
 	}
 
-	// The next login drops the user's expired sessions.
 	c := e.client()
 	expect(t, c.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
 	if n := e.count(`SELECT count(*) FROM sessions`); n != 1 {
@@ -423,7 +402,7 @@ func TestBadSessionCookie(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
 	c := e.client()
-	c.cookie = &http.Cookie{Name: "__Host-taskto_session", Value: "made-up-token"} // #nosec G124 -- a request cookie in a test
+	c.cookie = &http.Cookie{Name: "__Host-taskto_session", Value: "made-up-token"}
 	expect(t, c.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 }
 
@@ -442,11 +421,9 @@ func TestLoginRateLimitPerAccount(t *testing.T) {
 	login := func(c *client, password string) *httptest.ResponseRecorder {
 		return c.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": password})
 	}
-	// Successful logins don't count.
 	for range accountAttempts + 1 {
 		expect(t, login(e.client(), ownerPassword), http.StatusOK)
 	}
-	// Failures from many addresses add up for the account.
 	for i := range accountAttempts {
 		c := e.client()
 		c.ip = fmt.Sprintf("198.51.100.%d:1", i)
@@ -467,22 +444,16 @@ func TestLoginRateLimitPerIP(t *testing.T) {
 	attacker := e.client()
 	attacker.ip = "203.0.113.9:4444"
 	for i := range ipAttempts {
-		// Different (unknown) accounts: only the address limit applies.
 		rec := attacker.do(http.MethodPost, "/api/login", map[string]string{"email": fmt.Sprintf("guess%d@example.com", i), "password": otherPassword})
 		expect(t, rec, http.StatusUnauthorized)
 	}
 	expect(t, attacker.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusTooManyRequests)
-	// Someone else isn't affected.
 	expect(t, e.client().do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
-	// Unknown addresses are tracked like real ones (so answers don't differ), but the
-	// address limit comes first, so one client adds at most ipAttempts keys per window.
 	if n := e.svc.perAccount.Len(); n > ipAttempts+1 {
 		t.Fatalf("per-account limiter tracks %d keys, want at most %d", n, ipAttempts+1)
 	}
 }
 
-// Behind a trusted proxy each client has its own address limit, and rewriting
-// X-Forwarded-For doesn't get a client a fresh one.
 func TestLoginRateLimitBehindProxy(t *testing.T) {
 	e := newEnv(t, Options{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}})
 	e.setup()
@@ -495,16 +466,12 @@ func TestLoginRateLimitBehindProxy(t *testing.T) {
 		return c.do(http.MethodPost, "/api/login", map[string]string{"email": fmt.Sprintf("guess%d@example.com", i), "password": otherPassword})
 	}
 	for i := range ipAttempts {
-		// The attacker makes up a new left-most address every time; the proxy appends the real one.
 		expect(t, guess(viaProxy(fmt.Sprintf("192.0.2.%d, 203.0.113.9", i)), i), http.StatusUnauthorized)
 	}
 	expect(t, guess(viaProxy("198.51.100.1, 203.0.113.9"), 0), http.StatusTooManyRequests)
-	// Another client behind the same proxy isn't affected.
 	expect(t, viaProxy("198.51.100.20").do(http.MethodPost, "/api/login",
 		map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
 
-	// Reaching the server directly, the attacker can't pose as someone else either: an
-	// untrusted peer's header is ignored.
 	direct := e.client()
 	direct.ip = "203.0.113.50:1"
 	for i := range ipAttempts {
@@ -515,8 +482,6 @@ func TestLoginRateLimitBehindProxy(t *testing.T) {
 	expect(t, guess(direct, 0), http.StatusTooManyRequests)
 }
 
-// An attacker's failures neither reveal which emails have accounts nor lock the real
-// owner out from another address.
 func TestLoginLimitsDontRevealOrLockAccounts(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -526,7 +491,6 @@ func TestLoginLimitsDontRevealOrLockAccounts(t *testing.T) {
 		for range accountAndIPAttempts {
 			expect(t, attacker.do(http.MethodPost, "/api/login", map[string]string{"email": email, "password": "fake-wrong-password"}), http.StatusUnauthorized)
 		}
-		// The same answer whether the account exists or not.
 		expect(t, attacker.do(http.MethodPost, "/api/login", map[string]string{"email": email, "password": "fake-wrong-password"}), http.StatusTooManyRequests)
 	}
 	expect(t, e.client().do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
@@ -564,28 +528,23 @@ func TestCSRF(t *testing.T) {
 		t.Fatalf("invites = %d after refused requests, want 0", n)
 	}
 
-	// A cross-site logout or login is refused too, so a page elsewhere can't sign the
-	// user out or into another account; that holds without a body or content type.
 	r := owner.req(http.MethodPost, "/api/logout", nil)
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	r.Header.Del("Content-Type")
 	expect(t, owner.send(r), http.StatusForbidden)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// What passes: same-origin JSON, a matching Origin, and a client sending neither
-	// header (curl, scripts), which carries no ambient browser cookie.
 	r = owner.req(http.MethodPost, invites, body)
 	r.Header.Set("Content-Type", "application/json; charset=utf-8")
 	expect(t, owner.send(r), http.StatusCreated)
 	r = owner.req(http.MethodPost, invites, map[string]string{"email": "two@example.com"})
 	r.Header.Del("Sec-Fetch-Site")
-	r.Header.Set("Origin", "http://example.com") // httptest's Host
+	r.Header.Set("Origin", "http://example.com")
 	expect(t, owner.send(r), http.StatusCreated)
 	r = owner.req(http.MethodPost, invites, map[string]string{"email": "three@example.com"})
 	r.Header.Del("Sec-Fetch-Site")
 	expect(t, owner.send(r), http.StatusCreated)
 
-	// Safe methods aren't checked: they never change state.
 	r = owner.req(http.MethodGet, "/api/me", nil)
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	expect(t, owner.send(r), http.StatusOK)
@@ -602,14 +561,12 @@ func TestInviteNewPerson(t *testing.T) {
 		t.Fatal("the invite's hash isn't stored")
 	}
 
-	// Listed while pending, without the token.
 	rec := owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/invites", ws), nil)
 	expect(t, rec, http.StatusOK)
 	if strings.Contains(rec.Body.String(), token) || !strings.Contains(rec.Body.String(), "new@example.com") {
 		t.Fatalf("invites = %s", rec.Body.String())
 	}
 
-	// Invalid input doesn't use the invite.
 	anon := e.client()
 	expect(t, anon.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token, "name": "New", "password": "short"}), http.StatusBadRequest)
 	expect(t, anon.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token, "name": "", "password": otherPassword}), http.StatusBadRequest)
@@ -621,10 +578,8 @@ func TestInviteNewPerson(t *testing.T) {
 		t.Fatalf("accept reply = %+v", got)
 	}
 	expect(t, newcomer.do(http.MethodGet, "/api/me", nil), http.StatusOK)
-	// And they can log in with the password they chose.
 	expect(t, e.client().do(http.MethodPost, "/api/login", map[string]string{"email": "new@example.com", "password": otherPassword}), http.StatusOK)
 
-	// Single use.
 	expect(t, e.client().do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token, "name": "Again", "password": otherPassword}), http.StatusNotFound)
 	if got := decode[map[string][]Invite](t, owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/invites", ws), nil)); len(got["invites"]) != 0 {
 		t.Fatalf("pending invites after acceptance = %v", got)
@@ -634,10 +589,8 @@ func TestInviteNewPerson(t *testing.T) {
 	if len(members) != 2 || members[0].Name != "New Person" || members[0].Role != RoleMember || members[1].Role != RoleAdmin {
 		t.Fatalf("members = %+v", members)
 	}
-	// Members see the member list too.
 	expect(t, newcomer.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/members", ws), nil), http.StatusOK)
 
-	// Inviting someone who is already a member is refused.
 	expect(t, owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws), map[string]string{"email": "new@example.com"}), http.StatusConflict)
 }
 
@@ -646,14 +599,11 @@ func TestInviteExistingUser(t *testing.T) {
 	owner, ws := e.setup()
 	member, joined := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 
-	// The member runs a second workspace and invites the owner to it.
 	ws2 := e.addWorkspace(joined.User.ID, "Side project")
 	token := e.invite(member, ws2, "owner@example.com", RoleAdmin)
 
-	// Without logging in, the owner is told to log in rather than creating an account.
 	anon := e.client()
 	expect(t, anon.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token, "name": "Owner", "password": otherPassword}), http.StatusConflict)
-	// Someone else, logged in, can't use it.
 	expect(t, member.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token}), http.StatusForbidden)
 
 	rec := owner.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token})
@@ -665,10 +615,8 @@ func TestInviteExistingUser(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM users`); n != 2 {
 		t.Fatalf("users = %d, want no new account", n)
 	}
-	// Switching workspaces is using the other ID.
 	expect(t, owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/members", ws2), nil), http.StatusOK)
 
-	// An invite for someone who has since joined another way doesn't add them twice.
 	again := e.invite(member, e.addWorkspace(joined.User.ID, "Third"), "owner@example.com", RoleMember)
 	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) SELECT workspace_id, ?, 'member' FROM invites WHERE token_hash = ?`,
 		got.User.ID, hashToken(again)); err != nil {
@@ -719,11 +667,9 @@ func TestMembersAndRoles(t *testing.T) {
 	memberID := joined.User.ID
 	memberPath := func(id int64) string { return fmt.Sprintf("/api/workspaces/%d/members/%d", ws, id) }
 
-	// The only admin can't step down or leave.
 	expect(t, owner.do(http.MethodPatch, memberPath(ownerID), map[string]string{"role": "member"}), http.StatusConflict)
 	expect(t, owner.do(http.MethodDelete, memberPath(ownerID), nil), http.StatusConflict)
 
-	// Members can't do admin actions.
 	expect(t, member.do(http.MethodPatch, memberPath(memberID), map[string]string{"role": "admin"}), http.StatusForbidden)
 	expect(t, member.do(http.MethodPatch, memberPath(ownerID), map[string]string{"role": "member"}), http.StatusForbidden)
 	expect(t, member.do(http.MethodDelete, memberPath(ownerID), nil), http.StatusForbidden)
@@ -731,12 +677,10 @@ func TestMembersAndRoles(t *testing.T) {
 
 	expect(t, owner.do(http.MethodPatch, memberPath(memberID), map[string]string{"role": "boss"}), http.StatusBadRequest)
 	expect(t, owner.do(http.MethodPatch, memberPath(memberID), map[string]string{"role": "admin"}), http.StatusNoContent)
-	// With two admins, either can step down; then the other is the last.
 	expect(t, member.do(http.MethodPatch, memberPath(ownerID), map[string]string{"role": "member"}), http.StatusNoContent)
 	expect(t, member.do(http.MethodPatch, memberPath(memberID), map[string]string{"role": "member"}), http.StatusConflict)
 	expect(t, owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/invites", ws), nil), http.StatusForbidden)
 
-	// Removing a member takes their access away at once.
 	expect(t, member.do(http.MethodDelete, memberPath(ownerID), nil), http.StatusNoContent)
 	expect(t, owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/members", ws), nil), http.StatusNotFound)
 	if got := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)); len(got.Workspaces) != 0 {
@@ -745,15 +689,12 @@ func TestMembersAndRoles(t *testing.T) {
 	expect(t, member.do(http.MethodDelete, memberPath(ownerID), nil), http.StatusNotFound)
 }
 
-// TestRouteAccess calls every route that needs a login without one, as a user of another
-// workspace, and as a plain member where admins only are allowed.
 func TestRouteAccess(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
 	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 	ownerID := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)).User.ID
 
-	// An outsider: admin of their own workspace, not a member of ws.
 	outsider, outsiderMe := e.join(e.invite(owner, ws, "outsider@example.com", RoleMember), "Outsider")
 	other := e.addWorkspace(outsiderMe.User.ID, "Elsewhere")
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, outsiderMe.User.ID), nil), http.StatusNoContent)
@@ -786,11 +727,9 @@ func TestRouteAccess(t *testing.T) {
 	expect(t, e.client().do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 	expect(t, e.client().do(http.MethodPatch, "/api/me", map[string]string{"locale": "pt-BR"}), http.StatusUnauthorized)
 
-	// A nonexistent or malformed workspace looks the same as someone else's.
 	for _, p := range []string{"/api/workspaces/999/members", "/api/workspaces/abc/members"} {
 		expect(t, owner.do(http.MethodGet, p, nil), http.StatusNotFound)
 	}
-	// An admin of ws can't reach into another workspace through a member or invite ID.
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", other, outsiderMe.User.ID), nil), http.StatusNotFound)
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("%s/members/%d", w, outsiderMe.User.ID), nil), http.StatusNotFound)
 	otherInvite := decode[Invite](t, outsider.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", other), map[string]string{"email": "r@example.com"})).ID
@@ -798,7 +737,6 @@ func TestRouteAccess(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM invites WHERE id = ?`, otherInvite); n != 1 {
 		t.Fatal("an admin of one workspace deleted another workspace's invite")
 	}
-	// Nothing the refused calls asked for happened.
 	if n := e.count(`SELECT count(*) FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = 'admin'`, ws, ownerID); n != 1 {
 		t.Fatal("a refused call changed the owner's membership")
 	}
@@ -829,7 +767,6 @@ func TestMiddlewarePutsTheCallerOnTheContext(t *testing.T) {
 	}
 }
 
-// A request without a body (logout, DELETE) needs no content type from the same origin.
 func TestCSRFAllowsSameOriginBodilessRequests(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -838,7 +775,6 @@ func TestCSRFAllowsSameOriginBodilessRequests(t *testing.T) {
 	expect(t, owner.send(r), http.StatusNoContent)
 }
 
-// A server-side failure during login isn't a failed attempt, so it never adds up to 429.
 func TestLoginServerErrorsDontCountAgainstTheLimit(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -851,9 +787,6 @@ func TestLoginServerErrorsDontCountAgainstTheLimit(t *testing.T) {
 	}
 }
 
-// The routes named as taking a raw body accept application/octet-stream, and only they:
-// any other route, or another method on theirs, still needs JSON, and the cross-origin
-// check applies to them all.
 func TestCSRFRawBodyRoutes(t *testing.T) {
 	h := CSRF(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
 		"PUT /api/files/{path...}")
@@ -878,15 +811,11 @@ func TestCSRFRawBodyRoutes(t *testing.T) {
 	}
 }
 
-// A browser's tabs share its session cookie. One tab's logout (or any request of a session that has
-// ended) may be answered after another tab signed in as someone else and the cookie became theirs:
-// that answer must not expire the cookie, which would sign the newer login out.
 func TestAnOlderSessionsAnswerNeverExpiresANewerLoginsCookie(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
 	older := owner.cookie
 
-	// What the older session's requests answer: its logout, and a request after it ended.
 	sessionCookies := func(rec *httptest.ResponseRecorder) []*http.Cookie {
 		var out []*http.Cookie
 		for _, ck := range rec.Result().Cookies() {
@@ -909,8 +838,6 @@ func TestAnOlderSessionsAnswerNeverExpiresANewerLoginsCookie(t *testing.T) {
 		t.Fatalf("a request of an ended session answered with session cookies %+v", got)
 	}
 
-	// Meanwhile the browser signed in again: the newer cookie still works, and the older session
-	// stays revoked.
 	newer := e.client()
 	newer.ip = owner.ip
 	expect(t, newer.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)

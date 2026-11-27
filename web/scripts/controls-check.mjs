@@ -1,34 +1,15 @@
 #!/usr/bin/env node
-// Checks that the screens draw their controls with the design system's components: a `<button>`,
-// `<select>`, `<input>` or `<textarea>` written by hand outside src/ui/ fails, unless ALLOWED names
-// its file with the number of each such element it may have and the reason. The components
-// (src/ui/) are where those elements are written; tests and the gallery's specimens are not
-// screens. CI runs it with css-check (`pnpm --filter @taskto/web run css`); so can anyone.
-//
-// What it sees: every JSX element of those names in a .tsx or .ts file under src/, found by
-// parsing the module with the parser the web build already has (rolldown's, through Vite), so a
-// name inside a string, a template, a regular expression or a comment is never taken for one, and
-// an element is found wherever JSX may be (after text, after `return` on a new line, `< button`).
-// An element made another way (React.createElement) is not seen; the app makes none. A module that
-// doesn't parse fails the check.
-//
-// --root <dir> checks another web directory, for the script's tests.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// The build's own parser: rolldown, which Vite bundles with, reached through Vite so it is the
-// version the build uses and no dependency of its own.
 const fromVite = createRequire(createRequire(import.meta.url).resolve('vite/package.json'))
 const { parseAst } = await import(fromVite.resolve('rolldown/parseAst'))
 
 export const ELEMENTS = ['button', 'select', 'input', 'textarea']
 
-// The hand-written controls a screen may keep: per file, how many of each element, and why no
-// component fits. A count, not a yes, so a new one in the same file still fails; an entry the file
-// no longer needs fails too, so the list stays true.
 export const ALLOWED = new Map([
   [
     'src/apps/PhotoInput.tsx',
@@ -56,8 +37,6 @@ export const ALLOWED = new Map([
   ],
 ])
 
-// The hand-written controls in a module's source: each element's name and line. `lang` is the
-// module's kind, 'tsx' or 'ts'.
 export function controls(source, lang = 'tsx') {
   const found = []
   const visit = (node) => {
@@ -119,7 +98,6 @@ export function check(web, allowed = ALLOWED) {
       }
     }
   }
-  // In the app itself (not a test's directory), an entry for a file that is gone is stale.
   if (existsSync(join(web, 'src/main.tsx'))) {
     for (const file of allowed.keys()) {
       if (!seen.has(file)) errors.push(`${file} is in ALLOWED but doesn't exist: remove it`)

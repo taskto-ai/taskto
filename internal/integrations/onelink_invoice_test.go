@@ -15,12 +15,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// The invoice's link, made under one release, and the releases after it: whatever field, slot or
-// integration a later release asks for the link with, the invoice has one payable link, its money
-// stays while the link may be paid, and its payment is written.
-
-// definitionWith is invoiceApp with the slot named slot and, if alternateURL, the link written to
-// another field.
 func definitionWith(t *testing.T, slot string, alternateURL bool) string {
 	t.Helper()
 	out := invoiceApp
@@ -35,8 +29,6 @@ func definitionWith(t *testing.T, slot string, alternateURL bool) string {
 	return out
 }
 
-// publishApproved saves definition as the draft, has the owner approve its slot with integration, and
-// publishes it.
 func publishApproved(p *pay, definition, slot string, integration int64, acknowledge []any) *httptest.ResponseRecorder {
 	p.t.Helper()
 	path := p.appsPath(fmt.Sprintf("/%d", p.app.ID))
@@ -57,8 +49,6 @@ func publishApproved(p *pay, definition, slot string, integration int64, acknowl
 	return p.owner.do(http.MethodPost, path+"/publish", map[string]any{"version": app.Version, "acknowledge": acknowledge})
 }
 
-// A release that writes the link to another field, or a slot bound to another integration since, asks
-// for the invoice's link again: its open link is the one, and nothing else is made.
 func TestALinkWrittenToAnotherFieldIsTheInvoicesSameLink(t *testing.T) {
 	for _, across := range []bool{false, true} {
 		t.Run(fmt.Sprintf("account-change-%v", across), func(t *testing.T) {
@@ -82,8 +72,6 @@ func TestALinkWrittenToAnotherFieldIsTheInvoicesSameLink(t *testing.T) {
 	}
 }
 
-// A payment of a link made before an approved release renamed its slot is written through the slot
-// the live release binds to the same integration, though no entry gave the link again.
 func TestAPaymentAfterASlotRenameIsWritten(t *testing.T) {
 	p := newPay(t, publicURL)
 	id, original := p.sentInvoice(10, "EUR", "send-original")
@@ -94,8 +82,6 @@ func TestAPaymentAfterASlotRenameIsWritten(t *testing.T) {
 	}
 }
 
-// A release can't read the money of an invoice whose link may be paid otherwise than the live one
-// does, however its change was acknowledged.
 func TestAReleaseCantReadAnOpenLinksMoneyOtherwise(t *testing.T) {
 	p := newPay(t, publicURL)
 	p.sentInvoice(10, "EUR", "send-original")
@@ -106,8 +92,6 @@ func TestAReleaseCantReadAnOpenLinksMoneyOtherwise(t *testing.T) {
 	expectCode(t, response, http.StatusUnprocessableEntity, string(apierr.CodeAppPaymentLinkOpen))
 }
 
-// A verified expiry of the session of a key whose answer was lost resolves that key, and the money is
-// free again.
 func TestASignedExpiryOfAKeyInDoubtFreesTheMoney(t *testing.T) {
 	p := newPay(t, publicURL)
 	id := p.invoice(10, "EUR")
@@ -124,12 +108,9 @@ func TestASignedExpiryOfAKeyInDoubtFreesTheMoney(t *testing.T) {
 	}
 }
 
-// A ref made before refs kept their money's fields, whose entry was cleaned up, locks every field a
-// release of the app read money from, even once the live release asks for no link.
 func TestAnOldRefWithoutItsFieldsLocksEveryMoneyField(t *testing.T) {
 	p := newPay(t, publicURL)
 	id, original := p.sentInvoice(10, "EUR", "send-original")
-	// The outbox purge left effect_id NULL before 0063 ran: these are the fields 0063 gives that row.
 	p.exec(`UPDATE integration_refs SET effect_id = NULL, amount_field = '', currency_field = '' WHERE id = ?`, original.id)
 	p.exec(`DELETE FROM app_effects`)
 	p.republish(strings.Replace(invoiceApp, `"send": {"kind": "update", "effects": [{
@@ -138,9 +119,6 @@ func TestAnOldRefWithoutItsFieldsLocksEveryMoneyField(t *testing.T) {
 	expectCode(t, p.actRec("", "send", map[string]any{"id": id, "total": 12}), http.StatusUnprocessableEntity, string(apierr.CodeAppPaymentLinkOpen))
 }
 
-// secondPayableLink gives the record a second ref with a link a payer may use beside its first, as the
-// writer before refs were per record could: the first is lent to another record while the second is
-// made, and then given back.
 func (p *pay) secondPayableLink(id int64, first refRow, op string) {
 	p.t.Helper()
 	other := p.invoice(10, "EUR")
@@ -153,8 +131,6 @@ func (p *pay) secondPayableLink(id int64, first refRow, op string) {
 	}
 }
 
-// Every ref of the record that may be paid counts, not only the newest: an older one still open is
-// given again, and nothing new is made.
 func TestEveryPayableRefOfTheRecordCounts(t *testing.T) {
 	p := newPay(t, publicURL)
 	id, _ := p.sentInvoice(10, "EUR", "send-original")
@@ -168,8 +144,6 @@ func TestEveryPayableRefOfTheRecordCounts(t *testing.T) {
 	}
 }
 
-// An event's rule (a system write) can't change the money while another link of the record may be
-// paid.
 func TestAnEventsRuleCantChangeMoneyWhileALinkMayBePaid(t *testing.T) {
 	p := newPay(t, publicURL)
 	id, original := p.sentInvoice(10, "EUR", "send-original")
@@ -182,7 +156,6 @@ func TestAnEventsRuleCantChangeMoneyWhileALinkMayBePaid(t *testing.T) {
 	}
 }
 
-// The invoicing template records a payment whatever an ordinary edit made the status meanwhile.
 func TestTheTemplateRecordsAPaymentWhateverTheStatus(t *testing.T) {
 	p := newPayWith(t, publicURL, invoicingDefinition(t))
 	id := p.templateInvoice(120)
@@ -197,8 +170,6 @@ func TestTheTemplateRecordsAPaymentWhateverTheStatus(t *testing.T) {
 	}
 }
 
-// A payment of an expired link that arrives after the amount changed is recorded, and the amount
-// stays the new one.
 func TestALatePaymentAppliesAfterTheAmountChanged(t *testing.T) {
 	p := newPayWith(t, publicURL, invoicingDefinition(t))
 	id := p.templateInvoice(120)
@@ -215,8 +186,6 @@ func TestALatePaymentAppliesAfterTheAmountChanged(t *testing.T) {
 	}
 }
 
-// Two replacements of an expired link that run at once make one link, at the amount the last edit
-// left.
 func TestTwoReplacementsMakeOneLinkAtTheCurrentAmount(t *testing.T) {
 	p := newPayWith(t, publicURL, invoicingDefinition(t))
 	id := p.templateInvoice(120)
@@ -290,7 +259,6 @@ func TestTwoReplacementsMakeOneLinkAtTheCurrentAmount(t *testing.T) {
 	}
 }
 
-// A payment is written to the field the live release names now.
 func TestAPaymentWritesARenamedField(t *testing.T) {
 	p := newPay(t, publicURL)
 	id, original := p.sentInvoice(10, "EUR", "send-original")
@@ -302,7 +270,6 @@ func TestAPaymentWritesARenamedField(t *testing.T) {
 	}
 }
 
-// An offline edit of the money, replayed while the link may be paid, is refused; once paid, it applies.
 func TestAnOfflineEditOfTheMoneyWaitsForThePayment(t *testing.T) {
 	p := newPayWith(t, publicURL, invoicingDefinition(t))
 	id := p.templateInvoice(120)
@@ -329,7 +296,6 @@ func TestAnOfflineEditOfTheMoneyWaitsForThePayment(t *testing.T) {
 	}
 }
 
-// A one-use Stripe Payment Link paid through its own Checkout Session is used up: its money is free.
 func TestAPaidHostedLinkFreesItsMoney(t *testing.T) {
 	p := newPayWith(t, "", invoicingDefinition(t))
 	id := p.templateInvoice(120)
@@ -341,7 +307,7 @@ func TestAPaidHostedLinkFreesItsMoney(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.svc.publicURL = publicURL // the server has now exposed the webhook for Stripe.
+	p.svc.publicURL = publicURL
 	var publicID string
 	if err := p.db.QueryRow(`SELECT public_id FROM integrations WHERE id = ?`, p.in.ID).Scan(&publicID); err != nil {
 		t.Fatal(err)
@@ -353,7 +319,6 @@ func TestAPaidHostedLinkFreesItsMoney(t *testing.T) {
 			if err := event.ObjectAs(&data); err != nil {
 				t.Fatal(err)
 			}
-			// The real payment URL has this parameter. The fake PayLink helper takes the bare id.
 			data["client_reference_id"] = original.token
 			completed = testprovider.NewEvent(event.Type, data, time.Now())
 		}
@@ -372,7 +337,6 @@ func TestAPaidHostedLinkFreesItsMoney(t *testing.T) {
 	}
 }
 
-// A try that read a ref before a newer entry retired it makes no key for it afterwards.
 func TestARetiredRefTakesNoKey(t *testing.T) {
 	p := newPay(t, publicURL)
 	id := p.invoice(10, "EUR")
@@ -396,7 +360,6 @@ func TestARetiredRefTakesNoKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An older try successfully advanced the sequence, then paused before the next loop iteration.
 	stale, err := p.svc.nextAttempt(ctx, old, first)
 	if err != nil || stale.keySeq != old.keySeq+1 {
 		t.Fatalf("nextAttempt = %+v, %v", stale, err)
@@ -407,7 +370,6 @@ func TestARetiredRefTakesNoKey(t *testing.T) {
 	if refs := p.refs(); len(refs) != 2 || refs[0].state != "expired" || refs[1].amount != 1200 {
 		t.Fatalf("refs after replacing = %+v", refs)
 	}
-	// Resuming OpenPaymentLink would call currentAttempt before the write-ahead guard.
 	_, _ = p.svc.currentAttempt(ctx, stale)
 	if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE ref_id = ?`, old.id); n != 1 {
 		t.Fatalf("retired ref acquired a second key (%d rows); provider kept %d sessions", n, len(p.fake.Sessions()))

@@ -55,7 +55,6 @@ func TestTicketExpiryFreesTheSlotOnce(t *testing.T) {
 	}
 }
 
-// deadlineRecorder is a response writer that has deadlines, and keeps the last it was given.
 type deadlineRecorder struct {
 	*httptest.ResponseRecorder
 	deadlines []time.Time
@@ -66,8 +65,6 @@ func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// Each write gets its own deadline, the idle timeout from then: a long zip isn't cut at some
-// fixed time, and a connection that stops taking bytes fails one write.
 func TestIdleWriterExtendsTheDeadlineOnEveryWrite(t *testing.T) {
 	rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 	w := &idleWriter{w: rec, rc: http.NewResponseController(rec), idle: time.Minute}

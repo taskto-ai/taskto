@@ -26,58 +26,37 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// Workspace-shared accounts (docs/account-switching.md): an API key a workspace's admins add
-// for a CLI. Its members' turns use it through the server's proxy (proxy.go), which adds the
-// key to the CLI's requests: the key never reaches the worker. It is never a subscription
-// login, which the providers' terms forbid sharing.
-
-// Shared configures shared accounts (SetShared).
 type Shared struct {
-	// Key seals the accounts' keys and signs the proxy's tokens.
-	Key *serverkey.Key
-	// Egress is where the proxy and the accounts' tests may connect: the workspace accounts'
-	// egress policy.
-	Egress egress.Policy
-	// ProxyURL is the proxy's address as the CLIs reach it (http://taskto:8081); empty, turns on
-	// shared accounts are refused, with the reason.
+	Key      *serverkey.Key
+	Egress   egress.Policy
 	ProxyURL string
 }
 
-// SetShared turns shared accounts on. Without it, they can't be added and no turn uses them.
-// Call it before serving.
 func (s *Service) SetShared(c Shared) {
 	s.shared = &c
 	s.upstream = c.Egress.Transport(nil)
 	s.testClient = c.Egress.Client(15 * time.Second)
 }
 
-// AccountMode says which accounts a member's turns in a workspace may use.
 type AccountMode string
 
-// The modes.
 const (
-	// OwnElseShared: the member's own account if one is connected, else the workspace's.
 	OwnElseShared AccountMode = "own_else_shared"
-	// OwnOnly: the member's own accounts only.
-	OwnOnly AccountMode = "own"
-	// SharedOnly: the workspace's shared accounts only.
-	SharedOnly AccountMode = "shared"
+	OwnOnly       AccountMode = "own"
+	SharedOnly    AccountMode = "shared"
 )
 
 func (m AccountMode) valid() bool { return m == OwnElseShared || m == OwnOnly || m == SharedOnly }
 
-// usesOwn and usesShared say which accounts the mode allows.
 func (m AccountMode) usesOwn() bool    { return m != SharedOnly }
 func (m AccountMode) usesShared() bool { return m != OwnOnly }
 
-// defaultBaseURL is each CLI's provider's API, before /v1.
 var defaultBaseURL = map[cliworker.CLI]string{
 	cliworker.Claude: "https://api.anthropic.com",
 	cliworker.Codex:  "https://api.openai.com",
 	cliworker.Grok:   "https://api.x.ai",
 }
 
-// SharedAccount is a workspace's shared account, as the API shows it. The key never is.
 type SharedAccount struct {
 	ID        int64             `json:"id"`
 	CLI       cliworker.CLI     `json:"cli"`
@@ -85,7 +64,7 @@ type SharedAccount struct {
 	Label     string            `json:"label"`
 	BaseURL   string            `json:"base_url"`
 	Model     string            `json:"model"`
-	APIKey    string            `json:"api_key"` // "set"
+	APIKey    string            `json:"api_key"`
 	Limits    []cliworker.Limit `json:"limits"`
 	LimitsAt  *string           `json:"limits_at"`
 	CreatedAt string            `json:"created_at"`
@@ -120,8 +99,6 @@ func scanShared(sc interface{ Scan(...any) error }) (sharedRow, error) {
 	return r, nil
 }
 
-// sharedAccounts returns workspace's shared accounts, for cli only unless it is empty, oldest
-// first.
 func (s *Service) sharedAccounts(ctx context.Context, workspace int64, cli cliworker.CLI) ([]sharedRow, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sharedColumns+` FROM cli_shared_accounts
 		WHERE workspace_id = ? AND (? = '' OR cli = ?) ORDER BY id`, workspace, string(cli), string(cli))
@@ -140,7 +117,6 @@ func (s *Service) sharedAccounts(ctx context.Context, workspace int64, cli cliwo
 	return out, rows.Err()
 }
 
-// sharedAccount returns shared account id, which must be workspace's.
 func (s *Service) sharedAccount(ctx context.Context, workspace, id int64) (sharedRow, bool, error) {
 	r, err := scanShared(s.db.QueryRowContext(ctx, `SELECT `+sharedColumns+` FROM cli_shared_accounts
 		WHERE id = ? AND workspace_id = ?`, id, workspace))
@@ -150,12 +126,10 @@ func (s *Service) sharedAccount(ctx context.Context, workspace, id int64) (share
 	return r, err == nil, err
 }
 
-// sharedKeyAD binds a sealed key to its row, so a sealed value copied to another doesn't open.
 func sharedKeyAD(id int64) []byte {
 	return []byte("taskto cli_shared_accounts " + strconv.FormatInt(id, 10) + " api_key")
 }
 
-// apiKey returns the account's key in clear: only the proxy and the test ever ask.
 func (s *Service) apiKey(r sharedRow) (string, error) {
 	if s.shared == nil || r.sealed == nil {
 		return "", errors.New("the account's key can't be read")
@@ -167,7 +141,6 @@ func (s *Service) apiKey(r sharedRow) (string, error) {
 	return string(plain), nil
 }
 
-// modeOf returns user's mode in workspace: theirs, or the workspace's default.
 func (s *Service) modeOf(ctx context.Context, workspace, user int64) (AccountMode, error) {
 	var m string
 	err := s.db.QueryRowContext(ctx, `SELECT coalesce(
@@ -177,12 +150,10 @@ func (s *Service) modeOf(ctx context.Context, workspace, user int64) (AccountMod
 	return AccountMode(m), err
 }
 
-// recordSharedLimits keeps the limits the proxy saw on account id, merged by window.
 func (s *Service) recordSharedLimits(ctx context.Context, id int64, limits []cliworker.Limit) error {
 	return s.mergeLimits(ctx, "cli_shared_accounts", id, limits)
 }
 
-// usageRow returns user's account directory for shared account a, made the first time.
 func (s *Service) usageRow(ctx context.Context, user int64, a sharedRow) (row, error) {
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO cli_accounts (user_id, cli, slot, state, shared_account_id)
 		VALUES (?, ?, NULL, 'connected', ?) ON CONFLICT (user_id, shared_account_id) DO NOTHING`, user, string(a.CLI), a.ID); err != nil {
@@ -193,10 +164,8 @@ func (s *Service) usageRow(ctx context.Context, user int64, a sharedRow) (row, e
 	return r, err
 }
 
-// sharedSlot is the worker's directory for a shared account: "s<id>".
 func sharedSlot(id int64) cliworker.Slot { return cliworker.Slot("s" + strconv.FormatInt(id, 10)) }
 
-// sharedOfSlot returns the shared account a slot names, or 0.
 func sharedOfSlot(slot cliworker.Slot) int64 {
 	if !slot.Shared() {
 		return 0
@@ -205,10 +174,6 @@ func sharedOfSlot(slot cliworker.Slot) int64 {
 	return id
 }
 
-// --- The API: /api/workspaces/{workspace}/cli-accounts ---
-
-// SharedRoutes mounts the workspace routes of shared accounts on mux: members read them,
-// admins change them and the members' modes.
 func (s *Service) SharedRoutes(mux *http.ServeMux, a *auth.Service) {
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	admin := func(h http.HandlerFunc) http.Handler { return a.RequireAdmin(h) }
@@ -227,20 +192,15 @@ func workspaceOf(r *http.Request) int64 {
 	return m.WorkspaceID
 }
 
-// sharedList is GET /api/workspaces/{workspace}/cli-accounts.
 type sharedList struct {
-	// Enabled says whether turns can use the accounts now; Reason says why not, and
-	// ReasonCode is its code, for the web app to translate (apierr).
-	Enabled    bool        `json:"enabled"`
-	Reason     string      `json:"reason,omitempty"`
-	ReasonCode apierr.Code `json:"reason_code,omitempty"`
-	// Mode is the caller's in this workspace; DefaultMode the workspace's.
+	Enabled     bool            `json:"enabled"`
+	Reason      string          `json:"reason,omitempty"`
+	ReasonCode  apierr.Code     `json:"reason_code,omitempty"`
 	Mode        AccountMode     `json:"mode"`
 	DefaultMode AccountMode     `json:"default_mode"`
 	Accounts    []SharedAccount `json:"accounts"`
 }
 
-// sharedUnusable says why turns can't use shared accounts now, with its code, or "".
 func (s *Service) sharedUnusable(ctx context.Context) (string, apierr.Code, error) {
 	switch err := s.Usable(ctx); {
 	case errors.Is(err, ErrOff), errors.Is(err, ErrNoBoundary):
@@ -285,7 +245,6 @@ func (s *Service) handleSharedList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// maxShared bounds a workspace's shared accounts.
 const maxShared = 20
 
 type sharedDraft struct {
@@ -298,8 +257,6 @@ type sharedDraft struct {
 
 var sharedModelPattern = regexp.MustCompile(`^[A-Za-z0-9._:/\[\]-]{1,128}$`)
 
-// check validates the draft's fields that are set, normalising them in place. It returns
-// the refusal of the first that isn't valid, a 400, or nil.
 func (d *sharedDraft) check() *apierr.Error {
 	if d.Label != nil {
 		l := strings.TrimSpace(*d.Label)
@@ -334,16 +291,12 @@ func (d *sharedDraft) check() *apierr.Error {
 	return nil
 }
 
-// maxSharedLabel bounds a shared account's label, in characters.
 const maxSharedLabel = 60
 
 func badRequest(code apierr.Code, msg string, params ...apierr.Params) *apierr.Error {
 	return apierr.New(http.StatusBadRequest, code, msg, params...)
 }
 
-// checkSharedURL validates a base URL: http or https, no credentials, query or fragment;
-// https unless the host is this machine, so a key never crosses the network in clear. The
-// API root is kept: a trailing /v1 is dropped, since the CLIs add it.
 func checkSharedURL(raw string) (string, *apierr.Error) {
 	bad := badRequest(apierr.CodeBaseURLInvalid, "base_url: the provider's API address (https://…), without credentials, a query or a fragment",
 		apierr.Params{"max": 2048})
@@ -375,7 +328,6 @@ func loopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// checkSharedEgress refuses a base URL the workspace accounts' egress policy doesn't allow.
 func (s *Service) checkSharedEgress(ctx context.Context, base string) *apierr.Error {
 	u, err := url.Parse(base)
 	if err != nil {
@@ -444,7 +396,6 @@ func (s *Service) handleSharedCreate(w http.ResponseWriter, r *http.Request) {
 			VALUES (?, ?, ?, ?, ?, ?) RETURNING id`, ws, string(*d.CLI), *d.Label, *d.BaseURL, *d.Model, caller(r)).Scan(&id); err != nil {
 			return err
 		}
-		// The key is sealed for the row's ID, which only exists now.
 		sealed, err := s.shared.Key.Seal([]byte(*d.APIKey), sharedKeyAD(id))
 		if err != nil {
 			return err
@@ -452,7 +403,6 @@ func (s *Service) handleSharedCreate(w http.ResponseWriter, r *http.Request) {
 		if _, err = tx.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET api_key = ? WHERE id = ?`, sealed, id); err != nil {
 			return err
 		}
-		// The key is only said to be set; the address is kept as its host.
 		return audit.Record(r.Context(), tx, audit.Event{Workspace: ws, Action: audit.SharedCLIAccountCreated,
 			TargetType: audit.TargetSharedAccount, Target: id, Details: sharedDetails(*d.CLI, *d.BaseURL, audit.Details{"api_key_set": true})})
 	})
@@ -484,7 +434,7 @@ func (s *Service) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck // after a commit, a no-op
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
 		return err
 	}
@@ -493,8 +443,6 @@ func (s *Service) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
 
 type sharedHandler func(w http.ResponseWriter, r *http.Request, a sharedRow)
 
-// withShared finds the account in the path among the workspace's own: another workspace's is
-// a 404, like one that doesn't exist.
 func (s *Service) withShared(h sharedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.sharedOn(w) {
@@ -537,9 +485,6 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 			return
 		}
 	}
-	// The account is read again in the transaction that changes it, and the change is scoped to
-	// its workspace: what the handler read before may be gone, or its id may have been given to
-	// another workspace's account since.
 	var changed sharedRow
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
 		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
@@ -614,14 +559,10 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 }
 
 var (
-	// errSharedGone is a shared account that isn't (or no longer is) the workspace's.
 	errSharedGone = errors.New("no such shared account")
 	errCLIChanged = errors.New("an account's CLI doesn't change")
 )
 
-// sharedDetails are the details of a shared account's event: the CLI and where the account's
-// requests go (the address's host alone). Its label and model are names a person typed, and
-// aren't recorded: the target's id says which account it was.
 func sharedDetails(cli cliworker.CLI, baseURL string, more audit.Details) audit.Details {
 	d := audit.Details{"cli": string(cli)}
 	if h := audit.Host(baseURL); h != "" {
@@ -631,12 +572,7 @@ func sharedDetails(cli cliworker.CLI, baseURL string, more audit.Details) audit.
 	return d
 }
 
-// handleSharedDelete removes the account, its members' sessions on it and, in the background,
-// what their CLIs kept for it on the worker.
 func (s *Service) handleSharedDelete(w http.ResponseWriter, r *http.Request, a sharedRow) {
-	// The members' sessions on it, the delete and its event are one transaction, scoped to the
-	// workspace: a delete that finds nothing (the account is already gone, or its id belongs to
-	// another workspace's now) records nothing, so two deletes make one removal.
 	var users []int64
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
 		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
@@ -710,9 +646,6 @@ func (s *Service) handleSharedDelete(w http.ResponseWriter, r *http.Request, a s
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleSharedTest asks the provider for its models with the account's key: whether the key
-// and the address work, before a turn finds out. The provider's answer is never passed on,
-// only its status.
 func (s *Service) handleSharedTest(w http.ResponseWriter, r *http.Request, a sharedRow) {
 	key, err := s.apiKey(a)
 	if err != nil {
@@ -726,7 +659,6 @@ func (s *Service) handleSharedTest(w http.ResponseWriter, r *http.Request, a sha
 	}
 	authorize(req.Header, a.CLI, key)
 	if a.CLI == cliworker.Claude {
-		// Anthropic's API refuses a request without it (the CLI sends its own through the proxy).
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 	}
 	res, err := s.testClient.Do(req)
@@ -755,8 +687,6 @@ func (s *Service) handleSharedTest(w http.ResponseWriter, r *http.Request, a sha
 	}
 }
 
-// sharedTest is a shared account's test: whether the provider took the key, in words, and
-// a failure's code and params, for the web app to translate (apierr).
 type sharedTest struct {
 	OK      bool          `json:"ok"`
 	Message string        `json:"message"`
@@ -764,8 +694,6 @@ type sharedTest struct {
 	Params  apierr.Params `json:"params,omitempty"`
 }
 
-// authorize sets the provider's credential header for cli's API: Anthropic's x-api-key, or a
-// bearer token for OpenAI and xAI.
 func authorize(h http.Header, cli cliworker.CLI, key string) {
 	h.Del("Authorization")
 	h.Del("X-Api-Key")
@@ -776,13 +704,11 @@ func authorize(h http.Header, cli cliworker.CLI, key string) {
 	h.Set("Authorization", "Bearer "+key)
 }
 
-// memberMode is one member's mode, as GET …/modes shows it.
 type memberMode struct {
-	UserID int64  `json:"user_id"`
-	Name   string `json:"name"`
-	Email  string `json:"email"`
-	// Mode is the member's own; null means the workspace's default.
-	Mode *AccountMode `json:"mode"`
+	UserID int64        `json:"user_id"`
+	Name   string       `json:"name"`
+	Email  string       `json:"email"`
+	Mode   *AccountMode `json:"mode"`
 }
 
 func (s *Service) handleModes(w http.ResponseWriter, r *http.Request) {
@@ -822,8 +748,6 @@ func (s *Service) handleModes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"default_mode": def, "members": members})
 }
 
-// handleSetModes sets the workspace's default mode and members' own: {"default_mode": …,
-// "members": {"<user id>": "own" | null}}, null giving a member the default again.
 func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DefaultMode *AccountMode            `json:"default_mode"`
@@ -841,8 +765,6 @@ func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
 			return err
 		}
-		// What is recorded is what changed: a request that sets the modes they already are
-		// changes, and records, nothing.
 		defaultChanged, membersChanged := false, 0
 		if req.DefaultMode != nil {
 			var old string

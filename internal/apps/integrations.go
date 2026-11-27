@@ -12,36 +12,10 @@ import (
 	"taskto.ai/taskto/internal/currency"
 )
 
-// Integrations (docs/integrations.md).
-//
-// An app may use a service outside taskto.ai, starting with payments, without ever naming one. It
-// declares a slot of a kind in Definition.Integrations ("payments", of the kind "payments"), and
-// effects and event handlers refer to the slot by name. What the slot is connected to (a provider
-// account, its keys, its limits) is a workspace admin's, bound when they approve the app's contract
-// (integration_approvals.go), so a definition holds no URL, no redirect, no header, no secret, no
-// provider and no integration id, and a template or a copy of an app works with whichever the
-// admin binds. The shapes here refuse any key that is not one of theirs, and a test pins that.
-//
-//	"integrations": {"payments": {"kind": "payments", "on": {
-//	    "payment.succeeded": {"only_if": {…a rule…}, "set": {"status": {"value": "paid"}, "paid_at": {"from": "occurred_at"}}},
-//	    "payment.expired":   {"set": {"status": {"value": "sent"}}}}}}
-//
-// and, in an action of an insert or update, an effect that asks for a payment link:
-//
-//	{"kind": "create_payment_link", "integration": "payments", "amount_field": "total", "currency": "EUR",
-//	 "description": "Invoice {{number}}", "url_field": "pay_url", "id_field": "payment_id"}
-//
-// The slot's handlers are what the integration may write to a record when the outside service
-// reports an event: only the fields named, only the values or sources named, and only when the
-// rule holds. That, and what the app sends out, is the contract (contract.go) an admin approves.
-
-// KindPayments is the kind of integration an app asks for payments with.
 const KindPayments = "payments"
 
-// IntegrationKinds lists the kinds of integration, which are what the server supports.
 var IntegrationKinds = []string{KindPayments}
 
-// The events of the payments kind, which a slot's handlers are named for.
 const (
 	EventPaymentSucceeded = "payment.succeeded"
 	EventPaymentExpired   = "payment.expired"
@@ -49,13 +23,10 @@ const (
 	EventPaymentRefunded  = "payment.refunded"
 )
 
-// kindEvents are the events of each kind a slot may handle.
 var kindEvents = map[string][]string{
 	KindPayments: {EventPaymentSucceeded, EventPaymentExpired, EventPaymentFailed, EventPaymentRefunded},
 }
 
-// The sources a handler may write into a field with from: values the server takes from the event
-// it verified, never from anything the outside service sends as text.
 const (
 	SourceOccurredAt = "occurred_at"
 	SourcePaidAt     = "paid_at"
@@ -65,15 +36,11 @@ const (
 	SourcePaymentID  = "payment_id"
 )
 
-// sourceSpec says which events a source exists for and what a field must be to hold it.
 type sourceSpec struct {
 	events []string
-	// fits says whether the field can hold the source's value, and what is wrong if not.
-	fits func(Field) string
+	fits   func(Field) string
 }
 
-// The least a text field that holds a link or an id may hold, so a write after a payment can't be
-// refused by a limit the app chose too small: a checkout link is long.
 const (
 	minLinkLength      = 2048
 	minPaymentIDLength = 255
@@ -121,48 +88,33 @@ var sources = map[string]sourceSpec{
 	SourcePaymentID:  {events: kindEvents[KindPayments], fits: textOf(minPaymentIDLength)},
 }
 
-// Sources lists the sources a handler may write into a field with from, sorted.
 func Sources() []string { return sortedKeys(sources) }
 
 func allCurrencies(options []string) bool {
 	return len(options) > 0 && !slices.ContainsFunc(options, func(o string) bool { return !currency.Known(o) })
 }
 
-// Bounds of the integrations a definition declares.
 const (
 	maxIntegrationSlots = 4
 	maxHandlerSets      = 10
 	maxDescription      = 400
 )
 
-// IntegrationSlot is a use of an outside service that an app declares: a kind, and what the
-// service's events do to a record. It is never an integration: which provider account stands
-// behind the slot is an admin's to say when they approve the app.
 type IntegrationSlot struct {
-	// Kind is one of IntegrationKinds.
-	Kind string `json:"kind"`
-	// On maps an event of the kind to what it does.
-	On map[string]IntegrationHandler `json:"on,omitempty"`
+	Kind string                        `json:"kind"`
+	On   map[string]IntegrationHandler `json:"on,omitempty"`
 }
 
-// IntegrationHandler is what an event does to the record it is about: the fields it sets, when the
-// rule of OnlyIf, if any, holds of the record as it is then.
 type IntegrationHandler struct {
-	// OnlyIf is a rule in the language of rules.go, over the record before the event is applied.
-	OnlyIf *Rule `json:"only_if,omitempty"`
-	// Set maps a field of the collection to what it is set to.
-	Set map[string]IntegrationSet `json:"set" apitypes:"nonnull"`
+	OnlyIf *Rule                     `json:"only_if,omitempty"`
+	Set    map[string]IntegrationSet `json:"set" apitypes:"nonnull"`
 }
 
-// IntegrationSet is what one field is set to: a literal of the field's type (Value), or one of the
-// sources (From).
 type IntegrationSet struct {
 	Value any    `json:"value,omitempty" apitypes:"json"`
 	From  string `json:"from,omitempty"`
 }
 
-// strictObject decodes b into v refusing a key that isn't one of v's fields, so a url, a header, a
-// secret or an id in a slot is an error, never silently dropped.
 func strictObject(b []byte, v any, what string) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
@@ -175,7 +127,6 @@ func strictObject(b []byte, v any, what string) error {
 	return nil
 }
 
-// UnmarshalJSON reads a slot strictly.
 func (s *IntegrationSlot) UnmarshalJSON(b []byte) error {
 	type plain IntegrationSlot
 	var p plain
@@ -186,7 +137,6 @@ func (s *IntegrationSlot) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// UnmarshalJSON reads a handler strictly.
 func (h *IntegrationHandler) UnmarshalJSON(b []byte) error {
 	type plain IntegrationHandler
 	var p plain
@@ -197,10 +147,7 @@ func (h *IntegrationHandler) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// UnmarshalJSON reads what a field is set to strictly: it is exactly one of a value and a source.
 func (s *IntegrationSet) UnmarshalJSON(b []byte) error {
-	// Both are pointers or raw: a key that is present is told from one that is absent, whatever it
-	// holds, so {"value": null, "from": …} and {"value": "x", "from": ""} are two keys, refused.
 	var p struct {
 		Value json.RawMessage `json:"value"`
 		From  json.RawMessage `json:"from"`
@@ -231,8 +178,6 @@ func (s *IntegrationSet) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// writable says whether an integration may write the field: the plain types only. A capture field
-// (location, signature, barcode) or an attachment is locked or held by the person who captured it.
 func writable(f Field) bool {
 	switch f.Type {
 	case TypeString, TypeNumber, TypeBoolean, TypeDate, TypeTime, TypeChoice:
@@ -241,9 +186,6 @@ func writable(f Field) bool {
 	return false
 }
 
-// checkIntegrations validates the integrations the definition declares, and the effects that use
-// them, against the collection. It returns whether the definition uses any (they are for version 3
-// of the format).
 func (d Definition) checkIntegrations(c Collection) (bool, error) {
 	uses := len(d.Integrations) > 0
 	for _, name := range sortedKeys(d.Actions) {
@@ -305,8 +247,6 @@ func (d Definition) checkIntegrations(c Collection) (bool, error) {
 	return true, nil
 }
 
-// slotCurrencies are the currencies the app's payment links ask in through the slot, sorted:
-// none when no effect uses it.
 func (d Definition) slotCurrencies(slot string) []string {
 	set := map[string]bool{}
 	for _, a := range d.Actions {
@@ -326,10 +266,6 @@ func (d Definition) slotCurrencies(slot string) []string {
 	return sortedKeys(set)
 }
 
-// check validates one handler of a slot of kind, for event.
-//
-// currencies are the ones the slot asks in (see slotCurrencies): a choice that receives the
-// currency must offer each of them, or a write for one the choice lacks would be refused.
 func (h IntegrationHandler) check(c Collection, kind, event string, currencies []string) error {
 	if !slices.Contains(kindEvents[kind], event) {
 		return fmt.Errorf("an event of kind %s is one of %s", kind, strings.Join(kindEvents[kind], ", "))
@@ -383,8 +319,6 @@ func (h IntegrationHandler) check(c Collection, kind, event string, currencies [
 	return nil
 }
 
-// checkPaymentLink validates a create_payment_link effect's own fields against the collection. That its
-// integration is a declared slot of the right kind is checkIntegrations'.
 func (e Effect) checkPaymentLink(c Collection) error {
 	if f, ok := c.field(e.AmountField); !ok || f.Type != TypeNumber {
 		return fmt.Errorf("amount_field names %q, which is not a number field of the collection", e.AmountField)
@@ -426,47 +360,22 @@ func (e Effect) checkPaymentLink(c Collection) error {
 	return nil
 }
 
-// ----- the contract -----
-
-// contractVersion is the format of Contract, in its hash, so a change of format is a new hash.
 const contractVersion = 5
 
-// Contract is what the server derives from a draft for one slot: what the app may send out and
-// what the integration may write back, in field names and literals, never in the app's wording.
-// Computed in Go, from the definition, and never taken from a client: an admin approves its hash.
 type Contract struct {
-	Version int    `json:"version"`
-	Kind    string `json:"kind"`
-	// Operations are the operations the app asks the service for (create_payment_link).
-	Operations []string `json:"operations" apitypes:"nonnull"`
-	// Sends are the fields of the record the app sends out: names only.
-	Sends []string `json:"sends" apitypes:"nonnull"`
-	// Currencies are the currencies the app asks in.
-	Currencies []string `json:"currencies" apitypes:"nonnull"`
-	// Events are the events the app handles.
-	Events []string `json:"events" apitypes:"nonnull"`
-	// Writes are the fields the integration may write, by the field's name, with the literals and
-	// the sources it may write there.
-	Writes []ContractWrite `json:"writes" apitypes:"nonnull"`
-	// OnlyIf are the rules that gate each event's writes.
-	OnlyIf []ContractRule `json:"only_if" apitypes:"nonnull"`
-	// Links are the payment links the app asks for, one per effect: its action, the amount field,
-	// the currency (a literal, or a choice field and its options), where the link and its id are
-	// written, and the rule the record must meet. It binds a currency to the amount it is asked
-	// for, and keeps a restriction (when) from being dropped without a new approval.
-	Links []ContractLink `json:"links" apitypes:"nonnull"`
-	// Handlers are each event's writes, field by field. Writes above says what may be written to a
-	// field whatever the event; this binds each write to its event, so moving a value from one
-	// event to another is another contract.
-	Handlers []ContractHandler `json:"handlers" apitypes:"nonnull"`
-	// Fields are the constraints of every field the integration reads, writes or is gated by, by
-	// name and sorted: what each may hold. Raising a maximum, adding an option or dropping a
-	// requirement changes what the integration may write or send, so it is another contract.
-	Fields []ContractField `json:"fields" apitypes:"nonnull"`
+	Version    int               `json:"version"`
+	Kind       string            `json:"kind"`
+	Operations []string          `json:"operations" apitypes:"nonnull"`
+	Sends      []string          `json:"sends" apitypes:"nonnull"`
+	Currencies []string          `json:"currencies" apitypes:"nonnull"`
+	Events     []string          `json:"events" apitypes:"nonnull"`
+	Writes     []ContractWrite   `json:"writes" apitypes:"nonnull"`
+	OnlyIf     []ContractRule    `json:"only_if" apitypes:"nonnull"`
+	Links      []ContractLink    `json:"links" apitypes:"nonnull"`
+	Handlers   []ContractHandler `json:"handlers" apitypes:"nonnull"`
+	Fields     []ContractField   `json:"fields" apitypes:"nonnull"`
 }
 
-// ContractField is the constraints of one field the integration reads or writes. It holds no
-// wording: labels of options are left out.
 type ContractField struct {
 	Name         string   `json:"name"`
 	Type         string   `json:"type"`
@@ -475,87 +384,61 @@ type ContractField struct {
 	MaxLength    int      `json:"max_length,omitempty"`
 	Min          *float64 `json:"min,omitempty"`
 	Max          *float64 `json:"max,omitempty"`
-	// Options are the values a choice field may hold, sorted.
-	Options []string `json:"options,omitempty"`
-	// Format is the kind of code a barcode field reads: without it, the text is any text, so
-	// dropping or changing it changes what the field accepts.
-	Format string `json:"format,omitempty"`
-	// Editable is whether a stored location or signature may be replaced later.
-	Editable bool `json:"editable,omitempty"`
-	// MaxFiles and MaxBytes bound an attachment (or signature) field's files.
-	MaxFiles int `json:"max_files,omitempty"`
-	MaxBytes int `json:"max_bytes,omitempty"`
+	Options      []string `json:"options,omitempty"`
+	Format       string   `json:"format,omitempty"`
+	Editable     bool     `json:"editable,omitempty"`
+	MaxFiles     int      `json:"max_files,omitempty"`
+	MaxBytes     int      `json:"max_bytes,omitempty"`
 }
 
-// ContractLink is one kind of payment link request an app makes. It holds no wording.
 type ContractLink struct {
-	// Action is the action whose effect asks. It is an identifier (a client runs an action by it),
-	// not wording: moving a request to another action is another contract.
-	Action string `json:"action"`
-	// ActionKind is what the action does (insert, update, delete): it decides who may trigger the
-	// request, so changing it is another contract.
-	ActionKind  string `json:"action_kind"`
-	AmountField string `json:"amount_field"`
-	// Describes are the fields the link's description names, sorted: the fields it sends out as
-	// text. The wording itself is not in the contract.
-	Describes []string `json:"describes" apitypes:"nonnull"`
-	// DescribesID is whether the description names the record's id ({{id}}): it sends the id out
-	// as text too.
-	DescribesID bool   `json:"describes_id"`
-	Currency    string `json:"currency,omitempty"`
-	// CurrencyField and CurrencyOptions are the choice field the currency is read from, and the
-	// currencies it offers, sorted.
+	Action          string   `json:"action"`
+	ActionKind      string   `json:"action_kind"`
+	AmountField     string   `json:"amount_field"`
+	Describes       []string `json:"describes" apitypes:"nonnull"`
+	DescribesID     bool     `json:"describes_id"`
+	Currency        string   `json:"currency,omitempty"`
 	CurrencyField   string   `json:"currency_field,omitempty"`
 	CurrencyOptions []string `json:"currency_options,omitempty"`
 	URLField        string   `json:"url_field"`
 	IDField         string   `json:"id_field"`
-	// When is the rule the record must meet, as the change leaves it, for the link to be asked for.
-	When *Rule `json:"when,omitempty"`
+	When            *Rule    `json:"when,omitempty"`
 }
 
-// ContractHandler is what one event writes.
 type ContractHandler struct {
 	Event string        `json:"event"`
 	Sets  []ContractSet `json:"sets" apitypes:"nonnull"`
 }
 
-// ContractSet is one field an event writes: a literal, as JSON, or a source.
 type ContractSet struct {
 	Field string          `json:"field"`
 	Value json.RawMessage `json:"value,omitempty" apitypes:"json"`
 	From  string          `json:"from,omitempty"`
 }
 
-// ContractWrite is what the integration may write to one field.
 type ContractWrite struct {
-	Field string `json:"field"`
-	// Values are the literals it may write, as JSON, sorted.
+	Field  string            `json:"field"`
 	Values []json.RawMessage `json:"values" apitypes:"json,nonnull"`
-	// From are the sources it may write, sorted.
-	From []string `json:"from" apitypes:"nonnull"`
+	From   []string          `json:"from" apitypes:"nonnull"`
 }
 
-// ContractRule is the rule that gates an event's writes.
 type ContractRule struct {
 	Event string `json:"event"`
 	Rule  Rule   `json:"rule"`
 }
 
-// linkSources are what the write-back of a payment link puts in the effect's two fields.
 const (
 	linkURL = "link.url"
 	linkID  = "link.id"
 )
 
-// contract works out the contract of the slot, which the definition declares and Check has
-// accepted.
 func (d Definition) contract(slot string) Contract {
 	s := d.Integrations[slot]
 	c := Contract{Version: contractVersion, Kind: s.Kind,
 		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, Fields: []ContractField{}, OnlyIf: []ContractRule{}, Links: []ContractLink{}, Handlers: []ContractHandler{}}
 	sends, currencies := map[string]bool{}, map[string]bool{}
 	writes := map[string]*ContractWrite{}
-	var links []json.RawMessage // the encoded links already in c.Links
+	var links []json.RawMessage
 	write := func(field string) *ContractWrite {
 		w := writes[field]
 		if w == nil {
@@ -618,7 +501,7 @@ func (d Definition) contract(slot string) Contract {
 			}
 			raw, err := json.Marshal(set.Value)
 			if err != nil {
-				continue // a checked literal always encodes
+				continue
 			}
 			handler.Sets = append(handler.Sets, ContractSet{Field: field, Value: raw})
 			if !slices.ContainsFunc(w.Values, func(v json.RawMessage) bool { return bytes.Equal(v, raw) }) {
@@ -627,7 +510,6 @@ func (d Definition) contract(slot string) Contract {
 		}
 		c.Handlers = append(c.Handlers, handler)
 	}
-	// Links in a fixed order, whatever the order of the actions and their effects.
 	slices.SortFunc(c.Links, func(a, b ContractLink) int {
 		x, _ := json.Marshal(a)
 		y, _ := json.Marshal(b)
@@ -640,7 +522,6 @@ func (d Definition) contract(slot string) Contract {
 		slices.SortFunc(w.Values, func(a, b json.RawMessage) int { return bytes.Compare(a, b) })
 		c.Writes = append(c.Writes, *w)
 	}
-	// The constraints of every field the integration reads, writes or is gated by.
 	named := map[string]bool{}
 	for f := range sends {
 		named[f] = true
@@ -665,14 +546,6 @@ func (d Definition) contract(slot string) Contract {
 			named[f] = true
 		}
 	}
-	// Whether a field may be left out can depend on another field (required_when), in both
-	// directions, so follow those to a fixed point:
-	//   - outward: a named field's requirement reads another field, whose constraints decide when
-	//     the named one is required;
-	//   - inward: a field the integration never names has a requirement that reads a field it
-	//     writes or reads. A system write validates the whole resulting row, so that requirement
-	//     decides whether the integration's write succeeds (a note required once the status is
-	//     paid refuses the write that sets paid), and editing it is another contract.
 	for grew := true; grew; {
 		grew = false
 		for _, f := range d.Collection.Fields {
@@ -703,25 +576,21 @@ func (d Definition) contract(slot string) Contract {
 	return c
 }
 
-// sortedCopy returns a sorted copy of list.
 func sortedCopy(list []string) []string {
 	out := slices.Clone(list)
 	slices.Sort(out)
 	return out
 }
 
-// Hash is the contract's canonical hash: the SHA-256, in hex, of its JSON, whose fields come in a
-// fixed order and whose lists are sorted.
 func (c Contract) Hash() string {
 	raw, err := json.Marshal(c)
 	if err != nil {
-		return "" // the contract holds only strings, numbers and rules
+		return ""
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
 
-// Contracts returns the contract of each slot the definition declares, by the slot's name.
 func (d Definition) Contracts() map[string]Contract {
 	out := make(map[string]Contract, len(d.Integrations))
 	for name := range d.Integrations {

@@ -19,22 +19,19 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Limits on what a card holds.
 const (
-	maxNameLen   = 100 // board names, in characters
-	maxTitleLen  = 200 // card titles, in characters
+	maxNameLen   = 100
+	maxTitleLen  = 200
 	maxBodyBytes = 32 << 10
-	maxReasonLen = 1000 // blocked reasons, in characters
-	maxLinks     = 50   // of each kind, and blockers
-	maxPathLen   = 1024 // doc paths, in bytes
-	maxLabels    = 10   // labels on a card
-	maxLabelLen  = 30   // a label, in characters
+	maxReasonLen = 1000
+	maxLinks     = 50
+	maxPathLen   = 1024
+	maxLabels    = 10
+	maxLabelLen  = 30
 )
 
-// dateLayout is how a due date is written: a calendar date, no time zone.
 const dateLayout = "2006-01-02"
 
-// checkDate returns s if it is a real calendar date written YYYY-MM-DD.
 func checkDate(s string) (string, bool) {
 	t, err := time.Parse(dateLayout, s)
 	if err != nil || t.Format(dateLayout) != s {
@@ -43,11 +40,6 @@ func checkDate(s string) (string, bool) {
 	return s, true
 }
 
-// normalizeLabel normalizes a label, the one place that does: Unicode NFC (so a composed and
-// a decomposed "é" are one label), trimmed, inner whitespace collapsed to single spaces, and
-// case folded (Unicode's full case folding, so "ΟΣ" and "οσ" and "ος" are one label),
-// then NFC again, since folding can denormalize. Clients send what people typed. It fails for
-// an empty label, a long one, or one with control characters.
 func normalizeLabel(s string) (string, error) {
 	bad := func() error {
 		return invalidAs(apierr.CodeCardLabelInvalid, apierr.Params{"max": maxLabelLen},
@@ -63,16 +55,11 @@ func normalizeLabel(s string) (string, error) {
 	return l, nil
 }
 
-// Optional is a field that can be left out, set to null, or set to a value, for the
-// fields of an update where null means "clear it".
 type Optional[T any] struct {
-	// Set is true when the field was given, null included.
-	Set bool
-	// Value is nil for null.
+	Set   bool
 	Value *T
 }
 
-// UnmarshalJSON records that the field was given.
 func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 	o.Set = true
 	o.Value = nil
@@ -101,9 +88,6 @@ func commentBody(s string) (string, error) {
 	return s, nil
 }
 
-// validate checks and normalizes the fields ch sets. An assignee must be the agent or a
-// member of the workspace who may read sp; whether blockers are on the board is checked
-// when they are written.
 func (s *Service) validate(ctx context.Context, sp access.Space, ch *CardChanges) error {
 	if ch.Title != nil {
 		t := strings.TrimSpace(*ch.Title)
@@ -201,8 +185,6 @@ func (s *Service) validate(ctx context.Context, sp access.Space, ch *CardChanges
 	return nil
 }
 
-// conversationID parses a conversation link: the conversation API's ID, in decimal without
-// a sign or leading zeros, so each conversation has one spelling.
 func conversationID(s string) (int64, bool) {
 	id, err := strconv.ParseInt(s, 10, 64)
 	return id, err == nil && id > 0 && strconv.FormatInt(id, 10) == s
@@ -210,7 +192,6 @@ func conversationID(s string) (int64, bool) {
 
 func hasControl(s string) bool { return strings.ContainsFunc(s, unicode.IsControl) }
 
-// dedupe drops repeats, keeping the first of each. The result is never nil.
 func dedupe[T comparable](in []T) []T {
 	out := make([]T, 0, len(in))
 	for _, v := range in {

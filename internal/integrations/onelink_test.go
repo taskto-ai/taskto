@@ -12,12 +12,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// One payable link per invoice: a record that asks for its payment link again (it was sent again, an
-// edit ran the effect, its expired link is replaced) never gets a second link while the first may
-// still be paid. These run the bundled Invoicing template, and the generic invoicing app whose send
-// action runs the effect on every change of the record.
-
-// invoicingDefinition is the bundled Invoicing template's definition.
 func invoicingDefinition(t *testing.T) string {
 	t.Helper()
 	all, err := apps.Templates()
@@ -37,7 +31,6 @@ func invoicingDefinition(t *testing.T) string {
 	return ""
 }
 
-// templateInvoice adds a draft invoice through the template's own action, and returns its record.
 func (p *pay) templateInvoice(total any) int64 {
 	p.t.Helper()
 	p.act("", "add_invoice", map[string]any{"number": "INV-1", "customer": "Acme", "total": total, "currency": "EUR", "status": "draft"})
@@ -48,7 +41,6 @@ func (p *pay) templateInvoice(total any) int64 {
 	return id
 }
 
-// allEnded waits for there to be n entries, every one done or failed, and returns them.
 func (p *pay) allEnded(n int) []entry {
 	p.t.Helper()
 	var es []entry
@@ -67,7 +59,6 @@ func (p *pay) allEnded(n int) []entry {
 	return es
 }
 
-// field reads one field of the record.
 func (p *pay) field(record int64, name string) any {
 	p.t.Helper()
 	data, _ := p.record(record)
@@ -89,8 +80,6 @@ func TestEditingASentInvoiceMakesNoProviderCall(t *testing.T) {
 		t.Fatalf("the send: %d calls, pay_url %v", len(p.posts()), url)
 	}
 
-	// The record editor's action (the template's update without effects): the customer and the number
-	// change, and nothing is queued or asked of Stripe. (The amount can't, while the link may be paid.)
 	p.act("op-inv-edit-01", "edit_invoice", map[string]any{"id": record, "customer": "Acme Ltd", "number": "INV-1b"})
 	time.Sleep(200 * time.Millisecond)
 	if es := p.entries(); len(es) != 1 {
@@ -130,8 +119,6 @@ func TestSendingAnInvoiceTwiceMakesOneLink(t *testing.T) {
 		}
 	})
 
-	// An app whose send action runs the effect on any change: sending with another customer is a new
-	// entry, and the open link is given again.
 	t.Run("an action that runs the effect on every change", func(t *testing.T) {
 		p := newPay(t, publicURL)
 		record := p.invoice(10, "EUR")
@@ -150,10 +137,6 @@ func TestSendingAnInvoiceTwiceMakesOneLink(t *testing.T) {
 	})
 }
 
-// The record's open link asks other money than a new entry: nothing is made, and the entry says so.
-// The record's money can't change while its link may be paid, so the send is refused first; and an
-// entry that asks other money all the same (the record changed by a path that doesn't go through an
-// action) still makes no second link.
 func TestAnOpenLinkForAnotherAmountIsNeverJoinedByASecond(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -185,8 +168,6 @@ func TestAnExpiredLinkIsReplacedByExactlyOneNewLink(t *testing.T) {
 	p.allEnded(1)
 	first, firstID := p.field(record, "pay_url"), p.field(record, "payment_id")
 
-	// Replacing a link that is still open: the button clears it, which queues the effect, and the same
-	// link is written back. Nothing is made.
 	replace := func(op string) {
 		t.Helper()
 		p.act(op, "replace_link", map[string]any{"id": record, "pay_url": "", "payment_id": ""})
@@ -199,7 +180,6 @@ func TestAnExpiredLinkIsReplacedByExactlyOneNewLink(t *testing.T) {
 		t.Fatalf("an open link was replaced: %d links, pay_url %v", n, p.field(record, "pay_url"))
 	}
 
-	// Once Stripe says it expired, the replace makes one new link, and the record has it.
 	if _, err := p.fake.Expire(firstID.(string)); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +199,6 @@ func TestAnExpiredLinkIsReplacedByExactlyOneNewLink(t *testing.T) {
 		t.Fatalf("refs = %+v", refs)
 	}
 
-	// And replacing again while the new link is open makes nothing more.
 	replace("op-inv-repl-03")
 	p.allEnded(4)
 	if n := len(p.posts()); n != 2 || p.field(record, "pay_url") != second {
@@ -227,8 +206,6 @@ func TestAnExpiredLinkIsReplacedByExactlyOneNewLink(t *testing.T) {
 	}
 }
 
-// A newer entry for a record whose link's outcome is unknown takes that ref and resolves it: it finds
-// the object the first call made, and makes nothing of its own.
 func TestANewerEntryTakesARefWhoseOutcomeIsUnknown(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -239,7 +216,6 @@ func TestANewerEntryTakesARefWhoseOutcomeIsUnknown(t *testing.T) {
 	p.waitsUnknown()
 	p.fake.ClearFaults()
 
-	// The record is sent again, with another customer: a newer entry, the older superseded.
 	p.act("op-unknown-0002", "send", map[string]any{"id": record, "status": "sent", "customer": "Other"})
 	p.later(time.Minute)
 	es := p.allEnded(2)
@@ -258,12 +234,9 @@ func TestANewerEntryTakesARefWhoseOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
-// A ref under which no call ever ran holds nothing at Stripe: a newer entry removes it and makes its
-// own, once.
 func TestARefUnderWhichNothingRanIsReplaced(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
-	// A rate limit: Stripe says it ran nothing, and the entry waits to ask again under the same key.
 	p.fake.Fail(testprovider.RateLimited(time.Second).On(http.MethodPost, "/v1/checkout/sessions"))
 	p.startWorker()
 	p.send(record, "op-norun-00001")

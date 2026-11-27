@@ -12,7 +12,6 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// createdWorkspace is the reply of POST /api/workspaces.
 type createdWorkspace struct {
 	Workspace Membership `json:"workspace"`
 	me
@@ -36,7 +35,6 @@ func TestCreateWorkspaceMakesTheCallerItsFirstAdmin(t *testing.T) {
 	if got.Workspace.WorkspaceName != "Side project" || got.Workspace.Role != RoleAdmin || got.Workspace.WorkspaceID == home {
 		t.Fatalf("workspace = %+v", got.Workspace)
 	}
-	// The reply is /api/me with the new workspace in it, oldest first.
 	if len(got.Workspaces) != 2 || got.Workspaces[0].WorkspaceID != home || got.Workspaces[1] != got.Workspace {
 		t.Fatalf("workspaces = %+v", got.Workspaces)
 	}
@@ -44,8 +42,6 @@ func TestCreateWorkspaceMakesTheCallerItsFirstAdmin(t *testing.T) {
 		t.Fatalf("GET /api/me = %+v", again)
 	}
 
-	// What setup makes for a workspace, and nothing more: one membership, the caller's, as
-	// admin; their private space; no invites, tokens or shared spaces; no other member.
 	ws := got.Workspace.WorkspaceID
 	if n := e.count(`SELECT count(*) FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = 'admin'`, ws, ownerID); n != 1 {
 		t.Errorf("owner's admin memberships = %d, want 1", n)
@@ -62,12 +58,10 @@ func TestCreateWorkspaceMakesTheCallerItsFirstAdmin(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM invites WHERE workspace_id = ?`, ws) + e.count(`SELECT count(*) FROM access_tokens WHERE workspace_id = ?`, ws); n != 0 {
 		t.Errorf("a new workspace has %d invites and tokens", n)
 	}
-	// The first workspace is untouched.
 	if n := e.count(`SELECT count(*) FROM memberships WHERE workspace_id = ?`, home); n != 1 {
 		t.Errorf("the first workspace has %d members", n)
 	}
 
-	// The audit event belongs to the new workspace, and says what let the caller in.
 	ev := e.one(audit.WorkspaceCreated)
 	wantEvent(t, ev, ws, ownerID, audit.TargetWorkspace, ws)
 	if ev.Details["allowed_by"] != "admins" {
@@ -80,8 +74,7 @@ func TestCreateWorkspaceMakesTheCallerItsFirstAdmin(t *testing.T) {
 
 func TestWhoMayCreateAWorkspace(t *testing.T) {
 	for name, tt := range map[string]struct {
-		mode string
-		// admin and member are whether the workspace's admin and a plain member may.
+		mode          string
 		admin, member bool
 	}{
 		"default":        {"", true, false},
@@ -99,7 +92,6 @@ func TestWhoMayCreateAWorkspace(t *testing.T) {
 				if who == "member" {
 					want = tt.member
 				}
-				// GET /api/me tells the web app whether to offer the action.
 				if got := decode[me](t, c.do(http.MethodGet, "/api/me", nil)).CanCreateWorkspace; got != want {
 					t.Errorf("%s: can_create_workspace = %v, want %v", who, got, want)
 				}
@@ -124,19 +116,14 @@ func TestWhoMayCreateAWorkspace(t *testing.T) {
 	}
 }
 
-// Under "admins", being an admin of any workspace is enough, however the person got there,
-// and being only a member everywhere is not: so creating a workspace lets someone create
-// another, and an invited member who is admin of nothing can't.
 func TestCreatingAWorkspaceFollowsAdminship(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, home := e.setup()
 	member, mi := e.join(e.invite(owner, home, "member@example.com", RoleMember), "Member")
 	expect(t, member.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Nope"}), http.StatusForbidden)
 
-	// Promoted in the home workspace: now allowed.
 	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/members/%d", home, mi.User.ID), map[string]string{"role": "admin"}), http.StatusNoContent)
 	expect(t, member.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Yes"}), http.StatusCreated)
-	// Demoted again, and the workspace they made is theirs: still an admin there.
 	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/members/%d", home, mi.User.ID), map[string]string{"role": "member"}), http.StatusNoContent)
 	expect(t, member.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Again"}), http.StatusCreated)
 }
@@ -165,7 +152,6 @@ func TestCreateWorkspaceValidatesTheName(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM workspaces`); n != before {
 		t.Errorf("a refused name made %d workspaces", n-before)
 	}
-	// The longest name is fine, and two workspaces may share a name.
 	expect(t, owner.do(http.MethodPost, "/api/workspaces", map[string]string{"name": strings.Repeat("a", maxNameLen)}), http.StatusCreated)
 	expect(t, owner.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Home"}), http.StatusCreated)
 }
@@ -177,7 +163,6 @@ func TestCreateWorkspaceIsForALoggedInBrowser(t *testing.T) {
 
 	expect(t, e.client().do(http.MethodPost, "/api/workspaces", body), http.StatusUnauthorized)
 
-	// An access token acts in one workspace: it can't make another.
 	rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", home), map[string]string{"name": "agent"})
 	expect(t, rec, http.StatusCreated)
 	token := decode[struct{ Token string }](t, rec).Token
@@ -189,7 +174,6 @@ func TestCreateWorkspaceIsForALoggedInBrowser(t *testing.T) {
 		t.Fatalf("a token made a workspace: %d %s", rec.Code, rec.Body)
 	}
 
-	// The CSRF guard covers it like any other state change.
 	cross := owner.req(http.MethodPost, "/api/workspaces", body)
 	cross.Header.Set("Sec-Fetch-Site", "cross-site")
 	if rec := owner.send(cross); rec.Code != http.StatusForbidden {
@@ -205,8 +189,6 @@ func TestCreateWorkspaceIsIsolatedFromTheOthers(t *testing.T) {
 	owner, home := e.setup()
 	member, mi := e.join(e.invite(owner, home, "member@example.com", RoleMember), "Member")
 
-	// The member makes a workspace of their own: the owner is no part of it, and the member is
-	// no more than a member of the owner's.
 	ws := decode[createdWorkspace](t, member.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Mine"})).Workspace.WorkspaceID
 	mine := fmt.Sprintf("/api/workspaces/%d", ws)
 	theirs := fmt.Sprintf("/api/workspaces/%d", home)
@@ -219,13 +201,11 @@ func TestCreateWorkspaceIsIsolatedFromTheOthers(t *testing.T) {
 	expect(t, member.do(http.MethodGet, theirs+"/invites", nil), http.StatusForbidden)
 	expect(t, member.do(http.MethodPatch, theirs, map[string]string{"locale": "pt-BR"}), http.StatusForbidden)
 
-	// Each roster has the right people.
 	owners := decode[struct{ Members []Member }](t, owner.do(http.MethodGet, theirs+"/members", nil)).Members
 	mines := decode[struct{ Members []Member }](t, member.do(http.MethodGet, mine+"/members", nil)).Members
 	if len(owners) != 2 || len(mines) != 1 || mines[0].ID != mi.User.ID || mines[0].Role != RoleAdmin {
 		t.Fatalf("rosters: home %+v, new %+v", owners, mines)
 	}
-	// Each one's /api/me lists the workspaces they are in, with their role in each.
 	if got := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)).Workspaces; len(got) != 1 || got[0].WorkspaceID != home {
 		t.Errorf("owner's workspaces = %+v", got)
 	}
@@ -234,7 +214,6 @@ func TestCreateWorkspaceIsIsolatedFromTheOthers(t *testing.T) {
 		t.Errorf("member's workspaces = %+v", got)
 	}
 
-	// A token is bound to its workspace, also when its user has more than one.
 	rec := member.do(http.MethodPost, theirs+"/tokens", map[string]string{"name": "agent"})
 	expect(t, rec, http.StatusCreated)
 	token := decode[struct{ Token string }](t, rec).Token
@@ -245,28 +224,22 @@ func TestCreateWorkspaceIsIsolatedFromTheOthers(t *testing.T) {
 		t.Errorf("a token of the home workspace reads the new one: %d %s", rec.Code, rec.Body)
 	}
 
-	// Removing the member from the owner's workspace leaves their own.
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("%s/members/%d", theirs, mi.User.ID), nil), http.StatusNoContent)
 	expect(t, member.do(http.MethodGet, mine+"/members", nil), http.StatusOK)
-	// The last admin of their own can't leave it either.
 	expect(t, member.do(http.MethodDelete, fmt.Sprintf("%s/members/%d", mine, mi.User.ID), nil), http.StatusConflict)
 }
 
-// create makes a workspace as c, with the name the test gives, and returns the response.
 func createAs(c *client, name string) *httptest.ResponseRecorder {
 	return c.do(http.MethodPost, "/api/workspaces", map[string]string{"name": name})
 }
 
-// With -workspace-creation=anyone a single account can't make workspaces without end: past a
-// fixed number, whatever the time between them, it is refused (403 workspace_limit), and
-// others are unaffected.
 func TestAnAccountCreatesAtMostSomeWorkspaces(t *testing.T) {
 	e := newEnv(t, Options{WorkspaceCreation: CreateByAnyone})
 	owner, home := e.setup()
 	member, _ := e.join(e.invite(owner, home, "member@example.com", RoleMember), "Member")
 	for i := 0; i < maxWorkspacesPerUser; i++ {
 		expect(t, createAs(member, fmt.Sprintf("W%d", i)), http.StatusCreated)
-		e.advance(workspaceWindow) // slowly enough that the rate limit never applies
+		e.advance(workspaceWindow)
 	}
 	before := e.count(`SELECT count(*) FROM workspaces`)
 	rec := createAs(member, "One too many")
@@ -282,15 +255,11 @@ func TestAnAccountCreatesAtMostSomeWorkspaces(t *testing.T) {
 		t.Errorf("a refused creation made %d workspaces", n-before)
 	}
 	if me := decode[me](t, member.do(http.MethodGet, "/api/me", nil)); !me.CanCreateWorkspace {
-		// can_create_workspace is about the setting; the limit answers on the call.
 		t.Errorf("can_create_workspace = false under anyone")
 	}
-	// Somebody else is not counted against them, nor is the cap shared.
 	expect(t, createAs(owner, "Owner's own"), http.StatusCreated)
 }
 
-// A burst of creations is slowed down (429 too_many_workspaces with Retry-After), and
-// allowed again as the oldest leaves the hour.
 func TestCreatingWorkspacesIsRateLimitedPerAccount(t *testing.T) {
 	e := newEnv(t, Options{WorkspaceCreation: CreateByAnyone})
 	owner, home := e.setup()
@@ -305,7 +274,6 @@ func TestCreatingWorkspacesIsRateLimitedPerAccount(t *testing.T) {
 	if code := decode[struct{ Code string }](t, rec).Code; code != string(apierr.CodeTooManyWorkspaces) {
 		t.Errorf("code = %q", code)
 	}
-	// The first of the five was 5 minutes ago: it leaves the window in 55 minutes.
 	if got := rec.Header().Get("Retry-After"); got != "3300" {
 		t.Errorf("Retry-After = %q, want 3300", got)
 	}
@@ -316,8 +284,6 @@ func TestCreatingWorkspacesIsRateLimitedPerAccount(t *testing.T) {
 	expect(t, createAs(member, "Now fine"), http.StatusCreated)
 }
 
-// The server's own workspace is the one setup made, and its admins are the operators:
-// not an admin of a workspace they or others made later.
 func TestOnlyAdminsOfTheSetupWorkspaceAreOperators(t *testing.T) {
 	e := newEnv(t, Options{WorkspaceCreation: CreateByAnyone})
 	owner, home := e.setup()
@@ -328,12 +294,10 @@ func TestOnlyAdminsOfTheSetupWorkspaceAreOperators(t *testing.T) {
 	if !isOp(owner) || !isOp(admin) || isOp(member) {
 		t.Fatalf("operators: owner %v, admin %v, member %v", isOp(owner), isOp(admin), isOp(member))
 	}
-	// Making a workspace of their own makes someone its admin, not an operator.
 	expect(t, createAs(member, "Mine"), http.StatusCreated)
 	if isOp(member) {
 		t.Fatal("a member who made a workspace is an operator")
 	}
-	// The setup workspace is marked, and only it; a created one carries its creator.
 	if n := e.count(`SELECT count(*) FROM workspaces WHERE is_setup = 1 AND id = ? AND created_by = ?`, home, ownerID); n != 1 {
 		t.Errorf("setup workspace marked %d times", n)
 	}
@@ -341,7 +305,6 @@ func TestOnlyAdminsOfTheSetupWorkspaceAreOperators(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM workspaces WHERE is_setup = 1`); n != 1 {
 		t.Errorf("%d setup workspaces", n)
 	}
-	// Demoted from the setup workspace, someone is no operator.
 	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/members/%d", home, e.userID(admin)),
 		map[string]string{"role": "member"}), http.StatusNoContent)
 	if isOp(admin) {
@@ -349,8 +312,6 @@ func TestOnlyAdminsOfTheSetupWorkspaceAreOperators(t *testing.T) {
 	}
 }
 
-// A name that could hide or reorder what a reader sees is refused, in a workspace's name and
-// in setup's.
 func TestNamesRefuseControlAndBidiCharacters(t *testing.T) {
 	bad := map[string]string{
 		"NUL":                    "Ho\x00me",
@@ -390,7 +351,6 @@ func TestNamesRefuseControlAndBidiCharacters(t *testing.T) {
 		t.Errorf("%d workspaces with a bad name were made", n-before)
 	}
 
-	// Setup, for the owner's name and the first workspace's.
 	fresh := newEnv(t, Options{})
 	for field, s := range map[string]string{"name": "Ow\u202ener", "workspace_name": "Ho\x00me"} {
 		body := map[string]string{"email": "owner@example.com", "name": "Owner", "password": ownerPassword,

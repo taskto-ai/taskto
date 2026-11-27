@@ -1,7 +1,3 @@
-/* Buttons (Button.tsx). Every variant has the same box: a fixed height from the control scale, the
-   same font and line, and an edge of the same width drawn inside the height, so buttons of one size
-   line up to the pixel in a row, and with a field of the same size. */
-
 @layer components {
   .ui-button {
     position: relative;
@@ -59,7 +55,6 @@
     gap: var(--space-1);
   }
 
-  /* Secondary: white with the control's edge. */
   .ui-button-secondary {
     border-color: var(--color-border-strong);
     background: var(--color-surface);
@@ -70,7 +65,6 @@
     background: var(--color-bg-sunken);
   }
 
-  /* Ghost: nothing until the pointer is on it. */
   .ui-button-ghost {
     background: transparent;
     color: var(--color-text);
@@ -80,7 +74,6 @@
     background: var(--color-hover);
   }
 
-  /* Danger: the danger colour on the control's ground, its soft ground on hover. */
   .ui-button-danger {
     border-color: color-mix(in srgb, var(--color-danger) 50%, transparent);
     background: var(--color-surface);
@@ -92,20 +85,16 @@
     background: var(--color-danger-soft);
   }
 
-  /* Pressed: a tint laid over whatever ground it has. */
   .ui-button-secondary:active,
   .ui-button-ghost:active {
     background-image: linear-gradient(var(--color-selected), var(--color-selected));
   }
 
-  /* A tint over the soft danger takes its text under 4.5:1 in the dark: pressed, it keeps the
-     soft ground and its full edge. */
   .ui-button-danger:active {
     border-color: var(--color-danger);
     background: var(--color-danger-soft);
   }
 
-  /* Primary: mint, ink on it, an ink outline and a hard lift that rises on hover and presses flat. */
   .ui-button-primary {
     border: var(--line-strong) solid var(--color-accent-edge);
     background: var(--color-accent);
@@ -125,7 +114,6 @@
     box-shadow: none;
   }
 
-  /* Loading: the label is kept (its width, its name) but not seen; the spinner is over it. */
   .ui-button[aria-busy="true"] {
     cursor: progress;
   }
@@ -153,8 +141,6 @@
     place-items: center;
   }
 
-  /* Disabled: one look for every variant, a flat grey pill with muted text. Not a faded copy of
-     the variant: half-opacity mint reads as muddy, not as "not now". */
   .ui-button:disabled,
   .ui-button:disabled:hover,
   .ui-button:disabled:active {
@@ -167,8 +153,6 @@
     cursor: not-allowed;
   }
 
-  /* Fingers: every button is the touch target's height, the small one too, so a row of small
-     controls (whose fields grow the same way) still lines up. */
   @media (pointer: coarse) {
     .ui-button,
     .ui-button-sm {

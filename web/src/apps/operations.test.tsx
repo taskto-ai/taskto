@@ -24,7 +24,6 @@ afterEach(() => {
   setOperationUser(null)
 })
 
-// Presses the same button as the renderer would, stamping it with the time of the press.
 let at = 0
 const press = (transport: ReturnType<typeof httpTransport>, context: Record<string, unknown> = { amount: '1' }) =>
   transport.act({
@@ -50,7 +49,6 @@ test('an action keeps its operation key until the server has answered it', async
   await press(transport)
   expect(operation(calls, 0)).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
   expect(operation(calls, 1)).toBe(operation(calls, 0))
-  // Answered: the next press is a new one, and so is a different request.
   await press(transport)
   expect(operation(calls, 2)).not.toBe(operation(calls, 0))
 })
@@ -67,13 +65,10 @@ test('a submission keeps its key when the response is lost, the stage refreshes 
   const live = { number: 3, definition_version: 1, requires: [] } as never
   const app = { id: 1, version: 1, live, draft: null, access: {}, unpublished_changes: false } as never
 
-  // The press is lost on the first screen.
   await expect(press(httpTransport(base, 3))).rejects.toThrow()
-  // The stage draws the app again in place (a refresh) and a transport of its own is made.
   const { rerender, unmount } = render(<AppStage base={base} app={app} reloadKey={0} />)
   rerender(<AppStage base={base} app={app} reloadKey={1} />)
   await expect(press(httpTransport(base, 3))).rejects.toThrow()
-  // The screen is left and opened again (a remount), and the answer comes at last.
   unmount()
   render(<AppStage base={base} app={app} reloadKey={0} />)
   down = false
@@ -94,7 +89,6 @@ test('a submission keeps its key across a page reload', async () => {
     },
   })
   await expect(press(httpTransport(base, 3))).rejects.toThrow()
-  // A new page: nothing is left in memory but the tab's session storage.
   vi.resetModules()
   const fresh = await import('./operations')
   const { httpTransport: freshTransport } = await import('./transport')
@@ -102,7 +96,6 @@ test('a submission keeps its key across a page reload', async () => {
   down = false
   await press(freshTransport(base, 3))
   expect(operation(calls, 1)).toBe(operation(calls, 0))
-  // Another user of this browser never finds it.
   setOperationUser(8)
   await expect(press(httpTransport(base, 3))).resolves.toBeTruthy()
   expect(operation(calls, 2)).not.toBe(operation(calls, 0))
@@ -124,7 +117,7 @@ test('a gateway timeout leaves the outcome unknown: the retry is the same submis
 test.each([
   [500, { error: 'x', code: 'internal' }],
   [502, { error: 'bad gateway' }],
-  [404, { error: 'not found' }], // a proxy's, with no code of the server's
+  [404, { error: 'not found' }],
   [408, { error: 'x', code: 'request_timeout' }],
   [429, { error: 'x', code: 'rate_limited' }],
 ])('an answer of %s that doesn’t say the request was refused keeps the key', async (status, body) => {
@@ -140,7 +133,7 @@ test.each([
   [403, 'app_forbidden'],
   [409, 'app_record_conflict'],
   [409, 'app_release_outdated'],
-  [409, 'app_operation_reused'], // that key can never be used for this request: a new one is made
+  [409, 'app_operation_reused'],
 ])('a %s refused with %s is a definite answer: the next press is a new submission', async (status, code) => {
   const calls = fakeFetch({ [`POST ${base}/actions`]: { status, body: { error: 'x', code } } })
   const transport = httpTransport(base, 3)
@@ -156,7 +149,6 @@ test('the key is the submission’s: another release, app, action or context has
   const send = async (transport: ReturnType<typeof httpTransport>, context: Record<string, unknown>) =>
     press(transport, context).catch(() => undefined)
   await send(httpTransport(base, 3), { amount: '1', note: 'a' })
-  // The same, with the keys of the context in another order.
   await send(httpTransport(base, 3), { note: 'a', amount: '1' })
   await send(httpTransport(base, 4), { amount: '1', note: 'a' })
   await send(httpTransport(other, 3), { amount: '1', note: 'a' })
@@ -165,8 +157,6 @@ test('the key is the submission’s: another release, app, action or context has
   expect(keys[1]).toBe(keys[0])
   expect(new Set(keys).size).toBe(4)
 })
-
-// --- Two people on one browser ------------------------------------------------------------------
 
 test("an answer after the person signed out and another signed in never writes the first one's pending submissions under the second's key", async () => {
   claimDrafts(7)
@@ -184,15 +174,12 @@ test("an answer after the person signed out and another signed in never writes t
     },
   })
   const transport = httpTransport(base, 1)
-  // One whose outcome is unknown stays pending; the next is held.
   await expect(press(transport, { amount: '12.50', note: 'private' })).rejects.toBeTruthy()
   expect(sessionStorage.getItem('taskto:operations:7')).toContain('private')
   const held = press(transport, { amount: '3' }).catch(() => {})
   await vi.waitFor(() => expect(answer).not.toBe(null))
-  // Signed out: what was typed in pending submissions goes from this tab.
   forgetDrafts()
   expect(sessionStorage.getItem('taskto:operations:7')).toBeNull()
-  // The next person signs in and has a pending submission of their own.
   claimDrafts(8)
   sessionStorage.setItem('taskto:operations:8', JSON.stringify([['theirs', 'op-of-theirs-1']]))
   answer()
@@ -215,7 +202,6 @@ test('an answer after the same person signed out and in again never writes the o
   await vi.waitFor(() => expect(sessionStorage.getItem('taskto:operations:7')).not.toBeNull())
   forgetDrafts()
   claimDrafts(7)
-  // The new sign-in's own pending submission.
   sessionStorage.setItem('taskto:operations:7', JSON.stringify([['new', 'op-of-the-new-sign-in']]))
   answer()
   await held
@@ -223,12 +209,9 @@ test('an answer after the same person signed out and in again never writes the o
 })
 
 test("claiming this browser removes another account's pending submissions from this tab, whatever the browser-wide claim says", async () => {
-  // This tab held the first person's pending submission when another tab signed them out and the
-  // second person in (the browser-wide claim already names the second).
   sessionStorage.setItem('taskto:operations:7', JSON.stringify([['theirs', 'op-of-the-first-person']]))
   sessionStorage.setItem('taskto:operations:8', JSON.stringify([['mine', 'op-of-the-second-person']]))
   localStorage.setItem('taskto:drafts-of', '8')
-  // This tab is reloaded, and the second person's session claims it.
   claimDrafts(8)
   expect(sessionStorage.getItem('taskto:operations:7')).toBeNull()
   expect(sessionStorage.getItem('taskto:operations:8')).toBe(JSON.stringify([['mine', 'op-of-the-second-person']]))

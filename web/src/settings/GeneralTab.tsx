@@ -1,7 +1,3 @@
-// General: the workspace's own settings, for its admins: its default language, which members
-// get when their browser asks for a language the app doesn't have, and whether the server can
-// send email (docs/install.md#email), with a test message to the admin's own address.
-
 import { type FormEvent, useEffect, useState } from 'react'
 import { api, type MailStatus, mailPath, type Workspace } from '../api'
 import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, t as translate, useT } from '../i18n'
@@ -17,26 +13,20 @@ import { Select } from '../ui/Select'
 import { toast } from '../ui/Toast'
 import { Alert, Facts, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
-// `operator`: they run the server, so the server's own email is theirs to see; other admins' routes for it
-// answer 403.
 export function GeneralTab({ workspace, email, operator }: { workspace: Workspace; email: string; operator: boolean }) {
   const t = useT()
   const [locale, setLocale] = useState(workspace.locale || DEFAULT_LOCALE)
-  // The workspace's value from the server, when it comes again.
   useEffect(() => setLocale(workspace.locale || DEFAULT_LOCALE), [workspace.locale])
   const { busy, error, run } = useAction()
   const mounted = useMounted()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    // English, the default, is stored as "": no default picked.
     const body = { locale: locale === DEFAULT_LOCALE ? '' : locale }
     const session = sameSession()
     const ok = await run(() => api(`/api/workspaces/${workspace.id}`, { method: 'PATCH', body }))
     if (ok) {
       await setPreferences({ workspace: body.locale })
-      // The session may have ended, or the person left the tab, while the language's file loaded.
       if (!session() || !mounted.current) return
-      // In the language the page is in now, which the change may have made another.
       toast({ message: translate('settings.general.saved'), tone: 'success' })
     }
   }
@@ -66,8 +56,6 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
   )
 }
 
-// The server's outgoing email: where it sends through (never the account or its password), and
-// a test message that goes to the admin's own address and nowhere else.
 function MailPanel({ workspace, email }: { workspace: number; email: string }) {
   const t = useT()
   const status = useLoad(() => api<MailStatus>(mailPath(workspace)), [workspace])

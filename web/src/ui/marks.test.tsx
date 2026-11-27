@@ -16,7 +16,6 @@ describe('labelHue', () => {
     expect(LABEL_HUES).toContain(labelHue('launch'))
     expect(labelHue('Launch')).toBe(labelHue('launch'))
     expect(labelHue('  launch ')).toBe(labelHue('launch'))
-    // "é" precomposed and as "e" with a combining accent.
     expect(labelHue('café')).toBe(labelHue('café'))
   })
 
@@ -27,7 +26,6 @@ describe('labelHue', () => {
   })
 
   test("doesn't depend on the locale: Turkish dotted and dotless i are lower-cased the same everywhere", () => {
-    // toLowerCase, not toLocaleLowerCase: "I" is "i" on every machine.
     expect(labelHue('IDEAS')).toBe(labelHue('ideas'))
   })
 
@@ -72,14 +70,12 @@ describe('labelHue', () => {
     ]
     const counts = new Map<string, number>()
     for (const n of names) counts.set(labelHue(n), (counts.get(labelHue(n)) ?? 0) + 1)
-    // Every hue is used, and none takes more than about twice its share.
     expect([...counts.keys()].sort()).toEqual([...LABEL_HUES].sort())
     for (const [hue, count] of counts) expect(count, hue).toBeLessThanOrEqual((names.length / LABEL_HUES.length) * 2)
   })
 })
 
 describe('normalizeLabelName', () => {
-  // What the server's normalizeLabel (internal/boards/validate.go) keeps for each name, from Go.
   const SERVER: [string, string][] = [
     [' Tech\u0009Debt\u000a', 'tech debt'],
     ['K', 'k'],
@@ -148,7 +144,6 @@ describe('Avatar', () => {
     expect(initials('  ')).toBe('')
     expect(initials('Élodie Ödegaard')).toBe('ÉÖ')
     expect(initials('😀 Smile')).toBe('😀S')
-    // An accent written as a letter and a combining mark, and an emoji of several code points.
     expect(initials('E\u0301lodie O\u0308degaard')).toBe('E\u0301O\u0308')
     expect(initials('👩\u200d💻 Smith')).toBe('👩\u200d💻S')
   })

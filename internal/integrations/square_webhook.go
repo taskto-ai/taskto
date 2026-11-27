@@ -10,16 +10,8 @@ import (
 	"time"
 )
 
-// Square's webhooks: the signature over the notification URL and the body, and the events of a payment
-// (see the notes at the top of square.go).
-
 var errNoURL = errors.New("no webhook address to verify against")
 
-// VerifyWebhook checks a Square delivery. The one signature in the header is compared, in constant
-// time, with the HMAC of each configured secret over the webhook address that secret was saved for
-// (the current secret over URL, the previous one over PreviousURL) and the exact body: verifyKeys MACs over the body for every well-formed delivery, as Stripe's verifier computes,
-// whatever secrets there are. Only once it matched is the body read, for its one signed time, the
-// event's created_at, which must be within squareRetryWindow (and squareSkew) of now.
 func (square) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, now time.Time) error {
 	keys := [verifyKeys][]byte{verifyPad, verifyPad}
 	urls := [verifyKeys]string{secrets.URL, secrets.URL}
@@ -42,15 +34,13 @@ func (square) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, 
 	if err != nil || len(got) != sha256.Size {
 		return errMalformedHeader
 	}
-	// A secret matches only over an address of its own: one with none (saved while the server had no
-	// public URL) verifies nothing, whatever the other secret's address is.
 	match, addressed := 0, 0
 	for slot, key := range keys {
 		if slot < real && urls[slot] != "" {
 			addressed = 1
 		}
 		if hmac.Equal(squareMAC(key, urls[slot], body), got) && slot < real && urls[slot] != "" {
-			match = 1 // no early exit
+			match = 1
 		}
 	}
 	switch {
@@ -87,9 +77,6 @@ func squareMAC(key []byte, notificationURL string, body []byte) []byte {
 	return m.Sum(nil)
 }
 
-// squareEvent is the envelope of a Square event and the fields of a Payment that Normalize reads.
-// Everything else (the buyer's email, address and card, the receipt, the note's other uses) is never
-// decoded.
 type squareEvent struct {
 	MerchantID string `json:"merchant_id"`
 	Type       string `json:"type"`
@@ -111,19 +98,6 @@ type squareEvent struct {
 	} `json:"data"`
 }
 
-// Normalize reads a verified Square event. Square has no event per outcome, only the payment's
-// creation and its updates, so the payment's own fields decide:
-//
-//	payment.succeeded: a payment.created or payment.updated whose payment is COMPLETED, has refunded
-//	   nothing and carries a ref's token as its note. Square may tell one payment more than once (its
-//	   creation and an update, or an update of something else); the ref's state change applies it once.
-//	payment.refunded:  a payment.updated of a COMPLETED payment with refunded_money above zero: what has
-//	   been refunded so far, mapped to the ref through the payment's id.
-//
-// APPROVED and PENDING payments are not yet paid, and a FAILED or CANCELED one leaves the link open
-// for the payer to try again, so none of them is an event. A Square link never expires. A payment
-// without a token of ours, refund.* events (one refund's own amount, not the total) and every other
-// type are not events.
 func (square) Normalize(body []byte) (Event, bool) {
 	var ev squareEvent
 	if json.Unmarshal(body, &ev) != nil || !squareEventIDRe.MatchString(ev.EventID) || !squareIDRe.MatchString(ev.MerchantID) {
@@ -150,7 +124,7 @@ func (square) Normalize(body []byte) (Event, bool) {
 		return out, true
 	}
 	if p.Note == nil || !refTokenRe.MatchString(*p.Note) {
-		return Event{}, false // a payment that no link of ours made
+		return Event{}, false
 	}
 	out.Kind, out.RefToken, out.AmountMinor, out.Currency = EventPaymentSucceeded, *p.Note, p.TotalMoney.Amount, p.TotalMoney.Currency
 	return out, true

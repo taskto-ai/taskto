@@ -34,7 +34,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   sessionStorage.clear()
-  ackDeletion() // a date a test left in memory
+  ackDeletion()
 })
 afterEach(() => {
   cleanup()
@@ -51,16 +51,13 @@ test('deleting your account offers the export first, asks for the password, and 
   window.addEventListener(SESSION_LOST, lost)
   render(<SettingsPage me={me(false)} workspace={plain} tab="data" />)
   await screen.findByRole('heading', { name: 'Delete your account' })
-  // Looking at the page asks the server nothing.
   expect(calls).toEqual([])
   fireEvent.click(screen.getByRole('button', { name: 'Delete my account…' }))
-  // What it does, in plain words, before the form.
   await screen.findByText(/kept for 14 days/)
   screen.getByText(/shown as “Deleted user”/)
   expect(screen.getByRole('button', { name: 'Download my data first' })).toBeTruthy()
 
   const form = screen.getByRole('form', { name: 'Delete your account' })
-  // Nothing is sent until the password is given.
   expect(sent(calls, 'POST', '/api/me/deletion')).toHaveLength(0)
   expect(within(form).queryByLabelText('Two-factor code or recovery code')).toBeNull()
   fireEvent.change(within(form).getByLabelText('Your password'), { target: { value: 'fake-test-password' } })
@@ -68,12 +65,9 @@ test('deleting your account offers the export first, asks for the password, and 
 
   await waitFor(() => expect(sent(calls, 'POST', '/api/me/deletion')).toHaveLength(1))
   expect(sent(calls, 'POST', '/api/me/deletion')[0].body).toEqual({ password: 'fake-test-password' })
-  // Bound to the account whose form it is (the owner, 1), so a stale tab can't delete another's.
   expect(Object.values(sent(calls, 'POST', '/api/me/deletion')[0].headers)).toContain('1')
   await waitFor(() => expect(lost).toHaveBeenCalled())
-  // The end of the session is the owner's (1): a window signed in as another account ignores it.
   expect((lost.mock.calls[0][0] as CustomEvent).detail).toEqual({ user: 1 })
-  // The sign-in screen is told when the account is erased: the date waits there until it is shown.
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
   window.removeEventListener(SESSION_LOST, lost)
@@ -85,7 +79,6 @@ test('the answer arriving after another account signed in here, in another tab, 
   fakeFetch({
     'GET /api/me/deletion': { body: status() },
     'POST /api/me/deletion': () => {
-      // Before the answer, account 2 signs in through another tab and writes a draft.
       writeState('taskto:drafts-of', '2')
       writeState('taskto:message:2:c1', 'the other account’s unsent text')
       return { status: 202, body: { purge_at: '2026-12-08T10:00:00.000Z' } }
@@ -138,7 +131,6 @@ test('a deletion refused because its session ended already, in another tab, ends
   fireEvent.change(within(form).getByLabelText('Your password'), { target: { value: 'fake-test-password' } })
   fireEvent.click(within(form).getByRole('button', { name: 'Delete my account' }))
   await waitFor(() => expect(lost).toHaveBeenCalled())
-  // Told for the owner (1), whose form this is: a window signed in as another account ignores it.
   expect((lost.mock.calls[0][0] as CustomEvent).detail).toEqual({ user: 1 })
   expect(peekDeletion()).toBeNull()
   window.removeEventListener(SESSION_LOST, lost)
@@ -204,20 +196,16 @@ test('an admin has no action that deletes a member’s account: only the person 
   render(<SettingsPage me={me(false)} workspace={admin} tab="members" />)
   await screen.findByText('alice@example.com')
 
-  // Not in the menu of an ordinary member, of one who is waiting to be deleted, nor anywhere else:
-  // an admin can remove a member from the workspace, and that is all they can do about the account.
   fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
   expect(screen.getByRole('menuitem', { name: 'Remove' })).toBeTruthy()
   expect(screen.queryByRole('menuitem', { name: /Delete account/ })).toBeNull()
   fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Remove' }), { key: 'Escape' })
-  // The row of an account that waits to be deleted shows when, with nothing to act on it but removing.
   const row = screen.getByText('bob@example.com').closest('tr') as HTMLElement
   await within(row).findByText(/Deleting on/)
   fireEvent.click(screen.getByRole('button', { name: 'More actions for Bob' }))
   expect(screen.queryByRole('menuitem', { name: /Delete account/ })).toBeNull()
   expect(screen.queryByRole('menuitem', { name: 'Enable' })).toBeNull()
   expect(screen.queryByRole('menuitem', { name: 'Disable' })).toBeNull()
-  // A plain admin sees no list of waiting accounts: that is the operator's.
   expect(screen.queryByRole('heading', { name: 'Accounts waiting to be deleted' })).toBeNull()
   expect(sent(calls, 'GET', '/api/workspaces/1/account-deletions')).toHaveLength(0)
   expect(calls.filter((c) => c.path.endsWith('/deletion'))).toHaveLength(0)
@@ -255,7 +243,6 @@ test('an operator sees every account waiting to be deleted and cancels one', asy
   const alice = within(list).getByText('Alice').closest('li') as HTMLElement
   const bob = within(list).getByText('Bob').closest('li') as HTMLElement
   expect(within(alice).getByText(/Purged on/)).toBeTruthy()
-  // Once the purge has begun it can no longer be cancelled, and the list says so.
   expect(within(bob).getByText(/Being purged now/)).toBeTruthy()
   expect(within(bob).queryByRole('button')).toBeNull()
 

@@ -1,7 +1,3 @@
-// What a tab that is not the offline writer says (docs/offline.md, "One writer"): the records and the
-// queue are read here, and changes are made in the tab that holds the right, or here once the person
-// takes it over.
-
 import { useState } from 'react'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'

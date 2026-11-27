@@ -27,7 +27,6 @@ var (
 	bob   = Author{Name: "Bob", Email: "bob@example.com"}
 )
 
-// writable is a space its caller may write.
 func writable(id int64) access.Space {
 	return access.Space{ID: id, WorkspaceID: 1, Kind: access.Shared, Access: access.Write}
 }
@@ -60,8 +59,6 @@ func readText(t *testing.T, s *Store, sp access.Space, name, at string) string {
 	return string(must[Doc](t)(s.Read(ctx, sp, name, at)).Content)
 }
 
-// checkClean checks that the space's directory is a clean checkout of main, as git
-// itself sees it, and that its files are exactly want.
 func checkClean(t *testing.T, dataDir string, sp access.Space, want map[string]string) {
 	t.Helper()
 	dir := sp.Dir(dataDir)
@@ -107,7 +104,6 @@ func TestCRUD(t *testing.T) {
 	s, dataDir := newStore(t, Options{})
 	sp := writable(1)
 
-	// Nothing is created until the first write.
 	if page := must[Page](t)(s.List(ctx, sp, "", "", 0)); len(page.Docs) != 0 {
 		t.Fatalf("new space lists %v", page.Docs)
 	}
@@ -131,7 +127,6 @@ func TestCRUD(t *testing.T) {
 	if updated.Doc.Version == doc.Version {
 		t.Fatal("the version didn't change")
 	}
-	// Writing the same content again changes nothing and commits nothing.
 	same := must[Result](t)(s.Put(ctx, sp, "notes/plan.md", []byte("# Plan\n\nv2\n"), updated.Doc.Version, bob, ""))
 	if same.Commit != updated.Commit {
 		t.Fatalf("an unchanged document made commit %s", same.Commit)
@@ -169,7 +164,6 @@ func TestConflicts(t *testing.T) {
 	sp := writable(1)
 	v1 := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("one"), "", alice, "")).Doc.Version
 
-	// Two people edit version 1; the second to save gets a conflict, not an overwrite.
 	must[Result](t)(s.Put(ctx, sp, "a.md", []byte("alice's"), v1, alice, ""))
 	_, err := s.Put(ctx, sp, "a.md", []byte("bob's"), v1, bob, "")
 	wantErr(t, err, ErrConflict)
@@ -231,7 +225,6 @@ func TestConcurrentWrites(t *testing.T) {
 	var wins, conflicts int
 	for i := range n {
 		wg.Go(func() {
-			// Everyone edits the same version of shared.md: one wins.
 			_, err := s.Put(ctx, sp, "shared.md", fmt.Appendf(nil, "edit %d", i), base, alice, "")
 			mu.Lock()
 			defer mu.Unlock()
@@ -245,7 +238,6 @@ func TestConcurrentWrites(t *testing.T) {
 			}
 		})
 		wg.Go(func() {
-			// Separate documents don't conflict.
 			if _, err := s.Put(ctx, sp, fmt.Sprintf("own/%d.md", i), []byte("mine"), "", bob, ""); err != nil {
 				t.Error(err)
 			}
@@ -303,7 +295,6 @@ func TestHistoryAndRestore(t *testing.T) {
 		t.Fatalf("first commit = %+v", h.Commits[2])
 	}
 
-	// Pages: one at a time, each continuing before the last.
 	var paged []string
 	for before := ""; ; {
 		page := must[History](t)(s.History(ctx, sp, "a.md", before, 1))
@@ -322,7 +313,6 @@ func TestHistoryAndRestore(t *testing.T) {
 		t.Fatalf("space history has %d commits, want 4", len(all.Commits))
 	}
 
-	// Past versions.
 	if got := readText(t, s, sp, "a.md", r1.Commit); got != "one" {
 		t.Fatalf("a.md at r1 = %q", got)
 	}
@@ -333,7 +323,6 @@ func TestHistoryAndRestore(t *testing.T) {
 	_, err = s.Read(ctx, sp, "a.md", "HEAD~1")
 	wantErr(t, err, ErrInvalid)
 
-	// Restoring brings a deleted document back, as a new commit.
 	restored := must[Result](t)(s.Restore(ctx, sp, "a.md", r1.Commit, "", bob, ""))
 	if restored.Doc.Version != r1.Doc.Version || readText(t, s, sp, "a.md", "") != "one" {
 		t.Fatalf("restore = %+v", restored)
@@ -342,7 +331,6 @@ func TestHistoryAndRestore(t *testing.T) {
 	if h.Commits[0].Commit != restored.Commit || h.Commits[0].Change != "create" || h.Commits[0].Message != "Restore a.md from "+r1.Commit[:7] {
 		t.Fatalf("after restore, newest = %+v", h.Commits[0])
 	}
-	// Restoring over a newer version needs that version.
 	r4 := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("four"), restored.Doc.Version, alice, ""))
 	_, err = s.Restore(ctx, sp, "a.md", r2.Commit, restored.Doc.Version, bob, "")
 	wantErr(t, err, ErrConflict)
@@ -374,13 +362,11 @@ func TestLimits(t *testing.T) {
 	wantErr(t, err, ErrTooLarge)
 	must[Result](t)(s.Put(ctx, sp, "max.bin", make([]byte, 100), "", alice, ""))
 
-	// Random bytes don't compress: the repository fills up.
 	var full error
 	for i := 0; i < 100 && full == nil; i++ {
 		_, full = s.Put(ctx, sp, fmt.Sprintf("r%d.bin", i), []byte(randomSuffix()+randomSuffix()+randomSuffix()+randomSuffix()), "", alice, "")
 	}
 	wantErr(t, full, ErrRepoFull)
-	// Moves and deletes still work, so people can tidy up.
 	must[Result](t)(s.Move(ctx, sp, "max.bin", "old/max.bin", "", alice, ""))
 
 	deep := strings.Repeat("d/", MaxDepth-1)
@@ -480,8 +466,6 @@ func TestAccessChecked(t *testing.T) {
 	wantErr(t, err, access.ErrNotFound)
 }
 
-// TestLinksOutOfTheSpace plants links in a space's directory, as something outside the
-// API might, and checks nothing is read or written through them.
 func TestLinksOutOfTheSpace(t *testing.T) {
 	s, dataDir := newStore(t, Options{})
 	outside := t.TempDir()
@@ -490,7 +474,6 @@ func TestLinksOutOfTheSpace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A .git that is a link: the repository can't be opened.
 	sp := writable(1)
 	if err := os.MkdirAll(sp.Dir(dataDir), 0o700); err != nil {
 		t.Fatal(err)
@@ -502,7 +485,6 @@ func TestLinksOutOfTheSpace(t *testing.T) {
 		t.Fatal("wrote through a .git link")
 	}
 
-	// A folder that is a link out: the file isn't written through it.
 	sp2 := writable(2)
 	must[Result](t)(s.Put(ctx, sp2, "first.md", []byte("x"), "", alice, ""))
 	if err := os.Symlink(outside, filepath.Join(sp2.Dir(dataDir), "notes")); err != nil {
@@ -521,12 +503,10 @@ func TestLinksOutOfTheSpace(t *testing.T) {
 	}
 }
 
-// A folder move can't put what's inside it past the depth or length limits, even when
-// the destination folder itself is fine.
 func TestMoveFolderKeepsTheLimits(t *testing.T) {
 	s, dataDir := newStore(t, Options{})
 	sp := writable(1)
-	deep := strings.Repeat("d/", MaxDepth-2) + "doc.md" // MaxDepth-1 levels
+	deep := strings.Repeat("d/", MaxDepth-2) + "doc.md"
 	must[Result](t)(s.Put(ctx, sp, deep, []byte("x"), "", alice, ""))
 	head := must[History](t)(s.History(ctx, sp, "", "", 0)).Commits[0].Commit
 	_, err := s.Move(ctx, sp, "d", "x/y/d", "", alice, "")
@@ -537,7 +517,6 @@ func TestMoveFolderKeepsTheLimits(t *testing.T) {
 	checkClean(t, dataDir, sp, map[string]string{deep: "x"})
 }
 
-// The real git CLI sees the space as a clean checkout too, file modes included.
 func TestGitCLISeesACleanCheckout(t *testing.T) {
 	gitBin, err := exec.LookPath("git")
 	if err != nil {
@@ -561,8 +540,6 @@ func TestGitCLISeesACleanCheckout(t *testing.T) {
 	}
 }
 
-// A change whose files can't all be written changes nothing: main stays, the files are
-// put back, and the same change works once the problem is gone.
 func TestFailedChangeChangesNothing(t *testing.T) {
 	s, dataDir := newStore(t, Options{})
 	sp := writable(1)
@@ -571,7 +548,6 @@ func TestFailedChangeChangesNothing(t *testing.T) {
 	}
 	head := must[History](t)(s.History(ctx, sp, "", "", 0)).Commits[0].Commit
 
-	// Something outside git sits where the move's second file must go.
 	obstacle := filepath.Join(sp.Dir(dataDir), "done", "b.md", "in-the-way")
 	if err := os.MkdirAll(obstacle, 0o700); err != nil {
 		t.Fatal(err)
@@ -598,8 +574,6 @@ func TestFailedChangeChangesNothing(t *testing.T) {
 	checkClean(t, dataDir, sp, map[string]string{"done/a.md": "team/a.md", "done/b.md": "team/b.md"})
 }
 
-// Renames add commits and trees but no content; they still count, so renaming back and
-// forth can't grow a full repository without end.
 func TestRenamesCanNotOutgrowTheLimit(t *testing.T) {
 	s, dataDir := newStore(t, Options{MaxRepoSize: 16 << 10})
 	sp := writable(1)
@@ -625,14 +599,11 @@ func TestRenamesCanNotOutgrowTheLimit(t *testing.T) {
 	}
 }
 
-// A change cut off before main moved (the process died) is undone by the next write: the
-// files it had written go back to what main holds.
 func TestUnfinishedChangeIsRepaired(t *testing.T) {
 	s, dataDir := newStore(t, Options{})
 	sp := writable(1)
 	must[Result](t)(s.Put(ctx, sp, "a.md", []byte("committed"), "", alice, ""))
 
-	// What a crash mid-change leaves: a file written, the pending list, main unmoved.
 	dir := sp.Dir(dataDir)
 	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("half-written"), 0o600); err != nil {
 		t.Fatal(err)

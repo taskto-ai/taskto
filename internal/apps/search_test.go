@@ -9,9 +9,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// The search index holds a record's string, choice and barcode values, as the live release
-// declares them: never a field's name, nothing undeclared, nothing of another type, and nothing at
-// all of a record that is deleted, gone, or of an app that was never published.
 func TestSearchTextIsTheDeclaredTextValues(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -29,14 +26,12 @@ func TestSearchTextIsTheDeclaredTextValues(t *testing.T) {
 		t.Fatalf("text = %q, %v, %v: want the description only, not the amount or any name", text, indexed, err)
 	}
 
-	// An undeclared field, and a value of another type than its field's, are left out.
 	if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.hidden', 'quokka', '$.description', 'visible', '$.amount', 'text') WHERE id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
 	if text, _, _ = SearchText(ctx, w.e.db, id); text != "visible" {
 		t.Fatalf("text = %q", text)
 	}
-	// A string of the wrong type for its field is left out too.
 	if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.description', 12) WHERE id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +39,6 @@ func TestSearchTextIsTheDeclaredTextValues(t *testing.T) {
 		t.Fatalf("text = %q, indexed = %v", text, indexed)
 	}
 
-	// Deleted, gone, or a draft's: nothing.
 	if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.description', 'visible'), deleted_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +58,6 @@ func TestSearchTextIsTheDeclaredTextValues(t *testing.T) {
 	}
 }
 
-// A record's text is bounded, in bytes: the fields that fit, in the collection's order.
 func TestSearchTextIsBounded(t *testing.T) {
 	w := newWorld(t)
 	id := int64(0)
@@ -80,13 +73,12 @@ func TestSearchTextIsBounded(t *testing.T) {
 	}
 }
 
-// ReadsRecord is the one test of whether someone reads a record, as the lists of records go by.
 func TestReadsRecordIsTheScopeOfTheRoles(t *testing.T) {
 	mine, theirs, gone := sql.NullInt64{Int64: 7, Valid: true}, sql.NullInt64{Int64: 8, Valid: true}, sql.NullInt64{}
 	cases := []struct {
 		name string
 		acc  access.AppAccess
-		want [3]bool // a record of 7, of 8, of nobody's account any more
+		want [3]bool
 	}{
 		{"every record", access.AppAccess{View: true, ReadRecords: access.ScopeAll}, [3]bool{true, true, true}},
 		{"only their own", access.AppAccess{View: true, ReadRecords: access.ScopeOwn}, [3]bool{true, false, false}},
@@ -108,8 +100,6 @@ func TestReadsRecordIsTheScopeOfTheRoles(t *testing.T) {
 	}
 }
 
-// Choices are indexed as people read them (the label, and the stored value too if it is another
-// text) and barcodes as they are; a location, a signature and attachments are never indexed.
 func TestSearchTextOfChoicesBarcodesAndCaptures(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -120,7 +110,6 @@ func TestSearchTextOfChoicesBarcodesAndCaptures(t *testing.T) {
 		{"name":"where","type":"location"},
 		{"name":"sign","type":"signature"},
 		{"name":"photos","type":"attachment"}]`
-	// A release can't be changed: a new one, with these fields, goes live.
 	if _, err := w.e.db.Exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
 		SELECT rel.app_id, 99, json_set(rel.definition, '$.collection', json_object('fields', json(?))), rel.definition_version, rel.requires
 		FROM app_releases rel JOIN apps a ON a.id = rel.app_id AND rel.number = a.live_release WHERE a.id = ?`, fields, w.aliceApp.ID); err != nil {
@@ -144,15 +133,12 @@ func TestSearchTextOfChoicesBarcodesAndCaptures(t *testing.T) {
 		}
 		return text
 	}
-	// A labelled choice: its label, then the value it is stored as. A barcode as it is.
 	if got := set(`{"description":"lunch","category":"food","sku":"4006381333931"}`); got != "lunch\nMeals and snacks\nfood\n4006381333931" {
 		t.Fatalf("text = %q", got)
 	}
-	// An option with no label is shown, and stored, as it is: once.
 	if got := set(`{"category":"travel"}`); got != "travel" {
 		t.Fatalf("an unlabelled choice = %q", got)
 	}
-	// A location, a signature and photos hold ids and coordinates: nothing to search for.
 	got := set(`{"description":"visit","where":{"lat":-6.1,"lng":39.3,"captured_at":"2026-01-01T00:00:00.000Z"},"sign":"signature-id","photos":["photo-id-1","photo-id-2"]}`)
 	if got != "visit" {
 		t.Fatalf("a record with a location, a signature and photos = %q, want its description only", got)

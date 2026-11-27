@@ -2,11 +2,6 @@
 
 package providers
 
-// The feed with the real agent runtime (agent/dist). Like internal/agentrt's integration tests
-// it needs Node and a built agent package, so it only runs with TASKTO_AGENT_IT=1
-// (make agent-it). No request reaches a model: these tests only look at GET /models and the
-// scripted model.
-
 import (
 	"context"
 	"errors"
@@ -24,17 +19,15 @@ import (
 	"taskto.ai/taskto/internal/egress"
 )
 
-// startAgent runs the agent runtime on the feed's providers file, and returns its client.
 func startAgent(t *testing.T, e *env, feed *Feed) *agentrt.Client {
 	t.Helper()
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	entry, err := filepath.Abs("../../agent/dist/test-entry.js") // with the pause tool the test's model calls
+	entry, err := filepath.Abs("../../agent/dist/test-entry.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A short directory: Unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "taskto-feed-")
 	if err != nil {
 		t.Fatal(err)
@@ -102,8 +95,6 @@ func providerIDs(t *testing.T, client *agentrt.Client) []string {
 	return ids
 }
 
-// Accounts reach the running agent runtime on a reload, a run in progress goes on through it,
-// and a file the agent runtime refuses leaves its providers as they were.
 func TestFeedReloadsTheAgentRuntime(t *testing.T) {
 	e := newEnv(t)
 	client := startAgent(t, e, e.feed)
@@ -113,7 +104,6 @@ func TestFeedReloadsTheAgentRuntime(t *testing.T) {
 		t.Fatalf("providers at start = %v", got)
 	}
 
-	// A run in progress: the scripted model calls a tool that takes a while.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	conv, err := client.CreateConversation(ctx)
@@ -145,7 +135,6 @@ func TestFeedReloadsTheAgentRuntime(t *testing.T) {
 		t.Fatalf("providers after deleting one = %v, want %v", got, want)
 	}
 
-	// A file the agent runtime refuses: it answers 400 and keeps what it had.
 	if err := writeFile(e.feed.Path(), []byte(`{"providers":[{"id":"x","kind":"magic"}]}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -160,15 +149,12 @@ func TestFeedReloadsTheAgentRuntime(t *testing.T) {
 	}
 }
 
-// Every compat setting the API accepts is one the agent runtime accepts too. This catches a
-// pi-ai upgrade that drops or changes one.
 func TestAgentRuntimeAcceptsEveryCompatSetting(t *testing.T) {
 	e := newEnv(t)
 	client := startAgent(t, e, e.feed)
 	e.feed.reload = reloadVia(client)
 	owner, _ := e.setup()
 
-	// Each setting in turn with every value it may take, as few accounts as that needs.
 	var bodies []map[string]any
 	add := func(name string, value any) {
 		for _, b := range bodies {
@@ -203,7 +189,6 @@ func TestAgentRuntimeAcceptsEveryCompatSetting(t *testing.T) {
 	}
 }
 
-// The agent runtime accepts every egress policy the server writes for the accounts.
 func TestFeedEgressPolicies(t *testing.T) {
 	e := newEnv(t)
 	e.setEgress(Egress{

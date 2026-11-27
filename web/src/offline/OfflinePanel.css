@@ -1,6 +1,3 @@
-/* "Offline use" under a launched app (OfflinePanel): quiet, after the app and its records, set off by
-   a rule rather than a panel of its own. Its one action is secondary. */
-
 @layer screens {
   .ui-offline {
     display: grid;

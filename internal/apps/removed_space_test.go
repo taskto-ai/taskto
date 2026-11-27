@@ -20,10 +20,6 @@ import (
 	"taskto.ai/taskto/internal/knowledge"
 )
 
-// The files of an app's attachments are in the space's directory, which the knowledge base removes
-// with a purged account's private space. An upload's chunk, a finished picture, a read and the
-// sweep each open that directory, which makes it if it isn't there: after the removal they must
-// refuse instead, and leave nothing of the space on disk.
 func TestNothingMakesARemovedSpaceAgain(t *testing.T) {
 	w := newWorld(t)
 	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
@@ -62,9 +58,6 @@ func TestNothingMakesARemovedSpaceAgain(t *testing.T) {
 	gone("the sweep")
 }
 
-// removalIsWaiting reports whether a goroutine is in knowledge's RemoveSpace, blocked on the space's
-// exclusive lock: observed from the goroutines' stacks, so the test needs no sleep and no hook in
-// production code.
 func removalIsWaiting() bool {
 	buf := make([]byte, 1<<20)
 	buf = buf[:runtime.Stack(buf, true)]
@@ -76,9 +69,6 @@ func removalIsWaiting() bool {
 	return false
 }
 
-// A finalize that finds its picture isn't one removes the files through the directory it holds. If
-// it entered the space again while a removal waits for it to leave, the second entry would queue
-// behind the removal, which waits for the first: neither could go on.
 func TestCleanupInsideAHeldSpaceDoesNotWaitForAPendingRemoval(t *testing.T) {
 	w := newWorld(t)
 	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
@@ -128,10 +118,6 @@ func (w *world) generation(s int64) int64 {
 	return c
 }
 
-// A relocation that was found for an app and an attachment, and runs later, does only what is still
-// true when it has the spaces held: the app may have gone back to where it was, or the space it was
-// to move to may be another one that was given a purged space's ID. Neither may take a photo out
-// of the space it is in, or copy it into one that is not the app's.
 func TestAStaleRelocationMovesNothing(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -143,7 +129,6 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 	id := w.upload(w.alice, from, a, "photos", picture, 4096)
 	before := w.files(from, a)
 
-	// The app is back in its first space: a move to the other is no longer wanted.
 	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID)); err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +143,6 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 		t.Fatalf("the attachment's space is %d (%v)", space, err)
 	}
 
-	// The app's home is the other space now (its move is recorded, its files not yet): a relocation
-	// that knew the other space by a generation it no longer has is for a space that is gone.
 	if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +154,6 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 		t.Fatalf("a relocation to a space that was replaced copied into %v", got)
 	}
 
-	// The same relocation with the spaces as they are does the move.
 	if err := w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID)); err != nil {
 		t.Fatal(err)
 	}
@@ -183,10 +165,6 @@ func TestAStaleRelocationMovesNothing(t *testing.T) {
 	}
 }
 
-// A chunk takes the space before it takes the database's write lock, as finalize and relocation do.
-// If it took them the other way round, a removal waiting for the space would leave the chunk
-// holding the database lock while it waits for the space, and a finalize holding the space while it
-// waits for the database: neither goes on until the database gives up.
 func TestAChunkWaitsForTheSpaceWithoutHoldingTheDatabase(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -197,7 +175,6 @@ func TestAChunkWaitsForTheSpaceWithoutHoldingTheDatabase(t *testing.T) {
 	picture := testPNG(t, 64, 48)
 	id := w.start(w.alice, s, a, "photos", len(picture))
 
-	// A holder of the space, and a removal that waits for it: new holders queue behind the removal.
 	release, err := kb.HoldSpace(s)
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +186,6 @@ func TestAChunkWaitsForTheSpaceWithoutHoldingTheDatabase(t *testing.T) {
 	go func() { chunk <- w.chunk(w.alice, s, a, id, 0, picture).Code }()
 	spin(t, "the chunk to wait for the space", func() bool { return goroutineWith("putChunk", "sync.(*RWMutex).RLock") })
 
-	// The database is free while it waits.
 	written := make(chan error, 1)
 	go func() { written <- w.e.s.write(ctx, func(*sql.Tx) error { return nil }) }()
 	select {
@@ -230,8 +206,6 @@ func TestAChunkWaitsForTheSpaceWithoutHoldingTheDatabase(t *testing.T) {
 	}
 }
 
-// A space whose row is gone, found when its files are opened, is a 404 to the API and nothing to do
-// to the callers that clean up, not a failure of the server.
 func TestAFilesRootOfAGoneSpaceIsNotFound(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -249,8 +223,6 @@ func TestAFilesRootOfAGoneSpaceIsNotFound(t *testing.T) {
 	}
 }
 
-// goroutineWith reports whether a goroutine's stack has both words: how a test sees that code is
-// blocked where it expects, with no sleep and no hook in production code.
 func goroutineWith(a, b string) bool {
 	buf := make([]byte, 1<<20)
 	buf = buf[:runtime.Stack(buf, true)]
@@ -262,7 +234,6 @@ func goroutineWith(a, b string) bool {
 	return false
 }
 
-// spin yields until cond holds, and fails if it doesn't in ten seconds.
 func spin(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
@@ -276,11 +247,6 @@ func spin(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// The sequence that stalled the database: a finalize holds the space (it decodes the picture and
-// writes its files), a document write in the space queues for it, a chunk of another photo begins,
-// and the finalize goes on to its transaction. A chunk that took the database's write lock before
-// the space would hold it while it waited behind the document write, and the finalize would wait
-// for it: every write to the database waits with them until it gives up.
 func TestAFinalizeADocumentWriteAndAChunkDoNotWaitOnEachOther(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -305,7 +271,6 @@ func TestAFinalizeADocumentWriteAndAChunkDoNotWaitOnEachOther(t *testing.T) {
 	go func() { chunk <- w.chunk(w.alice, s, a, id, 0, picture).Code }()
 	spin(t, "the chunk to queue for the space", func() bool { return goroutineWith("putChunk", "sync.(*RWMutex).RLock") })
 
-	// The finalize reaches its transaction.
 	tx := make(chan error, 1)
 	go func() { tx <- w.e.s.write(ctx, func(*sql.Tx) error { return nil }) }()
 	select {
@@ -325,15 +290,10 @@ func TestAFinalizeADocumentWriteAndAChunkDoNotWaitOnEachOther(t *testing.T) {
 	}
 }
 
-// holderFunc is a SpaceHolder made of a function.
 type holderFunc func(sp access.Space) (func(), error)
 
 func (f holderFunc) HoldSpace(sp access.Space) (func(), error) { return f(sp) }
 
-// A finalize that finds its upload isn't a picture removes the files through the directory it
-// holds. Tested through the route, with a removal that comes to wait for the finalize's hold as
-// soon as it has it: a second entry into the space would queue behind that removal, which waits for
-// the first, and the finalize would never answer.
 func TestFinalizingANonPictureDoesNotEnterTheSpaceAgain(t *testing.T) {
 	w := newWorld(t)
 	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
@@ -371,7 +331,6 @@ func TestFinalizingANonPictureDoesNotEnterTheSpaceAgain(t *testing.T) {
 	}
 }
 
-// recordingHolder notes the order in which spaces are held.
 type recordingHolder struct {
 	*knowledge.Store
 	mu    sync.Mutex
@@ -385,9 +344,6 @@ func (r *recordingHolder) HoldSpace(sp access.Space) (func(), error) {
 	return r.Store.HoldSpace(sp)
 }
 
-// A relocation holds its two spaces in the order of their ids, whichever way the file goes, so two
-// moves in opposite directions never each hold one and wait for the other; and between a space and
-// itself it does nothing, rather than copy a file onto itself and remove the copy.
 func TestARelocationHoldsItsSpacesInOrderAndNeverMovesToItself(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -425,8 +381,6 @@ func TestARelocationHoldsItsSpacesInOrderAndNeverMovesToItself(t *testing.T) {
 	}
 }
 
-// The cleanups that find a space gone, because it was removed, have nothing to do and no failure
-// to report.
 func TestCleanupsOfARemovedSpaceHaveNothingToDo(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -450,10 +404,6 @@ func TestCleanupsOfARemovedSpaceHaveNothingToDo(t *testing.T) {
 	}
 }
 
-// A relocation checks that the app is still where the move was for, then copies, then records the
-// move in a transaction of its own, which waits for the database's write lock. If the app goes
-// back to its first space in the meantime, that transaction must record nothing, and the copy made
-// in the other space must be removed again: the attachment stays where it is, with its files.
 func TestARelocationThatLosesTheAppWhileWaitingForTheDatabaseMovesNothing(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -466,12 +416,10 @@ func TestARelocationThatLosesTheAppWhileWaitingForTheDatabaseMovesNothing(t *tes
 	if len(before) == 0 {
 		t.Fatal("fixture: the upload has no files")
 	}
-	// The app's move is recorded; its files have not followed.
 	if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, to.ID, a.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	// A writer holds the database, and moves the app back before it lets go.
 	holding, release := make(chan struct{}), make(chan struct{})
 	moved := make(chan error, 1)
 	go func() {
@@ -487,9 +435,7 @@ func TestARelocationThatLosesTheAppWhileWaitingForTheDatabaseMovesNothing(t *tes
 	go func() {
 		relocated <- w.e.s.relocateOne(ctx, a.ID, id, from.ID, w.generation(from.ID), to.ID, w.generation(to.ID))
 	}()
-	// The relocation has checked and copied, and waits for the write lock.
 	spin(t, "the relocation to wait for the database", func() bool { return goroutineWith("relocateOne", "(*Service).write") })
-	// It did copy: the cleanup below is of a copy that was made, not of nothing.
 	if got := w.files(to, a); !slices.Equal(got, before) {
 		t.Fatalf("the relocation waits for the database with %v in the other space, want its copy of %v", got, before)
 	}
@@ -513,9 +459,6 @@ func TestARelocationThatLosesTheAppWhileWaitingForTheDatabaseMovesNothing(t *tes
 	}
 }
 
-// Whichever of its two spaces has the lower ID, a relocation takes the files from the space they are
-// in and puts them in the app's: holding the spaces in the order of their IDs must not change which
-// directory is read and which is written.
 func TestARelocationMovesTheFilesWhicheverSpaceHasTheLowerID(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -528,7 +471,6 @@ func TestARelocationMovesTheFilesWhicheverSpaceHasTheLowerID(t *testing.T) {
 		t.Fatal("fixture: the upload has no files")
 	}
 
-	// There and back: one of the two moves goes from the lower ID to the higher, the other the other way.
 	at := w.alicePrivate
 	for _, to := range []access.Space{w.shared, w.alicePrivate} {
 		from := at
@@ -552,9 +494,6 @@ func TestARelocationMovesTheFilesWhicheverSpaceHasTheLowerID(t *testing.T) {
 	}
 }
 
-// The read that finds the space a chunk's attachment is in answers "not found" only for an
-// attachment that isn't there. A database that can't be read says nothing about the attachment:
-// its error is kept, and the chunk is not told its upload doesn't exist.
 func TestHoldingAnAttachmentsSpaceKeepsADatabaseError(t *testing.T) {
 	w := newWorld(t)
 	w.e.s.WithSpaceHolder(knowledge.New(w.e.dataDir, knowledge.Options{}))
@@ -582,11 +521,6 @@ func TestHoldingAnAttachmentsSpaceKeepsADatabaseError(t *testing.T) {
 	}
 }
 
-// The Store's check of a space's row reads the database, and a hold of the space that fails because
-// that read failed says nothing about the space: the chunk answers the failure (a 500), never "no
-// such upload", and the next one, with the database well again, is taken as if nothing had
-// happened. (A hold refused because the space was removed is still the 404 it always was:
-// TestNothingMakesARemovedSpaceAgain.)
 func TestAChunkWhoseSpaceHoldFailsOnTheDatabaseIsNotNotFound(t *testing.T) {
 	w := newWorld(t)
 	kb := knowledge.New(w.e.dataDir, knowledge.Options{})
@@ -612,9 +546,6 @@ func TestAChunkWhoseSpaceHoldFailsOnTheDatabaseIsNotNotFound(t *testing.T) {
 	expect(t, w.chunk(w.alice, s, a, id, 0, picture), http.StatusOK)
 }
 
-// The cleanups that work on files by what they found in the database (an attachment's, the sweep's
-// list of spaces) carry the generation of the space they found it in, and do nothing for a space
-// that has been removed and whose ID another has since: its files are the other's.
 func TestFileCleanupOfAReplacedSpaceLeavesTheReplacementsFiles(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -622,7 +553,6 @@ func TestFileCleanupOfAReplacedSpaceLeavesTheReplacementsFiles(t *testing.T) {
 	space := w.shared
 	old := access.Space{ID: space.ID, WorkspaceID: space.WorkspaceID, Generation: w.generation(space.ID)}
 
-	// The space is removed and another is made with its ID.
 	if _, err := w.e.db.Exec(`DELETE FROM spaces WHERE id = ?`, space.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +563,6 @@ func TestFileCleanupOfAReplacedSpaceLeavesTheReplacementsFiles(t *testing.T) {
 	if fresh == old.Generation {
 		t.Fatalf("fixture: the replacement has the generation %d too", fresh)
 	}
-	// Its file, a stray one as far as the sweep can tell (no row has it), made long ago.
 	const id = "0123456789abcdef0123456789abcdef"
 	root, done, err := w.e.s.filesRootAs(ctx, space.ID, fresh)
 	if err != nil {
@@ -663,7 +592,6 @@ func TestFileCleanupOfAReplacedSpaceLeavesTheReplacementsFiles(t *testing.T) {
 		t.Fatalf("the files of the space that was: %v", err)
 	}
 
-	// For the space that has the ID now, the same calls are the cleanup they are.
 	if err := w.e.s.unlinkFiles(ctx, space.ID, fresh, 7, id); err != nil {
 		t.Fatal(err)
 	}
@@ -672,8 +600,6 @@ func TestFileCleanupOfAReplacedSpaceLeavesTheReplacementsFiles(t *testing.T) {
 	}
 }
 
-// What an attachment is read with carries the generation of its space, so the files it is about
-// are the files of that space and not of one that has its ID later.
 func TestAnAttachmentIsLoadedWithItsSpacesGeneration(t *testing.T) {
 	w := newWorld(t)
 	s := w.alicePrivate
@@ -688,7 +614,6 @@ func TestAnAttachmentIsLoadedWithItsSpacesGeneration(t *testing.T) {
 	}
 }
 
-// The sweep lists the spaces with their generations, and sweeps each as the space it listed.
 func TestTheSweepListsSpacesWithTheirGenerations(t *testing.T) {
 	w := newWorld(t)
 	spaces, err := w.e.s.spacesToSweep(context.Background())

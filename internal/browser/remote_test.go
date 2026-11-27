@@ -13,12 +13,11 @@ import (
 	"time"
 )
 
-// The worker's API and the server's client of it, over a Unix socket as in container mode.
 func TestRemote(t *testing.T) {
 	vnc := func(c io.ReadWriteCloser) {
 		defer c.Close()
 		_, _ = io.WriteString(c, "RFB 003.008\n")
-		_, _ = io.Copy(c, c) // echo what the viewer sends
+		_, _ = io.Copy(c, c)
 	}
 	m := NewManager(Config{Host: &fakeHost{log: filepath.Join(t.TempDir(), "log"), vnc: vnc}})
 	t.Cleanup(m.Close)
@@ -37,7 +36,6 @@ func TestRemote(t *testing.T) {
 	if av := c.Availability(ctx); !av[Personal] || !av[Testing] {
 		t.Fatalf("availability = %v", av)
 	}
-	// Refusals come back as the Manager's errors.
 	if _, err := c.OpenLive(ctx, 1); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("a live view of no browser: %v", err)
 	}
@@ -52,7 +50,6 @@ func TestRemote(t *testing.T) {
 	if err := c.Start(ctx, 1, Personal); err != nil {
 		t.Fatal(err)
 	}
-	// An upgrade must say so in Connection too.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://cli-worker/browser/users/1/live", nil)
 	req.Header.Set("Upgrade", upgradeProtocol)
 	res, err := c.http.Do(req)
@@ -75,7 +72,6 @@ func TestRemote(t *testing.T) {
 		t.Fatal("user 2 sees user 1's browser running")
 	}
 
-	// The live view is an upgrade that then carries the stream both ways.
 	live, err := c.OpenLive(ctx, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +98,6 @@ func TestRemote(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// At most MaxLive views of one browser at once; closing one makes room.
 	var views []io.ReadWriteCloser
 	for range MaxLive {
 		v, err := c.OpenLive(ctx, 1)
@@ -130,7 +125,6 @@ func TestRemote(t *testing.T) {
 	for _, v := range views {
 		v.Close()
 	}
-	// User 2 has no browser to watch.
 	if _, err := c.OpenLive(ctx, 2); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("user 2's live view: %v", err)
 	}
@@ -143,7 +137,6 @@ func TestRemote(t *testing.T) {
 	}
 }
 
-// Every sentinel has its place in the order refuse tries them in.
 func TestRemoteErrorOrder(t *testing.T) {
 	if len(remoteErrorOrder) != len(remoteErrors) {
 		t.Fatalf("order %v, errors %d", remoteErrorOrder, len(remoteErrors))

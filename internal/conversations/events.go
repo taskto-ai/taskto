@@ -14,21 +14,8 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// interrupted is the end event the server sends itself when the stream stops for any reason
-// other than the agent runtime ending it: the sidecar restarted or broke the stream, the
-// caller lost access, or the server is shutting down. The client reconnects and starts again
-// from a fresh view (or learns it can't).
 var interrupted = []byte(`{"type":"end","kind":"interrupted"}`)
 
-// handleEvents streams the agent runtime's watch of a conversation as Server-Sent Events. Each
-// line of the sidecar's stream becomes one event's data, unchanged: first the view, then the
-// Chord operations of each commit, which the browser applies with applyImmutable() from
-// @earendil-works/chord/delta, and an end line when the sidecar ends it. The server checks
-// access and copies lines; it doesn't read them.
-//
-// One event at a time is in flight between the sidecar and the client, so a slow client
-// slows the sidecar's stream, which folds its commits while it waits. A client gone or
-// stuck for writeTimeout on one write closes the sidecar's watch.
 func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.conversationInPath(w, r)
 	if !ok {
@@ -39,10 +26,6 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, workspace := caller(r)
-	// The stream lasts as long as the login that opened it: signing the login out, from anywhere,
-	// ends it at once, and at the latest at the heartbeat's next look at the session. That also
-	// holds for an account disabled and enabled again between two heartbeats, which has no
-	// session left. One watch is enough: each one looks the session up on every heartbeat.
 	sessionCtx, stopWatch := s.watchSession(r, s.heartbeat)
 	defer stopWatch()
 	if sessionCtx.Err() != nil {
@@ -69,18 +52,15 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
-	h.Set("X-Accel-Buffering", "no") // a reverse proxy mustn't hold events back
+	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	out := &eventWriter{w: w, rc: http.NewResponseController(w), timeout: s.writeTimeout}
-	// The server has no write timeout; this connection's deadlines are set per write, and
-	// cleared for whatever uses the connection next.
 	defer func() { _ = out.rc.SetWriteDeadline(time.Time{}) }()
-	// EventSource reconnects this long after a stream ends.
 	if out.write([]byte("retry: 2000\n\n")) != nil {
 		return
 	}
 
-	events := make(chan agentrt.Event) // unbuffered: the next line is read once this one is taken
+	events := make(chan agentrt.Event)
 	failed := make(chan error, 1)
 	go func() {
 		for {
@@ -99,8 +79,6 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	heartbeat, stopHeartbeat := s.heartbeatClock()
 	defer stopHeartbeat()
-	// A brief database error doesn't end the stream; losing access, or the check failing
-	// several heartbeats in a row, does.
 	const maxFailedChecks = 3
 	failedChecks := 0
 	for {
@@ -108,7 +86,6 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case ev := <-events:
 			if err := out.event(ev.Raw); err != nil {
 				if errors.Is(err, errBadLine) {
-					// Not the client's fault: say the stream ended, so it reconnects now.
 					slog.WarnContext(ctx, "conversations: the agent runtime sent a line with a line break", "conversation", c.ID)
 					_ = out.event(interrupted)
 				}
@@ -121,20 +98,17 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !errors.Is(err, io.EOF) && ctx.Err() == nil {
 				slog.WarnContext(ctx, "conversations: event stream broke", "conversation", c.ID, "err", err)
 			}
-			if r.Context().Err() == nil { // the client is still there
+			if r.Context().Err() == nil {
 				_ = out.event(interrupted)
 			}
 			return
 		case <-heartbeat:
-			// Access is checked again, so someone removed from the workspace doesn't keep a stream.
 			switch _, err := s.find(ctx, workspace, user, c.ID); {
 			case errors.Is(err, errNotFound):
 				_ = out.event(interrupted)
 				return
 			case err != nil:
 				if ctx.Err() != nil {
-					// The stream ended while the check ran (the login was signed out, or the server
-					// is shutting down): say so as the end case does, so the client reconnects at once.
 					if r.Context().Err() == nil {
 						_ = out.event(interrupted)
 					}
@@ -149,12 +123,11 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			default:
 				failedChecks = 0
 			}
-			// A comment: proxies see traffic on an idle stream and don't close it.
 			if out.write([]byte(": heartbeat\n\n")) != nil {
 				return
 			}
 		case <-ctx.Done():
-			if r.Context().Err() == nil { // the server is shutting down, not the client gone
+			if r.Context().Err() == nil {
 				_ = out.event(interrupted)
 			}
 			return
@@ -162,8 +135,6 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// heartbeatClock says when an event stream's next heartbeat is due; call the func when the
-// stream ends.
 func (s *Service) heartbeatClock() (<-chan time.Time, func()) {
 	if s.heartbeatTicks != nil {
 		return s.heartbeatTicks()
@@ -172,19 +143,15 @@ func (s *Service) heartbeatClock() (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
-// eventWriter writes Server-Sent Events, each flushed at once.
 type eventWriter struct {
 	w       http.ResponseWriter
 	rc      *http.ResponseController
 	timeout time.Duration
 }
 
-// event writes data, one JSON line, as an event.
-// errBadLine is for a line from the agent runtime that can't be one event.
 var errBadLine = errors.New("conversations: line break in an event")
 
 func (e *eventWriter) event(data []byte) error {
-	// A JSON line has no raw line breaks; one with them would split the event.
 	if bytes.ContainsAny(data, "\r\n") {
 		return errBadLine
 	}

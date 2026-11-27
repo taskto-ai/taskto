@@ -1,10 +1,4 @@
-// One app in the Apps list: its name, what it holds, its state (live, a draft with changes, offline),
-// the way to open it and to edit it with the agent, and everything else in its "more" menu: publish,
-// history, roles, rename, duplicate, move and take offline. Each of those opens a dialog, and taking
-// it offline asks first. What is offered follows what the server says the caller may do (`access`),
-// as before; the server checks every change again.
-
-import { type FormEvent, useEffect, useId, useState } from 'react'
+import { type FormEvent, useEffect, useEffectEvent, useId, useState } from 'react'
 import { type App, api, type Space } from '../api'
 import { useFormat, useT } from '../i18n'
 import { spaceLabel } from '../spaces'
@@ -46,15 +40,11 @@ export function AppRow({
   space: Space
   app: App
   writable: boolean
-  // The spaces the app may move to.
   targets: Space[]
-  // Where a copy of the app may go: every space the user may write.
   copyTo: Space[]
   spaceBase: string
-  // Both answer what went wrong (null: it was done).
   change: (app: App, body: { name?: string; archived?: boolean }) => Promise<string | null>
   move: (app: App, to: number) => Promise<string | null>
-  // Shows an error on the page, for a change no dialog asked for.
   report: (error: string | null) => void
   reload: () => void
 }) {
@@ -64,7 +54,6 @@ export function AppRow({
   const [open, setOpen] = useState<Open>(null)
   const [confirmDialog, confirm] = useConfirm()
   const offline = app.archived_at !== null
-  // Those who may design or publish the app see what isn't live: its draft and its releases.
   const reviewer = writable && (app.access.design || app.access.publish)
   const appBase = `${spaceBase}/apps/${app.id}`
   const close = () => setOpen(null)
@@ -85,7 +74,6 @@ export function AppRow({
     setBusy(false)
     return failed
   }
-  // Taking offline and restoring have no dialog: what went wrong is said on the page.
   const archive = async (archived: boolean) => report(await run({ archived }))
   const takeOffline = async () => {
     const yes = await confirm({
@@ -99,8 +87,6 @@ export function AppRow({
 
   const detail = [
     t('apps.rows', { count: app.rows }),
-    // When the live release was published: the last change people see (a date the server sent, so
-    // one that can't be read is left out rather than shown wrong).
     ...(app.live && !Number.isNaN(Date.parse(app.live.published_at))
       ? [t('apps.publishedOn', { date: f.date(app.live.published_at) })]
       : []),
@@ -213,8 +199,6 @@ export function AppRow({
     </>
   )
 
-  // The dialogs are drawn with the actions, inside the row: they open in the top layer, wherever
-  // they are in the page.
   const dialogs = (
     <>
       {confirmDialog}
@@ -223,7 +207,6 @@ export function AppRow({
           app={app}
           onClose={close}
           onRename={async (name) => {
-            // Closed only once it is done; a refusal is said in the dialog, with what was typed.
             const failed = await run({ name })
             if (!failed) close()
             return failed
@@ -293,7 +276,6 @@ function RenameDialog({
 }: {
   app: App
   onClose: () => void
-  // Answers what went wrong, or null once it is renamed.
   onRename: (name: string) => Promise<string | null>
 }) {
   const t = useT()
@@ -314,7 +296,6 @@ function RenameDialog({
     <Dialog
       open
       onClose={onClose}
-      // While it saves, Escape and the close button do nothing (the library's guard).
       dismissible={!busy}
       title={t('apps.renameNamed', { name: app.name })}
       size="sm"
@@ -348,7 +329,6 @@ function MoveDialog({
   app: App
   targets: Space[]
   onClose: () => void
-  // Answers what went wrong, or null once it has moved.
   onMove: (to: number) => Promise<string | null>
 }) {
   const t = useT()
@@ -369,7 +349,6 @@ function MoveDialog({
     <Dialog
       open
       onClose={onClose}
-      // While it saves, Escape and the close button do nothing (the library's guard).
       dismissible={!busy}
       title={t('apps.moveTitle', { name: app.name })}
       description={t('apps.moveNote')}
@@ -402,8 +381,6 @@ function MoveDialog({
   )
 }
 
-// Publishing from the list: the app is read first with its draft and where its effects go, which
-// the list doesn't carry, so what the draft does is seen before anything goes live.
 function PublishDialog({
   appBase,
   spaceBase,
@@ -431,10 +408,8 @@ function PublishDialog({
       setError(appError(e, app.name))
     }
   }
-  // biome-ignore lint/correctness/useExhaustiveDependencies: read once, when the dialog opens
-  useEffect(() => {
-    void read()
-  }, [])
+  const readOnOpen = useEffectEvent(() => void read())
+  useEffect(() => readOnOpen(), [])
   return (
     <Dialog open onClose={onClose} title={t('apps.publishNamed', { name: app.name })} size="md">
       {error && <Notice tone="danger">{error}</Notice>}
@@ -447,7 +422,6 @@ function PublishDialog({
           space={space}
           inDialog
           onChanged={() => {
-            // The panel published the app, or found that it changed: the list and the panel read it again.
             reload()
             void read()
           }}

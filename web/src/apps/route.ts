@@ -1,10 +1,5 @@
-// A launched app's address, apart from the Apps page so the chat links to an app without
-// loading the A2UI renderer.
-
 import { routePath } from '../router'
 
-// A launched app's route item: "{space}-{app}", or "{space}-{app}-{screen}" to open it on one of its
-// screens (what a pin that names one does).
 export function appItem(space: number, app: number, screen?: string): string {
   return `${space}-${app}${screen ? `-${screen}` : ''}`
 }
@@ -14,14 +9,10 @@ export function parseItem(item: string | undefined): { space: number; app: numbe
   return m ? { space: Number(m[1]), app: Number(m[2]), ...(m[3] ? { screen: m[3] } : {}) } : null
 }
 
-// The Apps page with the app launched.
 export function appPath(workspace: number, space: number, app: number, screen?: string): string {
   return routePath({ workspace, section: 'apps', item: appItem(space, app, screen) })
 }
 
-// The builder's addresses, under the Apps page: "build" starts a new app in a new conversation,
-// "build-{conversation}" builds in a conversation (the one that is already there), and
-// "edit-{space}-{app}" asks the agent to change an app's draft.
 export type BuilderRoute =
   | { kind: 'new' }
   | { kind: 'conversation'; conversation: number }
@@ -41,8 +32,6 @@ export function builderPath(workspace: number, to: BuilderRoute = { kind: 'new' 
   return routePath({ workspace, section: 'apps', item })
 }
 
-// The templates' addresses, under the Apps page: "templates" is the list to start from, and
-// "installed-{space}-{app}" the draft a template or a copy made, to try and publish.
 export function templatesPath(workspace: number): string {
   return routePath({ workspace, section: 'apps', item: 'templates' })
 }

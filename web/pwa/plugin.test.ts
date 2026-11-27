@@ -6,8 +6,6 @@ import { PLACEHOLDER, precacheEntries, pwa, renderServiceWorker } from './plugin
 
 const template = `const VERSION = ${PLACEHOLDER.version}\nconst PRECACHE = ${PLACEHOLDER.precache}\n`
 
-// A build's files: the page, hashed chunks (the lazy ones too), a language file's chunk,
-// the public/ files, and what the worker leaves out.
 const build = [
   'index.html',
   'manifest.webmanifest',
@@ -15,11 +13,11 @@ const build = [
   'icons/icon.svg',
   'assets/index-abc123.js',
   'assets/index-abc123.css',
-  'assets/AppsPage-def456.js', // the lazy-loaded apps renderer
+  'assets/AppsPage-def456.js',
   'assets/pt-BR-ghi789.js',
   'assets/index-abc123.js.map',
-  'assets/zxing_reader-jkl012.wasm', // the scanner's decoder
-  'assets/zxing_writer-mno345.wasm', // the QR writer's
+  'assets/zxing_reader-jkl012.wasm',
+  'assets/zxing_writer-mno345.wasm',
   'vendor/novnc/core/rfb.js',
   'assets/THIRD_PARTY_NOTICES.txt',
   'sw.js',
@@ -33,7 +31,6 @@ test('precaches the page, public files and every chunk, lazy ones included', () 
   expect(entries).toContain('/assets/AppsPage-def456.js')
   expect(entries).toContain('/assets/pt-BR-ghi789.js')
   expect(entries).toContain('/assets/index-abc123.css')
-  // Scanning works offline, so its decoder is kept.
   expect(entries).toContain('/assets/zxing_reader-jkl012.wasm')
 })
 
@@ -83,7 +80,7 @@ test('the plugin writes sw.js from the built files, and its version follows thei
   outWrite('assets/Lazy-bbb.js', '2')
   const first = run()
   expect(first).toContain('/assets/Lazy-bbb.js')
-  expect(run()).toBe(first) // stable for the same build (sw.js itself isn't an input)
+  expect(run()).toBe(first)
   outWrite('index.html', '<html lang="en">')
   expect(run()).not.toBe(first)
 })

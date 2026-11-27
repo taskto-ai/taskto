@@ -12,9 +12,6 @@ import (
 	"taskto.ai/taskto/internal/schedule"
 )
 
-// A card dated and assigned on the web keeps its reminders, as one the agent dates does: the
-// server's HTTP routes and the command's tools schedule on the one scheduler.
-
 func (s *stack) reminderJobs(user, card int64) (remind, overdue bool) {
 	s.t.Helper()
 	has := func(kind schedule.Kind) bool {
@@ -51,7 +48,6 @@ func TestACardDatedOnTheWebGetsItsReminders(t *testing.T) {
 		t.Fatal("someone who is not the assignee has jobs")
 	}
 
-	// Archiving the space takes them away, and bringing it back gives them again.
 	space := fmt.Sprintf("/api/workspaces/%d/spaces/%d", s.one, s.team)
 	if code, body := s.browser(s.alice.cookie, http.MethodPatch, space, map[string]any{"archived": true}); code != http.StatusOK {
 		t.Fatalf("archive space = %d %v", code, body)
@@ -66,7 +62,6 @@ func TestACardDatedOnTheWebGetsItsReminders(t *testing.T) {
 		t.Fatalf("jobs after the space came back: reminder %v, overdue %v", r, o)
 	}
 
-	// Taking bob out of the workspace takes his jobs with him.
 	if code, body := s.browser(s.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", s.one, s.bob.id), nil); code != http.StatusNoContent {
 		t.Fatalf("remove member = %d %v", code, body)
 	}
@@ -75,8 +70,6 @@ func TestACardDatedOnTheWebGetsItsReminders(t *testing.T) {
 	}
 }
 
-// A person who is added back to a space, or to the workspace and then the space, has their
-// reminders back: the server gives the hooks that do it to the spaces and the accounts.
 func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 	s := newStack(t)
 	code, b := s.browser(s.bob.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards", s.one, s.team), map[string]any{"name": "Work"})
@@ -92,7 +85,6 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 		t.Fatalf("create card = %d %v", code, card)
 	}
 	cardID := id(card["id"])
-	// A card on their personal board, which is theirs whether or not they are in the space.
 	bobsBoard := s.scalar(`SELECT id FROM boards WHERE space_id = ?`, s.bob.private)
 	code, mine := s.browser(s.bob.cookie, http.MethodPost,
 		fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards/%d/cards", s.one, s.bob.private, bobsBoard), map[string]any{
@@ -131,8 +123,6 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 	add()
 	want("added to the space", true, true)
 
-	// Out of the workspace, and back in through a new invite: the space is theirs again once they
-	// are added to it, and not before.
 	if code, body := s.browser(s.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", s.one, s.bob.id), nil); code != http.StatusNoContent {
 		t.Fatalf("remove from the workspace = %d %v", code, body)
 	}
@@ -145,15 +135,12 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 	if code, body := s.browser(s.bob.cookie, http.MethodPost, "/api/invites/accept", map[string]any{"token": inv["token"]}); code != http.StatusOK {
 		t.Fatalf("accept = %d %v", code, body)
 	}
-	// Their personal board is theirs again at once; the shared space's card waits for the space.
 	wantPersonal("back in the workspace", true)
 	want("back in the workspace", false, false)
 	add()
 	want("added to the space again", true, true)
 }
 
-// A person's time zone, set on the web, times their reminders: the server gives the accounts the hook
-// that moves them, and each person's morning is their own.
 func TestAChangeOfTimeZoneOnTheWebMovesTheReminders(t *testing.T) {
 	s := newStack(t)
 	code, b := s.browser(s.bob.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards", s.one, s.team), map[string]any{"name": "Work"})
@@ -195,7 +182,6 @@ func TestAChangeOfTimeZoneOnTheWebMovesTheReminders(t *testing.T) {
 		t.Fatalf("overdue notice in Tokyo at %v, want %v", got, want)
 	}
 
-	// Alice's change reaches no one else's jobs, and a zone no one knows is refused.
 	if code, body := s.browser(s.alice.cookie, http.MethodPatch, "/api/me", map[string]any{"time_zone": "America/Sao_Paulo"}); code != http.StatusOK {
 		t.Fatalf("alice sets a zone = %d %v", code, body)
 	}

@@ -1,6 +1,3 @@
-// Uploading a file into the space, in a dialog: any file, at any path, created unless the person
-// chooses to replace one already there. While it is sent, the dialog says what and how big.
-
 import { useId, useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -13,8 +10,6 @@ import { Notice } from '../ui/Notice'
 import { Spinner } from '../ui/Spinner'
 import { type Change, encodePath, isConflict, isMarkdown, useMounted } from './docs'
 
-// A Markdown file is sent as its text, checked here to be UTF-8; any other file as its bytes,
-// streamed by the browser whatever its size.
 async function markdownText(file: File, notUtf8: string): Promise<string> {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
@@ -30,9 +25,7 @@ export function Upload({
   onCancel,
 }: {
   base: string
-  // The file is in the space: its document opens, if the form is still there.
   onDone: (path: string) => void
-  // The space's list of documents may have changed, whatever became of the form.
   onChanged: () => void
   onCancel: () => void
 }) {
@@ -46,11 +39,6 @@ export function Upload({
   const f = useFormat()
   const form = useId()
 
-  // The upload in flight: only Cancel stops it, and then nothing opens. When the form goes away
-  // for another reason (the person went to a document, or another space) the upload goes on
-  // and finishes, since a large one takes minutes; it just doesn't open the file over what they
-  // are doing. So the dialog's own close (its button, Escape) only closes it: a long upload
-  // goes on while the person works, and Cancel is what stops it.
   const sending = useRef<AbortController | null>(null)
   const mounted = useMounted()
   const cancel = () => {
@@ -58,22 +46,18 @@ export function Upload({
     onCancel()
   }
 
-  // Without `replace`, it only creates: a file already there is the user's to replace.
   const send = async (replace: boolean) => {
     if (!file || !target) return
     setBusy(true)
     setError(null)
     sending.current = new AbortController()
     const { signal } = sending.current
-    // It goes on when the form goes, but only in the session that started it (session.ts): after a
-    // sign-out, or someone else's sign-in, nothing more is sent, reloaded or said.
     const s = steps()
     try {
       const url = `${base}/docs/${encodePath(target)}`
       const text = s.check(
         isMarkdown(target) ? await markdownText(file, t('knowledge.uploadForm.notUtf8', { name: file.name })) : null,
       )
-      // Gone since it was found: replacing it is creating it.
       const current = s.check(
         replace
           ? await api<Doc>(url, { signal }).catch((e: unknown) => {
@@ -98,7 +82,6 @@ export function Upload({
       if (mounted.current && !signal.aborted) onDone(target)
     } catch (err) {
       if (!s.ok()) return
-      // Cancelled: the server may have finished all the same, so the list is read again.
       if (signal.aborted) return onChanged()
       setExists(isConflict(err) && !replace)
       setError(
@@ -109,7 +92,6 @@ export function Upload({
           : errorText(err),
       )
     } finally {
-      // The form's own state: ready again while it is here, whatever became of the session.
       if (!signal.aborted && mounted.current) setBusy(false)
     }
   }
@@ -172,7 +154,6 @@ export function Upload({
             <span>{t('knowledge.uploadForm.sending', { name: file.name, size: f.bytes(file.size) })}</span>
           </p>
         )}
-        {/* A refusal, "already exists" too: said at once, as an alert. */}
         {error && <Notice tone="danger">{error}</Notice>}
       </form>
     </Dialog>

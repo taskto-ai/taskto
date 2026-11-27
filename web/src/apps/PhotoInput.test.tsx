@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// Photos in an app: the input takes them from the camera or the library and uploads each in chunks
-// that resume from the server's offset; the camera being blocked never stops the library; the
-// thumbnails come from the server's own routes and nowhere else.
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
@@ -37,7 +33,6 @@ const state = (over: Record<string, unknown> = {}) => ({
 
 const picture = (name = 'cat.png', bytes = 10, type = 'image/png') => new File([new Uint8Array(bytes)], name, { type })
 
-// A field that keeps its value, as the screen's data model does.
 function Field({
   limits,
   onValue,
@@ -89,7 +84,6 @@ test('the camera input asks for the rear camera and the library input does not',
   expect(camera().getAttribute('capture')).toBe('environment')
   expect(library().hasAttribute('capture')).toBe(false)
   for (const input of [camera(), library()]) expect(input.getAttribute('accept')).toBe('image/jpeg,image/png,image/gif')
-  // It doesn't promise the photo is kept on the device.
   expect(screen.getByText(/may not also keep a copy in your camera roll/)).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Pictures' })).toBeTruthy()
 })
@@ -113,7 +107,6 @@ test('a blocked camera leaves the library working, and says so', async () => {
 
   fireEvent.change(library(), { target: { files: [picture()] } })
   await waitFor(() => expect(added).toHaveBeenCalledWith([id]))
-  // Three chunks in order, each at its offset, then finalize; the thumbnail is the server's route.
   expect(calls.filter((c) => c.method === 'PUT').map((c) => c.path)).toEqual([
     `${base}/uploads/${id}?offset=0`,
     `${base}/uploads/${id}?offset=4`,
@@ -154,14 +147,12 @@ test('an upload that fails is resumed from the server, not started again', async
       creates++
       return { status: 201, body: state({ size: 8 }) }
     },
-    // The connection fails at the second chunk, every time it is tried, until the person retries.
     [`PUT ${base}/uploads/${id}?offset=0`]: { body: state({ size: 8, received: 4 }) },
     [`PUT ${base}/uploads/${id}?offset=4`]: () => {
       puts++
       if (puts <= 4) return { status: 503, body: { error: 'busy', code: 'internal' } }
       return { body: state({ size: 8, received: 8 }) }
     },
-    // Where the server is: it has the first chunk.
     [`GET ${base}/uploads/${id}`]: { body: state({ size: 8, received: 4 }) },
     [`POST ${base}/uploads/${id}/finalize`]: { body: state({ status: 'ready', size: 8, received: 8 }) },
   })
@@ -174,7 +165,6 @@ test('an upload that fails is resumed from the server, not started again', async
   expect(added).not.toHaveBeenCalled()
   fireEvent.click(retry)
   await waitFor(() => expect(added).toHaveBeenCalledWith([id]), { timeout: 8000 })
-  // One upload was ever made, and the first chunk was sent once.
   expect(creates).toBe(1)
   expect(calls.filter((c) => c.method === 'PUT' && c.path.endsWith('offset=0'))).toHaveLength(1)
   expect(screen.queryByRole('alert')).toBeNull()
@@ -194,7 +184,6 @@ test('an upload refused for want of storage is not retried, and says so', async 
   fireEvent.change(library(), { target: { files: [picture('cat.png', 8)] } })
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toContain('Your private space has used its storage (10 MiB)')
-  // Once: waiting and trying again only fails the same way.
   expect(puts).toBe(1)
   expect(added).not.toHaveBeenCalled()
 }, 20000)
@@ -205,7 +194,6 @@ test('a chunk the server already has is not sent again: the client goes on from 
     [`POST ${base}/uploads`]: { status: 201, body: state({ size: 8 }) },
     [`PUT ${base}/uploads/${id}?offset=0`]: (call) => {
       offsets.push(call.path)
-      // The answer to this chunk was lost the first time; the server says where it is.
       return { status: 409, body: { error: 'x', code: 'app_upload_offset', params: { offset: 4 } } }
     },
     [`PUT ${base}/uploads/${id}?offset=4`]: (call) => {
@@ -243,7 +231,6 @@ test('a field at its limit takes no more, and a photo can be taken out', async (
   fireEvent.click(screen.getByRole('button', { name: 'Remove photo 1' }))
   expect(changed).toHaveBeenCalledWith([])
   expect(library().disabled).toBe(false)
-  // A photo of a record that was saved is left to the server's history: nothing is discarded.
   expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0)
 })
 
@@ -269,13 +256,11 @@ test('thumbnails are drawn from the server’s routes, open in a tab of their ow
   const link = screen.getByRole('link', { name: 'Open photo 1 of 2 in a new tab' })
   expect(link.getAttribute('href')).toBe(`${base}/attachments/${id}`)
   expect(link.getAttribute('rel')).toContain('noopener')
-  // Nothing in it points outside the server.
   for (const el of document.querySelectorAll('[src], [href]')) {
     expect((el.getAttribute('src') ?? el.getAttribute('href') ?? '').startsWith('/api/')).toBe(true)
   }
 })
 
-// The photo components as a screen uses them: through the renderer, in strict validation.
 const surface = (items: unknown[]) => [
   { version: 'v0.9', createSurface: { surfaceId: 'app-9', catalogId: 'https://taskto.ai/catalogs/apps/v1.json' } },
   {
@@ -322,7 +307,6 @@ test('the renderer draws the photo input with the server’s limits and the thum
     />,
   )
   expect(await screen.findByRole('group', { name: 'Pictures' })).toBeTruthy()
-  // The limits came from the data model: two photos of at most 100 Bs.
   expect(screen.getAllByText(/At most 2 photos\./).length).toBeGreaterThan(0)
   expect(screen.getByText(/Each up to 100 B\./)).toBeTruthy()
   const img = await screen.findByRole('img', { name: 'Photo 1 of 1' })

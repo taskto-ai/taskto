@@ -4,7 +4,6 @@ import { actionOf } from './explorer'
 const link = { kind: 'create_payment_link', integration: 'payments' }
 
 test('the record editor edits through an update that sets nothing going', () => {
-  // The bundled Invoicing template: sending runs the payment link effect, editing doesn't.
   const actions = {
     add_invoice: { kind: 'insert' },
     replace_link: { kind: 'update', effects: [link] },

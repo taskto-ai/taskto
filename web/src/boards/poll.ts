@@ -1,16 +1,10 @@
-import { type DependencyList, useCallback, useEffect, useState } from 'react'
+import { type DependencyList, useEffect, useState } from 'react'
 import { ApiError, errorText } from '../api'
+import { useMemoBy } from '../memo'
 
-// How often the open card's thread is asked for again, and the longest wait after failures.
 export const POLL_EVERY = 10_000
 export const POLL_MAX = 120_000
 
-// Loads with `load` every `every` ms while the page is visible, and hands each answer to
-// `apply`. It pauses while the page is hidden and loads at once when it is shown again.
-// After a failure it waits twice as long each time, up to `max`, and back to `every` after a
-// success. A 401, 403 or 404 stops it for good, since waiting won't change them: the session
-// ended, or the caller lost access to what it loads (every request checks access again).
-// Answers `stopped`, the error that stopped it, or null.
 export function usePoll<T>(
   load: (() => Promise<T>) | null,
   apply: (data: T) => void,
@@ -65,8 +59,7 @@ export function usePoll<T>(
       document.removeEventListener('visibilitychange', visibility)
     }
   }
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the caller's deps stand for `load` and `apply`
-  const start = useCallback(run, deps)
+  const start = useMemoBy(() => run, deps)
   useEffect(start, [start])
   return stopped
 }

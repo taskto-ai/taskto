@@ -28,9 +28,6 @@ func writeBackupStatus(t *testing.T, dir string, st backup.Status) {
 	}
 }
 
-// /healthz/backup is for outside monitoring, with no login: 200 while the backups are on
-// time, 503 once a night is missed or when none run, and never the error, which can name
-// the backup host.
 func TestHealthzBackup(t *testing.T) {
 	dir := t.TempDir()
 	h := newHandler(t, openDB(t), Options{BackupDataDir: dir})
@@ -67,7 +64,6 @@ func TestHealthzBackup(t *testing.T) {
 	}
 }
 
-// The whole status, error included, is for the server's operators only.
 func TestBackupStatusIsForAdmins(t *testing.T) {
 	s := newStack(t)
 	path := func(ws int64) string { return fmt.Sprintf("/api/workspaces/%d/backup", ws) }
@@ -88,7 +84,6 @@ func TestBackupStatusIsForAdmins(t *testing.T) {
 		t.Fatalf("admin of another workspace: %d", code)
 	}
 
-	// bob is a member of one, not an admin; he isn't in two at all.
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, path(s.one), nil); code != http.StatusForbidden || body["last_error"] != nil {
 		t.Fatalf("member: %d %v", code, body)
 	}
@@ -98,7 +93,6 @@ func TestBackupStatusIsForAdmins(t *testing.T) {
 	if code, _ := s.browser("", http.MethodGet, path(s.one), nil); code != http.StatusUnauthorized {
 		t.Fatalf("no login: %d", code)
 	}
-	// An admin's access token doesn't reach it: it's for the browser.
 	token, _ := s.newToken(s.alice.cookie, s.one, "monitor")
 	if code, body := s.api(token, http.MethodGet, path(s.one), nil); code == http.StatusOK || body["last_error"] != nil {
 		t.Fatalf("access token: %d %v", code, body)

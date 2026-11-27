@@ -13,7 +13,6 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// applier is an Applier a test controls: it records what it was given and answers with fn.
 type applier struct {
 	mu   sync.Mutex
 	seen []StoredEvent
@@ -44,7 +43,6 @@ func (a *applier) count() int {
 	return len(a.seen)
 }
 
-// put stores n events for the rig's integration, as the route does, and returns their ids.
 func (r *rig) put(n int) []int64 {
 	r.t.Helper()
 	var ids []int64
@@ -54,7 +52,7 @@ func (r *rig) put(n int) []int64 {
 		if got, err := r.store.record(context.Background(), r.in.ID, ev, SourceWebhook, []byte(ev.ID)); err != nil || got != storedNew {
 			r.t.Fatalf("record: %v, %v", got, err)
 		}
-		r.clock.Advance(time.Millisecond) // received_at differs: the worker takes them in order
+		r.clock.Advance(time.Millisecond)
 	}
 	for _, row := range r.rows(r.in.ID) {
 		ids = append(ids, row.ID)
@@ -102,7 +100,6 @@ func TestTheWorkerAppliesEventsInOrder(t *testing.T) {
 	if err := r.db.QueryRow(`SELECT count(*) FROM integration_events WHERE processed_at IS NOT NULL AND lease_until IS NULL`).Scan(&processed); err != nil || processed != 3 {
 		t.Errorf("%d events noted as processed: %v", processed, err)
 	}
-	// Done is done: nothing runs again.
 	r.svc.drainEvents(context.Background())
 	if a.count() != 3 {
 		t.Errorf("an applied event ran again: %d", a.count())
@@ -130,7 +127,7 @@ func TestTheOutcomesOfAnApplier(t *testing.T) {
 		case 1001:
 			return &EventError{Code: apierr.CodeBadRequest, Params: apierr.Params{"max": 3}}
 		case 1002:
-			return fmt.Errorf("the database said %s", stripeTestKey) // not one of the reasons: a failure that may pass
+			return fmt.Errorf("the database said %s", stripeTestKey)
 		}
 		return nil
 	}}
@@ -144,11 +141,9 @@ func TestTheOutcomesOfAnApplier(t *testing.T) {
 	if err := r.db.QueryRow(`SELECT error_params FROM integration_events WHERE id = ?`, ids[0]).Scan(&params); err != nil || !strings.Contains(params, "late") {
 		t.Errorf("the ignore's params: %q, %v", params, err)
 	}
-	// A refusal that doesn't pass fails at once, keeping its code.
 	if state, attempts, code, _ := r.state(ids[1]); state != EventFailed || attempts != 1 || code != string(apierr.CodeBadRequest) {
 		t.Errorf("refused: %s, %d, %q", state, attempts, code)
 	}
-	// An error of another kind is retried, and what it said is kept nowhere.
 	if state, attempts, code, next := r.state(ids[2]); state != EventPending || attempts != 1 || code != string(apierr.CodeIntegrationEventGaveUp) || next <= r.svc.store.stamp(r.clock.Now()) {
 		t.Errorf("transient: %s, %d, %q, next %q", state, attempts, code, next)
 	}
@@ -178,7 +173,6 @@ func TestRetriesAreBoundedAndBackOff(t *testing.T) {
 			t.Fatal(err)
 		}
 		waits = append(waits, at.Sub(before))
-		// Not yet due: another look does nothing.
 		r.svc.drainEvents(context.Background())
 		r.clock.Advance(at.Sub(before) + time.Millisecond)
 	}
@@ -197,7 +191,6 @@ func TestRetriesAreBoundedAndBackOff(t *testing.T) {
 	if waits[len(waits)-1] > eventBackoffMax {
 		t.Errorf("a wait over the cap: %v", waits)
 	}
-	// A failed event stays failed.
 	r.clock.Advance(24 * time.Hour)
 	r.svc.drainEvents(context.Background())
 	if a.count() != maxEventAttempts {
@@ -214,17 +207,14 @@ func TestALeaseThatRunsOutIsTakenAgain(t *testing.T) {
 	if err != nil || !found || ev.ID != id || ev.Attempts != 1 {
 		t.Fatalf("claim: %+v, %v, %v", ev, found, err)
 	}
-	// While the lease holds, nobody else gets it.
 	if _, _, found, err := r.svc.claimEvent(ctx); err != nil || found {
 		t.Fatalf("a leased event was claimed again: %v, %v", found, err)
 	}
-	// The worker died. Its lease runs out and another takes the event, which counts the try.
 	r.clock.Advance(eventLease + time.Second)
 	ev, lease2, found, err := r.svc.claimEvent(ctx)
 	if err != nil || !found || ev.ID != id || ev.Attempts != 2 || lease2 == lease1 {
 		t.Fatalf("reclaim: %+v, lease %d then %d, %v, %v", ev, lease1, lease2, found, err)
 	}
-	// The first worker comes back after all: it can't note a result for the claim it lost.
 	if err := r.svc.settleEvent(ctx, ev, lease1, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +228,6 @@ func TestALeaseThatRunsOutIsTakenAgain(t *testing.T) {
 		t.Fatalf("the owner couldn't settle: %s", state)
 	}
 
-	// A lease that runs out on the last permitted try isn't followed by another: the bound holds.
 	id2 := r.put(1)[1]
 	if _, err := r.db.Exec(`UPDATE integration_events SET state = 'running', attempts = ?, lease_until = ? WHERE id = ?`,
 		maxEventAttempts, r.svc.store.stamp(r.clock.Now().Add(-time.Second)), id2); err != nil {
@@ -261,12 +250,12 @@ func TestOldEventsArePurged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	age(ids[0], EventApplied, keepEventsDone+time.Hour) // gone
-	age(ids[1], EventApplied, time.Hour)                // kept: recent
-	age(ids[2], EventIgnored, keepEventsDone+time.Hour) // gone
-	age(ids[3], EventFailed, keepEventsDone+time.Hour)  // kept: waits for an admin
-	age(ids[4], EventFailed, keepEventsAll+time.Hour)   // gone: nobody came
-	age(ids[5], EventPending, keepEventsAll+time.Hour)  // kept: the worker's
+	age(ids[0], EventApplied, keepEventsDone+time.Hour)
+	age(ids[1], EventApplied, time.Hour)
+	age(ids[2], EventIgnored, keepEventsDone+time.Hour)
+	age(ids[3], EventFailed, keepEventsDone+time.Hour)
+	age(ids[4], EventFailed, keepEventsAll+time.Hour)
+	age(ids[5], EventPending, keepEventsAll+time.Hour)
 	if err := r.svc.purgeEvents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -279,8 +268,6 @@ func TestOldEventsArePurged(t *testing.T) {
 	}
 }
 
-// The worker the server starts: a delivery to the route wakes it and the event is applied, and
-// stopping it waits for it.
 func TestAWebhookWakesTheWorker(t *testing.T) {
 	r := newRig(t)
 	a := &applier{got: make(chan StoredEvent, 4)}
@@ -303,7 +290,6 @@ func TestAWebhookWakesTheWorker(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the worker didn't apply the event")
 	}
-	// The result is noted by the worker after the applier returns.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if state, _, _, _ := r.state(r.rows(r.in.ID)[0].ID); state == EventApplied {
@@ -314,7 +300,6 @@ func TestAWebhookWakesTheWorker(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// Stopping waits for the worker, and nothing runs after it.
 	stop()
 	stopped = true
 	seen := a.count()
@@ -325,8 +310,6 @@ func TestAWebhookWakesTheWorker(t *testing.T) {
 	}
 }
 
-// What the table holds is bound to its integration: one row per provider event id for each, and
-// removed with the integration.
 func TestEventsBelongToTheirIntegration(t *testing.T) {
 	r := newRig(t)
 	other, _, _ := r.integration(stripeBody("second"), hookFor("second"))
@@ -343,14 +326,12 @@ func TestEventsBelongToTheirIntegration(t *testing.T) {
 	if len(r.rows(r.in.ID)) != 1 || len(r.rows(other.ID)) != 1 {
 		t.Fatalf("rows: %d and %d, want one each", len(r.rows(r.in.ID)), len(r.rows(other.ID)))
 	}
-	// A replay of a stored event never changes it, whatever the second delivery says.
 	if got, err := r.store.record(ctx, r.in.ID, Event{ID: "evt_same", Kind: EventPaymentSucceeded, Currency: "EUR", OccurredAt: r.clock.Now()}, SourceWebhook, []byte("b")); err != nil || got != storedAgain {
 		t.Fatalf("a changed replay: %v, %v", got, err)
 	}
 	if row := r.rows(r.in.ID)[0]; row.Kind != EventPaymentExpired || row.Currency != "USD" {
 		t.Fatalf("a replay rewrote the event: %+v", row)
 	}
-	// The table refuses what the code never writes.
 	for name, q := range map[string]string{
 		"an unknown state":  `UPDATE integration_events SET state = 'done'`,
 		"an unknown source": `UPDATE integration_events SET source = 'email'`,
@@ -363,7 +344,6 @@ func TestEventsBelongToTheirIntegration(t *testing.T) {
 			t.Errorf("the table accepted %s", name)
 		}
 	}
-	// Deleting the integration deletes its events and no other's.
 	expect(t, r.owner.do(http.MethodDelete, wsPath(r.ws, fmt.Sprintf("integrations/%d", other.ID)), nil), http.StatusNoContent)
 	if len(r.rows(other.ID)) != 0 || len(r.rows(r.in.ID)) != 1 {
 		t.Fatalf("after the delete: %d and %d", len(r.rows(other.ID)), len(r.rows(r.in.ID)))
@@ -377,7 +357,6 @@ func TestEventErrorsAreCodes(t *testing.T) {
 	}
 }
 
-// An event keeps whether it is of live money from the route's write to the worker's claim.
 func TestAnEventKeepsItsMode(t *testing.T) {
 	r := newRig(t)
 	for i, live := range []bool{true, false} {
@@ -396,15 +375,13 @@ func TestAnEventKeepsItsMode(t *testing.T) {
 	}
 }
 
-// A queue that stays busy never keeps the admins waiting: the notifications owed are written between
-// events, not only once the queue is empty.
 func TestNotificationsAreWrittenWhileTheQueueIsBusy(t *testing.T) {
 	r := newRig(t)
 	ids := r.put(2*noticeTurn + 1)
 	var seen []int
 	a := &applier{fn: func(ev StoredEvent) error {
 		if ev.ID == ids[0] {
-			return &EventError{Code: apierr.CodeIntegrationAmountMismatch} // a failure the admins are told of
+			return &EventError{Code: apierr.CodeIntegrationAmountMismatch}
 		}
 		var n int
 		if err := r.db.QueryRow(`SELECT count(*) FROM notifications WHERE kind = 'integration_event'`).Scan(&n); err != nil {

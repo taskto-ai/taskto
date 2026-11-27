@@ -9,9 +9,6 @@ import type { CardDrag } from './drag'
 import { useFocusBack } from './focus'
 import { StatusDot } from './StatusDot'
 
-// A column of the board: its status dot, name and count, a button to add a card to it, its
-// cards (those the filters show), and the form for a new one. Dropping a card on the column
-// puts it last; on a card, before that one. An empty column is a quiet place to drop one.
 export function BoardColumn({
   column: col,
   cards: inColumn,
@@ -30,7 +27,6 @@ export function BoardColumn({
 }: {
   column: Column
   cards: Card[]
-  // Every card of the board, for where a move puts one.
   all: Card[]
   url: string
   canWrite: boolean
@@ -39,7 +35,6 @@ export function BoardColumn({
   today: string
   f: Format
   drag: CardDrag
-  // Whether the new-card form is open here.
   adding: boolean
   onAdding: (adding: boolean) => void
   onOpen: (id: number) => void
@@ -47,7 +42,6 @@ export function BoardColumn({
 }) {
   const t = useT()
   const name = t(col.label)
-  // Cancelling the form gives the focus back to the column's add button.
   const addButton = useFocusBack<HTMLButtonElement>(adding)
   return (
     <section

@@ -4,8 +4,6 @@ import { dirname, join, resolve } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
 import { unusedAliasErrors, unusedClassErrors } from '../scripts/css-check.mjs'
 
-// css-check's reverse check: a rule naming an old `tt-` class that nothing in the app uses is dead
-// (its screen moved onto the components), and fails, so the old stylesheets only shrink.
 const dirs: string[] = []
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })

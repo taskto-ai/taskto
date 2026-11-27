@@ -1,6 +1,3 @@
-/* The agent browser in a conversation: the agent's request to take over, and the panel with the
-   live view. Both sit in the conversation's column of notices, at its reading width. */
-
 @layer screens {
   .ui-browser-help {
     display: grid;
@@ -60,7 +57,6 @@
     gap: var(--space-2);
   }
 
-  /* noVNC scales the screen to fit this box (scaleViewport). */
   .ui-browser-screen {
     block-size: min(45vh, 460px);
     border-radius: var(--radius-md);

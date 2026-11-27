@@ -1,7 +1,3 @@
-// A member's own access tokens in the workspace, for their agents and scripts (docs/mcp.md).
-// A new token is shown once, when it is made: the server keeps only its hash. It lives in
-// this tab's state and nowhere else (no storage, no log), so leaving the tab forgets it.
-
 import { type FormEvent, useId, useState } from 'react'
 import { api, type Token, type TokenCreated, ws } from '../api'
 import { type Key, type T, useT } from '../i18n'
@@ -22,7 +18,6 @@ import { Alert, CopyButton, CopyField, day, Loading, Section, SettingsTab, useAc
 
 type Made = TokenCreated
 
-// What "Expires" offers, in days; null never expires.
 const EXPIRY: { days: number | null; label: Key }[] = [
   { days: 30, label: 'settings.tokens.expiry.days30' },
   { days: 90, label: 'settings.tokens.expiry.days90' },
@@ -47,14 +42,11 @@ export function TokensTab({ workspace }: { workspace: number }) {
     })
     if (!yes) return
     const ok = await action.run(() => api(`${base}/${token.id}`, { method: 'DELETE' }))
-    // Only once it is gone: a failed revoke keeps the new token on screen, still valid.
     if (!ok) return
     if (made?.id === token.id) setMade(null)
     tokens.reload()
   }
 
-  // One new token on show at a time: another would replace it, and its secret is shown only
-  // once. Done first.
   const held = made !== null
   const createButton = (
     <Button variant="primary" icon="plus" disabled={held} onClick={() => setCreating(true)}>
@@ -112,7 +104,6 @@ export function TokensTab({ workspace }: { workspace: number }) {
       <Section title={t('settings.tokens.connect')}>
         <Setup key={made?.id ?? 0} token={made?.token} />
       </Section>
-      {/* Drawn only while open, so each opening starts with an empty form and no old error. */}
       {creating && !held && (
         <CreateToken
           open
@@ -153,8 +144,6 @@ function CreateToken({
   const action = useAction()
   const t = useT()
   const formId = useId()
-  // While the token is being made the dialog stays: closed, it would forget the request, whose
-  // answer (the token, shown only once) could then be replaced by another before it was seen.
   const close = () => {
     if (!action.busy) onClose()
   }
@@ -232,8 +221,6 @@ function NewToken({ made, onDone }: { made: Made; onDone: () => void }) {
   )
 }
 
-// The setups of docs/mcp.md, for this server. `token` fills them in, right after it is made;
-// otherwise they show where it goes.
 function Setup({ token }: { token?: string }) {
   const t = useT()
   const url = `${window.location.origin}/mcp`

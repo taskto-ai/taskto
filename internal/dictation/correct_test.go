@@ -39,24 +39,17 @@ Words we use. A paragraph isn't a term.
 func TestCorrect(t *testing.T) {
 	terms := []string{"taskto", "Zanzibar", "Parakeet", "Go", "São Paulo", "Wurst", "Kubernetes cluster", "Node.js"}
 	for _, tc := range []struct{ in, want string }{
-		// Joined words, case and accents.
 		{"I use task to every day.", "I use taskto every day."},
 		{"Taskto is great", "taskto is great"},
 		{"we went to sao paulo, then home", "we went to São Paulo, then home"},
-		// One letter off, for a term of 6 to 9 letters.
 		{"a trip to Zansibar", "a trip to Zanzibar"},
 		{"the parakeat model", "the Parakeet model"},
-		// Two letters off is too far for a term under 10 letters.
 		{"the parrakeat model", "the parrakeat model"},
-		// Short terms must match exactly, and only case isn't worth changing.
 		{"let's go now", "let's go now"},
 		{"the wost case", "the wost case"},
 		{"some wurst please", "some Wurst please"},
-		// Multi-word terms, approximately.
 		{"deploy to the kubernetis cluster today", "deploy to the Kubernetes cluster today"},
-		// Words don't join across punctuation.
 		{"task, to do", "task, to do"},
-		// Punctuation inside a word.
 		{"written in node.js", "written in Node.js"},
 		{"", ""},
 	} {

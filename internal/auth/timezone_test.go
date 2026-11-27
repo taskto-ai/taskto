@@ -12,12 +12,12 @@ import (
 
 func TestValidTimeZone(t *testing.T) {
 	for name, want := range map[string]bool{
-		"":                                    true, // none
+		"":                                    true,
 		"UTC":                                 true,
 		"Europe/Lisbon":                       true,
 		"America/Sao_Paulo":                   true,
 		"Asia/Kolkata":                        true,
-		"Local":                               false, // the server's own zone is no one's
+		"Local":                               false,
 		"Mars/Olympus":                        false,
 		" UTC":                                false,
 		"../../etc/localtime":                 false,
@@ -56,7 +56,6 @@ func TestATimeZoneIsStoredPerUserAndShownOnlyToThem(t *testing.T) {
 	if got := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)).User.TimeZone; got != "Europe/Lisbon" {
 		t.Fatalf("GET /api/me zone = %q", got)
 	}
-	// Nobody else's changed, and a member list doesn't show anyone's.
 	if got := decode[me](t, member.do(http.MethodGet, "/api/me", nil)).User.TimeZone; got != "" {
 		t.Fatalf("the member's zone = %q", got)
 	}
@@ -65,7 +64,6 @@ func TestATimeZoneIsStoredPerUserAndShownOnlyToThem(t *testing.T) {
 	if strings.Contains(members.Body.String(), "Lisbon") || strings.Contains(members.Body.String(), "time_zone") {
 		t.Fatalf("a member list shows a time zone: %s", members.Body.String())
 	}
-	// The member's own change is theirs alone.
 	expect(t, member.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": "Asia/Tokyo"}), http.StatusOK)
 	if got := timeZoneOf(t, e, memberMe.User.ID); got != "Asia/Tokyo" {
 		t.Fatalf("the member's zone = %q", got)
@@ -73,17 +71,14 @@ func TestATimeZoneIsStoredPerUserAndShownOnlyToThem(t *testing.T) {
 	if got := timeZoneOf(t, e, ownerMe.User.ID); got != "Europe/Lisbon" {
 		t.Fatalf("the owner's zone moved to %q", got)
 	}
-	// A zone and a language are changed by the same call, and what is left out stays.
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"locale": "pt-BR"}), http.StatusOK)
 	if got := timeZoneOf(t, e, ownerMe.User.ID); got != "Europe/Lisbon" {
 		t.Fatalf("a change of language changed the zone to %q", got)
 	}
-	// "" clears it.
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": ""}), http.StatusOK)
 	if got := timeZoneOf(t, e, ownerMe.User.ID); got != "" {
 		t.Fatalf("a cleared zone = %q", got)
 	}
-	// Not logged in: nothing.
 	expect(t, e.client().do(http.MethodPatch, "/api/me", map[string]string{"time_zone": "UTC"}), http.StatusUnauthorized)
 }
 
@@ -99,7 +94,6 @@ func TestABadTimeZoneIsRefusedWithACodeAndChangesNothing(t *testing.T) {
 			t.Fatalf("%q: code %q", bad, got)
 		}
 	}
-	// The refused calls changed neither the zone nor the language sent with them.
 	if got := timeZoneOf(t, e, id); got != "Asia/Tokyo" {
 		t.Fatalf("zone after refused changes = %q", got)
 	}
@@ -114,17 +108,14 @@ func TestTheBrowsersZoneOnlyFillsAnEmptyOne(t *testing.T) {
 	owner, _ := e.setup()
 	id := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)).User.ID
 
-	// None yet: the browser's is taken.
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"browser_time_zone": "America/Sao_Paulo"}), http.StatusOK)
 	if got := timeZoneOf(t, e, id); got != "America/Sao_Paulo" {
 		t.Fatalf("the browser's zone was not taken: %q", got)
 	}
-	// Set: another browser (or the same one, travelling) doesn't change it.
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"browser_time_zone": "Asia/Tokyo"}), http.StatusOK)
 	if got := timeZoneOf(t, e, id); got != "America/Sao_Paulo" {
 		t.Fatalf("the browser's zone replaced one: %q", got)
 	}
-	// A person's own choice does, and clearing it makes room for the browser's again.
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": "Europe/Lisbon"}), http.StatusOK)
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": ""}), http.StatusOK)
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"browser_time_zone": "Asia/Tokyo"}), http.StatusOK)
@@ -132,7 +123,6 @@ func TestTheBrowsersZoneOnlyFillsAnEmptyOne(t *testing.T) {
 		t.Fatalf("zone = %q", got)
 	}
 
-	// A browser's zone this server doesn't know is no reason to fail: it is left out.
 	e.exec(t, `UPDATE users SET time_zone = ''`)
 	for _, odd := range []string{"Etc/Unknown", "Local", ""} {
 		expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"browser_time_zone": odd}), http.StatusOK)
@@ -148,7 +138,6 @@ func TestTimeZoneHooksRunInTheChangeAndCanUndoIt(t *testing.T) {
 	id := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)).User.ID
 	var told []int64
 	e.svc.OnTimeZoneChanged(func(ctx context.Context, tx *sql.Tx, userID int64) error {
-		// The new zone is already there, in the transaction.
 		zone, err := UserTimeZone(ctx, tx, userID)
 		if err != nil || zone == "" {
 			t.Errorf("hook saw zone %q, %v", zone, err)
@@ -157,14 +146,12 @@ func TestTimeZoneHooksRunInTheChangeAndCanUndoIt(t *testing.T) {
 		return nil
 	})
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": "Asia/Tokyo"}), http.StatusOK)
-	// The same zone again, and a browser's on a set one, are no change.
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": "Asia/Tokyo"}), http.StatusOK)
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"browser_time_zone": "UTC"}), http.StatusOK)
 	if len(told) != 1 || told[0] != id {
 		t.Fatalf("hooks were told %v, want once about %d", told, id)
 	}
 
-	// A hook that fails undoes the change.
 	e.svc.OnTimeZoneChanged(func(context.Context, *sql.Tx, int64) error { return errors.New("no") })
 	expect(t, owner.do(http.MethodPatch, "/api/me", map[string]string{"time_zone": "Europe/Lisbon"}), http.StatusInternalServerError)
 	if got := timeZoneOf(t, e, id); got != "Asia/Tokyo" {
@@ -185,7 +172,6 @@ func TestUserLocationIsTheZoneElseUTC(t *testing.T) {
 	if loc, err = UserLocation(ctx, e.db, id); err != nil || loc.String() != "Asia/Tokyo" {
 		t.Fatalf("a zone: %v, %v", loc, err)
 	}
-	// A stored name this machine doesn't know falls back to UTC, not to an error.
 	e.exec(t, `UPDATE users SET time_zone = 'Nowhere/Land' WHERE id = ?`, id)
 	if loc, err = UserLocation(ctx, e.db, id); err != nil || loc.String() != "UTC" {
 		t.Fatalf("an unknown zone: %v, %v", loc, err)

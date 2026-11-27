@@ -28,7 +28,6 @@ func TestLoadMailReadsThePasswordFromItsFile(t *testing.T) {
 	if !svc.Configured() || info.Host != "smtp.example.com" || info.Port != 587 || info.Security != "starttls" || !info.SignsIn {
 		t.Fatalf("%+v", info)
 	}
-	// The variables that name the account are removed from the environment, set or not.
 	if strings.Join(unset, ",") != "TASKTO_SMTP_USERNAME,TASKTO_SMTP_PASSWORD_FILE" {
 		t.Fatalf("unset = %v", unset)
 	}
@@ -51,7 +50,6 @@ func TestLoadMailErrorsNameTheFileNeverThePassword(t *testing.T) {
 	if _, err := loadMail(cfg, noop); err == nil || !strings.Contains(err.Error(), "smtp password file") {
 		t.Fatalf("a missing file: %v", err)
 	}
-	// A password that fails the sender's own checks is never in the message.
 	cfg = smtpConfig(t, "super-secret-value")
 	cfg.SMTPSecurity = "none"
 	_, err := loadMail(cfg, noop)

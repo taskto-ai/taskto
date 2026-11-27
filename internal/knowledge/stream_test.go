@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// ListAt and Stream read one commit whatever the space does meanwhile: a file replaced, renamed or
-// deleted after it is still listed, and read, as it was.
 func TestListAtAndStreamReadOneCommit(t *testing.T) {
 	s, _ := newStore(t, Options{LargeFileSize: 150})
 	sp := writable(1)
@@ -21,7 +19,6 @@ func TestListAtAndStreamReadOneCommit(t *testing.T) {
 	must[Result](t)(s.Put(ctx, sp, "big.bin", big, "", alice, ""))
 	pinned := must[string](t)(s.Head(ctx, sp))
 
-	// The space changes after the commit is taken: a replaced, a renamed, a deleted file.
 	a := must[Doc](t)(s.Read(ctx, sp, "a.md", ""))
 	must[Result](t)(s.Put(ctx, sp, "a.md", []byte("two"), a.Version, alice, ""))
 	must[Result](t)(s.Move(ctx, sp, "dir", "folder", "", alice, ""))
@@ -64,7 +61,6 @@ func TestListAtAndStreamReadOneCommit(t *testing.T) {
 	if got := string(read("dir/b.md")); got != "bee" {
 		t.Errorf("dir/b.md = %q", got)
 	}
-	// A file deleted since: its unversioned bytes are gone with it, which Stream says.
 	if _, _, err := s.Stream(ctx, sp, "big.bin", pinned); err == nil {
 		if got := read("big.bin"); string(got) != string(big) {
 			t.Errorf("big.bin differs")
@@ -73,7 +69,6 @@ func TestListAtAndStreamReadOneCommit(t *testing.T) {
 		wantErr(t, err, ErrNotKept)
 	}
 
-	// A stream that is open holds nothing: a writer isn't kept waiting by a slow reader.
 	_, rc, err := s.Stream(ctx, sp, "a.md", "")
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +91,6 @@ func TestListAtAndStreamReadOneCommit(t *testing.T) {
 	if _, _, err := s.Stream(ctx, sp, "a.md", "0123456789012345678901234567890123456789"); err == nil {
 		t.Error("a commit the repository doesn't have was read")
 	}
-	// A space with no repository has no commit to list at, though it lists as empty at the head.
 	if _, err := s.ListAt(ctx, writable(99), "0123456789012345678901234567890123456789", "", "", 0); err == nil {
 		t.Error("a listing at a commit of a space with no repository succeeded")
 	}
@@ -105,8 +99,6 @@ func TestListAtAndStreamReadOneCommit(t *testing.T) {
 	}
 }
 
-// A larger versioned file is spooled to a temporary file, read whole, and the file is gone once
-// the stream is closed.
 func TestStreamSpoolsALargerVersionedFile(t *testing.T) {
 	old := streamMemory
 	streamMemory = 8

@@ -1,9 +1,3 @@
-/* A sample second brand, "harbor": cool paper, navy ink and a signal yellow. It is not shipped:
-   the app imports only the default brand (../index.css). The tests load it, and so will the
-   gallery of components, to prove that a brand is this one block of colour roles and that
-   swapping it changes nothing else. It is chosen by data-brand="harbor" on <html>, with this file
-   imported; light and dark still come from the page's color-scheme. */
-
 @layer themes {
   :root[data-brand="harbor"] {
     --color-bg: light-dark(#f6f8fb, #0f1620);

@@ -26,94 +26,29 @@ import (
 	"taskto.ai/taskto/internal/quota"
 )
 
-// Photo attachments.
-//
-// A record holds no bytes: an attachment field's value is a list of attachment ids. The bytes are
-// separate resources, kept in the managed storage of the space that holds the app
-// (<space>/.taskto/app-files/<app>/<id>, with <id>.thumb beside it), reached only through the server's
-// authenticated routes, never by an address anyone could hand to another. The database keeps
-// each one's metadata (app_attachments, migration 0028).
-//
-// An attachment is made in three steps, by someone who may submit or change the app's records:
-//
-//  1. create an upload for a field of the app: the declared size is checked against the field's
-//     limit, and the answer is the id;
-//  2. send the bytes in chunks, each saying the offset it is at. The server's offset (what it has
-//     received) is in every answer and in the upload's state, and a chunk at any other offset is
-//     refused with it (ErrUploadOffset), so a chunk that was applied but whose answer was lost
-//     is never applied twice: the client asks where the server is and goes on from there, and
-//     the same bytes are never written twice. Only the uploader may add chunks, read the state,
-//     finalize or abandon an upload;
-//  3. finalize: the bytes must be all there, and be a JPEG, PNG or GIF by their own content (not
-//     by anything the client said), within the pixel bound; the server makes the thumbnail, and
-//     keeps the picture without its metadata (stripMetadata: where a photo was taken, the camera,
-//     and the rest, left out without touching the pixels; only the orientation stays). The upload
-//     becomes an attachment, "ready", whose size is that of the picture kept, and finalizing it
-//     again says the same.
-//
-// A ready attachment is attached to a record by the insert or update that lists its id, in the
-// same transaction as the record is written (claimAttachments): the attachment must be the
-// caller's own, of this app and this field, finished, and not attached to anything yet, or the
-// whole change is refused and nothing is written. Every route that writes records goes through
-// it, an action of an older release included. Once attached, an attachment stays with its record
-// for good: the record's history refers to it, so replacing it in the list, deleting the record
-// or restoring it never deletes a file.
-//
-// Reading an attachment or its thumbnail takes reading the record it is attached to, as the
-// caller's role in the app has it (all records, or only their own), and a deleted record's
-// attachments are read by nobody until it is restored. Before it is attached, only its uploader
-// reads it (to see what they are about to submit). Anyone else, for an attachment that doesn't
-// exist or one they may not read, gets the same 404.
-//
-// What isn't attached to a record within AttachmentTTL of its last change is removed with its
-// files: abandoned uploads, and photos taken and never submitted (Sweep). Files are removed
-// after their rows, so a failure leaves a stray file, which Sweep finds (a file no row of its
-// space knows) and removes too, as it does the files of an app that no longer exists.
-//
-// An app moved to another space of its workspace keeps working at once: each attachment's row
-// names the space whose directory holds its bytes, reads follow it, and the server copies the
-// files to the new space and updates the row (relocate), which Sweep retries if it was
-// interrupted. No route deletes an app or a space today; when one does, the rows go with them
-// (ON DELETE CASCADE) and Sweep removes the files.
-
-// Bounds of attachments.
 const (
-	// ChunkSize is the size of chunk the server suggests; MaxChunk the largest it takes.
-	ChunkSize = 1 << 20
-	MaxChunk  = 2 << 20
-	// MaxPendingAttachments bounds the uploads and finished photos of one person in one app that
-	// aren't attached to a record yet.
+	ChunkSize             = 1 << 20
+	MaxChunk              = 2 << 20
 	MaxPendingAttachments = 20
-	// MaxAppFileBytes bounds the declared size of all of an app's attachments together.
-	MaxAppFileBytes = 1 << 30
-	// AttachmentTTL is how long an attachment that is attached to no record is kept after its last
-	// change.
-	AttachmentTTL = 24 * time.Hour
-	// maxThumbnails bounds the pictures decoded at once, which bounds the memory they take.
-	maxThumbnails = 2
+	MaxAppFileBytes       = 1 << 30
+	AttachmentTTL         = 24 * time.Hour
+	maxThumbnails         = 2
 )
 
-// The states of an attachment.
 const (
 	statusUploading = "uploading"
 	statusReady     = "ready"
 )
 
-// filesDir is the directory, inside a space's directory, that holds its apps' attachments, named for
-// the apps' ids. It is in the server's managed storage (access.ManagedDir), which no document's name
-// can reach.
 const filesDir = access.ManagedDir + "/app-files"
 
 var attachmentIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// errNotPicture is for bytes that aren't a picture the server accepts.
 var errNotPicture = invalidAs(apierr.CodeAppAttachmentType, apierr.Params{"max_megapixels": maxPixels["jpeg"] / 1_000_000},
 	"the file isn't a JPEG, PNG or GIF picture this server can read")
 
-// errNotPNG is for a picture that isn't a PNG, offered for a signature.
 var errNotPNG = invalidAs(apierr.CodeAppSignatureType, nil, "a signature is a PNG picture")
 
-// statusError is an error with the status and code the API answers it with.
 type statusError struct {
 	status int
 	code   apierr.Code
@@ -125,72 +60,45 @@ func (e *statusError) Error() string { return e.msg }
 
 var errNoFiles = &statusError{http.StatusServiceUnavailable, apierr.CodeAppFilesUnavailable, "this server keeps no files for apps", nil}
 
-// Attachment is one attachment, or one upload on its way to be: what the API tells its uploader,
-// and, once it is ready, those who read the record it is in.
 type Attachment struct {
-	ID    string `json:"id"`
-	Field string `json:"field"`
-	// Status is "uploading" or "ready".
-	Status string `json:"status"`
-	// While it is uploading, Size is what the upload declared and Received what the server has of
-	// it so far: the offset the next chunk starts at. Once it is ready, both are the size of the
-	// stored picture, which is the length it is served with: the received file without its metadata.
-	Size     int64 `json:"size"`
-	Received int64 `json:"received"`
-	// ContentType, Width and Height are what the bytes turned out to be, once it is ready.
+	ID          string `json:"id"`
+	Field       string `json:"field"`
+	Status      string `json:"status"`
+	Size        int64  `json:"size"`
+	Received    int64  `json:"received"`
 	ContentType string `json:"content_type,omitempty"`
 	Width       int    `json:"width,omitempty"`
 	Height      int    `json:"height,omitempty"`
-	// Attached is whether a record holds it.
-	Attached  bool   `json:"attached"`
-	CreatedAt string `json:"created_at"`
-	// ChunkSize and MaxChunk are in the answer that creates an upload.
-	ChunkSize int `json:"chunk_size,omitempty"`
-	MaxChunk  int `json:"max_chunk,omitempty"`
+	Attached    bool   `json:"attached"`
+	CreatedAt   string `json:"created_at"`
+	ChunkSize   int    `json:"chunk_size,omitempty"`
+	MaxChunk    int    `json:"max_chunk,omitempty"`
 }
 
-// NewUpload starts an upload: the attachment field it is for and the size of the file in bytes.
 type NewUpload struct {
 	Field string `json:"field"`
 	Size  int64  `json:"size"`
 }
 
-// WithFiles gives the service the data directory whose spaces hold apps' attachments. Without
-// one the attachment routes aren't served.
 func (s *Service) WithFiles(dataDir string) *Service {
 	s.dataDir = dataDir
 	return s
 }
 
-// SpaceHolder orders the writes in a space's directory against its removal: the knowledge base's
-// Store, which removes a purged account's private spaces (knowledge.Store.HoldSpace).
 type SpaceHolder interface {
-	// HoldSpace holds sp's directory until release is called, so a removal of the space waits for
-	// it; it is an error that is access.ErrNotFound once the space is removed, and the caller then
-	// makes nothing in the directory.
 	HoldSpace(sp access.Space) (release func(), err error)
 }
 
-// WithSpaceHolder gives the service what orders its writes in a space's directory (an upload's
-// chunks, a finished picture, a photo that follows its app) against the space's removal, so none
-// lands after it and makes the directory again. Without one, a space is never removed under the
-// service (the tests of the apps alone).
 func (s *Service) WithSpaceHolder(h SpaceHolder) *Service {
 	s.holder = h
 	return s
 }
 
-// WithQuota gives the service the storage quotas, which an upload is checked against when it
-// starts, at its declared size, and again when it is finalized, at what is kept.
 func (s *Service) WithQuota(q *quota.Service) *Service {
 	s.quota = q
 	return s
 }
 
-// reserveQuota refuses, with the quota's error, adding bytes that would take sp over a storage
-// quota, and otherwise holds them (with every other write's) until the returned reservation is
-// released, which the caller does once its transaction is over. q is the transaction the caller
-// holds, so the uploads it has reserved count. The reservation may be nil, and is safe to release.
 func (s *Service) reserveQuota(ctx context.Context, q quota.Queryer, sp access.Space, adding int64) (*quota.Reservation, error) {
 	if s.quota == nil {
 		return nil, nil
@@ -198,8 +106,6 @@ func (s *Service) reserveQuota(ctx context.Context, q quota.Queryer, sp access.S
 	return s.quota.Reserve(ctx, q, sp, adding)
 }
 
-// lock serializes what is done to one attachment's bytes, in this process (which is the data
-// directory's only one). It returns what releases it.
 func (s *Service) lock(id string) func() {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(id))
@@ -218,20 +124,6 @@ func newID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// filesRootAs opens the directory of spaceID, which holds the files of attachments stored there, and
-// holds the space (WithSpaceHolder) until done is called, which also closes the root: a removal of
-// the space waits for it, and one that happened refuses it (ErrNotFound, and sql.ErrNoRows as for a
-// space whose rows are gone) before the directory is made again. A caller that has the root open
-// doesn't open another of the same space (the hold is a read lock, which a waiting removal makes a
-// second reader queue behind), and takes the hold before it begins a transaction, never inside one:
-// the hold first, the database's write lock after, everywhere, so a removal waiting for the hold
-// can't leave a holder and a writer each waiting for the other.
-//
-// generation is the one the space had when the caller learned of it (0 for any), a number no space
-// has twice (access.Space.Generation). A space that has another one, because its ID was given to a
-// space made after the first was purged, is gone as far as the caller is concerned. A caller that
-// works on a space it read from a row (an attachment's, an app's, the sweep's list) passes the
-// generation it read with the ID.
 func (s *Service) filesRootAs(ctx context.Context, spaceID, generation int64) (root *os.Root, done func(), err error) {
 	if s.dataDir == "" {
 		return nil, nil, errNoFiles
@@ -250,9 +142,6 @@ func (s *Service) filesRootAs(ctx context.Context, spaceID, generation int64) (r
 			return nil, nil, goneHolderAsNotFound(err)
 		}
 	}
-	// The row once more, inside the hold: a removal that finished between the read above and the
-	// hold has deleted the rows (and a space made since may have its ID), and the directory must
-	// not be made for a space that is gone.
 	var one int
 	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ? AND generation = ?`,
 		sp.ID, sp.WorkspaceID, row).Scan(&one); err != nil {
@@ -267,9 +156,6 @@ func (s *Service) filesRootAs(ctx context.Context, spaceID, generation int64) (r
 	return root, func() { _ = root.Close(); release() }, nil
 }
 
-// goneHolderAsNotFound is the answer to a failed hold of a space's directory: a space that was
-// removed or isn't there is the API's 404 (it has no photos), and anything else, a database that
-// couldn't be read by the holder's check, is the failure it is, never an answer about the space.
 func goneHolderAsNotFound(err error) error {
 	if errors.Is(err, access.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
@@ -277,9 +163,6 @@ func goneHolderAsNotFound(err error) error {
 	return err
 }
 
-// goneAsNotFound makes a missing space row the API's 404 too (it stays sql.ErrNoRows to the callers
-// that treat a gone space as nothing to do): a request that reaches a purged space's files is
-// answered as a space that isn't there, not as a server failure.
 func goneAsNotFound(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
@@ -287,20 +170,14 @@ func goneAsNotFound(err error) error {
 	return err
 }
 
-// fileName is the name, inside a space's directory, of an attachment's file with suffix: "" for
-// the picture, ".part" while it is received, ".thumb" for the thumbnail. The names are made of
-// numbers and the id's hexadecimal digits only.
 func fileName(appID int64, id, suffix string) string {
 	return path.Join(filesDir, strconv.FormatInt(appID, 10), id+suffix)
 }
 
-// upload is an attachment as the store has it.
 type upload struct {
 	Attachment
-	appID   int64
-	spaceID int64
-	// spaceGen is the generation of the space spaceID, read with the row: the space it was learned
-	// as (access.Space.Generation), for the files' sake.
+	appID    int64
+	spaceID  int64
 	spaceGen int64
 	owner    sql.NullInt64
 	rowID    sql.NullInt64
@@ -320,7 +197,6 @@ func scanAttachment(row scanner) (upload, error) {
 	return u, nil
 }
 
-// loadAttachment returns attachment id of appID, or ErrNotFound.
 func loadAttachment(ctx context.Context, q queryer, appID int64, id string) (upload, error) {
 	if !attachmentIDPattern.MatchString(id) {
 		return upload{}, ErrNotFound
@@ -332,8 +208,6 @@ func loadAttachment(ctx context.Context, q queryer, appID int64, id string) (upl
 	return u, err
 }
 
-// uploader checks, inside a write transaction, that a may still write the space and may submit or
-// change records of the app, as every step of an upload needs.
 func (s *Service) uploader(ctx context.Context, a Actor, spaceID, appID int64) error {
 	acc, err := s.recheckApp(ctx, a, spaceID, appID)
 	if err != nil {
@@ -345,8 +219,6 @@ func (s *Service) uploader(ctx context.Context, a Actor, spaceID, appID int64) e
 	return nil
 }
 
-// ownUpload loads attachment id for its uploader: anyone else's, or one that doesn't exist, is
-// ErrNotFound.
 func ownUpload(ctx context.Context, q queryer, a Actor, appID int64, id string) (upload, error) {
 	u, err := loadAttachment(ctx, q, appID, id)
 	if err != nil {
@@ -365,7 +237,6 @@ func offsetError(received int64) error {
 
 var errUploadState = &statusError{http.StatusConflict, apierr.CodeAppUploadState, "the upload isn't in the state this needs", nil}
 
-// createUpload starts an upload for field of the live release's collection.
 func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, appID int64, in NewUpload) (Attachment, error) {
 	if err := may(sp, access.Write); err != nil {
 		return Attachment{}, err
@@ -377,13 +248,12 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 	if err != nil {
 		return Attachment{}, err
 	}
-	// What was abandoned is cleared as uploads come in, so a quiet server needs no timer.
 	if err := s.sweep(ctx, time.Now().Add(-AttachmentTTL), appID); err != nil {
 		slog.Warn("apps: removing expired attachments", "app", appID, "err", err)
 	}
 	var created Attachment
 	var held *quota.Reservation
-	defer func() { held.Release() }() // after the commit, which is when the rows count by themselves
+	defer func() { held.Release() }()
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
@@ -420,7 +290,6 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 			return &fullError{msg: fmt.Sprintf("an app's attachments take at most %d MiB", MaxAppFileBytes>>20),
 				code: apierr.CodeAppFilesFull, params: apierr.Params{"max_mib": MaxAppFileBytes >> 20}}
 		}
-		// The file's bytes, and the thumbnail finalizing will add, are the space's from now on.
 		var qerr error
 		if held, qerr = s.reserveQuota(ctx, tx, sp, in.Size); qerr != nil {
 			return qerr
@@ -438,8 +307,6 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 	return created, err
 }
 
-// uploadState tells the uploader where the server is in an upload: Received is the offset to
-// continue from.
 func (s *Service) uploadState(ctx context.Context, sp access.Space, a Actor, appID int64, id string) (Attachment, error) {
 	if err := may(sp, access.Write); err != nil {
 		return Attachment{}, err
@@ -457,17 +324,12 @@ func (s *Service) uploadState(ctx context.Context, sp access.Space, a Actor, app
 	return out, err
 }
 
-// holdAttachmentSpace finds, without a transaction, the space attachment id of appID is in and holds
-// its files. When root is nil, err says why and is never nil: ErrNotFound when the attachment isn't
-// there, the database's own error when it couldn't be read (which is not an answer about the
-// attachment, and is kept as it is), or the files' error. done is nil then; otherwise the caller
-// calls it to let the space go.
 func (s *Service) holdAttachmentSpace(ctx context.Context, appID int64, id string) (space int64, root *os.Root, done func(), err error) {
 	var generation int64
 	if err := s.db.QueryRowContext(ctx, `SELECT t.space_id, s.generation FROM app_attachments t JOIN spaces s ON s.id = t.space_id
 		WHERE t.id = ? AND t.app_id = ?`, id, appID).Scan(&space, &generation); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil, nil, ErrNotFound // the transaction finds it gone too, unless it was made meanwhile
+			return 0, nil, nil, ErrNotFound
 		}
 		return 0, nil, nil, err
 	}
@@ -478,7 +340,6 @@ func (s *Service) holdAttachmentSpace(ctx context.Context, appID int64, id strin
 	return space, root, done, nil
 }
 
-// putChunk writes data at offset of upload id, which must be where the server is.
 func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID int64, id string, offset int64, data []byte) (Attachment, error) {
 	if err := may(sp, access.Write); err != nil {
 		return Attachment{}, err
@@ -487,10 +348,6 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 		return Attachment{}, ErrNotFound
 	}
 	defer s.lock(id)()
-	// The attachment's space is held before the transaction begins, which takes the database's write
-	// lock: the order everywhere is the space, then the database. Read here, without a transaction;
-	// the transaction checks it is still where the attachment is, and what it refuses is answered as
-	// it always was (an error found here is kept for the point where the files are needed).
 	heldSpace, held, done, rootErr := s.holdAttachmentSpace(ctx, appID, id)
 	if done != nil {
 		defer done()
@@ -521,10 +378,10 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 				apierr.Params{"max": u.Size - u.Received}}
 		}
 		if held == nil {
-			return rootErr // never nil here: see holdAttachmentSpace
+			return rootErr
 		}
 		if u.spaceID != heldSpace {
-			return errUploadState // its app was moved meanwhile: ask where the server is, and go on
+			return errUploadState
 		}
 		root := held
 		if err := root.MkdirAll(path.Dir(fileName(appID, id, "")), 0o700); err != nil {
@@ -534,8 +391,6 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 		if err != nil {
 			return err
 		}
-		// At the offset, not appended: a chunk written before and not recorded (the server stopped
-		// in between) is overwritten by the same bytes, never doubled.
 		if _, err := f.WriteAt(data, offset); err != nil {
 			_ = f.Close()
 			return err
@@ -553,8 +408,6 @@ func (s *Service) putChunk(ctx context.Context, sp access.Space, a Actor, appID 
 	return out, err
 }
 
-// finalizeUpload turns a complete upload into an attachment, or answers where the server is if it
-// isn't complete. A ready attachment is answered as it is, so finalizing again is safe.
 func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, appID int64, id string) (Attachment, error) {
 	if err := may(sp, access.Write); err != nil {
 		return Attachment{}, err
@@ -596,7 +449,6 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	defer done()
 	data, err := readUpload(root, appID, id, u.Size)
 	if errors.Is(err, errShort) || errors.Is(err, fs.ErrNotExist) {
-		// The bytes the store counts aren't all in the file (it was lost): start again from what is.
 		have := int64(0)
 		if fi, serr := root.Stat(fileName(appID, id, ".part")); serr == nil {
 			have = min(fi.Size(), u.Size)
@@ -616,20 +468,15 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		thumb, err = s.makeThumbnail(ctx, data, pic.format)
 	}
 	if err == nil {
-		// What is kept is the picture without the metadata a camera wrote into it (where it was
-		// taken, and more): the readers of a record see the picture, not that.
 		stored, err = stripMetadata(data, pic.format)
 	}
 	if err == nil {
-		// A picture the stripped bytes don't show as the received ones did is not kept.
 		var again sniffed
 		if again, err = inspect(stored); err == nil && again != pic {
 			err = errNotPicture
 		}
 	}
 	if errors.Is(err, errNotPicture) || errors.Is(err, errNotPNG) {
-		// Not a picture (or, for a signature, not a PNG), so not an attachment: it is removed, and the
-		// client starts over.
 		if derr := s.deleteAttachment(ctx, id, appID, root); derr != nil {
 			slog.Warn("apps: removing a file that isn't a picture", "app", appID, "err", derr)
 		}
@@ -638,11 +485,6 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if err != nil {
 		return Attachment{}, err
 	}
-	// The order makes it safe to stop at any point. The received file (.part) is removed only once
-	// the store says the attachment is ready, so until then a retry finds it and does all this again;
-	// the thumbnail and the stored picture are each written whole or not at all. Bytes past the
-	// declared size (a chunk written and never recorded, the server having stopped in between) were
-	// not read, and are not the picture's.
 	if err := writeFile(root, fileName(appID, id, ".thumb"), thumb); err != nil {
 		return Attachment{}, err
 	}
@@ -651,18 +493,15 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	}
 	var ready Attachment
 	var held *quota.Reservation
-	defer func() { held.Release() }() // after the commit, which is when the rows count by themselves
+	defer func() { held.Release() }()
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
 		}
-		// What is kept is the picture and its thumbnail, which can be more than the size the upload
-		// declared (and reserved): the difference must fit, checked here, where the size it is
-		// measured against is the one the row has and the row changes with it.
 		var declared int64
 		if err := tx.QueryRowContext(ctx, `SELECT size FROM app_attachments WHERE id = ? AND app_id = ? AND owner = ? AND status = 'uploading'`,
 			id, appID, a.UserID).Scan(&declared); errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound // removed meanwhile
+			return ErrNotFound
 		} else if err != nil {
 			return err
 		}
@@ -670,7 +509,6 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		if held, qerr = s.reserveQuota(ctx, tx, sp, int64(len(stored))+int64(len(thumb))-declared); qerr != nil {
 			return qerr
 		}
-		// From here the size is the stored one (the length it is served with), no longer the declared one.
 		res, err := tx.ExecContext(ctx, `
 			UPDATE app_attachments SET status = 'ready', size = ?, received = ?, content_type = ?, width = ?, height = ?,
 				thumb_size = ?, updated_at = ?
@@ -680,14 +518,13 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 			return err
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
-			return ErrNotFound // removed meanwhile
+			return ErrNotFound
 		}
 		u, err := loadAttachment(ctx, tx, appID, id)
 		ready = u.Attachment
 		return err
 	})
 	if errors.Is(err, quota.ErrExceeded) || errors.Is(err, quota.ErrUnavailable) {
-		// Still an upload: what was written for it is written again when it finalizes.
 		for _, ext := range []string{".thumb", ""} {
 			if rerr := root.Remove(fileName(appID, id, ext)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				slog.Warn("apps: removing a picture the quota refused", "app", appID, "err", rerr)
@@ -698,16 +535,13 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		return ready, err
 	}
 	if err := root.Remove(fileName(appID, id, ".part")); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		slog.Warn("apps: removing a received upload", "app", appID, "err", err) // Sweep removes it
+		slog.Warn("apps: removing a received upload", "app", appID, "err", err)
 	}
 	return ready, nil
 }
 
 var errShort = errors.New("the file has fewer bytes than were received")
 
-// readUpload reads the size bytes of an upload from the file being received. Only that file has
-// them: the finished one, which finalizing may have written before it stopped, holds the picture
-// without its metadata, so it is no stand-in, and finalizing starts again from this one.
 func readUpload(root *os.Root, appID int64, id string, size int64) ([]byte, error) {
 	f, err := root.Open(fileName(appID, id, ".part"))
 	if err != nil {
@@ -724,8 +558,6 @@ func readUpload(root *os.Root, appID int64, id string, size int64) ([]byte, erro
 	return data, nil
 }
 
-// writeFile writes data to name in root, whole or not at all: to a temporary file renamed into
-// place.
 func writeFile(root *os.Root, name string, data []byte) error {
 	tmp := name + ".tmp"
 	if err := root.MkdirAll(path.Dir(name), 0o700); err != nil {
@@ -745,7 +577,6 @@ func writeFile(root *os.Root, name string, data []byte) error {
 	return root.Rename(tmp, name)
 }
 
-// makeThumbnail makes a thumbnail with at most maxThumbnails pictures being decoded at a time.
 func (s *Service) makeThumbnail(ctx context.Context, data []byte, format string) ([]byte, error) {
 	select {
 	case s.thumbs <- struct{}{}:
@@ -756,8 +587,6 @@ func (s *Service) makeThumbnail(ctx context.Context, data []byte, format string)
 	return thumbnail(data, format)
 }
 
-// abandonUpload removes an attachment its uploader no longer wants, before it is attached to a
-// record: an upload on its way, or a photo they took out of the form.
 func (s *Service) abandonUpload(ctx context.Context, sp access.Space, a Actor, appID int64, id string) error {
 	if err := may(sp, access.Write); err != nil {
 		return err
@@ -776,7 +605,7 @@ func (s *Service) abandonUpload(ctx context.Context, sp access.Space, a Actor, a
 			return err
 		}
 		if u.Attached {
-			return errUploadState // a record holds it: it stays
+			return errUploadState
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM app_attachments WHERE id = ? AND row_id IS NULL`, id)
 		return err
@@ -788,9 +617,6 @@ func (s *Service) abandonUpload(ctx context.Context, sp access.Space, a Actor, a
 	return nil
 }
 
-// deleteAttachment removes an attachment that isn't attached, whoever's: the server's own clearing
-// of what can't be used. held is the root of its space when the caller has it open (and so holds
-// the space), which the files are then removed through.
 func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64, held *os.Root) error {
 	var spaceID, generation int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -816,7 +642,6 @@ func (s *Service) deleteAttachment(ctx context.Context, id string, appID int64, 
 	return nil
 }
 
-// spaceGeneration reads the generation of space id into g (0, as "any", if the row is gone).
 func spaceGeneration(ctx context.Context, q queryer, id int64, g *int64) error {
 	err := q.QueryRowContext(ctx, `SELECT generation FROM spaces WHERE id = ?`, id).Scan(g)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -825,20 +650,16 @@ func spaceGeneration(ctx context.Context, q queryer, id int64, g *int64) error {
 	return err
 }
 
-// removeFiles deletes an attachment's files from the space that held them. A failure is logged and
-// leaves a stray file, which Sweep removes later.
 func (s *Service) removeFiles(ctx context.Context, spaceID, generation, appID int64, id string) {
 	if err := s.unlinkFiles(ctx, spaceID, generation, appID, id); err != nil {
 		slog.Warn("apps: removing attachment files", "app", appID, "err", err)
 	}
 }
 
-// unlinkFiles deletes an attachment's files from the space that held them, and reports a file that
-// couldn't be removed (all are tried). One already gone is not a failure.
 func (s *Service) unlinkFiles(ctx context.Context, spaceID, generation, appID int64, id string) error {
 	root, done, err := s.filesRootAs(ctx, spaceID, generation)
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, access.ErrNotFound) {
-		return nil // the space is gone (removed, or its rows are), and its directory with it
+		return nil
 	}
 	if err != nil {
 		return err
@@ -847,7 +668,6 @@ func (s *Service) unlinkFiles(ctx context.Context, spaceID, generation, appID in
 	return unlinkIn(root, appID, id)
 }
 
-// unlinkIn removes the files of an attachment from root, all of them tried.
 func unlinkIn(root *os.Root, appID int64, id string) error {
 	var errs []error
 	for _, suffix := range []string{"", ".part", ".thumb", ".thumb.tmp", ".tmp"} {
@@ -858,18 +678,13 @@ func unlinkIn(root *os.Root, appID int64, id string) error {
 	return errors.Join(errs...)
 }
 
-// File is an attachment (or its thumbnail) opened for reading.
 type File struct {
 	*os.File
 	ContentType string
-	// Name is the file name offered to a browser: made here, from the id and the type.
-	Name string
-	ETag string
+	Name        string
+	ETag        string
 }
 
-// openAttachment opens attachment id of appID, or its thumbnail, for a caller who may read it:
-// those who read the record it is attached to (a live record, within their role's records), or,
-// before it is attached, its uploader. Whatever else, the answer is ErrNotFound.
 func (s *Service) openAttachment(ctx context.Context, sp access.Space, a Actor, appID int64, id string, thumb bool) (*File, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
@@ -925,7 +740,6 @@ func (s *Service) openAttachment(ctx context.Context, sp access.Space, a Actor, 
 	return &File{File: f, ContentType: contentType, Name: "photo-" + id[:8] + "." + ext, ETag: etag}, nil
 }
 
-// attachmentIDs reads the ids a stored attachment field holds, or the one a signature field does.
 func attachmentIDs(v any) []string {
 	if id, ok := v.(string); ok {
 		return []string{id}
@@ -940,20 +754,11 @@ func attachmentIDs(v any) []string {
 	return ids
 }
 
-// claimAttachments attaches the attachments row rowID of the app's collection newly lists
-// (after, against before, the row as it was; nil for an insert) to it, in the transaction that
-// writes the row. An id that isn't yet the row's must be an attachment of this app and field,
-// uploaded by the actor, finished and attached to nothing, or the change is refused as a whole.
-// The refusal doesn't say which of those it was: an id of someone else's isn't told from one that
-// doesn't exist.
 func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID int64, def Definition, before, after map[string]any) error {
 	for _, f := range def.Collection.Fields {
 		if f.Type != TypeAttachment && f.Type != TypeSignature {
 			continue
 		}
-		// A signature is a PNG, by what the bytes turned out to be, and an attachment is only claimed by
-		// a field of the kind it was uploaded for: a field retyped since can't take what was pending
-		// for what it was. What the field's size limit is now holds too, whatever it was at upload.
 		onlyType := ""
 		if f.Type == TypeSignature {
 			onlyType = "image/png"
@@ -984,7 +789,6 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID
 	return nil
 }
 
-// maxFileBytes is the most a file of the field may have: its max_bytes, or the default of its kind.
 func (f Field) maxFileBytes() int64 {
 	if f.MaxBytes != 0 {
 		return int64(f.MaxBytes)
@@ -995,8 +799,6 @@ func (f Field) maxFileBytes() int64 {
 	return DefaultMaxFileBytes
 }
 
-// filesModel is the limits of the collection's attachment and signature fields, for the screen's
-// data model at /_files (nil if there are none).
 func (d Definition) filesModel() map[string]any {
 	var out map[string]any
 	for _, f := range d.Collection.Fields {
@@ -1015,9 +817,6 @@ func (d Definition) filesModel() map[string]any {
 	return out
 }
 
-// fieldsModel is what a screen needs to know of the collection's capture fields, for the data model
-// at /_fields/<field> (nil if there are none): when a location is taken and whether it can still be
-// changed once stored, the format a barcode reads, and whether the field must have a value.
 func (d Definition) fieldsModel() map[string]any {
 	var out map[string]any
 	for _, f := range d.Collection.Fields {
@@ -1058,8 +857,6 @@ func cmpOr(v, fallback int) int {
 	return v
 }
 
-// parseAttachments reads an attachment field's value: a list of attachment ids (or one), at most
-// the field's MaxFiles, each different. Whether they may be used is for claimAttachments.
 func (f Field) parseAttachments(v any) (any, bool, error) {
 	var list []any
 	switch x := v.(type) {
@@ -1093,7 +890,6 @@ func (f Field) parseAttachments(v any) (any, bool, error) {
 	return out, true, nil
 }
 
-// Described is an attachment as the agent reads it: its metadata, never its bytes.
 type Described struct {
 	ID          string `json:"id"`
 	ContentType string `json:"content_type,omitempty"`
@@ -1102,10 +898,6 @@ type Described struct {
 	Height      int    `json:"height,omitempty"`
 }
 
-// describeAttachments replaces, in items (as Items made them), the ids an attachment field holds
-// by what each is: id, type, size and pixels. It never reads a file.
-//
-// spaceID, if not 0, says the app must be in that space: the same statement checks it.
 func describeAttachments(ctx context.Context, q queryer, spaceID, appID int64, def Definition, items []map[string]any) error {
 	var names []string
 	single := map[string]bool{}
@@ -1148,7 +940,7 @@ func describeAttachments(ctx context.Context, q queryer, spaceID, appID int64, d
 					list = append(list, d)
 				}
 				if single[name] && len(list) == 1 {
-					it[name] = list[0] // a signature is one picture
+					it[name] = list[0]
 					continue
 				}
 				it[name] = list
@@ -1158,16 +950,10 @@ func describeAttachments(ctx context.Context, q queryer, spaceID, appID int64, d
 	return nil
 }
 
-// relocate moves the files of app appID's attachments to the space the app is in now, after it
-// was moved: each is copied, its row says where it is, and the old copy is removed. It can be run
-// again at any point, and reads are right at every step, since they follow the row.
 func (s *Service) relocate(ctx context.Context, appID int64) error {
 	if s.dataDir == "" {
 		return nil
 	}
-	// The spaces are learned with their generations, which relocateOne checks again under the
-	// holds: a move that waits, or is retried, must not act on a space that has been purged and
-	// whose ID another has since.
 	var home, homeGen int64
 	if err := s.db.QueryRowContext(ctx, `SELECT a.space_id, s.generation FROM apps a JOIN spaces s ON s.id = a.space_id WHERE a.id = ?`, appID).Scan(&home, &homeGen); err != nil {
 		return err
@@ -1204,19 +990,11 @@ func (s *Service) relocate(ctx context.Context, appID int64) error {
 	return errors.Join(errs...)
 }
 
-// relocateOne copies an attachment's files from the space they are in (from, as it was when the move
-// was found: fromGen) to the app's home (to, toGen), and records it. Both spaces are held,
-// and what the move was for is checked again inside the holds: that the attachment is still in
-// from and the app's home still is to. A move that waited while the app went back, or a space was
-// purged and its ID given to another, is dropped, not carried out on what is there now; the
-// sweep finds the attachment again if it still needs moving.
 func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from, fromGen, to, toGen int64) error {
 	defer s.lock(id)()
 	if from == to {
-		return nil // nothing to move; copying a file onto itself and removing the old copy would lose it
+		return nil
 	}
-	// The two spaces are held in the order of their ids, whichever way the file goes: two moves in
-	// opposite directions never each wait for the other's space behind a waiting removal.
 	var src, dst *os.Root
 	first, second := &src, &dst
 	ids := [2]int64{from, to}
@@ -1241,10 +1019,8 @@ func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from,
 		return err
 	}
 	if current == 0 {
-		return nil // the app or the attachment is not where the move found it
+		return nil
 	}
-	// The stored picture and its thumbnail go. The received file goes only while the upload isn't
-	// finished: after, it is a leftover that is not the picture (it still has its metadata).
 	var status string
 	if err := s.db.QueryRowContext(ctx, `SELECT status FROM app_attachments WHERE id = ?`, id).Scan(&status); err != nil {
 		return err
@@ -1279,7 +1055,6 @@ func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from,
 		return err
 	}
 	if !moved {
-		// Changed since it was checked: what was copied is not wanted where it went.
 		for _, suffix := range suffixes {
 			if err := dst.Remove(fileName(appID, id, suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				slog.Warn("apps: removing the copy of an attachment that did not move", "app", appID, "err", err)
@@ -1304,11 +1079,6 @@ func readWhole(root *os.Root, name string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, MaxMaxFileBytes+1))
 }
 
-// Sweep removes what has outlived its use, as of cutoff: attachments attached to no record that
-// haven't changed since cutoff (abandoned uploads and photos never submitted), with their files;
-// the files of attachments whose app was moved, copied to the app's space; and files that no
-// attachment row of their space knows (what a failed removal left, an app's that is gone) that
-// haven't changed since cutoff. Records' attachments are never touched.
 func (s *Service) Sweep(ctx context.Context, cutoff time.Time) error {
 	if s.dataDir == "" {
 		return nil
@@ -1338,7 +1108,6 @@ func (s *Service) Sweep(ctx context.Context, cutoff time.Time) error {
 	return errors.Join(errs...)
 }
 
-// sweep removes the unattached attachments of appID (every app if 0) not changed since cutoff.
 func (s *Service) sweep(ctx context.Context, cutoff time.Time, appID int64) error {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, app_id FROM app_attachments
 		WHERE row_id IS NULL AND updated_at < ? AND (? = 0 OR app_id = ?) LIMIT 500`, cutoff.UTC().Format(timeFormat), appID, appID)
@@ -1371,8 +1140,6 @@ func (s *Service) sweep(ctx context.Context, cutoff time.Time, appID int64) erro
 	return errors.Join(errs...)
 }
 
-// deleteExpired removes attachment id if it still is unattached and unchanged since cutoff: it
-// may have been attached, or have taken a chunk, since it was found.
 func (s *Service) deleteExpired(ctx context.Context, id string, appID int64, cutoff time.Time) error {
 	defer s.lock(id)()
 	var spaceID, generation int64
@@ -1394,8 +1161,6 @@ func (s *Service) deleteExpired(ctx context.Context, id string, appID int64, cut
 	return nil
 }
 
-// sweepStrays removes files of attachments no row knows, and the directories of apps that are
-// gone, in every space, if they haven't changed since cutoff.
 func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 	spaces, err := s.spacesToSweep(ctx)
 	if err != nil {
@@ -1407,16 +1172,13 @@ func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 			return errors.Join(append(errs, err)...)
 		}
 		if _, err := os.Stat(filepath.Join(access.SpaceDir(s.dataDir, sp.WorkspaceID, sp.ID), filesDir)); err != nil {
-			continue // no files, or nothing to see
+			continue
 		}
 		errs = append(errs, s.sweepSpace(ctx, sp, cutoff))
 	}
 	return errors.Join(errs...)
 }
 
-// spacesToSweep lists every space with the generation it has now, which the sweep of each carries
-// to its files: a space removed and made again with its ID while the sweep goes round is not the
-// one that was listed, and its files are not swept as that one's.
 func (s *Service) spacesToSweep(ctx context.Context) ([]access.Space, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, generation FROM spaces`)
 	if err != nil {
@@ -1437,7 +1199,7 @@ func (s *Service) spacesToSweep(ctx context.Context) ([]access.Space, error) {
 func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.Time) error {
 	root, done, err := s.filesRootAs(ctx, sp.ID, sp.Generation)
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, access.ErrNotFound) {
-		return nil // the space is gone, with its files
+		return nil
 	}
 	if err != nil {
 		return err
@@ -1478,9 +1240,6 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 				return errors.Join(append(errs, err)...)
 			}
 			id, suffix, _ := strings.Cut(f.Name(), ".")
-			// The received file of an attachment that is ready is a leftover of finalizing (it was
-			// stopped, or couldn't remove it): it holds the original, metadata included, and nothing
-			// reads it, so it goes at once.
 			if suffix == "part" && attachmentIDPattern.MatchString(id) {
 				var ready int
 				if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM app_attachments WHERE id = ? AND space_id = ? AND status = 'ready'`,
@@ -1514,7 +1273,6 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 	return errors.Join(errs...)
 }
 
-// Maintain runs Sweep every interval until ctx is done, as the server does for the files it keeps.
 func (s *Service) Maintain(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -1530,12 +1288,6 @@ func (s *Service) Maintain(ctx context.Context, every time.Duration) {
 	}
 }
 
-// FinishMoves completes the moves of apps that involve the space spaceID, for the purge of a
-// private space (internal/accountdeletion): an app moved to or from it keeps its attachments'
-// files and rows where they were until relocate has copied them, and a move that stopped halfway
-// leaves some in the space that is about to go. It relocates every app that has attachments in
-// the space but lives elsewhere, and every app that lives there with attachments elsewhere, and
-// fails if any are left, so the space is never removed with a record's photo in it.
 func (s *Service) FinishMoves(ctx context.Context, spaceID int64) error {
 	if s.dataDir == "" {
 		return nil
@@ -1582,16 +1334,10 @@ func (s *Service) FinishMoves(ctx context.Context, spaceID int64) error {
 	return nil
 }
 
-// PurgeUploads removes the unfinished uploads and the photos never attached to a record that owner
-// made, in every app of every space, with their files, for the purge of an account
-// (internal/accountdeletion): an upload of a shared app belongs to the uploader alone, and a photo
-// already on a record belongs to the record, which stays. It returns how many it removed.
 func (s *Service) PurgeUploads(ctx context.Context, owner int64) (int, error) {
 	return s.PurgeUploadsNoting(ctx, owner, nil)
 }
 
-// PurgeUploadsNoting is PurgeUploads, and calls removed (if set) in the transaction that deletes each
-// upload's row, so what the caller keeps of it is written with the removal or not at all.
 func (s *Service) PurgeUploadsNoting(ctx context.Context, owner int64, removed func(ctx context.Context, tx *sql.Tx) error) (int, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, app_id FROM app_attachments WHERE owner = ? AND row_id IS NULL`, owner)
 	if err != nil {
@@ -1629,11 +1375,6 @@ func (s *Service) PurgeUploadsNoting(ctx context.Context, owner int64, removed f
 	return n, nil
 }
 
-// deleteUpload removes attachment id if it still is owner's and unattached (it may have been
-// attached since it was found): its files from the space that holds them, and then its row. The
-// row is what says a file is still to be removed, so a file that can't be removed leaves it, and
-// the error, for the purge to try again; the attachment's lock keeps it from being attached in
-// between.
 func (s *Service) deleteUpload(ctx context.Context, id string, appID, owner int64, removed func(context.Context, *sql.Tx) error) (bool, error) {
 	defer s.lock(id)()
 	var spaceID, generation int64

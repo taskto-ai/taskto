@@ -6,7 +6,6 @@ import (
 	"taskto.ai/taskto/internal/apitypes/nonnull"
 )
 
-// An empty inbox is told as a list, never null (apitypes:"nonnull").
 func TestEmptyInboxIsNeverNil(t *testing.T) {
 	w := newWorld(t, false)
 	for _, query := range []string{"", "?unread=1", "?before=1"} {

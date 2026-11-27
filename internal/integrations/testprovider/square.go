@@ -1,30 +1,5 @@
 package testprovider
 
-// The fake Square: an httptest server for the few Square endpoints the integration uses, written
-// against Square's published API reference (github.com/square/connect-api-specification, release
-// SquareAPIVersion) and its guides, as the adapter's notes cite them (internal/integrations/square.go):
-//
-//   - POST /v2/online-checkout/payment-links: a payment link for an order of ad hoc line items at a
-//     location (quick_pay is refused: the adapter doesn't use it). The order is made in state DRAFT.
-//   - GET /v2/online-checkout/payment-links (cursor, limit) and GET /v2/online-checkout/payment-links/{id}.
-//   - GET /v2/orders/{id}: the order of a link, DRAFT until it is paid, then OPEN with a tender.
-//   - GET /v2/merchants/me: the merchant the token belongs to.
-//
-// It honours idempotency keys as Square documents them: the same key and the same request get the
-// first answer again, the same key with another request is a 400 IDEMPOTENCY_KEY_REUSED; keys are never
-// forgotten here (Square publishes no retention). It refuses another Square-Version, a wrong token (401
-// UNAUTHORIZED), unknown fields, a location that isn't the merchant's and a link that lets the buyer
-// pay another amount (a tip, a coupon or a loyalty reward not turned off), and fails on demand
-// (FailNext). A link is paid once (PaySquare), refunded in parts (RefundSquare) and deleted
-// (DeleteLink, which cancels its order); each returns the events Square would deliver, in the order
-// it sends them: payment.created (APPROVED) then payment.updated (COMPLETED) and order.updated for a
-// payment; refund.created, refund.updated and payment.updated (refunded_money is the total so far)
-// for a refund. Events carry what a payer typed (their email and name), as Square's do.
-//
-// Not modelled: quick_pay, catalog items, taxes, discounts, tips and fees, customers, OAuth, the
-// Payments and Refunds APIs' own calls, and concurrent requests with one idempotency key (requests are
-// served one at a time).
-
 import (
 	"bytes"
 	"crypto/hmac"
@@ -42,47 +17,34 @@ import (
 	"time"
 )
 
-// SquareAPIVersion is the Square-Version the fake answers to, the one the adapter pins.
 const SquareAPIVersion = "2026-11-18"
 
-// SquareSignatureHeader is the header Square signs a delivery in.
 const SquareSignatureHeader = "X-Square-Hmacsha256-Signature"
 
-// The fake's credentials, obviously fake and made of parts.
 var (
-	// SquareTestToken is the access token the fake accepts unless WithSquareToken says another.
-	SquareTestToken = "sq-" + "sandbox-" + strings.Repeat("Fake", 6)
-	// SquareSignatureKey is the signature key of the fake's webhook subscription.
-	SquareSignatureKey = "sqsig" + strings.Repeat("Fake", 5)
-	// SquareOtherSignatureKey is a second one, for wrong-key and rotation tests.
+	SquareTestToken         = "sq-" + "sandbox-" + strings.Repeat("Fake", 6)
+	SquareSignatureKey      = "sqsig" + strings.Repeat("Fake", 5)
 	SquareOtherSignatureKey = "sqsig" + strings.Repeat("Rota", 5)
-	// SquareMerchantID and SquareLocationID are the fake's merchant and its location.
-	SquareMerchantID = "MFAKE" + strings.Repeat("M", 8)
-	SquareLocationID = "LFAKE" + strings.Repeat("L", 8)
+	SquareMerchantID        = "MFAKE" + strings.Repeat("M", 8)
+	SquareLocationID        = "LFAKE" + strings.Repeat("L", 8)
 )
 
-// SquareEvent is a delivery's body as Square sends it.
 type SquareEvent struct {
 	Type string
 	body []byte
 }
 
-// Body is the exact bytes Square signs and sends.
 func (e SquareEvent) Body() []byte { return bytes.Clone(e.body) }
 
-// SquareLink is a payment link the fake holds, as a test reads it.
 type SquareLink struct {
 	ID, OrderID, URL, Note, RedirectURL string
-	// Reference is the order's reference_id.
-	Reference string
-	Amount    int64
-	Currency  string
-	// State is the order's: DRAFT, OPEN once paid, CANCELED once deleted.
-	State string
-	// PaymentID is the payment that paid it, "" before.
-	PaymentID string
-	Refunded  int64
-	Deleted   bool
+	Reference                           string
+	Amount                              int64
+	Currency                            string
+	State                               string
+	PaymentID                           string
+	Refunded                            int64
+	Deleted                             bool
 }
 
 type squareIdem struct {
@@ -90,7 +52,6 @@ type squareIdem struct {
 	answer  []byte
 }
 
-// Square is the fake. Make one with NewSquare.
 type Square struct {
 	srv      *httptest.Server
 	clock    Clock
@@ -100,41 +61,32 @@ type Square struct {
 	pageSize int
 	payer    CustomerDetails
 
-	mu     sync.Mutex
-	links  map[string]*SquareLink
-	order  []string
-	byOrd  map[string]string
-	idem   map[string]squareIdem
-	faults []squareFault
-	calls  int
-	// requests is every request served, its method and path only; creates the body of every creation.
-	requests []Request
-	creates  [][]byte
-	// ordersDown: every read of an order fails with a 500 (a link is listed, its order can't be read).
+	mu         sync.Mutex
+	links      map[string]*SquareLink
+	order      []string
+	byOrd      map[string]string
+	idem       map[string]squareIdem
+	faults     []squareFault
+	calls      int
+	requests   []Request
+	creates    [][]byte
 	ordersDown bool
 }
 
 type squareFault struct {
 	status int
 	code   string
-	// after: the request runs before the failure is answered.
-	after bool
+	after  bool
 }
 
-// SquareOption changes how NewSquare builds the fake.
 type SquareOption func(*Square)
 
-// WithSquareClock sets the clock the fake stamps objects and events with.
 func WithSquareClock(c Clock) SquareOption { return func(s *Square) { s.clock = c } }
 
-// WithSquareToken sets the access token the fake accepts.
 func WithSquareToken(token string) SquareOption { return func(s *Square) { s.token = token } }
 
-// WithSquarePageSize caps how many links a page of the list holds, whatever limit is asked (Square's
-// limit is advisory).
 func WithSquarePageSize(n int) SquareOption { return func(s *Square) { s.pageSize = n } }
 
-// NewSquare starts a fake Square, stopped when the test ends.
 func NewSquare(t testing.TB, opts ...SquareOption) *Square {
 	t.Helper()
 	s := &Square{
@@ -150,23 +102,18 @@ func NewSquare(t testing.TB, opts ...SquareOption) *Square {
 	return s
 }
 
-// Host is the fake's host:port, for the client's test endpoint.
 func (s *Square) Host() string { return strings.TrimPrefix(s.srv.URL, "http://") }
 
-// Clock is the fake's clock.
 func (s *Square) Clock() Clock { return s.clock }
 
-// Payer is what the fake's payer types at the checkout.
 func (s *Square) Payer() CustomerDetails { return s.payer }
 
-// Calls counts the requests the fake answered, whatever their outcome.
 func (s *Square) Calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
 }
 
-// Links returns the payment links the fake holds, oldest first.
 func (s *Square) Links() []SquareLink {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -177,9 +124,6 @@ func (s *Square) Links() []SquareLink {
 	return out
 }
 
-// FailNext answers the next creation of a payment link with the status and Square error code; with
-// afterExecuting the link is made first (and kept under its key), as when an answer is lost after the
-// work was done.
 func (s *Square) FailNext(status int, code string, afterExecuting bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,7 +138,6 @@ func squareError(w http.ResponseWriter, status int, category, code string) {
 	}}})
 }
 
-// isFalse says that an option was sent, and false.
 func isFalse(b *bool) bool { return b != nil && !*b }
 
 func squareJSON(w http.ResponseWriter, v any) {
@@ -202,25 +145,20 @@ func squareJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// FailOrderReads makes every read of an order fail with a 500 while down is true: a lookup then sees a
-// link of its token and can't check it.
 func (s *Square) FailOrderReads(down bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ordersDown = down
 }
 
-// Creates returns the body of every request to create a payment link, oldest first.
 func (s *Square) Creates() [][]byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([][]byte(nil), s.creates...)
 }
 
-// URL is the fake's base address, for a test that calls it directly.
 func (s *Square) URL() string { return s.srv.URL }
 
-// Requests returns the method and path of every request the fake served, oldest first.
 func (s *Square) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -340,9 +278,6 @@ func (s *Square) createLink(w http.ResponseWriter, r *http.Request) {
 		squareError(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_LOCATION")
 		return
 	}
-	// A link must ask exactly its amount: a tip, a coupon or a loyalty reward would let the buyer pay
-	// another, so the fake refuses a link that doesn't turn each off explicitly (Square shows a
-	// seller's coupons and rewards unless told not to).
 	if co := req.CheckoutOptions; co == nil || !isFalse(co.AllowTipping) || !isFalse(co.EnableCoupon) || !isFalse(co.EnableLoyalty) {
 		squareError(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_VALUE")
 		return
@@ -449,8 +384,6 @@ func (s *Square) listLinks(w http.ResponseWriter, r *http.Request) {
 	squareJSON(w, out)
 }
 
-// PaySquare has the payer pay the link: a COMPLETED payment of the order's total with the link's note,
-// the order OPEN with a tender. It returns the events Square sends for it.
 func (s *Square) PaySquare(linkID string) ([]SquareEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,8 +404,6 @@ func (s *Square) PaySquare(linkID string) ([]SquareEvent, error) {
 	}, nil
 }
 
-// RefundSquare refunds minor of the link's payment (the rest when 0) and returns the events Square
-// sends: the refund's own two and the payment's update with the total refunded so far.
 func (s *Square) RefundSquare(linkID string, minor int64) ([]SquareEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -501,7 +432,6 @@ func (s *Square) RefundSquare(linkID string, minor int64) ([]SquareEvent, error)
 	}, nil
 }
 
-// DeleteLink deletes a link, as Square's DeletePaymentLink does: the link is gone and its order CANCELED.
 func (s *Square) DeleteLink(linkID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -543,7 +473,6 @@ func (s *Square) event(typ, objType, id string, object map[string]any) SquareEve
 	return SquareEvent{Type: typ, body: body}
 }
 
-// NewSquareEvent is a Square event of any type, with object as data.object, created at at.
 func NewSquareEvent(typ, objType, id string, object map[string]any, at time.Time) SquareEvent {
 	body, _ := json.Marshal(map[string]any{
 		"merchant_id": SquareMerchantID, "type": typ, "event_id": uuid(),
@@ -553,8 +482,6 @@ func NewSquareEvent(typ, objType, id string, object map[string]any, at time.Time
 	return SquareEvent{Type: typ, body: body}
 }
 
-// RestampSquare returns the event's body with its created_at moved to at: what Square signs as the
-// time, inside the body.
 func RestampSquare(body []byte, at time.Time) []byte {
 	var m map[string]any
 	if json.Unmarshal(body, &m) != nil {
@@ -565,8 +492,6 @@ func RestampSquare(body []byte, at time.Time) []byte {
 	return out
 }
 
-// SignSquare is the signature Square puts in SquareSignatureHeader: the Base64 HMAC-SHA256, keyed with
-// the subscription's signature key, of the notification URL followed by the body.
 func SignSquare(key, notificationURL string, body []byte) string {
 	m := hmac.New(sha256.New, []byte(key))
 	m.Write([]byte(notificationURL))

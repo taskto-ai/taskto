@@ -11,7 +11,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// payable is an Opener whose record has a link that may be paid, its money read from fields.
 type payable struct {
 	paylink.Opener
 	fields []paylink.MoneyFields
@@ -21,8 +20,6 @@ func (p payable) PayableMoney(_ context.Context, _ paylink.Querier, _, record in
 	return map[int64][]paylink.MoneyFields{record: p.fields}, nil
 }
 
-// The money a payable link was made from stays as it is, whatever the field's type is now: a release
-// that made the amount text (an acknowledged type change) leaves no way around the lock.
 func TestTheMoneyLockComparesWhatTheFieldHolds(t *testing.T) {
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))

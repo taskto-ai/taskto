@@ -1,5 +1,3 @@
-// A new document, in a dialog: a name, made Markdown, created with a heading and opened to edit.
-
 import { type FormEvent, useId, useState } from 'react'
 import { api, errorText } from '../api'
 import { useT } from '../i18n'
@@ -16,9 +14,7 @@ export function NewDoc({
   onCancel,
 }: {
   base: string
-  // The document is made: it opens, if the form is still there.
   onCreated: (path: string) => void
-  // The space's list of documents changed, whatever became of the form.
   onChanged: () => void
   onCancel: () => void
 }) {
@@ -32,7 +28,6 @@ export function NewDoc({
     e.preventDefault()
     const trimmed = name.trim().replace(/^\/+/, '')
     if (!trimmed) return
-    // A new document is Markdown; other files are uploaded.
     const path = isMarkdown(trimmed) ? trimmed : `${trimmed}.md`
     const title = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
     setBusy(true)

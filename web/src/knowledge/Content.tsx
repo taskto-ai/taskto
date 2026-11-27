@@ -5,8 +5,6 @@ import { ButtonLink } from '../ui/Button'
 import { isAudio, isVideo } from './docs'
 import './prose.css'
 
-// A document's text as it is read, or a file's download link, with a player for audio and
-// video.
 export function Content({ url, doc, onLink }: { url: string; doc: Doc; onLink: LinkHandler }) {
   const t = useT()
   const f = useFormat()
@@ -20,14 +18,8 @@ export function Content({ url, doc, onLink }: { url: string; doc: Doc; onLink: L
   const raw = `${url}${url.includes('?') ? '&' : '?'}raw=true`
   return (
     <div className="kb-file">
-      {isVideo(doc.path) && (
-        // biome-ignore lint/a11y/useMediaCaption: people's own recordings come without captions
-        <video className="kb-media" controls preload="metadata" src={raw} aria-label={doc.path} />
-      )}
-      {isAudio(doc.path) && (
-        // biome-ignore lint/a11y/useMediaCaption: people's own recordings come without captions
-        <audio className="kb-media" controls preload="metadata" src={raw} aria-label={doc.path} />
-      )}
+      {isVideo(doc.path) && <video className="kb-media" controls preload="metadata" src={raw} aria-label={doc.path} />}
+      {isAudio(doc.path) && <audio className="kb-media" controls preload="metadata" src={raw} aria-label={doc.path} />}
       <div className="kb-file-download">
         <ButtonLink plain href={raw} download icon="down">
           {t('knowledge.doc.download')}

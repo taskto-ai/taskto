@@ -1,17 +1,3 @@
-// Package integrations is a workspace's connections to outside services, starting with
-// payments: the closed registry of providers (Stripe, Square), each connection's settings,
-// limits and sealed secrets, and the spaces whose apps may use it (docs/integrations.md).
-//
-// The registry is code. An integration holds only what an admin typed for one provider account:
-// its credentials, sealed with the server key (internal/serverkey) and write-only, so the API
-// says "set" or "not set" and nothing, not a reply, the log, the audit log, an error or the
-// agent, ever holds one in clear. Nothing here calls a provider: that, the approval of an app's
-// use of an integration, and the webhook are the cards that follow; this package gives them the
-// store (Credentials, Usable) and the address the webhook will have.
-//
-// Admins manage a workspace's integrations: Routes wraps them in auth.Service.RequireAdmin,
-// which takes sessions only (an access token, and with it MCP, is refused), and every query is
-// scoped to the workspace of the request, so another workspace's id is "not found".
 package integrations
 
 import (
@@ -36,60 +22,34 @@ import (
 	"taskto.ai/taskto/internal/ratelimit"
 )
 
-// Options configure the Service.
 type Options struct {
-	// PublicURL is the server's external origin (-public-url); empty when it has none. The
-	// webhook address shown to admins is made from it.
-	PublicURL string
-	// Egress is where calls to providers may go (-integration-egress). Nil is "public": every
-	// connection's address is checked, so a call never reaches a private or loopback address.
-	Egress *egress.Policy
-	// ClientOptions are for tests: they change how the clients of calls to providers are built
-	// (WithTestEndpoint points them at a fake). The server's command leaves them empty, and nothing
-	// in its configuration, a definition or a request can set them.
+	PublicURL     string
+	Egress        *egress.Policy
 	ClientOptions []ClientOption
-	// Now is the clock of the webhook route's signature tolerance, the limits and the event
-	// worker; nil is the real one. It is for tests, which move time without sleeping.
-	Now func() time.Time
+	Now           func() time.Time
 }
 
-// Service serves the integrations API (docs/api.md#integrations).
 type Service struct {
-	store      *Store
-	spaces     *access.Checker
-	publicURL  string
-	egress     egress.Policy
-	clientOpts []ClientOption
-	// beforeBeginRef is for tests: it runs between reading an entry's ref and making it ready for a
-	// call, where another worker's call may finish.
-	beforeBeginRef func()
-	// afterWriteAhead is for tests: it runs after a call is written ahead and before it leaves, and an
-	// error it returns ends the try there, as a crash would.
+	store           *Store
+	spaces          *access.Checker
+	publicURL       string
+	egress          egress.Policy
+	clientOpts      []ClientOption
+	beforeBeginRef  func()
 	afterWriteAhead func() error
-	// beforeCall is for tests: it runs after the key's window is read and before the call's deadline is
-	// made from it, as the call is about to leave.
-	beforeCall func()
-	// afterCall is for tests: it runs after a call answered with an object and before anything of the
-	// answer is noted, and an error it returns ends the try there, as a crash would.
-	afterCall func() error
+	beforeCall      func()
+	afterCall       func() error
 
-	now func() time.Time
-	// hookIP and hookID limit the webhook route (webhook.go); applier applies stored events and
-	// wake tells the worker (events.go).
+	now            func() time.Time
 	hookIP, hookID *ratelimit.Limiter
-	// decoy is the secret a delivery with no usable one is verified against (webhook.go).
-	decoy WebhookSecrets
-	// afterLookup, set by a test, runs between the route's two reads of an integration: finding
-	// it by its public id, and opening its credentials.
-	afterLookup func()
-	applier     atomic.Pointer[Applier]
-	wake        chan struct{}
-	// pollMu guards polls, the reconciliation polling's memory of each integration's reads (poll.go).
-	pollMu sync.Mutex
-	polls  pollLimits
+	decoy          WebhookSecrets
+	afterLookup    func()
+	applier        atomic.Pointer[Applier]
+	wake           chan struct{}
+	pollMu         sync.Mutex
+	polls          pollLimits
 }
 
-// New returns the API over store.
 func New(store *Store, opts Options) *Service {
 	policy := egress.MustParse("public")
 	if opts.Egress != nil {
@@ -106,14 +66,10 @@ func New(store *Store, opts Options) *Service {
 	return s
 }
 
-// Client returns the client for calls to provider p of an integration with these settings, under
-// the server's integration egress policy (Credentials has what to send).
 func (s *Service) Client(p Provider, settings map[string]string, opts ...ClientOption) *Client {
 	return NewClient(p, settings, s.egress, opts...)
 }
 
-// Routes mounts the integrations endpoints on mux, behind a's access checks; spaces tells which
-// spaces an admin may allow and who reads a space's list.
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, spaces *access.Checker) {
 	s.spaces = spaces
 	admin := func(h http.HandlerFunc) http.Handler { return a.RequireAdmin(h) }
@@ -134,9 +90,6 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, spaces *access.Che
 		s.spaces.RequireSpace(access.Read, http.HandlerFunc(s.handleForSpace)))
 }
 
-// view is an integration as the API shows the caller: the webhook address the server's public
-// URL gives it, and the spaces it is allowed in that the caller manages (visible), which never
-// include another person's private space; those are only counted.
 func (s *Service) view(rec record, visible map[int64]bool) Integration {
 	out := rec.Integration
 	out.Spaces = []int64{}
@@ -160,8 +113,6 @@ func (s *Service) view(rec record, visible map[int64]bool) Integration {
 	return out
 }
 
-// manageable lists the spaces the caller, an admin, may manage: the ids view and setSpaces scope
-// everything to. On an error it has answered.
 func (s *Service) manageable(w http.ResponseWriter, r *http.Request) ([]int64, bool) {
 	spaces, err := s.spaces.Manageable(r.Context(), actorOf(r), workspaceOf(r))
 	if err != nil {
@@ -175,7 +126,6 @@ func (s *Service) manageable(w http.ResponseWriter, r *http.Request) ([]int64, b
 	return ids, true
 }
 
-// visibleTo is the set of ids view takes.
 func visibleTo(ids []int64) map[int64]bool {
 	set := make(map[int64]bool, len(ids))
 	for _, id := range ids {
@@ -184,9 +134,6 @@ func visibleTo(ids []int64) map[int64]bool {
 	return set
 }
 
-// respondOne writes rec as the caller sees it, with the spaces (visible) the caller managed when
-// the request began. A mutation reads them before it commits, so a failed lookup can't answer an
-// error for a change that was made.
 func (s *Service) respondOne(w http.ResponseWriter, status int, rec record, visible map[int64]bool) {
 	writeJSON(w, status, s.view(rec, visible))
 }
@@ -201,7 +148,6 @@ func actorOf(r *http.Request) int64 {
 	return u.ID
 }
 
-// ProviderInfo is a registered provider as the API shows it, for the form that connects one.
 type ProviderInfo struct {
 	ID       string        `json:"id"`
 	Kinds    []string      `json:"kinds" apitypes:"nonnull"`
@@ -209,17 +155,12 @@ type ProviderInfo struct {
 	Settings []SettingSpec `json:"settings" apitypes:"nonnull"`
 }
 
-// Registry is what a form needs to connect an integration.
 type Registry struct {
-	Providers  []ProviderInfo `json:"providers" apitypes:"nonnull"`
-	Currencies []string       `json:"currencies" apitypes:"nonnull"`
-	// Exponents is each currency's number of decimals, the server's own table: the web app
-	// writes an amount in the unit the server checks it in, whatever its formatter says.
-	Exponents map[string]int `json:"exponents" apitypes:"nonnull"`
-	// MaxAmountMinor is the largest amount ceiling the server accepts.
-	MaxAmountMinor int64 `json:"max_amount_minor"`
-	// WebhooksAvailable is whether the server has a public URL, so providers can reach it.
-	WebhooksAvailable bool `json:"webhooks_available"`
+	Providers         []ProviderInfo `json:"providers" apitypes:"nonnull"`
+	Currencies        []string       `json:"currencies" apitypes:"nonnull"`
+	Exponents         map[string]int `json:"exponents" apitypes:"nonnull"`
+	MaxAmountMinor    int64          `json:"max_amount_minor"`
+	WebhooksAvailable bool           `json:"webhooks_available"`
 }
 
 func (s *Service) handleProviders(w http.ResponseWriter, _ *http.Request) {
@@ -274,8 +215,6 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 	s.respondOne(w, http.StatusOK, rec, visibleTo(ids))
 }
 
-// createRequest is the body of a create. Secrets are the clear values, which only live here,
-// between the request and sealing.
 type createRequest struct {
 	Provider       string            `json:"provider"`
 	Name           string            `json:"name"`
@@ -310,9 +249,6 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	s.respondOne(w, http.StatusCreated, rec, visibleTo(ids))
 }
 
-// updateRequest is the body of a PATCH. An absent or null field stays as it is. settings and
-// currencies replace the whole value; a secret in secrets replaces that secret, and none can be
-// removed. The name and the provider can't change.
 type updateRequest struct {
 	DisplayName    *string           `json:"display_name"`
 	Settings       map[string]string `json:"settings"`
@@ -360,9 +296,6 @@ func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// spacesRequest is the body of a PUT of the allowed spaces. Keep names the spaces, among Spaces,
-// whose allowance an app's approval made and that the admin keeps after the approval ends: saving
-// the list does not do it.
 type spacesRequest struct {
 	Spaces []int64 `json:"spaces"`
 	Keep   []int64 `json:"keep"`
@@ -381,8 +314,6 @@ func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "spaces must be a list of space ids")
 		return
 	}
-	// Only spaces the admin can see and manage: their own private space and the workspace's shared
-	// ones. Anyone else's private space is "not found", as it is everywhere else.
 	manageable, ok := s.manageable(w, r)
 	if !ok {
 		return
@@ -405,7 +336,6 @@ func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Only the caller's manageable spaces change; the integration's others stay as they are.
 	rec, err := s.store.setSpaces(r.Context(), workspaceOf(r), actorOf(r), id, want, keep, manageable)
 	if err != nil {
 		fail(w, r, err)
@@ -415,8 +345,6 @@ func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
 	s.respondOne(w, http.StatusOK, rec, visibleTo(manageable))
 }
 
-// CheckResult is the answer of a check. Remote says whether the provider was asked: this version
-// only checks what the server holds, so it is false (docs/integrations.md#checking-a-connection).
 type CheckResult struct {
 	OK     bool          `json:"ok"`
 	Remote bool          `json:"remote"`
@@ -431,8 +359,6 @@ func (s *Service) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	ws := workspaceOf(r)
 	var res CheckResult
-	// One snapshot: the integration, which secrets are set and their opening are of one state, so
-	// a removal that commits meanwhile is "not found" or a finished check, never an "internal".
 	err := s.store.read(r.Context(), func(tx *sql.Tx) error {
 		rec, err := s.store.get(r.Context(), tx, ws, id)
 		if err != nil {
@@ -448,17 +374,21 @@ func (s *Service) handleCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// check looks at what the server holds of an integration: every required secret is set and opens
-// with the server's key, and the settings are the provider's. A secret that doesn't open is what
-// restoring a backup on another machine leaves, so it is the one thing worth saying aloud. An
-// error is a failure to read, not an answer.
+func settingsCheck(p Provider, settings map[string]string) (CheckResult, bool) {
+	err := checkSettings(p, settings)
+	if err == nil {
+		return CheckResult{}, false
+	}
+	return CheckResult{Code: err.Code, Params: err.Params}, true
+}
+
 func (s *Service) check(ctx context.Context, tx *sql.Tx, workspace int64, rec record) (CheckResult, error) {
 	p := Lookup(rec.Provider)
 	if p == nil {
 		return CheckResult{Code: apierr.CodeIntegrationProviderUnknown}, nil
 	}
-	if err := checkSettings(p, rec.Settings); err != nil {
-		return CheckResult{Code: err.Code, Params: err.Params}, nil //nolint:nilerr // a bad setting is the check's answer, not a failure
+	if res, bad := settingsCheck(p, rec.Settings); bad {
+		return res, nil
 	}
 	for _, spec := range p.Secrets() {
 		if spec.Required && rec.Secrets[spec.Name] != secretSet {
@@ -473,8 +403,6 @@ func (s *Service) check(ctx context.Context, tx *sql.Tx, workspace int64, rec re
 		}
 		return CheckResult{}, err
 	}
-	// A webhook secret another integration holds too (an old install can have one) verifies no
-	// delivery: it is said without saying whose it is.
 	current, previous, err := s.store.sharedWebhookSecrets(ctx, tx, rec.ID, creds)
 	if err != nil {
 		return CheckResult{}, err
@@ -499,14 +427,13 @@ func (s *Service) handleForSpace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]SpaceIntegration{"integrations": list})
 }
 
-// fail answers with the status for one of the package's errors, or 500.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var bad *apierr.Error
 	switch {
 	case errors.As(err, &bad):
 		apierr.WriteError(w, bad)
 	case errors.Is(err, auth.ErrAccountDisabled):
-		auth.WriteAccountDisabled(w) // the admin was disabled after the request was let in
+		auth.WriteAccountDisabled(w)
 	case errors.Is(err, errNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeIntegrationNotFound, errNotFound.Error())
 	case errors.Is(err, errTaken):
@@ -521,10 +448,9 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// serverError logs err and answers 500 without details.
 func serverError(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
-		return // the client went away
+		return
 	}
 	slog.ErrorContext(r.Context(), "integrations: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	apierr.Internal(w)
@@ -532,8 +458,6 @@ func serverError(w http.ResponseWriter, r *http.Request, err error) {
 
 const maxBody = 64 << 10
 
-// readJSON decodes the request body into v, strictly: unknown fields and trailing data are
-// errors. The decoder's message isn't passed on: it can quote the body, which holds secrets.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	body := http.MaxBytesReader(w, r.Body, maxBody)
 	var raw json.RawMessage
@@ -546,8 +470,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: one object expected")
 		return false
 	}
-	// A top-level null decodes into a struct as "nothing set", which would answer 200 for a change
-	// that wasn't made: the body is an object.
 	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) {
 		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: an object expected")
 		return false
@@ -561,8 +483,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200 with a
-// broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

@@ -1,8 +1,3 @@
-// "Loading…" said to a screen reader through one polite status region that is always there (the
-// page's), not by text inserted with each skeleton: a live region that appears with its words,
-// or one marked busy, may never be read. Each part that waits says so with useLoadingStatus; the
-// skeletons themselves are only shapes, hidden from screen readers.
-
 import { createContext, type ReactNode, useCallback, useContext, useId, useLayoutEffect, useState } from 'react'
 import { useT } from '../i18n'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
@@ -35,11 +30,9 @@ export function LoadingStatus({ children }: { children: ReactNode }) {
   )
 }
 
-// This part is waiting for what it shows (while `loading`), until it is done or goes away.
 export function useLoadingStatus(loading: boolean) {
   const part = useId()
   const report = useContext(LoadingContext)
-  // Before the screen is painted, so the region never says "Loading…" of what has come.
   useLayoutEffect(() => {
     report(part, loading)
     return () => report(part, false)

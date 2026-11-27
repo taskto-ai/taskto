@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,20 +18,22 @@ import (
 
 const isolationSupported = true
 
-// isolationState is the users the worker has made so far.
+type Isolation struct {
+	UIDBase       int
+	Passwd, Group string
+
+	state isolationState
+}
+
 type isolationState struct {
 	mu    sync.Mutex
 	known map[int64]bool
 }
 
-// uid is user's uid.
 func (iso *Isolation) uid(user int64) int { return iso.UIDBase + int(user) }
 
-// maxIsolatedUser bounds user IDs so uids stay below the 32-bit nobody range.
 const maxIsolatedUser = 1 << 30
 
-// asUser makes cmd run as user's own Unix user, creating it first. Without isolation it
-// does nothing.
 func (w *Worker) asUser(cmd *exec.Cmd, user int64) error {
 	iso := w.cfg.Isolation
 	if iso == nil {
@@ -42,13 +45,15 @@ func (w *Worker) asUser(cmd *exec.Cmd, user int64) error {
 	if err := w.ensureUser(user); err != nil {
 		return err
 	}
-	id := uint32(iso.uid(user)) //nolint:gosec // bounded by maxIsolatedUser
+	uid := iso.uid(user)
+	if uid < 0 || int64(uid) > math.MaxUint32 {
+		return fmt.Errorf("user %d's Unix user id is out of range", user)
+	}
+	id := uint32(uid)
 	cmd.SysProcAttr.Credential = &syscall.Credential{Uid: id, Gid: id, Groups: []uint32{}}
 	return nil
 }
 
-// ensureUser adds user's Unix user and group if they aren't there, and creates their
-// directory, owned by them. It refuses a directory that is a symlink or someone else's.
 func (w *Worker) ensureUser(user int64) error {
 	iso := w.cfg.Isolation
 	iso.state.mu.Lock()
@@ -91,12 +96,8 @@ func (w *Worker) ensureUser(user int64) error {
 	return nil
 }
 
-// addLine appends line to the account file path unless the entry is there: one with name and
-// id. An entry with the name and another id, or the id and another name, is refused rather
-// than duplicated. The file is replaced in one rename. (Each first-time user rewrites the
-// file: fine for the few hundred users a server has; the worker remembers whom it made.)
 func addLine(path, name string, id int, line string) error {
-	b, err := os.ReadFile(path) //nolint:gosec // G304: the configured account file
+	b, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return err
 	}
@@ -127,7 +128,7 @@ func addLine(path, name string, id int, line string) error {
 		tmp.Close()
 		return err
 	}
-	if err := tmp.Chmod(0o644); err != nil { //nolint:gosec // G302: account files are world-readable
+	if err := tmp.Chmod(0o644); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -137,7 +138,6 @@ func addLine(path, name string, id int, line string) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// killUIDs kills every process whose real uid is min or more: all the CLI users'.
 func killUIDs(min int) int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -149,7 +149,7 @@ func killUIDs(min int) int {
 		if err != nil || pid <= 1 {
 			continue
 		}
-		b, err := os.ReadFile("/proc/" + e.Name() + "/status") //nolint:gosec // G304: a /proc path
+		b, err := os.ReadFile("/proc/" + e.Name() + "/status")
 		if err != nil {
 			continue
 		}

@@ -23,12 +23,10 @@ import (
 
 const sharedKey = "fake-shared-key-for-the-tests"
 
-// provider is a fake model provider: it records what reaches it and answers like one.
 type provider struct {
 	*httptest.Server
-	mu   sync.Mutex
-	seen []*http.Request
-	// status, if set, is the answer; 429 comes with a Retry-After.
+	mu     sync.Mutex
+	seen   []*http.Request
 	status int
 }
 
@@ -66,7 +64,6 @@ func (p *provider) requests() []*http.Request {
 	return slices.Clone(p.seen)
 }
 
-// addShared adds a shared account for cli to ws as admin, at the provider.
 func (c *client) addShared(ws int64, cli cliworker.CLI, baseURL string) SharedAccount {
 	c.e.t.Helper()
 	rec := c.do(http.MethodPost, sharedPath(ws), map[string]string{"cli": string(cli), "label": "Company key", "base_url": baseURL, "api_key": sharedKey})
@@ -78,7 +75,6 @@ func sharedPath(ws int64) string { return "/api/workspaces/" + itoa(ws) + "/cli-
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-// secondWorkspace makes c the admin of a workspace of its own.
 func (e *env) secondWorkspace(c *client) int64 {
 	e.t.Helper()
 	var ws int64
@@ -106,14 +102,12 @@ func TestSharedAccountsAPI(t *testing.T) {
 	if a.APIKey != "set" || a.BaseURL != p.URL || a.CLI != cliworker.Claude || a.Label != "Company key" {
 		t.Fatalf("created = %+v", a)
 	}
-	// The default address is the provider's own.
 	rec := admin.do(http.MethodPost, sharedPath(ws), map[string]string{"cli": "codex", "label": "OpenAI", "api_key": sharedKey})
 	expect(t, rec, http.StatusCreated)
 	if got := decode[SharedAccount](t, rec).BaseURL; got != "https://api.openai.com" {
 		t.Errorf("default base URL = %s", got)
 	}
 
-	// Members read them, without the key, and their mode.
 	rec = member.do(http.MethodGet, sharedPath(ws), nil)
 	expect(t, rec, http.StatusOK)
 	l := decode[sharedList](t, rec)
@@ -124,7 +118,6 @@ func TestSharedAccountsAPI(t *testing.T) {
 		t.Fatal("the key is in the list")
 	}
 
-	// Only admins change them.
 	path := sharedPath(ws) + "/" + itoa(a.ID)
 	expect(t, member.do(http.MethodPost, sharedPath(ws), map[string]string{"cli": "grok", "label": "x", "api_key": sharedKey}), http.StatusForbidden)
 	expect(t, member.do(http.MethodPatch, path, map[string]string{"label": "mine"}), http.StatusForbidden)
@@ -132,7 +125,6 @@ func TestSharedAccountsAPI(t *testing.T) {
 	expect(t, member.do(http.MethodPost, path+"/test", map[string]any{}), http.StatusForbidden)
 	expect(t, member.do(http.MethodPatch, sharedPath(ws)+"/modes", map[string]any{"default_mode": "shared"}), http.StatusForbidden)
 
-	// Another workspace's admin reaches none of them, through either workspace's path.
 	expect(t, outsider.do(http.MethodGet, sharedPath(ws), nil), http.StatusNotFound)
 	otherPath := sharedPath(other) + "/" + itoa(a.ID)
 	expect(t, outsider.do(http.MethodPatch, otherPath, map[string]string{"label": "stolen"}), http.StatusNotFound)
@@ -142,13 +134,12 @@ func TestSharedAccountsAPI(t *testing.T) {
 		t.Fatalf("another workspace lists %+v", l.Accounts)
 	}
 
-	// Refusals.
 	for _, body := range []map[string]string{
 		{"cli": "claude", "label": "x", "api_key": "short"},
 		{"cli": "claude", "label": "", "api_key": sharedKey},
 		{"cli": "nope", "label": "x", "api_key": sharedKey},
 		{"cli": "claude", "label": "x", "api_key": sharedKey, "base_url": "http://example.com"},
-		{"cli": "claude", "label": "x", "api_key": sharedKey, "base_url": "https://user:pw@example.com"}, //nolint:gosec // G101: made up, to be refused
+		{"cli": "claude", "label": "x", "api_key": sharedKey, "base_url": "https://user:pw@example.com"},
 		{"cli": "claude", "label": "x", "api_key": sharedKey, "model": "bad model"},
 		{"cli": "claude", "label": "x"},
 	} {
@@ -156,7 +147,6 @@ func TestSharedAccountsAPI(t *testing.T) {
 	}
 	expect(t, admin.do(http.MethodPatch, path, map[string]string{"cli": "codex"}), http.StatusBadRequest)
 
-	// The test reaches the provider with the key, and says what it answered, never the key.
 	rec = admin.do(http.MethodPost, path+"/test", map[string]any{})
 	expect(t, rec, http.StatusOK)
 	if got := decode[map[string]any](t, rec); got["ok"] != true {
@@ -178,7 +168,6 @@ func TestSharedAccountsAPI(t *testing.T) {
 		t.Fatal("the key is in the test's answer")
 	}
 
-	// The key is sealed in the database.
 	var sealed []byte
 	if err := e.db.QueryRow(`SELECT api_key FROM cli_shared_accounts WHERE id = ?`, a.ID).Scan(&sealed); err != nil {
 		t.Fatal(err)
@@ -208,12 +197,10 @@ func TestModes(t *testing.T) {
 	if got := decode[sharedList](t, admin.do(http.MethodGet, sharedPath(ws), nil)); got.Mode != OwnOnly {
 		t.Fatalf("admin's mode = %s", got.Mode)
 	}
-	// Back to the default.
 	expect(t, admin.do(http.MethodPatch, modes, map[string]any{"members": map[string]any{itoa(member.id): nil}}), http.StatusOK)
 	if got := decode[sharedList](t, member.do(http.MethodGet, sharedPath(ws), nil)); got.Mode != OwnOnly {
 		t.Fatalf("member's mode = %s", got.Mode)
 	}
-	// Someone who isn't a member, and modes that aren't.
 	expect(t, admin.do(http.MethodPatch, modes, map[string]any{"members": map[string]any{itoa(outsider.id): "own"}}), http.StatusNotFound)
 	expect(t, admin.do(http.MethodPatch, modes, map[string]any{"members": map[string]any{itoa(member.id): "everything"}}), http.StatusBadRequest)
 	expect(t, admin.do(http.MethodPatch, modes, map[string]any{"default_mode": "any"}), http.StatusBadRequest)
@@ -228,16 +215,12 @@ func TestModes(t *testing.T) {
 	}
 }
 
-// A member's turn runs on the workspace's shared account by mode; the CLI gets the proxy's
-// address and a token for the turn, never the key; the proxy forwards the turn's requests
-// with the key, and stops taking the token when the turn ends.
 func TestTurnOnASharedAccount(t *testing.T) {
 	e := newTurnEnv(t)
 	p := newProvider(t)
 	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
 	conv := e.conversation(e.other)
 
-	// The member has no Claude Code login of their own: the shared account runs the turn.
 	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})); d.Status != cliworker.StatusOK {
 		t.Fatalf("turn = %+v", d)
 	}
@@ -259,12 +242,10 @@ func TestTurnOnASharedAccount(t *testing.T) {
 		t.Fatalf("the CLI wasn't pointed at the proxy: %v", calls[0].Env)
 	}
 
-	// The turn is over: its token no longer works.
 	if res := proxyCall(t, e, token, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("an ended turn's token: %d", res.StatusCode)
 	}
 
-	// A token for a running turn works, and the provider sees the key, not the token.
 	claims := proxyClaims{Account: a.ID, User: e.other.id, Conversation: conv, Turn: "c1-live"}
 	live, err := e.svc.mintToken(claims)
 	if err != nil {
@@ -281,8 +262,6 @@ func TestTurnOnASharedAccount(t *testing.T) {
 		t.Fatalf("the provider saw %s %v", last.URL, last.Header)
 	}
 
-	// Refusals: a forged or foreign token, a path outside /v1, a conversation that isn't the
-	// user's, the user out of the workspace, a mode that rules shared accounts out.
 	if res := proxyCall(t, e, live+"x", "/cli-proxy/v1/messages"); res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("forged token: %d", res.StatusCode)
 	}
@@ -306,7 +285,6 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	}
 }
 
-// A 429 from the provider is the shared account's limit, with when it resets.
 func TestProxyRecordsALimit(t *testing.T) {
 	e := newTurnEnv(t)
 	p := newProvider(t)
@@ -331,7 +309,6 @@ func TestProxyRecordsALimit(t *testing.T) {
 	}
 }
 
-// The mode decides between the member's own account and the workspace's.
 func TestModeChoosesTheAccount(t *testing.T) {
 	e := newTurnEnv(t)
 	p := newProvider(t)
@@ -346,18 +323,15 @@ func TestModeChoosesTheAccount(t *testing.T) {
 	}
 	turns := func(dir string) int { return len(clitest.Calls(t, dir)) }
 
-	// own_else_shared, own connected: own.
 	e.turn(conv, turnBody{Turn: "t1", CLI: "grok", Model: "default", Prompt: "one"})
 	if turns(own) == 0 || turns(shared) != 0 {
 		t.Fatalf("own %d, shared %d", turns(own), turns(shared))
 	}
-	// shared: the workspace's, even with their own connected.
 	setMode("shared")
 	e.turn(conv, turnBody{Turn: "t2", CLI: "grok", Model: "default", Prompt: "two"})
 	if turns(shared) != 1 {
 		t.Fatalf("shared mode: shared %d", turns(shared))
 	}
-	// own, with their own needing a new sign-in: asks for it, never the shared one.
 	setMode("own")
 	if err := e.svc.setReconnect(t.Context(), e.accountID(e.other.id, cliworker.Grok)); err != nil {
 		t.Fatal(err)
@@ -365,20 +339,16 @@ func TestModeChoosesTheAccount(t *testing.T) {
 	if d := done(e.turn(conv, turnBody{Turn: "t3", CLI: "grok", Model: "default", Prompt: "three"})); d.Status != cliworker.StatusLoginRequired {
 		t.Fatalf("own mode, reconnect: %+v", d)
 	}
-	// own_else_shared, their own needing a new sign-in: the shared one.
 	setMode(nil)
 	if d := done(e.turn(conv, turnBody{Turn: "t4", CLI: "grok", Model: "default", Prompt: "four"})); d.Status != cliworker.StatusOK || turns(shared) != 2 {
 		t.Fatalf("own_else_shared, reconnect: %+v, shared %d", d, turns(shared))
 	}
-	// shared, none for the CLI: refused, saying so.
 	setMode("shared")
 	if d := done(e.turn(conv, turnBody{Turn: "t5", CLI: "claude", Model: "default", Prompt: "five"})); d.Status != cliworker.StatusFailed || !strings.Contains(d.Text, "shared accounts only") {
 		t.Fatalf("shared mode, none: %+v", d)
 	}
 }
 
-// A shared account's turn whose key the provider refuses fails, rather than waiting for the
-// member to sign in: it isn't their login.
 func TestSharedKeyRefused(t *testing.T) {
 	e := newTurnEnv(t)
 	p := newProvider(t)
@@ -405,7 +375,6 @@ func TestSharedKeyRefused(t *testing.T) {
 	}
 }
 
-// proxied is the proxy's answer to a call.
 type proxied struct {
 	StatusCode int
 	Header     http.Header
@@ -430,7 +399,6 @@ func proxyCall(t *testing.T, e *turnEnv, token, path string) proxied {
 	return proxied{StatusCode: res.StatusCode, Header: res.Header, Body: string(body)}
 }
 
-// A turn run again (a replay) gets a new token, and its earlier one stops working.
 func TestReplayRetiresTheEarlierToken(t *testing.T) {
 	e := newTurnEnv(t)
 	p := newProvider(t)
@@ -457,8 +425,6 @@ func TestReplayRetiresTheEarlierToken(t *testing.T) {
 	}
 }
 
-// An admin's request that passed the middleware before the admin was disabled reaches the handler
-// after: it changes nothing and is answered 403, in every write of the shared accounts.
 func TestDisabledAdminChangesNoSharedAccountSettings(t *testing.T) {
 	e := newEnv(t, LocalUnsafe, nil)
 	admin, ws := e.setup()
@@ -467,7 +433,6 @@ func TestDisabledAdminChangesNoSharedAccountSettings(t *testing.T) {
 	existing := admin.addShared(ws, cliworker.Claude, p.URL)
 
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
-	// The admin is disabled after RequireAdmin let the request through, before the handler runs.
 	race := func(h http.HandlerFunc) http.Handler {
 		return a.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2030-01-01T00:00:00.000Z' WHERE id = ?`, admin.id); err != nil {

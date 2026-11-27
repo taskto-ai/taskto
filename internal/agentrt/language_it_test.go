@@ -1,8 +1,5 @@
 package agentrt
 
-// The agent's language reaches its system prompt, and stays with the conversation. Gated
-// by TASKTO_AGENT_IT=1.
-
 import (
 	"strings"
 	"testing"
@@ -15,7 +12,6 @@ func TestLanguageSection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// "system" makes the scripted model answer with its system prompt.
 	system := func(in Input) string {
 		t.Helper()
 		in.Content = "system"
@@ -35,7 +31,6 @@ func TestLanguageSection(t *testing.T) {
 	if got := system(Input{Language: "pt-BR"}); !strings.Contains(got, "The user's language is Brazilian Portuguese (português (Brasil), pt-BR).") {
 		t.Fatalf("pt-BR: %q", got)
 	}
-	// Kept across a restart.
 	s.kill()
 	s.start()
 	if got := system(Input{Language: "pt-BR"}); !strings.Contains(got, "Brazilian Portuguese") {

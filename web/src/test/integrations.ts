@@ -1,6 +1,3 @@
-// Fixtures for the integration screens' tests: the contract of an invoicing app's payments slot as
-// the server works it out, an approval of it, and an integration of the workspace.
-
 import type { Integration, IntegrationApproval, IntegrationContract, SlotStatus } from '../api'
 
 export const contract: IntegrationContract = {

@@ -29,7 +29,6 @@ const account = (cli: CliAccount['cli'], name: string, extra: Partial<CliAccount
   ...extra,
 })
 
-// fakeFetch with the switching queue's route, which the tab reads too.
 const fakeCli = (routes: Parameters<typeof fakeFetch>[0]) =>
   fakeFetch({ 'GET /api/me/cli-switching': { body: { enabled: false, queue: [], available: [] } }, ...routes })
 
@@ -85,7 +84,6 @@ test('one card per CLI: its state, how it signed in, terms next to Connect, and 
   const claude = await screen.findByRole('region', { name: 'Claude Code' })
   expect(within(claude).getByText('Connected')).toBeTruthy()
   expect(within(claude).getByText(/signed in with claude\.ai/)).toBeTruthy()
-  // Connected: no Connect, but Check and Disconnect.
   expect(within(claude).queryByRole('button', { name: 'Connect Claude Code' })).toBeNull()
   expect(within(claude).getByRole('button', { name: 'Check Claude Code' })).toBeTruthy()
   expect(within(claude).getByRole('button', { name: 'Disconnect Claude Code' })).toBeTruthy()
@@ -135,7 +133,6 @@ test('a trusted sign-in URL is a link, with the one-time code, until the login c
   expect(screen.queryByLabelText('Paste the code the sign-in page shows')).toBeNull()
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({})
 
-  // Read again every LOGIN_POLL_MS while it waits.
   await poll()
   expect(count(calls, 'GET', '/api/me/cli-accounts/codex/login')).toBe(1)
   await poll()
@@ -147,7 +144,6 @@ test('a trusted sign-in URL is a link, with the one-time code, until the login c
   expect(count(calls, 'GET', '/api/me/cli-accounts')).toBe(2)
   expect(screen.queryByRole('link', { name: 'https://auth.openai.com/codex/device' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Connect Codex' })).toBeNull()
-  // Polling stopped.
   await poll()
   expect(count(calls, 'GET', '/api/me/cli-accounts/codex/login')).toBe(3)
 })
@@ -173,7 +169,6 @@ test("an untrusted URL is text with a warning; Claude Code's code is pasted back
   expect(url.closest('a')).toBeNull()
   expect(screen.queryByRole('link', { name: /example\.com/ })).toBeNull()
   expect(document.querySelector('b')).toBeNull()
-  // A security warning: an alert, said at once.
   expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain(
     "This address isn't Claude Code's known sign-in page. Check it before you open it.",
   )
@@ -295,7 +290,6 @@ test('usage limits: each window with how much is used, when it resets, warnings 
 
   const week = screen.getByRole('listitem', { name: 'Weekly limit' })
   expect(within(week).getByText('91% used')).toBeTruthy()
-  // A status in words, in a badge of its tone.
   expect(within(week).getByText('Close to the limit').className).toContain('ui-badge-warning')
 
   const opus = screen.getByRole('listitem', { name: 'Weekly limit (Opus)' })
@@ -333,9 +327,9 @@ test('a sign-in the server keeps failing to report is read again less and less o
   render(<CliAccountsTab />)
   await screen.findByRole('link', { name: 'https://auth.openai.com/codex/device' })
   const reads = () => count(calls, 'GET', '/api/me/cli-accounts/codex/login')
-  await poll() // 2 s: the first read fails
+  await poll()
   await waitFor(() => expect(reads()).toBe(1))
-  await poll() // 2 s more: the next waits 4 s, not yet
+  await poll()
   expect(reads()).toBe(1)
   await poll()
   await waitFor(() => expect(reads()).toBe(2))
@@ -362,18 +356,15 @@ test('several accounts of one CLI: each its own card, a name, and another one ad
   const third = screen.getByRole('region', { name: 'Claude Code · account 3' })
   expect(within(third).getByRole('button', { name: 'Reconnect Claude Code · account 3' })).toBeTruthy()
 
-  // Naming one changes that one.
   const name = within(third).getByRole('form', { name: 'Name of Claude Code · account 3' })
   fireEvent.change(within(name).getByLabelText('Name'), { target: { value: ' Work ' } })
   fireEvent.click(within(name).getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(count(calls, 'PATCH', '/api/me/cli-accounts/claude-3')).toBe(1))
   expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ label: 'Work' })
 
-  // Another Claude Code account takes the first free number, with the warning about plans.
   expect(screen.getByText(/extra accounts to get around a plan's limits may break its terms/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Add another account Claude Code' }))
   await waitFor(() => expect(count(calls, 'POST', '/api/me/cli-accounts/claude-2/login')).toBe(1))
-  // Codex's first account isn't connected: no second one is offered before it.
   expect(screen.queryByRole('button', { name: 'Add another account Codex' })).toBeNull()
 })
 
@@ -381,8 +372,6 @@ test('a name typed right after the cards appear is kept: the form does not reset
   fakeCli({
     'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected', label: 'Personal' })),
   })
-  // Outside act, as a real page runs: the cards are committed by the scheduler, and a person (or a
-  // test) types as soon as the form is on screen, before the effects of that commit have run.
   const flag = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   flag.IS_REACT_ACT_ENVIRONMENT = false
   const host = document.createElement('div')
@@ -519,7 +508,6 @@ test('automatic switching: off until turned on, with the warning and terms; the 
         available: [
           own('claude', 'Claude Code'),
           own('claude-2', 'Claude Code (Work)'),
-          // Named from its number, in the user's language, rather than by the server's title.
           own('claude-3', 'server title', { number: 3 }),
           shared,
         ],
@@ -529,7 +517,6 @@ test('automatic switching: off until turned on, with the warning and terms; the 
   })
   render(<CliAccountsTab />)
   const panel = await screen.findByRole('region', { name: 'Automatic switching' })
-  // The panel shows while its state loads: wait for the switch itself.
   const toggle = (await within(panel).findByRole('switch', {
     name: 'Switch automatically when an account stops',
   })) as HTMLInputElement

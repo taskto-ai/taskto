@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// A server that ran setup before workspaces recorded their creators keeps its oldest
-// workspace as the server's own (is_setup), so its admins stay the operators, and no other
-// workspace becomes one.
 func TestWorkspaceCreatorsMarksTheOldestWorkspaceAsTheSetupOne(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -43,7 +40,6 @@ func TestWorkspaceCreatorsMarksTheOldestWorkspaceAsTheSetupOne(t *testing.T) {
 	if got["First"] != 1 || got["Second"] != 0 || got["Third"] != 0 {
 		t.Fatalf("is_setup = %v, want only First", got)
 	}
-	// Only one workspace can be the server's own.
 	if _, err := sqlDB.Exec(`UPDATE workspaces SET is_setup = 1 WHERE name = 'Second'`); err == nil {
 		t.Fatal("a second workspace became the setup one")
 	}

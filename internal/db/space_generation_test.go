@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// A database from before generations: the spaces it has get their IDs as generations, the rows
-// that refer to them (ON DELETE CASCADE) are all still there, the counter starts at the largest, and
-// a space made after takes a number no earlier one had, even in the ID of one deleted.
 func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -66,7 +63,6 @@ func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 		t.Fatalf("the counter starts at %d (%v), the largest generation is %d", last, err, largest)
 	}
 
-	// A new space is above every one there was, in the same transaction as its insert.
 	insert := func() (id, generation int64) {
 		t.Helper()
 		res, err := sqlDB.ExecContext(ctx, `INSERT INTO spaces (workspace_id, kind, name) VALUES (1, 'shared', 'New')`)
@@ -85,8 +81,6 @@ func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 	if gen1 <= largest {
 		t.Fatalf("a new space's generation %d is not above %d", gen1, largest)
 	}
-	// Deleted, and its ID is the largest again: SQLite gives it to the next space, which gets a
-	// generation of its own.
 	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM spaces WHERE id = ?`, id1); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +95,6 @@ func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 		t.Fatalf("the counter is %d (%v), want %d", last, err, gen2)
 	}
 
-	// Never changed, never taken from the caller, the counter never lowered or removed.
 	for _, q := range []string{
 		`UPDATE spaces SET generation = generation + 1 WHERE id = 40`,
 		`UPDATE spaces SET generation = 0 WHERE id = 40`,
@@ -115,14 +108,11 @@ func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 			t.Fatalf("%s was accepted", q)
 		}
 	}
-	if n := count("spaces"); n != before["spaces"]+1 { // the one made last
+	if n := count("spaces"); n != before["spaces"]+1 {
 		t.Fatalf("spaces = %d after the refused statements", n)
 	}
 }
 
-// The index's documents are numbered so that no ID is given twice. A database that has documents,
-// their full text rows and their chunks keeps all of them, with the same IDs, and a document made
-// after the newest was deleted takes a new ID.
 func TestSearchDocumentIDsAreNeverReusedAndTheMigrationKeepsTheIndex(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -162,7 +152,6 @@ func TestSearchDocumentIDsAreNeverReusedAndTheMigrationKeepsTheIndex(t *testing.
 		t.Fatalf("chunks after the migration: %s", got)
 	}
 
-	// The newest document is deleted with its space's rows, and another is made: a new ID.
 	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM spaces WHERE id = 6`); err != nil {
 		t.Fatal(err)
 	}

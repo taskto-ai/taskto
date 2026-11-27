@@ -15,15 +15,11 @@ import (
 	"taskto.ai/taskto/internal/config"
 )
 
-// backupUsage and restoreUsage are the subcommands' synopses.
 const (
 	backupUsage  = "usage: taskto backup [-config file] [-data-dir dir] [-uncompressed] FILE|-"
 	restoreUsage = "usage: taskto restore [-config file] [-data-dir dir] FILE|-"
 )
 
-// commandConfig parses a subcommand's flags, -config, -data-dir and any that extra adds,
-// and returns the configuration they and the environment give, and the one argument, FILE
-// or "-".
 func commandConfig(name, usage string, args []string, getenv func(string) string, stderr io.Writer, extra func(*flag.FlagSet)) (config.Config, string, error) {
 	fs := flag.NewFlagSet("taskto "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -47,9 +43,6 @@ func commandConfig(name, usage string, args []string, getenv func(string) string
 	return cfg, fs.Arg(0), err
 }
 
-// serverConfig returns the configuration a subcommand's -config and -data-dir (either may be
-// empty) and the environment give, by the server's own rules, so the subcommand finds the
-// data directory the server uses.
 func serverConfig(configFile, dataDir string, getenv func(string) string, stderr io.Writer) (config.Config, error) {
 	var cfgArgs []string
 	if configFile != "" {
@@ -61,8 +54,6 @@ func serverConfig(configFile, dataDir string, getenv func(string) string, stderr
 	return config.Load(cfgArgs, getenv, stderr)
 }
 
-// runBackup is `taskto backup`: it writes a snapshot of the data directory to FILE, or to
-// standard output for "-". It works while the server runs.
 func runBackup(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer, stderr io.Writer) error {
 	var opts backup.Options
 	cfg, out, err := commandConfig("backup", backupUsage, args, getenv, stderr, func(fs *flag.FlagSet) {
@@ -95,8 +86,6 @@ func runBackup(ctx context.Context, args []string, getenv func(string) string, s
 	return nil
 }
 
-// backupToFile writes the backup to a temporary file next to out and renames it into
-// place once it is complete, so a failed backup never leaves a file that looks whole.
 func backupToFile(ctx context.Context, dataDir, out string, opts backup.Options) (backup.Result, error) {
 	absData, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -109,18 +98,24 @@ func backupToFile(ctx context.Context, dataDir, out string, opts backup.Options)
 	if rel, err := filepath.Rel(absData, absOut); err == nil && filepath.IsLocal(rel) {
 		return backup.Result{}, fmt.Errorf("%s is inside the data directory: write the backup somewhere else", out)
 	}
-	if _, err := os.Lstat(absOut); err == nil { // #nosec G703 -- the operator names the backup file.
+	outDir, name := filepath.Dir(absOut), filepath.Base(absOut)
+	dir, err := os.OpenRoot(outDir)
+	if err != nil {
+		return backup.Result{}, err
+	}
+	defer dir.Close()
+	if _, err := dir.Lstat(name); err == nil {
 		return backup.Result{}, fmt.Errorf("%s already exists", out)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return backup.Result{}, err
 	}
 
-	// CreateTemp makes the file owner-only: a backup holds password hashes and keys.
-	f, err := os.CreateTemp(filepath.Dir(absOut), ".taskto-backup-*")
+	f, err := os.CreateTemp(outDir, ".taskto-backup-*")
 	if err != nil {
 		return backup.Result{}, err
 	}
-	defer os.Remove(f.Name()) // the temporary name goes once the backup is linked in place
+	tmp := filepath.Base(f.Name())
+	defer func() { _ = dir.Remove(tmp) }()
 	res, err := backup.Create(ctx, dataDir, version, f, opts)
 	if err == nil {
 		err = f.Sync()
@@ -131,18 +126,14 @@ func backupToFile(ctx context.Context, dataDir, out string, opts backup.Options)
 	if err != nil {
 		return res, err
 	}
-	// A link, not a rename: it fails if the file exists by now (another backup to the same
-	// path, say), where a rename would silently replace it.
-	err = os.Link(f.Name(), absOut) // #nosec G703 -- the operator names the backup file.
+	err = dir.Link(tmp, name)
 	switch {
 	case err == nil:
 		return res, nil
 	case errors.Is(err, fs.ErrExist):
 		return res, fmt.Errorf("%s already exists", out)
 	}
-	// Some filesystems (network shares, FAT) have no hard links: create the file
-	// exclusively instead, which can't replace one either, and copy the backup into it.
-	if err := copyExclusive(f.Name(), absOut); err != nil {
+	if err := copyExclusive(dir, tmp, name); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return res, fmt.Errorf("%s already exists", out)
 		}
@@ -151,15 +142,13 @@ func backupToFile(ctx context.Context, dataDir, out string, opts backup.Options)
 	return res, nil
 }
 
-// copyExclusive copies the file src to dst, which must not exist yet. A failed copy
-// removes what it wrote.
-func copyExclusive(src, dst string) (err error) {
-	in, err := os.Open(src) // #nosec G304 G703 -- the backup's own temporary file.
+func copyExclusive(dir *os.Root, src, dst string) (err error) {
+	in, err := dir.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 G703 -- the operator names the backup file.
+	out, err := dir.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -168,7 +157,7 @@ func copyExclusive(src, dst string) (err error) {
 			err = cerr
 		}
 		if err != nil {
-			_ = os.Remove(dst) // #nosec G703 -- dst is the operator's backup path.
+			_ = dir.Remove(dst)
 		}
 	}()
 	if _, err = io.Copy(out, in); err != nil {
@@ -177,9 +166,6 @@ func copyExclusive(src, dst string) (err error) {
 	return out.Sync()
 }
 
-// runRestore is `taskto restore`: it restores the backup in FILE, or standard input for
-// "-", gzipped or plain, into the data directory, which must be empty or not exist. Stop
-// the server first.
 func runRestore(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stderr io.Writer) error {
 	cfg, in, err := commandConfig("restore", restoreUsage, args, getenv, stderr, nil)
 	if err != nil {
@@ -187,7 +173,7 @@ func runRestore(ctx context.Context, args []string, getenv func(string) string, 
 	}
 	r := stdin
 	if in != "-" {
-		f, err := os.Open(in) // #nosec G304 G703 -- the operator names the backup to restore.
+		f, err := os.Open(in)
 		if err != nil {
 			return err
 		}
@@ -206,8 +192,6 @@ func runRestore(ctx context.Context, args []string, getenv func(string) string, 
 	return nil
 }
 
-// isTerminal reports whether w is a character device, such as a terminal, where an
-// archive would be garbage.
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {
@@ -217,7 +201,6 @@ func isTerminal(w io.Writer) bool {
 	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
 		return false
 	}
-	// /dev/null is a character device too, but writing a backup to it is a fine test.
 	if null, err := os.Stat(os.DevNull); err == nil && os.SameFile(info, null) {
 		return false
 	}

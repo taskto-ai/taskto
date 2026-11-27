@@ -22,10 +22,6 @@ const CHANGE_LABEL = {
   delete: 'knowledge.history.delete',
 } as const
 
-// The commits that changed a document, newest first; any version can be looked at, and
-// writers can make the document that version again, after a question. An unversioned file's
-// history only says who changed it: its older versions' bytes aren't kept, nor those of
-// versions removed from history, which an admin can do.
 export function History({
   base,
   url,
@@ -46,8 +42,6 @@ export function History({
   onReload: () => void
 }) {
   const historyUrl = `${base}/history/${encodePath(current.path)}`
-  // Each time the list is made again (old versions removed, a reload) it is a new generation:
-  // the old one's pages, request and views are gone, and a late answer for it is dropped.
   const [generation, setGeneration] = useState(0)
   const first = useLoad(() => api<{ commits: Commit[]; next?: string }>(historyUrl), [historyUrl, generation])
   const [removing, setRemoving] = useState(false)
@@ -55,8 +49,6 @@ export function History({
   const [older, setOlder] = useState<{ commits: Commit[]; next?: string }[]>([])
   const [viewing, setViewing] = useState<Commit | null>(null)
   const [busy, setBusy] = useState(false)
-  // What failed, and what its Reload brings back: the older page's reloads the history, a
-  // restore's reloads the document and the history.
   const [error, setError] = useState<{ error: unknown; reload: () => void; reloadable?: boolean } | null>(null)
   const [confirmDialog, confirm] = useConfirm()
   useLoadingStatus(!first.data && !first.error)
@@ -66,7 +58,6 @@ export function History({
   const commits = pages.flatMap((p) => p.commits)
   const next = pages.at(-1)?.next
   const kept = (c: Commit) => c.versioned !== false
-  // Something to remove: an older version still kept, or one not loaded yet.
   const canRemove =
     admin &&
     first.data !== undefined &&
@@ -74,7 +65,6 @@ export function History({
   const t = useT()
   const f = useFormat()
 
-  // One page at a time: a second click while one loads would add the same page twice.
   const loadingOlder = useRef<AbortController | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const now = useLatest(generation)
@@ -91,7 +81,6 @@ export function History({
       })
       if (!request.signal.aborted && now.current === made) setOlder((o) => [...o, page])
     } catch (err) {
-      // A request this list ended itself (it was made again, or went away) is not an error.
       if (request.signal.aborted || now.current !== made) return
       setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
     } finally {
@@ -101,7 +90,6 @@ export function History({
       }
     }
   }
-  // The list again from its newest page: what it showed, and asked for, is dropped.
   const reloadHistory = () => {
     loadingOlder.current?.abort()
     loadingOlder.current = null
@@ -153,7 +141,6 @@ export function History({
             <Button
               size="sm"
               onClick={() => {
-                // The button goes while the history loads again: the keyboard waits on the section.
                 section.current?.focus()
                 first.reload()
               }}
@@ -167,9 +154,8 @@ export function History({
       )}
       {!first.data && !first.error && (
         <div className="kb-history-loading">
-          {['70%', '50%', '60%'].map((width, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place
-            <Skeleton key={i} width={width} />
+          {['70%', '50%', '60%'].map((width) => (
+            <Skeleton key={width} width={width} />
           ))}
         </div>
       )}
@@ -269,7 +255,6 @@ export function History({
           onRemoved={(n) => {
             setRemoving(false)
             setRemoved(n)
-            // The commits have new IDs: the history is loaded again.
             reloadHistory()
           }}
           onReload={onReload}
@@ -282,8 +267,6 @@ export function History({
   )
 }
 
-// Removing a file's older versions from history, for an admin: it can't be undone, and
-// the backups made before still hold them, so the question says both.
 function ConfirmRemoveOld({
   url,
   doc,
@@ -342,7 +325,6 @@ function ConfirmRemoveOld({
   )
 }
 
-// A version as it was. Opening one moves the keyboard to it.
 function AtCommit({ url, commit, onLink }: { url: string; commit: Commit; onLink: LinkHandler }) {
   const at = `${url}?at=${commit.commit}`
   const doc = useDoc(at)

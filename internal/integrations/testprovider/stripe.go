@@ -1,43 +1,3 @@
-// Package testprovider is a fake Stripe, a fake Square (square.go) and a sender of signed webhook
-// events, for tests. It is a normal package that only tests import (like
-// internal/cliworker/clitest): a test in cmd/taskto checks that the server's binary doesn't link
-// it. It must not import the integrations package, whose own tests import it.
-//
-// The fake is an httptest server for the few endpoints the integration uses, written against
-// Stripe's public API reference at the pinned version (DefaultAPIVersion; a test checks that it
-// is the one the adapter sends):
-//
-//   - POST /v1/checkout/sessions, GET /v1/checkout/sessions/{id}, GET /v1/checkout/sessions and
-//     POST /v1/checkout/sessions/{id}/expire: hosted Checkout in payment mode, the way to a link
-//     that carries a reference of ours (client_reference_id) and expires by itself.
-//   - POST /v1/payment_links, GET and POST /v1/payment_links/{id}: Payment Links. A link takes
-//     no client reference and never expires, and may take at most so many payments
-//     (restrictions[completed_sessions][limit]: it deactivates when they are made). At Stripe a
-//     payment through one is a Checkout Session that carries the link's id; the fake makes one
-//     when a test calls PayLink.
-//   - GET /v1/events and GET /v1/events/{id}: the events of the last 30 days, newest first.
-//   - GET /v1/balance: a harmless authenticated call, for a connection check.
-//   - GET /v1/account: the account the key belongs to (its id), which a test moves to another
-//     account with SetAccount, the way a key of another account would answer.
-//
-// It honours idempotency keys as Stripe documents for API v1 (the same key and parameters get
-// the saved answer with Idempotent-Replayed: true, the same key with other parameters is an
-// idempotency_error, keys are forgotten after 24 hours), refuses unknown parameters, wrong keys,
-// other API versions and bodies that aren't form-encoded, and fails on demand (Fail).
-//
-// Not modelled: prices, products and customers (a line's amount comes inline, in price_data),
-// subscriptions and setup mode, expanding objects, Connect, thin events, the delivery state of
-// events (a list's delivery_success is refused), the parameters nothing here would act on
-// (customer_creation, billing_address_collection, a link's inactive_message and
-// payment_intent_data, a session's statement_descriptor and receipt_email: refused, so a test that
-// sends one finds out), and concurrent requests
-// with one idempotency key (requests are served one at a time, so the second finds the first's
-// answer). The money rules are Stripe's common cases: amounts in whole minor units, a maximum of
-// 99999999, the documented minimum of each currency for an account that settles in it
-// (minimumCharges in params.go), amounts of ISK and UGX in whole units (the last two digits 00)
-// and of the three-decimal currencies ending in 0.
-//
-// What the sender does is in sender.go.
 package testprovider
 
 import (
@@ -54,24 +14,15 @@ import (
 	"time"
 )
 
-// DefaultAPIVersion is the Stripe API version the fake answers to: requests must send it in
-// Stripe-Version, as the adapter does.
 const DefaultAPIVersion = "2026-11-18.endive"
 
-// The fake's credentials. They are obviously fake and made of parts, so no file holds a whole
-// key-shaped string for a secret scanner to find.
 var (
-	// TestAPIKey is the secret key the fake accepts unless WithAPIKey says another.
-	TestAPIKey = "sk_" + "test_" + strings.Repeat("Fake", 6)
-	// TestAccountID is the id of the account the fake answers as, unless WithAccount says another.
-	TestAccountID = "acct_" + strings.Repeat("Fake", 4)
-	// TestWebhookSecret is the signing secret a Sender uses unless told another.
-	TestWebhookSecret = "whsec_" + strings.Repeat("Fake", 6)
-	// OtherWebhookSecret is a second signing secret, for wrong-secret and rotation tests.
+	TestAPIKey         = "sk_" + "test_" + strings.Repeat("Fake", 6)
+	TestAccountID      = "acct_" + strings.Repeat("Fake", 4)
+	TestWebhookSecret  = "whsec_" + strings.Repeat("Fake", 6)
 	OtherWebhookSecret = "whsec_" + strings.Repeat("Rota", 6)
 )
 
-// Stripe is the fake. Make one with NewStripe.
 type Stripe struct {
 	srv   *httptest.Server
 	done  chan struct{}
@@ -95,44 +46,30 @@ type Stripe struct {
 	log          []Request
 }
 
-// Option changes how NewStripe builds the fake.
 type Option func(*Stripe)
 
-// WithClock sets the clock the fake reads: object times, expiry, the 24 hours of an idempotency
-// key and the 30 days of the events list.
 func WithClock(c Clock) Option { return func(s *Stripe) { s.clock = c } }
 
-// WithAPIKey sets the secret key the fake accepts. A key with "_live_" in it makes the fake's
-// objects live-mode ones.
 func WithAPIKey(key string) Option {
 	return func(s *Stripe) { s.apiKey = key; s.live = strings.Contains(key, "_live_") }
 }
 
-// WithAnyAPIVersion makes the fake accept any Stripe-Version, or none. The default refuses
-// anything but DefaultAPIVersion, so a call that forgets to pin the version fails a test.
 func WithAnyAPIVersion() Option { return func(s *Stripe) { s.anyVersion = true } }
 
-// WithAccount sets the id of the account the key belongs to.
 func WithAccount(id string) Option { return func(s *Stripe) { s.account = id } }
 
-// SetAccount moves the key to another account from now on, as replacing an integration's key with
-// one of another account does: what the fake holds stays, and is what the first account made.
 func (s *Stripe) SetAccount(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.account = id
 }
 
-// SetAPIKey replaces the key the fake accepts from now on, as an admin replacing an integration's key
-// with the same account's key of the other mode does: the account's id stays, and the objects it
-// made, and a key with "_live_" in it makes the fake's new objects live-mode ones.
 func (s *Stripe) SetAPIKey(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.apiKey, s.live = key, strings.Contains(key, "_live_")
 }
 
-// NewStripe starts a fake Stripe, stopped when the test ends.
 func NewStripe(t testing.TB, opts ...Option) *Stripe {
 	t.Helper()
 	s := &Stripe{
@@ -150,48 +87,34 @@ func NewStripe(t testing.TB, opts ...Option) *Stripe {
 		o(s)
 	}
 	s.srv = httptest.NewServer(s)
-	// Cleanups run last in, first out: release the requests that hang, then close the server.
 	t.Cleanup(s.srv.Close)
 	t.Cleanup(func() { close(s.done) })
 	return s
 }
 
-// URL is the fake's base URL (http://127.0.0.1:port), for a client's test endpoint.
 func (s *Stripe) URL() string { return s.srv.URL }
 
-// Host is the fake's host:port, for integrations.WithTestEndpoint.
 func (s *Stripe) Host() string { return strings.TrimPrefix(s.srv.URL, "http://") }
 
-// APIKey is the secret key the fake accepts.
 func (s *Stripe) APIKey() string { return s.apiKey }
 
-// APIVersion is the version the fake answers to.
 func (s *Stripe) APIVersion() string { return s.version }
 
-// Clock is the clock the fake reads.
 func (s *Stripe) Clock() Clock { return s.clock }
 
-// Request is one request the fake received, for tests to check what the client sent. The key
-// itself is not kept, only how it was sent.
 type Request struct {
 	Method, Path   string
 	Query          url.Values
 	Form           url.Values
 	IdempotencyKey string
 	APIVersion     string
-	// Auth is "bearer" or "basic" when the request carried the right key, "" when it carried
-	// none or a wrong one.
-	Auth string
-	// Status is the status answered ("0" for a connection dropped or never answered).
-	Status int
-	// Replayed is true when the answer was a saved one (Idempotent-Replayed).
-	Replayed bool
-	// Faulted is true when an injected fault changed the request's outcome.
-	Faulted bool
-	At      time.Time
+	Auth           string
+	Status         int
+	Replayed       bool
+	Faulted        bool
+	At             time.Time
 }
 
-// Requests returns the requests received so far, oldest first.
 func (s *Stripe) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -203,7 +126,6 @@ func (s *Stripe) Requests() []Request {
 	return out
 }
 
-// cloneValues copies the map and the slices of v, so a caller can't change what the fake kept.
 func cloneValues(v url.Values) url.Values {
 	if v == nil {
 		return nil
@@ -215,7 +137,6 @@ func cloneValues(v url.Values) url.Values {
 	return out
 }
 
-// RequestsTo returns the requests to method and path.
 func (s *Stripe) RequestsTo(method, path string) []Request {
 	var out []Request
 	for _, r := range s.Requests() {
@@ -232,15 +153,10 @@ type idemEntry struct {
 	at          time.Time
 }
 
-// idemTTL is how long the fake remembers a key. Stripe keeps it at least 24 hours and may
-// remove it after.
 const idemTTL = 24 * time.Hour
 
-// maxBody is the largest request body the fake reads.
 const maxBody = 1 << 20
 
-// ServeHTTP is the fake's handler. It is exported so a test may mount the fake in its own
-// server; NewStripe has already done it.
 func (s *Stripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	_ = r.Body.Close()
@@ -250,7 +166,6 @@ func (s *Stripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get("Idempotency-Key"), APIVersion: r.Header.Get("Stripe-Version")}
 	var rp reply
 	if readErr != nil || len(body) > maxBody {
-		// A body cut short or cut off at the limit must not run as if it were whole.
 		rp = invalid("", "The request body couldn't be read in full, or is larger than 1 MiB.", "")
 	} else {
 		rp = s.handle(r, body, &rec)
@@ -286,7 +201,6 @@ func (s *Stripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(rp.body)
 }
 
-// handle answers one request. The caller holds s.mu.
 func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	s.expireDue()
 	fn, id, ok := route(r)
@@ -323,7 +237,7 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	key := r.Header.Get("Idempotency-Key")
 	fp := r.Method + " " + r.URL.Path + "?" + form.Encode()
 	if e, ok := s.idem[key]; ok && s.clock.Now().Sub(e.at) >= idemTTL {
-		delete(s.idem, key) // forgotten: the request runs as a new one
+		delete(s.idem, key)
 	}
 	fault := s.peekFault(r)
 	if fault != nil && !fault.After {
@@ -361,14 +275,12 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 		rp = fn(s, r, form, id)
 	}
 
-	// An After fault strikes only a request whose operation ran: not a replay of a saved answer
-	// and not a refusal, which leave the fault queued for the request that does run.
 	if fault != nil && !rp.replayed && (rp.executed || rp.status < 400) {
 		s.useFault(fault)
 		rec.Faulted = true
 		fr := fault.reply()
 		if e := s.idem[key]; e != nil && !fr.drop && !fr.hang && rp.executed && !rp.replayed {
-			e.reply = fr.clone() // Stripe saves a 500 under the key too
+			e.reply = fr.clone()
 		}
 		fr.replayed = rp.replayed
 		return fr
@@ -376,7 +288,6 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	return rp
 }
 
-// authenticate checks the key: Authorization: Bearer <key>, or Basic with the key as the user.
 func (s *Stripe) authenticate(r *http.Request, rec *Request) (reply, bool) {
 	h := r.Header.Get("Authorization")
 	var given, scheme string
@@ -384,7 +295,7 @@ func (s *Stripe) authenticate(r *http.Request, rec *Request) (reply, bool) {
 	case strings.HasPrefix(h, "Bearer "):
 		given, scheme = strings.TrimPrefix(h, "Bearer "), "bearer"
 	case strings.HasPrefix(h, "Basic "):
-		if user, _, ok := r.BasicAuth(); ok { // the credentials must carry their separator
+		if user, _, ok := r.BasicAuth(); ok {
 			given = user
 		}
 		scheme = "basic"
@@ -402,7 +313,6 @@ func (s *Stripe) authenticate(r *http.Request, rec *Request) (reply, bool) {
 	return reply{}, false
 }
 
-// redactKey shows a key the way Stripe's errors do: its prefix and its last four characters.
 func redactKey(k string) string {
 	if len(k) <= 12 {
 		return "****"
@@ -412,7 +322,6 @@ func redactKey(k string) string {
 
 type handlerFn func(s *Stripe, r *http.Request, form url.Values, id string) reply
 
-// route picks the handler of a request by method and path.
 func route(r *http.Request) (handlerFn, string, bool) {
 	p, m := r.URL.Path, r.Method
 	both := func(get, post handlerFn) (handlerFn, bool) {

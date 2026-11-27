@@ -11,27 +11,12 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// Disabling a member (docs/api.md#disabling-a-member). An admin switches an account off without
-// removing it: the account is signed out everywhere and can't sign in again (password or single
-// sign-on, or a reset link), its access tokens stop working, and its conversations' agents and
-// CLI turns are refused from their next call. Nothing it owns goes: its memberships, its spaces'
-// files, its boards and its tokens stay, so enabling it again restores its access as it was.
-//
-// An account belongs to every workspace its person is in, so the switch is the account's, not one
-// workspace's, and the rule for who may flip it is the one for a password reset link: an admin of
-// every workspace the account belongs to (administersAll), never their own account. Such an admin
-// is an admin of each of them besides the target, and is in use themselves (a disabled account
-// has no session to ask with, and setDisabled checks it again), so a workspace is never left
-// without an admin in use by this. Changing a role or removing a member counts admins in use
-// only, so they can't leave it that way either (checkNotLastAdmin).
-
 var (
 	errDisableOwn       = errors.New("you can't disable your own account")
 	errDisableElsewhere = errors.New("this member also belongs to a workspace you aren't an admin of: only someone who administers all of their workspaces can disable or enable them")
 )
 
 func (s *Service) disableRoutes(mux *http.ServeMux) {
-	// RequireAdmin takes no access tokens; refuseTokens says so up front.
 	mux.Handle("POST /api/workspaces/{workspace}/members/{user}/disable",
 		refuseTokens(s.RequireAdmin(s.disableHandler(true)).ServeHTTP))
 	mux.Handle("POST /api/workspaces/{workspace}/members/{user}/enable",
@@ -58,14 +43,12 @@ func (s *Service) disableHandler(disable bool) http.Handler {
 			writeError(w, http.StatusBadRequest, apierr.CodeDisableOwn, err.Error())
 			return
 		case errors.Is(err, errDeletionPending):
-			// Its switch is the deletion's: an operator cancels that, which enables it again.
 			writeError(w, http.StatusConflict, apierr.CodeDeletionPending, err.Error())
 			return
 		case errors.Is(err, errDisableElsewhere):
 			writeError(w, http.StatusForbidden, apierr.CodeDisableElsewhere, err.Error())
 			return
 		case errors.Is(err, errAccountDisabled):
-			// The admin was disabled meanwhile, by another admin.
 			accountDisabled(w)
 			return
 		case err != nil:
@@ -78,15 +61,8 @@ func (s *Service) disableHandler(disable bool) http.Handler {
 	})
 }
 
-// ErrAccountDisabled is EnsureActorEnabled's answer for an actor who was disabled.
 var ErrAccountDisabled = errAccountDisabled
 
-// EnsureActorEnabled fails with ErrAccountDisabled if the account that is acting (the request's
-// user, see audit.ActorFrom) has been disabled since the request was authenticated. An admin's write
-// calls it first thing in its transaction, which holds the write lock, so a request that passed
-// RequireAdmin just before the admin was disabled changes nothing: the middleware checks the
-// session once, and a disable that lands after it would otherwise let the write through. Without
-// an actor on ctx it does nothing.
 func EnsureActorEnabled(ctx context.Context, q interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }) error {
@@ -98,7 +74,7 @@ func EnsureActorEnabled(ctx context.Context, q interface {
 	err := q.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, actor).Scan(&off)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return nil // the membership check says what's left to say
+		return nil
 	case err != nil:
 		return err
 	case off:
@@ -107,23 +83,14 @@ func EnsureActorEnabled(ctx context.Context, q interface {
 	return nil
 }
 
-// WriteAccountDisabled answers 403 with the disabled-account code, for a caller of
-// EnsureActorEnabled in another package.
 func WriteAccountDisabled(w http.ResponseWriter) { accountDisabled(w) }
 
-// isDisabled reports whether userID's account is disabled, reading through q.
 func (s *Service) isDisabled(ctx context.Context, q querier, userID int64) (bool, error) {
 	var disabled bool
 	err := q.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&disabled)
 	return disabled, err
 }
 
-// setDisabled switches userID's account off or on, for the admin by acting in workspaceID, where
-// userID must be a member. It fails with errNotFound if they aren't, errDisableOwn for the
-// admin's own account, errDisableElsewhere if userID belongs to a workspace by doesn't
-// administer, and errAccountDisabled if by was disabled meanwhile. Disabling ends the account's
-// sessions, which takes their push subscriptions, and its reset links; one that is disabled
-// already, or enabled, is left as it is and records nothing.
 func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64, disable bool) error {
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		if _, err := roleIn(ctx, tx, workspaceID, userID); err != nil {
@@ -142,8 +109,6 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 		} else if !all {
 			return errDisableElsewhere
 		}
-		// Read in the transaction, which holds the write lock: of two admins disabling each other
-		// at once, the second finds itself disabled.
 		if off, err := s.isDisabled(ctx, tx, by); err != nil {
 			return err
 		} else if off {
@@ -177,8 +142,6 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 		if err != nil {
 			return err
 		}
-		// The rest of what could still become a login: reset links, half-done password logins
-		// waiting on a code, and a two-factor enrolment that wasn't confirmed.
 		if err := s.endSignIns(ctx, tx, userID); err != nil {
 			return err
 		}
@@ -186,8 +149,6 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"logins_ended": sessions}})
 	})
 	if err == nil && disable {
-		// Open connections made with the account's logins (a live view) end now; the ones the
-		// signal misses end at their next look at the session (WatchSession).
 		s.endLive(userID, "")
 	}
 	return err

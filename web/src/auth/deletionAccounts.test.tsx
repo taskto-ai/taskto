@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The notice after an account deletion, on a browser where several people sign in one after the
-// other: it is told to the person who asked, once, and never to the next one.
-
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { type Me, SESSION_LOST } from '../api'
@@ -26,7 +23,7 @@ const workspace = { id: 1, name: 'Home', role: 'member' as const }
 
 beforeEach(() => {
   sessionStorage.clear()
-  ackDeletion() // a date a test left in memory
+  ackDeletion()
 })
 afterEach(() => {
   cleanup()
@@ -35,8 +32,6 @@ afterEach(() => {
   ackDeletion()
 })
 
-// The leaver's deletion request, held open until the test answers it: the person has pressed the
-// button and the answer is on its way.
 async function askDeletion(routes: Parameters<typeof fakeFetch>[0]) {
   let answer!: () => void
   const held = new Promise<void>((resolve) => {
@@ -61,11 +56,9 @@ async function askDeletion(routes: Parameters<typeof fakeFetch>[0]) {
   fireEvent.change(within(form).getByLabelText('Your password'), { target: { value: 'fake-test-password' } })
   fireEvent.click(within(form).getByRole('button', { name: 'Delete my account' }))
   await waitFor(() => expect(calls.some((c) => c.path === '/api/me/deletion' && c.method === 'POST')).toBe(true))
-  // The settings page is gone, as a request refused a moment before would have taken the app away.
   page.unmount()
   return {
     calls,
-    // The server's answer arrives, and the person's form finishes.
     arrive: async () => {
       answer()
       await waitFor(() => expect(lost).toHaveBeenCalled())
@@ -87,11 +80,9 @@ test('case 1: an answer that arrives after another account signed in is not told
   await screen.findByLabelText('Password')
   signInAs('next@example.com')
   await waitFor(() => expect(onDone).toHaveBeenCalledWith(next))
-  // The app is theirs now: the sign-in screen is gone, and only then does the answer come.
   cleanup()
   await arrive()
   expect(peekDeletion()).toBeNull()
-  // The next account's next sign-in screen (after it signs out) never hears of it.
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByLabelText('Password')
   expect(screen.queryByText(NOTICE)).toBeNull()
@@ -108,7 +99,6 @@ test('case 2: an answer that arrives while another account is on the code step i
   signInAs('next@example.com')
   await screen.findByRole('heading', { name: 'Two-factor login' })
   await arrive()
-  // Not kept for later either: going back to the password, or finishing the login, is theirs alone.
   expect(peekDeletion()).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Back to the password' }))
   await screen.findByLabelText('Password')
@@ -159,7 +149,6 @@ test('case 3: a notice the storage could not keep is not lost when the page stay
 
 test('case 4: another account that goes to the code step and back is not shown the notice', async () => {
   rememberDeletion(PURGE)
-  // Drawn in a page nobody has looked at yet, so the notice is still waiting when they submit.
   let state: DocumentVisibilityState = 'hidden'
   vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state)
   fakeFetch({
@@ -225,7 +214,6 @@ test('case 4: another account whose login fails is not shown a notice that was w
 })
 
 test('case 3: a notice dropped while the storage could not even be read is not told when it comes back', () => {
-  // A date no other test has shown, so nothing in this page's record covers it.
   sessionStorage.setItem('taskto.accountDeleted', '2026-12-20T10:00:00.000Z')
   const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
     throw new Error('no storage')
@@ -285,7 +273,6 @@ test('case 3: a removal that is refused is written over, so a reload does not te
   })
   ackDeletion(PURGE)
   expect(sessionStorage.getItem('taskto.accountDeleted')).toBe('')
-  // A reload: a page with nothing in memory, and the storage as it is.
   vi.resetModules()
   const reloaded = await import('./deleted')
   expect(reloaded.peekDeletion()).toBeNull()

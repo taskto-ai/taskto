@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 
-// The two pages a link from outside opens inside the shell: a confirmation email's, and a push's
-// /notification/{id}. They are pages like the others: a heading, then what happened in a notice or
-// an empty state with the way on.
-
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { fakeFetch } from '../test/fakes'

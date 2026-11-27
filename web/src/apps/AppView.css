@@ -1,8 +1,4 @@
-/* An app's screen (AppView) and what the app's own catalog draws in it (catalog.tsx). The renderer's
-   components are themed in ui/a2ui.css, outside the layers; what is here is taskto.ai's own. */
-
 @layer screens {
-  /* The host of an app's screens (catalog.tsx): no wider than the app. */
   .ui-app-screen {
     min-inline-size: 0;
   }
@@ -14,8 +10,6 @@
     overflow-wrap: anywhere;
   }
 
-  /* An icon (catalog.tsx): its path on a 24 by 24 view box, at the theme's icon size, filled in the
-     text's colour, so it follows light and dark and a button's own colour. */
   .ui-app-icon {
     display: inline-block;
     flex: none;
@@ -25,15 +19,10 @@
     fill: currentColor;
   }
 
-  /* An icon given by name, where it is all a control shows (catalog.tsx): the word, as it was
-     drawn before icons were paths, in the control's own type. */
   .ui-app-icon-name {
     overflow-wrap: anywhere;
   }
 
-  /* A number (the Stat component): a tile with its label small and muted over the value, large with
-     figures that line up. Tiles side by side in a row share it and wrap onto the next line when
-     there isn't room; one alone takes the width it needs. */
   .ui-stat {
     box-sizing: border-box;
     display: grid;
@@ -47,8 +36,6 @@
     border-radius: var(--radius-md);
   }
 
-  /* In one of the app's rows (the element the catalog draws it in is no box of its own), tiles share
-     the row and wrap; in a column a tile is only as tall as what it says. */
   a2ui-basic-row > * > .ui-stat {
     flex: 1 1 calc(var(--space-16) * 2);
   }

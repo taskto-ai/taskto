@@ -1,8 +1,3 @@
-// Model provider accounts: the workspace's (its admins manage them, its members use them)
-// and the viewer's own (only they see and use them, in any workspace). An API key goes in
-// and never comes back: the API answers "set" or "not set", so the form only ever offers to
-// replace or remove it.
-
 import { type FormEvent, useId, useState } from 'react'
 import { api, codeText, type Model, type ProviderAccount, type ProviderCheck, ws } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -46,8 +41,6 @@ function Accounts({ title, base, editable, intro }: { title: string; base: strin
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [confirmDialog, confirm] = useConfirm()
   const t = useT()
-  // The removed row's menu, or the empty state's button once the first account is in, had the
-  // keyboard: the section's title takes it.
   const refocus = useRefocus(accounts.data)
   const done = () => {
     if (accounts.data?.length === 0) refocus.after()
@@ -219,7 +212,6 @@ function AccountRow({
 
 type Confirm = (options: ConfirmOptions) => Promise<boolean>
 
-// One model ID per line; a model kept from before keeps its other settings.
 function parseModels(text: string, before: Model[]): Model[] {
   const ids = [...new Set(text.split('\n').map((l) => l.trim()))].filter(Boolean)
   return ids.map((id) => before.find((m) => m.id === id) ?? { id })

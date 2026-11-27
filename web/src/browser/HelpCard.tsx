@@ -5,7 +5,6 @@ import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import './Browser.css'
 
-// What the agent asked for, from its browser_help call.
 export type HelpRequest = { reason: string; message: string }
 
 const TITLE = {
@@ -14,14 +13,9 @@ const TITLE = {
   two_factor: 'browser.help.two_factor',
 } as const
 
-// What Done and Not now send: an answer the agent goes on from, in the user's language, as
-// the user's own message in the conversation.
 export const doneMessage = () => translate('browser.help.doneMessage')
 export const notNowMessage = () => translate('browser.help.notNowMessage')
 
-// HelpCard is the agent's request to take over the browser (a login, a captcha, a 2FA code):
-// Take over opens the live view under the user's control; Done and Not now answer the agent,
-// which carries on from that message.
 export function HelpCard({
   help,
   conversation,
@@ -30,9 +24,7 @@ export function HelpCard({
   onAnswered,
 }: {
   help: HelpRequest
-  // The conversation's API path, for the answer.
   conversation: string
-  // Whether the browser can be used now (the live view needs it).
   canTakeOver: boolean
   onTakeOver: () => void
   onAnswered: () => void
@@ -59,7 +51,6 @@ export function HelpCard({
         tone="info"
         title={t(Object.hasOwn(TITLE, help.reason) ? TITLE[help.reason as keyof typeof TITLE] : 'browser.help.other')}
       >
-        {/* The model's words, shown as plain text. */}
         <p className="ui-browser-help-said">{help.message}</p>
         <div className="ui-browser-actions">
           <Button size="sm" icon="browser" disabled={!canTakeOver} onClick={onTakeOver}>

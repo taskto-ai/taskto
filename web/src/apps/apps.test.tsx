@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// Contract test with the Go server (internal/apps): the golden files there are the messages
-// Go sends, the action it expects back from the button, and the catalog it checks saved apps
-// against.
 
 import { MessageProcessor, STRICT_VALIDATION } from '@a2ui/web_core/v0_9'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -25,12 +21,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// The value shown next to a Stat's label.
 function stat(label: string): string {
   return screen.getByText(label).closest('dl')?.querySelector('dd')?.textContent ?? ''
 }
 
-// A2UI's TextField doesn't link its <label> to its <input>, so getByLabelText can't find it.
 function field(label: string): HTMLInputElement {
   const input = screen.getByText(label).closest('a2ui-basic-textfield')?.querySelector('input')
   if (!input) throw new Error(`no input for ${label}`)
@@ -141,7 +135,6 @@ test("a conflict is told in the user's language and the screen shows the record 
   expect((await screen.findByRole('alert')).textContent).toBe(
     'Someone else changed this record meanwhile. It is shown as it is now: check it and try again.',
   )
-  // The screen was loaded again: it has the row the other change added.
   await screen.findByText('Lunch')
   expect(loads).toBe(2)
 })
@@ -198,8 +191,6 @@ test('a new transport object on re-render does not reload the app', async () => 
   expect(loads).toBe(1)
 })
 
-// The server checks saved apps against its catalog; the renderer must offer exactly the same
-// components, props and functions, so what the server accepts draws, and nothing else does.
 test('the catalog is the one the server checks apps against', () => {
   expect(appsCatalog.id).toBe(goCatalog.id)
   const components: Record<string, string[]> = {}
@@ -210,8 +201,6 @@ test('the catalog is the one the server checks apps against', () => {
   expect([...appsCatalog.functions.keys()].sort()).toEqual(goCatalog.functions)
 })
 
-// What a release needs is named by the server's capabilities: the client must know the same set, and
-// read the same definition format version, or it would draw apps it can't, or refuse ones it can.
 test('the capabilities and definition version are the ones the server speaks', () => {
   expect([...catalogCapabilities].sort()).toEqual(goCatalog.capabilities)
   expect(DEFINITION_VERSION).toBe(goCatalog.definition_version)
@@ -231,7 +220,6 @@ test('a release that needs a capability this client lacks shows "update required
   )
   await screen.findByText('Update required')
   expect(screen.getByText(/published with features this version of taskto.ai doesn’t have yet/)).toBeTruthy()
-  // It says what is missing, not what the client has.
   expect(screen.getByText('Needs: component.Gauge, function.sparkline')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Update taskto.ai' })).toBeTruthy()
   await new Promise((resolve) => setTimeout(resolve, 20))
@@ -302,7 +290,6 @@ test("a draft is tried on sample rows the server makes, and its actions never re
   const action = { name: 'add_expense', surfaceId: 'app-1', sourceComponentId: 'add', timestamp: 't', context: {} }
   expect(await preview.act(action)).toEqual(afterAdd)
   await preview.act(action)
-  // The first step sends nothing; the next ones send back the rows the last one left, with the action.
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
     `POST ${base}/preview`,
     `POST ${base}/preview`,
@@ -311,7 +298,6 @@ test("a draft is tried on sample rows the server makes, and its actions never re
   expect(calls[0].body).toEqual({})
   expect(calls[1].body).toEqual({ rows: sample, action })
   expect(calls[2].body).toEqual({ rows: grown, action })
-  // Loading again starts over from fresh sample rows.
   await preview.load()
   expect(calls[3].body).toEqual({})
 })
@@ -341,7 +327,6 @@ test('two taps on a preview in quick succession each go on from the rows the oth
 
   const first = preview.act(tap('one'))
   const second = preview.act(tap('two'))
-  // The second waits for the first: it must start from the rows the first leaves.
   await vi.waitFor(() => expect(sent).toHaveLength(2))
   await new Promise((r) => setTimeout(r, 20))
   expect(sent).toHaveLength(2)
@@ -356,7 +341,6 @@ test('two taps on a preview in quick succession each go on from the rows the oth
   answers[2]([...afterOne, { id: 3, revision: 1, data: { by: 'two' } }])
   await second
 
-  // A step that fails leaves the next one to go on from the rows as they were.
   const failing = preview.act(tap('three'))
   await vi.waitFor(() => expect(sent).toHaveLength(4))
   const fine = preview.act(tap('four'))

@@ -1,28 +1,3 @@
-// One tab at a time changes existing records offline (docs/offline.md, "One writer").
-//
-// Edits and deletions of downloaded records, the choices about a change that needs attention, and
-// discards are made by the tab that holds the *offline writer*: one per account on this browser.
-// The other tabs of the account show the queue and the records and change nothing; they say so,
-// and offer to take over. That one rule replaces what several tabs writing one queue would need
-// (merging, re-checking, tabs undoing each other's choices).
-//
-// One source of truth, and a way to take turns:
-//   - who may write is what the database says: a row in the `meta` store names the writer's
-//     identity and a lease (`until`) that its holder renews with a heartbeat. The row is taken
-//     only by a compare-and-set, in one transaction, when it is free or its lease has run out
-//     (`OfflineStore.claimWriter`), and every write only the writer makes
-//     (`OfflineStore.assertWriter`) reads that row in its own transaction and is refused unless it
-//     names this tab. A tab that lost the right while a write was on its way is refused by the
-//     database, not by what it believed.
-//   - Web Locks, where the browser has them, only serialize who is trying: a tab takes the lock
-//     before it tries the row, so tabs with Web Locks never race one another for it, and a row
-//     left by a holder whose lock is gone (its tab was closed) is free to the one that holds the
-//     lock. They never decide on their own: a tab without Web Locks, or one that holds the row by
-//     the lease alone, is respected the same way, because the row says so.
-// Taking over asks the holder to let go (a message on a BroadcastChannel) and waits until the row
-// is free: the holder stops writing at once, and the waiting tab becomes the writer. Nobody is
-// ever made the writer without the person pressing the button, other than the first tab.
-
 import type { OfflineStore } from './store'
 
 export const WRITER_LEASE_MS = 15_000
@@ -30,12 +5,9 @@ const POLL_MS = 400
 
 export type WriterDeps = {
   now?: () => number
-  // Runs fn every ms until the returned function is called (the lease's heartbeat): a test's own.
   heartbeat?: (fn: () => void, ms: number) => () => void
-  // Where the poll of a tab that waits for a lease is: a test's own.
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
-  // The browser's Web Locks (null: none), and the channel the tabs of an account hear each other on.
   locks?: LockManager | null
   channel?: (name: string) => Pick<BroadcastChannel, 'postMessage' | 'close' | 'onmessage'> | null
 }
@@ -49,20 +21,13 @@ const randomId = () => {
 export class OfflineWriter {
   readonly owner = randomId()
   private held = false
-  // Counts the times this tab became the writer: what a screen drawn before a hand-over (to another
-  // tab and back, or from a reader to the writer) is told apart by (`session`).
   private epoch = 0
   private listeners = new Set<() => void>()
   private stopped = false
-  // Lets go of the Web Lock this tab holds (the promise that keeps it resolves).
   private unlock: (() => void) | undefined
   private stopBeat: (() => void) | undefined
-  // The person's take-over that is waiting, and the acquisition that is being made (a start's or a
-  // take-over's): stopping aborts them, and one that was granted after that lets go of what it got.
   private waiting: AbortController | undefined
   private acquiring: AbortController | undefined
-  // Acquisitions are made one after the other, never at once: two of one tab would race for its
-  // own row.
   private turn: Promise<void> = Promise.resolve()
   private poll: unknown
   private chan: ReturnType<NonNullable<WriterDeps['channel']>> = null
@@ -85,14 +50,10 @@ export class OfflineWriter {
     return `taskto-offline-writer-${this.store.user}`
   }
 
-  // Whether this tab may change existing records now.
   holds(): boolean {
     return this.held && !this.stopped
   }
 
-  // Which time this tab became the writer, or 0 while it is not: a screen drawn in one session is
-  // not the screen of another, since the queue may have been changed by the writer in between
-  // (transport.ts: a press is bound to the session its screen was drawn in).
   session(): number {
     return this.holds() ? this.epoch : 0
   }
@@ -109,7 +70,6 @@ export class OfflineWriter {
     for (const fn of [...this.listeners]) fn()
   }
 
-  // Listens for another tab asking this one to let go, and takes the right if it is free.
   async start(): Promise<void> {
     this.stopped = false
     try {
@@ -130,9 +90,6 @@ export class OfflineWriter {
     await this.acquire(false, new AbortController())
   }
 
-  // The person presses "make changes here": the holder is asked to let go, and this waits for the
-  // right (the row is free, and with Web Locks, the lock is this tab's) and resolves once this tab
-  // holds it.
   async takeOver(): Promise<void> {
     if (this.holds()) return
     this.waiting?.abort()
@@ -140,9 +97,7 @@ export class OfflineWriter {
     this.waiting = wait
     try {
       this.chan?.postMessage({ want: this.owner })
-    } catch {
-      // The holder is not told: the lock or the lease ends when it does.
-    }
+    } catch {}
     try {
       await this.acquire(true, wait)
     } finally {
@@ -150,7 +105,6 @@ export class OfflineWriter {
     }
   }
 
-  // Lets go of the right for good (the tab is done with this account's database).
   stop() {
     this.stopped = true
     this.waiting?.abort()
@@ -159,9 +113,7 @@ export class OfflineWriter {
     void this.release()
     try {
       this.chan?.close()
-    } catch {
-      // Closed already.
-    }
+    } catch {}
     this.chan = null
     this.set(false)
   }
@@ -179,17 +131,11 @@ export class OfflineWriter {
       if (this.locks) await this.acquireLock(wait, ctl.signal)
       else await this.acquireLease(wait, ctl.signal)
     } catch {
-      // The database is closed, or the wait was cancelled: this tab is not the writer.
     } finally {
       if (this.acquiring === ctl) this.acquiring = undefined
     }
   }
 
-  // One compare-and-set on the writer row, repeated every POLL_MS while `wait`: whether this tab
-  // holds it. Free is a row nobody holds, or one whose lease has run out; with the lock in hand
-  // (`via: 'lock'`) also one a holder with a lock left (its lock is gone: this one is the only tab
-  // with a lock that can be here). A row a tab without Web Locks holds by its lease is never taken
-  // from it before the lease has run out, whatever lock this tab holds.
   private async takeRow(wait: boolean, signal: AbortSignal, via: 'lock' | 'lease'): Promise<boolean> {
     for (;;) {
       if (signal.aborted || this.stopped) return false
@@ -206,13 +152,9 @@ export class OfflineWriter {
     }
   }
 
-  // With Web Locks: the lock is taken first, and held for as long as the promise the callback
-  // returns is pending; the row is then taken on top of it. A lock that is granted after this tab
-  // stopped (or after the wait was cancelled) is let go of at once, with the row if it got it.
   private acquireLock(wait: boolean, signal: AbortSignal): Promise<void> {
     const locks = this.locks as LockManager
     return new Promise<void>((resolve) => {
-      // `ifAvailable` and `signal` can't be asked together: a start doesn't wait, a take-over does.
       const options: LockOptions = wait ? { signal } : { ifAvailable: true }
       locks
         .request(this.name, options, async (lock) => {
@@ -223,11 +165,8 @@ export class OfflineWriter {
           let got = false
           try {
             got = await this.takeRow(wait, signal, 'lock')
-          } catch {
-            // The database is closed.
-          }
+          } catch {}
           if (!got) {
-            // Not ours to hold: returning lets the lock go.
             resolve()
             return
           }
@@ -246,7 +185,6 @@ export class OfflineWriter {
     })
   }
 
-  // Without them: the row's lease, taken when it is free or has run out, and renewed while held.
   private async acquireLease(wait: boolean, signal: AbortSignal): Promise<void> {
     if (!(await this.takeRow(wait, signal, 'lease'))) return
     if (signal.aborted || this.stopped) {
@@ -256,7 +194,6 @@ export class OfflineWriter {
     this.renewing('lease')
   }
 
-  // The row is this tab's: it is the writer, and keeps the lease renewed for as long as it is.
   private renewing(via: 'lock' | 'lease') {
     this.set(!this.stopped)
     this.stopBeat?.()
@@ -293,15 +230,12 @@ export class OfflineWriter {
     this.poll = undefined
   }
 
-  // The holder is asked to let go: it stops writing at once and stays a reader.
   private async yieldWriter() {
     if (!this.held) return
     this.set(false)
     await this.release()
   }
 
-  // The right was taken from this tab (or the database can't say): it is a reader, and a Web Lock
-  // it holds is let go, so that it isn't held by a tab that doesn't write.
   private lost() {
     this.stopBeat?.()
     this.stopBeat = undefined
@@ -318,9 +252,7 @@ export class OfflineWriter {
     this.unlock = undefined
     try {
       await this.store.releaseWriter(this.owner)
-    } catch {
-      // Closed: the row is let go with the database, or by the next holder.
-    }
+    } catch {}
     unlock?.()
   }
 }

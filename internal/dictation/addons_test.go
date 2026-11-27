@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/egress"
 )
 
-// installVoz puts a fake Voz add-on in dir, answering script's output.
 func installVoz(t *testing.T, dir, script string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, "desertant-voz"), 0o700); err != nil {
@@ -42,8 +41,6 @@ func TestDetectAddons(t *testing.T) {
 	}
 }
 
-// The fake Voz checks what it is given: a WAV on standard input, the language, and a clean
-// environment.
 const vozScript = `#!/bin/sh
 [ -z "$TASKTO_TEST_SECRET" ] || exit 3
 head -c 4 | grep -q RIFF || exit 4
@@ -70,7 +67,6 @@ func TestVozAddon(t *testing.T) {
 	if len(st.Addons) != 1 || !st.Addons[0].Installed || st.Addons[0].Notice == "" || st.Addons[0].LicenceURL != "https://license.desertant.com/" {
 		t.Fatalf("addons = %+v", st.Addons)
 	}
-	// Not without its notice confirmed; a member can't confirm it.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "desertant-voz"}), http.StatusBadRequest)
 	expect(t, member.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "desertant-voz", "accept_notice": "desertant-voz"}),
 		http.StatusForbidden)
@@ -86,17 +82,14 @@ func TestVozAddon(t *testing.T) {
 		t.Fatalf("notice_by = %d, %v", by, err)
 	}
 
-	// The glossary corrects its text too (the owner reads their own private space).
 	rec = owner.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusOK)
 	if got := decode[transcribeReply](t, rec); got.Text != "voz heard taskto (--language pt)" || got.Engine != "desertant-voz" {
 		t.Fatalf("reply = %+v", got)
 	}
-	// Back to local, and to the add-on again without confirming twice.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "local"}), http.StatusOK)
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "desertant-voz"}), http.StatusOK)
 
-	// A server without it installed says so.
 	bare := newEnv(t, nil, egress.Policy{})
 	o2, ws2 := bare.setup()
 	expect(t, o2.do(http.MethodPatch, route(ws2, ""), map[string]any{"accept_notice": "desertant-voz"}), http.StatusBadRequest)

@@ -8,38 +8,22 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// The admin's view of an integration's events (docs/api.md#integration-events): what the webhook
-// route stored and what the worker made of it, and a retry for the events that failed. An event has
-// no record data in it, no body and no token of ours: its kind, its amount, its state and the code
-// that says why it is not applied. An admin sees that a payment of 120.00 EUR was not applied and
-// why; which app or record it was for is not shown, since an admin has no read access to a private
-// app's records.
-
-// EventView is a stored event as the admins are shown it.
 type EventView struct {
-	ID int64 `json:"id"`
-	// Kind is the normalized event (payment.succeeded...), Source where it came from (webhook).
-	Kind   string `json:"kind"`
-	Source string `json:"source"`
-	// State is pending, running, applied, ignored or failed. Code is why an ignored or failed event
-	// was not applied (the codes of integration_event_*), "" for one that was.
-	State string `json:"state"`
-	Code  string `json:"code,omitempty"`
-	// AmountMinor is in the currency's smallest unit; of a refund, what has been refunded so far.
-	AmountMinor int64  `json:"amount_minor"`
-	Currency    string `json:"currency"`
-	// Livemode says whether the event is of live money.
+	ID          int64   `json:"id"`
+	Kind        string  `json:"kind"`
+	Source      string  `json:"source"`
+	State       string  `json:"state"`
+	Code        string  `json:"code,omitempty"`
+	AmountMinor int64   `json:"amount_minor"`
+	Currency    string  `json:"currency"`
 	Livemode    bool    `json:"livemode"`
 	Attempts    int     `json:"attempts"`
 	OccurredAt  string  `json:"occurred_at"`
 	ReceivedAt  string  `json:"received_at"`
 	ProcessedAt *string `json:"processed_at"`
-	// Retriable is whether a retry is possible: a failed event, once what is wrong is fixed.
-	Retriable bool `json:"retriable"`
+	Retriable   bool    `json:"retriable"`
 }
 
-// EventList is a page of events, newest first. NextBefore is the id to give as before for the next
-// page, 0 when there is none.
 type EventList struct {
 	Events     []EventView `json:"events" apitypes:"nonnull"`
 	NextBefore int64       `json:"next_before"`
@@ -52,15 +36,12 @@ const (
 
 var eventStates = map[string]bool{EventPending: true, EventRunning: true, EventApplied: true, EventIgnored: true, EventFailed: true}
 
-// handleEvents lists the integration's events: ?state= narrows them to one state, ?limit= bounds the
-// page and ?before= continues after an earlier page.
 func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id, ok := integrationID(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
-	// The integration must be this workspace's: another workspace's id is not found, as everywhere.
 	if _, err := s.store.getSnapshot(ctx, workspaceOf(r), id); err != nil {
 		fail(w, r, err)
 		return
@@ -129,10 +110,6 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleRetryEvent puts a failed event back to wait for the worker, with its tries counted anew: for
-// once what was wrong (an approval, a switched-off integration, an app that was offline) is fixed.
-// Only a failed event of this integration, in this workspace, is retried; applying it again is safe
-// whatever happened to it before (apply.go).
 func (s *Service) handleRetryEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := integrationID(w, r)
 	if !ok {
@@ -160,8 +137,6 @@ func (s *Service) handleRetryEvent(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	} else if n == 0 {
-		// Not this integration's, or not failed: which of the two is not told apart for an id that is
-		// not its own.
 		var state string
 		err := s.store.db.QueryRowContext(ctx, `SELECT state FROM integration_events WHERE id = ? AND integration_id = ?`, event, id).Scan(&state)
 		switch {

@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// TestGeneratedIsCurrent fails when the committed web/src/api.gen.ts is not what the structs
-// say: a field renamed or retyped in Go. Regenerating it makes the web app's typecheck say
-// where it still reads the old field.
 func TestGeneratedIsCurrent(t *testing.T) {
 	want, err := Generate(Roots())
 	if err != nil {
@@ -41,26 +38,26 @@ type kind string
 
 type sample struct {
 	base
-	Shade    string            `json:"shade"`
-	Name     string            `json:"name"`
-	Maybe    *string           `json:"maybe"`
-	Omitted  *string           `json:"omitted,omitempty"`
-	Count    int               `json:"count,omitempty"`
-	Kind     kind              `json:"kind"`
-	When     time.Time         `json:"when"`
-	Bytes    []byte            `json:"bytes"`
-	Raw      json.RawMessage   `json:"raw" apitypes:"json"`
-	Any      any               `json:"any" apitypes:"json"`
-	Tags     []string          `json:"tags"`
-	Sure     []string          `json:"sure" apitypes:"nonnull"`
-	Maybes   []*string         `json:"maybes" apitypes:"nonnull"`
-	ByName   map[string]inner  `json:"by_name"`
-	Nested   inner             `json:"nested"`
-	Anon     struct{ A int }   `json:"anon"`
-	Hidden   string            `json:"-"`
-	Odd      string            `json:"odd-name"`
-	Fallback string            // no tag: the Go name
-	secret   string            //nolint:unused // proves unexported fields are left out
+	Shade    string           `json:"shade"`
+	Name     string           `json:"name"`
+	Maybe    *string          `json:"maybe"`
+	Omitted  *string          `json:"omitted,omitempty"`
+	Count    int              `json:"count,omitempty"`
+	Kind     kind             `json:"kind"`
+	When     time.Time        `json:"when"`
+	Bytes    []byte           `json:"bytes"`
+	Raw      json.RawMessage  `json:"raw" apitypes:"json"`
+	Any      any              `json:"any" apitypes:"json"`
+	Tags     []string         `json:"tags"`
+	Sure     []string         `json:"sure" apitypes:"nonnull"`
+	Maybes   []*string        `json:"maybes" apitypes:"nonnull"`
+	ByName   map[string]inner `json:"by_name"`
+	Nested   inner            `json:"nested"`
+	Anon     struct{ A int }  `json:"anon"`
+	Hidden   string           `json:"-"`
+	Odd      string           `json:"odd-name"`
+	Fallback string
+	secret   string
 	Numbered int               `json:"numbered,string"`
 	Fixed    [2]int            `json:"fixed"`
 	Labels   map[string]string `json:"labels,omitempty"`
@@ -81,33 +78,32 @@ func TestGenerate(t *testing.T) {
 	got := string(out)
 	for _, want := range []string{
 		"export type Sample = {\n",
-		"  id: number\n",                // an embedded struct's fields come up
-		"  shade: string\n",             // the outer field wins over the embedded one
-		"  maybe: string | null\n",      // a pointer may be null
-		"  omitted?: string\n",          // a pointer that is left out when nil is never null
-		"  count?: number\n",            // omitempty
-		"  kind: string\n",              // a named string
-		"  when: string\n",              // a time
-		"  bytes: string | null\n",      // base64, null when nil
-		"  raw: unknown\n",              // free-form JSON, said to be
-		"  any: unknown\n",              // as is an any
-		"  tags: string[] | null\n",     // a nil slice is null
-		"  sure: string[]\n",            // unless promised not to be
-		"  maybes: (string | null)[]\n", // the promise is of the slice, not its elements
+		"  id: number\n",
+		"  shade: string\n",
+		"  maybe: string | null\n",
+		"  omitted?: string\n",
+		"  count?: number\n",
+		"  kind: string\n",
+		"  when: string\n",
+		"  bytes: string | null\n",
+		"  raw: unknown\n",
+		"  any: unknown\n",
+		"  tags: string[] | null\n",
+		"  sure: string[]\n",
+		"  maybes: (string | null)[]\n",
 		"  by_name: Record<string, PackageInner> | null\n",
 		"  nested: PackageInner\n",
-		"  anon: {\n    A: number\n  }\n", // written in place, with the Go name
+		"  anon: {\n    A: number\n  }\n",
 		"  \"odd-name\": string\n",
 		"  Fallback: string\n",
 		"  numbered: string\n",
-		"  fixed: number[]\n", // an array is never null
+		"  fixed: number[]\n",
 		"  labels?: Record<string, string>\n",
 		"  free: Record<string, unknown>\n",
 		"  key: Record<string, number> | null\n",
 		"  text_key: Record<string, number> | null\n",
 		"export type PackageInner = {\n  deep: string\n}\n",
 	} {
-		// The package's name is apitypes here.
 		want = strings.ReplaceAll(want, "Package", "Apitypes")
 		if !strings.Contains(got, want) {
 			t.Errorf("the output lacks %q:\n%s", want, got)
@@ -120,33 +116,27 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
-// custom writes itself: its struct says nothing of it.
 type custom struct{ Hidden string }
 
 func (custom) MarshalJSON() ([]byte, error) { return []byte(`1`), nil }
 
-// promoted gets the MarshalJSON of the time it embeds.
 type promoted struct {
 	time.Time
 	Extra string `json:"extra"`
 }
 
-// level is a number that writes itself as text: a string, not a number.
 type level int
 
 func (level) MarshalJSON() ([]byte, error) { return []byte(`"high"`), nil }
 
-// pointerKey's MarshalText is on its pointer, which a map key is not.
 type pointerKey struct{ N int }
 
 func (*pointerKey) MarshalText() ([]byte, error) { return []byte("k"), nil }
 
-// code is written as text only when encoding/json can address it, which a map's values are not.
 type code int
 
 func (*code) MarshalText() ([]byte, error) { return []byte("c"), nil }
 
-// tree holds itself: it has no type to write in place.
 type tree []tree
 
 type page[T any] struct{ Items []T }
@@ -160,7 +150,6 @@ func TestGenerateRejects(t *testing.T) {
 		"a name taken": {{Name: "A", Type: reflect.TypeFor[a]()}, {Name: "A", Type: reflect.TypeFor[b]()}},
 		"a channel":    {{Name: "C", Type: reflect.TypeFor[struct{ C chan int }]()}},
 
-		// A MarshalJSON of its own, which would leave out the field the struct has.
 		"a root with a MarshalJSON":  {{Name: "C", Type: reflect.TypeFor[custom]()}},
 		"a root with a promoted one": {{Name: "P", Type: reflect.TypeFor[promoted]()}},
 		"a field with a MarshalJSON": {{Name: "F", Type: reflect.TypeFor[struct{ C custom }]()}},
@@ -172,13 +161,11 @@ func TestGenerateRejects(t *testing.T) {
 		}]()}},
 		"a root a time promotes to": {{Name: "T", Type: reflect.TypeFor[time.Time]()}},
 
-		// What encoding/json decides by the value, or by where it is.
 		"a marshaler on a pointer, in a map": {{Name: "F", Type: reflect.TypeFor[struct{ M map[string]code }]()}},
 		"a marshaler on a pointer, by value": {{Name: "F", Type: reflect.TypeFor[struct{ C code }]()}},
 		"a type that holds itself":           {{Name: "F", Type: reflect.TypeFor[struct{ T tree }]()}},
 		"a name that is not TypeScript's":    {{Name: "F", Type: reflect.TypeFor[struct{ P page[int] }]()}},
 
-		// Free-form JSON is said to be so.
 		"an any":                  {{Name: "F", Type: reflect.TypeFor[struct{ V any }]()}},
 		"an any in a map":         {{Name: "F", Type: reflect.TypeFor[struct{ V map[string]any }]()}},
 		"a raw message":           {{Name: "F", Type: reflect.TypeFor[struct{ V json.RawMessage }]()}},
@@ -188,7 +175,6 @@ func TestGenerateRejects(t *testing.T) {
 			V string `apitypes:"nonnull"`
 		}]()}},
 
-		// A map's key is a string, a number or an encoding.TextMarshaler itself.
 		"a key that is a struct":        {{Name: "K", Type: reflect.TypeFor[struct{ M map[inner]int }]()}},
 		"a key whose pointer is a text": {{Name: "K", Type: reflect.TypeFor[struct{ M map[pointerKey]int }]()}},
 		"a key that is a float":         {{Name: "K", Type: reflect.TypeFor[struct{ M map[float64]int }]()}},
@@ -197,7 +183,6 @@ func TestGenerateRejects(t *testing.T) {
 			t.Errorf("%s: no error", name)
 		}
 	}
-	// What is allowed beside them.
 	type okay struct {
 		When  time.Time        `json:"when"`
 		Pager *time.Time       `json:"pager"`
@@ -208,14 +193,12 @@ func TestGenerateRejects(t *testing.T) {
 		Ptr   *code            `json:"ptr"`
 		Num   json.Number      `json:"num"`
 		Quote json.Number      `json:"quote,string"`
-		Deep  **int            `json:"deep,string"` //nolint:staticcheck // the option meets two pointers, which encoding/json ignores
+		Deep  **int            `json:"deep,string"`
 	}
 	out, err := Generate([]Root{{Name: "Okay", Type: reflect.TypeFor[okay]()}})
 	if err != nil {
 		t.Fatalf("allowed fields were refused: %v", err)
 	}
-	// A json.Number is a number, and a string with the option; the option looks through one
-	// pointer, so it leaves a pointer to a pointer to a number a number.
 	for _, want := range []string{"  num: number\n", "  quote: string\n", "  deep: number | null\n", "  ptr: string | null\n"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("the output lacks %q:\n%s", want, out)
@@ -233,7 +216,7 @@ type right struct {
 
 type clash struct {
 	left
-	right //nolint:govet // the clash is what the test is about
+	right
 }
 
 type optionalInner struct {
@@ -246,7 +229,6 @@ type viaPointer struct {
 }
 
 func TestGenerateEmbedding(t *testing.T) {
-	// Two embedded structs with the same name at the same depth: encoding/json writes neither.
 	if _, err := Generate([]Root{{Name: "Clash", Type: reflect.TypeFor[clash]()}}); err == nil {
 		t.Error("an ambiguous field was not rejected")
 	}
@@ -255,7 +237,6 @@ func TestGenerateEmbedding(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(out)
-	// A nil embedded pointer leaves its fields out; a pointer with the string option is still null.
 	for _, want := range []string{"  id?: number\n", "  n: string | null\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the output lacks %q:\n%s", want, got)
@@ -263,13 +244,10 @@ func TestGenerateEmbedding(t *testing.T) {
 	}
 }
 
-// wireField is how a generated field reads: whether its key may be absent and whether its
-// value may be null.
 type wireField struct{ optional, null bool }
 
 var fieldLine = regexp.MustCompile(`^  ("[^"]+"|[A-Za-z_$][A-Za-z0-9_$]*)(\?)?: (.*)$`)
 
-// shapeOf reads the top-level fields of the type generated for v from the output.
 func shapeOf(t *testing.T, v any) map[string]wireField {
 	t.Helper()
 	out, err := Generate([]Root{{Name: "Wire", Type: reflect.TypeOf(v)}})
@@ -295,9 +273,6 @@ func shapeOf(t *testing.T, v any) map[string]wireField {
 	return nil
 }
 
-// sameAsEncoding fails when what encoding/json writes for a value is not what the generated
-// shape says: a key written that the shape lacks, or null where it says never, or a key left
-// out of a field it says is always there.
 func sameAsEncoding(t *testing.T, name string, shape map[string]wireField, v any) {
 	t.Helper()
 	raw, err := json.Marshal(v)
@@ -326,7 +301,6 @@ func sameAsEncoding(t *testing.T, name string, shape map[string]wireField, v any
 
 type zeroSlice []int
 
-// IsZero says even a nil one is not zero, so omitzero writes it, as null.
 func (zeroSlice) IsZero() bool { return false }
 
 type unexportedEmbedded struct {
@@ -340,24 +314,24 @@ type promotedHidden struct {
 type wireSample struct {
 	*optionalWire
 	promotedHidden
-	unexportedEmbedded `json:"tagged"` // an unexported struct with a name is written under it
-	Plain              *int            `json:"plain"`
-	Struct             inner           `json:"struct,omitempty"` // omitempty never leaves a struct out
-	Zero               inner           `json:"zero,omitzero"`    // omitzero does
-	List               []string        `json:"list,omitempty"`
-	Items              []string        `json:"items"`
-	Both               *int            `json:"both,omitempty"`
-	Cut                zeroSlice       `json:"cut,omitzero"`
-	Arr                [2]int          `json:"arr,omitempty"` // an array with elements is always written
-	Raw                []byte          `json:"raw"`
-	Dash               string          `json:"-,"`             //nolint:staticcheck // the tag is what is tested
-	Skipped            string          `json:"it's,omitempty"` //nolint:staticcheck // an invalid name, which encoding/json ignores
-	Text               map[string]int  `json:"text,omitempty"`
-	Number             *int            `json:"number,omitempty,string"`
-	PtrList            *[]string       `json:"ptr_list,omitempty"` // a pointer to a nil slice is written, as null
-	PtrText            *string         `json:"ptr_text,omitempty"`
-	PtrPtr             **[]string      `json:"ptr_ptr,omitempty"`
-	hidden             string          //nolint:unused // not written
+	unexportedEmbedded `json:"tagged"`
+	Plain              *int           `json:"plain"`
+	Struct             inner          `json:"struct,omitempty"`
+	Zero               inner          `json:"zero,omitzero"`
+	List               []string       `json:"list,omitempty"`
+	Items              []string       `json:"items"`
+	Both               *int           `json:"both,omitempty"`
+	Cut                zeroSlice      `json:"cut,omitzero"`
+	Arr                [2]int         `json:"arr,omitempty"`
+	Raw                []byte         `json:"raw"`
+	Dash               string         `json:"-,"`
+	Skipped            string         `json:"it's,omitempty"`
+	Text               map[string]int `json:"text,omitempty"`
+	Number             *int           `json:"number,omitempty,string"`
+	PtrList            *[]string      `json:"ptr_list,omitempty"`
+	PtrText            *string        `json:"ptr_text,omitempty"`
+	PtrPtr             **[]string     `json:"ptr_ptr,omitempty"`
+	hidden             string
 }
 
 type optionalWire struct {
@@ -381,25 +355,24 @@ func TestShapeIsWhatEncodingWrites(t *testing.T) {
 	} {
 		sameAsEncoding(t, name, shape, v)
 	}
-	// The cases that made a field look wrong, said outright.
 	for key, want := range map[string]wireField{
-		"value":    {optional: true, null: true},  // an embedded pointer's nil *int: absent, or null when present
-		"name":     {optional: true, null: false}, // absent with the embedded pointer nil
-		"loud":     {},                            // an unexported embedded struct's fields come up
-		"tagged":   {},                            // and one with a name is that name
+		"value":    {optional: true, null: true},
+		"name":     {optional: true, null: false},
+		"loud":     {},
+		"tagged":   {},
 		"plain":    {null: true},
-		"struct":   {},               // omitempty doesn't leave a struct out
-		"zero":     {optional: true}, // omitzero does
-		"list":     {optional: true}, // left out when empty: never null
-		"items":    {null: true},     // written as null when nil
+		"struct":   {},
+		"zero":     {optional: true},
+		"list":     {optional: true},
+		"items":    {null: true},
 		"both":     {optional: true},
-		"cut":      {optional: true, null: true}, // a type that says its nil is not zero
+		"cut":      {optional: true, null: true},
 		"arr":      {},
 		"raw":      {null: true},
 		"-":        {},
-		"Skipped":  {optional: true}, // an invalid name in a tag is ignored: the Go name
+		"Skipped":  {optional: true},
 		"number":   {optional: true},
-		"ptr_list": {optional: true, null: true}, // a pointer, left out when nil, to a slice that may be nil
+		"ptr_list": {optional: true, null: true},
 		"ptr_text": {optional: true},
 		"ptr_ptr":  {optional: true, null: true},
 	} {

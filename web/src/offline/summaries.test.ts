@@ -4,7 +4,6 @@ import type { Download } from './store'
 
 afterEach(() => vi.useRealTimers())
 
-// A download of an app whose summaries are a monthly sum and a count of open failures.
 function download(items: Record<string, unknown>[]): Download {
   return {
     definition: {

@@ -13,13 +13,8 @@ import (
 	"testing"
 )
 
-// The golden files are the contract with the web renderer: web/src/apps/apps.test.tsx draws
-// the same surface, sends expenses.action.json from a real button click, applies the
-// response, and checks its catalog against catalog.json. Regenerate with:
-// go test ./internal/apps -update
 var update = flag.Bool("update", false, "rewrite golden files")
 
-// surfaceID is the example's surface in the golden files.
 var surfaceID = SurfaceID(1)
 
 func example(t *testing.T) Definition {
@@ -66,9 +61,6 @@ func TestSurface(t *testing.T) {
 	golden(t, "expenses.surface.json", Surface(surfaceID, example(t), seed))
 }
 
-// The catalog as the web app must register it: every component with its props, and the
-// functions, and the capabilities (what a release needs) and definition format version it
-// speaks.
 func TestCatalogContract(t *testing.T) {
 	comps := map[string][]string{}
 	for name, spec := range components {
@@ -122,7 +114,6 @@ func TestPlanGoldenAction(t *testing.T) {
 	golden(t, "expenses.after-add.json", []Message{DataModel(surfaceID, def, append(seed, Row{ID: 2, Revision: 1, Data: ch.Data}))})
 }
 
-// screen returns the example with change applied to its components, decoded as objects.
 func screen(t *testing.T, change func(map[string]map[string]any) []map[string]any) Definition {
 	t.Helper()
 	def := example(t)
@@ -290,7 +281,6 @@ func TestCheckRefusesBadDefinitions(t *testing.T) {
 		"reserved summary": {func(d *Definition) { d.Summaries["items"] = Summary{Kind: "count"} }, "not items"},
 		"sum of text":      {func(d *Definition) { d.Summaries["total"] = Summary{Kind: "sum", Field: "description"} }, "not a number field"},
 		"summary kind":     {func(d *Definition) { d.Summaries["avg"] = Summary{Kind: "avg", Field: "amount"} }, "kind must be count or sum"},
-		// No regular expressions: a pattern runs in every viewer's browser (see catalog.go).
 		"validationRegexp": {func(d *Definition) {
 			raw, _ := json.Marshal(map[string]any{"id": "code", "component": "TextField", "label": "Code", "validationRegexp": "(a+)+$"})
 			d.Components = append(d.Components, raw)
@@ -324,7 +314,6 @@ func TestCheckRefusesBadDefinitions(t *testing.T) {
 	}
 }
 
-// todo is an app whose actions are of every kind, over every type of field.
 func todo(t *testing.T) Definition {
 	t.Helper()
 	max := 10.0
@@ -412,8 +401,6 @@ func TestDataModelShowsDeclaredFieldsOnly(t *testing.T) {
 	}
 }
 
-// A choice's stored text is not how it reads to people: each item carries its label at
-// _labels/<field>, so a screen shows "Food" where the row holds "food".
 func TestItemsCarryTheLabelOfEachChoice(t *testing.T) {
 	def := Definition{Collection: Collection{Fields: []Field{
 		{Name: "category", Type: TypeChoice, Options: []string{"food", "other"}, OptionLabels: map[string]string{"food": "Food"}},
@@ -422,10 +409,8 @@ func TestItemsCarryTheLabelOfEachChoice(t *testing.T) {
 	}}}
 	items := Items(def, []Row{
 		{ID: 1, Revision: 1, Data: map[string]any{"category": "food", "kind": "b", "note": "x"}},
-		// An option with no label reads as it is stored; a field with no value has no label.
 		{ID: 2, Revision: 1, Data: map[string]any{"category": "other"}},
 		{ID: 3, Revision: 1, Data: map[string]any{"note": "y"}},
-		// A value its field no longer lists is still shown, as it is.
 		{ID: 4, Revision: 1, Data: map[string]any{"category": "gone"}},
 	})
 	raw, _ := json.Marshal(items)
@@ -436,7 +421,6 @@ func TestItemsCarryTheLabelOfEachChoice(t *testing.T) {
 	if string(raw) != want {
 		t.Fatalf("items = %s\nwant    %s", raw, want)
 	}
-	// The record a detail screen shows is made the same way.
 	if got := item(def, Row{ID: 1, Revision: 1, Data: map[string]any{"category": "food"}})[LabelsKey]; fmt.Sprint(got) != "map[category:Food]" {
 		t.Fatalf("record labels = %v", got)
 	}
@@ -463,7 +447,6 @@ func TestCheckRefusesBadOptionLabels(t *testing.T) {
 		"labels not given": {Name: "k", Type: TypeChoice, Options: []string{"a"}, OptionLabels: map[string]string{}},
 	} {
 		if name == "labels not given" {
-			// An empty map is no labels: nothing to refuse.
 			if _, err := base(f).Check(); err != nil {
 				t.Errorf("%s: %v", name, err)
 			}
@@ -475,9 +458,6 @@ func TestCheckRefusesBadOptionLabels(t *testing.T) {
 	}
 }
 
-// A client that predates the labels would draw nothing where a screen binds to one, so a release that
-// does requires the capability, which an older client lacks and answers with "update required"; a
-// release that only has option labels, and shows the stored text, needs nothing new.
 func TestBindingToALabelRequiresTheCapability(t *testing.T) {
 	fields := []Field{{Name: "category", Type: TypeChoice, Options: []string{"food", "other"}, OptionLabels: map[string]string{"food": "Food"}}}
 	check := func(components ...string) []string {
@@ -501,7 +481,6 @@ func TestBindingToALabelRequiresTheCapability(t *testing.T) {
 	if got := check(root, `{"id":"row","component":"Text","text":{"path":"category"}}`); slices.Contains(got, LabelsCapability) {
 		t.Errorf("a stored text needs no new capability: %v", got)
 	}
-	// Screens are looked at too, and the server's catalog lists it as one a client may have.
 	tpl, err := Templates()
 	if err != nil {
 		t.Fatal(err)

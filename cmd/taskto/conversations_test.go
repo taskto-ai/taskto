@@ -23,8 +23,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// fakeAgentSocket serves the agent runtime's list and retire routes on the socket the server's
-// sidecar would use for dataDir.
 type fakeAgentSocket struct {
 	mu   sync.Mutex
 	list []agentrt.ConversationInfo
@@ -113,7 +111,6 @@ func TestConversationsCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The server isn't running: nothing answers on the socket.
 	if _, err := run("check"); err == nil || !strings.Contains(err.Error(), "run this while the server runs with -agent") {
 		t.Fatalf("check without the agent runtime: err = %v", err)
 	}
@@ -153,8 +150,6 @@ func TestConversationsCommand(t *testing.T) {
 			t.Errorf("check printed:\n%s\nwant %q", out, want)
 		}
 	}
-	// The line an orphan is listed on, not just its digits: a lost conversation's creation
-	// time has milliseconds, and any three digits can be among them.
 	if strings.Contains(out, "Private plans") || strings.Contains(out, "agent runtime conversation 151,") {
 		t.Errorf("check printed:\n%s\nwant no titles and nothing created within the grace period", out)
 	}
@@ -227,8 +222,6 @@ func TestCleanRefusesToDeleteEveryConversation(t *testing.T) {
 		}
 		return n
 	}
-	// The agent runtime lists none of them: wiped, or a listing gone wrong. Nothing is
-	// deleted without -all.
 	serveFakeAgent(t, dataDir)
 	if _, err := run("-lost", "clean"); err == nil || !strings.Contains(err.Error(), "clean -lost -all") {
 		t.Fatalf("clean -lost with every conversation lost: err = %v", err)

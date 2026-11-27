@@ -2,10 +2,6 @@
 
 package lockfile
 
-// Tests with other processes run this test binary again: with TASKTO_LOCKFILE_HOLD set it
-// takes that lock, says so on stdout and holds it until its stdin closes; with
-// TASKTO_LOCKFILE_WAIT set it only waits for its stdin to close.
-
 import (
 	"bufio"
 	"errors"
@@ -38,15 +34,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// child starts this test binary with env and returns it once it has started; closing its
-// stdin ends it.
 func child(t *testing.T, env string) (*exec.Cmd, io.WriteCloser, *bufio.Reader) {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(exe) //nolint:gosec // G204: the test binary itself
+	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(), env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -66,7 +60,6 @@ func child(t *testing.T, env string) (*exec.Cmd, io.WriteCloser, *bufio.Reader) 
 	return cmd, stdin, bufio.NewReader(stdout)
 }
 
-// lockOK takes the lock at path and fails the test if it can't; the test releases it.
 func lockOK(t *testing.T, path string) *os.File {
 	t.Helper()
 	f, err := Lock(path)
@@ -77,8 +70,6 @@ func lockOK(t *testing.T, path string) *os.File {
 	return f
 }
 
-// The holder's PID is in the file, and in the error another taker gets. The lock is per
-// open file, so even a second Lock in the same process is refused.
 func TestLockIsExclusive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
 	f := lockOK(t, path)
@@ -90,13 +81,10 @@ func TestLockIsExclusive(t *testing.T) {
 	if !errors.As(err, &held) || held.PID != os.Getpid() || !errors.Is(err, ErrLocked) {
 		t.Fatalf("second Lock = %v, want a HeldError with this PID", err)
 	}
-	// Released on close.
 	f.Close()
 	lockOK(t, path)
 }
 
-// A second process is refused, with the holder's PID. Once the holder dies without
-// releasing anything, its lock is gone though its file, and its PID in it, are still there.
 func TestAnotherProcessIsRefusedUntilItDies(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
 	holder, _, out := child(t, "TASKTO_LOCKFILE_HOLD="+path)
@@ -113,7 +101,6 @@ func TestAnotherProcessIsRefusedUntilItDies(t *testing.T) {
 		t.Fatalf("error %q doesn't name the holder's PID", err)
 	}
 
-	// A crash: SIGKILL, no cleanup. The stale file is reused.
 	if err := holder.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +114,6 @@ func TestAnotherProcessIsRefusedUntilItDies(t *testing.T) {
 	}
 }
 
-// A child process started while the lock is held doesn't inherit it: once the parent
-// lets go, the lock is free although the child still runs.
 func TestLockIsNotInherited(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
 	f := lockOK(t, path)
@@ -172,7 +157,6 @@ func TestDataDirSaysWhoHoldsIt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("second DataDir = %v, want %q", err, want)
 	}
-	// Matchable, not only readable.
 	if held := (*HeldError)(nil); !errors.Is(err, ErrLocked) || !errors.As(err, &held) || held.PID != os.Getpid() {
 		t.Fatalf("second DataDir = %v: want errors.Is ErrLocked and a *HeldError naming pid %d", err, os.Getpid())
 	}
@@ -180,7 +164,6 @@ func TestDataDirSaysWhoHoldsIt(t *testing.T) {
 
 func TestAFileReplacedWhileLockingIsLockedAgain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
-	// Another process removes the file and makes a new one between our open and our lock.
 	replaced := false
 	afterOpen = func() {
 		if replaced {
@@ -201,7 +184,6 @@ func TestAFileReplacedWhileLockingIsLockedAgain(t *testing.T) {
 	}
 	defer f.Close()
 	afterOpen = nil
-	// The lock is on the file the path names, so nobody else gets it.
 	if g, err := Lock(path); !errors.Is(err, ErrLocked) {
 		if g != nil {
 			g.Close()
