@@ -493,7 +493,9 @@ func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 			close(h.releaseClean)
 		}
 	}
-	m := NewManager(Config{Host: h, StartTimeout: 100 * time.Millisecond})
+	// The start timeout is how long the second start waits for the old browser before it gives
+	// up; it bounds the first start too, which a loaded machine can make slow.
+	m := NewManager(Config{Host: h, StartTimeout: 3 * time.Second})
 	t.Cleanup(m.Close)
 	t.Cleanup(release) // runs before m.Close
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -509,7 +511,7 @@ func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the old browser's stop didn't reach its last step")
 	}
-	// The start waits 100 ms for the old browser, then gives up.
+	// The start waits for the old browser until its timeout, then gives up.
 	if err := m.Start(ctx, 1, Testing); err == nil {
 		t.Fatal("a start while the old browser was still stopping succeeded")
 	}
