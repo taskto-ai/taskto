@@ -1,6 +1,6 @@
 import { type CliName, isCliName } from '../api'
 import { t } from '../i18n'
-import { CHANGE_TOOLS, type Changed, changeOf, isId } from './changes'
+import { type Changed, changeOf, isId } from './changes'
 
 export type ConversationView = {
   entries?: { id: number; kind: string; model?: unknown[] }[]
@@ -70,7 +70,7 @@ function toolsOf(content: unknown, key: string, { saved, done, changed }: Kept):
     const use: ToolUse = { id: String(part.id ?? part.name), key: at, name: part.name as string }
     const app = APP_TOOLS.has(use.name) ? saved.get(at) : undefined
     if (app) use.app = app
-    const change = CHANGE_TOOLS.has(use.name) ? changed.get(at) : undefined
+    const change = changed.get(at)
     if (change) use.changed = change
     const cli = use.name === CLI_TOOL ? (part.arguments as { cli?: unknown } | undefined)?.cli : undefined
     if (isCliName(cli)) use.cli = cli
