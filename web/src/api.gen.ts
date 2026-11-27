@@ -541,6 +541,35 @@ export type DeletionStatus = {
   blockers: AuthDeletionBlocker[]
 }
 
+export type Desk = {
+  id: number
+  name: string
+  layout: unknown
+  version: number
+  updated_at: string
+}
+
+export type DeskChanged = {
+  error: string
+  code: string
+  current: Desk
+}
+
+export type DeskLayoutWrite = {
+  version: number
+  layout: unknown
+}
+
+export type DeskList = {
+  desks: DeskSummary[]
+}
+
+export type DeskSummary = {
+  id: number
+  name: string
+  updated_at: string
+}
+
 export type Doc = {
   path: string
   version: string

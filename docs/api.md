@@ -4330,6 +4330,42 @@ reads the space may list them; they are seen only for the apps they may view.
 - `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
   default of another space.
 
+## Desks
+
+Each member has a main desk in each workspace. A desk stores only a window layout and route paths;
+the pages named by those paths load their own data and apply their usual access checks. Layouts are
+per person and workspace, so they follow the person across devices. The main desk is created on its
+first save. Reading it never writes to the database. A desk id belonging to another person or
+workspace is `404 not_found`.
+
+These routes need a browser session and workspace membership. Access tokens are refused.
+
+### `GET /api/workspaces/{workspace}/desks`
+
+Lists the main desk first, then any named desks. Before the main desk has been saved, it is returned
+as `{"id":0,"name":"","updated_at":""}`. A read does not create a row.
+
+### `GET /api/workspaces/{workspace}/desks/{desk}`
+
+`{desk}` is `main` or a desk id. Before its first save, `main` returns
+`{"id":0,"name":"","layout":{"v":1,"focus":"","root":null},"version":0,"updated_at":""}`.
+
+### `PUT /api/workspaces/{workspace}/desks/{desk}/layout`
+
+Saves a layout using optimistic concurrency. The request is `{"version":0,"layout":{...}}` for a
+new main desk, and each successful save increments the version. If another save has changed the
+version, the server returns `409 desk_changed` with the current desk in `current`.
+
+A version 1 layout has `v: 1`, a `focus` group id and a `root` node. A node is either a group with
+`group`, `tabs` and `active`, or a split with `split` (`row` or `column`), `sizes` and `children`.
+Groups contain 1 to 20 tabs; there are at most 6 groups and 60 tabs, and at most 3 levels of nodes.
+Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes adding to 1 within
+0.01. Group and tab ids are distinct lowercase letters and digits, 1 to 16 characters. Paths are
+at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
+`knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route. Unknown fields,
+other workspace paths, malformed layouts, and bodies larger than 32 KiB are refused; invalid
+layouts return `400 desk_invalid` with a closed `reason` code.
+
 ## Integrations
 
 An integration is a workspace admin's connection to an account at an outside service. The
