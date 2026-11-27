@@ -55,6 +55,15 @@ test('lists conversations, creates one and opens it', async () => {
   await waitFor(() => expect(sources.at(-1)?.url).toBe('/api/workspaces/1/conversations/7/events'))
 })
 
+test('marks conversations started by an app', async () => {
+  const started = { ...conversation(3, 'Report'), origin: { kind: 'app' as const, space_id: 1, app_id: 2 } }
+  fakeFetch({ 'GET /api/workspaces/1/conversations': { body: { conversations: [started] } } })
+  const { factory } = fakeStreams()
+  render(<Page streams={factory} />)
+  const row = await screen.findByRole('listitem')
+  expect(within(row).getByText('App')).toBeTruthy()
+})
+
 test('a conversation made after the page went (the session ended) is not opened', async () => {
   let answer: () => void = () => {}
   fakeFetch({

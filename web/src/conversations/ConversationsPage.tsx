@@ -114,9 +114,12 @@ export function ConversationsPage({
                   current={c.id === openId}
                   title={conversationTitle(c)}
                   detail={
-                    <time dateTime={c.updated_at} title={f.dateTime(c.updated_at)}>
-                      {f.relative(c.updated_at)}
-                    </time>
+                    <>
+                      {c.origin && <span className="ui-chat-origin">{t(`conversations.origin.${c.origin.kind}`)}</span>}
+                      <time dateTime={c.updated_at} title={f.dateTime(c.updated_at)}>
+                        {f.relative(c.updated_at)}
+                      </time>
+                    </>
                   }
                 />
               ))}

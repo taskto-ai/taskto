@@ -45,7 +45,7 @@ type fakeRuntime struct {
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, aborts: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, aborts: map[int64]int{}, replies: map[int64][]agentrt.Message{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -70,6 +70,13 @@ func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (i
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
+	}
+	if in.RequestID != "" {
+		for i, prior := range f.inputs[conv] {
+			if prior.RequestID == in.RequestID {
+				return int64(1000 + i + 1), nil
+			}
+		}
 	}
 	f.inputs[conv] = append(f.inputs[conv], in)
 	return int64(1000 + len(f.inputs[conv])), nil

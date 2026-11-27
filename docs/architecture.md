@@ -49,6 +49,8 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   naming their conversation with a capability the server issued for it; the server acts
   for the conversation's owner, checking their access on every call
   ([agent-tools.md](agent-tools.md)).
+  The server can also start a person's conversation without a browser request. Those turns
+  carry a private origin key so retries from at-least-once callers reuse the same turn.
 - **Spaces and access:** a workspace contains spaces: a private one per member, and shared
   ones with editors and viewers. Everything people store lives in a space, and one
   package, `internal/access`, decides who may read and write each, for the API and for

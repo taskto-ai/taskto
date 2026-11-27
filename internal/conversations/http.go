@@ -22,6 +22,14 @@ import (
 
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	s.language = a.Language
+	s.userLanguage = func(ctx context.Context, user int64) string {
+		locale, err := a.UserLocale(ctx, user)
+		if err != nil {
+			slog.WarnContext(ctx, "conversations: reading the user's language for a server-started turn", "user", user, "err", err)
+			return ""
+		}
+		return locale
+	}
 	s.watchSession = a.WatchSession
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	const base = "/api/workspaces/{workspace}/conversations"

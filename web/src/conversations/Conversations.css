@@ -49,6 +49,15 @@
     white-space: nowrap;
   }
 
+  .ui-chat-origin {
+    flex: none;
+    padding: 0 var(--space-1);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    font: var(--type-caption);
+  }
+
   .ui-chat-rows .ui-row[data-current] .ui-row-title {
     font: var(--type-ui-strong);
   }

@@ -5459,13 +5459,16 @@ conversation's content`) on those routes. The server logs it, and an operator ca
 A conversation as the API shows it:
 
 ```json
-{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask"}
+{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask", "origin": null}
 ```
 
 - `title`: up to 200 printable characters, trimmed; may be empty.
 - `archived_at`: when the owner archived it, or `null`. An archived conversation can be read
   and streamed, but not sent to or switched to another model (`409`) until it is unarchived.
 - `updated_at`: the last rename, archive or message.
+- `origin`: `null` for a conversation someone started themselves; for one the server
+  started, it identifies whether an app or routine started it and the relevant space, app or
+  routine IDs. The deduplication key stays private.
 - `cli_permissions`: on a CLI worker, `ask` (the default: the CLI asks the owner before it
   runs a command, edits a file or fetches a page) or `allow_all` (nothing asks). See
   [Permission questions](#permission-questions) and [agent-safety.md](agent-safety.md).

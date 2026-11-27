@@ -130,6 +130,7 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions?: 'ask' | 'allow_all'
+  origin: { kind: 'app' | 'routine'; space_id?: number; app_id?: number; routine_id?: number } | null
 }
 
 export type CliQuestion = { id: string; turn: string; cli: string; tool: string; input?: string; asked_at: string }

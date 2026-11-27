@@ -49,6 +49,7 @@ type Service struct {
 	capability   func(conversation, agentConversation int64) string
 	questions    CLIQuestions
 	language     func(r *http.Request, browser string) string
+	userLanguage func(ctx context.Context, user int64) string
 	watchSession func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc)
 
 	closing    context.Context
@@ -94,24 +95,41 @@ func (s *Service) openStream(user int64) (func(), bool) {
 func (s *Service) EndStreams() { s.endStreams() }
 
 type Conversation struct {
-	ID             int64   `json:"id"`
-	WorkspaceID    int64   `json:"workspace_id"`
-	Title          string  `json:"title"`
-	ArchivedAt     *string `json:"archived_at"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	CLIPermissions string  `json:"cli_permissions"`
+	ID             int64               `json:"id"`
+	WorkspaceID    int64               `json:"workspace_id"`
+	Title          string              `json:"title"`
+	ArchivedAt     *string             `json:"archived_at"`
+	CreatedAt      string              `json:"created_at"`
+	UpdatedAt      string              `json:"updated_at"`
+	CLIPermissions string              `json:"cli_permissions"`
+	Origin         *ConversationOrigin `json:"origin"`
 
 	agentID int64
 }
 
+type ConversationOrigin struct {
+	Kind      string `json:"kind"`
+	SpaceID   int64  `json:"space_id,omitempty"`
+	AppID     int64  `json:"app_id,omitempty"`
+	RoutineID int64  `json:"routine_id,omitempty"`
+}
+
 var errNotFound = errors.New("conversation not found")
 
-const columns = `id, workspace_id, agent_id, title, archived_at, created_at, updated_at, cli_permissions`
+const columns = `id, workspace_id, agent_id, title, archived_at, created_at, updated_at, cli_permissions,
+	CASE WHEN origin IS NULL THEN NULL ELSE json_object('kind', origin_kind, 'space_id', origin_space_id, 'app_id', origin_app_id, 'routine_id', origin_routine_id) END`
 
 func scan(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
-	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions)
+	var origin sql.NullString
+	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions, &origin)
+	if err == nil && origin.Valid {
+		var value ConversationOrigin
+		err = json.Unmarshal([]byte(origin.String), &value)
+		if err == nil {
+			c.Origin = &value
+		}
+	}
 	return c, err
 }
 
