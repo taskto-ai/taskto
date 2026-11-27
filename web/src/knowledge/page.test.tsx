@@ -760,3 +760,34 @@ test('a dirty editor in one place intercepts its own links, and leaves another p
   expect(b.navigate).not.toHaveBeenCalled()
   expect(window.location.pathname).toBe('/')
 })
+
+test('a link to the page of its own place is not intercepted, whatever the browser’s address is', async () => {
+  kb('write')
+  const at: Place = { id: 'a', path: '/w/1/knowledge', navigate: vi.fn(), setTitle: vi.fn() }
+  const seen: boolean[] = []
+  render(
+    <PlaceContext.Provider value={at}>
+      <div data-place="a">
+        <a
+          href="/w/1/knowledge"
+          onClick={(e) => {
+            seen.push(e.defaultPrevented)
+            e.preventDefault()
+          }}
+        >
+          Knowledge page
+        </a>
+        <KnowledgePage workspace={1} />
+      </div>
+    </PlaceContext.Provider>,
+  )
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'Unsaved words.' } })
+
+  fireEvent.click(screen.getByRole('link', { name: 'Knowledge page' }))
+  expect(seen).toEqual([false])
+  expect(asked()).toBeNull()
+  expect(at.navigate).not.toHaveBeenCalled()
+})

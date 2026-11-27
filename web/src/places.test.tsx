@@ -213,3 +213,62 @@ test('a place can be asked on its own, for example before its tab closes', () =>
   act(() => askPlace('none', closed))
   expect(closed).toHaveBeenCalledTimes(2)
 })
+
+test('a newer navigation cancels a leave that is still waiting for a place', () => {
+  const a = place('a')
+  const holds: (() => void)[] = []
+  const left = vi.fn()
+  render(
+    <In at={a}>
+      <Guarded ask={(go) => holds.push(go)} />
+    </In>,
+  )
+  act(() => beforeLeaving(left))
+  setFocusedPlace('a')
+  act(() => navigate('/w/1/boards'))
+  expect(holds).toHaveLength(2)
+  act(() => holds[0]?.())
+  expect(left).not.toHaveBeenCalled()
+  expect(window.location.pathname).toBe('/w/1/home')
+  act(() => holds[1]?.())
+  expect(window.location.pathname).toBe('/w/1/boards')
+})
+
+test('a place that lost its guard while an earlier one was asked is passed over, and the later ones are still asked', () => {
+  const a = place('a')
+  const b = place('b')
+  const c = place('c')
+  let leaveA: (() => void) | null = null
+  const askA = vi.fn<BeforeLeave>((go) => {
+    leaveA = go
+  })
+  const askC = vi.fn<BeforeLeave>((go) => go())
+  const left = vi.fn()
+  const view = render(
+    <>
+      <In at={a}>
+        <Guarded ask={askA} />
+      </In>
+      <In at={b}>
+        <Guarded ask={vi.fn()} />
+      </In>
+      <In at={c}>
+        <Guarded ask={askC} />
+      </In>
+    </>,
+  )
+  act(() => beforeLeaving(left))
+  view.rerender(
+    <>
+      <In at={a}>
+        <Guarded ask={askA} />
+      </In>
+      <In at={c}>
+        <Guarded ask={askC} />
+      </In>
+    </>,
+  )
+  act(() => leaveA?.())
+  expect(askC).toHaveBeenCalledTimes(1)
+  expect(left).toHaveBeenCalledTimes(1)
+})

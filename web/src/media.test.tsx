@@ -77,3 +77,58 @@ test('in a place its own width decides, and follows it as it changes, whatever t
   act(() => resize(600))
   expect(screen.getByTestId('probe').textContent).toBe('narrow')
 })
+
+function watching(width: number) {
+  const observed: Element[] = []
+  const disconnected: number[] = []
+  class Recording {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(el: Element) {
+      observed.push(el)
+      this.callback([{ contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver)
+    }
+    unobserve() {}
+    disconnect() {
+      disconnected.push(observed.length)
+    }
+  }
+  vi.stubGlobal('ResizeObserver', Recording)
+  return { observed, disconnected }
+}
+
+test('in a place the width of its root is watched, not the page’s own box, and the watch ends with the page', () => {
+  viewportIs(false)
+  const seen = watching(500)
+  const view = render(
+    <PlaceContext.Provider value={place}>
+      <div data-place="a" data-testid="root">
+        <Probe />
+      </div>
+    </PlaceContext.Provider>,
+  )
+  expect(seen.observed).toEqual([screen.getByTestId('root')])
+  expect(seen.disconnected).toEqual([])
+  view.unmount()
+  expect(seen.disconnected).toEqual([1])
+})
+
+test('a place with no width yet is not narrow', () => {
+  viewportIs(false)
+  watching(0)
+  render(
+    <PlaceContext.Provider value={place}>
+      <div data-place="a">
+        <Probe />
+      </div>
+    </PlaceContext.Provider>,
+  )
+  expect(screen.getByTestId('probe').textContent).toBe('wide')
+})
+
+test('with no place nothing is watched', () => {
+  viewportIs(false)
+  const seen = watching(500)
+  render(<Probe />)
+  expect(seen.observed).toEqual([])
+  expect(screen.getByTestId('probe').textContent).toBe('wide')
+})
