@@ -79,6 +79,12 @@ type Index struct {
 	// the text; after it has the vectors and before it stores them; and after a search has the
 	// endpoint its query would go to and before it checks consent to it.
 	afterEndpoint, beforeStore, afterQueryEndpoint func()
+	// afterEmbedRequest is called after each request the embeddings job makes, whatever it
+	// returned; afterQueryEmbedded after a search has its query's vector and before it ranks;
+	// beforeRelease after a document search has its results and before they are checked against the
+	// caller's access once more. All for tests.
+	// afterConsentBody is called by the consent route after it has read the request's body.
+	afterEmbedRequest, afterQueryEmbedded, beforeRelease, afterConsentBody func()
 	// afterCardSync, when set, is called by a card search after it has indexed the cards it
 	// looks in and before it finds them; tests change the world there.
 	afterCardSync func()
@@ -103,7 +109,7 @@ type Index struct {
 	// The spaces changed since the sync worker last looked, and its wake-up. A change only
 	// adds its space here: it never waits for the index.
 	dirtyMu   sync.Mutex
-	dirty     map[int64]access.Space
+	dirty     map[dirtyKey]access.Space
 	syncWake  chan struct{}
 	embedWake chan struct{}
 	// convWake wakes the conversations' worker, which has a goroutine of its own: reading
@@ -120,7 +126,7 @@ func New(sqlDB *sql.DB, kb *knowledge.Store, prov *providers.Store, opts Options
 		db: sqlDB, kb: kb, providers: prov, client: opts.HTTPClient, log: opts.Logger, now: time.Now,
 		vectors:    newVectorCache(opts.VectorCache),
 		batchFiles: syncBatch, batchBytes: syncBatchBytes, syncWait: searchSyncWait, recordSyncLimit: recordSyncMax, conversationSyncLimit: conversationSyncMax, conversationPassLimit: conversationPassMax,
-		dirty:    map[int64]access.Space{},
+		dirty:    map[dirtyKey]access.Space{},
 		syncWake: make(chan struct{}, 1), embedWake: make(chan struct{}, 1), convWake: make(chan struct{}, 1),
 	}
 	if x.client == nil {
@@ -139,10 +145,14 @@ func (x *Index) Knowledge() *knowledge.Store { return x.kb }
 // changed is the knowledge base's OnChange: the space is synced in the background.
 func (x *Index) changed(sp access.Space) {
 	x.dirtyMu.Lock()
-	x.dirty[sp.ID] = sp
+	x.dirty[dirtyKey{sp.ID, sp.Generation}] = sp
 	x.dirtyMu.Unlock()
 	wake(x.syncWake)
 }
+
+// dirtyKey names a space waiting to be synced: its ID and its generation, so that a late
+// notification for a space that was removed never replaces the one for the space that took its ID.
+type dirtyKey struct{ id, generation int64 }
 
 // wake signals a worker without waiting: signals sent while it is busy add up to one.
 func wake(c chan struct{}) {
@@ -206,7 +216,7 @@ func (x *Index) syncLoop(ctx context.Context) {
 		}
 		x.dirtyMu.Lock()
 		dirty := x.dirty
-		x.dirty = map[int64]access.Space{}
+		x.dirty = map[dirtyKey]access.Space{}
 		x.dirtyMu.Unlock()
 		for _, sp := range dirty {
 			if _, err := x.Sync(ctx, sp); err != nil && ctx.Err() == nil {

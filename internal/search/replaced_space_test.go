@@ -3,10 +3,14 @@ package search
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"math/rand/v2"
+	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/access"
 )
@@ -104,7 +108,7 @@ func TestASearchAuthorizedForAReplacedSpaceFindsNothingOfTheReplacement(t *testi
 	if hits := must[[]hit](t)(w.e.idx.fullText(ctx, freshIn, match, 10, 0, false)); len(hits) != 1 {
 		t.Fatalf("fixture: the replacement's own search finds %d documents", len(hits))
 	}
-	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, freshIn, key, qv, 10)); len(found) == 0 {
+	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, freshIn, w.rank(key), qv, 10)); len(found) == 0 {
 		t.Fatal("fixture: the replacement has no vectors to find")
 	}
 
@@ -115,10 +119,10 @@ func TestASearchAuthorizedForAReplacedSpaceFindsNothingOfTheReplacement(t *testi
 	if hits := must[[]hit](t)(w.e.idx.fullText(ctx, staleIn, match, 10, 0, false)); len(hits) != 0 {
 		t.Fatalf("the full-text ranking under the old authorization found %d documents of the replacement", len(hits))
 	}
-	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, staleIn, key, qv, 10)); len(found) != 0 {
+	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, staleIn, w.rank(key), qv, 10)); len(found) != 0 {
 		t.Fatalf("the semantic ranking under the old authorization found %d passages of the replacement", len(found))
 	}
-	if found := must[[]near](t)(w.e.idx.nearestBrute(ctx, staleIn, key, qv)); len(found) != 0 {
+	if found := must[[]near](t)(w.e.idx.nearestBrute(ctx, staleIn, w.rank(key), qv)); len(found) != 0 {
 		t.Fatalf("the uncached semantic ranking under the old authorization found %d passages of the replacement", len(found))
 	}
 	fused := must[[]hit](t)(w.e.idx.fuse(ctx, staleIn, nil, []near{{doc: docs[0]}}))
@@ -250,7 +254,7 @@ func TestTheVectorCacheNeverComparesAReplacementWithTheOldSpacesVectors(t *testi
 	qv := randomVector(rand.New(rand.NewPCG(7, 7)), fakeDims)
 	// The cache loads the old space's vectors.
 	for range 2 {
-		if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, spacesJSON(t, old), key, qv, 10)); len(found) == 0 {
+		if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, spacesJSON(t, old), w.rank(key), qv, 10)); len(found) == 0 {
 			t.Fatal("fixture: the old space has no vectors to find")
 		}
 	}
@@ -264,11 +268,11 @@ func TestTheVectorCacheNeverComparesAReplacementWithTheOldSpacesVectors(t *testi
 		t.Fatal(err)
 	}
 	freshIn := spacesJSON(t, fresh)
-	want := w.e.idx.bruteNearest(t, freshIn, key, qv, 10)
+	want := w.e.idx.bruteNearest(t, freshIn, w.rank(key), qv, 10)
 	if len(want) != 0 {
 		t.Fatalf("fixture: brute force finds %d passages in the replacement", len(want))
 	}
-	got := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, freshIn, key, qv, 10))
+	got := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, freshIn, w.rank(key), qv, 10))
 	if len(got) != 0 {
 		t.Fatalf("the cached comparison finds %d passages in the replacement, which has none: the old space's vectors", len(got))
 	}
@@ -365,7 +369,7 @@ func TestAConsentRequestForAReplacedSpaceTouchesNothingOfTheReplacement(t *testi
 	default:
 	}
 
-	err := w.e.idx.setConsent(ctx, old, w.owner.id, true, nil)
+	err := w.e.idx.setConsent(ctx, old, w.owner.id, true, nil, nil)
 	if !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("consent given under the old space's authority: %v", err)
 	}
@@ -389,7 +393,7 @@ func TestAConsentRequestForAReplacedSpaceTouchesNothingOfTheReplacement(t *testi
 		t.Fatalf("the replacement's own consent: %+v", c)
 	}
 	// And the space that is current can change its own.
-	if err := w.e.idx.setConsent(ctx, fresh, w.owner.id, false, nil); err != nil {
+	if err := w.e.idx.setConsent(ctx, fresh, w.owner.id, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -446,7 +450,7 @@ func TestTheVectorCacheOfOverlappingSearchesForReplacedSpacesIsTheNewOnes(t *tes
 	go func() {
 		found, rest, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{freshRef}, key, qv)
 		if err == nil && len(rest) != 0 { // read from SQLite instead
-			found, err = w.e.idx.nearestBrute(ctx, spacesJSON(t, fresh), key, qv)
+			found, err = w.e.idx.nearestBrute(ctx, spacesJSON(t, fresh), w.rank(key), qv)
 		}
 		freshDone <- result{found, err}
 	}()
@@ -461,7 +465,7 @@ func TestTheVectorCacheOfOverlappingSearchesForReplacedSpacesIsTheNewOnes(t *tes
 	if r.err != nil {
 		t.Fatal(r.err)
 	}
-	want := w.e.idx.bruteNearest(t, spacesJSON(t, fresh), key, qv, 10)
+	want := w.e.idx.bruteNearest(t, spacesJSON(t, fresh), w.rank(key), qv, 10)
 	if len(want) == 0 {
 		t.Fatal("fixture: the replacement has no vectors")
 	}
@@ -472,5 +476,286 @@ func TestTheVectorCacheOfOverlappingSearchesForReplacedSpacesIsTheNewOnes(t *tes
 	again, rest, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{freshRef}, key, qv)
 	if err != nil || len(rest) != 0 || len(again) == 0 {
 		t.Fatalf("the next search of the new space: %d found, %v left to SQLite, %v", len(again), rest, err)
+	}
+}
+
+// rank is the endpoint a query was embedded by in these tests: the model's key at the fake
+// endpoint the world's provider account names.
+func (w *world) rank(key string) rankEndpoint {
+	return rankEndpoint{key: key, baseURL: w.e.embed.srv.URL + "/v1"}
+}
+
+// replaceInWorkspace removes sp's row and makes another space with its ID in another workspace.
+func (w *world) replaceInWorkspace(sp access.Space) access.Space {
+	w.e.t.Helper()
+	res, err := w.e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Elsewhere')`)
+	if err != nil {
+		w.e.t.Fatal(err)
+	}
+	other, _ := res.LastInsertId()
+	w.exec(`DELETE FROM spaces WHERE id = ?`, sp.ID)
+	w.exec(`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (?, ?, 'shared', 'Elsewhere')`, sp.ID, other)
+	return w.generationOf(access.Space{ID: sp.ID, WorkspaceID: other, Kind: sp.Kind, Access: access.Write})
+}
+
+// The cache's entry for a space ID is of one workspace at a time: when a space in another workspace
+// takes the ID, a change of that workspace's model (which drops its vectors) must reach the entry,
+// and a change of the first workspace's must not.
+func TestTheVectorCacheEntryFollowsTheWorkspaceOfTheSpaceThatTookTheID(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	key := Embeddings{Account: account, Model: fakeModel}.key()
+	old := w.generationOf(w.team)
+	w.fillVectors(old, key, 8, 2, fakeDims, 1)
+	qv := randomVector(rand.New(rand.NewPCG(3, 3)), fakeDims)
+	cache := w.e.idx.vectors
+	if found, _, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{{old.ID, old.Generation}}, key, qv); err != nil || len(found) == 0 {
+		t.Fatalf("fixture: the old space's vectors: %d, %v", len(found), err)
+	}
+
+	fresh := w.replaceInWorkspace(old)
+	ref := []spaceRef{{fresh.ID, fresh.Generation}}
+	w.fillVectors(fresh, key, 8, 2, fakeDims, 2)
+	if found, _, err := cache.nearest(ctx, w.e.db, fresh.WorkspaceID, ref, key, qv); err != nil || len(found) == 0 {
+		t.Fatalf("fixture: the replacement's vectors: %d, %v", len(found), err)
+	}
+	held := func() bool {
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		return cache.spaces[fresh.ID].snap != nil
+	}
+
+	// The first workspace's model changes: nothing of the replacement's.
+	cache.changedWorkspace(w.ws)
+	if !held() {
+		t.Fatal("a change of another workspace's model dropped the replacement's vectors")
+	}
+	// The replacement's workspace changes its model, which drops its vectors from SQLite.
+	w.exec(`DELETE FROM search_chunks WHERE doc_id IN (SELECT id FROM search_docs WHERE space_id = ?)`, fresh.ID)
+	w.exec(`UPDATE search_docs SET embed_version = NULL, embed_key = NULL WHERE space_id = ?`, fresh.ID)
+	cache.changedWorkspace(fresh.WorkspaceID)
+	found, rest, err := cache.nearest(ctx, w.e.db, fresh.WorkspaceID, ref, key, qv)
+	if err != nil || len(rest) != 0 || len(found) != 0 {
+		t.Fatalf("after the replacement's workspace changed its model the cache returned %d vectors (SQLite has none): %v, %v", len(found), rest, err)
+	}
+}
+
+// The endpoint that embedded a query is the one whose vectors it is compared with: if the URL
+// changes while the search waits for the embedding, and the consent and the vectors have caught up
+// with the new URL, the old endpoint's query vector isn't ranked against them.
+func TestASearchRanksOnlyVectorsOfTheEndpointThatEmbeddedItsQuery(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	key := Embeddings{Account: account, Model: fakeModel}.key()
+	team := w.generationOf(w.team)
+	team.Access = access.Read
+	w.put(w.owner, team, "fruit.md", "a kumquat in the team space")
+	if _, err := w.e.idx.Sync(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	w.fillVectors(team, key, 8, 2, fakeDims, 1)
+	w.e.idx.afterQueryEmbedded = func() { w.e.idx.afterQueryEmbedded = nil; w.moveEndpoint(account, team.ID) }
+
+	res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{team}, Query{Text: "kumquat"}))
+	if res.Mode != ModeHybrid {
+		t.Fatalf("fixture: the search was %s", res.Mode)
+	}
+	for _, r := range res.Results {
+		if r.Match != "text" {
+			t.Fatalf("the query vector of the old endpoint ranked %q, a result by meaning, from the new endpoint's vectors", r.Path)
+		}
+	}
+}
+
+// A late notification for a space that was removed doesn't take the place of the one for the space
+// that took its ID.
+func TestAStaleSyncNotificationDoesNotReplaceTheReplacementsInTheQueue(t *testing.T) {
+	w := newWorld(t)
+	x := w.e.idx
+	x.dirtyMu.Lock()
+	clear(x.dirty)
+	x.dirtyMu.Unlock()
+	current := access.Space{ID: 77, WorkspaceID: w.ws, Generation: 9, Access: access.Write}
+	stale := access.Space{ID: 77, WorkspaceID: w.ws, Generation: 6, Access: access.Write}
+	x.changed(current)
+	x.changed(stale) // arrives late
+	x.dirtyMu.Lock()
+	defer x.dirtyMu.Unlock()
+	if got, ok := x.dirty[dirtyKey{77, 9}]; !ok || got.Generation != 9 {
+		t.Fatalf("the replacement's notification was replaced: %+v", x.dirty)
+	}
+}
+
+// Each request of an embedding job is sent only while what let the first still stands: consent
+// withdrawn after the first request stops the second.
+func TestAnEmbeddingJobStopsBetweenRequestsWhenConsentIsWithdrawn(t *testing.T) {
+	w := newWorld(t)
+	w.setModel()
+	team := w.generationOf(w.team)
+	var body strings.Builder
+	for i := range 40 { // 40 sections that don't fit one passage together: two requests of 32 and 8
+		fmt.Fprintf(&body, "# Part %d\n\n%s\n\n", i, strings.Repeat("kumquat ", 175))
+	}
+	w.put(w.owner, team, "long.md", body.String())
+	if _, err := w.e.idx.Sync(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	w.e.idx.afterEmbedRequest = func() {
+		w.e.idx.afterEmbedRequest = nil
+		w.exec(`DELETE FROM search_embedding_consent WHERE space_id = ?`, team.ID)
+	}
+	before := w.e.embed.calls.Load() // setting the model made a request of its own
+	if _, err := w.e.idx.embedPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.e.embed.calls.Load() - before; n != 1 {
+		t.Fatalf("the job made %d requests, want the first only", n)
+	}
+}
+
+// A failure is recorded against the endpoint it happened at: if the workspace's endpoint changed
+// while the request failed, the wait it earned isn't put on the new one.
+func TestAnEmbeddingFailureIsNotRecordedAgainstAnEndpointThatChanged(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	team := w.generationOf(w.team)
+	w.put(w.owner, team, "fruit.md", "a kumquat")
+	if _, err := w.e.idx.Sync(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	w.e.embed.fail.Store(true)
+	w.e.idx.afterEmbedRequest = func() { w.e.idx.afterEmbedRequest = nil; w.moveEndpoint(account, team.ID) }
+	if _, err := w.e.idx.embedPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var tries int
+	var after sql.NullString
+	if err := w.e.db.QueryRow(`SELECT embed_tries, embed_after FROM search_docs WHERE space_id = ?`, team.ID).Scan(&tries, &after); err != nil {
+		t.Fatal(err)
+	}
+	if tries != 0 || after.Valid {
+		t.Fatalf("the failure at the old endpoint was recorded for the new one: %d tries, wait until %v", tries, after)
+	}
+}
+
+// A document search releases results of a space only while the caller can still read it: they may
+// lose access while the search runs.
+func TestASearchReleasesNothingOfASpaceTheCallerLostWhileItRan(t *testing.T) {
+	w := newWorld(t)
+	w.put(w.owner, w.team, "fruit.md", "a kumquat in the team space")
+	w.e.idx.beforeRelease = func() {
+		w.e.idx.beforeRelease = nil
+		w.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.team.ID, w.alice.id)
+	}
+	rec := w.search(w.alice, &w.team, "kumquat")
+	expect(t, rec, http.StatusOK)
+	if got := decode[Results](t, rec); len(got.Results) != 0 {
+		t.Fatalf("results of a space the caller lost access to: %+v", got.Results)
+	}
+}
+
+// A consent change uses the caller's role as it is when the change is made, not the one seen
+// before the request's body was read.
+func TestAConsentChangeUsesTheCallersRoleAtTheTimeOfTheChange(t *testing.T) {
+	w := newWorld(t)
+	w.setModel()
+	notes := w.createShared("Notes")
+	w.addMember(notes, w.alice, access.RoleEditor)
+	w.e.idx.afterConsentBody = func() {
+		w.e.idx.afterConsentBody = nil
+		w.exec(`UPDATE space_members SET role = 'viewer' WHERE space_id = ? AND user_id = ?`, notes.ID, w.alice.id)
+	}
+	rec := w.alice.do(http.MethodPut, embeddingURL(notes), map[string]bool{"enabled": true})
+	expect(t, rec, http.StatusForbidden)
+	var n int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_embedding_consent WHERE space_id = ?`, notes.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("consent given by a caller who was demoted: %d rows, %v", n, err)
+	}
+}
+
+// A consent change that is refused leaves the cache of the space that has the ID alone.
+func TestARefusedConsentChangeLeavesTheReplacementsCacheAlone(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	key := Embeddings{Account: account, Model: fakeModel}.key()
+	old := w.generationOf(w.team)
+	fresh := w.replace(old, true)
+	w.fillVectors(fresh, key, 8, 2, fakeDims, 1)
+	qv := randomVector(rand.New(rand.NewPCG(4, 4)), fakeDims)
+	cache := w.e.idx.vectors
+	if found, _, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{{fresh.ID, fresh.Generation}}, key, qv); err != nil || len(found) == 0 {
+		t.Fatalf("fixture: %d, %v", len(found), err)
+	}
+	if err := w.e.idx.setConsent(ctx, old, w.owner.id, false, nil, nil); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("a consent change for the old space: %v", err)
+	}
+	cache.mu.Lock()
+	held := cache.spaces[fresh.ID].snap != nil
+	cache.mu.Unlock()
+	if !held {
+		t.Fatal("a refused consent change evicted the replacement's vectors")
+	}
+}
+
+// What an old space's load finds (it didn't fit the budget) is not put on the entry of the space
+// that took the ID while it loaded.
+func TestAnOldLoadThatDidNotFitDoesNotMarkTheReplacementsEntry(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	key := Embeddings{Account: account, Model: fakeModel}.key()
+	old := w.generationOf(w.team)
+	w.fillVectors(old, key, 400, 2, fakeDims, 1) // more than the budget below holds
+	qv := randomVector(rand.New(rand.NewPCG(6, 6)), fakeDims)
+	cache := newVectorCache(40 << 10)
+
+	reached, release := make(chan struct{}), make(chan struct{})
+	cache.beforeInstall = func(sp spaceRef) {
+		if sp.generation == old.Generation {
+			close(reached)
+			<-release
+		}
+	}
+	oldDone := make(chan error, 1)
+	go func() {
+		_, _, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{{old.ID, old.Generation}}, key, qv)
+		oldDone <- err
+	}()
+	<-reached // the old space's vectors are loaded (over the budget) and not yet recorded
+
+	fresh := w.replace(old, true)
+	w.fillVectors(fresh, key, 4, 2, fakeDims, 2)
+	freshDone := make(chan []near, 1)
+	go func() {
+		found, rest, err := cache.nearest(ctx, w.e.db, w.ws, []spaceRef{{fresh.ID, fresh.Generation}}, key, qv)
+		if err != nil || len(rest) != 0 {
+			t.Errorf("the replacement's search: %v, left to SQLite: %v", err, rest)
+		}
+		freshDone <- found
+	}()
+	spin(t, "the replacement's search to claim the entry", func() bool {
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		return cache.spaces[fresh.ID].generation == fresh.Generation
+	})
+	close(release)
+	if err := <-oldDone; err != nil {
+		t.Fatal(err)
+	}
+	if found := <-freshDone; len(found) == 0 {
+		t.Fatal("the replacement's search found nothing: it was sent to SQLite by the old space's over-budget load")
+	}
+}
+
+// spin yields until cond holds, and fails if it doesn't in ten seconds.
+func spin(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for !cond() {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", what)
+		default:
+			runtime.Gosched()
+		}
 	}
 }

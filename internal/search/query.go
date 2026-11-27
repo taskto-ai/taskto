@@ -211,6 +211,9 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		} else {
 			qv = vs[0]
 			res.Mode = ModeHybrid
+			if x.afterQueryEmbedded != nil {
+				x.afterQueryEmbedded()
+			}
 		}
 	}
 
@@ -230,7 +233,7 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		if err != nil {
 			return Results{}, err
 		}
-		near, err := x.nearest(ctx, workspaceID, in, e.key(), qv, hybridDepth)
+		near, err := x.nearest(ctx, workspaceID, in, rankEndpoint{key: e.key(), baseURL: ep.BaseURL}, qv, hybridDepth)
 		if err != nil {
 			return Results{}, err
 		}
@@ -273,6 +276,11 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	}
 	return res, nil
 }
+
+// rankEndpoint is the endpoint a query was embedded by: the model's key (account and model) and
+// the URL itself. Only vectors that were made by that endpoint (the space's consent names both) are
+// compared with the query's.
+type rankEndpoint struct{ key, baseURL string }
 
 // scopeEntry is a space a search was authorized for, as the access check found it: the workspace
 // and the generation it had then (access.Space.Generation; 0 for any).
@@ -531,14 +539,16 @@ type near struct {
 // whose passages, embedded with the model key, are most like qv, at most limit, best first.
 // It compares the vector cache's vectors, and reads those of the spaces it doesn't have
 // from SQLite.
-func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, qv []float32, limit int) ([]near, error) {
-	// Only spaces consented to the endpoint the query went to: another's vectors, of an
-	// endpoint changed since, aren't compared with it. Asked of SQLite on every search,
-	// never cached.
+func (x *Index) nearest(ctx context.Context, workspaceID int64, in string, ep rankEndpoint, qv []float32, limit int) ([]near, error) {
+	key := ep.key
+	// Only spaces consented to the endpoint the query went to (its URL itself, and the workspace's
+	// model as it is now): another's vectors, of an endpoint changed since, aren't compared with
+	// it, even when the account and model are the same and the vectors have the same dimension.
+	// Asked of SQLite on every search, never cached.
 	rows, err := x.db.QueryContext(ctx, `SELECT sp.id, sp.generation FROM spaces sp
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE sp.id IN (`+scopeSQL+`) AND sp.workspace_id = ? AND `+embeddableSQL+`
-		ORDER BY sp.id`, in, workspaceID)
+		WHERE sp.id IN (`+scopeSQL+`) AND sp.workspace_id = ? AND `+keySQL+` = ? AND `+embeddableAtSQL+`
+		ORDER BY sp.id`, in, workspaceID, key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +584,7 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, 
 		if err != nil {
 			return nil, err
 		}
-		more, err := x.nearestBrute(ctx, string(raw), key, qv)
+		more, err := x.nearestBrute(ctx, string(raw), ep, qv)
 		if err != nil {
 			return nil, err
 		}
@@ -587,13 +597,13 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, 
 // the model key with its passage most like qv, unordered, reading every vector from
 // SQLite: without the vector cache, or for a space that doesn't fit in it, and the
 // reference the cache is tested against.
-func (x *Index) nearestBrute(ctx context.Context, in, key string, qv []float32) ([]near, error) {
+func (x *Index) nearestBrute(ctx context.Context, in string, ep rankEndpoint, qv []float32) ([]near, error) {
 	rows, err := x.db.QueryContext(ctx, `SELECT c.doc_id, c.seq, c.vector FROM search_chunks c
 		JOIN search_docs d ON d.id = c.doc_id
 		JOIN spaces sp ON sp.id = d.space_id
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
 		WHERE d.space_id IN (`+scopeSQL+`) AND d.embed_key = ? AND d.embed_version = d.version
-			AND `+embeddableSQL, in, key)
+			AND `+keySQL+` = ? AND `+embeddableAtSQL, in, ep.key, ep.key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}

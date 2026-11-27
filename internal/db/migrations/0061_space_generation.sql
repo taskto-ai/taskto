@@ -56,6 +56,16 @@ BEGIN
     SELECT RAISE(ABORT, 'the counter of space generations is never removed');
 END;
 
+-- And it is one row, never replaced: INSERT OR REPLACE would delete the row and put another, which
+-- the guards on UPDATE and DELETE don't see (SQLite fires no delete trigger for a replacement unless
+-- recursive triggers are on).
+CREATE TRIGGER space_generations_one_row
+BEFORE INSERT ON space_generations
+WHEN EXISTS (SELECT 1 FROM space_generations)
+BEGIN
+    SELECT RAISE(ABORT, 'the counter of space generations is one row, and is never replaced');
+END;
+
 -- The index's documents are numbered the same way: search_docs.id (which is also the rowid of
 -- the document's row in search_fts, and the key of its chunks) was the table's largest plus one,
 -- so after a space was removed its documents' IDs could go to the documents of a space made

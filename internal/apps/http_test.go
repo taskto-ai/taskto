@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -42,7 +41,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
 	dbHooks := &db.Hooks{}
-	sqlDB, err := db.OpenHooked(ctx, filepath.Join(t.TempDir(), db.FileName), dbHooks)
+	sqlDB, err := db.OpenHooked(ctx, migratedDatabase(t, t.TempDir()), dbHooks)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -62,6 +62,9 @@ type vectorCache struct {
 	// beforeRefresh is for tests: it runs in snapshot after the space's entry is chosen and before
 	// its refresh lock is taken, the moment another search can interleave.
 	beforeRefresh func(sp spaceRef)
+	// beforeInstall is for tests: it runs in snapshot after the vectors are loaded and before the
+	// cache's lock is taken to record what the load found.
+	beforeInstall func(sp spaceRef)
 }
 
 // tooBigRetry is how long a space that didn't fit is read from SQLite before a load is tried
@@ -233,9 +236,10 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, sp spaceRef, wor
 		return nil, nil
 	case sp.generation > s.generation:
 		// Another space has the ID (generations only grow): what is held is of one that isn't the
-		// one asked about.
+		// one asked about, and its workspace may not be this one's: invalidations by workspace
+		// (a model change) must find the entry under the space it is of now.
 		c.resetLocked(s)
-		s.generation = sp.generation
+		s.generation, s.workspace = sp.generation, workspace
 	}
 	c.clock++
 	s.lastUse = c.clock
@@ -289,17 +293,24 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, sp spaceRef, wor
 			next = cur.with(changed, docs)
 		}
 	}
+	if c.beforeInstall != nil {
+		c.beforeInstall(sp)
+	}
 	var over errOverBudget
 	if errors.As(err, &over) {
 		c.mu.Lock()
-		c.dropLocked(s)
-		s.tooBig, s.tooBigAt = int64(over), c.now()
+		if s.generation == sp.generation { // not the entry of a space that took the ID meanwhile
+			c.dropLocked(s)
+			s.tooBig, s.tooBigAt = int64(over), c.now()
+		}
 		c.mu.Unlock()
 		return nil, nil
 	}
 	if err != nil {
 		c.mu.Lock()
-		s.reset = true // whatever it was asked to reload, it hasn't
+		if s.generation == sp.generation {
+			s.reset = true // whatever it was asked to reload, it hasn't
+		}
 		c.mu.Unlock()
 		return nil, err
 	}
@@ -315,10 +326,10 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, sp spaceRef, wor
 func (c *vectorCache) install(s *cachedSpace, next *spaceVectors, keep map[int64]bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.dropLocked(s)
 	if s.generation != next.generation {
-		return false // the entry was taken by another space with the ID while these were loaded
+		return false // the entry was taken by another space with the ID while these were loaded: theirs
 	}
+	c.dropLocked(s)
 	if c.used+next.bytes > c.budget {
 		var victims []*cachedSpace
 		for _, o := range c.spaces {

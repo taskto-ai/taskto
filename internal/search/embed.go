@@ -137,6 +137,8 @@ var (
 	errNoConsentEndpoint = errors.New("no embeddings model to consent to")
 	// errConsentEndpointChanged is for consent to an endpoint that isn't the workspace's now.
 	errConsentEndpointChanged = errors.New("the embeddings endpoint has changed")
+	// errConsentForbidden is for a caller who isn't the space's owner or an editor now.
+	errConsentForbidden = errors.New("only the space's owner or one of its editors can change this")
 )
 
 // consent returns sp's consent: of the space the access check found, by its workspace and
@@ -187,7 +189,12 @@ func (x *Index) consent(ctx context.Context, sp access.Space) (Consent, error) {
 // if that space is still the one with the ID, checked in the transaction that makes it
 // (access.ErrNotFound otherwise), so a request that was in flight while the space was removed and
 // another made with its ID changes nothing of the new one.
-func (x *Index) setConsent(ctx context.Context, sp access.Space, userID int64, on bool, want *ConsentEndpoint) error {
+//
+// authorize, if not nil, is the caller's own authority, asked inside the same transaction (the
+// route's: the caller's access now, through the access checker, not the role captured before the
+// request's body was read); an error from it refuses the change.
+func (x *Index) setConsent(ctx context.Context, sp access.Space, userID int64, on bool, want *ConsentEndpoint,
+	authorize func(ctx context.Context, tx *sql.Tx) error) error {
 	workspaceID, spaceID := sp.WorkspaceID, sp.ID
 	const docs = `SELECT id FROM search_docs WHERE space_id = ?`
 	// dropVectors drops the space's vectors: they are only ever of the endpoint consented to.
@@ -256,15 +263,24 @@ func (x *Index) setConsent(ctx context.Context, sp access.Space, userID int64, o
 		if err := stillSpace(ctx, tx, sp); err != nil {
 			return err
 		}
+		if authorize != nil {
+			if err := authorize(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if err := apply(tx); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.SearchConsentChanged,
 			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"enabled": on}})
 	})
-	x.vectors.changedSpace(spaceID)
-	if err == nil && on {
-		wake(x.embedWake)
+	if err == nil {
+		// Only a change that was made: a refused request (a space that is another's now) leaves the
+		// cache of whoever has the ID alone.
+		x.vectors.changedSpace(spaceID)
+		if on {
+			wake(x.embedWake)
+		}
 	}
 	return err
 }
@@ -314,6 +330,9 @@ type pending struct {
 	version                          string
 	title                            string
 	tries                            int
+	// key and url are the endpoint the job attempted, set when it has it: a failure is recorded
+	// only while the workspace's endpoint is still that one.
+	key, url string
 }
 
 // embedPending embeds up to embedBatch waiting documents whose time has come, and returns
@@ -342,17 +361,22 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 		x.afterPending()
 	}
 	for _, p := range batch {
-		if err := x.embedDoc(ctx, p); err != nil {
+		if err := x.embedDoc(ctx, &p); err != nil {
 			if ctx.Err() != nil {
 				return 0, ctx.Err()
 			}
 			x.log.Warn("search: embedding a document failed; it will be retried", "doc", p.id, "tries", p.tries+1, "err", err)
 			wait := min(retryFirst<<min(p.tries, 16), retryMax)
-			// Only for the version that failed: one changed meanwhile starts afresh.
+			// Only for the version that failed, and the endpoint it failed at: one changed meanwhile
+			// (the document, or where its text goes) starts afresh, and a wait earned at one endpoint
+			// isn't put on another that is ready.
 			if _, err := x.db.ExecContext(ctx, `UPDATE search_docs SET embed_tries = embed_tries + 1, embed_after = ?
 				WHERE id = ? AND version = ?
-				AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = search_docs.space_id AND sp.workspace_id = ? AND sp.generation = ?)`,
-				x.now().Add(wait).UTC().Format(timeFormat), p.id, p.version, p.workspace, p.generation); err != nil {
+				AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = search_docs.space_id AND sp.workspace_id = ? AND sp.generation = ?)
+				AND (? = '' OR EXISTS (SELECT 1 FROM search_settings e JOIN provider_accounts pa ON pa.id = e.account_id
+					JOIN spaces sp ON sp.id = search_docs.space_id
+					WHERE e.workspace_id = sp.workspace_id AND `+keySQL+` = ? AND pa.base_url = ?))`,
+				x.now().Add(wait).UTC().Format(timeFormat), p.id, p.version, p.workspace, p.generation, p.key, p.key, p.url); err != nil {
 				return 0, err
 			}
 		}
@@ -361,7 +385,7 @@ func (x *Index) embedPending(ctx context.Context) (int, error) {
 }
 
 // embedDoc embeds the document p and stores its chunks, unless it changed meanwhile.
-func (x *Index) embedDoc(ctx context.Context, p pending) error {
+func (x *Index) embedDoc(ctx context.Context, p *pending) error {
 	e, ep, err := x.embeddings(ctx, p.workspace)
 	if errors.Is(err, errNoEmbeddings) {
 		return nil // removed since the batch was read
@@ -369,6 +393,7 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 	if err != nil {
 		return err
 	}
+	p.key, p.url = e.key(), ep.BaseURL
 	// The text that leaves the server is read with what lets it: the document is still this
 	// version, in the space it was found in (its workspace and generation), whose consent is to
 	// this very endpoint. One read, so nothing changes between the check and the text: a space
@@ -392,12 +417,32 @@ func (x *Index) embedDoc(ctx context.Context, p pending) error {
 	chunks := chunk(unsegment(body))
 	vectors := make([][]float32, 0, len(chunks))
 	for start := 0; start < len(chunks); start += inputsPerCall {
+		if start > 0 {
+			// Each request after the first is sent only if what let the first still stands: the
+			// space (its generation), the document's version and consent to the URL held. The read
+			// of the text above was one request's authority, not the job's.
+			var one int
+			err := x.db.QueryRowContext(ctx, `SELECT 1 FROM search_docs d
+				JOIN spaces sp ON sp.id = d.space_id
+				JOIN search_settings e ON e.workspace_id = sp.workspace_id
+				WHERE d.id = ? AND d.version = ? AND d.markdown AND sp.workspace_id = ? AND sp.generation = ?
+				AND `+keySQL+` = ? AND `+embeddableAtSQL, p.id, p.version, p.workspace, p.generation, e.key(), ep.BaseURL).Scan(&one)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil // no longer to be sent: the next pass sees what it is now
+			}
+			if err != nil {
+				return err
+			}
+		}
 		inputs := make([]string, 0, inputsPerCall)
 		for _, c := range chunks[start:min(start+inputsPerCall, len(chunks))] {
 			// The title gives each passage its context.
 			inputs = append(inputs, p.title+"\n\n"+c)
 		}
 		vs, err := x.embed(ctx, ep, e.Model, inputs)
+		if x.afterEmbedRequest != nil {
+			x.afterEmbedRequest()
+		}
 		if err != nil {
 			return err
 		}

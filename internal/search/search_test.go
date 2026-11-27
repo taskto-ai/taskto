@@ -345,7 +345,7 @@ func TestSearchLeavesLargeCatchUpsToTheWorker(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 	w.e.idx.dirtyMu.Lock()
-	_, handed := w.e.idx.dirty[sp.ID]
+	_, handed := w.e.idx.dirty[dirtyKey{sp.ID, sp.Generation}]
 	w.e.idx.dirtyMu.Unlock()
 	if !handed {
 		t.Fatal("the catch-up wasn't handed to the worker")

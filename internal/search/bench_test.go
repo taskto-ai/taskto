@@ -95,7 +95,7 @@ func BenchmarkNearest(b *testing.B) {
 		name := fmt.Sprintf("%dk", n/1000)
 		b.Run("brute/"+name, func(b *testing.B) {
 			for b.Loop() {
-				found, err := idx.nearestBrute(ctx, in, key, q)
+				found, err := idx.nearestBrute(ctx, in, w.rank(key), q)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -103,11 +103,11 @@ func BenchmarkNearest(b *testing.B) {
 			}
 		})
 		b.Run("cached/"+name, func(b *testing.B) {
-			if _, err := idx.nearest(ctx, w.ws, in, key, q, hybridDepth); err != nil {
+			if _, err := idx.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth); err != nil {
 				b.Fatal(err)
 			}
 			for b.Loop() {
-				if _, err := idx.nearest(ctx, w.ws, in, key, q, hybridDepth); err != nil {
+				if _, err := idx.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -115,7 +115,7 @@ func BenchmarkNearest(b *testing.B) {
 		b.Run("reload/"+name, func(b *testing.B) {
 			for b.Loop() {
 				idx.vectors.changedSpace(w.team.ID)
-				if _, err := idx.nearest(ctx, w.ws, in, key, q, hybridDepth); err != nil {
+				if _, err := idx.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth); err != nil {
 					b.Fatal(err)
 				}
 			}

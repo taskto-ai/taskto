@@ -108,6 +108,8 @@ func TestSpaceGenerationMigrationKeepsEverythingAndNeverRepeats(t *testing.T) {
 		`INSERT INTO spaces (workspace_id, kind, name, generation) VALUES (1, 'shared', 'Chosen', 999)`,
 		`UPDATE space_generations SET last = 1`,
 		`DELETE FROM space_generations`,
+		`INSERT OR REPLACE INTO space_generations (id, last) VALUES (1, 1)`,
+		`INSERT INTO space_generations (id, last) VALUES (2, 500)`,
 	} {
 		if _, err := sqlDB.ExecContext(ctx, q); err == nil {
 			t.Fatalf("%s was accepted", q)
