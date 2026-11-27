@@ -183,7 +183,10 @@ export function App() {
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
   // lost while the login is showing.
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
-  useEffect(() => {
+  // Heard from the commit that draws the shell (a layout effect, not a passive one, which runs a
+  // moment after the shell is on the screen): an end of the session said in between would be lost,
+  // and the shell would stay for a session that is over.
+  useLayoutEffect(() => {
     if (!signedIn) return
     // The session ended elsewhere (or expired): this device stops receiving the person's pushes.
     const lost = (e: Event) => {
