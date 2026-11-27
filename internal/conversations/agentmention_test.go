@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -216,5 +217,56 @@ func TestAMentionWhoseSendFailsLeavesTheConversationOnItsAgent(t *testing.T) {
 	}
 	if len(e.rt.inputs[agent]) != 0 {
 		t.Fatalf("the failed send recorded %d inputs", len(e.rt.inputs[agent]))
+	}
+}
+
+func TestAModelChosenWhileAMentionsSendFailsIsKept(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	send := path(ws, fmt.Sprintf("/%d/messages", c.ID))
+	chosen := agentrt.ModelRef{Provider: fmt.Sprintf("ws%d-gateway", ws), ModelID: "m"}
+	agent := c.agentIDForTest(t, e)
+
+	submitting, release := make(chan struct{}), make(chan struct{})
+	e.rt.mu.Lock()
+	e.rt.submitErr = errors.New("submit failed")
+	e.rt.onSubmit = func() {
+		close(submitting)
+		<-release
+	}
+	e.rt.mu.Unlock()
+
+	sent := make(chan int, 1)
+	go func() { sent <- owner.do(http.MethodPost, send, mention("cli-codex", "default", "hello")).Code }()
+	<-submitting
+	set := make(chan int, 1)
+	go func() {
+		set <- owner.do(http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": chosen.Provider, "model_id": chosen.ModelID}).Code
+	}()
+	for waiting := false; !waiting; {
+		select {
+		case code := <-set:
+			set <- code
+			waiting = true
+		default:
+			e.svc.mu.Lock()
+			waiting = e.svc.modelHolds[c.ID] != nil && e.svc.modelHolds[c.ID].users == 2
+			e.svc.mu.Unlock()
+			runtime.Gosched()
+		}
+	}
+	close(release)
+	if code := <-sent; code != http.StatusServiceUnavailable {
+		t.Fatalf("the failed send answered %d, want 503", code)
+	}
+	if code := <-set; code != http.StatusOK {
+		t.Fatalf("the owner's choice answered %d, want 200", code)
+	}
+
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	if got := e.rt.models[agent]; got != chosen {
+		t.Fatalf("the model is %+v after the failed send, want the owner's choice %+v", got, chosen)
 	}
 }

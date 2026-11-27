@@ -323,6 +323,11 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	var before agentrt.ModelRef
 	if switchTo != nil {
+		done, err := s.holdModel(r.Context(), c.ID)
+		if err != nil {
+			return
+		}
+		defer done()
 		was, err := rt.Model(r.Context(), c.agentID)
 		if err != nil {
 			conversationError(w, r, c, err)
@@ -471,6 +476,11 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	done, err := s.holdModel(r.Context(), c.ID)
+	if err != nil {
+		return
+	}
+	defer done()
 	if !s.stillWritable(w, r) {
 		return
 	}

@@ -42,6 +42,7 @@ type fakeRuntime struct {
 	waited    atomic.Int64
 	waitErr   error
 	submitErr error
+	onSubmit  func()
 }
 
 var setupToken = auth.NewSetupToken()
@@ -68,6 +69,12 @@ func (f *fakeRuntime) CreateConversationOn(_ context.Context, model agentrt.Mode
 }
 
 func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (int64, error) {
+	f.mu.Lock()
+	hook := f.onSubmit
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
