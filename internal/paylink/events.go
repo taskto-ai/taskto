@@ -14,6 +14,18 @@ type EventWriter interface {
 	WriteEvent(ctx context.Context, w EventWrite) (EventResult, error)
 }
 
+// EventTargetChecker is what an EventWriter may also offer: whether events of an app's slot may be
+// written now, which is what the reconciliation polling asks before it reads anything at a provider
+// for the app's references. It is the check WriteEvent makes in its own transaction, read alone: the
+// app is online, its live release declares the slot, the contract is approved and the integration it
+// is bound to is switched on and allowed in the app's space. The answer is only a reason not to
+// call the provider: the write checks everything again.
+type EventTargetChecker interface {
+	// EventBinding returns the integration the slot of the app is bound to, and ok false when the
+	// app's slot may not be written to now (it is not an error). Any other failure is an error.
+	EventBinding(ctx context.Context, appID int64, slot string) (integrationID int64, ok bool, err error)
+}
+
 // EventWrite is one verified event for one record. Every id in it comes from the server's own
 // reference (integration_refs) and never from the provider's event.
 type EventWrite struct {

@@ -40,6 +40,21 @@ import (
 // or neither does. Done, the integrations' step that records the event's outcome, runs last in it,
 // so the outcome commits with them too.
 
+// EventBinding says which integration the slot of the app is bound to when an event may be written
+// to the app now: Binding's check, with the refusals that mean "not now" (the app gone, offline or not
+// published, a contract that isn't approved, an integration that is off or not allowed in the space)
+// answered as ok false (paylink.EventTargetChecker).
+func (s *Service) EventBinding(ctx context.Context, appID int64, slot string) (int64, bool, error) {
+	b, err := s.Binding(ctx, appID, slot)
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOffline), errors.Is(err, ErrNotPublished), errors.Is(err, ErrIntegrationUnapproved):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, err
+	}
+	return b.IntegrationID, true, nil
+}
+
 // WriteEvent writes the event to the record. Its failures are *paylink.Error, except those of
 // w.Settle and w.Done, which are returned as they are.
 func (s *Service) WriteEvent(ctx context.Context, w paylink.EventWrite) (paylink.EventResult, error) {

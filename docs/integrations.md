@@ -36,8 +36,9 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
   refunded) as the integration, and only as the app's approved contract allows
   ([Applying events](#applying-events)).
 
-Polling the provider for payments the webhook missed arrives as a separate change. The rules below
-are the ones it has to keep.
+- **Reconciliation polling**: a worker that is always on reads the open links at the provider and
+  applies what it finds as a webhook's event is applied, which is what marks a record paid on a
+  server with no public address ([Reconciliation polling](#reconciliation-polling)).
 
 ## Concepts
 
@@ -61,7 +62,7 @@ The registry is the list in `internal/integrations/registry.go`. Each provider s
 - its **kinds**: `payments` for both;
 - its **secrets**: Stripe takes an `api_key` (required) and a `webhook_secret`; Square takes
   an `api_key` (required) and a `webhook_secret`. The webhook secret is optional because an
-  install without a public URL never receives a webhook (reconciling payments without webhooks is a later change, not built yet);
+  install without a public URL never receives a webhook (payments are then reconciled by [polling](#reconciliation-polling));
 - its **settings**, which are short identifiers or choices, never a URL or free text: Stripe
   has none; Square has `environment` (`sandbox` or `production`) and `location_id`;
 - how to **recognise its credentials**: a Stripe secret key starts with `sk_` or `rk_` (a
@@ -348,8 +349,8 @@ write.
   filter).
 
   **Paid status without a public URL** can't come from a webhook, which Stripe can't deliver to such a
-  server. It is to come from reconciliation polling (a later change, not built yet): until then a
-  record made without a public URL is not marked paid by itself.
+  server. It comes from [reconciliation polling](#reconciliation-polling), which is always on: the
+  server asks Stripe about each open link and applies what it finds as a webhook's event is applied.
 
   The API version is pinned in code (`integrations.StripeAPIVersion`, sent in the
   `Stripe-Version` header; the version Stripe's documentation lists as current when the adapter was
@@ -689,6 +690,55 @@ provider said and changes what an app holds, so it believes little:
   event shows its kind, amount, state and code, never the app or record, since an admin has no read
   access to a private app's records. A notification to the record's creator is not sent.
 
+## Reconciliation polling
+
+A server with no public address can't receive webhooks, and one that has an address can miss one. So
+a worker of its own (`StartPolling`, in the server process, always on, whether or not there is a public
+URL) reads the objects of the refs that are still open and feeds what it finds through the same path a
+webhook's event takes. It never reads an event feed: it retrieves the objects the server made.
+
+- **Same path, so once.** A finding is stored in `integration_events` as an event of the source `poll`
+  with the id `poll:<object>:<state>` (`poll:cs_…:paid`, `poll:cs_…:expired`): once per integration, by
+  the table's unique key. The event worker then applies it with [the same step](#applying-events) as a
+  webhook's, so the same checks hold (the ref's token, mode, integration and exact money, the app's
+  approval as of that moment) and the ref's conditional state change is what makes a payment apply
+  once, whether the webhook, the poll or both tell it: the second is ignored as a duplicate. A poll
+  doesn't move `last_event_at`, which tells an admin that webhooks arrive.
+- **What it reads.** For a Checkout Session, its status and payment status (`complete` and `paid`:
+  paid; `expired`: the link ended; a delayed payment that hasn't settled: nothing yet). For a Payment
+  Link, the link's completed sessions (`payment_link` filter), each paid one a payment. The answer is
+  checked against Stripe's shapes as a webhook's is, and nothing a payer typed is decoded or kept. A refund of a paid
+  ref is not polled: a ref that is paid, expired, failed or refunded is no longer open, and the
+  webhook tells a refund.
+- **Dated when it happened.** A polled payment is dated by the provider's own time of the payment,
+  read in the same request, as its webhook event is: a payment made at 23:59:30 and found at 00:00:10
+  is `occurred_at` 23:59:30, and an invoice's `paid_at` is the day it was paid. For Stripe the read
+  asks for the session's PaymentIntent and its latest Charge as objects (`expand[]` of
+  `payment_intent.latest_charge`, `data.payment_intent.latest_charge` for a link's list), and the
+  time is the Charge's `created`, when the payer's payment was made (for a card, when it succeeded;
+  for a delayed method such as a bank debit, when the debit was started, which can be days before
+  the webhook's `checkout.session.async_payment_succeeded`). Only when the provider gives no time (a
+  session with no charge, or an adapter whose provider says none) is a payment dated by when the poll
+  found it, and so is an expiry: Stripe gives no time of an expiry the server asked for early (a
+  session's `expires_at` stays the time it was due to expire). The [contract
+  suite](#the-end-to-end-isolation-and-contract-suites) requires the payment's time of every adapter that polls.
+- **Read-only.** A poll never makes, changes or deletes anything at the provider.
+- **Its own key, its own mode.** A ref is read with its own integration's key only, in that
+  integration's workspace, and only while the key is of the mode the ref was made in (a test ref is
+  never read with a live key, nor a live ref with a test key). A ref's app and its approval must still
+  allow it (the integration on and allowed in the app's space, the app online with its approved
+  contract bound to this integration); otherwise nothing is sent to Stripe for it and it is looked at
+  again after five minutes. An integration that is disabled is not read for at all.
+- **Polite.** After each read a ref waits longer: a minute, then double, up to 30 minutes; where
+  webhooks arrive too (a public URL and a webhook secret) the poll is a safety net, 30 minutes doubling
+  to six hours. An integration is read at most 20 times a minute, whatever the number of its open
+  refs, the ones that waited longest first. A `429` holds all of the integration's reads for the wait
+  Stripe's `Retry-After` asked for (a minute at least, an hour at most) and counts as no read of the
+  ref. A new ref is read for the first time a minute after it was made.
+- **It stops.** A ref that isn't open is never read. One older than 30 days is not read any more (a
+  Payment Link doesn't expire by itself), though it stays open: a payment made after that arrives by
+  webhook or not at all.
+
 ### What the adapter was written against (Stripe)
 
 Pinned from Stripe's public documentation on the day the adapter was written (the code comments
@@ -786,8 +836,10 @@ Three groups of tests run in CI's Go job, with no real network:
   written once in terms of the adapter interfaces and the normalized shapes: a link made once for a
   token and refused for the same token with other terms, found by its token, its state read live,
   a webhook's signature, time tolerance and rotation, and a payment, expiry and refund each read as one
-  event with the ref's token and the exact amount, nothing a payer typed in it. An adapter runs it by
-  giving a `paymentsFixture` (its adapter, a client for its fake, the fake's payer, expiry and refund);
+  event with the ref's token and the exact amount, nothing a payer typed in it; and of an adapter that
+  polls (`PaymentPoller`), a payment read back dated by the provider's time of it, the time its webhook
+  event carries, not the time of the read. An adapter runs it by giving a `paymentsFixture` (its
+  adapter, a client for its fake, the fake's payer, expiry and refund, and a clock it can move);
   `contract_stripe_test.go` is Stripe's, and `TestTheContractSuiteNoticesABrokenAdapter` runs the cases
   against adapters broken on purpose, to show they fail.
 

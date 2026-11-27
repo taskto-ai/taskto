@@ -85,11 +85,32 @@ func newPay(t *testing.T, public string) *pay { return newPayWith(t, public, inv
 // newPayWith is newPay with the invoicing app's definition, for a test that needs another.
 func newPayWith(t *testing.T, public, definition string) *pay {
 	t.Helper()
+	return newPayClocked(t, public, definition, false)
+}
+
+// newPayOnOneClock is newPay with the fake Stripe on the server's clock too, for a test of the times
+// the provider says: p.later moves the provider's time as well.
+func newPayOnOneClock(t *testing.T, public string) *pay {
+	t.Helper()
+	return newPayClocked(t, public, invoiceApp, true)
+}
+
+// clockFunc is a testprovider.Clock of a function.
+type clockFunc func() time.Time
+
+func (f clockFunc) Now() time.Time { return f() }
+
+func newPayClocked(t *testing.T, public, definition string, providerToo bool) *pay {
+	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
-	fake := testprovider.NewStripe(t)
 	// One clock moves the integrations' and the apps' alike.
 	offset := new(atomic.Int64)
+	var fakeOpts []testprovider.Option
+	if providerToo {
+		fakeOpts = append(fakeOpts, testprovider.WithClock(clockFunc(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })))
+	}
+	fake := testprovider.NewStripe(t, fakeOpts...)
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
 		Now:           func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
 		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host()), WithoutConnectionReuse()}})
