@@ -750,9 +750,11 @@ write.
   one token). The event is then tried again with its backoff (`integration_link_still_open`, and
   `failed` for an admin to retry after the attempts), the key stays unresolved and the money stays
   locked; once every object has ended, the retry moves it on. The same proof stands before the end
-of a kept link is noted on a reference that was paid on another object: while another object of the
-token may be paid, or the token already shows a paid one, the end isn't noted
-(`integration_event_late`) and the record's money stays locked until an admin reconciles it. What a field holds is compared as well as the money read from it, so a field
+of a kept link is noted on a reference that was paid on another object, and the object the reference
+was paid on counts as settled, not as one that may still be paid: while any other object of the token
+may be paid the end isn't noted, the event is tried again with its backoff (`integration_link_still_open`)
+and the record's money stays locked; once every other object has ended, the retry notes the kept link
+ended and the money is released, with no admin step. What a field holds is compared as well as the money read from it, so a field
   whose type a release changed stays locked too. An open link is given again only to an entry that
   reads its money from the fields the link's was read from; another gets `integration_link_still_open`.
   So a link is never paid at an amount the record no longer says, and the payment

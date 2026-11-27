@@ -165,8 +165,11 @@ func TestAPaidRefsSavedLinkExpiryIsNotNotedWhileAnotherObjectOfTheTokenMayBePaid
 	}
 	p.later(time.Hour)
 	p.drain()
-	if may, _, err := p.svc.MayBePaid(ctx, p.db, p.app.ID, record); err != nil || !may {
-		t.Fatalf("may be paid = %v, %v: a paid reference's money was freed without an admin", may, err)
+	if n := p.count(`SELECT count(*) FROM integration_refs WHERE link_expired_at IS NOT NULL`); n != 1 {
+		t.Fatalf("%d saved links noted ended after every object had ended", n)
+	}
+	if may, _, err := p.svc.MayBePaid(ctx, p.db, p.app.ID, record); err != nil || may {
+		t.Fatalf("may be paid = %v, %v: the money stayed locked after every object of the token had ended", may, err)
 	}
 	if n := p.count(`SELECT count(*) FROM integration_events WHERE state = 'failed'`); n != 0 {
 		t.Fatalf("%d events failed", n)

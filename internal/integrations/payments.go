@@ -9,6 +9,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -54,6 +55,7 @@ type NewLink struct {
 	Description string
 	SuccessURL  string
 	CancelURL   string
+	Paid        []string
 }
 
 func (l NewLink) IdempotencyKey() string { return l.Token }
@@ -294,7 +296,7 @@ func (stripe) find(ctx context.Context, creds Credentials, c *Client, l NewLink,
 			} else {
 				ours = o.ClientReferenceID != nil && *o.ClientReferenceID == l.Token
 			}
-			if !ours {
+			if !ours || slices.Contains(l.Paid, o.ID) {
 				continue
 			}
 			seen := Link{ObjectID: seenObjectID(o.ID)}

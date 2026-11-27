@@ -1003,6 +1003,19 @@ func paidOnOwnLink(r ref) bool {
 		(r.paidObjectID == r.objectID || r.paidLinkID == r.objectID)
 }
 
+func paidObjectsOf(r ref) []string {
+	if r.state != "paid" && r.state != "refunded" {
+		return nil
+	}
+	var out []string
+	for _, id := range []string{r.paidObjectID, r.paidLinkID} {
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func linkFinished(r ref) bool {
 	return r.state == "expired" || r.linkExpiredAt != "" || paidOnOwnLink(r)
 }
@@ -1090,8 +1103,9 @@ func (s *Service) provePaymentEnded(ctx context.Context, provider PaymentProvide
 		return err
 	}
 	var keys []NewLink
+	paid := paidObjectsOf(prior)
 	for rows.Next() {
-		l := NewLink{AmountMinor: prior.amountMinor, Currency: prior.currency, SuccessURL: prior.successURL, CancelURL: prior.cancelURL}
+		l := NewLink{AmountMinor: prior.amountMinor, Currency: prior.currency, SuccessURL: prior.successURL, CancelURL: prior.cancelURL, Paid: paid}
 		if err := rows.Scan(&l.Token, &l.KeySeq); err != nil {
 			_ = rows.Close()
 			return err
