@@ -746,7 +746,8 @@ write.
     record and the call, or between the call and its answer being noted, leaves the key as a call
     that may have run.
   - *Sent once.* The HTTP client never resends the call by itself (a later try of the entry may ask
-    the same key again within its window, below, and never a new key): Go's transport would resend a
+    the same key again within its window, below, and never a new key without an admin's
+    confirmation): Go's transport would resend a
     request with an `Idempotency-Key` on a new connection when a reused one breaks, and report the
     second copy's failed dial, though the first reached Stripe. The body is made one that can't be
     read again, which stops that, and whether a call may have left is told by whether a connection was
