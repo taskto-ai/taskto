@@ -161,21 +161,20 @@ func syncDir(path string) error {
 }
 
 // nextHome takes the next home number: the counter is moved on, on disk, before the number is
-// used, so a number is never given twice, a crash in between only skipping one. The caller holds
+// used, so a number is never given twice, a crash in between only skipping one. The number is the
+// highest of what the worker found at start and has given since (w.nextFree) and the counter file,
+// so a file that is lost or put back while the worker runs never sends it lower; a home the volume
+// has (a record, retired or not, or a directory) is skipped whatever they say. The caller holds
 // w.accountsMu.
 func (w *Worker) nextHome() (int64, error) {
-	home := int64(firstHome)
-	b, err := os.ReadFile(w.counterFile())
-	switch {
-	case err == nil:
-		if home, err = strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err != nil || home < firstHome {
-			return 0, errors.New("the worker's home counter is damaged")
-		}
-	case !errors.Is(err, fs.ErrNotExist):
-		return 0, err
+	home := max(w.nextFree, int64(firstHome))
+	if n, ok := w.readCounter(); ok {
+		home = max(home, n)
 	}
-	// A home whose directory is there is someone's, whatever the counter says: never given again.
 	for ; home < maxHome; home++ {
+		if w.usedHomes[home] {
+			continue
+		}
 		if _, err := os.Lstat(w.cfg.Layout.Home(home).Root); errors.Is(err, fs.ErrNotExist) {
 			break
 		}
@@ -186,6 +185,11 @@ func (w *Worker) nextHome() (int64, error) {
 	if err := writeDurably(w.stateDir(), w.counterFile(), []byte(strconv.FormatInt(home+1, 10)+"\n")); err != nil {
 		return 0, err
 	}
+	w.nextFree = home + 1
+	if w.usedHomes == nil {
+		w.usedHomes = map[int64]bool{}
+	}
+	w.usedHomes[home] = true
 	if hook := w.allocateHookForTest; hook != nil {
 		if err := hook(); err != nil {
 			return 0, err
@@ -194,15 +198,27 @@ func (w *Worker) nextHome() (int64, error) {
 	return home, nil
 }
 
+// giveHome gives r the next home number, and with isolation its uid under the volume's UID base:
+// every account that gets a home gets it here (a new one, or one a census brings back that never
+// had one). The caller holds w.accountsMu.
+func (w *Worker) giveHome(r *accountRecord) error {
+	home, err := w.nextHome()
+	if err != nil {
+		return err
+	}
+	r.Home = home
+	if iso := w.cfg.Isolation; iso != nil {
+		r.UID = int64(iso.UIDBase) + home
+	}
+	return nil
+}
+
 // resolve is the account a request names: its record, or, with make, a new one, given the next
 // home number. A retired account is ErrForgotten; one the worker doesn't know, without make,
 // ErrUnknownAccount.
 func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 	if !a.Valid() {
 		return account{}, badRequest{errors.New("invalid account")}
-	}
-	if _, err := w.seeBoot(a.Boot); err != nil {
-		return account{}, err
 	}
 	w.accountsMu.Lock()
 	defer w.accountsMu.Unlock()
@@ -214,13 +230,9 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 		if !make {
 			return account{}, ErrUnknownAccount
 		}
-		home, err := w.nextHome()
-		if err != nil {
+		r = accountRecord{User: a.User, Boot: a.Boot}
+		if err := w.giveHome(&r); err != nil {
 			return account{}, err
-		}
-		r = accountRecord{Home: home, User: a.User, Boot: a.Boot}
-		if iso := w.cfg.Isolation; iso != nil {
-			r.UID = int64(iso.UIDBase) + home
 		}
 		if w.cfg.AdoptLegacy {
 			if _, err := os.Lstat(w.cfg.Layout.legacy(a.User)); err == nil {
@@ -352,8 +364,8 @@ func (w *Worker) unretire(identity string, before time.Time) error {
 	}
 	r.Retired, r.RetiredAt = false, time.Time{}
 	if r.Home == 0 {
-		// Retired before the worker gave it a home: it gets one now.
-		if r.Home, err = w.nextHome(); err != nil {
+		// Retired before the worker gave it a home: it gets one now, as any account does.
+		if err := w.giveHome(&r); err != nil {
 			return err
 		}
 	}

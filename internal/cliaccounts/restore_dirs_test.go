@@ -73,6 +73,10 @@ func TestARestoreNeverGivesANewPersonAnOldPersonsCLIDirectory(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	svcA := New(dbA, Container, LocalWorker(e.worker))
 	t.Cleanup(svcA.Close)
+	// The first server's census at its start: its boot is the one the worker heard from.
+	if err := svcA.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	kept := newUser(t, dbA, "kept@example.com")
 	keptFiles := signedInWithFiles(t, svcA, e, kept)

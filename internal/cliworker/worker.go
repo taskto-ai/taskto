@@ -89,6 +89,9 @@ type Worker struct {
 	helpersBuilt   atomic.Int64
 	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
 	dialHookForTest func()
+	// provisionHookForTest, in tests, runs as an isolated home is made, once it is owned and
+	// before it is renamed into place; an error stops there, as a crash would.
+	provisionHookForTest func() error
 	// handOffHookForTest, in tests, runs in a live view's dial once its helper said it is connected,
 	// before the connection's watch for a removal is set.
 	handOffHookForTest func()
@@ -100,9 +103,13 @@ type Worker struct {
 	// boots seen, oldest first, under bootsMu; censusMu runs censuses and deletions one at a time.
 	volumeLock *os.File
 	bootsMu    sync.Mutex
-	boots      []string
-	censusMu   sync.Mutex
-	accounts   map[string]accountRecord
+	boots      []bootEntry
+	// nextFree and usedHomes are the allocator's high-water mark and the homes the volume has
+	// (records, retired ones too, and directories), under accountsMu (checkCounter).
+	nextFree  int64
+	usedHomes map[int64]bool
+	censusMu  sync.Mutex
+	accounts  map[string]accountRecord
 	// allocateHookForTest, in tests, runs once a home number is taken, before it is recorded, and
 	// adoptHookForTest once a directory from before homes is moved, before its record says so.
 	allocateHookForTest func() error
@@ -261,6 +268,13 @@ func (w *Worker) sweep() error {
 		if err != nil {
 			// Not every process was looked at: one of an earlier history's may still run.
 			return fmt.Errorf("cliworker: stopping what an earlier worker left running: %w", err)
+		}
+	}
+	// Homes being made when an earlier worker stopped: never renamed into place, so nobody's.
+	partial, _ := filepath.Glob(filepath.Join(w.cfg.Layout.Root, provisionPrefix+"*"))
+	for _, p := range partial {
+		if err := removeTree(p, w.cfg.Isolation != nil); err != nil {
+			return fmt.Errorf("cliworker: removing a home an earlier worker was making: %w", err)
 		}
 	}
 	records, _ := filepath.Glob(filepath.Join(w.stateDir(), "*.pid"))

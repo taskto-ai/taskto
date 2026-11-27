@@ -66,8 +66,9 @@ Minted by the server for each worker turn it starts, whatever account it runs on
 | nonce | tells two tokens of one turn apart: a replay gets a new one, and the old one stops |
 | expiry | two hours, as the proxy's: the longest turn and a wait for a place |
 
-- It is `ttm1.<claims>.<MAC>`, signed with the server key (`serverkey.MAC`) under a purpose of
-  its own, so a proxy token isn't a tools token or the other way round. It is stateless, so a
+- It is `ttm1.<sealed claims>.<MAC>`: the claims sealed with the server key (`serverkey.Seal`),
+  so the CLI that holds the token can read none of them, the account's identity included, then a
+  MAC of the sealed bytes (`serverkey.MAC`) under a purpose of its own, so a proxy token isn't a tools token or the other way round. It is stateless, so a
   server restart in the middle of a turn doesn't break it.
 - **It stops with its turn**, two ways:
   - the worker must still be running the turn the token names: the server asks it on every

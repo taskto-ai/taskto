@@ -66,10 +66,27 @@ func (w *Worker) ensureUser(home int64, uid int) error {
 	info, err := os.Lstat(dirs.Root)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		if err := os.Mkdir(dirs.Root, 0o700); err != nil {
+		// Made whole under a name of its own and renamed into place: a stop or a failed chown in
+		// between leaves a temporary directory the next start removes, never a home of the wrong
+		// owner, which would be refused for good.
+		tmp, err := os.MkdirTemp(w.cfg.Layout.Root, provisionPrefix+strconv.FormatInt(home, 10)+"-")
+		if err != nil {
 			return err
 		}
-		if err := os.Lchown(dirs.Root, uid, uid); err != nil {
+		if err := os.Lchown(tmp, uid, uid); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if hook := w.provisionHookForTest; hook != nil {
+			if err := hook(); err != nil {
+				return err // as a stop would: the temporary directory stays
+			}
+		}
+		if err := os.Rename(tmp, dirs.Root); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := syncDir(w.cfg.Layout.Root); err != nil {
 			return err
 		}
 	case err != nil:

@@ -233,23 +233,46 @@ func TestContainerModeRemovesDirectoriesFromBeforeHomes(t *testing.T) {
 	}
 }
 
-// Reconcile retires the accounts the census doesn't name, apart from those the census's own server
-// made since it read its database, and removes their homes; the live ones keep theirs.
+// bootCensus is a census of the server with boot, which read its database at before.
+func bootCensus(boot string, before time.Time, owners map[int64]string) cliworker.Census {
+	if owners == nil {
+		owners = map[int64]string{}
+	}
+	return cliworker.Census{Owners: owners, Boot: boot, Before: before}
+}
+
+// Reconcile retires the accounts the census doesn't name that servers it heard from made (an
+// earlier census's server's), and removes their homes; the live ones keep theirs, as do those the
+// census's own server made since it read its database and those of a server whose census hasn't
+// come yet.
 func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 	h := newHarness(t, nil)
 	browsers := &fakeBrowsers{stopped: map[string]bool{}}
 	h.w.SetBrowsers(browsers)
 	ctx := context.Background()
+	start := time.Now().Add(-time.Hour)
 	live := mine(t, h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true))
 	goneDirs := h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true)
+	// The first server's census, at its start.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, map[int64]string{1: cliworker.IdentityForTest(1), 2: cliworker.IdentityForTest(2)})); err != nil {
+		t.Fatal(err)
+	}
+	// Another server after it, which made an account and told the worker.
 	other := cliowner.Account{User: 3, Identity: strings.Repeat("3", 32), Boot: strings.Repeat("9", 32)}
 	if _, err := h.w.Status(ctx, other, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.w.Reconcile(ctx, bootCensus(other.Boot, start.Add(time.Minute), map[int64]string{1: cliworker.IdentityForTest(1), 2: cliworker.IdentityForTest(2), 3: other.Identity})); err != nil {
+		t.Fatal(err)
+	}
+	// A server whose census hasn't come: its account is kept.
+	coming := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: strings.Repeat("e", 32)}
+	if _, err := h.w.Status(ctx, coming, cliworker.Claude, ""); err != nil {
+		t.Fatal(err)
+	}
 	// The server starts again: its census has a boot of its own, and an account it makes since it
 	// read its database carries that boot.
-	again := census(nil, 1)
-	again.Boot = strings.Repeat("a", 32)
+	again := bootCensus(strings.Repeat("a", 32), time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})
 	since := acct(4)
 	since.Boot = again.Boot
 	if _, err := h.w.Status(ctx, since, cliworker.Claude, ""); err != nil {
@@ -270,8 +293,10 @@ func TestReconcileRetiresTheAccountsThatAreGone(t *testing.T) {
 			t.Errorf("the %s account's browsers weren't stopped", name)
 		}
 	}
-	if _, err := h.w.Status(ctx, since, cliworker.Claude, ""); err != nil {
-		t.Errorf("an account made by this server since its census: %v", err)
+	for name, a := range map[string]cliowner.Account{"made by this server since its census": since, "of a server whose census hasn't come": coming} {
+		if _, err := h.w.Status(ctx, a, cliworker.Claude, ""); err != nil {
+			t.Errorf("an account %s: %v", name, err)
+		}
 	}
 	if browsers.again == nil || !browsers.again(acct(1).Identity) || browsers.again(acct(2).Identity) {
 		t.Error("the browsers' refusals weren't taken back for the live accounts only")

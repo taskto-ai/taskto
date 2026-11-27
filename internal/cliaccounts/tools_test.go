@@ -4,7 +4,6 @@ package cliaccounts
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -233,14 +232,12 @@ func TestToolsTokenRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(toolsClaims{Nonce: "old", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
-	expired := toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(e.svc.shared.Key.MAC(toolsTokenPurpose, payload))
+	expired, _ := sealToken(e.svc.shared.Key, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "old", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
 	otherKey, err := serverkey.Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ = json.Marshal(toolsClaims{Nonce: "x", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
-	otherServer := toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(otherKey.MAC(toolsTokenPurpose, payload))
+	otherServer, _ := sealToken(otherKey, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "x", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
 	for name, token := range map[string]string{
 		"forged": forged, "a proxy token": proxyToken, "expired": expired, "another server's": otherServer,
 		"none": "", "malformed": "ttm1.nope", "an access token's shape": "ttp_0123456789abcdef0123456789abcdef",

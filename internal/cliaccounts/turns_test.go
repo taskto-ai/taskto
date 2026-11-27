@@ -602,6 +602,10 @@ func TestACensusLeavesARunningTurnToItsStop(t *testing.T) {
 	if _, err := e.worker.AccountDirs(stranger, "", ""); err != nil {
 		t.Fatal(err)
 	}
+	// That server's census, from before this one started.
+	if err := e.worker.Reconcile(ctx, cliworker.Census{Owners: map[int64]string{77: stranger.Identity}, Boot: stranger.Boot, Before: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
 	e.owner.connect(cliworker.Codex)
 	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Codex), clitest.Scenario{SleepMS: 30_000})
 	conv := e.conversation(e.owner)

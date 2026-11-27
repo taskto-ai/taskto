@@ -493,3 +493,34 @@ func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	}
 	<-stopped
 }
+
+// A deleted account's Forget runs under the CLI worker's fence for deletions: one it refuses (an
+// earlier server's purge) stops no browser and removes no file.
+func TestForgetRunsUnderTheFence(t *testing.T) {
+	h := newProfileHost(t)
+	refuse := errors.New("an earlier server's purge")
+	var fenced []string
+	m := NewManager(Config{Host: h, Max: 8, Fence: func(_ context.Context, a cliowner.Account, do func() error) error {
+		fenced = append(fenced, a.Identity)
+		if a.User == 1 {
+			return refuse
+		}
+		return do()
+	}})
+	t.Cleanup(m.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	startAll(t, m, 1)
+	if err := m.Forget(ctx, acct(1)); !errors.Is(err, refuse) {
+		t.Fatalf("a refused Forget: %v", err)
+	}
+	if h.browsersAlive(1) == 0 || !h.exists(1) {
+		t.Errorf("a refused Forget stopped the browsers (%d left) or removed the profile (%v)", h.browsersAlive(1), h.exists(1))
+	}
+	if err := m.Forget(ctx, acct(2)); err != nil {
+		t.Fatal(err)
+	}
+	if len(fenced) != 2 {
+		t.Errorf("the fence saw %v, want both deletions", fenced)
+	}
+}

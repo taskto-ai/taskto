@@ -47,10 +47,8 @@ func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
 	// server sent, delayed past a restore that brought the account back, retires nothing.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
-	if latest, err := w.seeBoot(a.Boot); err != nil {
+	if err := w.deletionFence(a.Boot); err != nil {
 		return err
-	} else if !latest {
-		return ErrStaleBoot
 	}
 	end, err := w.beginGate(ctx, scope{id: a.Identity, all: true})
 	if err != nil {
@@ -119,10 +117,8 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	// restore replaced, still running or delayed) would retire the accounts the later one made.
 	w.censusMu.Lock()
 	defer w.censusMu.Unlock()
-	if latest, err := w.seeBoot(c.Boot); err != nil {
+	if err := w.registerCensus(c); err != nil {
 		return err
-	} else if !latest {
-		return ErrStaleBoot
 	}
 	live := make(map[string]bool, len(c.Owners))
 	for _, id := range c.Owners {
@@ -139,7 +135,9 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			if err := w.unretire(id, c.Before); err != nil {
 				return err
 			}
-		case r.Boot == c.Boot && !r.Retired:
+		case !r.Retired && (r.Boot == c.Boot || (r.Boot != "" && !w.knownBoot(r.Boot))):
+			// Made by this census's server since it read its database, or by a server whose census
+			// the worker never applied: a later one's, whose census is still to come. Kept.
 		default:
 			// A caller that has given up retires nothing more.
 			if err := ctx.Err(); err != nil {

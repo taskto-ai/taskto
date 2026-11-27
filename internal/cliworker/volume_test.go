@@ -5,10 +5,12 @@ package cliworker_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +60,43 @@ func TestALostOrRolledBackCounterGivesNoHomeAgain(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.reopen(t)
+			for user := int64(4); user < 7; user++ {
+				if home := h.w.HomeForTest(acct(user)); taken[home] {
+					t.Fatalf("account %d was given home %d, which another has", user, home)
+				} else {
+					taken[home] = true
+				}
+			}
+		})
+	}
+}
+
+// The same while the worker runs: a counter lost or put back under it never sends the allocator
+// lower, and a home the volume has is skipped, a retired account's whose directory is gone and a
+// record's whose directory was never made included.
+func TestACounterLostWhileTheWorkerRunsGivesNoHomeAgain(t *testing.T) {
+	for name, damage := range map[string]func(path string) error{
+		"lost": os.Remove,
+		"rolled back": func(p string) error {
+			return os.WriteFile(p, []byte(strconv.Itoa(cliworker.FirstHomeForTest)+"\n"), 0o600)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			ctx := context.Background()
+			h.introduce(t, 1)
+			taken := map[int64]bool{h.w.HomeForTest(acct(1)): true}
+			// A retired account: its record keeps its home, its directory is gone.
+			h.user(t, 2, cliworker.Claude, clitest.Scenario{}, true)
+			taken[h.w.HomeForTest(acct(2))] = true
+			if err := h.w.Forget(ctx, acct(2)); err != nil {
+				t.Fatal(err)
+			}
+			// An account recorded, its directory not made yet.
+			taken[h.w.HomeForTest(acct(3))] = true
+			if err := damage(h.w.CounterFileForTest()); err != nil {
+				t.Fatal(err)
+			}
 			for user := int64(4); user < 7; user++ {
 				if home := h.w.HomeForTest(acct(user)); taken[home] {
 					t.Fatalf("account %d was given home %d, which another has", user, home)
@@ -129,16 +168,22 @@ func TestTheLastHomeNumberIsTheLast(t *testing.T) {
 	}
 }
 
-// A census or a deletion from a server boot older than one the worker has heard from since (a
-// server a restore replaced, still running or delayed) retires nothing: the accounts the later
-// server made keep their homes.
+// A census or a deletion from a server boot older than one whose census the worker applied (a
+// server a restore replaced, still running or delayed) retires nothing, and neither does an
+// earlier server's census that comes while a later server already made accounts but hasn't sent
+// its own: those accounts keep their homes.
 func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
+	start := time.Now().Add(-time.Hour)
 	old := acct(1) // the tests' boot: the earlier server's
 	if _, err := h.w.Status(ctx, old, cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, map[int64]string{1: old.Identity})); err != nil {
+		t.Fatal(err)
+	}
+	// The later server makes an account before its census reaches the worker.
 	later := strings.Repeat("c", 32)
 	made := cliowner.Account{User: 2, Identity: strings.Repeat("d", 32), Boot: later}
 	dirs, err := h.w.AccountDirs(made, cliworker.Claude, "")
@@ -146,30 +191,81 @@ func TestAnEarlierBootsCensusOrDeletionRetiresNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
-	// The earlier server's census, which doesn't know the later one's account.
-	if err := h.w.Reconcile(ctx, census(nil, 1)); !errors.Is(err, cliworker.ErrStaleBoot) {
+	login := filepath.Join(dirs.Config(cliworker.Claude), ".credentials.json")
+	// The earlier server's census again (a retry, or one delayed), which doesn't know the account.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, map[int64]string{1: old.Identity})); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := h.w.Status(ctx, made, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Fatalf("the later server's account after the earlier census: %+v %v", st, err)
+	}
+	// The later server's census.
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), map[int64]string{2: made.Identity})); err != nil {
+		t.Fatal(err)
+	}
+	// From now on the earlier server's census and deletion are stale, and so is the census of a
+	// server the worker never heard from that read its database before the latest did.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
 		t.Errorf("the earlier boot's census: %v, want ErrStaleBoot", err)
 	}
-	// And its deletion of the account, delayed past the restore that brought the account back.
+	if err := h.w.Reconcile(ctx, bootCensus(strings.Repeat("f", 32), start.Add(time.Minute), nil)); !errors.Is(err, cliworker.ErrStaleBoot) {
+		t.Errorf("an unknown earlier boot's census: %v, want ErrStaleBoot", err)
+	}
 	earlier := made
 	earlier.Boot = cliworker.TestBoot
 	if err := h.w.Forget(ctx, earlier); !errors.Is(err, cliworker.ErrStaleBoot) {
 		t.Errorf("the earlier boot's deletion: %v, want ErrStaleBoot", err)
 	}
+	if err := h.w.FenceDeletion(ctx, earlier, func() error { return errors.New("ran") }); !errors.Is(err, cliworker.ErrStaleBoot) {
+		t.Errorf("the earlier boot's browser purge: %v, want ErrStaleBoot", err)
+	}
 	if st, err := h.w.Status(ctx, made, cliworker.Claude, ""); err != nil || !st.LoggedIn {
 		t.Errorf("the later server's account: %+v %v", st, err)
 	}
-	// The later server's own census is applied.
-	now := census(map[int64]string{2: made.Identity})
-	now.Boot = later
-	if err := h.w.Reconcile(ctx, now); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(login); err != nil {
+		t.Errorf("the later server's account's login: %v", err)
 	}
+	// The later server's census applied: the account it doesn't name is retired.
 	if _, err := h.w.Status(ctx, old, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the account the later census doesn't name: %v, want ErrForgotten", err)
 	}
-	if _, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), ".credentials.json")); err != nil {
-		t.Errorf("the later server's account's login: %v", err)
+}
+
+// While an earlier server's censuses run, a later server's requests make accounts at the same
+// time: none of them is retired, whichever comes first (run with -race).
+func TestAnEarlierCensusRacingALaterServersAccountsRetiresNone(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	start := time.Now().Add(-time.Hour)
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, nil)); err != nil {
+		t.Fatal(err)
+	}
+	later := strings.Repeat("c", 32)
+	accounts := make([]cliowner.Account, 20)
+	for i := range accounts {
+		accounts[i] = cliowner.Account{User: int64(100 + i), Identity: fmt.Sprintf("%030x%02x", 7, i), Boot: later}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 20 {
+			_ = h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, start, nil))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for _, a := range accounts {
+			if _, err := h.w.Status(ctx, a, cliworker.Claude, ""); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	wg.Wait()
+	for _, a := range accounts {
+		if _, err := h.w.Status(ctx, a, cliworker.Claude, ""); err != nil {
+			t.Errorf("the later server's account %d after the earlier censuses: %v", a.User, err)
+		}
 	}
 }
 

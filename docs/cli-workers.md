@@ -436,25 +436,42 @@ The UI shows what the command prints.
     the worker refuses to start with one below 65536 or above 2147483646.
 - **The volume.** A home number, and so a uid, is never given twice on a volume:
   - one worker per volume: the worker takes an exclusive lock on it (`.worker/lock`, a `flock`
-    held while it runs) before it sweeps processes, writes anything or opens a socket. A second
-    worker on the same volume doesn't start, and leaves the first's sockets alone;
+    held while it runs) once it has made its own directories, before it reads the counter or a
+    record, sweeps processes, writes anything else or opens a socket. A second worker on the same
+    volume doesn't start, and leaves the first's sockets alone;
   - at every start the counter is checked against everything on the volume that names a home:
     the records, the homes' directories and the trash. A counter that is missing, damaged or
     behind (a partial restore of the volume, say) is moved past the highest home, with a warning;
-    two records with the same home stop the worker, which says to start it on a new volume. A
-    home whose directory is there is never given, whatever the counter says;
+    two records with the same home stop the worker, which says to start it on a new volume. The
+    worker then keeps the highest number it has given in memory, with every home the volume has
+    (a record, retired or not, or a directory): a counter file lost or put back while it runs
+    never sends it lower, and none of those homes is given again, whatever the file says;
   - with isolation, the UID base is the volume's: pinned the first time (`.worker/uid-base`), and
-    each record keeps its uid. A worker started with another `-uid-base` doesn't start (it would
-    give a home's uid to another home); changing it means a new volume;
+    each record keeps its uid (every home is given in one place, so each record that has a home
+    has it, one a census brings back included). A worker started with another `-uid-base` doesn't
+    start (it would give a home's uid to another home), nor does one on a volume with homes whose
+    base nothing can rebuild (no pin, no record with a uid); changing the base means a new volume;
+  - with isolation, a new home is made whole under a temporary name (`.new-h<home>-…`), owned by
+    its Unix user, and renamed into place: a stop or a failed `chown` in between leaves a
+    temporary directory the next start removes, never a home of the wrong owner;
   - the worker's own directories are made with each new one's parent synced, before anything is
     recorded in them.
-- **Server boots.** The worker keeps the server boots it has heard from, in the order it first
-  heard them (`.worker/boots.json`, the last 64). A census or a deletion (`Forget`) from a boot
-  older than the latest is ignored (`ErrStaleBoot`, `409`, `stale_boot`): it comes from a server
-  that started earlier (one a restore replaced, still running, or a delayed request), which would
-  retire the accounts the later server made. The server stops trying a census the worker calls
-  stale, and logs it. Censuses and deletions run one at a time, and one whose caller has given up
-  retires nothing more.
+- **Server boots.** Only a census registers a server's boot: the worker keeps the boots whose
+  censuses it applied, in that order, with when each server read its database
+  (`.worker/boots.json`, the last 4096). No other request registers one, so a delayed request of an
+  earlier server can't make its boot the latest. Then:
+  - a census from a registered boot that isn't the latest, or from one the worker never heard from
+    whose server read its database before the latest's did, is ignored (`ErrStaleBoot`, `409`,
+    `stale_boot`). The time only ever makes the worker refuse a census, which removes nothing;
+  - a census retires only the accounts of boots it was told of before: an account made by a
+    server whose census hasn't come (a later one's, made before its census reached the worker) is
+    kept, so an earlier server's census, a retry or a delayed one, never retires it;
+  - a deletion (`Forget`, and the agent browsers' purge in the worker, `FenceDeletion`) is taken
+    only from the latest census's boot, and retires the account before it stops or removes
+    anything. The server sends its boot with every deletion, the purge's too;
+  - censuses and deletions run one at a time, so no boot is registered between a decision and
+    what it decides, and one whose caller has given up retires nothing more. The server stops
+    trying a census the worker calls stale, and logs it.
 - **Retired accounts.** An account that is gone (`Forget`, `Reconcile`) is **retired**: its record
   says so, durably, and keeps its home number, so the number is never given again. Every request
   for a retired identity is refused (`ErrForgotten`, `410 Gone` with the code `forgotten` over the
@@ -534,7 +551,9 @@ The UI shows what the command prints.
   account whose number has a `u<number>` directory moves it to the account's new home, once: the
   record says a move is due before the rename and stops saying so after it, so a stop in between
   is finished by the next request, and a later account of the number finds nothing to adopt. A
-  local install keeps its CLI sign-ins, working files and browser profiles.
+  local install keeps its CLI sign-ins, working files and browser profiles. A conversation's
+  working directory moves too, and Claude Code finds a session by it: the next turn may start a
+  new session with the conversation so far rather than resume the one from before.
 - **Outages.** While the worker can't be reached, at a start or later, the server's API answers
   `cli_worker_not_ready` (`503`) first: before it says whether a CLI is installed, in the settings'
   list, a sign-in and its check, a turn (before its stream starts, and before a resumed turn says

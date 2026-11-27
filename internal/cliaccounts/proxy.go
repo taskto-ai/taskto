@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/serverkey"
 )
 
 // The proxy (docs/account-switching.md): a turn on a workspace's shared account points its CLI
@@ -57,12 +58,48 @@ func (s *Service) mintToken(c proxyClaims) (string, error) {
 	var nonce [12]byte
 	_, _ = rand.Read(nonce[:])
 	c.Nonce = b64.EncodeToString(nonce[:])
-	payload, err := json.Marshal(c)
+	token, err := sealToken(s.shared.Key, proxyTokenPrefix, proxyTokenPurpose, c)
 	if err != nil {
 		return "", err
 	}
 	s.track(proxyTokenPurpose, c.Turn, c.Nonce)
-	return "tt1." + b64.EncodeToString(payload) + "." + b64.EncodeToString(s.shared.Key.MAC(proxyTokenPurpose, payload)), nil
+	return token, nil
+}
+
+const proxyTokenPrefix = "tt1."
+
+// sealToken makes a turn token of claims v: prefix, then the claims sealed with the server key
+// (serverkey.Seal, bound to purpose), then a MAC of the sealed bytes under purpose. The CLI holds
+// the token and can read nothing of it, the account's identity included; only this server opens it.
+func sealToken(key *serverkey.Key, prefix, purpose string, v any) (string, error) {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	sealed, err := key.Seal(payload, []byte(purpose))
+	if err != nil {
+		return "", err
+	}
+	return prefix + b64.EncodeToString(sealed) + "." + b64.EncodeToString(key.MAC(purpose, sealed)), nil
+}
+
+// openToken checks a token from sealToken, MAC first, and opens its claims into v.
+func openToken(key *serverkey.Key, prefix, purpose, token string, v any) bool {
+	rest, ok := strings.CutPrefix(token, prefix)
+	if !ok || key == nil {
+		return false
+	}
+	parts := strings.Split(rest, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	sealed, err1 := b64.DecodeString(parts[0])
+	mac, err2 := b64.DecodeString(parts[1])
+	if err1 != nil || err2 != nil || !hmac.Equal(mac, key.MAC(purpose, sealed)) {
+		return false
+	}
+	payload, err := key.Open(sealed, []byte(purpose))
+	return err == nil && json.Unmarshal(payload, v) == nil
 }
 
 // track records nonce as the token of kind (a MAC purpose) for turn. A turn run again (a
@@ -91,16 +128,7 @@ var errBadToken = errors.New("this token isn't valid: it belongs to a turn that 
 // readToken checks a token's signature and expiry, and that its turn hasn't ended.
 func (s *Service) readToken(token string) (proxyClaims, error) {
 	var c proxyClaims
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 || parts[0] != "tt1" {
-		return c, errBadToken
-	}
-	payload, err1 := b64.DecodeString(parts[1])
-	mac, err2 := b64.DecodeString(parts[2])
-	if err1 != nil || err2 != nil || !hmac.Equal(mac, s.shared.Key.MAC(proxyTokenPurpose, payload)) {
-		return c, errBadToken
-	}
-	if err := json.Unmarshal(payload, &c); err != nil || time.Now().Unix() > c.Expires {
+	if !openToken(s.shared.Key, proxyTokenPrefix, proxyTokenPurpose, token, &c) || time.Now().Unix() > c.Expires {
 		return c, errBadToken
 	}
 	if s.retired(c.Nonce) {

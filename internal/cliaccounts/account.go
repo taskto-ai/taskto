@@ -278,6 +278,10 @@ func outage(err error) bool {
 	return errors.Is(err, ErrNotReady) || errors.Is(err, cliworker.ErrUnreachable)
 }
 
+// Boot is this server's boot, which every request to the CLI worker carries: a deletion from it
+// is the latest server's (cliworker.Worker.FenceDeletion).
+func (s *Service) Boot() string { return s.boot }
+
 // LocalHome is a's home directory on the CLI worker running in this process (local mode), for the
 // browsers there; an error with no worker here.
 func (s *Service) LocalHome(a cliowner.Account) (string, error) {

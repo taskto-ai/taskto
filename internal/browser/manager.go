@@ -52,6 +52,10 @@ type Config struct {
 	// running one's state and tabs too, apart from stopping them: an error refuses it (the CLI
 	// worker's rule, cliworker.Worker.BrowserAllowed).
 	Allow func(a cliowner.Account) error
+	// Fence, when set, runs a deleted account's Forget (do) under the CLI worker's rule for
+	// deletions (cliworker.Worker.FenceDeletion): only the latest server's, the account retired
+	// first. A purge an earlier server sent then stops and removes nothing.
+	Fence func(ctx context.Context, a cliowner.Account, do func() error) error
 }
 
 // allowed asks Config.Allow about a.
@@ -238,6 +242,13 @@ func (m *Manager) Forget(ctx context.Context, a cliowner.Account) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if a.Identity != "" && m.cfg.Fence != nil {
+		return m.cfg.Fence(ctx, a, func() error { return m.forget(ctx, a) })
+	}
+	return m.forget(ctx, a)
+}
+
+func (m *Manager) forget(ctx context.Context, a cliowner.Account) error {
 	// A purge from before identities were kept names none: no session is keyed by it, and the
 	// host removes only the number's directory from before homes.
 	if a.Identity != "" {

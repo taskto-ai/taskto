@@ -4,6 +4,7 @@ package cliaccounts
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -520,5 +521,51 @@ func TestDisabledAdminChangesNoSharedAccountSettings(t *testing.T) {
 	list := decode[sharedList](t, admin.do(http.MethodGet, sharedPath(ws), nil))
 	if len(list.Accounts) != 1 || list.Accounts[0].Label != existing.Label || list.DefaultMode != OwnElseShared {
 		t.Fatalf("a disabled admin changed something: %+v", list)
+	}
+}
+
+// identityIn reports whether the identity can be read in v: as it is, or in any part of it a
+// base64 decoding opens (a token's dot-separated parts).
+func identityIn(v, identity string) bool {
+	if strings.Contains(v, identity) {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(v, func(r rune) bool { return r == '.' || r == '=' || r == ' ' }) {
+		for _, enc := range []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding, base64.StdEncoding, base64.RawStdEncoding} {
+			if b, err := enc.DecodeString(part); err == nil && strings.Contains(string(b), identity) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The tokens a turn's CLI gets, the proxy's and the tools', name the account in a way only this
+// server can read: the CLI holds them, and the account's identity never reaches it, even decoded.
+func TestATurnsTokensDoNotShowTheIdentity(t *testing.T) {
+	e := newTurnEnv(t)
+	e.svc.SetTools(Tools{Handler: http.NotFoundHandler()})
+	p := newProvider(t)
+	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
+	conv := e.conversation(e.other)
+	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})); d.Status != cliworker.StatusOK {
+		t.Fatalf("turn = %+v", d)
+	}
+	calls := turnCalls(t, e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID)))
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d", len(calls))
+	}
+	identity := e.acct(e.other.id).Identity
+	var tokens int
+	for _, kv := range calls[0].Env {
+		if strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=") || strings.HasPrefix(kv, "TASKTO_TOOLS_TOKEN=") {
+			tokens++
+		}
+		if identityIn(kv, identity) {
+			t.Errorf("the CLI's environment shows the account's identity: %s", kv)
+		}
+	}
+	if tokens != 2 {
+		t.Fatalf("fixture: the CLI got %d of the two tokens: %v", tokens, calls[0].Env)
 	}
 }

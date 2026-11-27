@@ -99,6 +99,9 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		// Every operation on an account's browsers follows the worker's rule for it: none while
 		// it is retired or its home is being removed.
 		Allow: w.BrowserAllowed,
+		// A deleted account's purge of its browsers is a deletion as the worker's Forget is:
+		// only the latest server's.
+		Fence: w.FenceDeletion,
 	})
 	defer browsers.Close()
 	// Removing a user's whole directory (Forget, Reconcile) stops their browsers first.

@@ -4,6 +4,7 @@ package cliworker_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -419,6 +420,10 @@ func TestIsolationRemovalEndsEveryProcessOfTheUser(t *testing.T) {
 	go func() { _ = detached.Wait(); close(ended) }()
 	t.Cleanup(func() { _ = detached.Process.Kill(); <-ended })
 
+	// The first server's census, at its start.
+	if err := h.w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now().Add(-time.Hour), map[int64]string{5: cliworker.IdentityForTest(5)})); err != nil {
+		t.Fatal(err)
+	}
 	// A restore gave 5 to another account: the old account is retired, and tidied up.
 	old := h.home(5)
 	next := cliowner.Account{User: 5, Identity: strings.Repeat("b", 32), Boot: strings.Repeat("c", 32)}
@@ -557,4 +562,36 @@ func TestIsolationRefusesAChangedUIDBase(t *testing.T) {
 		t.Fatalf("the volume's own base: %v", err)
 	}
 	w.Close()
+}
+
+// A home whose making stopped half way (after it was owned, before it was in place) is made again
+// on the account's next request, owned by its Unix user: never a home of the wrong owner refused
+// for good. What the stop left is removed when a worker starts.
+func TestIsolationAHomeInterruptedWhileMadeIsMadeAgain(t *testing.T) {
+	h := newIsolated(t)
+	ctx := context.Background()
+	h.w.SetProvisionHookForTest(func() error { return errors.New("the worker stopped here") })
+	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err == nil {
+		t.Fatal("fixture: the making of the home didn't stop")
+	}
+	h.w.SetProvisionHookForTest(nil)
+	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil {
+		t.Fatalf("the account's next request: %v", err)
+	}
+	info, err := os.Lstat(h.home(1).Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := info.Sys().(*syscall.Stat_t); int(st.Uid) != h.uid(1) {
+		t.Errorf("the home belongs to uid %d, want %d", st.Uid, h.uid(1))
+	}
+	h.w.Close()
+	w, err := cliworker.New(h.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if left, _ := filepath.Glob(filepath.Join(h.layout.Root, ".new-h*")); len(left) > 0 {
+		t.Errorf("a new worker left what the stop left: %v", left)
+	}
 }

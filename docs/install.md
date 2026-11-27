@@ -731,9 +731,11 @@ The version that keys the CLI worker's files by each account's identity (account
   directories, and their **agent browser's personal profile** (its cookies and sign-ins to
   websites). Conversations themselves are the server's and stay: their next CLI turn starts a new
   session with the conversation so far.
-- **Local mode** (`-cli-workers local`): nothing is lost. The first request of each account moves
+- **Local mode** (`-cli-workers local`): no file is lost. The first request of each account moves
   its directory (`<data>/cli/u<number>`) to its home, once, and a stop in the middle is finished
-  by the next request.
+  by the next request. A conversation's working directory moves with it, and Claude Code finds a
+  session by its working directory: a conversation's next turn may start a new CLI session with
+  the conversation so far instead of resuming the one from before the upgrade.
 
 To go back to an older version afterwards, in container mode, start it with the worker on a
 **new, empty** `cli-homes` volume and keep the upgraded one aside (detached, not mounted by
@@ -1289,6 +1291,15 @@ given one of those numbers gets a new, empty home from their first request, befo
 tidied. At its next start the server tells the worker which accounts exist, and the worker removes
 the homes of the others ([cli-workers.md](cli-workers.md#accounts-and-their-homes)).
 
+**A backup from before account homes** (made by a version before migration `0062`, which gives
+each account its identity) has no identities: when the upgraded server restores it, the migration
+gives its accounts new ones, which no home on the worker's volume has. So in container mode
+everyone loses their CLI sign-ins, the CLIs' working files and the agent browser's personal
+profile once more (their conversations stay, from the backup), and the worker removes the homes
+the census doesn't name. Nothing reaches anyone else's: it is the safe outcome of a backup that
+can't say who had which home. Keep a copy of the `cli-homes` volume first if you may want those
+files (`docker run --rm -v taskto_cli-homes:/from -v taskto_cli-homes_kept:/to alpine cp -a /from/. /to/`).
+
 From an archive file:
 
 `docker compose down` stops the backup schedule too when its profile is in `.env`'s
@@ -1414,8 +1425,8 @@ each account's files in a home of its own ([Upgrading to account homes](#upgradi
 a container worker no longer hands over a directory it made before: nothing can tell an upgrade
 from a restore made by an older version. So after that upgrade each person signs in to their CLIs
 once more (Settings → CLI accounts), and loses the CLIs' working files and the agent browser's
-personal profile; their conversations go on, with new CLI sessions. In local mode everything is
-kept. **Going back** from that version to an older one, in container mode, the older worker must
+personal profile; their conversations go on, with new CLI sessions. In local mode every file is
+kept (a conversation's next turn may still start a new CLI session). **Going back** from that version to an older one, in container mode, the older worker must
 start on a new, empty `cli-homes` volume: the roll back below says how.
 
 **Upgrade**, say from v0.1.0 to v0.2.0:
@@ -1436,7 +1447,11 @@ pull` and `docker compose up -d --no-build` instead of `--build`. Without the pr
 The old image stays as `taskto:v0.1.0` until you remove it.
 
 **Roll back** to v0.1.0 with the data from before the upgrade (anything written since is
-lost):
+lost). If v0.1.0 is from before [account homes](#upgrading-to-account-homes) and the CLI workers
+run in container mode, the older worker must start on a new, empty `cli-homes` volume: an older
+worker reads directories by user number and must never see the homes. The two lines marked so
+keep the upgraded volume aside (`taskto_cli-homes_kept`, mounted by nothing) and empty the one the
+worker mounts, before anything starts; leave them out otherwise:
 
 ```sh
 git checkout v0.1.0
@@ -1445,22 +1460,15 @@ docker compose down
 docker volume rm taskto_data
 docker compose build
 docker compose run --rm -T taskto restore - < before-v0.2.0.tar.gz
+# from before account homes, in container mode only:
+docker run --rm -v taskto_cli-homes:/from -v taskto_cli-homes_kept:/to alpine cp -a /from/. /to/
+docker run --rm -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 docker compose up -d
 ```
 
-If the version you go back to is from before [account homes](#upgrading-to-account-homes) and the
-CLI workers run in container mode, give the older worker a new, empty `cli-homes` volume before
-`docker compose up -d`, and keep the upgraded one aside, mounted by nothing (an older worker reads
-directories by user number and must never see the homes):
-
-```sh
-docker run --rm -v taskto_cli-homes:/from -v taskto_cli-homes_kept:/to alpine cp -a /from/. /to/
-docker run --rm -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-```
-
 When you upgrade again, put it back the same way (empty `taskto_cli-homes` and copy
-`taskto_cli-homes_kept` into it) before the new version starts. In local mode, move `<data>/cli` aside instead,
-and put it back before upgrading again.
+`taskto_cli-homes_kept` into it) before the new version starts. In local mode, move `<data>/cli`
+aside instead, before `docker compose up -d`, and put it back before upgrading again.
 
 The base images are pinned by digest in the `Dockerfile`, so rebuilding a version uses the
 same bases; their security updates come with new versions.

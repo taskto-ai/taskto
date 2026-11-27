@@ -54,6 +54,9 @@ func (l Layout) Home(home int64) Dirs {
 	}
 }
 
+// provisionPrefix names a home being made, before it is renamed into place (isolation_linux.go).
+const provisionPrefix = ".new-h"
+
 // legacy is the directory a worker from before homes made for user number user: Root/u<user>.
 func (l Layout) legacy(user int64) string {
 	return filepath.Join(l.Root, "u"+strconv.FormatInt(user, 10))

@@ -2,9 +2,7 @@ package cliaccounts
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -89,31 +87,19 @@ func (s *Service) mintToolsToken(c toolsClaims) (string, error) {
 	var nonce [12]byte
 	_, _ = rand.Read(nonce[:])
 	c.Nonce = b64.EncodeToString(nonce[:])
-	payload, err := json.Marshal(c)
+	token, err := sealToken(s.shared.Key, toolsTokenPrefix, toolsTokenPurpose, c)
 	if err != nil {
 		return "", err
 	}
 	s.track(toolsTokenPurpose, c.Turn, c.Nonce)
-	return toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(s.shared.Key.MAC(toolsTokenPurpose, payload)), nil
+	return token, nil
 }
 
 // readToolsToken checks a tools token's signature, expiry and nonce.
 func (s *Service) readToolsToken(token string) (toolsClaims, bool) {
 	var c toolsClaims
-	rest, ok := strings.CutPrefix(token, toolsTokenPrefix)
-	if !ok || s.shared == nil {
-		return c, false
-	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 2 {
-		return c, false
-	}
-	payload, err1 := b64.DecodeString(parts[0])
-	mac, err2 := b64.DecodeString(parts[1])
-	if err1 != nil || err2 != nil || !hmac.Equal(mac, s.shared.Key.MAC(toolsTokenPurpose, payload)) {
-		return c, false
-	}
-	if err := json.Unmarshal(payload, &c); err != nil || time.Now().Unix() > c.Expires || c.User <= 0 || c.Conversation <= 0 {
+	if s.shared == nil || !openToken(s.shared.Key, toolsTokenPrefix, toolsTokenPurpose, token, &c) ||
+		time.Now().Unix() > c.Expires || c.User <= 0 || c.Conversation <= 0 {
 		return c, false
 	}
 	return c, !s.retired(c.Nonce)

@@ -1,6 +1,7 @@
 package cliworker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/lockfile"
@@ -101,12 +103,15 @@ func homeOfName(name string) (int64, bool) {
 	return n, err == nil && n >= firstHome && n < maxHome
 }
 
-// checkCounter makes sure the next home number is above every home on the volume.
+// checkCounter makes sure the next home number is above every home on the volume, and keeps what
+// it found in memory (w.nextFree, w.usedHomes) for every allocation after it: the counter file is
+// then only ever moved on, never read back lower.
 func (w *Worker) checkCounter() error {
 	w.accountsMu.Lock()
 	defer w.accountsMu.Unlock()
 	highest := int64(0)
 	owner := map[int64]string{}
+	used := map[int64]bool{}
 	entries, err := os.ReadDir(w.accountsDir())
 	if err != nil {
 		return err
@@ -127,6 +132,7 @@ func (w *Worker) checkCounter() error {
 			return fmt.Errorf("cliworker: two accounts have home %d (%s… and %s…): the worker's volume is damaged; start the worker on a new volume", r.Home, other[:6], id[:6])
 		}
 		owner[r.Home] = id
+		used[r.Home] = true
 		highest = max(highest, r.Home)
 	}
 	for _, dir := range []string{w.cfg.Layout.Root, w.trashDir()} {
@@ -139,15 +145,19 @@ func (w *Worker) checkCounter() error {
 		}
 		for _, n := range names {
 			if home, ok := homeOfName(n.Name()); ok {
+				used[home] = true
 				highest = max(highest, home)
 			}
 		}
 	}
+	w.usedHomes = used
 	next, ok := w.readCounter()
 	if ok && next > highest {
+		w.nextFree = next
 		return nil
 	}
 	if highest == 0 && !ok {
+		w.nextFree = firstHome
 		return nil // a new volume: the counter is made by the first allocation
 	}
 	repaired := max(highest+1, int64(firstHome))
@@ -156,7 +166,11 @@ func (w *Worker) checkCounter() error {
 	}
 	slog.Warn("cliworker: the home counter was missing, damaged or behind the homes on the volume: moved past them",
 		"counter", next, "highest_home", highest, "next", repaired)
-	return writeDurably(w.stateDir(), w.counterFile(), []byte(strconv.FormatInt(repaired, 10)+"\n"))
+	if err := writeDurably(w.stateDir(), w.counterFile(), []byte(strconv.FormatInt(repaired, 10)+"\n")); err != nil {
+		return err
+	}
+	w.nextFree = repaired
+	return nil
 }
 
 // readCounter is the counter's value, and whether it could be read as one.
@@ -172,7 +186,9 @@ func (w *Worker) readCounter() (int64, bool) {
 func (w *Worker) uidBaseFile() string { return filepath.Join(w.stateDir(), "uid-base") }
 
 // pinUIDBase records base as the volume's UID base the first time, and refuses another later:
-// every account's uid is its home number plus the base it was given under.
+// every account's uid is its home number plus the base it was given under. A volume whose base
+// can't be rebuilt (homes given, no pin, and no record that says its uid) is refused too: a base
+// it accepted then might give a home's uid to another home.
 func (w *Worker) pinUIDBase(base int) error {
 	b, err := os.ReadFile(w.uidBaseFile())
 	switch {
@@ -188,28 +204,47 @@ func (w *Worker) pinUIDBase(base int) error {
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
-	// Not pinned yet: the records that say their uid must agree with base.
+	// Not pinned: the records that say their uid must agree with base, and with homes given at
+	// least one must say it.
 	recs, err := w.records()
 	if err != nil {
 		return err
 	}
+	homes, said := 0, 0
 	for _, r := range recs {
-		if r.UID != 0 && r.UID != int64(base)+r.Home {
+		if r.Home == 0 {
+			continue
+		}
+		homes++
+		if r.UID == 0 {
+			continue
+		}
+		said++
+		if r.UID != int64(base)+r.Home {
 			return fmt.Errorf("cliworker: this volume's accounts run under uid base %d: start the worker with -uid-base %d, or on a new volume", r.UID-r.Home, r.UID-r.Home)
 		}
+	}
+	if homes > 0 && said == 0 {
+		return errors.New("cliworker: this volume has homes but no record of the UID base they were given under (.worker/uid-base is gone): start the worker on a new volume")
 	}
 	return writeDurably(w.stateDir(), w.uidBaseFile(), []byte(strconv.Itoa(base)+"\n"))
 }
 
-// bootsFile keeps the server boots the worker has seen, in the order it first saw them.
+// bootsFile keeps the server boots whose censuses the worker applied, in that order.
 func (w *Worker) bootsFile() string { return filepath.Join(w.stateDir(), "boots.json") }
 
-// maxBoots bounds the boots kept: the last ones are all that ever matter.
-const maxBoots = 64
+// maxBoots bounds the boots kept: a server start each, a few kilobytes for years of them.
+const maxBoots = 4096
+
+// bootEntry is a boot whose census the worker applied, with when its server read its database.
+type bootEntry struct {
+	Boot   string    `json:"boot"`
+	Before time.Time `json:"before"`
+}
 
 type bootLog struct {
-	// Seen is the boots, oldest first.
-	Seen []string `json:"seen"`
+	// Boots is the boots, oldest first.
+	Boots []bootEntry `json:"boots"`
 }
 
 func (w *Worker) loadBoots() error {
@@ -226,34 +261,100 @@ func (w *Worker) loadBoots() error {
 		// what keeps an earlier server's census from retiring a later one's accounts.
 		return fmt.Errorf("cliworker: the log of server boots (.worker/boots.json) is damaged; remove it to start it again: %w", err)
 	}
-	w.boots = l.Seen
+	w.boots = l.Boots
 	return nil
 }
 
-// seeBoot records boot as seen, if it is new, and reports whether it is the latest: a boot first
-// seen before another is a server's that started before it.
-func (w *Worker) seeBoot(boot string) (latest bool, err error) {
-	if boot == "" {
-		return true, nil // a request from before boots were sent: nothing to order
+// Only a census registers a boot: a server's census is the first thing it sends, and the worker
+// keeps the order it applied them in. No other request registers one, so a delayed request of an
+// earlier server can't make its boot look like the latest. The caller holds w.censusMu, which every
+// census and deletion takes, so nothing registers a boot between a decision and what it decides.
+
+// latestBoot is the boot of the last census applied, "" before any.
+func (w *Worker) latestBoot() string {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	if len(w.boots) == 0 {
+		return ""
 	}
+	return w.boots[len(w.boots)-1].Boot
+}
+
+// knownBoot reports whether a census of boot was applied.
+func (w *Worker) knownBoot(boot string) bool {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	for _, b := range w.boots {
+		if b.Boot == boot {
+			return true
+		}
+	}
+	return false
+}
+
+// registerCensus takes c's boot as the latest, or refuses it with ErrStaleBoot: a boot whose
+// census was applied before another's, or one the worker never heard from whose server read its
+// database before the latest's did (an earlier server's census, delayed). The clock only ever
+// makes the worker refuse a census, which removes nothing, never apply one.
+func (w *Worker) registerCensus(c Census) error {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
 	for i, b := range w.boots {
-		if b == boot {
-			return i == len(w.boots)-1, nil
+		if b.Boot == c.Boot {
+			if i == len(w.boots)-1 {
+				return nil
+			}
+			return ErrStaleBoot
 		}
 	}
-	seen := append(append([]string(nil), w.boots...), boot)
-	if len(seen) > maxBoots {
-		seen = seen[len(seen)-maxBoots:]
+	if n := len(w.boots); n > 0 && !c.Before.After(w.boots[n-1].Before) {
+		return ErrStaleBoot
 	}
-	b, err := json.Marshal(bootLog{Seen: seen})
+	boots := append(append([]bootEntry(nil), w.boots...), bootEntry{Boot: c.Boot, Before: c.Before})
+	if len(boots) > maxBoots {
+		boots = boots[len(boots)-maxBoots:]
+	}
+	b, err := json.Marshal(bootLog{Boots: boots})
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err := writeDurably(w.stateDir(), w.bootsFile(), b); err != nil {
-		return false, err
+		return err
 	}
-	w.boots = seen
-	return true, nil
+	w.boots = boots
+	return nil
+}
+
+// deletionFence admits a deletion (Forget, a browser purge) only from the latest census's boot:
+// one an earlier server sent, delayed past a restore that brought the account back, retires and
+// removes nothing. Before any census, there is nothing to fence against. The caller holds
+// w.censusMu.
+func (w *Worker) deletionFence(boot string) error {
+	latest := w.latestBoot()
+	if latest == "" || boot == latest {
+		return nil
+	}
+	return ErrStaleBoot
+}
+
+// FenceDeletion runs do, the agent browsers' part of a deleted account's purge, as Forget is run:
+// one at a time with the censuses, only for the latest server boot, and with the account retired
+// first, so a purge an earlier server sent can't stop or remove the browser of an account a
+// restore brought back (browser.Config.Fence).
+func (w *Worker) FenceDeletion(ctx context.Context, a cliowner.Account, do func() error) error {
+	if !cliowner.IsIdentity(a.Identity) {
+		return badRequest{errors.New("invalid account")}
+	}
+	w.censusMu.Lock()
+	defer w.censusMu.Unlock()
+	if err := w.deletionFence(a.Boot); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := w.retire(a.Identity, a.User); err != nil {
+		return fmt.Errorf("recording that the account is gone: %w", err)
+	}
+	return do()
 }

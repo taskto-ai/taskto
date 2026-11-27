@@ -145,3 +145,7 @@ func (w *Worker) RetireOnlyForTest(identity string) error { return w.retire(iden
 
 // MaxHomeForTest is the first home number there is none above.
 const MaxHomeForTest = maxHome
+
+// SetProvisionHookForTest has f run as an isolated home is made, once it is owned and before it is
+// renamed into place; an error from it stops there, as a crash would.
+func (w *Worker) SetProvisionHookForTest(f func() error) { w.provisionHookForTest = f }
