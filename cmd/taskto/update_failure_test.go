@@ -725,7 +725,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 
 	// A page after the first that can't be read: nothing is installed.
 	e = setup()
-	e.gh.failPages = map[int]bool{2: true}
+	e.gh.locked(func() { e.gh.failPages = map[int]bool{2: true} })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -736,7 +736,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 
 	// The same list without the marker is taken: the newest by version.
 	e = setup()
-	e.gh.releases[2]["body"] = ""
+	e.gh.locked(func() { e.gh.releases[2]["body"] = "" })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -954,7 +954,7 @@ func TestUpdateNotifies(t *testing.T) {
 	// A notification that fails never changes the outcome: an error from the server, nothing
 	// listening, and a file that isn't an address.
 	for name, setup := range map[string]func(e *updEnv){
-		"the server answers 500": func(e *updEnv) { notify(e); e.gh.notifyStatus = 500 },
+		"the server answers 500": func(e *updEnv) { notify(e); e.gh.locked(func() { e.gh.notifyStatus = 500 }) },
 		"nothing listens":        func(e *updEnv) { e.write("etc/update-notify-url", "http://127.0.0.1:1/notify/"+secret+"\n") },
 		"not an address":         func(e *updEnv) { e.write("etc/update-notify-url", "not a url "+secret+"\n") },
 		"an address with a quote": func(e *updEnv) {

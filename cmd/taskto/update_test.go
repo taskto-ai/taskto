@@ -76,6 +76,14 @@ func (g *fakeGitHub) health(w http.ResponseWriter, file string) {
 	fmt.Fprintf(w, `{"status":"ok","version":%q,"database":"ok","agent":"ready"}`, strings.TrimSpace(string(b)))
 }
 
+// locked runs f with g's lock held: the test's goroutine changes what g serves, or reads what it
+// was sent, while g's handlers may run.
+func (g *fakeGitHub) locked(f func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	f()
+}
+
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -296,18 +304,19 @@ func (e *updEnv) writeFirewall(v string) {
 // publish puts a ref's commit on the fake raw server, and its images' revision label on the
 // fake docker. The safety script is the real one.
 func (e *updEnv) publish(ref string) {
-	e.gh.files[shaOf(ref)] = map[string]string{
+	files := map[string]string{
 		"compose.yaml":              "# compose " + ref + "\n# TASKTO_IMAGE_PREFIX\n",
 		"deploy/Caddyfile":          "caddy\n",
 		"deploy/worker-firewall.sh": firewallScript + "# " + updOld + "\n",
 		"deploy/safety-check.sh":    readRepoFile(e.t, "deploy/safety-check.sh"),
 	}
+	e.gh.locked(func() { e.gh.files[shaOf(ref)] = files })
 	e.write("fake/revision-"+ref, shaOf(ref))
 }
 
 // file of the commit of a ref, to change it.
 func (e *updEnv) commitFile(ref, name, content string) {
-	e.gh.files[shaOf(ref)][name] = content
+	e.gh.locked(func() { e.gh.files[shaOf(ref)][name] = content })
 }
 
 // mutate makes a version's running containers break a safety rule.
@@ -323,7 +332,9 @@ func (e *updEnv) mutate(version string, kinds ...string) {
 func (e *updEnv) setRunning(v string) { e.write("fake/running", v+"\n") }
 
 func (e *updEnv) release(tag, body string, draft, pre bool) {
-	e.gh.releases = append(e.gh.releases, map[string]any{"tag_name": tag, "body": body, "draft": draft, "prerelease": pre})
+	e.gh.locked(func() {
+		e.gh.releases = append(e.gh.releases, map[string]any{"tag_name": tag, "body": body, "draft": draft, "prerelease": pre})
+	})
 	e.publish(tag)
 }
 
@@ -611,7 +622,7 @@ func TestUpdateSucceeds(t *testing.T) {
 		t.Errorf("last_change = %v", last)
 	}
 	// A run with nothing new keeps what the last change was.
-	e.gh.releases = e.gh.releases[:0]
+	e.gh.locked(func() { e.gh.releases = e.gh.releases[:0] })
 	e.release(updNew, "", false, false)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("second run exit %d", code)
@@ -723,7 +734,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 			"can't pull caddy:",
 		},
 		"a file that isn't there": {
-			func(e *updEnv) { delete(e.gh.files[shaOf(updNew)], "deploy/Caddyfile") },
+			func(e *updEnv) { e.gh.locked(func() { delete(e.gh.files[shaOf(updNew)], "deploy/Caddyfile") }) },
 			"can't fetch deploy/Caddyfile",
 		},
 		"images that aren't built from the commit": {
@@ -791,7 +802,7 @@ func TestUpdatePreflightFailuresTouchNothing(t *testing.T) {
 			"the public address doesn't answer as " + updOld + " before the update",
 		},
 		"a tag that isn't a commit": {
-			func(e *updEnv) { delete(e.gh.files, shaOf(updNew)) },
+			func(e *updEnv) { e.gh.locked(func() { delete(e.gh.files, shaOf(updNew)) }) },
 			"can't resolve " + updNew,
 		},
 	} {
@@ -959,8 +970,10 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 	}
 	// Newest first: a commit whose CI failed, one off a side branch, one whose images aren't
 	// published, the one to take, and the install's own.
-	e.gh.runs = []map[string]any{run(red, "failure"), run(diverged, "success"), run(unpublished, "success"), run(green, "success"), run(a, "success")}
-	e.gh.compare = map[string]string{red: "ahead", diverged: "diverged", unpublished: "ahead", green: "ahead", a: "identical"}
+	e.gh.locked(func() {
+		e.gh.runs = []map[string]any{run(red, "failure"), run(diverged, "success"), run(unpublished, "success"), run(green, "success"), run(a, "success")}
+		e.gh.compare = map[string]string{red: "ahead", diverged: "diverged", unpublished: "ahead", green: "ahead", a: "identical"}
+	})
 	for _, c := range []string{unpublished, green} {
 		e.publish(c)
 	}
@@ -986,8 +999,10 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 	}
 
 	// Now on it: nothing newer.
-	e.gh.runs = []map[string]any{run(green, "success"), run(a, "success")}
-	e.gh.compare[green] = "identical"
+	e.gh.locked(func() {
+		e.gh.runs = []map[string]any{run(green, "success"), run(a, "success")}
+		e.gh.compare[green] = "identical"
+	})
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}

@@ -171,24 +171,24 @@ func (e *updEnv) publicAt(dir string) (s struct {
 func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		prepare func(e *updEnv)
+		prepare func(t *testing.T, e *updEnv)
 		extra   func(e *updEnv) []string
 	}{
 		// Only the last directory of the path is the updater's to make right; the ones above it
 		// are the host's.
 		"a directory above it is writable by its group": {
-			prepare: func(e *updEnv) { chmod(t, e.sub("outer"), 0o775) },
+			prepare: func(t *testing.T, e *updEnv) { chmod(t, e.sub("outer"), 0o775) },
 			extra:   func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=" + e.dir + "/outer/public"} },
 		},
 		"a directory above it is writable by anyone": {
-			prepare: func(e *updEnv) { chmod(t, e.sub("outer"), 0o777) },
+			prepare: func(t *testing.T, e *updEnv) { chmod(t, e.sub("outer"), 0o777) },
 			extra:   func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=" + e.dir + "/outer/public"} },
 		},
 		"the directory is somebody else's": {extra: func(e *updEnv) []string {
 			return []string{fmt.Sprintf("TASKTO_UPDATE_OWNER=%d", os.Getuid()+1)}
 		}},
 		"above it, a link to a directory others can write": {
-			prepare: func(e *updEnv) {
+			prepare: func(t *testing.T, e *updEnv) {
 				chmod(t, e.sub("elsewhere"), 0o777)
 				if err := os.Symlink(filepath.Join(e.dir, "elsewhere"), filepath.Join(e.dir, "viaLink")); err != nil {
 					t.Fatal(err)
@@ -196,7 +196,7 @@ func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 			},
 			extra: func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=" + e.dir + "/viaLink/public"} },
 		},
-		"it is a link to a file": {prepare: func(e *updEnv) {
+		"it is a link to a file": {prepare: func(t *testing.T, e *updEnv) {
 			e.write("file", "x")
 			if err := os.Symlink(filepath.Join(e.dir, "file"), filepath.Join(e.state, "public")); err != nil {
 				t.Fatal(err)
@@ -211,7 +211,7 @@ func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.prepare != nil {
-				tc.prepare(e)
+				tc.prepare(t, e)
 			}
 			if tc.extra != nil {
 				e.extra = tc.extra(e)

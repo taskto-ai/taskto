@@ -154,10 +154,10 @@ func TestUpdateRequestedRespectsTheGates(t *testing.T) {
 			e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_CHANNEL=off\n")
 		}, 0, "skipped", "off", "automatic updates are off"},
 		"a release that needs a person": {func(e *updEnv) {
-			e.gh.releases = []map[string]any{}
+			e.gh.locked(func() { e.gh.releases = []map[string]any{} })
 			e.release(updNew, "Notes\nmanual-upgrade: true\n", false, false)
 		}, 0, "skipped", "manual-upgrade", "needs manual steps"},
-		"nothing newer": {func(e *updEnv) { e.gh.releases = []map[string]any{} }, 0, "up-to-date", "", "no release is newer"},
+		"nothing newer": {func(e *updEnv) { e.gh.locked(func() { e.gh.releases = []map[string]any{} }) }, 0, "up-to-date", "", "no release is newer"},
 		"a stopped update": {func(e *updEnv) {
 			e.write("state/blocked", "an earlier update stopped\n")
 		}, 1, "blocked", "blocked", "taskto-update --clear-block"},

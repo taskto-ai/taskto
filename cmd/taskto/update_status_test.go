@@ -277,7 +277,7 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 	// Back on, and nothing newer than what is installed (the person updated by hand, outside the
 	// updater's own log): a run that looks clears it.
 	e.write("etc/install.env", strings.Replace(e.read("etc/install.env"), "TASKTO_UPDATE_CHANNEL='off'\n", "", 1))
-	e.gh.releases = []map[string]any{}
+	e.gh.locked(func() { e.gh.releases = []map[string]any{} })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -294,7 +294,7 @@ func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t 
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	e.gh.releases = nil // the fake answers `null`, which isn't a release list
+	e.gh.locked(func() { e.gh.releases = nil }) // the fake answers `null`, which isn't a release list
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}

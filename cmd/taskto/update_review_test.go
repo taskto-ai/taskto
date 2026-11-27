@@ -386,11 +386,10 @@ func TestUpdateStopTurnsOffRestartPoliciesAndConfirmsTheStop(t *testing.T) {
 			if b, _ := st["backup"].(string); b == "" || !strings.Contains(fmt.Sprint(st["reason"]), "restore the backup "+b) {
 				t.Errorf("the report doesn't name the backup: %v", st)
 			}
-			e.gh.mu.Lock()
-			notified := len(e.gh.notifications) == 1 && e.gh.notifications[0].Body["result"] == tc.result
-			e.gh.mu.Unlock()
-			if !notified {
-				t.Errorf("the alert doesn't say %s: %+v", tc.result, e.gh.notifications)
+			var sent []notification
+			e.gh.locked(func() { sent = append(sent, e.gh.notifications...) })
+			if len(sent) != 1 || sent[0].Body["result"] != tc.result {
+				t.Errorf("the alert doesn't say %s: %+v", tc.result, sent)
 			}
 			code, out := e.run()
 			if code != 1 || !strings.Contains(out, "blocked") {
@@ -449,7 +448,7 @@ func TestUpdateRefusesAVersionWithoutSafetyRulesAndPointsAtTheRunbook(t *testing
 	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	delete(e.gh.files[shaOf(updOld)], "deploy/safety-check.sh")
+	e.gh.locked(func() { delete(e.gh.files[shaOf(updOld)], "deploy/safety-check.sh") })
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
