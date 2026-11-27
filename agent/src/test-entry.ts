@@ -24,4 +24,12 @@ if (modelPauseMs > 0) {
   }
 }
 
+const continuePauseMs = Number(process.env.TASKTO_AGENT_TEST_CONTINUE_PAUSE_MS ?? 0)
+if (continuePauseMs > 0) {
+  testHooks.beforeContinueWrite = () => {
+    console.error('test: the continue is waiting before its commit')
+    return new Promise((resolve) => setTimeout(resolve, continuePauseMs))
+  }
+}
+
 await import('./index.js')

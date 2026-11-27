@@ -15,6 +15,7 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
+	Continue(ctx context.Context, conversation int64) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
 	Model(ctx context.Context, conversation int64) (agentrt.ModelRef, error)

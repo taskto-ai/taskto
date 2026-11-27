@@ -318,6 +318,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
+| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
@@ -5575,6 +5576,19 @@ What the model sees next, simplified to role and text:
 conversation's next model request on, also in the middle of a run: `200` with the model;
 `400 unknown model` for one the caller may not use or that isn't configured; `409` for an
 archived conversation.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/continue`
+
+Runs the conversation again on what it holds, with no new message: for a reply that failed (the
+model's provider refused it, for a limit or an overload) and now has another model, or the same
+one again. Nothing is sent in the body. `202 {"submission_id": 12}`; the answer arrives through the
+events stream. Only the conversation's owner, and only while the conversation is idle: `409
+conversation_busy` while it works (a continue never queues), `409 conversation_archived` for an
+archived one, `404` for one the caller doesn't own or that doesn't exist. Like a message, it checks
+access and the archive again just before passing the request to the agent runtime. A conversation
+whose context has nothing to answer (it ends in an answer) starts no run and settles as
+unanswered. The web app offers it, with the model switch (`PUT …/model`) first, on a failed last
+reply.
 
 ### `POST /api/workspaces/{workspace}/conversations/{conversation}/stop`
 

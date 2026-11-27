@@ -5,6 +5,7 @@ import { format } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import {
+  ConversationBusy,
   type ConversationId,
   type Cursor,
   configure,
@@ -99,7 +100,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly reason?: 'unknown_model' | 'no_model',
+    readonly reason?: 'unknown_model' | 'no_model' | 'busy',
   ) {
     super(message)
   }
@@ -311,6 +312,21 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           if (lang.tag !== language) lang.tag = language
         }
       }, context)
+      return send(res, 202, { submissionId })
+    }
+    if (req.method === 'POST' && action === 'continue') {
+      const conv = await conversation(id)
+      let submissionId: SubmissionId | undefined
+      await testHooks.beforeContinueWrite?.()
+      try {
+        await conv.commit(async (tx) => {
+          if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+          submissionId = await conv.submit(tx, { type: 'continue' })
+        }, context)
+      } catch (error) {
+        if (error instanceof ConversationBusy) throw new HttpError(409, 'the conversation is busy', 'busy')
+        throw error
+      }
       return send(res, 202, { submissionId })
     }
     if (req.method === 'POST' && action === 'retire') {

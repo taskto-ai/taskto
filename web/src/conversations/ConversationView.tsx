@@ -21,6 +21,7 @@ import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
+import { ContinueBar } from './ContinueBar'
 import { ConversationHead } from './ConversationHead'
 import './Conversations.css'
 import { type History, useHistory } from './history'
@@ -213,6 +214,18 @@ export function ConversationView({
         onLoadEarlier={older.loadEarlier}
         loadingEarlier={older.loading}
         earlierError={older.error}
+        footer={
+          last?.failed && !running && !archived && !unreadable && providers.data && model ? (
+            <ContinueBar
+              base={base}
+              providers={providers.data}
+              current={model}
+              cli={cli.data}
+              onChosen={setPicked}
+              onContinued={onChanged}
+            />
+          ) : undefined
+        }
       />
       <Composer
         workspace={workspace}

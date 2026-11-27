@@ -5,4 +5,5 @@ export const testHooks = {
   spikeTools: false,
   extraToolSpecs: [] as ToolSpec[],
   beforeModelWrite: undefined as (() => Promise<void>) | undefined,
+  beforeContinueWrite: undefined as (() => Promise<void>) | undefined,
 }

@@ -34,6 +34,7 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base+"/{conversation}/messages", member(s.handleMessages))
 	mux.Handle("GET "+base+"/{conversation}/model", member(s.handleModel))
 	mux.Handle("PUT "+base+"/{conversation}/model", member(s.handleSetModel))
+	mux.Handle("POST "+base+"/{conversation}/continue", member(s.handleContinue))
 	mux.Handle("POST "+base+"/{conversation}/stop", member(s.handleStop))
 	mux.Handle("GET "+base+"/{conversation}/entries", member(s.handleEntries))
 	mux.Handle("GET "+base+"/{conversation}/events", member(s.handleEvents))
@@ -146,6 +147,7 @@ func agentError(w http.ResponseWriter, r *http.Request, err error) {
 var agentRefusals = map[string]apierr.Code{
 	"unknown_model": apierr.CodeModelUnknown,
 	"no_model":      apierr.CodeConversationNoModel,
+	"busy":          apierr.CodeConversationBusy,
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +330,36 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	s.markWhenSettled(rt, c.ID, c.agentID, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
+}
+
+type SubmissionReply struct {
+	SubmissionID int64 `json:"submission_id"`
+}
+
+func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.writable(w, r)
+	if !ok {
+		return
+	}
+	rt, ok := s.runtime(w, r)
+	if !ok {
+		return
+	}
+	if !s.stillWritable(w, r) {
+		return
+	}
+	sub, err := rt.Continue(r.Context(), c.agentID)
+	if err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
+	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
+		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
+	}
+	s.markWhenSettled(rt, c.ID, c.agentID, sub)
+	user, _ := caller(r)
+	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "by", user)
+	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub})
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {

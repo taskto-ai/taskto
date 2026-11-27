@@ -32,6 +32,7 @@ export type ChatMessage = {
   text: string
   tools: ToolUse[]
   error?: string
+  failed?: boolean
   pending?: boolean
 }
 
@@ -137,6 +138,7 @@ function toMessage(
       : undefined
   const out: ChatMessage = { key, role: m.role, text: textOf(m.content), tools: toolsOf(m.content, key, saved, done) }
   if (error) out.error = error
+  if (m.role === 'assistant' && m.stopReason === 'error') out.failed = true
   if (pending) out.pending = true
   if (!out.text && out.tools.length === 0 && !out.error && !pending) return null
   return out

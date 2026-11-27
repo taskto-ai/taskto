@@ -451,6 +451,27 @@
     }
   }
 
+  .ui-chat-continue {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .ui-chat-continue-select {
+    flex: 0 1 auto;
+    inline-size: auto;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .ui-chat-continue-note {
+    flex-basis: 100%;
+    font: var(--type-small);
+    color: var(--color-danger);
+  }
+
   .ui-chat-model-note {
     order: 1;
     flex-basis: 100%;
