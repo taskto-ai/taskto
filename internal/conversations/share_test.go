@@ -1,6 +1,7 @@
 package conversations
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -295,9 +296,19 @@ func TestAShareEndsWithMembership(t *testing.T) {
 	}
 	admin.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/enable", ws, reader.id), nil)
 
+	owner.expect(http.StatusOK, http.MethodPost, "/api/login", map[string]string{"email": "owner2@example.com", "password": password})
+	second := owner.create(ws, nil)
+	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/members/%d", second.ID, reader.id)), map[string]any{"role": "viewer"})
 	admin.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, reader.id), nil)
 	if n := e.count(`SELECT count(*) FROM conversation_members`); n != 0 {
 		t.Fatalf("a member who left the workspace keeps %d shares", n)
+	}
+	want := []string{
+		fmt.Sprintf(`actor=%d workspace=%d conversation=%d {"user_id":%d}`, admin.id, ws, conv.ID, reader.id),
+		fmt.Sprintf(`actor=%d workspace=%d conversation=%d {"user_id":%d}`, admin.id, ws, second.ID, reader.id),
+	}
+	if rows := e.auditRows("conversation_unshared"); fmt.Sprint(rows) != fmt.Sprint(want) {
+		t.Fatalf("audit rows = %q, want one for each share the departure ended: %q", rows, want)
 	}
 	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, ws, reader.id); err != nil {
 		t.Fatal(err)
@@ -446,5 +457,36 @@ func TestASharedStreamCountsAgainstTheViewer(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("a second stream of the viewer = %d, want 429", res.StatusCode)
+	}
+}
+
+func TestAStaleOwnerCannotShareOrUnshareAnotherConversation(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	reader := e.invite(owner, ws, "reader@example.com")
+	other := e.invite(owner, ws, "other@example.com")
+	conv := owner.create(ws, nil)
+	one := path(ws, fmt.Sprintf("/%d", conv.ID))
+	owner.expect(http.StatusOK, http.MethodPut, one+fmt.Sprintf("/members/%d", reader.id), map[string]any{"role": "viewer"})
+
+	read, err := e.svc.reach(t.Context(), ws, owner.id, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, 9999, '')`,
+		conv.ID, ws, other.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.share(t.Context(), read, owner.id, reader.id, RoleViewer); !errors.Is(err, errNotFound) {
+		t.Fatalf("share on a conversation that changed hands = %v, want %v", err, errNotFound)
+	}
+	if err := e.svc.unshare(t.Context(), read, reader.id); !errors.Is(err, errNotFound) {
+		t.Fatalf("unshare on a conversation that changed hands = %v, want %v", err, errNotFound)
+	}
+	if n := e.count(`SELECT count(*) FROM conversation_members`); n != 0 {
+		t.Fatalf("%d shares of the new conversation", n)
 	}
 }

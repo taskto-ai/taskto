@@ -217,7 +217,7 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
       />
-      {!readOnly && (
+      {!readOnly && Boolean(meta.data || meta.error) && (
         <Composer
           workspace={workspace}
           base={base}

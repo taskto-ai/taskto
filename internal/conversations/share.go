@@ -41,6 +41,18 @@ func (s *Service) Readable(ctx context.Context, workspace, user, id int64) (titl
 	return c.Title, c.Owner.Name, true, nil
 }
 
+func stillOwnedBy(ctx context.Context, tx *sql.Tx, c Conversation) error {
+	var same bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM conversations WHERE id = ? AND owner_id = ? AND agent_id = ?)`,
+		c.ID, c.Owner.ID, c.agentID).Scan(&same); err != nil {
+		return err
+	}
+	if !same {
+		return errNotFound
+	}
+	return nil
+}
+
 func (s *Service) members(ctx context.Context, id int64) (Members, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT u.id, u.name, m.role, m.added_at
 		FROM conversation_members m JOIN users u ON u.id = m.user_id
@@ -79,6 +91,9 @@ func (s *Service) share(ctx context.Context, c Conversation, actor, target int64
 		return Member{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := stillOwnedBy(ctx, tx, c); err != nil {
+		return Member{}, err
+	}
 	var inWorkspace bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ?)`,
 		c.WorkspaceID, target).Scan(&inWorkspace); err != nil {
@@ -138,6 +153,9 @@ func (s *Service) unshare(ctx context.Context, c Conversation, target int64) err
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := stillOwnedBy(ctx, tx, c); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?`, c.ID, target)
 	if err != nil {
 		return err
@@ -202,6 +220,8 @@ func (s *Service) handleShare(w http.ResponseWriter, r *http.Request) {
 	user, _ := caller(r)
 	m, err := s.share(r.Context(), c, user, target, req.Role)
 	switch {
+	case errors.Is(err, errNotFound):
+		writeError(w, http.StatusNotFound, apierr.CodeConversationNotFound, errNotFound.Error())
 	case errors.Is(err, errNotWorkspaceMember):
 		writeError(w, http.StatusNotFound, apierr.CodeMemberNotFound, "member not found")
 	case errors.Is(err, errMembersLimit):
@@ -229,6 +249,8 @@ func (s *Service) handleUnshare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch err := s.unshare(r.Context(), c, target); {
+	case errors.Is(err, errNotFound):
+		writeError(w, http.StatusNotFound, apierr.CodeConversationNotFound, errNotFound.Error())
 	case errors.Is(err, errNotShared):
 		writeError(w, http.StatusNotFound, apierr.CodeConversationMemberGone, "that person doesn't have this conversation shared")
 	case err != nil:

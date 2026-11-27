@@ -145,6 +145,48 @@ test('a person it is shared with sees it read only: no composer, no rename, no s
   expect(calls.some((c) => c.method !== 'GET')).toBe(false)
 })
 
+test('nothing can be typed until the conversation says who it belongs to', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    ...MODELS,
+    'GET /api/workspaces/1/conversations/7': async () => {
+      await held
+      return { body: conversation({ role: 'viewer', owner: { id: 5, name: 'Eve' } }) }
+    },
+  })
+  render(view(fakeStreams().factory))
+  await screen.findByRole('region', { name: 'Conversation' })
+  expect(screen.queryByLabelText('Message')).toBeNull()
+  release()
+  await screen.findByText('Shared by Eve · read only')
+  expect(screen.queryByLabelText('Message')).toBeNull()
+})
+
+test('the dialog reads who it is shared with each time it opens', async () => {
+  let shared: unknown[] = []
+  const calls = fakeFetch({
+    ...MODELS,
+    'GET /api/workspaces/1/conversations/7': { body: conversation() },
+    'GET /api/workspaces/1/conversations/7/members': () => ({ body: { members: shared } }),
+    'GET /api/workspaces/1/members': { body: workspaceMembers },
+  })
+  render(view(fakeStreams().factory))
+  fireEvent.click(await screen.findByRole('button', { name: 'Share' }))
+  const first = await screen.findByRole('dialog', { name: 'Share this conversation' })
+  await within(first).findByText("It isn't shared with anyone.")
+  fireEvent.click(within(first).getByRole('button', { name: 'Done' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+  shared = [{ user: { id: 3, name: 'Cy' }, role: 'viewer', added_at: '2026-11-19T10:00:00.000Z' }]
+  fireEvent.click(screen.getByRole('button', { name: 'Share' }))
+  const again = await screen.findByRole('dialog', { name: 'Share this conversation' })
+  expect(await within(again).findByRole('button', { name: 'Stop sharing with Cy' })).toBeTruthy()
+  expect(calls.filter((c) => c.path === '/api/workspaces/1/conversations/7/members')).toHaveLength(2)
+})
+
 test('the owner has the composer and no read only notice', async () => {
   fakeFetch({ ...MODELS, 'GET /api/workspaces/1/conversations/7': { body: conversation() } })
   render(view(fakeStreams().factory))

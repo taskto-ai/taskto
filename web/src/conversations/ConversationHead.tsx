@@ -175,7 +175,7 @@ export function ConversationHead({
         )}
       </div>
       {error && <Notice tone="danger">{error}</Notice>}
-      {conversation && !reader && (
+      {conversation && !reader && sharing && (
         <ShareDialog
           workspace={workspace}
           url={url}
