@@ -31,13 +31,14 @@ func TestTheLimitsAreReadAgainBeforeANewKeysCall(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The lookup can't be read, so the key is asked again, and Stripe answers with the session it
-			// kept, which has expired: the try moves on to the next key. The admin changes the limits while
-			// that call is out.
+			// kept, which has expired: the try moves on to the next key. The admin changes the limits
+			// meanwhile.
 			p.fake.Fail(testprovider.Unavailable().On(http.MethodGet, "/v1/checkout/sessions"))
-			p.svc.afterWriteAhead = func() error {
+			// The change commits once the replay has left, before the next key's call is written ahead
+			// (one after the write-ahead is TestALimitChangedBeforeTheCallLeavesStopsIt's).
+			p.svc.beforeSettle = func(string) {
+				p.svc.beforeSettle = nil
 				p.exec(change, p.in.ID)
-				p.svc.afterWriteAhead = nil
-				return nil
 			}
 			_, err := p.svc.OpenPaymentLink(context.Background(), req)
 			var pe *paylink.Error

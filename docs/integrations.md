@@ -642,9 +642,13 @@ write.
 - **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
   than the currency has, zero or less, above the integration's ceiling, or a currency the integration
   doesn't list are each refused, with a code that says which, before anything is made. The limits
-  (and that the integration is on and allowed in the space) are read again right before every call
-  leaves, so a try that moves on from an expired key to a new one is refused by a ceiling lowered
-  meanwhile. The money limits (the ceiling, the currencies) never stop the lookup of a key whose
+  (and that the integration is on and allowed in the space) are read again for every call: in the
+  transaction that writes the call ahead, which holds the write lock, so a change of the limits commits
+  either before it (and refuses the call) or after it; and once more right before the call leaves, so a
+  change committed after the write-ahead still stops a call that hasn't left, which is then noted as
+  one that never ran. A try that moves on from an expired key to a new one is refused by a ceiling
+  lowered meanwhile. Only a change made while the request is already on its way to the provider comes
+  after the call. The money limits (the ceiling, the currencies) never stop the lookup of a key whose
   outcome is unknown: its object, if it turns up, is the link, and the key is not asked again past them
   (the entry waits on the lookup, then fails with `integration_outcome_unknown` for an admin). The
   integration must still be on and allowed in the app's space: one switched off, taken from the space

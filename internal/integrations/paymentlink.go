@@ -286,18 +286,22 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			}
 			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationConditionChanged}
 		}
-		// The admin's limits as they are now, read again right before the call leaves: a try that moved on
-		// from an expired key asks for a new link, and a ceiling lowered since the try began refuses it.
-		// A key whose outcome is unknown is not asked again past them; it is only looked for.
-		if err := s.limitsAllow(ctx, req); err != nil {
+		// The admin's limits as they are now: a try that moved on from an expired key asks for a new link,
+		// and a ceiling lowered since the try began refuses it. They are read in the transaction that
+		// writes the call ahead (which holds the write lock, so a change of the limits commits before it,
+		// and is seen, or after it), and once more right before the call leaves. A key whose outcome is
+		// unknown is not asked again past them; it is only looked for.
+		refusedBy := func(err error) error {
 			if a.unknown() {
-				return paylink.Link{}, s.stillUnknown(ctx, a)
+				return s.stillUnknown(ctx, a)
 			}
-			return paylink.Link{}, err
+			return err
 		}
 		// The call is written ahead before it leaves, and that record is never taken back.
-		if ok, err := s.writeAhead(ctx, ref, a); err != nil {
+		if ok, refused, err := s.writeAhead(ctx, ref, a, req); err != nil {
 			return paylink.Link{}, err
+		} else if refused != nil {
+			return paylink.Link{}, refusedBy(refused)
 		} else if !ok {
 			// Another try resolved the key or moved the ref on meanwhile: read it again.
 			if ref, err = s.refByID(ctx, ref.id); err != nil {
@@ -312,6 +316,17 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			if err := s.afterWriteAhead(); err != nil {
 				return paylink.Link{}, err
 			}
+		}
+		// A change of the limits committed after the write-ahead stops the call that hasn't left: it is
+		// noted as one that never ran, so the key's outcome is as it was before it.
+		if refused := s.limitsAllow(ctx, s.store.db, req); refused != nil {
+			if errors.As(refused, new(*paylink.Error)) {
+				if a, err = s.noteNotExecuted(ctx, a); err != nil {
+					return paylink.Link{}, err
+				}
+				return paylink.Link{}, refusedBy(refused)
+			}
+			return paylink.Link{}, refused
 		}
 		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(a, req.Description))
 		if err != nil {
@@ -726,14 +741,15 @@ func (s *Service) pageURLs() (success, cancel string) {
 
 // limitsAllow says whether the integration may make the request's link now: it is still there, on and
 // allowed in the app's space, and the amount and currency are within the admin's limits as they are now.
-func (s *Service) limitsAllow(ctx context.Context, req paylink.Request) error {
-	rec, err := s.store.getSnapshot(ctx, req.WorkspaceID, req.IntegrationID)
+// It reads through q: the write-ahead's transaction, or the database.
+func (s *Service) limitsAllow(ctx context.Context, q querier, req paylink.Request) error {
+	rec, err := s.store.get(ctx, q, req.WorkspaceID, req.IntegrationID)
 	if errors.Is(err, errNotFound) {
 		return unavailable()
 	} else if err != nil {
 		return err
 	}
-	usable, err := s.store.usable(ctx, req.WorkspaceID, req.IntegrationID, req.SpaceID)
+	usable, err := s.store.usableIn(ctx, q, req.WorkspaceID, req.IntegrationID, req.SpaceID)
 	if err != nil {
 		return err
 	}
@@ -1023,19 +1039,36 @@ var errRefMoved = errors.New("the payment link's reference moved on")
 // writeAhead records, before a call under the key leaves, that it is sent: the key's outcome is unknown
 // from here until something resolves it, whatever becomes of this process. It says false, and records
 // nothing, when the key is no longer the ref's current one or has an outcome (another try moved on).
-func (s *Service) writeAhead(ctx context.Context, r ref, a attempt) (bool, error) {
+//
+// The admin's limits are read in the same transaction (limitsAllow), which holds the write lock: refused
+// says why they don't allow the call now, and nothing is written ahead then.
+func (s *Service) writeAhead(ctx context.Context, r ref, a attempt, req paylink.Request) (ok bool, refused, err error) {
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if lerr := s.limitsAllow(ctx, tx, req); lerr != nil {
+		if errors.As(lerr, new(*paylink.Error)) {
+			return false, lerr, nil
+		}
+		return false, nil, lerr
+	}
 	at := s.store.stamp(s.store.now())
-	res, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET sends = sends + 1,
+	res, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET sends = sends + 1,
 			first_sent_at = coalesce(first_sent_at, ?), unknown_since = coalesce(unknown_since, ?)
 		WHERE ref_id = ? AND seq = ? AND outcome IS NULL
 			AND EXISTS (SELECT 1 FROM integration_refs WHERE id = ? AND key_seq = ? AND provider_object_id IS NULL
 				AND state IN ('creating', 'failed'))`,
 		at, at, a.refID, a.seq, r.id, a.seq)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	n, err := res.RowsAffected()
-	return n == 1, err
+	if err != nil {
+		return false, nil, err
+	}
+	return n == 1, nil, tx.Commit()
 }
 
 // noteNotExecuted records that a call under the key certainly never ran, and returns the key as it is

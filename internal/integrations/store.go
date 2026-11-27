@@ -881,8 +881,13 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 
 // usable reports whether the workspace's integration is enabled and allowed in the space.
 func (s *Store) usable(ctx context.Context, workspace, integration, space int64) (bool, error) {
+	return s.usableIn(ctx, s.db, workspace, integration, space)
+}
+
+// usableIn is usable, read through q.
+func (s *Store) usableIn(ctx context.Context, q querier, workspace, integration, space int64) (bool, error) {
 	var ok bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integrations i
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integrations i
 		JOIN integration_spaces s ON s.integration_id = i.id
 		WHERE i.id = ? AND i.workspace_id = ? AND i.disabled_at IS NULL AND s.space_id = ?)`, integration, workspace, space).Scan(&ok)
 	return ok, err
