@@ -37,6 +37,9 @@ const (
 	kIconName
 	kRule
 	kScreenRefs
+	kField
+	kActionRef
+	kColumns
 )
 
 type prop struct {
@@ -48,6 +51,16 @@ type prop struct {
 func req(k kind) prop            { return prop{kind: k, required: true} }
 func opt(k kind) prop            { return prop{kind: k} }
 func enum(values ...string) prop { return prop{kind: kEnum, values: values} }
+func fieldNamed(types ...string) prop {
+	return prop{kind: kField, values: types}
+}
+func actionNamed(kinds ...string) prop {
+	return prop{kind: kActionRef, values: kinds}
+}
+func required(p prop) prop {
+	p.required = true
+	return p
+}
 func props(m map[string]prop) map[string]prop {
 	m["accessibility"] = opt(kAccessibility)
 	m["weight"] = opt(kNumber)
@@ -117,7 +130,15 @@ var components = map[string]map[string]prop{
 		"max":        opt(kDynString),
 		"label":      opt(kDynString),
 	}),
-	"Stat":           {"label": req(kDynString), "value": req(kDynString)},
+	"Stat": {"label": req(kDynString), "value": req(kDynString)},
+	"Table": props(map[string]prop{
+		"items":   req(kDynValue),
+		"columns": req(kColumns),
+		"label":   req(kDynString),
+		"open":    actionNamed(ActionNavigate),
+		"sort":    fieldNamed(columnTypes...),
+		"dir":     enum("asc", "desc"),
+	}),
 	"Show":           {"when": req(kRule), "source": enum("draft", "record"), "child": req(kComponentID)},
 	"PhotoInput":     {"field": req(kString), "label": opt(kDynString), "value": req(kDynStringList)},
 	"Photos":         {"label": opt(kDynString), "value": req(kDynStringList)},
@@ -126,6 +147,13 @@ var components = map[string]map[string]prop{
 	"BarcodeInput":   {"field": req(kString), "label": opt(kDynString), "value": req(kDynString)},
 	screensComponent: {"current": req(kDynString), "screens": req(kScreenRefs)},
 }
+
+var columnTypes = []string{TypeString, TypeNumber, TypeDate, TypeTime, TypeChoice, TypeBoolean, TypeBarcode}
+
+const (
+	maxTableColumns = 12
+	tableItemsPath  = "/items"
+)
 
 var inputFields = map[string]string{
 	"PhotoInput":     TypeAttachment,
@@ -309,6 +337,11 @@ func (c *screenCheck) component(id string, obj map[string]any) error {
 			return fmt.Errorf("%s needs %q", name, key)
 		}
 	}
+	if name == "Table" {
+		if items, _ := obj["items"].(map[string]any); items["path"] != tableItemsPath || len(items) != 1 {
+			return fmt.Errorf(`the Table's items must be {"path": %q}`, tableItemsPath)
+		}
+	}
 	if want, isInput := inputFields[name]; isInput {
 		field, _ := obj["field"].(string)
 		if f, ok := c.collection.field(field); !ok || f.Type != want {
@@ -393,6 +426,21 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 		return rule.check(c.collection)
 	case kScreenRefs:
 		return fmt.Errorf("only the server adds the host of the screens")
+	case kField:
+		return c.fieldRef(p, v)
+	case kActionRef:
+		return c.actionRef(p, v)
+	case kColumns:
+		list, ok := v.([]any)
+		if !ok || len(list) < 1 || len(list) > maxTableColumns {
+			return fmt.Errorf("must be a list of 1 to %d columns", maxTableColumns)
+		}
+		return eachObject(v, func(i int, o map[string]any) error {
+			return c.object(id, o, map[string]prop{
+				"field": required(fieldNamed(columnTypes...)),
+				"label": req(kDynString),
+			}, depth+1)
+		})
 	case kIconName:
 		switch n := v.(type) {
 		case string:
@@ -410,6 +458,39 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 		}
 	default:
 		return fmt.Errorf("unknown kind of prop")
+	}
+	return nil
+}
+
+func (c *screenCheck) fieldRef(p prop, v any) error {
+	name, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("must be the name of a field of the collection")
+	}
+	f, declared := c.collection.field(name)
+	if !declared {
+		return fmt.Errorf("%q is not a field of the collection", name)
+	}
+	if len(p.values) > 0 && !slices.Contains(p.values, f.Type) {
+		return fmt.Errorf("field %q is a %s field: use one of %s", name, f.Type, strings.Join(p.values, ", "))
+	}
+	return nil
+}
+
+func (c *screenCheck) actionRef(p prop, v any) error {
+	name, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("must be the name of one of the app's actions")
+	}
+	a, declared := c.actions[name]
+	if !declared {
+		return fmt.Errorf("%q is not one of the app's actions", name)
+	}
+	if len(p.values) > 0 && !slices.Contains(p.values, a.Kind) {
+		return fmt.Errorf("action %q is %s: use one of %s", name, a.Kind, strings.Join(p.values, ", "))
+	}
+	if a.Kind == ActionNavigate && !c.screens[a.Screen].Record {
+		return fmt.Errorf("action %q opens %q, which doesn't show a record: it is opened with a row's id", name, a.Screen)
 	}
 	return nil
 }

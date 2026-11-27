@@ -29,6 +29,7 @@ export const COMPONENTS = [
   'SignatureInput',
   'Slider',
   'Stat',
+  'Table',
   'Tabs',
   'Text',
   'TextField',

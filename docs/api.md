@@ -3056,7 +3056,7 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
+  address), plus `Stat` (a labelled value), `Table` (a sortable table of the records, below), `Show` (draws its child while a rule holds,
   [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
   attachments, which upload to and draw from this server's own authenticated routes, never an
   outside address: [Photo attachments](#photo-attachments)), and `LocationInput`, `SignatureInput` and
@@ -3067,6 +3067,22 @@ saying what is wrong) unless:
   component may contain itself, and every button's event must be one of the app's
   actions. The web app's renderer runs with A2UI's strict validation too, against the
   same catalog.
+- **Table** lists the records as a table: `{"id", "component": "Table", "items": {"path": "/items"}, "columns": [{"field", "label"}], "label", "open"?, "sort"?, "dir"?}`.
+  `items` is exactly the data binding `/items` (the records the viewer may read, so a table shows no
+  one else's). `columns` are 1–12 entries, each a `field` (a string, number, boolean, date, time,
+  choice or barcode field of the collection, never a photo, signature or location) and its
+  `label`, a dynamic string. `label` is the table's caption, which screen readers read. `open`
+  names a `navigate` action to a screen with `"record": true`: the first column then holds a button
+  that runs the action with the row's `id`, as a `Button`'s event does (the same path: an update's
+  `expectedRevision` is added, a conflict is reloaded, an error is shown), so the app needs no
+  event of its own for it. `sort` is a field of the same types and `dir` is `asc` (the default) or
+  `desc`: how the table starts; people click a column's header to sort by it. Choice fields show
+  their labels, dates the viewer's format, numbers their locale's, booleans a translated yes or no,
+  and a row with no value comes last whichever way it sorts. The table draws the first 200 rows
+  (after sorting) and says how many there are; a filter or paging is not part of it. Each column
+  that the server sends to a client carries its field's `type`, added to the surface only, never
+  stored in the definition. `app_catalog` describes `Table` and the two kinds of prop it
+  introduces: a field's name of given types and an action's name of given kinds.
 - **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
   the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
   filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app

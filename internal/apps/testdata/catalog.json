@@ -20,6 +20,7 @@
     "component.SignatureInput",
     "component.Slider",
     "component.Stat",
+    "component.Table",
     "component.Tabs",
     "component.Text",
     "component.TextField",
@@ -177,6 +178,16 @@
     "Stat": [
       "label",
       "value"
+    ],
+    "Table": [
+      "accessibility",
+      "columns",
+      "dir",
+      "items",
+      "label",
+      "open",
+      "sort",
+      "weight"
     ],
     "Tabs": [
       "accessibility",

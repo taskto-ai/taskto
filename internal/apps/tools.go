@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
@@ -445,6 +446,7 @@ var rules = []string{
 	`Saving a definition (create_app, update_app) saves the app's DRAFT: it changes nothing people use. They keep using the live release until a person who may publish the app publishes the draft, in the Apps page; you have no tool to publish. A new app is a draft only, and is not launchable until published.`,
 	`Publishing checks the draft against the app's rows: removing a field that rows have values for, changing a field's type, making a field required (or conditionally required) that some row lacks, or tightening its limits or a choice's options below a stored value needs the publisher to acknowledge it by name. So prefer adding fields as optional, and keep names and types of fields that have data.`,
 	`Records: list_app_actions says which of the LIVE release's actions change records and what the user's roles allow, and run_app_action runs one as the user, exactly as the app's own button would, if the release you listed (expected_release) is still the live one: an insert with the fields, an update with the row's id and the fields to change, a delete with the row's id. The user's roles in the app, the collection's rules, the locks of captured values and the action's effects all apply; the user must ask for it, and each call changes data people use. You can't set a photo, a signature or a location. To let the agent change something the app doesn't offer, add an action to the draft; it is used once a person publishes it.`,
+	`Table lists the rows as a sortable table: {"items": {"path": "/items"} (exactly this), "columns": [{"field": a field's name, "label"}] (1 to 12; string, number, boolean, date, time, choice and barcode fields, never a photo, signature or location), "label" (the table's caption, read by screen readers), "open"? (the name of a navigate action to a screen with "record": true: the first column then holds a button that opens the row's detail screen, so the action needs no context of your own), "sort"? (a field's name, same types) and "dir"? ("asc" default | "desc")}. It shows the first 200 rows and says how many more there are; people click a header to sort what is shown. It shows only the rows its viewer may read. Choice fields show their labels.`,
 	`Image, Video, AudioPlayer and openUrl are not available: an app never loads or opens outside addresses.`,
 	`Icons: give an icon as a path. An Icon's name is {"svgPath": "<path data>"}, one SVG path you write on a 24 by 24 view box (0 0 24 24), filled in the text's colour (nonzero fill; cut a hole by drawing it the other way round). Only path data is accepted: it starts with M or m and holds only the commands MLHVCSQTAZ (either case), numbers, commas and spaces, at most 2000 characters; no quotes, tags, URLs or styles. Examples: a plus {"svgPath": "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z"}, a back arrow {"svgPath": "M3 12l8-8v5h10v6H11v5z"}. Beside a label, put the icon and a Text in a Row: the icon is decoration. A Button (or a Modal's trigger) that shows only icons needs "accessibility": {"label": "<what it does>"} on its icon. An icon name (add, delete, …) has no drawing: where it is all a control shows it appears as the plain word, elsewhere as nothing; don't use names in new apps`,
 	`Photos: a collection field {"name", "type": "attachment", "max_files"? (1 to 10, default 1), "max_bytes"? (per file, at most 16 MiB, default 8 MiB), "required"?} holds JPEG, PNG or GIF pictures, which people upload with the PhotoInput component {"field": "<that field>", "label"?, "value": {"path": "/draft/<field>"}} (camera or library; on a detail screen with "source": "record" use "/record/<field>" and an update action whose context gives the field) and see with Photos {"value": {"path": "<field>"} inside a List template, or "/record/<field>", "label"?}, which draws thumbnails from this server, never from an outside address. The action's context passes the field's binding ({"path": "/draft/<field>"}) like any other. An attachment field needs definition_version 2, can't be used in a rule, and is stored as a list of attachment ids; the pictures themselves are separate resources that only people who may read the record can fetch. You can read their ids and metadata (list_app_rows) but you cannot upload, read or attach a picture yourself.`,
@@ -455,8 +457,11 @@ func describeProps(spec map[string]prop) map[string]string {
 	out := map[string]string{}
 	for name, p := range spec {
 		d := kindNames[p.kind]
-		if p.kind == kEnum {
+		switch {
+		case p.kind == kEnum:
 			d = fmt.Sprintf("one of %q", p.values)
+		case (p.kind == kField || p.kind == kActionRef) && len(p.values) > 0:
+			d += " of " + strings.Join(p.values, ", ")
 		}
 		if p.required {
 			d += " (required)"
@@ -478,4 +483,7 @@ var kindNames = map[kind]string{
 	kIconName:      `{"svgPath": "<SVG path data on a 24 by 24 view box>"}: see the rule on icons (a name such as "add" is only shown as its word, and only where it is all a control shows)`,
 	kRule:          `a rule: {"field", "op": eq|ne|lt|lte|gt|gte, "value": literal}, {"all": [rule, …]} or {"any": [rule, …]}`,
 	kScreenRefs:    `[{"name", "child": component id}]`,
+	kField:         "the name of a field of the collection, of the types listed",
+	kActionRef:     "the name of one of the app's actions, of the kinds listed",
+	kColumns:       `[{"field": the name of a string, number, boolean, date, time, choice or barcode field, "label": dynamic string}], 1 to 12`,
 }
