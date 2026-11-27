@@ -1,5 +1,5 @@
-import { type ReactNode, type Ref, useContext, useEffect } from 'react'
-import { PlaceContext } from '../router'
+import type { ReactNode, Ref } from 'react'
+import { usePlaceTitle } from '../router'
 import './PageHeader.css'
 
 export interface PageHeaderProps {
@@ -23,13 +23,7 @@ export function PageHeader({
   titleRef,
   titleAction,
 }: PageHeaderProps) {
-  const setTitle = useContext(PlaceContext)?.setTitle
-  const text = level === 1 ? (titleText ?? (typeof title === 'string' ? title : null)) : null
-  useEffect(() => {
-    if (!setTitle || text === null) return
-    setTitle(text)
-    return () => setTitle(null)
-  }, [setTitle, text])
+  usePlaceTitle(level === 1 ? (titleText ?? (typeof title === 'string' ? title : null)) : null)
   const Heading = level === 1 ? 'h1' : 'h2'
   return (
     <header className="ui-page-header">

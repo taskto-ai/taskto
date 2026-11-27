@@ -1,7 +1,7 @@
 import { type ReactNode, useRef } from 'react'
 import type { Space } from '../api'
 import { useT } from '../i18n'
-import { useContainerNarrow } from '../media'
+import { usePageNarrow } from '../media'
 import { spaceLabel } from '../spaces'
 import { Field } from '../ui/Field'
 import { SegmentedControl } from '../ui/SegmentedControl'
@@ -34,7 +34,7 @@ export function WhereChoice({
   const { mine, shared: sharedSpaces } = writableSpaces(spaces)
   const label = t('apps.builder.where')
   const root = useRef<HTMLDivElement>(null)
-  const narrow = useContainerNarrow(root)
+  const narrow = usePageNarrow(root)
   const choose = (next: Where) => {
     onWhere(next)
     if (next === 'shared' && !shared) onShared(String(sharedSpaces[0]?.id ?? ''))

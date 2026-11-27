@@ -6,9 +6,9 @@ import type { AppRef } from '../conversations/transcript'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { browserLocale, useT } from '../i18n'
 import { useLoad } from '../load'
-import { useContainerNarrow } from '../media'
+import { usePageNarrow } from '../media'
 import { useMounted } from '../mounted'
-import { Link, routePath, useNavigate } from '../router'
+import { Link, routePath, useNavigate, usePlaceTitle } from '../router'
 import { steps } from '../session'
 import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
@@ -239,8 +239,9 @@ function BuilderSession({
   streams?: EventSourceFactory
 }) {
   const t = useT()
+  usePlaceTitle(t('apps.builder.title'))
   const root = useRef<HTMLDivElement>(null)
-  const narrow = useContainerNarrow(root)
+  const narrow = usePageNarrow(root)
   const [session, setSession] = useState<Session>(initial)
   const [pane, setPane] = useState<Pane>(() =>
     readDraft(paneKey(workspace, conversation)) === 'preview' ? 'preview' : 'build',

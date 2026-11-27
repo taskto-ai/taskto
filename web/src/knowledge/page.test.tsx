@@ -697,6 +697,21 @@ test('opening the open document while a save is in flight drops another opening 
   expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
 })
 
+test('the knowledge base reports its title to its place, and withdraws it with the page', async () => {
+  kb('write')
+  const titles: (string | null)[] = []
+  const at: Place = { id: 'a', path: '/w/1/knowledge', navigate: vi.fn(), setTitle: (title) => titles.push(title) }
+  const view = render(
+    <PlaceContext.Provider value={at}>
+      <KnowledgePage workspace={1} />
+    </PlaceContext.Provider>,
+  )
+  await screen.findByRole('button', { name: /^ideas\.md/ })
+  expect(titles.at(-1)).toBe('Knowledge base')
+  view.unmount()
+  expect(titles.at(-1)).toBeNull()
+})
+
 test('a dirty editor in one place intercepts its own links, and leaves another place’s clicks alone', async () => {
   kb('write')
   const place = (id: string): Place => ({ id, path: '/w/1/knowledge', navigate: vi.fn(), setTitle: vi.fn() })

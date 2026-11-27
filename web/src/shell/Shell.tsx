@@ -187,7 +187,6 @@ function Frame({
         ref={main}
         tabIndex={-1}
         className="ui-shell-main"
-        data-page=""
         inert={drawer || undefined}
         key={special ? path : `${workspace.id}/${route.section}`}
       >

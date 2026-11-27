@@ -532,20 +532,28 @@ shell, or later a pane of the desk, gives it, and never assumes it is the only p
   shell, `App.tsx` and the notification sync use the router's `navigate` and `usePath` directly.
 - **Leave guards.** `useBeforeLeave` registers under its place (`null` when there is none), and a
   navigation or a Back asks the guards of the place the desk says is focused
-  (`setFocusedPlace`). `beforeLeaving` (sign-out, a workspace switch) asks every place's guard in
-  turn and goes on only if all agree; `askPlace(id, go)` asks one place, for example before its
-  tab closes. The knowledge base's click guard acts only on clicks outside every other place, found
-  by the `data-place` attribute on a place's root element.
-- **Title.** `PageHeader` at level 1 reports its title (`titleText` when the title is not a
-  string) to its place with `setTitle`, and withdraws it when the page goes; the desk's tabs show it.
-- **Width.** A page's layout answers to the width of its place, never the viewport's: the element
-  a page is drawn in is a size container named `page` (`.ui-shell-main` has `container: page /
-  inline-size` and `data-page`), page rules use `@container page (…)`, and a component that must
-  choose in script uses `useContainerNarrow(ref)` (`web/src/media.ts`, which measures the nearest
-  `[data-page]`). The thresholds keep today's single-page look at 390, 820 and 1440px: the main
-  column is the viewport at the phone's width, less the rail (about 60px) on a tablet and less
-  `--width-sidebar` on a wide screen. A thing drawn outside the page, in a drawer, is sized by the
-  viewport, which is the right box for it: a rule for what a drawer holds stays a media query.
+  (`setFocusedPlace`). `beforeLeaving` (sign-out) and `navigateWholeApp` (a workspace switch, in
+  the switcher and after "New workspace") ask every place's guard in turn, once each, and go on
+  only if all agree; `navigateWholeApp` then changes the address without asking the focused place
+  again. `askPlace(id, go)` asks one place, for example before its tab closes. The knowledge base's
+  click guard acts only on clicks outside every other place, found by the `data-place` attribute on
+  a place's root element.
+- **Title.** A section reports its place's title with `usePlaceTitle(text)` (`web/src/router.tsx`):
+  `PageHeader` at level 1 does (`titleText` when the title is not a string), and the screens that
+  draw their own level 1 heading do (the conversations list, the knowledge base, the app builder's
+  session), each withdrawing it when its page goes; the desk's tabs show it.
+- **Width.** In the shell's one place, a page's layout answers to the viewport, as it always did:
+  the page rules are media queries, and every threshold (the chat's 48rem, the board's 640px, the
+  browser's 40rem) is the one the shell's three bands were drawn with, so the layout is the same at
+  every width and root font size, which container thresholds could not be (the main column is the
+  viewport less a rail or a sidebar of different widths, and `rem` in a container query follows the
+  root font where a media query follows the browser's own). A page that must choose in script
+  uses `usePageNarrow(ref)` (`web/src/media.ts`): the viewport with no place, and the width of the
+  nearest `[data-place]` element in one. A pane of the desk is where a page's width stops being the
+  viewport's: it makes its body a size container named `page` and adds the container rules for
+  what its pages draw, and the AppExplorer's record list, which reads the viewport itself, needs
+  the same. A thing drawn outside the page, in a drawer, is sized by the viewport, which is the
+  right box for it: a rule for what a drawer holds stays a media query.
 
 - **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
 - **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's

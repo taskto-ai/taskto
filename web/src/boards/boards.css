@@ -506,7 +506,7 @@
     margin-inline-start: auto;
   }
 
-  @container page (max-width: 40rem) {
+  @media (max-width: 640px) {
     .ui-board-columns {
       grid-auto-columns: 84%;
       scroll-snap-type: inline proximity;

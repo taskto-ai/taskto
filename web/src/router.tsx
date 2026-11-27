@@ -201,9 +201,7 @@ export function askPlace(id: string | null, go: () => void) {
   askEach([id], go)
 }
 
-export function navigate(path: string, { replace = false } = {}) {
-  if (path === window.location.pathname) return
-  watchHistory()
+function commit(path: string, replace: boolean) {
   if (replace) {
     window.history.replaceState(unnumbered ? window.history.state : { idx: index }, '', path)
     notify()
@@ -215,17 +213,26 @@ export function navigate(path: string, { replace = false } = {}) {
     window.history.pushState({ idx: index }, '', path)
     moved()
   }
-  const go = () => {
-    if (flight !== null) after = push
-    else push()
-  }
+  if (flight !== null) after = push
+  else push()
+}
+
+export function navigate(path: string, { replace = false } = {}) {
+  if (path === window.location.pathname) return
+  watchHistory()
   const ask = asker()
-  if (!ask) return go()
+  if (replace || !ask) return commit(path, replace)
   generation += 1
   const mine = generation
   ask(() => {
-    if (mine === generation) go()
+    if (mine === generation) commit(path, replace)
   })
+}
+
+export function navigateWholeApp(path: string) {
+  if (path === window.location.pathname) return
+  watchHistory()
+  beforeLeaving(() => commit(path, false))
 }
 
 export function usePath(): string {
@@ -234,6 +241,15 @@ export function usePath(): string {
 
 export function useNavigate(): Place['navigate'] {
   return useContext(PlaceContext)?.navigate ?? navigate
+}
+
+export function usePlaceTitle(title: string | null) {
+  const setTitle = useContext(PlaceContext)?.setTitle
+  useEffect(() => {
+    if (!setTitle || title === null) return
+    setTitle(title)
+    return () => setTitle(null)
+  }, [setTitle, title])
 }
 
 export function usePlacePath(): string {

@@ -469,7 +469,7 @@
     }
   }
 
-  @container page (max-width: 41.75rem) {
+  @media (max-width: 48rem) {
     .ui-chat-layout {
       grid-template-columns: minmax(0, 1fr);
     }

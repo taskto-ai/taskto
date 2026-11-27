@@ -4,7 +4,7 @@ import { builderPath } from '../apps/route'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { useMounted } from '../mounted'
-import { routePath, useNavigate } from '../router'
+import { routePath, useNavigate, usePlaceTitle } from '../router'
 import { steps } from '../session'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -32,6 +32,8 @@ export function ConversationsPage({
   const go = useNavigate()
   const f = useFormat()
   const [archived, setArchived] = useState(false)
+  const title = archived ? t('conversations.archived') : t('shell.sections.conversations')
+  usePlaceTitle(title)
   const list = useLoad(
     () =>
       api<{ conversations: Conversation[] }>(`${ws(workspace)}/conversations${archived ? '?archived=true' : ''}`).then(
@@ -67,7 +69,7 @@ export function ConversationsPage({
       <section className="ui-chat-list" aria-label={t('shell.sections.conversations')}>
         <div className="ui-chat-list-head">
           <Heading level={1} size="title" className="ui-chat-list-title">
-            {archived ? t('conversations.archived') : t('shell.sections.conversations')}
+            {title}
           </Heading>
           <IconButton
             icon="archive"
