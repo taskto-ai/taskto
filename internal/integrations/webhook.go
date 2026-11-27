@@ -218,7 +218,8 @@ func (s *Service) hookSubject(ctx context.Context, publicID string) (hookSubject
 		target: target, provider: provider, revision: revision,
 		secrets: WebhookSecrets{
 			Current: creds.WebhookSecret, Previous: creds.WebhookSecretPrevious,
-			URL: signedURL(hookURL(s.publicURL, publicID), target.registeredURL),
+			URL:         signedURL(hookURL(s.publicURL, publicID), target.registeredURL),
+			PreviousURL: signedURL(hookURL(s.publicURL, publicID), target.previousRegisteredURL),
 		},
 		live: !target.disabled,
 	}, nil

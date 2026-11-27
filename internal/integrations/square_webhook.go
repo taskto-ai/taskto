@@ -16,16 +16,21 @@ import (
 var errNoURL = errors.New("no webhook address to verify against")
 
 // VerifyWebhook checks a Square delivery. The one signature in the header is compared, in constant
-// time, with the HMAC of each configured secret over the integration's webhook address and the exact
-// body: verifyKeys MACs over the body for every well-formed delivery, as Stripe's verifier computes,
+// time, with the HMAC of each configured secret over the webhook address that secret was saved for
+// (the current secret over URL, the previous one over PreviousURL) and the exact body: verifyKeys MACs over the body for every well-formed delivery, as Stripe's verifier computes,
 // whatever secrets there are. Only once it matched is the body read, for its one signed time, the
 // event's created_at, which must be within squareRetryWindow (and squareSkew) of now.
 func (square) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, now time.Time) error {
 	keys := [verifyKeys][]byte{verifyPad, verifyPad}
+	urls := [verifyKeys]string{secrets.URL, secrets.URL}
 	real := 0
-	for _, s := range []Secret{secrets.Current, secrets.Previous} {
+	for i, s := range []Secret{secrets.Current, secrets.Previous} {
 		if s != "" {
 			keys[real] = []byte(s.Reveal())
+			urls[real] = secrets.URL
+			if i == 1 && secrets.PreviousURL != "" {
+				urls[real] = secrets.PreviousURL
+			}
 			real++
 		}
 	}
@@ -39,7 +44,7 @@ func (square) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, 
 	}
 	match := 0
 	for slot, key := range keys {
-		if hmac.Equal(squareMAC(key, secrets.URL, body), got) && slot < real {
+		if hmac.Equal(squareMAC(key, urls[slot], body), got) && slot < real {
 			match = 1 // no early exit
 		}
 	}

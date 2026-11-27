@@ -13,7 +13,8 @@ package testprovider
 // It honours idempotency keys as Square documents them: the same key and the same request get the
 // first answer again, the same key with another request is a 400 IDEMPOTENCY_KEY_REUSED; keys are never
 // forgotten here (Square publishes no retention). It refuses another Square-Version, a wrong token (401
-// UNAUTHORIZED), unknown fields and a location that isn't the merchant's, and fails on demand
+// UNAUTHORIZED), unknown fields, a location that isn't the merchant's and a link that lets the buyer
+// pay another amount (a tip, a coupon or a loyalty reward not turned off), and fails on demand
 // (FailNext). A link is paid once (PaySquare), refunded in parts (RefundSquare) and deleted
 // (DeleteLink, which cancels its order); each returns the events Square would deliver, in the order
 // it sends them: payment.created (APPROVED) then payment.updated (COMPLETED) and order.updated for a
@@ -106,8 +107,9 @@ type Square struct {
 	idem   map[string]squareIdem
 	faults []squareFault
 	calls  int
-	// requests is every request served, its method and path only.
+	// requests is every request served, its method and path only; creates the body of every creation.
 	requests []Request
+	creates  [][]byte
 	// ordersDown: every read of an order fails with a 500 (a link is listed, its order can't be read).
 	ordersDown bool
 }
@@ -192,6 +194,9 @@ func squareError(w http.ResponseWriter, status int, category, code string) {
 	}}})
 }
 
+// isFalse says that an option was sent, and false.
+func isFalse(b *bool) bool { return b != nil && !*b }
+
 func squareJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -204,6 +209,16 @@ func (s *Square) FailOrderReads(down bool) {
 	defer s.mu.Unlock()
 	s.ordersDown = down
 }
+
+// Creates returns the body of every request to create a payment link, oldest first.
+func (s *Square) Creates() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]byte(nil), s.creates...)
+}
+
+// URL is the fake's base address, for a test that calls it directly.
+func (s *Square) URL() string { return s.srv.URL }
 
 // Requests returns the method and path of every request the fake served, oldest first.
 func (s *Square) Requests() []Request {
@@ -273,8 +288,10 @@ type squareCreate struct {
 		} `json:"line_items"`
 	} `json:"order"`
 	CheckoutOptions *struct {
-		AllowTipping bool   `json:"allow_tipping"`
-		RedirectURL  string `json:"redirect_url"`
+		AllowTipping  *bool  `json:"allow_tipping"`
+		EnableCoupon  *bool  `json:"enable_coupon"`
+		EnableLoyalty *bool  `json:"enable_loyalty"`
+		RedirectURL   string `json:"redirect_url"`
 	} `json:"checkout_options"`
 	PaymentNote string `json:"payment_note"`
 }
@@ -285,6 +302,7 @@ func (s *Square) createLink(w http.ResponseWriter, r *http.Request) {
 		squareError(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "BAD_REQUEST")
 		return
 	}
+	s.creates = append(s.creates, raw)
 	var req squareCreate
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -322,6 +340,13 @@ func (s *Square) createLink(w http.ResponseWriter, r *http.Request) {
 		squareError(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_LOCATION")
 		return
 	}
+	// A link must ask exactly its amount: a tip, a coupon or a loyalty reward would let the buyer pay
+	// another, so the fake refuses a link that doesn't turn each off explicitly (Square shows a
+	// seller's coupons and rewards unless told not to).
+	if co := req.CheckoutOptions; co == nil || !isFalse(co.AllowTipping) || !isFalse(co.EnableCoupon) || !isFalse(co.EnableLoyalty) {
+		squareError(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_VALUE")
+		return
+	}
 	li := o.LineItems[0]
 	if li.Quantity != "1" || li.Name == "" || len(li.Name) > 512 || li.BasePriceMoney == nil || li.BasePriceMoney.Amount <= 0 ||
 		len(li.BasePriceMoney.Currency) != 3 || (req.CheckoutOptions != nil && len(req.CheckoutOptions.RedirectURL) > 2048) {
@@ -332,9 +357,7 @@ func (s *Square) createLink(w http.ResponseWriter, r *http.Request) {
 		ID: strings.ToUpper(randomID(16)), OrderID: randomID(29), URL: "https://sandbox.square.link/u/" + randomID(8),
 		Note: req.PaymentNote, Reference: o.ReferenceID, Amount: li.BasePriceMoney.Amount, Currency: li.BasePriceMoney.Currency, State: "DRAFT",
 	}
-	if req.CheckoutOptions != nil {
-		l.RedirectURL = req.CheckoutOptions.RedirectURL
-	}
+	l.RedirectURL = req.CheckoutOptions.RedirectURL
 	s.links[l.ID] = l
 	s.byOrd[l.OrderID] = l.ID
 	s.order = append(s.order, l.ID)

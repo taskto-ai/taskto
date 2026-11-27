@@ -31,7 +31,10 @@ import (
 //     checkout link" (location_id required, reference_id "a client-specified ID to associate an entity
 //     in another system", at most 40 characters); checkout_options.redirect_url is "the confirmation
 //     page URL to redirect the buyer to after Square processes the payment" (at most 2048);
-//     allow_tipping; payment_note, at most 500: "After processing the payment, Square adds this note
+//     the checkout options that let a buyer pay another amount, all sent and all false: allow_tipping
+//     (a tip), enable_coupon (a Square marketing coupon) and enable_loyalty (a loyalty reward), so the
+//     link asks exactly the order's amount; shipping_fee and app_fee_money are never sent
+//     (https://developer.squareup.com/reference/square/objects/CheckoutOptions); payment_note, at most 500: "After processing the payment, Square adds this note
 //     to the resulting Payment as well as the post payment confirmation email". The answer is a
 //     payment_link (id, version, order_id, url, long_url, checkout_options, payment_note, created_at).
 //     The payment_note is how a payment carries our token back: Payment.note is in the payment's
@@ -169,9 +172,13 @@ func (square) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 		Quantity       string      `json:"quantity"`
 		BasePriceMoney squareMoney `json:"base_price_money"`
 	}
+	// Every option that could let the buyer pay another amount is sent, and false: Square shows a
+	// coupon or a loyalty reward the seller has unless it is turned off.
 	type options struct {
-		AllowTipping bool   `json:"allow_tipping"`
-		RedirectURL  string `json:"redirect_url,omitempty"`
+		AllowTipping  bool   `json:"allow_tipping"`
+		EnableCoupon  bool   `json:"enable_coupon"`
+		EnableLoyalty bool   `json:"enable_loyalty"`
+		RedirectURL   string `json:"redirect_url,omitempty"`
 	}
 	body := struct {
 		IdempotencyKey string `json:"idempotency_key"`

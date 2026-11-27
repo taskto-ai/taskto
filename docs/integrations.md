@@ -874,7 +874,11 @@ afterwards, the integration's `webhook_url_changed` is `true` and the settings p
 provider still sends to, and Square still signs over, the old address. The admin registers the new
 address at the provider and saves the signing secret again (the same one is fine), which records
 the new address and clears the warning. The same warning shows for Stripe, whose deliveries also
-keep going to the old address.
+keep going to the old address. Each secret is verified over the address it was saved for: when a
+new secret replaces one, the replaced secret keeps the address it was saved for
+(`webhook_previous_registered_url`), so during the day it keeps verifying, Square's deliveries
+signed with it over the old address are accepted, and it never verifies over the new address,
+nor the new secret over the old one.
 
 What a delivery goes through, in this order, each step cheaper than the next:
 
@@ -1167,7 +1171,10 @@ is a change of code and of this section.
   `connect.squareup.com`, by the integration's `environment`, a choice and never a URL.
 - **Payment links** ([CreatePaymentLink](https://developer.squareup.com/reference/square/checkout-api/create-payment-link)):
   one order of one ad hoc line (the app's description, quantity 1, the exact amount) at the
-  integration's `location_id`, with tipping off. The key's token is the `idempotency_key`, the
+  integration's `location_id`. The link asks exactly that amount: every checkout option that would
+  let a buyer pay another is sent and false (`allow_tipping`, `enable_coupon`, `enable_loyalty`;
+  Square shows a seller's coupons and loyalty rewards unless they are turned off), and
+  `shipping_fee` and `app_fee_money` are never sent. The fake Square refuses a link without them. The key's token is the `idempotency_key`, the
   order's `reference_id` and the link's `payment_note`, which Square copies to the payment
   ("After processing the payment, Square adds this note to the resulting Payment as well as the
   post payment confirmation email"): the note is how a payment's events carry the token back, and

@@ -11,3 +11,10 @@
 -- nothing to compare, and the current address is the only one.
 ALTER TABLE integrations ADD COLUMN webhook_registered_url TEXT
     CHECK (webhook_registered_url IS NULL OR length(webhook_registered_url) BETWEEN 1 AND 2048);
+
+-- The address the previous signing secret was saved for. A replaced secret keeps verifying for a day,
+-- and Square signed what it sent with it over the address it was registered for, so each secret is
+-- verified over its own address: the previous one over this, the current one over the column above.
+-- Copied from webhook_registered_url when the current secret becomes the previous one; NULL as above.
+ALTER TABLE integrations ADD COLUMN webhook_previous_registered_url TEXT
+    CHECK (webhook_previous_registered_url IS NULL OR length(webhook_previous_registered_url) BETWEEN 1 AND 2048);

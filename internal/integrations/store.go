@@ -753,7 +753,7 @@ func (s *Store) holds(ctx context.Context, tx *sql.Tx, ref sealRef, name, value 
 }
 
 // keepPrevious moves the integration's current webhook secret to the previous one, valid for
-// previousOverlap, and drops a previous one that has expired. With no current secret, or one that
+// previousOverlap, with the address it was saved for, and drops a previous one that has expired. With no current secret, or one that
 // doesn't open (the server key changed) or that another integration holds too, there is nothing
 // to keep.
 func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now time.Time) error {
@@ -783,6 +783,11 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 	if held {
 		_, err = tx.ExecContext(ctx, `DELETE FROM integration_secrets WHERE integration_id = ? AND name = ?`,
 			ref.id, SecretWebhookSecretPrevious)
+		return err
+	}
+	// The secret goes with the address it was saved for: Square signed with it over that address.
+	if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_previous_registered_url = webhook_registered_url WHERE id = ?`,
+		ref.id); err != nil {
 		return err
 	}
 	expires := now.Add(previousOverlap)

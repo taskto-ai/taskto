@@ -89,6 +89,9 @@ type WebhookSecrets struct {
 	// registered), or the current one when none was recorded. A provider that doesn't sign the address
 	// (Stripe) ignores it.
 	URL string
+	// PreviousURL is the address the previous secret was saved for (the current address when none was
+	// recorded): a provider that signs the address verifies the previous secret over this one only.
+	PreviousURL string
 }
 
 // Event is a provider event reduced to closed, typed fields: what the server keeps of a webhook

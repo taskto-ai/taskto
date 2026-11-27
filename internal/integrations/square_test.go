@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -297,6 +298,98 @@ func TestSquareCallsSendTheVersionTokenAndLocation(t *testing.T) {
 	}
 }
 
+// A link asks exactly the invoice's amount: the create request turns off, explicitly, every checkout
+// option that would let a buyer pay another amount (a tip, a seller's coupon, a loyalty reward), and
+// sends no shipping or app fee. The fake Square refuses a link without them, as the next test shows.
+func TestSquareLinksLetNoBuyerPayAnotherAmount(t *testing.T) {
+	ctx := context.Background()
+	r := newSquareRig(t)
+	for _, pages := range []bool{true, false} {
+		if _, err := (square{}).CreatePaymentLink(ctx, r.creds, r.client, squareNewLink(t, pages)); err != nil {
+			t.Fatalf("pages %v: %v", pages, err)
+		}
+	}
+	creates := r.fake.Creates()
+	if len(creates) != 2 {
+		t.Fatalf("%d creations", len(creates))
+	}
+	for _, raw := range creates {
+		var body struct {
+			CheckoutOptions map[string]json.RawMessage `json:"checkout_options"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"allow_tipping", "enable_coupon", "enable_loyalty"} {
+			if string(body.CheckoutOptions[k]) != "false" {
+				t.Errorf("checkout_options.%s = %s, want false sent", k, body.CheckoutOptions[k])
+			}
+		}
+		for _, k := range []string{"shipping_fee", "app_fee_money"} {
+			if _, ok := body.CheckoutOptions[k]; ok {
+				t.Errorf("checkout_options.%s was sent", k)
+			}
+		}
+	}
+}
+
+// The fake Square refuses a link that lets the buyer pay another amount: any of the three options
+// left out, or turned on.
+func TestTheFakeSquareRefusesALinkOfAnotherAmount(t *testing.T) {
+	fake := testprovider.NewSquare(t)
+	post := func(options map[string]any) int {
+		t.Helper()
+		tok, err := newToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(map[string]any{
+			"idempotency_key": tok, "payment_note": tok, "checkout_options": options,
+			"order": map[string]any{"location_id": testprovider.SquareLocationID, "reference_id": tok, "line_items": []any{map[string]any{
+				"name": "Invoice", "quantity": "1", "base_price_money": map[string]any{"amount": 500, "currency": "USD"}}}},
+		})
+		req, err := http.NewRequest(http.MethodPost, fake.URL()+"/v2/online-checkout/payment-links", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+testprovider.SquareTestToken)
+		req.Header.Set("Square-Version", testprovider.SquareAPIVersion)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	off := map[string]any{"allow_tipping": false, "enable_coupon": false, "enable_loyalty": false}
+	if code := post(off); code != http.StatusOK {
+		t.Fatalf("all three off: %d", code)
+	}
+	for k := range off {
+		missing, on := map[string]any{}, map[string]any{}
+		for o, v := range off {
+			on[o] = v
+			if o != k {
+				missing[o] = v
+			}
+		}
+		on[k] = true
+		if code := post(missing); code != http.StatusBadRequest {
+			t.Errorf("%s left out: %d", k, code)
+		}
+		if code := post(on); code != http.StatusBadRequest {
+			t.Errorf("%s on: %d", k, code)
+		}
+	}
+	if code := post(nil); code != http.StatusBadRequest {
+		t.Errorf("no checkout options: %d", code)
+	}
+	if n := len(fake.Links()); n != 1 {
+		t.Fatalf("%d links made, want only the one with all three off", n)
+	}
+}
+
 // A link is read through its order: unpaid while the order has no tender, settled once paid or deleted.
 // A lookup reads every page, and says so when there are more than it reads.
 func TestSquareLinkStateAndLookup(t *testing.T) {
@@ -452,12 +545,17 @@ func TestSquareNormalizeReadsOnlyOurFinishedPayments(t *testing.T) {
 // serveAt rebuilds the env's handler with another public URL, over the same database: a server whose
 // address changed.
 func (e *env) serveAt(publicURL string) {
+	e.serveAtWith(publicURL, func() time.Time { return testprovider.DefaultStart })
+}
+
+// serveAtWith is serveAt with the server's clock.
+func (e *env) serveAtWith(publicURL string, now func() time.Time) {
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
 	a.Routes(mux)
 	spaces := access.New(e.db, a)
 	spaces.Routes(mux)
-	e.svc = New(e.store, Options{PublicURL: publicURL, Now: func() time.Time { return testprovider.DefaultStart }})
+	e.svc = New(e.store, Options{PublicURL: publicURL, Now: now})
 	e.svc.Routes(mux, a, spaces)
 	e.svc.HookRoutes(mux)
 	e.h = a.ClientAddr(auth.CSRF(mux))
@@ -474,6 +572,80 @@ func (e *env) deliverSquare(path, signedOver, host string, body []byte) int {
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	return rec.Code
+}
+
+// deliverSquareAs posts a Square delivery signed with secret over signedOver, and returns the answer.
+func (e *env) deliverSquareAs(path, secret, signedOver string, body []byte) *httptest.ResponseRecorder {
+	e.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(SquareSignatureHeader, testprovider.SignSquare(secret, signedOver, body))
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	return rec
+}
+
+// A new signing secret saved after the public URL changed: during the overlap each secret verifies
+// over the address it was saved for, the previous one over the old address (Square signed what it sent
+// before the change with it, over that address) and the new one over the new address, never the other
+// way round. After the overlap the previous secret verifies nothing. Every refusal is the route's one
+// answer, the same as for an id with nothing behind it.
+func TestSquareEachSecretVerifiesOverItsOwnAddress(t *testing.T) {
+	const oldOrigin, newOrigin = "https://old.example.test", "https://new.example.test"
+	at := testprovider.DefaultStart
+	now := func() time.Time { return at }
+	e := newEnvWith(t, Options{PublicURL: oldOrigin, Now: now})
+	owner, ws := e.setup()
+	body := squareBody("shop")
+	oldKey, newKey := testprovider.SquareSignatureKey, testprovider.SquareOtherSignatureKey
+	body["secrets"] = map[string]string{"api_key": squareToken, "webhook_secret": oldKey}
+	in := e.create(owner, ws, body)
+	oldURL := *in.WebhookURL
+	path := strings.TrimPrefix(oldURL, oldOrigin)
+
+	// The public URL changes; the admin registers the new address at Square and saves its new key.
+	e.serveAtWith(newOrigin, now)
+	got := decode[Integration](t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)),
+		map[string]any{"secrets": map[string]string{"webhook_secret": newKey}}))
+	newURL := *got.WebhookURL
+	if got.WebhookURLChanged || newURL == oldURL {
+		t.Fatalf("after the new key was saved: %+v", got)
+	}
+	event := func() []byte {
+		tok, _ := newToken()
+		return testprovider.NewSquareEvent("payment.updated", "payment", "PAY1", map[string]any{"payment": map[string]any{
+			"id": "PAY1", "status": "COMPLETED", "note": tok, "total_money": map[string]any{"amount": 500, "currency": "USD"},
+		}}, at).Body()
+	}
+	// The route's answer to an id with nothing behind it: what every refusal must look like.
+	nothing := e.deliverSquareAs("/hooks/"+strings.Repeat("0", 32), newKey, newURL, event())
+	refused := func(what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != nothing.Code || rec.Body.String() != nothing.Body.String() ||
+			rec.Header().Get("Content-Type") != nothing.Header().Get("Content-Type") {
+			t.Errorf("%s: %d %q, want the route's one refusal %d %q", what, rec.Code, rec.Body.String(), nothing.Code, nothing.Body.String())
+		}
+	}
+	if nothing.Code != http.StatusNotFound {
+		t.Fatalf("an id with nothing behind it: %d", nothing.Code)
+	}
+
+	if rec := e.deliverSquareAs(path, oldKey, oldURL, event()); rec.Code != http.StatusOK {
+		t.Errorf("the previous key over the old address during the overlap: %d", rec.Code)
+	}
+	if rec := e.deliverSquareAs(path, newKey, newURL, event()); rec.Code != http.StatusOK {
+		t.Errorf("the new key over the new address: %d", rec.Code)
+	}
+	refused("the previous key over the new address", e.deliverSquareAs(path, oldKey, newURL, event()))
+	refused("the new key over the old address", e.deliverSquareAs(path, newKey, oldURL, event()))
+
+	// The overlap ends: the previous key verifies nothing, the new one still does.
+	at = at.Add(previousOverlap + time.Minute)
+	refused("the previous key over the old address after the overlap", e.deliverSquareAs(path, oldKey, oldURL, event()))
+	refused("the previous key over the new address after the overlap", e.deliverSquareAs(path, oldKey, newURL, event()))
+	if rec := e.deliverSquareAs(path, newKey, newURL, event()); rec.Code != http.StatusOK {
+		t.Errorf("the new key over the new address after the overlap: %d", rec.Code)
+	}
 }
 
 // The hook route verifies a Square delivery over the address the signing secret was saved for, made from

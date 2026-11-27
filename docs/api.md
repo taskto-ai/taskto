@@ -4577,8 +4577,9 @@ In order:
 3. The integration is found by `public_id`. The signature is verified **over the raw bytes,
    before the body is parsed**, in constant time, against the integration's webhook secret and,
    for a day after an admin replaces it, the one it replaced. Square's signature also covers the
-   notification URL: the one the webhook secret was saved for (`webhook_url_changed`), made from
-   the public URL, never from the request's `Host`. The provider's tolerance applies to the signed
+   notification URL: each secret's own, the one it was saved for (`webhook_url_changed`; the
+   replaced secret keeps the address it was saved for), made from the public URL, never from the
+   request's `Host`. The provider's tolerance applies to the signed
    time (Stripe: its `t`, five minutes either way; Square: the event's `created_at`, inside the
    signed body, up to a day and five minutes back, since Square retries for a day, and five minutes
    ahead). The same work is done
