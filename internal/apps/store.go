@@ -1074,6 +1074,7 @@ func shownBy(live, from Definition) Definition {
 		}
 	}
 	shown.Summaries = map[string]Summary{}
+	shown.Series = map[string]Series{}
 	same := func(field string) bool {
 		lf, kept := shown.Collection.field(field)
 		ff, _ := from.Collection.field(field)
@@ -1091,6 +1092,21 @@ func shownBy(live, from Definition) Definition {
 		}
 		if keep {
 			shown.Summaries[name] = sum
+		}
+	}
+	for name, series := range from.Series {
+		keep := same(series.Field) || series.Field == ""
+		keep = keep && same(series.GroupBy)
+		if series.SplitBy != "" {
+			keep = keep && same(series.SplitBy)
+		}
+		if series.Where != nil {
+			for _, field := range ruleFields(*series.Where) {
+				keep = keep && same(field)
+			}
+		}
+		if keep {
+			shown.Series[name] = series
 		}
 	}
 	return shown

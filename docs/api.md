@@ -3055,10 +3055,12 @@ and kind included.
   "components": [{"id": "root", "component": "Column", "children": ["title", "items", "form"]}, …],
   "collection": {"fields": [
     {"name": "description", "type": "string", "required": true, "max_length": 200},
-    {"name": "amount", "type": "number", "required": true, "min": 0}
+    {"name": "amount", "type": "number", "required": true, "min": 0},
+    {"name": "spent_on", "type": "date"}
   ]},
   "actions": {"add_expense": {"kind": "insert"}, "delete_expense": {"kind": "delete"}},
-  "summaries": {"total": {"kind": "sum", "field": "amount"}}
+  "summaries": {"total": {"kind": "sum", "field": "amount"}},
+  "series": {"by_month": {"kind": "sum", "field": "amount", "group_by": "spent_on", "bucket": "month", "last": 12}}
 }
 ```
 
@@ -3072,9 +3074,19 @@ saying what is wrong) unless:
   (one screen; `string`, `number`, `boolean` and `date` fields; `insert`, `update` and
   `delete`) is still read, checked and drawn exactly as it was; a definition that says `1` can't
   use anything of version 2 (`400`), which is everything in [Screens](#screens-and-navigation),
-  [time and choice fields](#fields-and-rules) and [rules](#fields-and-rules). **Version 3** adds
+  [time and choice fields](#fields-and-rules), [rules](#fields-and-rules), series, and
+  contributions. **Version 3** adds
   [integrations](#integrations-of-an-app): a definition that says `1` or `2` can't declare them or use
   the `create_payment_link` effect (`400`).
+- **series** declares up to 10 count, sum or average aggregates grouped by a choice, boolean, text or
+  date field. A date group needs a `day`, `week` or `month` bucket; it keeps the latest 12 buckets by
+  default, or 1–90 when `last` is set. A series can filter rows with `where` and split into one line
+  per choice option or boolean value. The model at `/<name>` is `{"x":[{"key":"2026-11","label":"2026-11"}],"series":[{"key":"","label":"","values":[3]}]}`.
+  Choice groups follow their declared option order and labels; boolean groups are false then true;
+  text groups keep the 20 most frequent values and combine the rest as `other`. Buckets use UTC and
+  weeks start Monday. Empty averages are `null`. The server computes series over all records the
+  viewer may read, independently of the bounded `/items` list, and reports the `data.series`
+  capability in `requires`.
 - **requires** lists the catalog **capabilities** the screen needs: `component.<Name>` for
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than

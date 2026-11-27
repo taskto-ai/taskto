@@ -319,6 +319,18 @@ export type OfflineApp = {
     screens?: { name: string; record?: boolean }[]
     actions: Record<string, { kind: AppActionKind; screen?: string; then?: string }>
     summaries?: Record<string, { kind: 'count' | 'sum'; field?: string; where?: unknown }>
+    series?: Record<
+      string,
+      {
+        kind: 'count' | 'sum' | 'avg'
+        field?: string
+        group_by: string
+        bucket?: 'day' | 'week' | 'month'
+        last?: number
+        split_by?: string
+        where?: unknown
+      }
+    >
   }
   messages: unknown[]
   scope: 'all' | 'own'
