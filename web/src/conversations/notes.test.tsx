@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { fakeFetch, fakeStreams } from '../test/fakes'
+import { claimDrafts, forgetDrafts } from '../uiState'
 import { ConversationView } from './ConversationView'
 
 const conversation = {
@@ -17,6 +18,7 @@ const conversation = {
 beforeEach(() => window.history.replaceState(null, '', '/w/1/conversations/7'))
 afterEach(() => {
   cleanup()
+  forgetDrafts()
   vi.unstubAllGlobals()
 })
 
@@ -123,4 +125,45 @@ test('a refused note shows the translated reason and keeps the text', async () =
   fireEvent.click(screen.getByRole('button', { name: 'Add note' }))
   expect(await screen.findByText('A note must have 1 to 8,000 characters.')).toBeTruthy()
   expect(box().value).toBe('too much')
+})
+
+test('an unsent note comes back as a note after a reload, and is still posted to /notes', async () => {
+  claimDrafts(1)
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/conversations/7': { body: conversation },
+    'POST /api/workspaces/1/conversations/7/notes': { status: 202, body: { submission_id: 5 } },
+    'POST /api/workspaces/1/conversations/7/messages': { status: 202, body: { submission_id: 6 } },
+  })
+  const first = render(view(fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  fireEvent.click(screen.getByRole('radio', { name: 'Note' }))
+  fireEvent.change(box(), { target: { value: 'for the record' } })
+  await waitFor(() =>
+    expect(localStorage.getItem('taskto:note:1:/api/workspaces/1/conversations/7')).toBe('for the record'),
+  )
+  expect(localStorage.getItem('taskto:message:1:/api/workspaces/1/conversations/7')).toBeNull()
+  first.unmount()
+
+  render(view(fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  expect((screen.getByRole('radio', { name: 'Note' }) as HTMLInputElement).checked).toBe(true)
+  expect(box().value).toBe('for the record')
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+  expect(calls.filter((c) => c.method === 'POST').map((c) => c.path)).toEqual([
+    '/api/workspaces/1/conversations/7/notes',
+  ])
+})
+
+test('a message draft and a note draft are kept apart', async () => {
+  claimDrafts(1)
+  fakeFetch({ 'GET /api/workspaces/1/conversations/7': { body: conversation } })
+  render(view(fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  fireEvent.change(box(), { target: { value: 'to the agent' } })
+  fireEvent.click(screen.getByRole('radio', { name: 'Note' }))
+  expect(box().value).toBe('')
+  fireEvent.change(box(), { target: { value: 'for me' } })
+  fireEvent.click(screen.getByRole('radio', { name: 'To the agent' }))
+  expect(box().value).toBe('to the agent')
 })

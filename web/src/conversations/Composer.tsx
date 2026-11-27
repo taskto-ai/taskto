@@ -49,11 +49,23 @@ export function Composer({
   const id = useId()
   const off = archived || unreadable
   const messageKey = draftKey('message', base)
-  const [text, setText] = useState(() => readDraft(messageKey) ?? '')
-  const keepText = useEffectEvent((text: string) => writeDraft(messageKey, text.trim() ? text : null))
-  useEffect(() => keepText(text), [text])
-  const [mode, setMode] = useState<Mode>('message')
+  const noteKey = draftKey('note', base)
+  const [drafts, setDrafts] = useState<Record<Mode, string>>(() => ({
+    message: readDraft(messageKey) ?? '',
+    note: readDraft(noteKey) ?? '',
+  }))
+  const [mode, setMode] = useState<Mode>(() =>
+    readDraft(noteKey)?.trim() && !readDraft(messageKey)?.trim() ? 'note' : 'message',
+  )
   const noting = mode === 'note'
+  const text = drafts[mode]
+  const setText = (next: string | ((current: string) => string)) =>
+    setDrafts((all) => ({ ...all, [mode]: typeof next === 'function' ? next(all[mode]) : next }))
+  const keepDrafts = useEffectEvent((all: Record<Mode, string>) => {
+    writeDraft(messageKey, all.message.trim() ? all.message : null)
+    writeDraft(noteKey, all.note.trim() ? all.note : null)
+  })
+  useEffect(() => keepDrafts(drafts), [drafts])
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -79,6 +91,7 @@ export function Composer({
     const content = text.trim()
     if (!content || busy) return
     const draft = text
+    const sentAs = mode
     pendingId.current ??= requestId()
     setBusy(true)
     setError(null)
@@ -95,7 +108,7 @@ export function Composer({
         await api(`${base}/messages`, { method: 'POST', body })
       }
       pendingId.current = null
-      setText((current) => (current === draft ? '' : current))
+      setDrafts((all) => (all[sentAs] === draft ? { ...all, [sentAs]: '' } : all))
       onSent()
     } catch (err) {
       setError(errorText(err))
