@@ -105,6 +105,8 @@ export type TruncateHooks = {
   round?: (backlog: number, ms: number) => void
   /** Just before the TRUNCATE checkpoint, the backlog its round found. */
   truncating?: (backlog: number) => void
+  /** How long the TRUNCATE checkpoint that emptied the log took, holding the write lock, in ms. */
+  truncated?: (ms: number) => void
 }
 
 /**
@@ -134,10 +136,14 @@ export function truncateWalWithin(db: DatabaseSync, timeoutMs: number, hooks?: T
     const left = backlog(db)
     const took = performance.now() - began
     hooks?.round?.(left, took)
-    if (left <= DRAINED_FRAMES && took <= QUICK_MS) {
+    // Looked at once more just before the TRUNCATE (a second passive checkpoint, which copies what
+    // landed since the first): what the TRUNCATE copies is then only what lands after that look.
+    if (left <= DRAINED_FRAMES && took <= QUICK_MS && backlog(db) <= DRAINED_FRAMES) {
       hooks?.truncating?.(left)
       try {
+        const t0 = performance.now()
         truncateWal(db)
+        hooks?.truncated?.(performance.now() - t0)
         return
       } catch (error) {
         if (!(error instanceof WalBusyError)) throw error
@@ -182,11 +188,16 @@ export function storedKind(kind: string): string {
 /** The lifecycle's stored kind as an SQL string literal. */
 const LIFECYCLE = `'${storedKind(LIFECYCLE_KIND).replaceAll("'", "''")}'`
 
-/** How many rows one statement of the purge deletes: small, so a transaction stays near SLICE_MS. */
-const CHUNK = 100
+/**
+ * How many rows one statement of the purge deletes. A transaction's time is checked between its
+ * steps, so a step's own length is what can go past SLICE_MS: small, so it can't by much (measured
+ * with a lock probe on 60,000 tasks of 4 KB: steps of 200 held the lock up to 480 ms, of 50 about
+ * 130 ms on a busy disk, about 30 ms on a quiet one).
+ */
+const CHUNK = 50
 
 /** How many marked conversations and tasks one step of the sweep takes, and marks at most. */
-const SWEEP = 200
+const SWEEP = 50
 
 /** How long one of the purge's transactions goes on deleting before it commits and pauses. */
 const SLICE_MS = 20
@@ -196,10 +207,13 @@ const SLICE_MS = 20
  * at the commit (overwritten with zeros, secure_delete), so this bounds the commit's work, as
  * SLICE_MS bounds the deleting. Large records (a task's, an entry's) free a page or more each.
  */
-export const SLICE_PAGES = 2048
+export const SLICE_PAGES = 512
 
-/** One short transaction's time, in ms: taking the write lock, the deleting, and the commit. */
-export type SliceTiming = { lock: number; work: number; commit: number; pages: number }
+/**
+ * One short transaction's time, in ms: taking the write lock, the deleting, and the commit; the pages
+ * it freed, and its longest step of the sweep, in ms.
+ */
+export type SliceTiming = { lock: number; work: number; commit: number; pages: number; step: number }
 
 /** What purgeRecords tells a test. */
 export type PurgeHooks = {
@@ -209,6 +223,8 @@ export type PurgeHooks = {
   slice?: (ms: number, timing: SliceTiming) => void
   /** The last transaction's length, from taking the write lock to its commit, in ms. */
   final?: (ms: number) => void
+  /** The TRUNCATE checkpoint's length at the end, holding the write lock, in ms. */
+  truncate?: (ms: number) => void
 }
 
 // Deletes a conversation's records, and those of the conversations its tasks started, from the
@@ -236,6 +252,9 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
     // write lock for its sync. The checkpoint that ends the purge syncs the database, and the purge
     // isn't done (the server asks again) until it has.
     db.exec('PRAGMA synchronous = NORMAL')
+    // And, as the harness's, a commit doesn't checkpoint the log: the checkpointer does, on its own
+    // thread, so no commit of the purge's does that work besides its own.
+    db.exec('PRAGMA wal_autocheckpoint = 0')
     // Pi Durable never gives an id again (its next_id only grows), so a mark names nothing else.
     db.exec(MARKS_TABLE)
     db.exec(MARKS_INDEX)
@@ -254,10 +273,14 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
       const locked = performance.now()
       let worked = locked
       let freed = 0
+      let longestStep = 0
       try {
         const free = freePages()
         while (performance.now() - locked < SLICE_MS && freed < SLICE_PAGES) {
-          if (step() === 0) {
+          const t0 = performance.now()
+          const n = step()
+          longestStep = Math.max(longestStep, performance.now() - t0)
+          if (n === 0) {
             more = false
             break
           }
@@ -275,6 +298,7 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
         work: worked - locked,
         commit: ended - worked,
         pages: freed,
+        step: longestStep,
       })
       hooks?.afterSlice?.()
       sleep(PAUSE_MS)
@@ -299,7 +323,7 @@ export function purgeRecords(path: string, root: number, timeoutMs: number, hook
     hooks?.final?.(performance.now() - began)
     // What was deleted is still in the log until it is emptied, and a reader (the harness's, or a
     // watch) can hold it up: then the purge isn't done, and the server asks again.
-    truncateWalWithin(db, timeoutMs)
+    truncateWalWithin(db, timeoutMs, hooks?.truncate ? { truncated: hooks.truncate } : undefined)
   } finally {
     db.close()
   }
@@ -520,6 +544,10 @@ export type PurgeReport = {
   lock: number
   work: number
   commit: number
+  step: number
+  /** The last transaction's length, and the closing TRUNCATE's, each holding the write lock, in ms. */
+  final?: number
+  truncate?: number
 }
 
 type Outcome = { ok: true; report?: PurgeReport } | { ok: false; busy: boolean; message: string }
@@ -534,14 +562,23 @@ function run(job: PurgeJob): Outcome {
     }
     let report: PurgeReport | undefined
     const slice = (ms: number, t: SliceTiming) => {
-      report ??= { slices: 0, longest: { ms, ...t }, lock: 0, work: 0, commit: 0 }
+      report ??= { slices: 0, longest: { ms, ...t }, lock: 0, work: 0, commit: 0, step: 0 }
       report.slices++
       if (ms > report.longest.ms) report.longest = { ms, ...t }
       report.lock = Math.max(report.lock, t.lock)
       report.work = Math.max(report.work, t.work)
       report.commit = Math.max(report.commit, t.commit)
+      report.step = Math.max(report.step, t.step)
     }
-    purgeRecords(job.path, job.root, job.timeoutMs, job.report ? { slice } : undefined)
+    let final = 0
+    let truncate = 0
+    purgeRecords(
+      job.path,
+      job.root,
+      job.timeoutMs,
+      job.report ? { slice, final: (ms) => (final = ms), truncate: (ms) => (truncate = ms) } : undefined,
+    )
+    if (report) Object.assign(report, { final, truncate })
     return { ok: true, report }
   } catch (error) {
     return { ok: false, busy: error instanceof WalBusyError, message: (error as Error).message ?? String(error) }

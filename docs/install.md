@@ -896,9 +896,13 @@ is a decision about the workspace's records, not an account's.
   every connection the runtime opens sets SQLite's `secure_delete`; the purge ends by emptying the
   write-ahead log. A database written by a version before this one can still hold what was deleted
   then: the runtime compacts it once (`VACUUM`) when it next starts, before it serves, if it is at
-  most 256 MiB and the disk has room for twice its size. A larger one is left as it is, and the log
-  says so at each start: compact it by hand, with the server stopped, and record that it was
-  (`sqlite3 <data>/agent/agent.db "VACUUM; INSERT OR REPLACE INTO taskto_maintenance VALUES
+  most 256 MiB and the disk has room for twice its size. It is recorded done only once the
+  write-ahead log is empty too; when it can't be finished (a reader such as a backup holds the log,
+  or SQLite fails: the disk full, the file read-only), the log says it is deferred, the runtime
+  starts all the same, and it is tried again at the next start. A larger one is left as it is, and
+  the log says so at each start: compact it by hand, with the server stopped, and record that it was
+  (`sqlite3 <data>/agent/agent.db "VACUUM; CREATE TABLE IF NOT EXISTS taskto_maintenance (name TEXT
+  PRIMARY KEY, done_at INTEGER NOT NULL) STRICT; INSERT OR REPLACE INTO taskto_maintenance VALUES
   ('secure_delete_vacuum', 0)"`). Removed files' blocks on the disk
   itself are the file system's (see SQLite and the filesystem below).
   It also rewrites the runtime's providers file, stops the

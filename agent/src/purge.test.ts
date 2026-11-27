@@ -136,10 +136,54 @@ describe('runPurge', () => {
     }
   }
 
+  // The longest time, in ms, a connection that never waits couldn't take the write lock, trying every
+  // 3 ms on a worker thread of its own until stop is called.
+  const lockProbe = (path: string) => {
+    const shared = new Int32Array(new SharedArrayBuffer(4))
+    const worker = new Worker(
+      `const { workerData, parentPort } = require('node:worker_threads')
+      const { DatabaseSync } = require('node:sqlite')
+      const db = new DatabaseSync(workerData.path, { timeout: 0 })
+      let since = 0
+      let longest = 0
+      while (Atomics.load(workerData.stop, 0) === 0) {
+        const now = performance.now()
+        try {
+          db.exec('BEGIN IMMEDIATE')
+          db.exec('ROLLBACK')
+          if (since) longest = Math.max(longest, now - since)
+          since = 0
+        } catch {
+          if (!since) since = now
+        }
+        Atomics.wait(workerData.stop, 0, 0, 3)
+      }
+      if (since) longest = Math.max(longest, performance.now() - since)
+      db.close()
+      parentPort.postMessage(longest)`,
+      { eval: true, workerData: { path, stop: shared } },
+    )
+    const result = new Promise<number>((resolve, reject) => {
+      worker.once('message', resolve)
+      worker.once('error', reject)
+    })
+    return {
+      stop: () => {
+        Atomics.store(shared, 0, 1)
+        Atomics.notify(shared, 0)
+        return result
+      },
+    }
+  }
+
   // Writes on the calling thread, as the harness's commits are, every 15 ms while work is pending,
   // each on a connection that waits up to 5 s for the write lock: how long the longest one took,
   // and the longest gap between two ticks of a 10 ms timer there (what a health check would wait).
-  const writesDuring = async (work: Promise<unknown>) => {
+  // With lockProbe, also the longest time the write lock was held by someone else: on a thread of its
+  // own (so a write that waits here doesn't stop it), a connection that never waits tries to take it
+  // every 3 ms, and the longest run of refusals is how long it couldn't. That tells a stall the
+  // purge's lock made from one the disk made (the write's own I/O).
+  const writesDuring = async (work: Promise<unknown>, options: { lockProbe?: boolean } = {}) => {
     const db = new DatabaseSync(path, { timeout: 5000 })
     // Configured as the sidecar configures the harness's connection (HARNESS_DB_OPTIONS, and
     // synchronous = NORMAL as Chord sets it).
@@ -155,6 +199,7 @@ describe('runPurge', () => {
       gap = Math.max(gap, now - last)
       last = now
     }, 10)
+    const probe = options.lockProbe ? lockProbe(path) : undefined
     let report: unknown
     const settled = work.then(
       (value) => {
@@ -176,10 +221,12 @@ describe('runPurge', () => {
     }
     const took = performance.now() - began
     clearInterval(timer)
+    const locked = probe ? await probe.stop() : 0
     db.close()
     const error = await settled
-    // What the purge's own transactions took (lock, deleting, commit), to say which a stall was.
-    return { longest, gap, writes, took, error, report: JSON.stringify(report) }
+    // What the purge's own transactions took (lock, deleting, commit), and how long the write lock
+    // was held as the probe saw it, to say which a stall was.
+    return { longest, gap, writes, took, error, locked, report: JSON.stringify({ lockHeld: locked, purge: report }) }
   }
 
   it('waits for a reader off the calling thread, which keeps running meanwhile', async () => {
@@ -435,7 +482,9 @@ describe('runPurge', () => {
     writer.exec('COMMIT')
     settle(writer)
     try {
-      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000, report: true }))
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000, report: true }), {
+        lockProbe: true,
+      })
       expect(probe.error).toBeUndefined()
       // A fixed bound on the longest stall, whatever the history's length: no transaction of the
       // purge grows with it (in one last transaction a write waited for nearly all of it).
@@ -570,6 +619,37 @@ describe('runPurge', () => {
       // The round that emptied the log is the last one: it found the backlog copied.
       expect(rounds.length).toBeGreaterThan(1)
       expect(rounds[rounds.length - 1]).toBeLessThanOrEqual(64)
+      expect(log()).toBe('')
+    } finally {
+      db.close()
+      reader.close()
+      writer.close()
+    }
+  })
+
+  // A commit that lands after the round's passive checkpoint found the log drained is copied by a
+  // second look just before the TRUNCATE, not by the TRUNCATE under the write lock.
+  it('looks at the log again just before the TRUNCATE', () => {
+    const { writer, reader } = fixture()
+    reader.exec('COMMIT')
+    const more = writer.prepare('INSERT INTO entries (conversation_id, text) VALUES (2, ?)')
+    const db = new DatabaseSync(path, { timeout: 1000 })
+    let committed = false
+    const truncated: number[] = []
+    try {
+      truncateWalWithin(db, 10_000, {
+        round: (backlog) => {
+          if (committed || backlog > 64) return
+          committed = true
+          writer.exec('BEGIN')
+          for (let i = 0; i < 10_000; i++) more.run('k'.repeat(400))
+          writer.exec('COMMIT')
+        },
+        truncating: () => truncated.push(pending()),
+      })
+      expect(committed).toBe(true)
+      expect(truncated.length).toBe(1)
+      expect(truncated[0]).toBeLessThanOrEqual(64)
       expect(log()).toBe('')
     } finally {
       db.close()
@@ -894,7 +974,9 @@ describe('runPurge', () => {
     writer.exec('COMMIT')
     settle(writer)
     try {
-      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000, report: true }))
+      const probe = await writesDuring(runPurge({ path, root: 1, timeoutMs: 10_000, report: true }), {
+        lockProbe: true,
+      })
       expect(probe.error).toBeUndefined()
       expect(probe.longest, probe.report).toBeLessThan(250)
       expect(probe.gap, probe.report).toBeLessThan(250)

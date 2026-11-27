@@ -1,6 +1,6 @@
 // The purge against a database Pi Durable wrote itself: what the unit tests' fixture stands in for
 // (purge.test.ts) is checked here against the real thing, so the two can't drift apart.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -157,5 +157,72 @@ describe('the purge on a database Pi Durable wrote', () => {
 
   it('needs no compaction for a new database', () => {
     expect(compactOnce(path)).toBe('fresh')
+  })
+
+  const recorded = () => {
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      return db.prepare("SELECT count(*) AS n FROM taskto_maintenance WHERE name = 'secure_delete_vacuum'").get()
+    } finally {
+      db.close()
+    }
+  }
+
+  // A reader (a backup's snapshot) holds the log while the sidecar starts: the rewrite can't be
+  // emptied out of the log, so the compaction isn't recorded done; it is at a start without one.
+  it('defers the compaction while a reader holds the log', async () => {
+    await retired(notes, 'older')
+    const reader = new DatabaseSync(path)
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) FROM documents').get()
+    try {
+      expect(compactOnce(path)).toBe('deferred')
+      expect(recorded()).toEqual({ n: 0 })
+    } finally {
+      reader.exec('COMMIT')
+      reader.close()
+    }
+    expect(compactOnce(path)).toBe('compacted')
+    // Only the latest note is left: the document still holds it, the earlier ones were deleted.
+    expect(remnants()).toEqual(markers.map((_, i) => (i === markers.length - 1 ? 1 : 0)))
+  })
+
+  // After a hard stop the log can be large: finding the compaction done before doesn't checkpoint
+  // it (a read-write connection's closing would, and the start would wait for it).
+  it('looks for the compaction without checkpointing the log', async () => {
+    await retired()
+    expect(compactOnce(path)).toBe('compacted')
+    // A log left as a hard stop leaves it: written, and its writer gone without checkpointing it
+    // (another connection was open when it closed, and that one only reads).
+    const keep = new DatabaseSync(path, { readOnly: true })
+    keep.prepare('SELECT count(*) FROM documents').get()
+    const writer = new DatabaseSync(path)
+    writer.exec('PRAGMA wal_autocheckpoint = 0')
+    writer.exec('CREATE TABLE IF NOT EXISTS filler (x TEXT)')
+    const fill = writer.prepare('INSERT INTO filler (x) VALUES (?)')
+    writer.exec('BEGIN')
+    for (let i = 0; i < 2000; i++) fill.run('f'.repeat(1000))
+    writer.exec('COMMIT')
+    writer.close()
+    keep.close()
+    const before = statSync(`${path}-wal`).size
+    expect(before).toBeGreaterThan(1_000_000)
+    expect(compactOnce(path)).toBe('done-before')
+    expect(statSync(`${path}-wal`).size).toBe(before)
+  })
+
+  // SQLite failing as it compacts (the disk full, the file read-only) defers it: the sidecar starts.
+  it('defers the compaction when SQLite fails, rather than not starting', async () => {
+    if (process.getuid?.() === 0) return // root writes a read-only file all the same
+    await retired(notes, 'older')
+    // SQLite makes the log and its index with the file's mode, so all three are given it back.
+    const files = () => [path, `${path}-wal`, `${path}-shm`].filter(existsSync)
+    chmodSync(path, 0o444)
+    try {
+      expect(compactOnce(path)).toBe('deferred')
+    } finally {
+      for (const f of files()) chmodSync(f, 0o644)
+    }
+    expect(compactOnce(path)).toBe('compacted')
   })
 })

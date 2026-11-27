@@ -32,8 +32,12 @@ export async function openHarnessStorage(path: string): Promise<SqliteStorage> {
  */
 export const COMPACT_MAX_BYTES = 256 * 1024 * 1024
 
-/** What compactOnce did. */
-export type Compaction = 'fresh' | 'done-before' | 'compacted' | 'too-large' | 'no-room'
+/**
+ * What compactOnce did. deferred: it couldn't be finished now (a reader held the log, so it couldn't
+ * be emptied, or SQLite failed: the disk full, the file read-only); it is tried again at the next
+ * start, and nothing is recorded.
+ */
+export type Compaction = 'fresh' | 'done-before' | 'compacted' | 'too-large' | 'no-room' | 'deferred'
 
 const MAINTENANCE_TABLE = `CREATE TABLE IF NOT EXISTS taskto_maintenance (
   name    TEXT PRIMARY KEY,
@@ -50,40 +54,65 @@ const COMPACTED = 'secure_delete_vacuum'
  * by recordFresh once the harness has made it. It is bounded: not for a database larger than
  * maxBytes, which would hold the sidecar's start past the server's patience, nor without room on the
  * disk for the copy SQLite makes (twice its size); either is left for the next start, and logged.
+ *
+ * It is recorded done only once the rewrite is in the file and the log is empty: a reader that holds
+ * the log (a backup's snapshot) keeps what was deleted in it, and the TRUNCATE checkpoint that would
+ * empty it says busy. Then it is deferred, as it is when SQLite fails meanwhile; the sidecar starts
+ * all the same. Whether anything is to do is read on a read-only connection, whose closing never
+ * checkpoints the log: after a hard stop that can be large, and the start would wait for it.
  */
 export function compactOnce(path: string, maxBytes = COMPACT_MAX_BYTES): Compaction {
   if (!existsSync(path)) return 'fresh'
-  const db = new DatabaseSync(path)
+  let size: number
+  const look = new DatabaseSync(path, { readOnly: true })
   try {
-    db.exec(MAINTENANCE_TABLE)
-    if (db.prepare('SELECT 1 FROM taskto_maintenance WHERE name = ?').get(COMPACTED)) return 'done-before'
-    const pages = Number((db.prepare('PRAGMA page_count').get() as { page_count: number }).page_count)
-    const pageSize = Number((db.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)
+    const recorded = look
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'taskto_maintenance'")
+      .get()
+    if (recorded && look.prepare('SELECT 1 FROM taskto_maintenance WHERE name = ?').get(COMPACTED)) return 'done-before'
+    const pages = Number((look.prepare('PRAGMA page_count').get() as { page_count: number }).page_count)
+    const pageSize = Number((look.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)
     let wal = 0
     try {
       wal = statSync(`${path}-wal`).size
     } catch {
       // no log: nothing to add
     }
-    const size = pages * pageSize + wal
-    if (size > maxBytes) {
-      console.error(
-        `agent.db is ${size} bytes, more than the ${maxBytes} compacted at start: content deleted before this version may remain in the file until it is compacted (docs/install.md#privacy-and-account-deletion)`,
-      )
-      return 'too-large'
-    }
-    const disk = statfsSync(dirname(path))
-    if (Number(disk.bavail) * Number(disk.bsize) < 2 * size) {
-      console.error('not enough room on the disk to compact agent.db at start; it is tried again at the next start')
-      return 'no-room'
-    }
+    size = pages * pageSize + wal
+  } finally {
+    look.close()
+  }
+  if (size > maxBytes) {
+    console.error(
+      `agent.db is ${size} bytes, more than the ${maxBytes} compacted at start: content deleted before this version may remain in the file until it is compacted (docs/install.md#privacy-and-account-deletion)`,
+    )
+    return 'too-large'
+  }
+  const disk = statfsSync(dirname(path))
+  if (Number(disk.bavail) * Number(disk.bsize) < 2 * size) {
+    console.error('not enough room on the disk to compact agent.db at start; it is tried again at the next start')
+    return 'no-room'
+  }
+  let db: DatabaseSync | undefined
+  try {
+    db = new DatabaseSync(path)
+    db.exec(MAINTENANCE_TABLE)
     db.exec('PRAGMA secure_delete = ON')
     db.exec('VACUUM')
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number | bigint } | undefined
+    if (Number(row?.busy ?? 1) !== 0) {
+      console.error(
+        'compacting agent.db is deferred to the next start: a reader holds its log, so it could not be emptied',
+      )
+      return 'deferred'
+    }
     db.prepare('INSERT OR REPLACE INTO taskto_maintenance (name, done_at) VALUES (?, ?)').run(COMPACTED, Date.now())
     return 'compacted'
+  } catch (error) {
+    console.error(`compacting agent.db is deferred to the next start: ${(error as Error).message}`)
+    return 'deferred'
   } finally {
-    db.close()
+    db?.close()
   }
 }
 
