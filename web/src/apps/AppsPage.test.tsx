@@ -41,6 +41,7 @@ const app = (over: Record<string, unknown>) => ({
   id: 1,
   space_id: 2,
   name: 'Expenses',
+  icon: '',
   archived_at: null,
   version: 1,
   rows: 1,
@@ -113,7 +114,13 @@ test("lists every space's apps, and changes only the ones the user may", async (
 
   await within(mine).findByText('Expenses')
   expect(within(mine).getByText('Live · release 1')).toBeTruthy()
-  expect(await menuItems(mine, 'Expenses')).toEqual(['History', 'Rename', 'Duplicate as template', 'Take offline'])
+  expect(await menuItems(mine, 'Expenses')).toEqual([
+    'History',
+    'Rename',
+    'Change icon',
+    'Duplicate as template',
+    'Take offline',
+  ])
 
   await choose(mine, 'Expenses', 'Rename')
   const rename = await screen.findByRole('dialog', { name: 'Rename Expenses' })
@@ -776,4 +783,92 @@ test('in the list’s publish dialog, the confirmation takes the focus, describe
   await waitFor(() =>
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Review and publish…' })),
   )
+})
+
+test('an icon is picked from the list or typed, saved with the version the person saw, and shown in the row', async () => {
+  let expenses = app({})
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': () => ({ body: { apps: [expenses] } }),
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'PATCH /api/workspaces/1/spaces/2/apps/1': (call) => {
+      const body = call.body as { version: number; icon: string }
+      if (body.icon === '🛑') return { status: 400, body: { error: 'bad', code: 'app_icon_invalid' } }
+      expenses = app({ ...expenses, version: expenses.version + 1, icon: body.icon })
+      return { body: expenses }
+    },
+  })
+  render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await within(mine).findByText('Expenses')
+  expect(within(mine).getByText('E')).toBeTruthy()
+
+  await choose(mine, 'Expenses', 'Change icon')
+  let dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  const save = within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
+  const group = within(dialog).getByRole('radiogroup', { name: 'Change icon' })
+  expect((within(group).getByRole('radio', { name: 'No icon (use initials)' }) as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(within(group).getByRole('radio', { name: '🧾' }))
+  expect((within(group).getByRole('radio', { name: '🧾' }) as HTMLInputElement).checked).toBe(true)
+  expect(save.disabled).toBe(false)
+  fireEvent.click(save)
+  await within(mine).findByText('🧾')
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(within(mine).queryByText('E')).toBeNull()
+  expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ version: 1, icon: '🧾' }])
+
+  await choose(mine, 'Expenses', 'Change icon')
+  dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  expect((within(dialog).getByRole('radio', { name: '🧾' }) as HTMLInputElement).checked).toBe(true)
+  const typed = within(dialog).getByLabelText('Or type or paste an emoji')
+  fireEvent.change(typed, { target: { value: 'abc' } })
+  expect(within(dialog).getByText('Use a single emoji.')).toBeTruthy()
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '1' } })
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '🧾🧾' } })
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: ' 🦄 ' } })
+  expect(within(dialog).queryByText('Use a single emoji.')).toBeNull()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(mine).findByText('🦄')
+  expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ version: 2, icon: '🦄' })
+
+  await choose(mine, 'Expenses', 'Change icon')
+  dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  expect((within(dialog).getByLabelText('Or type or paste an emoji') as HTMLInputElement).value).toBe('🦄')
+  fireEvent.click(within(dialog).getByRole('radio', { name: 'No icon (use initials)' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(mine).findByText('E')
+  expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ version: 3, icon: '' })
+
+  await choose(mine, 'Expenses', 'Change icon')
+  dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  fireEvent.change(within(dialog).getByLabelText('Or type or paste an emoji'), { target: { value: '🛑' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(4))
+  expect(screen.getByRole('dialog', { name: 'Icon for Expenses' })).toBeTruthy()
+})
+
+test('the icon is changed only by someone who may design the app in a space they may write', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': {
+      body: { apps: [app({ access: { ...everything, design: false } }), app({ id: 2, name: 'Mine', icon: '🧾' })] },
+    },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': {
+      body: { apps: [app({ id: 7, space_id: 3, name: 'Team tracker', icon: '🚚' })] },
+    },
+  })
+  render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  const team = screen.getByRole('region', { name: 'Team' })
+  await within(team).findByText('Team tracker')
+  expect(within(team).getByText('🚚')).toBeTruthy()
+  expect(await menuItems(team, 'Team tracker')).not.toContain('Change icon')
+  await within(mine).findByText('Mine')
+  expect(within(mine).getByText('🧾')).toBeTruthy()
+  expect(await menuItems(mine, 'Expenses')).not.toContain('Change icon')
+  expect(await menuItems(mine, 'Mine')).toContain('Change icon')
 })

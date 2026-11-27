@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/access"
@@ -43,6 +44,7 @@ type App struct {
 	ID                 int64            `json:"id"`
 	SpaceID            int64            `json:"space_id"`
 	Name               string           `json:"name"`
+	Icon               string           `json:"icon"`
 	ArchivedAt         *string          `json:"archived_at"`
 	Version            int64            `json:"version"`
 	Rows               int              `json:"rows"`
@@ -141,7 +143,11 @@ func appFull(msg string) error {
 
 const maxApps = 500
 
-const maxNameLen = 100
+const (
+	maxNameLen   = 100
+	maxIconBytes = 32
+	maxIconRunes = 8
+)
 
 type Service struct {
 	db               *sql.DB
@@ -327,7 +333,7 @@ func via(a Actor) any {
 }
 
 const (
-	appFields = `a.id, a.space_id, a.name, a.archived_at, a.version,
+	appFields = `a.id, a.space_id, a.name, a.icon, a.archived_at, a.version,
 		a.created_at, a.created_by, coalesce(cu.name, ''), a.created_by_agent, a.created_via,
 		a.updated_at, a.updated_by, coalesce(uu.name, ''), a.updated_by_agent, a.updated_via,
 		a.draft_differs, r.number, r.definition_version, r.requires, r.published_at, r.published_by, coalesce(pu.name, ''), a.live_at, `
@@ -348,7 +354,7 @@ func scanApp(row scanner, withDefinition bool) (App, error) {
 	var relRequires, relAt, liveAt sql.NullString
 	var createdAgent, updatedAgent bool
 	var createdVia, updatedVia sql.NullString
-	if err := row.Scan(&a.ID, &a.SpaceID, &a.Name, &a.ArchivedAt, &a.Version,
+	if err := row.Scan(&a.ID, &a.SpaceID, &a.Name, &a.Icon, &a.ArchivedAt, &a.Version,
 		&a.CreatedAt, &createdBy, &createdName, &createdAgent, &createdVia,
 		&a.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia,
 		&a.draftDiffers, &relNumber, &relVersion, &relRequires, &relAt, &relBy, &relByName, &liveAt, &draft, &live); err != nil {
@@ -479,6 +485,7 @@ func (s *Service) getApp(ctx context.Context, sp access.Space, a Actor, appID in
 
 type NewApp struct {
 	Name       string     `json:"name"`
+	Icon       string     `json:"icon"`
 	Definition Definition `json:"definition"`
 }
 
@@ -491,6 +498,10 @@ func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, n
 		return App{}, err
 	}
 	name, err := appName(na.Name)
+	if err != nil {
+		return App{}, err
+	}
+	icon, err := appIcon(na.Icon)
 	if err != nil {
 		return App{}, err
 	}
@@ -519,10 +530,10 @@ func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, n
 			return errTooManyApps
 		}
 		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO apps (space_id, name, definition, draft_differs,
+			INSERT INTO apps (space_id, name, icon, definition, draft_differs,
 				created_by, created_by_agent, created_via, updated_by, updated_by_agent, updated_via)
-			VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?) RETURNING id`,
-			sp.ID, name, string(raw), a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a)).Scan(&id); err != nil {
+			VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			sp.ID, name, icon, string(raw), a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a)).Scan(&id); err != nil {
 			return err
 		}
 		for _, g := range grants {
@@ -547,6 +558,7 @@ func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, n
 type Changes struct {
 	Version    int64       `json:"version"`
 	Name       *string     `json:"name"`
+	Icon       *string     `json:"icon"`
 	Archived   *bool       `json:"archived"`
 	Definition *Definition `json:"definition"`
 }
@@ -555,19 +567,26 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 	if err := may(sp, access.Write); err != nil {
 		return App{}, err
 	}
-	if ch.Name == nil && ch.Archived == nil && ch.Definition == nil {
-		return App{}, invalidf("name, archived or definition is required")
+	if ch.Name == nil && ch.Icon == nil && ch.Archived == nil && ch.Definition == nil {
+		return App{}, invalidf("name, icon, archived or definition is required")
 	}
 	if err := checkVersion(ch.Version); err != nil {
 		return App{}, err
 	}
-	var name, def any
+	var name, icon, def any
 	if ch.Name != nil {
 		n, err := appName(*ch.Name)
 		if err != nil {
 			return App{}, err
 		}
 		name = n
+	}
+	if ch.Icon != nil {
+		i, err := appIcon(*ch.Icon)
+		if err != nil {
+			return App{}, err
+		}
+		icon = i
 	}
 	var checked Definition
 	if ch.Definition != nil {
@@ -597,7 +616,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if err != nil {
 			return err
 		}
-		if ch.Name != nil || ch.Definition != nil {
+		if ch.Name != nil || ch.Icon != nil || ch.Definition != nil {
 			if err := need(acc, access.CapDesign); err != nil {
 				return err
 			}
@@ -621,13 +640,14 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		_, err = tx.ExecContext(ctx, `
 			UPDATE apps SET
 				name = coalesce(?, name),
+				icon = coalesce(?, icon),
 				definition = coalesce(?, definition),
 				draft_differs = coalesce(?, draft_differs),
 				archived_at = CASE WHEN ? IS NULL THEN archived_at
 				                   WHEN ? = '' THEN NULL
 				                   ELSE coalesce(archived_at, ?) END,
 				version = version + 1, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?
-			WHERE id = ?`, name, def, differs, archivedAt, archivedAt, archivedAt, now(), a.UserID, a.Agent, via(a), appID)
+			WHERE id = ?`, name, icon, def, differs, archivedAt, archivedAt, archivedAt, now(), a.UserID, a.Agent, via(a), appID)
 		if err != nil {
 			return err
 		}
@@ -1266,4 +1286,28 @@ func appName(s string) (string, error) {
 		return "", invalidAs(apierr.CodeAppNameLength, apierr.Params{"max": maxNameLen}, "an app's name is 1 to %d characters", maxNameLen)
 	}
 	return s, nil
+}
+
+func appIcon(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if len(s) > maxIconBytes || utf8.RuneCountInString(s) > maxIconRunes || !isEmoji(s) {
+		return "", invalidAs(apierr.CodeAppIconInvalid, nil, "an app's icon is one emoji, or empty to show its initials")
+	}
+	return s, nil
+}
+
+func isEmoji(s string) bool {
+	symbol := false
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) || unicode.IsControl(r) || unicode.IsPunct(r) {
+			return false
+		}
+		if unicode.Is(unicode.So, r) || (r >= 0x1F1E6 && r <= 0x1F1FF) {
+			symbol = true
+		}
+	}
+	return symbol
 }

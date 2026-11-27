@@ -81,6 +81,7 @@ const offered: AvailableApp = {
   space_kind: 'private',
   app_id: 1,
   name: 'Expenses',
+  icon: '',
   widgets: [{ id: 'spend', title: 'Spending', kind: 'summaries', size: 'medium' }],
   pin: { label: 'Spend' },
   can_set_defaults: false,
@@ -152,6 +153,26 @@ test('a person pins an app and places a widget, and both show: the widget on Hom
   fireEvent.click(await screen.findByRole('button', { name: 'Unpin Spend' }))
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Pinned apps' })).toBeNull())
   expect(screen.getByRole('article', { name: 'Spending' })).toBeTruthy()
+})
+
+test('a pinned app shows its emoji, and its initials without one', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({
+    'GET /api/workspaces/1/home': {
+      body: home({
+        pins: [
+          pinItem({ app_icon: '🧾' }),
+          pinItem({ id: 12, app_id: 2, app_name: 'Tools', label: 'Tools', screen: undefined }),
+        ],
+      }),
+    },
+  })
+  render(<PinnedNav workspace={1} path="/w/1/conversations" />)
+  const pinned = await screen.findByRole('region', { name: 'Pinned apps' })
+  const spend = within(pinned).getByRole('link', { name: 'Spend' })
+  expect(within(spend).getByText('🧾')).toBeTruthy()
+  expect(within(spend).queryByText('SP')).toBeNull()
+  expect(within(within(pinned).getByRole('link', { name: 'Tools' })).getByText('TO')).toBeTruthy()
 })
 
 test('a pin opens its app on the screen it names', async () => {

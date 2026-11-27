@@ -590,6 +590,13 @@
     "moveTitle": "Move {name} to a space",
     "moveNote": "The app moves with its records. Who can use it is then set by the space it moves to.",
     "renameNamed": "Rename {name}",
+    "changeIcon": "Change icon",
+    "iconTitle": "Icon for {name}",
+    "iconNone": "No icon (use initials)",
+    "iconCustom": "Or type or paste an emoji",
+    "iconCustomHelp": "One emoji. The app shows its initials without one.",
+    "iconPreview": "Preview",
+    "iconInvalid": "Use a single emoji.",
     "takeOfflineConfirm": {
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
@@ -1003,6 +1010,7 @@
     "app_offline": "This app is offline: restore it to launch it.",
     "app_changed": "Someone changed this app meanwhile: reload and try again.",
     "app_name_length": "An app name needs 1 to {max} characters.",
+    "app_icon_invalid": "An icon is one emoji.",
     "too_many_apps": "A space can have at most {max} apps.",
     "app_token_rate_limited": "Your access tokens ran {max} actions in a minute here, which is the most allowed. Try again in {seconds} seconds.",
     "app_full": "This app is full: it holds at most {max_rows} rows and {max_mib} MiB of data.",

@@ -60,6 +60,15 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 		t.Fatalf("update_app = %v", updated)
 	}
 	w.status(http.StatusConflict, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 1, "name": "Stale"})
+	iconic := w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 2, "icon": "🧾"})
+	if iconic["icon"] != "🧾" || iconic["name"] != "Spending" || id(iconic["version"]) != 3 {
+		t.Fatalf("update_app with an icon = %v", iconic)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 3, "icon": "abc"})
+	plain := w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 3, "icon": ""})
+	if plain["icon"] != "" || id(plain["version"]) != 4 {
+		t.Fatalf("update_app clearing the icon = %v", plain)
+	}
 	w.exec(`INSERT INTO app_rows (app_id, data) VALUES (?, '{"description": "Coffee", "amount": 4.5, "dropped": "old"}')`, app)
 	rows := w.ok(w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app})["rows"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["description"] != "Coffee" || rows[0].(map[string]any)["dropped"] != nil {
@@ -126,7 +135,7 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 	}
 	w.exec(`DELETE FROM apps WHERE space_id = ? AND id != ?`, w.alicePrivate, app)
 
-	w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 2, "archived": true})
+	w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 4, "archived": true})
 	if rows := w.ok(w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app})["rows"].([]any); len(rows) != 1 {
 		t.Fatalf("an offline app's rows = %v", rows)
 	}

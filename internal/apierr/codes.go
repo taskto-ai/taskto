@@ -109,6 +109,7 @@ const (
 	CodeAppOffline           Code = "app_offline"
 	CodeAppChanged           Code = "app_changed"
 	CodeAppNameLength        Code = "app_name_length"
+	CodeAppIconInvalid       Code = "app_icon_invalid"
 	CodeTooManyApps          Code = "too_many_apps"
 	CodeAppTokenRateLimited  Code = "app_token_rate_limited"
 	CodeAppFull              Code = "app_full"

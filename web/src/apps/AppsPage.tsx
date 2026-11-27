@@ -118,7 +118,7 @@ function SpaceApps({
   const t = useT()
   const headingId = `apps-space-${space.id}`
 
-  const change = async (app: App, body: { name?: string; archived?: boolean }) => {
+  const change = async (app: App, body: { name?: string; icon?: string; archived?: boolean }) => {
     let failed: string | null = null
     try {
       await api<App>(`${base}/${app.id}`, { method: 'PATCH', body: { version: app.version, ...body } })

@@ -176,6 +176,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_offline` | 409 | The app is offline: restore it to launch it or run its actions. |
 | `app_changed` | 409 | The app changed since the client read it; `current` is the app as it is now. |
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
+| `app_icon_invalid` | 400 | An app's icon must be one emoji, or empty to show the initials of its name. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
 | `app_preview_full` | 409 | A [preview](#post-appsapppreview) holds `max_rows` sample rows already. |
@@ -2983,7 +2984,7 @@ An app:
 
 ```json
 {
-  "id": 9, "space_id": 4, "name": "Expense tracker",
+  "id": 9, "space_id": 4, "name": "Expense tracker", "icon": "🧾",
   "archived_at": null, "version": 1, "rows": 12,
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": true},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true},
@@ -3242,8 +3243,8 @@ out unless `?archived=true`, after the others.
 
 ### `POST …/apps`
 
-Writers. `{"name": "Expense tracker", "definition": { … }}` (a name of 1–100
-characters). `201` with the app.
+Writers. `{"name": "Expense tracker", "icon"?: "🧾", "definition": { … }}` (a name of 1–100
+characters; an icon is [one emoji](#app-icons)). `201` with the app.
 
 ### `GET …/apps/{app}`
 
@@ -3251,12 +3252,24 @@ The app, with its definition.
 
 ### `PATCH …/apps/{app}`
 
-Writers. With the `version`: `name` renames it and `definition` replaces the app's **draft**:
-its screen, collection, actions and summaries (these take the design capability), `archived`
+Writers. With the `version`: `name` renames it, `icon` sets its [icon](#app-icons) (`""` goes
+back to the initials) and `definition` replaces the app's **draft**:
+its screen, collection, actions and summaries (these take the design capability, as do the
+name and the icon), `archived`
 takes it offline (`true`) or restores it (`false`; the publish capability). A new definition is
 checked against the catalog, not against the rows, and changes nothing people use: the app
 keeps serving its live release until the draft is published. Fields no longer declared stay in
 the rows, unseen, and come back if declared again. `200` with the app.
+
+#### App icons
+
+An app's `icon` is one emoji, or `""` to show the initials of its name (the colour still comes
+from the name). The server keeps it trimmed, at most 32 bytes and 8 characters, with nothing in
+it that is a letter, a digit, a space or punctuation and at least one symbol or flag; anything
+else is `400 app_icon_invalid`. Changing it needs the design capability, bumps the app's
+`version` and records no audit event. The agent's `create_app` and `update_app` take it too, a
+copy of an app keeps it, and Home's items (`app_icon`, left out when empty) and its available
+apps (`icon`) carry it.
 
 ### `POST …/apps/{app}/move`
 
@@ -4277,7 +4290,7 @@ id is `404`, never `403`).
 
 The caller's Home: `{"widgets": […], "pins": […], "hidden": […], "limits": {"widgets": 24,
 "pins": 20}}`. An item is `{"id"?, "default_id"?, "source": "personal"|"default", "kind":
-"widget"|"pin", "space_id", "app_id", "app_name", "widget_id"?, "widget"?, "label"?, "screen"?,
+"widget"|"pin", "space_id", "app_id", "app_name", "app_icon"?, "widget_id"?, "widget"?, "label"?, "screen"?,
 "state", "reason"?, "release"?, "can_manage"?}`. The defaults of the caller's shared spaces
 come first, then their own in the order they chose; an item the caller placed themselves
 replaces the same default. `hidden` are the defaults they hid.
@@ -4285,7 +4298,7 @@ replaces the same default. `hidden` are the defaults they hid.
 ### `GET /api/workspaces/{workspace}/home/available`
 
 The apps the caller may put on Home or pin: those they may view, online and published, in the
-spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name",
+spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name", "icon",
 "widgets", "pin", "can_set_defaults", "defaults"}]}`. `can_set_defaults` and the `defaults` set
 are only for those who may [set defaults](#shared-defaults) for the app.
 

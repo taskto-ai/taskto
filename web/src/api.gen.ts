@@ -8,6 +8,7 @@ export type App = {
   id: number
   space_id: number
   name: string
+  icon: string
   archived_at: string | null
   version: number
   rows: number
@@ -426,6 +427,7 @@ export type AvailableApp = {
   space_kind: string
   app_id: number
   name: string
+  icon: string
   widgets: Widget[]
   pin: Pin | null
   can_set_defaults: boolean
@@ -573,6 +575,7 @@ export type HomeItem = {
   space_id: number
   app_id: number
   app_name: string
+  app_icon?: string
   widget_id?: string
   widget?: Widget
   label?: string

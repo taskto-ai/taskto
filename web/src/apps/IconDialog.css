@@ -1,0 +1,78 @@
+@layer screens {
+  .apps-icon-preview {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .apps-icon-preview-name {
+    display: grid;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+    font: var(--type-ui-strong);
+  }
+
+  .apps-icon-choices {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .apps-icon-none,
+  .apps-icon-choice {
+    position: relative;
+    display: flex;
+  }
+
+  .apps-icon-none {
+    justify-self: start;
+  }
+
+  .apps-icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--control-md), 1fr));
+    gap: var(--space-1);
+  }
+
+  .apps-icon-input {
+    appearance: none;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .apps-icon-face {
+    display: grid;
+    place-items: center;
+    flex: 1;
+    min-block-size: var(--control-md);
+    border-radius: var(--radius-sm);
+    background: var(--color-neutral-soft);
+    font-size: var(--text-xl);
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .apps-icon-face-text {
+    padding-inline: var(--space-3);
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-text-muted);
+  }
+
+  .apps-icon-input:checked + .apps-icon-face {
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: 0 0 0 var(--line-strong) var(--color-focus);
+  }
+
+  .apps-icon-input:hover:not(:checked) + .apps-icon-face {
+    box-shadow: 0 0 0 var(--line-thin) var(--color-border-strong);
+  }
+
+  .apps-icon-input:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+}
