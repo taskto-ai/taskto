@@ -37,6 +37,7 @@ type fakeRuntime struct {
 	aborts  map[int64]int
 	resumes map[int64]int
 	resumed []continueCall
+	sets    int
 	err     error
 	onAbort func(ctx context.Context)
 	replies map[int64][]agentrt.Message
@@ -138,6 +139,7 @@ func (f *fakeRuntime) SetModel(_ context.Context, conv int64, model agentrt.Mode
 		return f.err
 	}
 	f.models[conv] = model
+	f.sets++
 	return nil
 }
 

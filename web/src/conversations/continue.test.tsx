@@ -235,3 +235,21 @@ test('a sign-out while the continue is in flight does not mark the model as chos
   await act(async () => release())
   expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).value).toBe(JSON.stringify(['script', 's']))
 })
+
+test('the model picker is disabled while a continue is in flight, so its model is the one shown', async () => {
+  let release: () => void = () => {}
+  const calls = await show([asked, failed], {
+    [`POST ${BASE}/continue`]: () =>
+      new Promise((done) => {
+        release = () => done(accepted)
+      }),
+  })
+  const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  expect(picker.disabled).toBe(false)
+  choose('Scripted: T')
+  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
+  expect(picker.disabled).toBe(true)
+  await act(async () => release())
+  await waitFor(() => expect(picker.disabled).toBe(false))
+  expect(picker.value).toBe(JSON.stringify(['script', 't']))
+})

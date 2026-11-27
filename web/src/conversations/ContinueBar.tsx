@@ -16,12 +16,14 @@ export function ContinueBar({
   afterEntry,
   onChosen,
   onContinued,
+  onPending,
 }: {
   base: string
   current: ModelRef
   afterEntry: number
   onChosen: (m: ModelRef) => void
   onContinued: () => void
+  onPending: (pending: boolean) => void
 }) {
   const t = useT()
   const id = useId()
@@ -32,6 +34,7 @@ export function ContinueBar({
   const run = async (model: ModelRef) => {
     setBusy(true)
     setError(null)
+    onPending(true)
     const same = sameSession()
     try {
       await continueConversation(base, { model, after_entry: afterEntry })
@@ -46,6 +49,8 @@ export function ContinueBar({
         models.reload()
         onContinued()
       }
+    } finally {
+      onPending(false)
     }
   }
 

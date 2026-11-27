@@ -130,10 +130,10 @@ func TestContinueRunsOnTheModelItWasGiven(t *testing.T) {
 		t.Fatalf("the runtime was asked %+v, want [%+v]", got, want)
 	}
 	e.rt.mu.Lock()
-	switched := len(e.rt.models)
+	sets := e.rt.sets
 	e.rt.mu.Unlock()
-	if switched > 1 {
-		t.Fatalf("the continue wrote the conversation's model on its own: %d models set", switched)
+	if sets != 0 {
+		t.Fatalf("the continue wrote the conversation's model on its own: %d model writes", sets)
 	}
 }
 
@@ -209,4 +209,20 @@ func TestAnotherUserCannotListAConversationsContinueModels(t *testing.T) {
 	c := owner.create(ws, nil)
 	member.expect(http.StatusNotFound, http.MethodGet, path(ws, fmt.Sprintf("/%d/continue-models", c.ID)), nil)
 	owner.expect(http.StatusNotFound, http.MethodGet, path(ws, "/999999/continue-models"), nil)
+}
+
+func TestContinueRechecksTheArchiveAfterLookingUpTheModels(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.svc.SetContinueModels(func(context.Context, int64, int64) ([]providers.Choice, error) {
+		if _, err := e.db.Exec(`UPDATE conversations SET archived_at = 'now' WHERE id = ?`, c.ID); err != nil {
+			t.Error(err)
+		}
+		return e.runnable, nil
+	})
+	owner.expect(http.StatusConflict, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7))
+	if got := e.continues(); len(got) != 0 {
+		t.Fatalf("the runtime was asked to continue an archived conversation: %+v", got)
+	}
 }

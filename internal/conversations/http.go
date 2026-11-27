@@ -411,7 +411,7 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.stillWritable(w, r) || !s.runnable(w, r, model) {
+	if !s.runnable(w, r, model) || !s.stillWritable(w, r) {
 		return
 	}
 	sub, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)

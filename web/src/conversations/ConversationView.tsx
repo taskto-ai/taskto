@@ -103,6 +103,7 @@ export function ConversationView({
   )
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
+  const [continuing, setContinuing] = useState(false)
   const model = picked ?? loadedModel.data
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
@@ -223,6 +224,7 @@ export function ConversationView({
               afterEntry={lastEntry}
               onChosen={setPicked}
               onContinued={onChanged}
+              onPending={setContinuing}
             />
           ) : undefined
         }
@@ -243,7 +245,7 @@ export function ConversationView({
             current={model}
             cli={cli.data}
             onChosen={setPicked}
-            disabled={archived || unreadable}
+            disabled={archived || unreadable || continuing}
           />
         )}
       </Composer>
