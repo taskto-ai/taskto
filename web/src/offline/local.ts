@@ -236,11 +236,11 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
     if (q.operation in (download.operations ?? {})) continue
     const kind = kindOf(q)
     if (kind === 'insert') {
-      let values: Record<string, unknown> = {}
+      let values: Record<string, unknown>
       try {
         values = parseInsert(download.definition, q.action.context)
       } catch {
-        values = {}
+        continue
       }
       created.push({ id: q.record.id, ...values })
     } else {

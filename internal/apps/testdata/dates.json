@@ -21,6 +21,9 @@
     { "date": "26-01-05", "valid": false },
     { "date": "2026-01-05T00:00:00Z", "valid": false },
     { "date": "２０２６-01-05", "valid": false },
-    { "date": "", "valid": false }
+    { "date": "", "valid": false },
+    { "date": " 2026-01-05 ", "valid": false, "field": true },
+    { "date": "2026-01-05\n", "valid": false, "field": true },
+    { "date": "\t2026-02-30 ", "valid": false, "field": false }
   ]
 }
