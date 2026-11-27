@@ -42,7 +42,7 @@ export type Runtime = {
   stop: () => void
 }
 
-export type Foreign = { users: number[]; count: number }
+export type Foreign = { users: number[]; count: number; owner: number; unsent: Record<number, number>; failed?: true }
 
 export type RuntimeState = {
   runtime: Runtime | null
@@ -75,7 +75,7 @@ export function setSyncDeps(next: SyncDeps, writer: WriterDeps = {}) {
 async function sweep(user: number, current: () => boolean): Promise<Foreign | null> {
   const others = readUsers().filter((id) => id !== user)
   const keep: number[] = []
-  const foreign: Foreign = { users: [], count: 0 }
+  const foreign: Foreign = { users: [], count: 0, owner: user, unsent: {} }
   for (const id of others) {
     if (!current()) throw new Lapsed()
     let store: OfflineStore
@@ -101,6 +101,7 @@ async function sweep(user: number, current: () => boolean): Promise<Foreign | nu
         keep.push(id)
         foreign.users.push(id)
         foreign.count += unsent.length
+        foreign.unsent[id] = unsent.length
         store.close()
       }
     } catch (e) {
@@ -221,16 +222,26 @@ export async function activate(user: number, name?: string, still: () => boolean
 export async function discardForeign(): Promise<void> {
   if (opening) await opening.catch(() => {})
   const foreign = state.foreign
-  const owner = state.runtime?.user
-  if (!foreign || owner === undefined) return
+  if (!foreign) return
+  const mine = () => state.foreign === foreign && lastUser()?.id === foreign.owner
   const gone: number[] = []
+  let stopped = false
   for (const id of foreign.users) {
-    const still = () => state.runtime?.user === owner && state.foreign === foreign && lastUser()?.id === owner
-    const outcome = await OfflineStore.deleteRetired(id, { force: true, still }).catch(() => 'failed' as const)
+    if (!mine()) {
+      stopped = true
+      break
+    }
+    const outcome = await OfflineStore.deleteRetired(id, { force: true, still: mine }).catch(() => 'failed' as const)
     if (outcome === 'removed') gone.push(id)
+    if (outcome === 'stopped') stopped = true
   }
   writeUsers(readUsers().filter((id) => !gone.includes(id)))
-  if (state.foreign === foreign) set({ ...state, foreign: null })
+  if (state.foreign !== foreign) return
+  const users = foreign.users.filter((id) => !gone.includes(id))
+  if (stopped || users.length === 0) return set({ ...state, foreign: null })
+  const unsent = Object.fromEntries(users.map((id) => [id, foreign.unsent[id] ?? 0]))
+  const count = users.reduce((sum, id) => sum + (unsent[id] ?? 0), 0)
+  set({ ...state, foreign: { users, count, owner: foreign.owner, unsent, failed: true } })
 }
 
 export type Unsent = { count: number; items: UnsentRef[]; unreadable: 'schema' | 'unavailable' | null }

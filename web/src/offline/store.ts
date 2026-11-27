@@ -279,23 +279,35 @@ export class OfflineStore {
     const name = OfflineStore.databaseName(user)
     if (!still()) throw new Superseded()
     let made = false
-    const open = () => {
+    let refused: 'existing' | 'expired' | null = null
+    const open = async () => {
       made = false
-      return openDatabase(name, SCHEMA_VERSION, {
-        ...MIGRATIONS,
-        1: (d, tx) => {
-          made = true
-          MIGRATIONS[1]?.(d, tx)
-        },
-      })
+      refused = null
+      try {
+        return await openDatabase(name, SCHEMA_VERSION, {
+          ...MIGRATIONS,
+          1: (d, tx) => {
+            made = true
+            if (existing || expired()) {
+              refused = existing ? 'existing' : 'expired'
+              tx.abort()
+              return
+            }
+            MIGRATIONS[1]?.(d, tx)
+          },
+        })
+      } catch (e) {
+        if (refused === 'existing') throw new NotOnDevice()
+        if (refused === 'expired') throw new StorageUnavailable('the offline database took too long')
+        throw e
+      }
     }
-    const giveUp = async (db: IDBDatabase, error: Error, madeByThisCheck = false): Promise<never> => {
+    const giveUp = async (db: IDBDatabase, error: Error): Promise<never> => {
       db.close()
-      if (made && (locked || madeByThisCheck) && !expired()) await deleteDatabase(name).catch(() => {})
+      if (made && locked && !expired()) await deleteDatabase(name).catch(() => {})
       throw error
     }
     const db = await open()
-    if (made && existing) return giveUp(db, new NotOnDevice(), true)
     let retired = false
     try {
       retired = (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined

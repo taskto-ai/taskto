@@ -935,7 +935,7 @@ test('another account signing in: the last one’s downloads, synced records and
   const [sent] = await alice.store.listItems()
   await alice.store.updateItem(sent.id, (i) => ({ ...i, state: 'synced' }))
   const state = await activate(2, 'Bob')
-  expect(state.foreign).toEqual({ users: [1], count: 1 })
+  expect(state.foreign).toMatchObject({ users: [1], count: 1 })
   expect(state.runtime?.user).toBe(2)
   expect(await state.runtime?.store.listItems()).toEqual([])
   const sealed = await OfflineStore.open(1)

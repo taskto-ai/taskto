@@ -19,7 +19,7 @@ import {
   signOutPending,
   unansweredSignOut,
 } from './pendingSignOut'
-import { activate, deactivate, discardForeign, lastUser, runtimeState } from './runtime'
+import { activate, deactivate, discardForeign, lastUser, runtimeState, unsentState } from './runtime'
 import { databaseExists, lockTimes, OfflineStore, type OutboxItem } from './store'
 
 const during = vi.hoisted(() => ({
@@ -1390,7 +1390,7 @@ test("discarding other accounts' records stops at one that signed in again meanw
   }
   localStorage.setItem('taskto:offline-users', JSON.stringify([8, 9]))
   const state = await activate(7, 'Pat')
-  expect(state.foreign).toEqual({ users: [8, 9], count: 2 })
+  expect(state.foreign).toMatchObject({ users: [8, 9], count: 2 })
   runtimeState().runtime?.engine.pause('manual')
   const real = IDBFactory.prototype.deleteDatabase
   vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(function (this: IDBFactory, name: string) {
@@ -1466,4 +1466,96 @@ test('with Web Locks, an open that is superseded after it made the database remo
   fakeLocks()
   await expect(OfflineStore.open(7, { still: supersededAfterOpening() })).rejects.toThrow()
   expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+function failingDeletion(only?: string) {
+  const real = IDBFactory.prototype.deleteDatabase
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(function (this: IDBFactory, name: string) {
+    if (only !== undefined && name !== only) return real.call(this, name)
+    const request = {} as IDBOpenDBRequest
+    queueMicrotask(() => request.onerror?.(new Event('error')))
+    return request
+  })
+}
+
+async function sealedOf(...ids: number[]) {
+  for (const id of ids) {
+    const theirs = await OfflineStore.open(id)
+    await theirs.enqueue({ ...queued(`of-${id}`), user: id }, [])
+    theirs.close()
+  }
+  localStorage.setItem('taskto:offline-users', JSON.stringify(ids))
+}
+
+test('a check of a database that a stale listing names makes none, though removing one would fail', async () => {
+  failingDeletion()
+  expect(await unsentState(7, new Map(), { still: () => true })).toEqual({ left: [], unreadable: false })
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test("a start whose open outlasts the account's lock leaves no database made", async () => {
+  fakeLocks()
+  const overs: (() => void)[] = []
+  lockTimes.holdOver = (_ms, over) => {
+    overs.push(over)
+    return () => {}
+  }
+  const real = IDBFactory.prototype.open
+  vi.spyOn(indexedDB, 'open').mockImplementation(function (this: IDBFactory, name: string, version?: number) {
+    if (name === 'taskto-offline-7')
+      queueMicrotask(() => {
+        for (const over of overs.splice(0)) over()
+      })
+    return real.call(this, name, version)
+  })
+  await expect(OfflineStore.open(7)).rejects.toThrow()
+  await new Promise((done) => setTimeout(done, 50))
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test("another account's records can be discarded though the signed-in account's own database can't open", async () => {
+  await sealedOf(8)
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('taskto-offline-7', 99)
+    request.onsuccess = () => {
+      request.result.close()
+      resolve()
+    }
+    request.onerror = () => reject(request.error)
+  })
+  const state = await activate(7, 'Pat')
+  expect(state).toMatchObject({ runtime: null, problem: 'schema', foreign: { users: [8], count: 1 } })
+  await discardForeign()
+  expect(runtimeState().foreign).toBeNull()
+  expect(await databases()).not.toContain('taskto-offline-8')
+})
+
+test('a discard that failed for one account keeps it in the prompt, says so, and can be tried again', async () => {
+  await sealedOf(8, 9)
+  await activate(7, 'Pat')
+  runtimeState().runtime?.engine.pause('manual')
+  failingDeletion('taskto-offline-9')
+  await discardForeign()
+  expect(runtimeState().foreign).toMatchObject({ users: [9], count: 1, failed: true })
+  expect(await databases()).not.toContain('taskto-offline-8')
+  expect(JSON.parse(localStorage.getItem('taskto:offline-users') ?? '[]')).toContain(9)
+  vi.restoreAllMocks()
+  await discardForeign()
+  expect(runtimeState().foreign).toBeNull()
+  expect(await databases()).not.toContain('taskto-offline-9')
+})
+
+test('a sign-out recorded after a start asked is not settled by a start whose login could not be recorded', async () => {
+  const asked = Date.now() - 1000
+  recordSignOut(7, 's2', false, new Map())
+  const real = Storage.prototype.setItem
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    if (key === 'taskto:login') throw new Error('full')
+    return real.call(this, key, value)
+  })
+  expect(await finishUnfinishedSignOuts({ ...me, session: 's1' }, asked)).toBe(true)
+  vi.restoreAllMocks()
+  expect(pendingSignOuts().some((p) => p.session === 's2')).toBe(true)
 })

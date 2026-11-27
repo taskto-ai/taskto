@@ -529,6 +529,7 @@ export function App() {
       <>
         <ForeignGuard
           count={foreign.count}
+          failed={foreign.failed}
           onDiscard={() => void discardForeign()}
           onSignOut={() => logOut({ user: me.user.id, session: me.session ?? '', next: { state: 'login' } })}
         />

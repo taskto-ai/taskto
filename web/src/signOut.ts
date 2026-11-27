@@ -113,7 +113,8 @@ export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()
     if (!p) continue
     if (me && sameLogin(p, me)) continue
     if (me && p.user === me.user.id) {
-      if ((p.at ?? 0) <= asked || loginIsCurrent(me.user.id, me.session)) settleSignOut(p.user, p.session)
+      if ((p.at ?? 0) <= asked || (remembered === 'ok' && loginIsCurrent(me.user.id, me.session)))
+        settleSignOut(p.user, p.session)
       continue
     }
     if ((p.at ?? 0) > asked) continue

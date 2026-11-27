@@ -526,7 +526,9 @@ signing in is dealt with when it signs in:
   unsent records of another account. Sign in as that account to send them, or discard them.*
   *Discard them* (asks again) deletes everything of that account on this device, each one under its
   account's lock and only while the choice still holds (the account that made it is still the one
-  here, and none of the others signed in since, in another tab: their data is theirs again); signing out
+  here, and none of the others signed in since, in another tab: their data is theirs again), and it works
+  though the signed-in account's own database can't be opened; an account whose deletion failed stays in the
+  prompt, which says so, for another try, and only the ones deleted leave it; signing out
   leaves them for their owner to sign in and send. A database that can't be opened, read or cut
   down at that point (written by a newer version, or a storage error that may pass) is **never
   deleted by the sign-in**: it stays as it is, sealed, and is looked at again at the next
@@ -590,7 +592,7 @@ signing in is dealt with when it signs in:
   (a runtime this tab still holds for the account is taken up only then: a lapsed start writes no
   marker and resumes nothing), inside the account's lock before it opens or makes the database (a
   start that waited there behind a sign-out's deletion never makes it again; one it made for a login
-  that ended meanwhile is deleted before the lock goes, and one that was there is left as it is),
+  that ended meanwhile is deleted before the lock goes, and one that was there is left as it is; an open still pending when the lock's time runs out aborts its making of the database instead of committing it, so none is made once the lock is gone),
   and after taking the account up, reporting its time zone and setting its language: when it isn't
   any more, what it took is let go (no database left open, no queue, no writer's lock), and the
   language and time zone of another account are never set. A Try again in a tab whose sign-out
@@ -616,8 +618,9 @@ signing in is dealt with when it signs in:
   lets it go, and a start that can't have it in time finds the database unavailable, as one in use
   by another tab is, so a sign-in never hangs on it. The deletion removes only the database it retired:
   one a newer start of the account made again since, with whatever was saved in it, stays. Checking
-  that the device is clear only looks: it never makes the database it asks about (one a cleanup in
-  another tab removed meanwhile stays gone). A cleanup
+  that the device is clear only looks: it never makes the database it asks about, its open aborting the
+  making of one (so there is nothing to delete, and one a cleanup in another tab removed meanwhile
+  stays gone). A cleanup
   that couldn't read the database it kept, or couldn't delete it, is not verified clear: it is said,
   and finished at a later start. A tab whose own sign-out another tab finished goes to the login
   screen, not *The account changed*; Back stops, and lets go of what it had claimed, when another
