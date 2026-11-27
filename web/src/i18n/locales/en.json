@@ -2545,6 +2545,12 @@
     "documents": "Documents",
     "sizeUnversioned": "{size} · not versioned",
     "notVersioned": "Not versioned: only its current version is kept.",
+    "preview": {
+      "loading": "Loading the preview",
+      "tooLarge": "This file is over {size}, so it isn't previewed. Download it to open it.",
+      "failed": "This file can't be previewed; download it to open it.",
+      "label": "Preview of {name}"
+    },
     "conflict": "It may have changed since you opened it, or the name is taken.",
     "reload": "Reload",
     "spaces": {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { scenario, setUp } from '../support.mjs'
+import JSZip from 'jszip'
+import { api, scenario, setUp } from '../support.mjs'
 
 scenario('a document is created, edited, shown in its history and restored', async (s) => {
   const { page } = s
@@ -51,4 +52,68 @@ scenario('a document is created, edited, shown in its history and restored', asy
     .getByRole('listitem')
     .nth(3)
     .waitFor()
+})
+
+async function wordFile(heading, cell) {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+  )
+  zip.file(
+    '_rels/.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+  )
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${heading}</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>${cell}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Signed</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>`,
+  )
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+scenario('a Word file is previewed in its sandboxed frame, and so is an older version of it', async (s) => {
+  const { page, context, messages } = s
+  await setUp(s)
+  const { spaces } = await api(context, 'GET', '/api/workspaces/1/spaces')
+  const space = spaces.find((x) => x.kind === 'private')
+  const url = `/api/workspaces/1/spaces/${space.id}/docs/contract.docx`
+  const put = async (path, bytes) => {
+    const res = await context.request.fetch(path, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      data: bytes,
+    })
+    assert.ok(res.ok(), `PUT ${path}: ${res.status()} ${await res.text()}`)
+  }
+  await put(url, await wordFile('Draft agreement', 'Acme'))
+  const { version } = await api(context, 'GET', url)
+  await put(`${url}?base_version=${version}`, await wordFile('Master agreement', 'Globex'))
+
+  await page.getByRole('link', { name: 'Knowledge base' }).click()
+  await page
+    .getByRole('list', { name: 'Documents' })
+    .getByRole('button', { name: /^contract\.docx/ })
+    .click()
+
+  const frame = page.getByTitle('Preview of contract.docx')
+  await frame.waitFor()
+  assert.equal(await frame.getAttribute('sandbox'), 'allow-same-origin')
+  const inside = page.frameLocator('iframe[title="Preview of contract.docx"]')
+  await inside.getByText('Master agreement').waitFor()
+  await inside.locator('table').getByText('Globex').waitFor()
+  assert.equal(await inside.locator('script').count(), 0)
+  await page.getByRole('link', { name: 'Download' }).waitFor()
+
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  const history = page.getByRole('region', { name: 'History' })
+  const versions = history.getByRole('list', { name: 'History' }).getByRole('listitem')
+  await versions.nth(1).getByRole('button', { name: 'View' }).click()
+  const older = history.locator('.kb-version').getByTitle('Preview of contract.docx')
+  await older.waitFor()
+  await history.locator('.kb-version').frameLocator('iframe').getByText('Draft agreement').waitFor()
+
+  assert.deepEqual(
+    messages.filter((m) => !m.includes('Blocked script execution in')),
+    [],
+  )
 })

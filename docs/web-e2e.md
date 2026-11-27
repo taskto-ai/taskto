@@ -17,7 +17,7 @@ share nothing and can run in any order and in parallel.
 | File | Scenario |
 |---|---|
 | `auth.e2e.mjs` | First-run setup with the setup token from the server's log (a wrong token is refused), the owner's session across a reload, logging out, a wrong password refused, logging back in; and setup closed once the owner exists |
-| `knowledge.e2e.mjs` | Create a document, edit it, see both changes (and the creation) in its history, restore the first version |
+| `knowledge.e2e.mjs` | Create a document, edit it, see both changes (and the creation) in its history, restore the first version; and a Word file built in the test with `jszip`, uploaded through the API and shown in its sandboxed preview frame (current and an older version), with no console errors besides Chromium's note about the blocked script that Playwright's own tracing injects |
 | `boards.e2e.mjs` | On the private space's personal board: add a card, move it from *To do* to *Doing* to *Done*, comment on it, and see it in place after a reload |
 | `apps.e2e.mjs` | Install the Expense tracker template as a draft, publish it, add a record to the live app, and check the server stored it as the owner's |
 | `offline.e2e.mjs` | Download that app for offline use, load the page with no connection (the service worker serves the app, which opens the offline view), add a record there, see it kept on the device, then go back online and check that it reached the server |

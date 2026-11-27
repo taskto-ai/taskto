@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, expect, test, vi } from 'vitest'
-import { ApiError, api, errorText, forAccount, SESSION_LOST } from './api'
+import { ApiError, api, apiBytes, errorText, forAccount, SESSION_LOST } from './api'
 import { setPreferences } from './i18n'
 import { fakeFetch } from './test/fakes'
 
@@ -43,4 +43,20 @@ test('a refused request made for an account says whose session ended; one made f
   await expect(api('/api/x', { method: 'POST', body: {} })).rejects.toBeInstanceOf(ApiError)
   window.removeEventListener(SESSION_LOST, listen)
   expect(heard).toEqual([{ user: 5 }, undefined])
+})
+
+test('a download of bytes returns them, and a refusal is an ApiError that ends the session like any other', async () => {
+  fakeFetch({
+    'GET /api/file': { body: { a: 1 } },
+    'GET /api/gone': { status: 401, body: { error: 'log in first', code: 'not_logged_in' } },
+  })
+  expect(new TextDecoder().decode(await apiBytes('/api/file'))).toBe('{"a":1}')
+  let ended = 0
+  const listen = () => {
+    ended++
+  }
+  window.addEventListener(SESSION_LOST, listen)
+  await expect(apiBytes('/api/gone')).rejects.toMatchObject({ status: 401, code: 'not_logged_in' })
+  window.removeEventListener(SESSION_LOST, listen)
+  expect(ended).toBe(1)
 })
