@@ -263,3 +263,20 @@ func TestAnOlderReleaseShowsOnlySeriesWhoseFieldsStillMeanTheSame(t *testing.T) 
 		})
 	}
 }
+
+func TestAMalformedSeriesIsRefusedWhenSavedAndTheDraftIsUnchanged(t *testing.T) {
+	w := newWorld(t)
+	app := w.seriesPlanner(t)
+	before := w.view(w.alice, w.shared, app)
+	bad := *before.Draft
+	bad.Series = map[string]Series{seriesName: {Kind: "count", GroupBy: "no_such_field"}}
+	rec := w.patchDraft(w.alice, w.shared, app, bad)
+	expect(t, rec, http.StatusBadRequest)
+	if !strings.Contains(rec.Body.String(), "group_by") {
+		t.Fatalf("the refusal doesn't say what is wrong: %s", rec.Body)
+	}
+	after := w.view(w.alice, w.shared, app)
+	if after.Version != before.Version || len(after.Draft.Series) != 1 || after.Draft.Series[seriesName].GroupBy != "category" {
+		t.Fatalf("a refused save changed the draft: %+v", after.Draft.Series)
+	}
+}
