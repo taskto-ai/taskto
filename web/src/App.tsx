@@ -10,6 +10,7 @@ import {
   SESSION_LOST,
 } from './api'
 import { forgetOperationsOf } from './apps/operations'
+import { parseRunPath } from './apps/route'
 import {
   InviteScreen,
   LoginScreen,
@@ -550,7 +551,11 @@ export function App() {
     case 'offline':
       return (
         <Suspense fallback={<StartingScreen />}>
-          <OfflineShell user={session.name} onReconnect={load} />
+          <OfflineShell
+            user={session.name}
+            onReconnect={load}
+            requested={parseRunPath(window.location.pathname) ?? undefined}
+          />
         </Suspense>
       )
     case 'in': {

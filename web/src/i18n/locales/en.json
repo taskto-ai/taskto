@@ -3093,6 +3093,7 @@
       "open": "Open",
       "openNamed": "Open {name}",
       "back": "Back to the downloaded apps",
+      "notDownloaded": "This app isn’t downloaded on this device. The apps that are downloaded are listed here.",
       "needsUpdate": "This version of taskto.ai can’t draw {name}."
     },
     "accountChanged": {

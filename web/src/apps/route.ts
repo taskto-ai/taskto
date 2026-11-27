@@ -29,8 +29,20 @@ export function runWindowName(space: number, app: number): string {
 
 export const RUN_WINDOW_FEATURES = 'popup,width=480,height=800'
 
+const runWindows = new Map<string, Window>()
+
 export function openRunWindow(workspace: number, space: number, app: number, screen?: string): void {
-  window.open(runPath(workspace, space, app, screen), runWindowName(space, app), RUN_WINDOW_FEATURES)
+  const name = runWindowName(space, app)
+  const held = runWindows.get(name)
+  const popup = held && !held.closed ? held : window.open('', name, RUN_WINDOW_FEATURES)
+  if (!popup) {
+    runWindows.delete(name)
+    return
+  }
+  popup.opener = null
+  runWindows.set(name, popup)
+  popup.location.href = runPath(workspace, space, app, screen)
+  popup.focus()
 }
 
 export type BuilderRoute =

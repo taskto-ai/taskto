@@ -41,6 +41,20 @@ scenario(
     assert.equal(await popup.getByRole('link', { name: 'All apps' }).count(), 0)
     assert.equal(await popup.title(), 'Expense tracker · taskto.ai')
     await popup.getByText('Team lunch').waitFor()
+    assert.equal(await popup.evaluate(() => window.opener), null)
+    assert.equal(await popup.evaluate(() => window.name), `taskto-app-${spaceId}-${appId}`)
+
+    const windows = context.pages().length
+    let another = false
+    context.on('page', () => {
+      another = true
+    })
+    await page.getByRole('button', { name: 'Open in a new window' }).click()
+    await popup.waitForURL(`**${run}`)
+    await popup.getByRole('button', { name: 'New expense' }).waitFor()
+    assert.equal(another, false, 'a second click opens no second window')
+    assert.equal(context.pages().length, windows)
+    assert.equal(await popup.evaluate(() => window.opener), null)
     await popup.close()
 
     await page.goto(run)

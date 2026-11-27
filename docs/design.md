@@ -554,6 +554,24 @@ browser tab's title: the app's name and the brand, put back when the page goes. 
 the server that the app page doesn't ask, so a person who can't read the app's space sees "This app
 wasn't found" and no data.
 
+The window is opened as a blank popup that lets go of its opener (`window.opener` is `null`, so the
+app's page can't reach the page that launched it) and is then sent to the run address. The launching
+page keeps the handle of each app's window: a second click navigates and focuses that window
+instead of opening another, and a window the person closed is opened again. After the launching
+page is reloaded the handle is gone, and the next click opens a window of its own.
+
+The page asks again whether the person still reads the space each time its window comes to the
+front, and when any response says the space or the workspace is gone (`space_not_found`,
+`workspace_not_found`, announced by `api()` as the `taskto:access-lost` event). When they are, the
+app, its records and the tab's title are removed at once and the same "wasn't found" page takes
+their place; a check that fails for another reason (a network error, a server error) leaves the app
+as it was.
+
+Opened with no connection, the run address of an app downloaded on this device opens that app in
+the offline view (the same local copy, queue and writer checks as the offline list), with the app's
+name as the page and the tab's title and the same "Open in taskto" link; "Back to the downloaded
+apps" shows the list. A run address of an app that isn't downloaded says so above the list.
+
 ## The logo
 
 The sidebar, the phone's bar and the login screens show the website's logo

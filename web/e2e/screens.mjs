@@ -393,6 +393,16 @@ export const SCREENS = [
     ready: (s) => heading(s, s.ids.appName),
   },
   {
+    name: 'app-standalone',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('run', `${s.ids.space}-${s.ids.componentsApp}`)),
+    ready: (s) => [
+      heading(s, COMPONENTS_APP_NAME),
+      text(s, 'Submit'),
+      s.page.getByRole('link', { name: 'Open in taskto' }),
+    ],
+  },
+  {
     name: 'app-components',
     phase: 'seeded',
     show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`)),

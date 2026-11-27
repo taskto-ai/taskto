@@ -785,7 +785,8 @@ test('in the list’s publish dialog, the confirmation takes the focus, describe
 })
 
 test('the menu opens an app in a window of its own, one per app, and not an app that is offline or a draft for a user', async () => {
-  const open = vi.fn()
+  const popup = { closed: false, opener: {} as unknown, location: { href: '' }, focus: vi.fn() }
+  const open = vi.fn(() => popup)
   vi.stubGlobal('open', open)
   const noDesign = { ...everything, design: false, publish: false, roles: ['user'], restricted: true }
   fakeFetch({
@@ -809,7 +810,10 @@ test('the menu opens an app in a window of its own, one per app, and not an app 
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
   await choose(crew, 'Expenses', 'Open in a new window')
-  expect(open).toHaveBeenCalledWith('/w/1/run/4-1', 'taskto-app-4-1', 'popup,width=480,height=800')
+  expect(open).toHaveBeenCalledWith('', 'taskto-app-4-1', 'popup,width=480,height=800')
+  expect(popup.opener).toBeNull()
+  expect(popup.location.href).toBe('/w/1/run/4-1')
+  popup.closed = true
   expect(await menuItems(crew, 'Gone')).not.toContain('Open in a new window')
   expect(await menuItems(crew, 'Soon')).not.toContain('Open in a new window')
 })

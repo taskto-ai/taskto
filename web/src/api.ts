@@ -24,6 +24,10 @@ export class ApiError extends Error {
 
 export const SESSION_LOST = 'taskto:session-lost'
 
+export const ACCESS_LOST = 'taskto:access-lost'
+
+const ACCESS_LOST_CODES = new Set<unknown>(['space_not_found', 'workspace_not_found'])
+
 export const sessionLostFor = (user: number) => new CustomEvent(SESSION_LOST, { detail: { user } })
 
 export const concernsAccount = (e: Event, signedIn: number | null | undefined): boolean => {
@@ -83,6 +87,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       const key = Object.keys(extra).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
       const expected = Number(key === undefined ? undefined : extra[key as keyof typeof extra])
       window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
+    }
+    if (res.status === 404 && ACCESS_LOST_CODES.has(data?.code)) {
+      window.dispatchEvent(new Event(ACCESS_LOST))
     }
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
     throw new ApiError(res.status, message, data)

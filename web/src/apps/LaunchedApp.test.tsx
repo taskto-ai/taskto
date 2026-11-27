@@ -243,13 +243,18 @@ test('in the shell the title is left alone', async () => {
 
 test('the app opens in a window of its own, a popup named for the app, or in a new tab by its link', async () => {
   serve()
-  const open = vi.fn()
+  const popup = { closed: false, opener: {} as unknown, location: { href: '' }, focus: vi.fn() }
+  const open = vi.fn(() => popup)
   vi.stubGlobal('open', open)
   render(<LaunchedApp workspace={1} space={2} app={1} writable screen="home" />)
   const windowButton = await screen.findByRole('button', { name: 'Open in a new window' })
   fireEvent.click(windowButton)
   expect(open).toHaveBeenCalledTimes(1)
-  expect(open).toHaveBeenCalledWith('/w/1/run/2-1-home', 'taskto-app-2-1', 'popup,width=480,height=800')
+  expect(open).toHaveBeenCalledWith('', 'taskto-app-2-1', 'popup,width=480,height=800')
+  expect(popup.opener).toBeNull()
+  expect(popup.location.href).toBe('/w/1/run/2-1-home')
+  expect(popup.focus).toHaveBeenCalledTimes(1)
+  popup.closed = true
   const tab = screen.getByRole('link', { name: 'Open in a new tab' })
   expect(tab.getAttribute('href')).toBe('/w/1/run/2-1-home')
   expect(tab.getAttribute('target')).toBe('_blank')

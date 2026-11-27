@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef } from 'react'
-import { api, type Me, type Space, ws } from '../api'
+import { ACCESS_LOST, ApiError, api, type Me, type Space, ws } from '../api'
 import { setPreferences, useT } from '../i18n'
 import { useLoad } from '../load'
 import { routePath } from '../router'
@@ -30,9 +30,37 @@ export function StandaloneApp({
   const main = useRef<HTMLElement>(null)
   const member = me.workspaces.find((w) => w.id === workspace)
   const spaces = useLoad(
-    () => (member ? api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces) : Promise.resolve([])),
+    () =>
+      member
+        ? api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then(
+            (r) => r.spaces,
+            (e: unknown) => {
+              if (e instanceof ApiError && e.status === 404) return []
+              throw e
+            },
+          )
+        : Promise.resolve([]),
     [workspace, !!member],
   )
+  const reloading = useRef(false)
+  reloading.current = !!spaces.loading
+  const reload = spaces.reload
+  useEffect(() => {
+    const revalidate = () => {
+      if (!reloading.current) reload()
+    }
+    const wake = () => {
+      if (document.visibilityState === 'visible') revalidate()
+    }
+    window.addEventListener(ACCESS_LOST, revalidate)
+    window.addEventListener('focus', wake)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      window.removeEventListener(ACCESS_LOST, revalidate)
+      window.removeEventListener('focus', wake)
+      document.removeEventListener('visibilitychange', wake)
+    }
+  }, [reload])
   const locale = member?.locale ?? null
   useEffect(() => {
     void setPreferences({ workspace: locale })
@@ -55,7 +83,7 @@ export function StandaloneApp({
         </EmptyState>
       </Page>
     )
-  } else if (spaces.error) {
+  } else if (!found && spaces.error) {
     body = (
       <Page width="reading">
         <Notice tone="danger">{spaces.error}</Notice>

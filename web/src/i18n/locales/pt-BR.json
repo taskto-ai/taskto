@@ -3116,6 +3116,7 @@
       "open": "Abrir",
       "openNamed": "Abrir {name}",
       "back": "Voltar aos apps baixados",
+      "notDownloaded": "Este app não foi baixado neste dispositivo. Os apps baixados estão listados aqui.",
       "needsUpdate": "Esta versão do taskto.ai não consegue mostrar {name}."
     },
     "accountChanged": {
