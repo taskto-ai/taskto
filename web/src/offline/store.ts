@@ -762,7 +762,11 @@ export class OfflineStore {
 
   static deleteRetired(
     user: number,
-    { force = false, still = () => true }: { force?: boolean; still?: () => boolean } = {},
+    {
+      force = false,
+      still = () => true,
+      removed = () => {},
+    }: { force?: boolean; still?: () => boolean; removed?: () => void } = {},
   ): Promise<'removed' | 'newer' | 'stopped'> {
     return withLock(user, async (expired) => {
       if (!still()) return 'stopped'
@@ -772,6 +776,7 @@ export class OfflineStore {
       if (!still()) return 'stopped'
       if (expired()) throw new StorageUnavailable('the offline database took too long')
       await deleteDatabase(name)
+      if (!expired()) removed()
       return 'removed'
     })
   }

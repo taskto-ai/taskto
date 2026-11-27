@@ -41,6 +41,10 @@ function writeUsers(list: number[]) {
   } catch {}
 }
 
+function dropUser(id: number) {
+  writeUsers(readUsers().filter((n) => n !== id))
+}
+
 export { type LastUser, lastUser, rememberUser }
 
 export type Runtime = {
@@ -246,7 +250,10 @@ async function discardShown(
     store = await OfflineStore.open(id, { still: mine })
   } catch (e) {
     if (e instanceof Superseded) return 'stopped'
-    if (e instanceof NotOnDevice) return 'removed'
+    if (e instanceof NotOnDevice) {
+      if (mine()) dropUser(id)
+      return 'removed'
+    }
     throw e
   }
   let left: UnsentRef[]
@@ -259,7 +266,12 @@ async function discardShown(
     store.close()
   }
   if (left.length > 0) return left
-  return OfflineStore.deleteRetired(id, { still: mine })
+  return OfflineStore.deleteRetired(id, {
+    still: mine,
+    removed: () => {
+      if (mine()) dropUser(id)
+    },
+  })
 }
 
 export async function discardForeign(): Promise<void> {
@@ -280,7 +292,6 @@ export async function discardForeign(): Promise<void> {
     else if (outcome === 'stopped') stopped = true
     else if (Array.isArray(outcome)) changed[id] = outcome
   }
-  writeUsers(readUsers().filter((id) => !gone.includes(id)))
   if (state.foreign !== foreign) return
   const users = foreign.users.filter((id) => !gone.includes(id))
   if (stopped || users.length === 0) return set({ ...state, foreign: null })

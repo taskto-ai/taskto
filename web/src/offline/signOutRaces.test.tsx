@@ -1598,6 +1598,34 @@ test('a discard asked after another account signed in and saved records deletes 
   expect(await databases()).not.toContain('taskto-offline-8')
 })
 
+test('an account that signs in again and saves a record as its discard finishes stays registered for the next sign-in', async () => {
+  await sealedOf(8)
+  await unreadableOwnDatabase(7)
+  await activate(7, 'Pat')
+  expect(runtimeState().foreign).toMatchObject({ users: [8] })
+  const real = OfflineStore.deleteRetired.bind(OfflineStore)
+  vi.spyOn(OfflineStore, 'deleteRetired').mockImplementation(async (user, options) => {
+    const outcome = await real(user, options)
+    if (user === 8) {
+      localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Kim' }))
+      localStorage.setItem('taskto:offline-users', JSON.stringify([7, 8]))
+      const returned = await OfflineStore.open(8)
+      await returned.enqueue({ ...queued('saved-by-returning-owner'), user: 8 }, [])
+      returned.close()
+      localStorage.setItem(LAST, JSON.stringify({ id: 7, name: 'Pat' }))
+    }
+    return outcome
+  })
+  await discardForeign()
+  vi.restoreAllMocks()
+  expect(await idsOf(8)).toEqual(['saved-by-returning-owner'])
+  expect(JSON.parse(localStorage.getItem('taskto:offline-users') ?? '[]')).toContain(8)
+  await deactivate({ purge: false })
+  localStorage.setItem(LAST, JSON.stringify({ id: 9, name: 'Lee' }))
+  const next = await activate(9, 'Lee')
+  expect(next.foreign).toMatchObject({ users: [8], count: 1 })
+})
+
 test("a prompt about another account's records ends when another login takes the browser, with no runtime open", async () => {
   await sealedOf(8)
   await unreadableOwnDatabase(7)
