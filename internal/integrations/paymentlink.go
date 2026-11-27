@@ -466,7 +466,13 @@ func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylin
 			// on record, which may be open. The entry waits, and a person sees it if it never resolves.
 			return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
 		}
-		return resolvedExpired, paylink.Link{}, t.s.markAttempt(ctx, a, attemptExpired)
+		// And as the key is now, not as this try read it: another may have noted an object meanwhile.
+		if ok, err := t.s.markExpiredOf(ctx, a, found.ObjectID); err != nil {
+			return unresolved, paylink.Link{}, err
+		} else if !ok {
+			return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
+		}
+		return resolvedExpired, paylink.Link{}, nil
 	}
 	if seen {
 		// The object on record wasn't found this time: nothing says what became of it. The entry waits.
@@ -1139,7 +1145,8 @@ func (s *Service) nextAttempt(ctx context.Context, r ref, a attempt) (ref, error
 // that read its object open and was slow to save it, while another try saw that object expired and moved
 // the ref to the next key, never installs it (it can't be paid, and the next key's call makes the link).
 // It reads the ref again, and the entry tries again. A ref marked failed meanwhile (a late answer under
-// the same key) still notes it.
+// the same key) still notes it. Nor does an object other than the one the key has on record (noted by
+// another try since this one read the key): that one may be paid, and stays.
 func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Request, l Link) (paylink.Link, error) {
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1149,8 +1156,9 @@ func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Re
 	res, err := tx.ExecContext(ctx, `
 		UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'
 		WHERE id = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed') AND key_seq = ?
-			AND EXISTS (SELECT 1 FROM integration_ref_attempts WHERE ref_id = ? AND seq = ? AND (outcome IS NULL OR outcome = 'made'))`,
-		l.ObjectID, l.URL, r.id, a.seq, a.refID, a.seq)
+			AND EXISTS (SELECT 1 FROM integration_ref_attempts WHERE ref_id = ? AND seq = ? AND (outcome IS NULL OR outcome = 'made')
+				AND (object_id IS NULL OR object_id = ?))`,
+		l.ObjectID, l.URL, r.id, a.seq, a.refID, a.seq, l.ObjectID)
 	if err != nil {
 		var se *sqlite.Error
 		if errors.As(err, &se) && se.Code() == 2067 { // SQLITE_CONSTRAINT_UNIQUE: the object is another ref's

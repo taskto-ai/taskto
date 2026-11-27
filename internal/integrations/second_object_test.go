@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/integrations/testprovider"
@@ -58,4 +60,63 @@ func TestAnotherSessionOfTheKeyNeverReplacesTheOneOnRecord(t *testing.T) {
 	if r := p.refs(); r[0].keySeq != 0 {
 		t.Fatalf("refs = %+v: the ref moved on", r)
 	}
+}
+
+// Another try notes an object A on the key while this try's lookup runs from an older read of the key
+// (which had none). What this try finds (a session B that expired, or one it would install) never takes
+// the key from A: the key isn't marked expired, and B is never installed as the ref's link.
+func TestAnOlderReadOfTheKeyNeverOverridesTheObjectNotedSince(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T) (*pay, paylink.Request, ref, attempt, string) {
+		p := newPay(t, publicURL)
+		req := p.direct(p.invoice(10, "EUR"), "op-stale-read-0001")
+		p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+		if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+			t.Fatal("the lost answer was no error")
+		}
+		r, _, err := p.svc.refOf(ctx, req.EffectID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := p.svc.attemptByKey(ctx, r.id, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := "cs_test_" + strings.Repeat("d", 24)
+		p.exec(`UPDATE integration_ref_attempts SET object_id = ?, object_verified = 0 WHERE seq = 0`, other)
+		return p, req, r, a, other
+	}
+	t.Run("an expired one found by the lookup", func(t *testing.T) {
+		p, req, r, a, other := setup(t)
+		if _, err := p.fake.Expire(p.fake.Sessions()[0].ID); err != nil {
+			t.Fatal(err)
+		}
+		rec, _ := p.svc.store.getSnapshot(ctx, p.ws, p.in.ID)
+		creds, _ := p.svc.store.credentials(ctx, p.ws, p.in.ID)
+		tr := try{s: p.svc, provider: Lookup(rec.Provider).(PaymentProvider), creds: creds,
+			client: p.svc.Client(Lookup(rec.Provider), rec.Settings, p.svc.clientOpts...), rec: rec, req: req, since: time.Now().Add(-time.Hour)}
+		res, _, err := tr.resolve(ctx, &r, a)
+		var pe *paylink.Error
+		if res == resolvedExpired || !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkLookupPending {
+			t.Fatalf("res = %v, err = %v: want the wait", res, err)
+		}
+		if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE seq = 0 AND object_id = ? AND outcome IS NULL`, other); n != 1 {
+			t.Fatal("the key was marked expired while another object is on record")
+		}
+	})
+	t.Run("one installed as the link", func(t *testing.T) {
+		p, req, r, a, other := setup(t)
+		s := p.fake.Sessions()[0]
+		_, err := p.svc.noteLink(ctx, r, a, req, Link{ObjectID: s.ID, URL: *s.URL})
+		var pe *paylink.Error
+		if !errors.As(err, &pe) || !pe.Transient {
+			t.Fatalf("err = %v: want a transient failure", err)
+		}
+		if refs := p.refs(); refs[0].object != "" {
+			t.Fatalf("refs = %+v: installed over the object on record", refs)
+		}
+		if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE seq = 0 AND object_id = ? AND outcome IS NULL`, other); n != 1 {
+			t.Fatal("the object on record was replaced")
+		}
+	})
 }
