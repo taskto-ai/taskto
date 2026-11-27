@@ -87,10 +87,6 @@ type Census struct {
 	// Before is when the server read its database, for the logs: nothing is decided by it (the
 	// worker orders boots by when it registered them, volume.go).
 	Before time.Time `json:"before"`
-	// Recovery marks a census a server sends because a deletion was answered
-	// cliowner.ErrCensusNeeded: it registers the server's boot only if the worker lost which is the
-	// latest, and retires and takes back nothing (registerRecovery).
-	Recovery bool `json:"recovery,omitempty"`
 }
 
 func (c Census) check() error {
@@ -140,11 +136,6 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 	// nothing, and registers nothing.
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	if c.Recovery {
-		// Only the latest boot is set: what the census says of the accounts is left to the next
-		// one, so an earlier server's census, taken while the worker can't tell, retires nothing.
-		return w.registerRecovery(c, n)
 	}
 	seq, err := w.registerCensus(c, n)
 	if err != nil {

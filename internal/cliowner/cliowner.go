@@ -10,11 +10,10 @@ import (
 	"errors"
 )
 
-// ErrCensusNeeded is the CLI worker's answer to a deletion when it has lost the list of server
-// boots it orders deletions by (a worker started again without it): the server sends its census,
-// which sets the latest boot again, and tries the deletion again. A deletion an earlier server
-// sent is refused otherwise (cliworker.ErrStaleBoot), and stays refused.
-var ErrCensusNeeded = errors.New("the CLI worker needs this server's census before a deletion")
+// ErrAuthorityLost is the CLI worker's answer to a census or a deletion while it can't tell the
+// current server from an earlier one (it lost its history of server boots): it refuses them all
+// until an operator hands it over (`taskto cli-worker trust-server`, docs/cli-workers.md).
+var ErrAuthorityLost = errors.New("the CLI worker lost its history of server boots and refuses every deletion until an operator hands it over: see docs/cli-workers.md")
 
 type key struct{}
 

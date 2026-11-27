@@ -50,39 +50,6 @@ func TestBootsAreOrderedWithoutAClock(t *testing.T) {
 	}
 }
 
-// What a census retires doesn't depend on the list of boots: with it lost (or past its bound),
-// and the latest boot lost with it, an account made under an earlier server is still one a later
-// census retires, never one of a server still to come. Meanwhile deletions ask for a census.
-func TestALostListOfBootsLeavesNoAccountUnretired(t *testing.T) {
-	h := newHarness(t, nil)
-	ctx := context.Background()
-	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
-		t.Fatal(err)
-	}
-	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
-	h.w.Close()
-	for _, f := range []string{"boots.json", "latest-boot"} {
-		if err := os.Remove(filepath.Join(h.layout.Root, ".worker", f)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h.reopen(t)
-	later := strings.Repeat("c", 32)
-	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); !errors.Is(err, cliowner.ErrCensusNeeded) {
-		t.Errorf("a deletion before a census set the order again: %v, want ErrCensusNeeded", err)
-	}
-	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
-		t.Errorf("the earlier server's account after a census that doesn't name it: %v, want ErrForgotten", err)
-	}
-	gone(t, dirs.Root)
-	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); err != nil {
-		t.Errorf("a deletion once the census set the order again: %v", err)
-	}
-}
-
 // slowHelper is a helper that waits before it does anything (a slow start), so a turn's home is
 // made only after the worker admitted the turn. It touches the marker it returns as it starts.
 func slowHelper(t *testing.T) (script, started string) { return slowHelperFor(t, 1) }
@@ -318,79 +285,156 @@ func turnOver(turn *cliworker.Turn) <-chan struct{} {
 	return done
 }
 
-// A lost list of boots changes nothing: the latest boot is kept on its own, so an earlier server's
-// deletion is still refused as stale (it is never asked for a census, which could make it the
-// latest), and the latest server's deletions go on.
-func TestALostListKeepsTheLatestBoot(t *testing.T) {
-	h := newHarness(t, nil)
-	ctx := context.Background()
-	earlier, later := cliworker.TestBoot, strings.Repeat("c", 32)
-	if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
-		t.Fatal(err)
-	}
+// losePart removes the named files of the worker's state, with the worker stopped, and starts it
+// again.
+func (h *harness) losePart(t *testing.T, files ...string) {
+	t.Helper()
 	h.w.Close()
-	if err := os.Remove(filepath.Join(h.layout.Root, ".worker", "boots.json")); err != nil {
-		t.Fatal(err)
-	}
-	h.reopen(t)
-	if err := h.w.Forget(ctx, cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: earlier}); !errors.Is(err, cliworker.ErrStaleBoot) {
-		t.Errorf("the earlier server's deletion after the list was lost: %v, want ErrStaleBoot", err)
-	}
-	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); err != nil {
-		t.Errorf("the latest server's deletion after the list was lost: %v", err)
-	}
-}
-
-// With the latest boot lost too, the worker can't tell which server is the latest: deletions ask
-// for a census, and the recovery census a server then sends sets the latest boot and retires
-// nothing, so an earlier server's, taken first, can't retire what the latest server keeps; once
-// the latest boot is set, another server's recovery census is refused.
-func TestARecoveryCensusRetiresNothing(t *testing.T) {
-	h := newHarness(t, nil)
-	ctx := context.Background()
-	earlier, later := cliworker.TestBoot, strings.Repeat("c", 32)
-	if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
-		t.Fatal(err)
-	}
-	// An account the later server made: the earlier server's database doesn't have it.
-	kept := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: later}
-	dirs, err := h.w.AccountDirs(kept, cliworker.Claude, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
-	h.w.Close()
-	for _, f := range []string{"boots.json", "latest-boot"} {
+	for _, f := range files {
 		if err := os.Remove(filepath.Join(h.layout.Root, ".worker", f)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	h.reopen(t)
-	if err := h.w.Forget(ctx, cliowner.Account{User: 8, Identity: cliworker.IdentityForTest(8), Boot: earlier}); !errors.Is(err, cliowner.ErrCensusNeeded) {
-		t.Fatalf("a deletion with the latest boot lost: %v, want ErrCensusNeeded", err)
+}
+
+// Losing the history of boots, alone or with the copy of the latest, leaves the worker unable to
+// tell the current server from an earlier one still trying: it refuses every census and every
+// deletion, from any boot, the earlier server's regular census included, so nothing is retired;
+// other work goes on. The state stays across a start of the worker, until an operator hands it
+// over to the current server, whose census and deletions then go through.
+func TestALostHistoryOfBootsRefusesEveryRetirementUntilAnOperatorHandsItOver(t *testing.T) {
+	for name, files := range map[string][]string{
+		"the history":                {"boots.json"},
+		"the history and the latest": {"boots.json", "latest-boot"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			ctx := context.Background()
+			earlier, later := cliworker.TestBoot, strings.Repeat("c", 32)
+			if err := h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+				t.Fatal(err)
+			}
+			old := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+			if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
+				t.Fatal(err)
+			}
+			kept := cliowner.Account{User: 5, Identity: strings.Repeat("5", 32), Boot: later}
+			dirs, err := h.w.AccountDirs(kept, cliworker.Claude, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
+			h.losePart(t, files...)
+			if h.w.AuthorityLost() == "" {
+				t.Fatal("the worker doesn't say it lost its authority")
+			}
+			// And says so over its socket, where the server asks, and refuses a deletion there too.
+			r := serve(t, h)
+			if why, err := r.AuthorityLost(ctx); err != nil || why == "" {
+				t.Errorf("over the socket: %q %v", why, err)
+			}
+			if err := r.Forget(ctx, cliowner.Account{User: 1, Identity: cliworker.IdentityForTest(1), Boot: later}); !errors.Is(err, cliworker.ErrAuthorityLost) {
+				t.Errorf("a deletion over the socket: %v, want ErrAuthorityLost", err)
+			}
+			// Everything that would retire is refused, from either server.
+			for what, err := range map[string]error{
+				"the earlier server's census":      h.w.Reconcile(ctx, bootCensus(earlier, time.Now(), nil)),
+				"the later server's census":        h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)),
+				"an unknown server's census":       h.w.Reconcile(ctx, bootCensus(strings.Repeat("e", 32), time.Now(), nil)),
+				"the earlier server's deletion":    h.w.Forget(ctx, cliowner.Account{User: 5, Identity: kept.Identity, Boot: earlier}),
+				"the later server's deletion":      h.w.Forget(ctx, cliowner.Account{User: 1, Identity: cliworker.IdentityForTest(1), Boot: later}),
+				"the later server's browser purge": h.w.FenceDeletion(ctx, kept, func() error { return nil }),
+			} {
+				if !errors.Is(err, cliworker.ErrAuthorityLost) {
+					t.Errorf("%s: %v, want ErrAuthorityLost", what, err)
+				}
+			}
+			if st, err := h.w.Status(ctx, kept, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+				t.Errorf("the later server's account, other work going on: %+v %v", st, err)
+			}
+			// The state outlives a start of the worker.
+			h.w.Close()
+			h.reopen(t)
+			if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); !errors.Is(err, cliworker.ErrAuthorityLost) {
+				t.Errorf("a census after the worker started again: %v, want ErrAuthorityLost", err)
+			}
+			// The operator hands it over to the later server, with the worker stopped.
+			if err := cliworker.TrustServer(h.layout, later); err == nil {
+				t.Error("a handover while the worker runs was taken")
+			}
+			h.w.Close()
+			if err := cliworker.TrustServer(h.layout, later); err != nil {
+				t.Fatal(err)
+			}
+			h.reopen(t)
+			if h.w.AuthorityLost() != "" {
+				t.Errorf("still lost after the handover: %s", h.w.AuthorityLost())
+			}
+			if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), map[int64]string{5: kept.Identity})); err != nil {
+				t.Fatalf("the trusted server's census: %v", err)
+			}
+			gone(t, old.Root)
+			if st, err := h.w.Status(ctx, kept, cliworker.Claude, ""); err != nil || !st.LoggedIn {
+				t.Errorf("the trusted server's account: %+v %v", st, err)
+			}
+			if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: earlier}); !errors.Is(err, cliworker.ErrStaleBoot) {
+				t.Errorf("the earlier server's deletion after the handover: %v, want ErrStaleBoot", err)
+			}
+			if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); err != nil {
+				t.Errorf("the trusted server's deletion: %v", err)
+			}
+		})
 	}
-	// The earlier server answers first, with its database's census.
-	recovery := bootCensus(earlier, time.Now(), nil)
-	recovery.Recovery = true
-	if err := h.w.Reconcile(ctx, recovery); err != nil {
-		t.Fatalf("the recovery census: %v", err)
+}
+
+// A copy of the latest boot that is gone or behind the history (a stop between the two writes) is
+// written again: the history is whole, and nothing is lost. One that isn't in the history is
+// damage, and the worker can't trust either.
+func TestTheCopyOfTheLatestBootIsRepairedOnlyFromAWholeHistory(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
 	}
-	if st, err := h.w.Status(ctx, kept, cliworker.Claude, ""); err != nil || !st.LoggedIn {
-		t.Errorf("the later server's account after the earlier server's recovery census: %+v %v", st, err)
+	later := strings.Repeat("c", 32)
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
+		t.Fatal(err)
 	}
-	// Now the latest boot is set: another recovery census is refused, and retires nothing either.
-	other := bootCensus(later, time.Now(), nil)
-	other.Recovery = true
-	if err := h.w.Reconcile(ctx, other); !errors.Is(err, cliworker.ErrStaleBoot) {
-		t.Errorf("a second server's recovery census: %v, want ErrStaleBoot", err)
+	h.losePart(t, "latest-boot")
+	if why := h.w.AuthorityLost(); why != "" {
+		t.Fatalf("the copy alone gone: lost (%s)", why)
 	}
-	if st, err := h.w.Status(ctx, kept, cliworker.Claude, ""); err != nil || !st.LoggedIn {
-		t.Errorf("the later server's account at the end: %+v %v", st, err)
+	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); err != nil {
+		t.Errorf("the latest server's deletion: %v", err)
 	}
+	h.w.Close()
+	if err := os.WriteFile(filepath.Join(h.layout.Root, ".worker", "latest-boot"), []byte(`{"boot":"`+strings.Repeat("e", 32)+`","seq":9}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.reopen(t)
+	if h.w.AuthorityLost() == "" {
+		t.Error("a copy of the latest boot the history doesn't have was trusted")
+	}
+}
+
+// In local mode one server only can ever talk to the worker (it runs in the server's process, on
+// the server's data directory): a lost history of boots doesn't stop it, and the server's next
+// census sets the history again and tidies as usual.
+func TestALostHistoryInLocalModeIsSetAgainByTheNextCensus(t *testing.T) {
+	h := newHarness(t, func(c *cliworker.Config) { c.OneServer = true })
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Fatal(err)
+	}
+	old := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	h.losePart(t, "boots.json", "latest-boot")
+	if why := h.w.AuthorityLost(); why != "" {
+		t.Fatalf("local mode lost its authority: %s", why)
+	}
+	next := strings.Repeat("c", 32)
+	if err := h.w.Reconcile(ctx, bootCensus(next, time.Now(), nil)); err != nil {
+		t.Fatalf("the server's census: %v", err)
+	}
+	gone(t, old.Root)
 }

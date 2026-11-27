@@ -11,7 +11,9 @@ import {
   api,
   type BackupStatus,
   backupPath,
+  type CLIWorkerStatus,
   type Credit,
+  cliWorkerPath,
   type DictationStatus,
   dictationPath,
   type UpdateAvailable,
@@ -63,6 +65,7 @@ export function AboutTab({ workspace, operator }: { workspace: number; operator:
       </Section>
       {operator && <UpdatesPanel workspace={workspace} />}
       {operator && <BackupsPanel workspace={workspace} />}
+      {operator && <CLIWorkerPanel workspace={workspace} />}
     </SettingsTab>
   )
 }
@@ -471,6 +474,27 @@ const BACKUP_TONE: Record<BackupStatus['health'], NoticeTone> = {
   ok: 'success',
   failing: 'warning',
   late: 'danger',
+}
+
+// CLIWorkerPanel says, when the CLI worker lost its history of server boots, that it refuses every
+// census and deletion until an operator hands it over to this server, with the command to run
+// (docs/cli-workers.md). Nothing is shown otherwise.
+function CLIWorkerPanel({ workspace }: { workspace: number }) {
+  const t = useT()
+  const status = useLoad(() => api<CLIWorkerStatus>(cliWorkerPath(workspace)), [workspace])
+  const s = status.data
+  if (!s?.authority_lost) {
+    return null
+  }
+  return (
+    <Section title={t('settings.about.cliWorker.title')}>
+      <Notice tone="danger">{t('settings.about.cliWorker.authorityLost')}</Notice>
+      <p className="settings-text">{t('settings.about.cliWorker.handOver')}</p>
+      <p className="settings-text">
+        <code>{`taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''}`}</code>
+      </p>
+    </Section>
+  )
 }
 
 function BackupsPanel({ workspace }: { workspace: number }) {

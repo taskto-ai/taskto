@@ -1464,28 +1464,37 @@ pull` and `docker compose up -d --no-build` instead of `--build`. Without the pr
 The old image stays as `taskto:v0.1.0` until you remove it.
 
 **Roll back** to v0.1.0 with the data from before the upgrade (anything written since is
-lost). If v0.1.0 is from before [account homes](#upgrading-to-account-homes) and the CLI workers
-run in container mode, the older worker must start on a new, empty `cli-homes` volume: an older
-worker reads directories by user number and must never see the homes. The two lines marked so
-keep the upgraded volume aside (`taskto_cli-homes_kept`, mounted by nothing) and empty the one the
-worker mounts, before anything starts; leave them out otherwise:
+lost). Set `TASKTO_VERSION=v0.1.0` in `.env` first. The commands run as one script that stops at
+the first one that fails (`bash -euo pipefail`): nothing after a failed step runs, so a volume is
+never emptied after its copy failed. If v0.1.0 is from before
+[account homes](#upgrading-to-account-homes) and the CLI workers run in container mode, the older
+worker must start on a new, empty `cli-homes` volume: an older worker reads directories by user
+number and must never see the homes. Set `HOMES=1` for that: the script then keeps the upgraded
+volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`, mounted by
+nothing), and empties the one the worker mounts only once the copy has succeeded, before anything
+starts:
 
 ```sh
+HOMES=0   # 1: back to a version from before account homes, in container mode
+bash -euo pipefail -s "$HOMES" <<'EOF'
 git checkout v0.1.0
-# in .env: TASKTO_VERSION=v0.1.0
-docker compose down
-docker volume rm taskto_data
-docker compose build
+docker compose down </dev/null
+docker volume rm taskto_data </dev/null
+docker compose build </dev/null
 docker compose run --rm -T taskto restore - < before-v0.2.0.tar.gz
-# from before account homes, in container mode only:
-docker run --rm -v taskto_cli-homes:/from -v taskto_cli-homes_kept:/to alpine cp -a /from/. /to/
-docker run --rm -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-docker compose up -d
+if [ "$1" = 1 ]; then
+  KEPT="taskto_cli-homes_kept_$(date +%Y%m%d%H%M%S)"
+  docker run --rm </dev/null -v taskto_cli-homes:/from -v "$KEPT":/to alpine cp -a /from/. /to/
+  docker run --rm </dev/null -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  echo "the upgraded worker's volume is kept in $KEPT"
+fi
+docker compose up -d </dev/null
+EOF
 ```
 
-When you upgrade again, put it back the same way (empty `taskto_cli-homes` and copy
-`taskto_cli-homes_kept` into it) before the new version starts. In local mode, move `<data>/cli`
-aside instead, before `docker compose up -d`, and put it back before upgrading again.
+When you upgrade again, put it back the same way (empty `taskto_cli-homes` and copy the kept
+volume into it) before the new version starts. In local mode, move `<data>/cli` aside instead,
+before `docker compose up -d`, and put it back before upgrading again.
 
 The base images are pinned by digest in the `Dockerfile`, so rebuilding a version uses the
 same bases; their security updates come with new versions.

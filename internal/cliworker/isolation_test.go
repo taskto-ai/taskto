@@ -595,3 +595,36 @@ func TestIsolationAHomeInterruptedWhileMadeIsMadeAgain(t *testing.T) {
 		t.Errorf("a new worker left what the stop left: %v", left)
 	}
 }
+
+// A removal stopped part way (the home taken off its path, not yet the worker's or in the trash)
+// leaves the account's published path empty, never a home of the wrong owner: a restore that
+// brings the account back gives it a home it can use.
+func TestIsolationARemovalStoppedPartWayLeavesNoForeignHome(t *testing.T) {
+	h := newIsolated(t)
+	ctx := context.Background()
+	h.signIn(t, 1, cliworker.Claude)
+	h.w.SetDetachHookForTest(func() error { return errors.New("the worker stopped here") })
+	if err := h.w.Forget(ctx, acct(1)); err == nil {
+		t.Fatal("fixture: the removal didn't stop")
+	}
+	// The worker's process starts again: nothing of the first one's memory.
+	h.w.Close()
+	cfg := h.cfg
+	cfg.Isolation = &cliworker.Isolation{UIDBase: h.cfg.Isolation.UIDBase, UserFile: h.cfg.Isolation.UserFile, Group: h.cfg.Isolation.Group}
+	w, err := cliworker.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.w = w
+	t.Cleanup(w.Close)
+	// A restore brings the account back.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil {
+		t.Errorf("the account a restore brought back: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(h.layout.Root, ".detached-*")); len(left) > 0 {
+		t.Errorf("a new worker left what the stopped removal left: %v", left)
+	}
+}

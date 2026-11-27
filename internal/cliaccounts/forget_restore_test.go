@@ -250,36 +250,53 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	_ = e.svc.worker.CancelLogin(other, cliworker.Claude, "")
 }
 
-// A CLI worker started again on its own, having lost its list of server boots, can't tell which
-// boot is the latest: it asks for a census before a deletion, and the live server sends it and
-// tries again, so the deletion completes without the server starting again.
-func TestADeletionCompletesAfterTheWorkerAloneStartsAgain(t *testing.T) {
+// A CLI worker started again on its own, having lost its history of server boots, can't tell this
+// server from an earlier one: it refuses the deletion, again and again, without retiring anything.
+// Once an operator hands it over to this server (by its boot), the deletion completes, with no
+// start of the server.
+func TestADeletionWaitsForTheOperatorAfterTheWorkerLostItsHistory(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, Container, nil)
+	sw := e.swappable()
 	user := newUser(t, e.db, "leaving@example.com")
 	if err := e.svc.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
 	dirs := e.dirs(user)
 	e.worker.Close()
-	for _, f := range []string{"boots.json", "latest-boot"} {
-		if err := os.Remove(filepath.Join(e.layout.Root, ".worker", f)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	again, err := cliworker.New(cliworker.Config{Layout: e.layout, UnsafePrivileged: os.Geteuid() == 0})
-	if err != nil {
+	if err := os.Remove(filepath.Join(e.layout.Root, ".worker", "boots.json")); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(again.Close)
-	e.svc.worker = accountWorker{w: LocalWorker(again), s: e.svc}
+	start := func() *cliworker.Worker {
+		w, err := cliworker.New(cliworker.Config{Layout: e.layout, UnsafePrivileged: os.Geteuid() == 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(w.Close)
+		sw.use(LocalWorker(w))
+		return w
+	}
+	w := start()
+	for range 2 {
+		if err := e.svc.Forget(ctx, user); !errors.Is(err, cliowner.ErrAuthorityLost) {
+			t.Fatalf("a deletion while the worker lost its history: %v, want ErrAuthorityLost", err)
+		}
+	}
+	if _, err := os.Stat(dirs.Root); err != nil {
+		t.Fatalf("the refused deletion removed something: %v", err)
+	}
+	w.Close()
+	if err := cliworker.TrustServer(e.layout, e.svc.Boot()); err != nil {
+		t.Fatal(err)
+	}
+	w = start()
 	if err := e.svc.Forget(ctx, user); err != nil {
-		t.Fatalf("the deletion after the worker started again: %v", err)
+		t.Fatalf("the deletion once the worker was handed over: %v", err)
 	}
 	if _, err := os.Stat(dirs.Root); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the deleted account's home remains: %v", err)
 	}
-	if _, err := again.AccountDirs(accountIn(t, e.svc, user), "", ""); !errors.Is(err, cliworker.ErrForgotten) {
+	if _, err := w.AccountDirs(accountIn(t, e.svc, user), "", ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the deleted account after its deletion: %v, want ErrForgotten", err)
 	}
 }

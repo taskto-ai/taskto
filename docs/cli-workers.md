@@ -476,18 +476,15 @@ The UI shows what the command prints.
   - a deletion (`Forget`, and the agent browsers' purge in the worker, `FenceDeletion`) is taken
     only from the latest registered boot, and retires the account before it stops or removes
     anything. The server sends its boot with every deletion, the purge's too;
-  - the latest boot is kept on its own (`.worker/latest-boot`, written durably at each
-    registration), apart from the list. A worker that lost it (and the list's last entry with it)
-    can't tell which boot is the latest: it answers a deletion with `census_needed` (`409`), and
-    the live server sends a recovery census and tries the deletion again, the browsers' purge too.
-    A recovery census registers its boot only while the worker can't tell, and retires and takes
-    back nothing: what the census says of the accounts waits for the next one, so an earlier
-    server's, taken first, can't retire what the latest keeps. Once the latest boot is set, a
-    recovery census of another boot is refused (`stale_boot`);
-  - the list of boots (`.worker/boots.json`, the last 4096) only names the latest one, for
-    deletions: what a census retires is decided by the records' numbers, never by the list. With
-    the list lost, damaged or past its bound, no account is taken for a later server's, and the
-    latest boot, kept on its own, still fences deletions;
+  - the whole history of boots is kept, never cut (`.worker/boots.json`, the latest last, written
+    whole by a rename; a boot is a few dozen bytes), with a copy of the latest
+    (`.worker/latest-boot`, written after it). So a boot the worker can't place is a server it
+    never heard from, a later one, and an earlier server's census or deletion is always refused as
+    stale. A copy of the latest that is gone or behind the history (a stop between the two
+    writes) is written again from the history;
+  - if the history is lost or damaged, or doesn't reach as far as its accounts' records, or its
+    copy of the latest isn't one of it, the worker can't tell the current server from an earlier one
+    still trying: it enters the **authority-lost** state below;
   - one server runs on a data directory (its lock), and a restore takes that lock too, so an
     earlier server's census can come after a later one's only if it was in flight when its server
     stopped. A census, a deletion or a browser purge whose caller has gone (its connection closed)
@@ -497,8 +494,37 @@ The UI shows what the command prints.
     its caller goes meanwhile: retired and stopped are one step, so a retry never finds an account
     retired with its work still running;
   - censuses and deletions run one at a time, so no boot is registered between a decision and
-    what it decides. The server stops
-    trying a census the worker calls stale (a later server has spoken to the worker), and logs it.
+    what it decides. The server stops trying a census the worker calls stale (a later server has
+    spoken to the worker), and logs it.
+- <a id="authority-lost"></a>**Authority lost.** A worker in this state (in container mode; the
+  reason is in its log, at every start, and in `.worker/authority-lost`) refuses every census and
+  every deletion, the agent browsers' purge too (`authority_lost`, `409`): nothing is retired or
+  removed, so neither an earlier server nor a later one can retire what the other keeps. Account
+  deletions and the tidying of what a restore left wait; everything else goes on (sign-ins, turns,
+  browsers of accounts the worker has). The state outlives a start of the worker, and no server
+  can end it, the first that sends a census included. An operator ends it by handing the worker
+  over to the current server:
+  1. Stop every other server that may still talk to this worker (a server a restore replaced, an
+     older install during a move): from then on the worker takes censuses and deletions from the
+     server it is handed to only, and a boot it can't place is taken for a later server.
+  2. Find the current server's boot: Settings → About shows it, with the command, to the server's
+     operators while the worker is in this state, and the server logs it at every start
+     (`this server's boot, for the CLI worker`).
+  3. Stop the worker, hand it over on its volume, and start it again:
+
+     ```sh
+     docker compose stop cli-worker
+     docker compose --profile cli run --rm --no-deps cli-worker trust-server -homes /homes -boot <boot>
+     docker compose start cli-worker
+     ```
+
+     The worker's deletions and censuses from that server go through again; the server's next
+     census (at its next start, or the one it tries again by itself) tidies what waited. The boot
+     is the server's process's: if the server starts again before the handover, use its new one.
+
+  In local mode the worker runs in the server's process, on the server's data directory, which
+  one server holds at a time: there is no earlier server to tell apart, so a lost history is set
+  again by the server's next census, and the state never applies.
 - **Retired accounts.** An account that is gone (`Forget`, `Reconcile`) is **retired**: its record
   says so, durably, and keeps its home number, so the number is never given again. Every request
   for a retired identity is refused (`ErrForgotten`, `410 Gone` with the code `forgotten` over the

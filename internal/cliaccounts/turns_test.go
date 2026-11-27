@@ -594,9 +594,10 @@ func (h *halfReconcile) Reconcile(ctx context.Context, c cliworker.Census) error
 // running turn as it was, and the turn's stop stops it: never a 204 for a turn left running.
 func TestACensusLeavesARunningTurnToItsStop(t *testing.T) {
 	e := newTurnEnv(t)
+	sw := e.swappable()
 	ctx := context.Background()
 	w := &halfReconcile{Worker: LocalWorker(e.worker)}
-	e.svc.worker = accountWorker{w: w, s: e.svc}
+	sw.use(w)
 	// An account of another history, whose home the census removes: the part the worker stops in.
 	stranger := cliowner.Account{User: 77, Identity: strings.Repeat("7", 32), Boot: strings.Repeat("8", 32)}
 	if _, err := e.worker.AccountDirs(stranger, "", ""); err != nil {
@@ -647,6 +648,7 @@ func TestACensusLeavesARunningTurnToItsStop(t *testing.T) {
 // web app and the CLIs' tools tell apart from a CLI that isn't installed or a turn that failed.
 func TestAnUnreachableWorkerIsNotReadyEverywhere(t *testing.T) {
 	e := newTurnEnv(t)
+	sw := e.swappable()
 	e.owner.connect(cliworker.Claude)
 	conv := e.conversation(e.owner)
 	dir, err := os.MkdirTemp("", "gone")
@@ -654,7 +656,7 @@ func TestAnUnreachableWorkerIsNotReadyEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	e.svc.worker = accountWorker{w: RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))), s: e.svc}
+	sw.use(RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))))
 	notReady := func(what string, code int, body string) {
 		t.Helper()
 		var reply struct {
@@ -691,9 +693,10 @@ func (startOutage) StartTurn(cliworker.TurnSpec) (Turn, bool, error) {
 // just as it starts is the answer, cli_worker_not_ready, with nothing streamed before it.
 func TestATurnRunAgainSaysSoOnlyOnceItStarted(t *testing.T) {
 	e := newTurnEnv(t)
+	sw := e.swappable()
 	e.owner.connect(cliworker.Claude)
 	conv := e.conversation(e.owner)
-	e.svc.worker = accountWorker{w: startOutage{LocalWorker(e.worker)}, s: e.svc}
+	sw.use(startOutage{LocalWorker(e.worker)})
 	code, events, body := e.post(conv, "/cli/turn", turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hi", Replay: true})
 	if code != http.StatusServiceUnavailable || !strings.Contains(body, string(apierr.CodeCLIWorkerNotReady)) || len(events) > 0 {
 		t.Errorf("a turn run again on a worker gone at its start = %d %+v %s, want 503 %s and no events", code, events, body, apierr.CodeCLIWorkerNotReady)

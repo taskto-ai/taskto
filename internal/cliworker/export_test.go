@@ -173,3 +173,7 @@ func (w *Worker) SetArrivedHookForTest(f func(boot string)) { w.arrivedHookForTe
 // SetRetiredHookForTest has f run as a census has recorded an account's retirement, before it
 // stops what runs for it.
 func (w *Worker) SetRetiredHookForTest(f func(identity string)) { w.retiredHookForTest = f }
+
+// SetDetachHookForTest has f run as a removal has taken a home off its published path, before it
+// takes it over; an error from it stops there, as a crash would.
+func (w *Worker) SetDetachHookForTest(f func() error) { w.detachHookForTest = f }

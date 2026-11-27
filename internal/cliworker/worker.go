@@ -43,6 +43,11 @@ type Config struct {
 	// with the database, so u<n> is the account's of number n). Otherwise such a directory is
 	// removed (Reconcile).
 	AdoptLegacy bool
+	// OneServer says only one server can ever talk to this worker: local mode, where the worker runs
+	// in the server's process, on the server's data directory, which one server holds at a time. A
+	// lost history of boots then can't hide an earlier server still running: the worker doesn't
+	// enter the authority-lost state, and the next census sets the history again.
+	OneServer bool
 	// UnsafePrivileged lets the helper start a CLI as root, which it otherwise refuses
 	// (docs/agent-safety.md). For development and tests that run as root only.
 	UnsafePrivileged bool
@@ -89,6 +94,9 @@ type Worker struct {
 	helpersBuilt   atomic.Int64
 	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
 	dialHookForTest func()
+	// detachHookForTest, in tests, runs as a removal has taken a home off its published path, before
+	// it takes it over; an error stops there, as a crash would.
+	detachHookForTest func() error
 	// retiredHookForTest, in tests, runs as a census has recorded an account's retirement, before
 	// it stops what runs for it.
 	retiredHookForTest func(identity string)
@@ -111,9 +119,8 @@ type Worker struct {
 	bootsMu    sync.Mutex
 	boots      []bootEntry
 	bootSeq    int64
-	// latest is the latest registered boot, when latestKnown (volume.go).
-	latest      bootEntry
-	latestKnown bool
+	// authorityLost says why the worker can't tell the current server, "" when it can (volume.go).
+	authorityLost string
 	// reserved is the numbers the censuses waiting for the census lock took as they arrived, by
 	// boot, and reservedTop the highest given (volume.go), under bootsMu.
 	reserved    map[string]reservation
@@ -286,6 +293,9 @@ func (w *Worker) sweep() error {
 			// Not every process was looked at: one of an earlier history's may still run.
 			return fmt.Errorf("cliworker: stopping what an earlier worker left running: %w", err)
 		}
+	}
+	if err := w.sweepDetached(); err != nil {
+		return err
 	}
 	// Homes being made when an earlier worker stopped: never renamed into place, so nobody's.
 	partial, _ := filepath.Glob(filepath.Join(w.cfg.Layout.Root, provisionPrefix+"*"))

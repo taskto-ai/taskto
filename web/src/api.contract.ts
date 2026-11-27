@@ -71,4 +71,5 @@ export type Contract = [
   // The host's updates, for the server's operators.
   Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
   Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,
+  Is<Check<Gen.CLIWorkerStatus, Api.CLIWorkerStatus>>,
 ]

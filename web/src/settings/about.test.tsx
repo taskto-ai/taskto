@@ -533,3 +533,27 @@ test('with nothing newer it says up to date, and an updater that never looked sa
   expect(screen.queryByText(/Up to date: nothing newer/)).toBeNull()
   expect(screen.queryByText('Last looked for updates')).toBeNull()
 })
+
+test('operators see when the CLI worker lost its authority, with the command that hands it over to this server', async () => {
+  const boot = 'ab'.repeat(16)
+  fakeFetch({
+    ...noUpdater,
+    ...noBackups,
+    'GET /api/workspaces/1/cli-worker': {
+      body: { mode: 'container', reachable: true, authority_lost: true, boot },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/The CLI worker lost its history of this server's starts/)).toBeTruthy()
+  expect(screen.getByText(`taskto cli-worker trust-server -homes /homes -boot ${boot}`).tagName).toBe('CODE')
+  cleanup()
+
+  fakeFetch({
+    ...noUpdater,
+    ...noBackups,
+    'GET /api/workspaces/1/cli-worker': { body: { mode: 'container', reachable: true, authority_lost: false } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  await screen.findByText(/No scheduled backup has run on this server/)
+  expect(screen.queryByText(/lost its history/)).toBeNull()
+})

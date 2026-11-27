@@ -61,7 +61,7 @@ var remoteErrors = map[string]error{
 	"unknown_account": ErrUnknownAccount,
 	"full":            ErrFull,
 	"stale_boot":      ErrStaleBoot,
-	"census_needed":   cliowner.ErrCensusNeeded,
+	"authority_lost":  cliowner.ErrAuthorityLost,
 }
 
 // The headers that name a request's account by its identity and the server's boot.
@@ -195,6 +195,9 @@ func (w *Worker) Handler() http.Handler {
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /authority", func(rw http.ResponseWriter, _ *http.Request) {
+		reply(rw, authorityReply{Lost: w.AuthorityLost()})
 	})
 	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
 		var req Census
@@ -333,7 +336,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrCensusNeeded):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrAuthorityLost):
 				status = http.StatusConflict
 			}
 		}
@@ -526,6 +529,21 @@ func (c *Remote) Forget(ctx context.Context, a cliowner.Account) error {
 // Reconcile tells the worker which accounts exist (Worker.Reconcile).
 func (c *Remote) Reconcile(ctx context.Context, census Census) error {
 	return c.do(ctx, cliowner.Account{}, http.MethodPost, "/reconcile", census, nil)
+}
+
+// authorityReply is GET /authority: why the worker can't tell the current server, "" when it can.
+type authorityReply struct {
+	Lost string `json:"lost,omitempty"`
+}
+
+// AuthorityLost says why the worker can't tell the current server from an earlier one, "" when it
+// can (Worker.AuthorityLost).
+func (c *Remote) AuthorityLost(ctx context.Context) (string, error) {
+	var out authorityReply
+	if err := c.do(ctx, cliowner.Account{}, http.MethodGet, "/authority", nil, &out); err != nil {
+		return "", err
+	}
+	return out.Lost, nil
 }
 
 // StartTurn starts spec's turn on the worker, or attaches to the one with its ID.

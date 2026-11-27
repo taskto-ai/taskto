@@ -55,11 +55,13 @@ func (w *Worker) removeAccount(ctx context.Context, acct account) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Made again, and checked again, on the account's next use: the home is about to leave its path,
+	// and a detach that stops part way leaves no home there.
+	w.dropUnixUser(acct.home)
 	trash, err := w.detach(w.cfg.Layout.Home(acct.home).Root, "h"+strconv.FormatInt(acct.home, 10))
 	if err != nil {
 		return fmt.Errorf("taking the account's directory away: %w", err)
 	}
-	w.dropUnixUser(acct.home)
 	w.dropState(acct.id)
 	if trash != "" {
 		if err := removeTree(trash, w.cfg.Isolation != nil); err != nil {
@@ -94,9 +96,13 @@ func (w *Worker) dropState(id string) {
 func (w *Worker) trashDir() string { return filepath.Join(w.stateDir(), "trash") }
 
 // detach takes the directory root away from its path into the trash, under a name starting with
-// name, and returns where it went ("" when there was none). With isolation the directory is its
-// account's: the worker takes it over first (CAP_CHOWN), since moving a directory to another
-// parent writes its "..". No process of the account's runs by then.
+// name, and returns where it went ("" when there was none). No process of the account's runs by
+// then. First it is renamed beside itself, out of its published path (a rename in the same
+// directory doesn't write its ".."): only then, with isolation, does the worker take it over
+// (CAP_CHOWN), since moving a directory to another parent writes its "..", and move it to the
+// trash. A stop at any point leaves the published path either the account's own directory,
+// untouched, or empty, never a directory of the wrong owner there; what is left beside it
+// (detachedPrefix) is removed when a worker starts.
 func (w *Worker) detach(root, name string) (string, error) {
 	info, err := os.Lstat(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -108,23 +114,51 @@ func (w *Worker) detach(root, name string) (string, error) {
 	if err := os.MkdirAll(w.trashDir(), 0o700); err != nil {
 		return "", err
 	}
-	if info.IsDir() {
-		if err := takeOver(root, w.cfg.Isolation != nil); err != nil {
-			return "", err
-		}
-	}
 	var r [8]byte
 	if _, err := rand.Read(r[:]); err != nil {
 		return "", err
 	}
-	trash := filepath.Join(w.trashDir(), name+"-"+hex.EncodeToString(r[:]))
-	if err := os.Rename(root, trash); err != nil {
+	leaf := name + "-" + hex.EncodeToString(r[:])
+	aside := filepath.Join(filepath.Dir(root), detachedPrefix+leaf)
+	if err := os.Rename(root, aside); err != nil {
+		return "", err
+	}
+	if err := syncDir(filepath.Dir(root)); err != nil {
+		return "", err
+	}
+	if hook := w.detachHookForTest; hook != nil {
+		if err := hook(); err != nil {
+			return "", err // as a stop would: what is aside stays
+		}
+	}
+	if info.IsDir() {
+		if err := takeOver(aside, w.cfg.Isolation != nil); err != nil {
+			return "", err
+		}
+	}
+	trash := filepath.Join(w.trashDir(), leaf)
+	if err := os.Rename(aside, trash); err != nil {
 		return "", err
 	}
 	if err := syncDir(filepath.Dir(root)); err != nil {
 		return "", err
 	}
 	return trash, nil
+}
+
+// detachedPrefix names a directory a removal took off its published path, before it reached the
+// trash.
+const detachedPrefix = ".detached-"
+
+// sweepDetached removes what a removal left beside the homes when it stopped (detach).
+func (w *Worker) sweepDetached() error {
+	left, _ := filepath.Glob(filepath.Join(w.cfg.Layout.Root, detachedPrefix+"*"))
+	for _, p := range left {
+		if err := removeTree(p, w.cfg.Isolation != nil); err != nil {
+			return fmt.Errorf("cliworker: removing what a removal left: %w", err)
+		}
+	}
+	return nil
 }
 
 // takeOver makes directory path the worker's own (with chown, when the users are Unix users of

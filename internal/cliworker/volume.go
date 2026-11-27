@@ -1,6 +1,7 @@
 package cliworker
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -239,18 +241,37 @@ func (w *Worker) pinUIDBase(base int) error {
 // a census registers a boot: a delayed request of an earlier server can't make its boot the
 // latest. Every account record keeps the number of the latest boot when it was made (Gen) and,
 // once retired, when it was (RetiredGen): a census retires only accounts made before it was
-// registered, and takes back only retirements made before it, so what it decides never depends on
-// the list of boots (.worker/boots.json, the last maxBoots), whose loss only makes the worker
-// refuse deletions until a census registers a boot again.
+// registered, and takes back only retirements made before it.
+//
+// The whole history of boots is kept, never cut (.worker/boots.json, the latest last, written
+// whole by a rename; .worker/latest-boot is a copy of the latest, written after it), so a boot the
+// worker can't place is a server it never heard from: a later one. If the history is lost or
+// damaged, or disagrees with the records, the worker can no longer tell the latest server from an
+// earlier one still trying: it is then in the authority-lost state (.worker/authority-lost, kept
+// until an operator hands it over). It refuses every census and every deletion, the agent
+// browsers' purge too (ErrAuthorityLost), and goes on with everything else for the accounts it
+// has. Only an operator leaves the state, by naming the current server's boot with the worker
+// stopped (TrustServer, `taskto cli-worker trust-server`): never the first server that sends a
+// census.
 
-// bootsFile is the boots registered, with their numbers.
+// ErrAuthorityLost is the worker's answer to a census or a deletion while it can't tell which
+// server is the current one (its history of boots was lost): an operator hands it over
+// (docs/cli-workers.md). It is cliowner's, so the agent browsers' API carries it too.
+var ErrAuthorityLost = cliowner.ErrAuthorityLost
+
+// bootsFile is the history of boots, the latest last.
 func (w *Worker) bootsFile() string { return filepath.Join(w.stateDir(), "boots.json") }
 
 // bootSeqFile is the boot counter: the highest number given.
 func (w *Worker) bootSeqFile() string { return filepath.Join(w.stateDir(), "boot-seq") }
 
-// maxBoots bounds the boots kept: a server start each.
-const maxBoots = 4096
+// latestBootFile is a copy of the latest boot, with its number: its loss with the history's tells
+// a volume that had boots from a new one.
+func (w *Worker) latestBootFile() string { return filepath.Join(w.stateDir(), "latest-boot") }
+
+// authorityLostFile marks the authority-lost state: it stays until an operator hands the worker
+// over (TrustServer).
+func (w *Worker) authorityLostFile() string { return filepath.Join(w.stateDir(), "authority-lost") }
 
 // bootEntry is a registered boot, with its number.
 type bootEntry struct {
@@ -263,57 +284,133 @@ type bootLog struct {
 	Boots []bootEntry `json:"boots"`
 }
 
-// loadBoots reads the boots and the counter, which is moved past every number the volume names
-// (the list's, and the records' Gen and RetiredGen) if it is behind: numbers only ever go up.
-func (w *Worker) loadBoots() error {
-	b, err := os.ReadFile(w.bootsFile())
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-	case err != nil:
-		return err
-	default:
-		var l bootLog
-		if json.Unmarshal(b, &l) != nil {
-			// Written whole, by a rename: damaged is the disk's doing. The list only names the
-			// latest boot, for deletions, which are refused until the next census.
-			slog.Warn("cliworker: the list of server boots (.worker/boots.json) is damaged: deletions wait for the next census")
-		} else {
-			w.boots = l.Boots
-		}
-	}
-	// The latest boot is kept on its own, apart from the list: losing the list changes nothing.
-	if b, err := os.ReadFile(w.latestBootFile()); err == nil {
-		var e bootEntry
-		if json.Unmarshal(b, &e) == nil && cliowner.IsIdentity(e.Boot) && e.Seq > 0 {
-			w.latest, w.latestKnown = e, true
-		} else {
-			slog.Warn("cliworker: the latest server boot (.worker/latest-boot) is damaged: deletions wait for a recovery census")
-		}
+// bootState is what the worker's volume says of the server boots: the history, the counter, and
+// whether the worker can trust them (lost: why not).
+type bootState struct {
+	boots []bootEntry
+	seq   int64
+	lost  string
+}
+
+// readBootState reads the boots of the volume under layout. A volume with nothing of boots (a new
+// one) is not lost; one with a history that is missing, damaged, behind its records or apart from
+// its copy of the latest, or with the authority-lost mark, is.
+func readBootState(w *Worker) (bootState, error) {
+	var st bootState
+	if _, err := os.Lstat(w.authorityLostFile()); err == nil {
+		st.lost = "an operator hasn't handed the worker over since it lost its history of boots"
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return st, err
+	}
+	hist, haveHist, err := readIfThere(w.bootsFile())
+	if err != nil {
+		return st, err
+	}
+	latestRaw, haveLatest, err := readIfThere(w.latestBootFile())
+	if err != nil {
+		return st, err
 	}
 	seq, _ := w.readSeq(w.bootSeqFile())
-	for _, e := range w.boots {
-		seq = max(seq, e.Seq)
-	}
-	seq = max(seq, w.latest.Seq)
 	recs, err := w.records()
+	if err != nil {
+		return st, err
+	}
+	var gen int64
+	for _, r := range recs {
+		gen = max(gen, r.Gen, r.RetiredGen)
+	}
+	st.seq = max(seq, gen)
+	fresh := !haveHist && !haveLatest && seq == 0 && gen == 0
+	switch {
+	case fresh:
+		return st, nil
+	case !haveHist:
+		st.lost = cmp.Or(st.lost, "its history of boots (.worker/boots.json) is gone")
+		return st, nil
+	}
+	l, damaged := decodeHistory(hist)
+	if damaged != "" {
+		st.lost = cmp.Or(st.lost, damaged)
+		return st, nil
+	}
+	st.boots = l.Boots
+	last := l.Boots[len(l.Boots)-1]
+	st.seq = max(st.seq, last.Seq)
+	if gen > last.Seq {
+		st.lost = cmp.Or(st.lost, "its history of boots is behind its accounts' records")
+	}
+	if haveLatest {
+		var e bootEntry
+		if json.Unmarshal(latestRaw, &e) != nil || !slices.Contains(l.Boots, e) {
+			st.lost = cmp.Or(st.lost, "its copy of the latest boot (.worker/latest-boot) isn't one of its history")
+		}
+	}
+	return st, nil
+}
+
+// decodeHistory reads a history of boots, or says why it can't be trusted.
+func decodeHistory(b []byte) (bootLog, string) {
+	var l bootLog
+	switch err := json.Unmarshal(b, &l); {
+	case err != nil:
+		return l, "its history of boots (.worker/boots.json) is damaged: " + err.Error()
+	case len(l.Boots) == 0:
+		return l, "its history of boots (.worker/boots.json) is empty"
+	}
+	return l, ""
+}
+
+// readIfThere reads path, and says whether it was there: only its absence isn't an error.
+func readIfThere(path string) ([]byte, bool, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the worker's own files, in its own directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	return b, err == nil, err
+}
+
+// loadBoots reads the boots at start. A lost state is recorded (the mark) and said loudly; a copy
+// of the latest that is behind the history (a stop between the two writes) or gone is written
+// again, the history being whole.
+func (w *Worker) loadBoots() error {
+	st, err := readBootState(w)
 	if err != nil {
 		return err
 	}
-	for _, r := range recs {
-		seq = max(seq, r.Gen, r.RetiredGen)
+	w.boots, w.bootSeq = st.boots, st.seq
+	if st.lost != "" && w.cfg.OneServer {
+		// One server only, and it is this one: its next census sets the history again.
+		slog.Warn("cliworker: the history of server boots was lost: the next census sets it again (one server only)", "why", st.lost)
+		if err := os.Remove(w.authorityLostFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		st.lost = ""
 	}
-	w.bootSeq = seq
-	// The latest boot lost, but the list's last entry has the counter's number: that is the latest
-	// (the list is written after it, in the same registration).
-	if n := len(w.boots); !w.latestKnown && n > 0 && w.boots[n-1].Seq == seq {
-		w.latest, w.latestKnown = w.boots[n-1], true
+	if st.lost != "" {
+		w.authorityLost = st.lost
+		if err := writeDurably(w.stateDir(), w.authorityLostFile(), []byte(st.lost+"\n")); err != nil {
+			return err
+		}
+		slog.Error("cliworker: AUTHORITY LOST: this worker can't tell the current server from an earlier one, so it refuses every census and every deletion until an operator hands it over (taskto cli-worker trust-server, docs/cli-workers.md)", "why", st.lost)
+		return nil
 	}
-	if n, _ := w.readSeq(w.bootSeqFile()); n < seq {
-		return writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n"))
+	if n := len(w.boots); n > 0 {
+		if err := w.writeLatest(w.boots[n-1]); err != nil {
+			return err
+		}
+	}
+	if n, _ := w.readSeq(w.bootSeqFile()); n < w.bootSeq {
+		return writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(w.bootSeq, 10)+"\n"))
 	}
 	return nil
+}
+
+func (w *Worker) writeLatest(e bootEntry) error {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	return writeDurably(w.stateDir(), w.latestBootFile(), b)
 }
 
 func (w *Worker) readSeq(path string) (int64, bool) {
@@ -325,6 +422,13 @@ func (w *Worker) readSeq(path string) (int64, bool) {
 	return n, err == nil && n >= 0
 }
 
+// AuthorityLost says why the worker is in the authority-lost state, "" when it isn't.
+func (w *Worker) AuthorityLost() string {
+	w.bootsMu.Lock()
+	defer w.bootsMu.Unlock()
+	return w.authorityLost
+}
+
 // latestSeq is the number of the latest registered boot (0 before any): a new record's Gen.
 func (w *Worker) latestSeq() int64 {
 	w.bootsMu.Lock()
@@ -332,17 +436,12 @@ func (w *Worker) latestSeq() int64 {
 	return w.bootSeq
 }
 
-// latestBootFile is the latest registered boot, with its number: what deletions are fenced by,
-// kept on its own and written durably at every registration.
-func (w *Worker) latestBootFile() string { return filepath.Join(w.stateDir(), "latest-boot") }
-
-// latestBoot is the latest registered boot, "" when the worker has none (no census yet, or its
-// record of the latest was lost: recovering).
+// latestBoot is the latest registered boot, "" before any.
 func (w *Worker) latestBoot() string {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
-	if w.latestKnown {
-		return w.latest.Boot
+	if n := len(w.boots); n > 0 {
+		return w.boots[n-1].Boot
 	}
 	return ""
 }
@@ -392,17 +491,20 @@ type reservation struct {
 }
 
 // registerCensus registers c's boot with n, the number its census took as it arrived
-// (reserveBoot), or refuses it with ErrStaleBoot: a boot registered before the latest one is an
-// earlier server's, and so is one whose census arrived before the latest's. It returns the boot's
-// number. The caller holds w.censusMu.
+// (reserveBoot), or refuses it: ErrAuthorityLost while the worker can't tell the current server,
+// ErrStaleBoot for a boot registered before the latest one, or whose census arrived after a later
+// one was registered. It returns the boot's number. The caller holds w.censusMu.
 func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	w.bootsMu.Lock()
 	defer w.bootsMu.Unlock()
-	if w.latestKnown && c.Boot == w.latest.Boot {
-		return w.latest.Seq, nil
+	if w.authorityLost != "" {
+		return 0, ErrAuthorityLost
 	}
-	for _, b := range w.boots {
+	for i, b := range w.boots {
 		if b.Boot == c.Boot {
+			if i == len(w.boots)-1 {
+				return b.Seq, nil
+			}
 			return 0, ErrStaleBoot
 		}
 	}
@@ -412,44 +514,16 @@ func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	return n, w.register(c.Boot, n)
 }
 
-// registerRecovery registers the boot of a recovery census (Census.Recovery: one a server sends
-// because a deletion was answered cliowner.ErrCensusNeeded): only while the worker has lost which
-// boot is the latest, and then as the latest, whatever its number. Otherwise it is the latest's
-// own (nothing to do) or refused: a recovery census never takes the place of a boot the worker
-// knows is the latest, so an earlier server's can't. The caller holds w.censusMu.
-func (w *Worker) registerRecovery(c Census, n int64) error {
-	w.bootsMu.Lock()
-	defer w.bootsMu.Unlock()
-	if w.latestKnown {
-		if c.Boot == w.latest.Boot {
-			return nil
-		}
-		return ErrStaleBoot
-	}
-	return w.register(c.Boot, max(n, w.bootSeq+1))
-}
-
 // register makes boot, with number seq, the latest: the counter first (a number is never given
-// twice, a stop in between only skipping one), then the latest boot, then the list. The caller
-// holds w.bootsMu.
+// twice, a stop in between only skipping one), then the history, whole, then its copy of the
+// latest. The caller holds w.bootsMu.
 func (w *Worker) register(boot string, seq int64) error {
 	if err := writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(seq, 10)+"\n")); err != nil {
 		return err
 	}
 	w.bootSeq = seq
 	latest := bootEntry{Boot: boot, Seq: seq}
-	lb, err := json.Marshal(latest)
-	if err != nil {
-		return err
-	}
-	if err := writeDurably(w.stateDir(), w.latestBootFile(), lb); err != nil {
-		return err
-	}
-	w.latest, w.latestKnown = latest, true
 	boots := append(append([]bootEntry(nil), w.boots...), latest)
-	if len(boots) > maxBoots {
-		boots = boots[len(boots)-maxBoots:]
-	}
 	b, err := json.Marshal(bootLog{Boots: boots})
 	if err != nil {
 		return err
@@ -458,27 +532,73 @@ func (w *Worker) register(boot string, seq int64) error {
 		return err
 	}
 	w.boots = boots
-	return nil
+	return w.writeLatest(latest)
 }
 
 // deletionFence admits a deletion (Forget, a browser purge) only from the latest registered boot:
 // one an earlier server sent, delayed past a restore that brought the account back, retires and
 // removes nothing (ErrStaleBoot). On a volume that never had a census there is nothing to fence
-// against. One that lost which boot is the latest (.worker/latest-boot, and the list with it)
-// asks for a census (cliowner.ErrCensusNeeded): the live server sends a recovery census, which
-// sets the latest boot and retires nothing, and tries again. The caller holds w.censusMu.
+// against. In the authority-lost state every deletion is refused (ErrAuthorityLost). The caller
+// holds w.censusMu.
 func (w *Worker) deletionFence(boot string) error {
+	if w.AuthorityLost() != "" {
+		return ErrAuthorityLost
+	}
 	if w.latestSeq() == 0 {
 		return nil
 	}
-	latest := w.latestBoot()
-	switch {
-	case latest == "":
-		return cliowner.ErrCensusNeeded
-	case boot == latest:
+	if boot == w.latestBoot() {
 		return nil
 	}
 	return ErrStaleBoot
+}
+
+// TrustServer hands the worker's volume under layout over to the server with boot, ending the
+// authority-lost state: an operator's step (`taskto cli-worker trust-server`), with the worker
+// stopped (it takes the volume's lock) and every server but the current one stopped too. The
+// boot is registered as the latest, after everything the volume names (the history that is
+// left, its counter, its records), and the mark is removed. A boot the history no longer has is,
+// from then on, a server the worker never heard from: that is why every other server must be
+// stopped.
+func TrustServer(layout Layout, boot string) error {
+	if !cliowner.IsIdentity(boot) {
+		return badRequest{errors.New("invalid boot: 32 hexadecimal characters, as the server logs it")}
+	}
+	w := &Worker{cfg: Config{Layout: layout}, accounts: map[string]accountRecord{}}
+	for _, dir := range []string{w.stateDir(), w.accountsDir()} {
+		if err := mkdirDurable(dir); err != nil {
+			return err
+		}
+	}
+	lock, err := lockfile.Lock(filepath.Join(w.stateDir(), "lock"))
+	if err != nil {
+		if errors.Is(err, lockfile.ErrLocked) {
+			return fmt.Errorf("the CLI worker is running on %s: stop it first: %w", layout.Root, err)
+		}
+		return err
+	}
+	defer lock.Close()
+	st, err := readBootState(w)
+	if err != nil {
+		return err
+	}
+	w.boots, w.bootSeq = st.boots, st.seq
+	if n := len(w.boots); n > 0 && w.boots[n-1].Seq > w.bootSeq {
+		w.bootSeq = w.boots[n-1].Seq
+	}
+	// What is left of the history stays, but not the boot being trusted: it is the latest now.
+	w.boots = slices.DeleteFunc(w.boots, func(e bootEntry) bool { return e.Boot == boot })
+	w.bootsMu.Lock()
+	err = w.register(boot, w.bootSeq+1)
+	w.bootsMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(w.authorityLostFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	slog.Info("cliworker: handed over to the server with this boot", "boot", boot, "seq", w.bootSeq)
+	return syncDir(w.stateDir())
 }
 
 // FenceDeletion runs do, the agent browsers' part of a deleted account's purge, as Forget is run:

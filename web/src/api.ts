@@ -1203,6 +1203,17 @@ export type UpdateAvailable = {
 export type UpdateRequested = { requested_at: string }
 
 export const updatesPath = (workspace: number) => `${ws(workspace)}/updates`
+
+// The CLI worker's authority, for the server's operators (docs/cli-workers.md): whether it lost
+// its history of server boots, so that it refuses every census and deletion until an operator
+// hands it over to this server, whose boot it then shows.
+export type CLIWorkerStatus = {
+  mode: string
+  reachable: boolean
+  authority_lost: boolean
+  boot?: string
+}
+export const cliWorkerPath = (workspace: number) => `${ws(workspace)}/cli-worker`
 export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`
 
 // Storage quotas and what each space stores (docs/quotas.md), in bytes. A limit of 0 is none.

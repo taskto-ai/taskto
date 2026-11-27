@@ -25,10 +25,32 @@ import (
 	"taskto.ai/taskto/internal/privcheck"
 )
 
+// runTrustServer is `taskto cli-worker trust-server -boot BOOT`: an operator hands a CLI worker
+// that lost its history of server boots (the authority-lost state, docs/cli-workers.md) over to
+// the server with boot, which the server logs at its start and shows its operators. The worker
+// must be stopped, and every server but that one.
+func runTrustServer(args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("cli-worker trust-server", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	homes := fs.String("homes", "/homes", "the worker's volume")
+	boot := fs.String("boot", "", "the current server's boot, as it logs it and Settings → About shows it")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := cliworker.TrustServer(cliworker.Layout{Root: *homes}, *boot); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(stderr, "the CLI worker on %s now takes censuses and deletions from the server with boot %s only\n", *homes, *boot)
+	return nil
+}
+
 // runCLIWorker is `taskto cli-worker`: the CLI worker of container mode (docs/cli-workers.md),
 // in a container of its own, as root. Each taskto user's CLIs run as a Unix user of their own;
 // the server reaches the worker on a Unix socket only its user can open.
 func runCLIWorker(args []string, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "trust-server" {
+		return runTrustServer(args[1:], stderr)
+	}
 	fs := flag.NewFlagSet("cli-worker", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	socket := fs.String("socket", "/run/taskto-cli/worker.sock", "the socket the server connects to")

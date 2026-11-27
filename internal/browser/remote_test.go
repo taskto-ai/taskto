@@ -158,11 +158,11 @@ func TestRemoteErrorOrder(t *testing.T) {
 	}
 }
 
-// The CLI worker's request for a census, refusing a purge, reaches the server as itself over the
-// worker's socket: the server then sends its census and tries the purge again.
-func TestAPurgeRefusedForACensusSaysSoOverTheSocket(t *testing.T) {
+// The CLI worker's refusal of a purge while it lost its history of server boots reaches the server
+// as itself over the worker's socket: the server says so to its operators.
+func TestAPurgeRefusedForLostAuthoritySaysSoOverTheSocket(t *testing.T) {
 	m := NewManager(Config{Host: &fakeHost{log: filepath.Join(t.TempDir(), "log")}, Fence: func(context.Context, cliowner.Account, func() error) error {
-		return cliowner.ErrCensusNeeded
+		return cliowner.ErrAuthorityLost
 	}})
 	t.Cleanup(m.Close)
 	dir, err := os.MkdirTemp("/tmp", "br")
@@ -178,7 +178,7 @@ func TestAPurgeRefusedForACensusSaysSoOverTheSocket(t *testing.T) {
 	srv := &http.Server{Handler: NewHandler(m), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	if err := NewRemote(sock).Forget(context.Background(), acct(1)); !errors.Is(err, cliowner.ErrCensusNeeded) {
-		t.Errorf("the purge over the socket: %v, want ErrCensusNeeded", err)
+	if err := NewRemote(sock).Forget(context.Background(), acct(1)); !errors.Is(err, cliowner.ErrAuthorityLost) {
+		t.Errorf("the purge over the socket: %v, want ErrAuthorityLost", err)
 	}
 }

@@ -77,6 +77,9 @@ type Worker interface {
 	Forget(ctx context.Context, a cliowner.Account) error
 	// Reconcile tells the worker which accounts exist (cliworker.Worker.Reconcile).
 	Reconcile(ctx context.Context, census cliworker.Census) error
+	// AuthorityLost says why the worker can't tell the current server from an earlier one, ""
+	// when it can (cliworker.Worker.AuthorityLost).
+	AuthorityLost(ctx context.Context) (string, error)
 
 	// StartTurn starts spec's turn, or returns the one with its ID (attached true).
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
@@ -125,6 +128,10 @@ func LocalWorker(w *cliworker.Worker) Worker { return localWorker{w} }
 
 type localWorker struct{ *cliworker.Worker }
 
+func (l localWorker) AuthorityLost(context.Context) (string, error) {
+	return l.Worker.AuthorityLost(), nil
+}
+
 func (l localWorker) StartLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
 	login, err := l.Worker.StartLogin(a, cli, slot)
 	if err != nil {
@@ -158,6 +165,10 @@ func (l localWorker) Answer(_ context.Context, a cliowner.Account, conversation 
 func RemoteWorker(r *cliworker.Remote) Worker { return remoteWorker{r} }
 
 type remoteWorker struct{ *cliworker.Remote }
+
+func (r remoteWorker) AuthorityLost(ctx context.Context) (string, error) {
+	return r.Remote.AuthorityLost(ctx)
+}
 
 func (r remoteWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	t, attached, err := r.Remote.StartTurn(spec)
@@ -349,11 +360,8 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 		return ErrOff
 	}
 	err := s.worker.Forget(ctx, user)
-	if errors.Is(err, cliowner.ErrCensusNeeded) {
-		// The worker lost which boot is the latest: this server's recovery census sets it.
-		if err = s.RecoveryCensus(ctx); err == nil {
-			err = s.worker.Forget(ctx, user)
-		}
+	if errors.Is(err, cliowner.ErrAuthorityLost) {
+		slog.Error("cliaccounts: the CLI worker refuses deletions until an operator hands it over to this server (taskto cli-worker trust-server, docs/cli-workers.md)", "boot", s.boot)
 	}
 	if err != nil {
 		return fmt.Errorf("removing the CLI worker's files of user %d: %w", user, err)
@@ -386,23 +394,12 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 // It returns cliworker.ErrIncomplete when the worker couldn't remove everything yet: those
 // accounts are refused all the same, and the call is made again.
 func (s *Service) ReconcileForgotten(ctx context.Context) error {
-	return s.census(ctx, false)
-}
-
-// RecoveryCensus is the census a deletion sends when the worker answered it
-// cliowner.ErrCensusNeeded: the worker lost which server boot is the latest. It registers this
-// server's boot only while the worker can't tell, and retires nothing (cliworker.Census.Recovery).
-func (s *Service) RecoveryCensus(ctx context.Context) error {
-	return s.census(ctx, true)
-}
-
-func (s *Service) census(ctx context.Context, recovery bool) error {
 	if s.worker == nil {
 		return nil
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot, Recovery: recovery}
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot}
 	// Not the accounts whose purge has begun: it retires them in the worker before it deletes
 	// them, and one that stopped between the two is made again from its start.
 	rows, err := s.db.QueryContext(ctx, `SELECT id, cli_identity FROM users
@@ -441,6 +438,9 @@ func (s *Service) StartReconcile() {
 	if s.worker == nil {
 		return
 	}
+	// An operator hands a CLI worker that lost its history of server boots over to this server by
+	// naming it (taskto cli-worker trust-server -boot, docs/cli-workers.md).
+	slog.Info("cliaccounts: this server's boot, for the CLI worker", "boot", s.boot)
 	try := func() error {
 		a := s.startAttempt()
 		<-a.done

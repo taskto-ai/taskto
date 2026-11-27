@@ -111,6 +111,7 @@ type userWorker interface {
 	Logout(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) error
 	Forget(ctx context.Context, user int64) error
 	Reconcile(ctx context.Context, census cliworker.Census) error
+	AuthorityLost(ctx context.Context) (string, error)
 	StartTurn(spec cliworker.TurnSpec) (Turn, bool, error)
 	// FindTurn is user's turn id; false when the worker has none, and the error when it can't be
 	// asked.
@@ -216,6 +217,10 @@ func (a accountWorker) Forget(ctx context.Context, user int64) error {
 
 func (a accountWorker) Reconcile(ctx context.Context, census cliworker.Census) error {
 	return a.w.Reconcile(ctx, census)
+}
+
+func (a accountWorker) AuthorityLost(ctx context.Context) (string, error) {
+	return a.w.AuthorityLost(ctx)
 }
 
 func (a accountWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {

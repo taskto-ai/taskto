@@ -354,6 +354,7 @@ func TestTurnsWithoutTaskToTools(t *testing.T) {
 // bad token: the CLI's model tries again. No tool runs meanwhile.
 func TestAToolsTokenCheckDuringAnOutageIsNotReady(t *testing.T) {
 	e := newTurnEnv(t)
+	sw := e.swappable()
 	conv := e.conversation(e.owner)
 	token, err := e.svc.mintToolsToken(toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: fmt.Sprintf("c%d-t1", conv)})
 	if err != nil {
@@ -364,7 +365,7 @@ func TestAToolsTokenCheckDuringAnOutageIsNotReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	e.svc.worker = accountWorker{w: RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))), s: e.svc}
+	sw.use(RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))))
 	r := httptest.NewRequest(http.MethodPost, ToolsPath, nil)
 	r.Header.Set("Authorization", "Bearer "+token)
 	_, err = e.svc.ToolsCaller(r)

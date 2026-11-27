@@ -22,6 +22,7 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
@@ -101,5 +102,7 @@ func Roots() []Root {
 		// The host's updates, for the server's operators.
 		root[updatestatus.Report]("UpdateReport"),
 		root[updatestatus.Requested]("UpdateRequested"),
+		// The CLI worker's authority, for the server's operators.
+		root[cliaccounts.WorkerStatus]("CLIWorkerStatus"),
 	}
 }

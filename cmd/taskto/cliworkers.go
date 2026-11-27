@@ -80,6 +80,7 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 		// The directories are in the data directory, and a backup holds them with the database: a
 		// directory from before homes is its number's account's.
 		AdoptLegacy: true,
+		OneServer:   true,
 		// The server checked itself at start; this lets the helper run a CLI as root too.
 		UnsafePrivileged: cfg.UnsafePrivilegedAgents,
 	})

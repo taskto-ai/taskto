@@ -91,6 +91,7 @@ func newEnv(t *testing.T, mode Mode, tune func(*cliworker.Config)) *env {
 	e.svc.Routes(mux, a)
 	e.svc.SharedRoutes(mux, a)
 	e.svc.SwitchingRoutes(mux, a)
+	e.svc.OperatorRoutes(mux, a)
 	e.h = auth.CSRF(mux)
 	return e
 }
