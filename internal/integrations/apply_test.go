@@ -957,6 +957,9 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 	expect(t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", other.ID, failed.id)), nil), http.StatusNotFound)
 	rec = p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", p.in.ID, 999999)), nil)
 	expect(t, rec, http.StatusNotFound)
+	if _, err := p.fake.Expire(ref.object); err != nil {
+		t.Fatal(err)
+	}
 	p.put(Event{Kind: EventPaymentExpired, RefToken: ref.token, ObjectID: ref.object, AmountMinor: ref.amount, Currency: "EUR"})
 	p.drain()
 	applied := p.lastEvent(EventPaymentExpired)
@@ -1380,6 +1383,9 @@ func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 		t.Fatalf("an old key's expiry ended the ref: %+v", now)
 	}
 
+	if _, err := p.fake.Expire(link.ObjectID); err != nil {
+		t.Fatal(err)
+	}
 	p.put(Event{Kind: EventPaymentExpired, RefToken: p.keyToken(1), ObjectID: link.ObjectID, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentExpired), EventIgnored, apierr.CodeIntegrationEventNoHandler)

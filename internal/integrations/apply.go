@@ -204,6 +204,9 @@ func (a *eventApplier) classify(ctx context.Context, ev StoredEvent, r ref, tr t
 	if ev.AmountMinor != r.amountMinor || ev.Currency != r.currency {
 		return &EventError{Code: apierr.CodeIntegrationAmountMismatch}
 	}
+	if ev.Kind == EventPaymentExpired {
+		return a.svc.expiryProven(ctx, ev, r)
+	}
 	return nil
 }
 
@@ -317,9 +320,54 @@ func (s *Service) expiredKeyOfEvent(ctx context.Context, r ref, ev StoredEvent) 
 	if ev.ObjectID == "" || ev.LinkID != "" || r.successURL == "" || ev.RefToken == "" {
 		return nil
 	}
+	if err := s.expiryProven(ctx, ev, r); err != nil {
+		return err
+	}
 	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'expired', object_id = ?
 		WHERE ref_id = ? AND token = ? AND outcome IS NULL AND (object_id IS NULL OR object_id = ?)`,
 		ev.ObjectID, r.id, ev.RefToken, ev.ObjectID)
+	return err
+}
+
+func (s *Service) expiryProven(ctx context.Context, ev StoredEvent, r ref) error {
+	rec, err := s.store.getSnapshot(ctx, ev.WorkspaceID, ev.IntegrationID)
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return &EventError{Code: apierr.CodeIntegrationUnavailable, Transient: true}
+		}
+		return err
+	}
+	provider, _ := Lookup(rec.Provider).(PaymentProvider)
+	if provider == nil {
+		return &EventError{Code: apierr.CodeIntegrationUnavailable, Transient: true}
+	}
+	creds, err := s.store.credentials(ctx, ev.WorkspaceID, ev.IntegrationID)
+	if err != nil || creds.APIKey == "" {
+		var unreadable unreadableError
+		if err == nil || errors.As(err, &unreadable) {
+			return &EventError{Code: apierr.CodeIntegrationUnavailable, Transient: true}
+		}
+		return err
+	}
+	if Lookup(rec.Provider).Mode(rec.Settings, creds.APIKey.Reveal()) != r.accountMode {
+		return &EventError{Code: apierr.CodeIntegrationAccountChanged, Transient: true}
+	}
+	client := s.Client(Lookup(rec.Provider), rec.Settings, s.clientOpts...)
+	account, err := provider.AccountID(ctx, creds, client)
+	if err != nil {
+		return s.eventProofFailure(s.failed(ctx, rec, nil, err))
+	}
+	if r.accountID != "" && account != r.accountID {
+		return &EventError{Code: apierr.CodeIntegrationAccountChanged, Transient: true}
+	}
+	return s.eventProofFailure(s.provePaymentEnded(ctx, provider, creds, client, rec, r))
+}
+
+func (s *Service) eventProofFailure(err error) error {
+	var pe *paylink.Error
+	if errors.As(err, &pe) {
+		return &EventError{Code: pe.Code, Params: pe.Params, Transient: true}
+	}
 	return err
 }
 

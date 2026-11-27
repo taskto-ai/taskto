@@ -614,7 +614,12 @@ made in: one replaced by a key of the other mode while the call was out fails th
 holds is also checked in the transaction that writes the call ahead, under the same lock as an admin's
 change of the key: a key of the other mode that was saved before it stops the call, which never
 leaves (`integration_account_changed`, nothing recorded as sent), and one saved after it finds the call
-written ahead, a payable attempt, and is refused (`integration_mode_change_refused`). It makes
+written ahead, a payable attempt, and is refused (`integration_mode_change_refused`). The key and
+settings the call holds are checked there as well: any change of them since they were read (a
+rotation of the same account's key, another account's key of the same mode) stops this try before
+anything is written, and the entry starts again from the integration's current key, reading its
+account again: the same account goes on with the new key, another account (or merchant) fails with
+`integration_account_changed`, nothing sent, and the old account's key never goes out. It makes
 the link at the provider with the integration's key, which is opened only for the call; and it writes
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
@@ -738,7 +743,13 @@ write.
   record otherwise than the live release does (a field retyped, a currency no longer offered).
   A verified `checkout.session.expired` of a session that carries the token of a key whose outcome is
   unknown (its create answer was lost) resolves that key as expired, and only that key: the reference
-  is left to its entry, and the money is free once no key of it may have made something. What a field holds is compared as well as the money read from it, so a field
+  is left to its entry, and the money is free once no key of it may have made something. Like every
+  expiry that ends a key or a reference, it is proven first: every key of the reference is looked up
+  by its token at the provider (in the reference's own account and mode), and nothing moves on while
+  another object of any of those tokens may still be paid (a lost answer can leave two sessions under
+  one token). The event is then tried again with its backoff (`integration_link_still_open`, and
+  `failed` for an admin to retry after the attempts), the key stays unresolved and the money stays
+  locked; once every object has ended, the retry moves it on. What a field holds is compared as well as the money read from it, so a field
   whose type a release changed stays locked too. An open link is given again only to an entry that
   reads its money from the fields the link's was read from; another gets `integration_link_still_open`.
   So a link is never paid at an amount the record no longer says, and the payment

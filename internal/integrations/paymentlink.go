@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -28,6 +29,18 @@ func unavailable() error {
 }
 
 func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (paylink.Link, error) {
+	for range maxKeysPerTry {
+		link, err := s.openPaymentLink(ctx, req)
+		if !errors.Is(err, errCredentialsMoved) {
+			return link, err
+		}
+	}
+	return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+}
+
+var errCredentialsMoved = errors.New("the integration's credentials changed since they were read")
+
+func (s *Service) openPaymentLink(ctx context.Context, req paylink.Request) (paylink.Link, error) {
 	rec, err := s.store.getSnapshot(ctx, req.WorkspaceID, req.IntegrationID)
 	if err != nil {
 		if errors.Is(err, errNotFound) {
@@ -192,7 +205,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			}
 			return err
 		}
-		if ok, refused, err := s.writeAhead(ctx, ref, a, req, who); err != nil {
+		if ok, refused, err := s.writeAhead(ctx, ref, a, req, who, creds); err != nil {
 			return paylink.Link{}, err
 		} else if refused != nil {
 			return paylink.Link{}, refusedBy(refused)
@@ -831,7 +844,7 @@ func (s *Service) currentAttempt(ctx context.Context, r ref) (attempt, error) {
 
 var errRefMoved = errors.New("the payment link's reference moved on")
 
-func (s *Service) writeAhead(ctx context.Context, r ref, a attempt, req paylink.Request, who whose) (ok bool, refused, err error) {
+func (s *Service) writeAhead(ctx context.Context, r ref, a attempt, req paylink.Request, who whose, held Credentials) (ok bool, refused, err error) {
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, nil, err
@@ -849,6 +862,17 @@ func (s *Service) writeAhead(ctx context.Context, r ref, a attempt, req paylink.
 	}
 	if rec.Mode != who.mode {
 		return false, &paylink.Error{Code: apierr.CodeIntegrationAccountChanged}, nil
+	}
+	current, err := s.store.openCredentials(ctx, tx, req.WorkspaceID, req.IntegrationID)
+	if err != nil {
+		var unreadable unreadableError
+		if errors.As(err, &unreadable) {
+			return false, unavailable(), nil
+		}
+		return false, nil, err
+	}
+	if current.APIKey.Reveal() != held.APIKey.Reveal() || !maps.Equal(current.Settings, held.Settings) {
+		return false, nil, errCredentialsMoved
 	}
 	at := s.store.stamp(s.store.now())
 	res, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET sends = sends + 1,

@@ -86,6 +86,7 @@ func TestAKeyOfTheSameModeBeforeTheWriteAheadLetsTheCallGoOn(t *testing.T) {
 	rotated := "sk_" + "live_" + strings.Repeat("Rota", 6)
 	p.svc.beforeBeginRef = func() {
 		p.svc.beforeBeginRef = nil
+		p.fake.SetAPIKey(rotated)
 		if status, code := p.patchKey(rotated); status != http.StatusOK {
 			t.Errorf("a rotation of the live key = %d %q", status, code)
 		}
