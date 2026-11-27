@@ -9,6 +9,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,6 +23,10 @@ type PaymentProvider interface {
 	LinkState(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (LinkState, error)
 	AccountID(ctx context.Context, creds Credentials, c *Client) (string, error)
 	KeyKept() time.Duration
+}
+
+type payableChecker interface {
+	NothingPayable(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (bool, error)
 }
 
 type PaymentPoller interface {
@@ -50,6 +55,7 @@ type NewLink struct {
 	Description string
 	SuccessURL  string
 	CancelURL   string
+	Paid        []string
 }
 
 func (l NewLink) IdempotencyKey() string { return l.Token }
@@ -238,9 +244,19 @@ const (
 	findSkew     = 10 * time.Minute
 )
 
-func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
+func (p stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (Link, bool, bool, error) {
+	return p.find(ctx, creds, c, l, since, true)
+}
+
+func (p stripe) NothingPayable(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time) (bool, error) {
+	_, found, _, err := p.find(ctx, creds, c, l, since, false)
+	return !found && err == nil, err
+}
+
+func (stripe) find(ctx context.Context, creds Credentials, c *Client, l NewLink, since time.Time, oneExpired bool) (Link, bool, bool, error) {
 	hosted := l.SuccessURL == ""
 	sawExpired := false
+	expiredID := ""
 	path := "/v1/checkout/sessions"
 	q := url.Values{"limit": {strconv.Itoa(findPageSize)}}
 	if hosted {
@@ -262,6 +278,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				URL               string            `json:"url"`
 				Currency          string            `json:"currency"`
 				Status            string            `json:"status"`
+				Mode              string            `json:"mode"`
 				Active            *bool             `json:"active"`
 				AmountTotal       int64             `json:"amount_total"`
 				ClientReferenceID *string           `json:"client_reference_id"`
@@ -279,7 +296,7 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			} else {
 				ours = o.ClientReferenceID != nil && *o.ClientReferenceID == l.Token
 			}
-			if !ours {
+			if !ours || slices.Contains(l.Paid, o.ID) {
 				continue
 			}
 			seen := Link{ObjectID: seenObjectID(o.ID)}
@@ -287,13 +304,22 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 				return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 			}
 			if !hosted {
+				if o.Mode != "payment" {
+					return seen, false, false, &CallError{Kind: CallRefused, Status: status}
+				}
 				switch o.Status {
 				case "open":
 				case "expired":
-					sawExpired = true
+					if oneExpired && sawExpired && expiredID != seen.ObjectID {
+						return seen, false, false, &CallError{Kind: CallRefused, Status: status}
+					}
+					sawExpired, expiredID = true, seen.ObjectID
 					continue
 				default:
 					if o.Status == "complete" {
+						if len(l.Paid) > 0 {
+							continue
+						}
 						return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 					}
 					return seen, false, false, &CallError{Kind: CallRefused, Status: status}
@@ -315,7 +341,10 @@ func (stripe) FindPaymentLink(ctx context.Context, creds Credentials, c *Client,
 			return link, true, false, nil
 		}
 		if !more {
-			return Link{}, false, sawExpired, nil
+			if sawExpired {
+				return Link{ObjectID: expiredID}, false, true, nil
+			}
+			return Link{}, false, false, nil
 		}
 		last := data[len(data)-1].ID
 		if last == "" {
@@ -353,10 +382,14 @@ func (stripe) LinkState(ctx context.Context, creds Credentials, c *Client, hoste
 		ID     string `json:"id"`
 		Object string `json:"object"`
 		Status string `json:"status"`
+		Mode   string `json:"mode"`
 		Active *bool  `json:"active"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil || out.Object != want || out.ID != objectID {
 		return 0, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	if !hosted && out.Mode != "payment" {
+		return 0, &CallError{Kind: CallRefused, Status: status}
 	}
 	if hosted {
 		switch {
