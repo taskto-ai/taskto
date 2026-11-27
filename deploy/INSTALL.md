@@ -1442,9 +1442,12 @@ the one that failed (a failed release isn't tried again by itself, but a newer o
    ```
 
    The worker's volume is then empty (it is kept, emptied, as the data's is); people sign in to
-   their CLIs again on the older version. When you upgrade again, empty it the same way and copy
-   the kept volume back into it before the new version starts, so their homes are as they were
-   left.
+   their CLIs again on the older version. Upgrading this rolled-back data again does **not** bring
+   the kept volume back: that database has no account identities or installation, and gets new
+   ones the kept homes don't have, so after the next upgrade people sign in to their CLIs once
+   more, on the empty volume. The kept volume is usable only with the upgraded server's own backup,
+   the one from right before this rollback: restore that backup instead of upgrading again if you
+   want the homes, and give it the kept volume. Keep it detached until you have decided.
 4. Run step 9, then 12, 13, 14 and 15.
 5. Clear the stop, once the old version runs and the data is right. This removes the record
    and the marker, if the server is healthy and answers as the version in `/srv/taskto/.env`

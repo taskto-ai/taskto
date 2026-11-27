@@ -643,3 +643,113 @@ func TestADeletionWithNoIdentityIsFencedToo(t *testing.T) {
 	}
 	gone(t, legacy)
 }
+
+// A volume that lost only its installation binding is still some installation's: the worker can't
+// tell whose, so it loses its authority rather than let the first census to come take it, and the
+// operator's handover must name the installation. The homes stay.
+func TestALostInstallationBindingIsAuthorityLost(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Fatal(err)
+	}
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	h.losePart(t, "installation")
+	if h.w.AuthorityLost() == "" {
+		t.Fatal("a used volume without its installation was trusted")
+	}
+	other := strings.Repeat("e", 32)
+	c := bootCensus(strings.Repeat("c", 32), time.Now(), nil)
+	c.Installation = other
+	if err := h.w.Reconcile(ctx, c); !errors.Is(err, cliworker.ErrAuthorityLost) {
+		t.Errorf("another installation's first census: %v, want ErrAuthorityLost", err)
+	}
+	if _, err := os.Stat(dirs.Root); err != nil {
+		t.Errorf("the volume's home: %v", err)
+	}
+	h.w.Close()
+	if err := cliworker.TrustServer(h.layout, cliworker.TestBoot, ""); err == nil {
+		t.Error("a handover that doesn't name the installation was taken")
+	}
+	if err := cliworker.TrustServer(h.layout, cliworker.TestBoot, cliworker.TestInstallation); err != nil {
+		t.Fatal(err)
+	}
+	h.reopen(t)
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Errorf("the named installation's census: %v", err)
+	}
+	if err := h.w.Reconcile(ctx, c); !errors.Is(err, cliworker.ErrOtherInstallation) {
+		t.Errorf("the other installation's census: %v, want ErrOtherInstallation", err)
+	}
+}
+
+// A damaged boot counter is a lost authority, never a stale census of the current server's; the
+// handover makes it again from the history and the records, and says it worked only once a
+// starting worker would trust it.
+func TestADamagedBootCounterIsHandedOverSoundly(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	h.w.Close()
+	if err := os.WriteFile(filepath.Join(h.layout.Root, ".worker", "boot-seq"), []byte("9223372036854775807\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.reopen(t)
+	if h.w.AuthorityLost() == "" {
+		t.Fatal("a damaged boot counter was trusted")
+	}
+	later := strings.Repeat("c", 32)
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); !errors.Is(err, cliworker.ErrAuthorityLost) {
+		t.Errorf("a census with the counter damaged: %v, want ErrAuthorityLost", err)
+	}
+	h.w.Close()
+	if err := cliworker.TrustServer(h.layout, later, ""); err != nil {
+		t.Fatalf("the handover: %v", err)
+	}
+	h.reopen(t)
+	if why := h.w.AuthorityLost(); why != "" {
+		t.Fatalf("the handover said it worked, and the worker still doesn't trust it: %s", why)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
+		t.Errorf("the trusted server's census: %v", err)
+	}
+}
+
+// The first account a volume gets pins it to its server's installation, before any census: a
+// census of another installation that comes first can't take the volume or remove that home.
+func TestTheFirstAccountPinsTheVolume(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true) // the account of the tests' installation
+	c := bootCensus(strings.Repeat("c", 32), time.Now(), nil)
+	c.Installation = strings.Repeat("e", 32)
+	if err := h.w.Reconcile(ctx, c); !errors.Is(err, cliworker.ErrOtherInstallation) {
+		t.Errorf("another installation's census, first to come: %v, want ErrOtherInstallation", err)
+	}
+	if st, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Errorf("the first account's home: %+v %v", st, err)
+	}
+	if _, err := os.Stat(dirs.Root); err != nil {
+		t.Errorf("the first account's home: %v", err)
+	}
+}
+
+// A volume that has never seen a census stays new however often the worker starts on it: starting
+// writes nothing of boots, so the next start doesn't take it for one that lost its history.
+func TestANewVolumeStaysNewAcrossStarts(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	for range 2 {
+		h.w.Close()
+		h.reopen(t)
+		if why := h.w.AuthorityLost(); why != "" {
+			t.Fatalf("a new volume started again lost its authority: %s", why)
+		}
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Errorf("the first census after the starts: %v", err)
+	}
+}

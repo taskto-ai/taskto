@@ -48,6 +48,9 @@ type accountRecord struct {
 	UID int64 `json:"uid,omitempty"`
 	// User is the number the account had when the worker first saw it, for logs and adoption.
 	User int64 `json:"user"`
+	// Installation is the installation of the server whose request made the record: a census of
+	// another never retires it.
+	Installation string `json:"installation,omitempty"`
 	// Boot is the server boot whose request made the record (Reconcile keeps an account made since
 	// the census it is given), and Gen the number of the latest registered boot then (volume.go): a
 	// census retires only accounts made before it was registered.
@@ -105,7 +108,8 @@ func (w *Worker) record(identity string) (accountRecord, bool, error) {
 	}
 	var r accountRecord
 	// A retired account the worker never gave a home (a deletion of one it hadn't seen) has none.
-	if err := json.Unmarshal(b, &r); err != nil || (r.Home < firstHome && (!r.Retired || r.Home != 0)) || r.Home >= maxHome {
+	if err := json.Unmarshal(b, &r); err != nil || (r.Home < firstHome && (!r.Retired || r.Home != 0)) || r.Home >= maxHome ||
+		!validSeq(r.Gen) || !validSeq(r.RetiredGen) {
 		return accountRecord{}, false, fmt.Errorf("the record of an account is damaged")
 	}
 	w.accounts[identity] = r
@@ -239,14 +243,16 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 		if !make {
 			return account{}, ErrUnknownAccount
 		}
-		// A new account of another installation than the volume's is never given a home here.
+		// A new account of another installation than the volume's is never given a home here, and
+		// the first account a volume gets pins it to its installation, as a first census does:
+		// before any home exists, so no census of another installation can take homes it made.
 		w.bootsMu.Lock()
-		err := w.sameInstallation(a.Installation, false)
+		err := w.sameInstallation(a.Installation, a.Installation != "")
 		w.bootsMu.Unlock()
 		if err != nil {
 			return account{}, err
 		}
-		r = accountRecord{User: a.User, Boot: a.Boot, Gen: w.latestSeq()}
+		r = accountRecord{User: a.User, Boot: a.Boot, Installation: a.Installation, Gen: w.latestSeq()}
 		if err := w.giveHome(&r); err != nil {
 			return account{}, err
 		}

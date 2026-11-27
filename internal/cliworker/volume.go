@@ -325,6 +325,9 @@ func (w *Worker) pinUIDBase(base int) error {
 // stopped (TrustServer, `taskto cli-worker trust-server`): never the first server that sends a
 // census.
 
+// trustHookForTest, in tests, runs between a handover's writes and its reading them back.
+var trustHookForTest func(Layout)
+
 // ErrAuthorityLost is the worker's answer to a census or a deletion while it can't tell which
 // server is the current one (its history of boots was lost): an operator hands it over
 // (docs/cli-workers.md). It is cliowner's, so the agent browsers' API carries it too.
@@ -392,7 +395,11 @@ func readBootState(w *Worker) (bootState, error) {
 	if err != nil {
 		return st, err
 	}
-	seq, _ := w.readSeq(w.bootSeqFile())
+	seq, seqThere, seqValid := w.readSeq(w.bootSeqFile())
+	if seqThere && !seqValid {
+		st.lost = cmp.Or(st.lost, "its boot counter (.worker/boot-seq) is damaged")
+		seq = 0
+	}
 	recs, err := w.records()
 	if err != nil {
 		return st, err
@@ -402,7 +409,14 @@ func readBootState(w *Worker) (bootState, error) {
 		gen = max(gen, r.Gen, r.RetiredGen)
 	}
 	st.seq = max(seq, gen)
-	fresh := !haveHist && !haveLatest && seq == 0 && gen == 0
+	fresh := !haveHist && !haveLatest && !seqThere && gen == 0
+	// A volume with boots, accounts or homes on it is some installation's: without its binding,
+	// the worker can't tell whose, and the first census to come would take it.
+	if _, bound, err := readIfThere(w.installationFile()); err != nil {
+		return st, err
+	} else if !bound && (!fresh || len(recs) > 0 || w.hasHomes()) {
+		st.lost = cmp.Or(st.lost, "its installation (.worker/installation) is gone from a volume that has boots, accounts or homes")
+	}
 	switch {
 	case fresh:
 		return st, nil
@@ -444,7 +458,7 @@ func decodeHistory(b []byte) (bootLog, string) {
 	seen := map[string]bool{}
 	for i, e := range l.Boots {
 		switch {
-		case !cliowner.IsIdentity(e.Boot) || e.Seq <= 0:
+		case !cliowner.IsIdentity(e.Boot) || e.Seq <= 0 || !validSeq(e.Seq):
 			return l, "its history of boots (.worker/boots.json) has an entry that isn't a boot"
 		case seen[e.Boot]:
 			return l, "its history of boots (.worker/boots.json) has a boot twice"
@@ -454,6 +468,20 @@ func decodeHistory(b []byte) (bootLog, string) {
 		seen[e.Boot] = true
 	}
 	return l, ""
+}
+
+// hasHomes reports whether the layout's root has a home's directory.
+func (w *Worker) hasHomes() bool {
+	names, err := os.ReadDir(w.cfg.Layout.Root)
+	if err != nil {
+		return false
+	}
+	for _, n := range names {
+		if _, ok := homeOfName(n.Name()); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // readIfThere reads path, and says whether it was there: only its absence isn't an error.
@@ -495,7 +523,7 @@ func (w *Worker) loadBoots() error {
 			return err
 		}
 	}
-	if n, _ := w.readSeq(w.bootSeqFile()); n < w.bootSeq {
+	if n, there, valid := w.readSeq(w.bootSeqFile()); there && !valid || n < w.bootSeq {
 		return writeDurably(w.stateDir(), w.bootSeqFile(), []byte(strconv.FormatInt(w.bootSeq, 10)+"\n"))
 	}
 	return nil
@@ -509,13 +537,21 @@ func (w *Worker) writeLatest(e bootEntry) error {
 	return writeDurably(w.stateDir(), w.latestBootFile(), b)
 }
 
-func (w *Worker) readSeq(path string) (int64, bool) {
+// maxBootSeq bounds the boot numbers: a server start each, so never reached; a number above it is
+// a damaged counter or record, and adding one to it can't overflow.
+const maxBootSeq = 1 << 40
+
+// validSeq reports whether n can be a boot number (0: none yet).
+func validSeq(n int64) bool { return n >= 0 && n <= maxBootSeq }
+
+// readSeq is the counter at path, whether it is there, and whether it is a boot number.
+func (w *Worker) readSeq(path string) (n int64, there, valid bool) {
 	b, err := os.ReadFile(path) //nolint:gosec // G304: the worker's own counter, in its own directory
 	if err != nil {
-		return 0, false
+		return 0, false, false
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-	return n, err == nil && n >= 0
+	n, err = strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	return n, true, err == nil && validSeq(n)
 }
 
 // AuthorityLost says why the worker is in the authority-lost state, "" when it isn't.
@@ -610,6 +646,9 @@ func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 	if n <= w.bootSeq {
 		return 0, ErrStaleBoot // a census that arrived after this one was registered first
 	}
+	if !validSeq(n) {
+		return 0, errors.New("cliworker: no boot number is left")
+	}
 	return n, w.register(c.Boot, n)
 }
 
@@ -686,13 +725,25 @@ func TrustServer(layout Layout, boot, installation string) error {
 		return err
 	}
 	defer lock.Close()
+	// A volume whose installation binding is gone (or never was, with boots or accounts on it) is
+	// handed over to a named installation only: the operator says whose it is.
+	if _, there, err := readIfThere(w.installationFile()); err != nil {
+		return err
+	} else if !there && installation == "" {
+		return badRequest{errors.New("this volume has no installation: name the server's (-installation, as Settings → About shows it and the server logs it)")}
+	}
 	st, err := readBootState(w)
 	if err != nil {
 		return err
 	}
+	// The counter is made again from what the volume names, whatever it says itself: the history
+	// that is left and the records (readBootState leaves a damaged counter out).
 	w.boots, w.bootSeq = st.boots, st.seq
-	if n := len(w.boots); n > 0 && w.boots[n-1].Seq > w.bootSeq {
-		w.bootSeq = w.boots[n-1].Seq
+	if n := len(w.boots); n > 0 {
+		w.bootSeq = max(w.bootSeq, w.boots[n-1].Seq)
+	}
+	if !validSeq(w.bootSeq + 1) {
+		return errors.New("the volume's boot numbers are damaged beyond repair: start the worker on a new volume")
 	}
 	// What is left of the history stays, but not the boot being trusted: it is the latest now.
 	w.boots = slices.DeleteFunc(w.boots, func(e bootEntry) bool { return e.Boot == boot })
@@ -710,8 +761,31 @@ func TrustServer(layout Layout, boot, installation string) error {
 	if err := os.Remove(w.authorityLostFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	slog.Info("cliworker: handed over to the server with this boot", "boot", boot, "installation", installation, "seq", w.bootSeq)
-	return syncDir(w.stateDir())
+	if err := syncDir(w.stateDir()); err != nil {
+		return err
+	}
+	if trustHookForTest != nil {
+		trustHookForTest(layout)
+	}
+	// Read back as a starting worker reads it: success only if that worker trusts this boot.
+	check := &Worker{cfg: Config{Layout: layout}, accounts: map[string]accountRecord{}}
+	got, err := readBootState(check)
+	if err != nil {
+		return err
+	}
+	if err := check.loadInstallation(); err != nil {
+		return err
+	}
+	switch n := len(got.boots); {
+	case got.lost != "":
+		return fmt.Errorf("the handover didn't take: the worker would still not trust it (%s)", got.lost)
+	case n == 0 || got.boots[n-1].Boot != boot:
+		return errors.New("the handover didn't take: the latest boot isn't the one handed over to")
+	case check.installation == "" || (installation != "" && check.installation != installation):
+		return errors.New("the handover didn't take: the volume's installation isn't the one handed over to")
+	}
+	slog.Info("cliworker: handed over to the server with this boot", "boot", boot, "installation", check.installation, "seq", w.bootSeq)
+	return nil
 }
 
 // FenceDeletion runs do, the agent browsers' part of a deleted account's purge, as Forget is run:

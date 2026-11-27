@@ -855,6 +855,19 @@ func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
 			t.Errorf("the Rollback's worker-volume step doesn't have %q", want)
 		}
 	}
+	// Rolling back across account homes loses the upgraded homes for an upgrade of the rolled-back
+	// data: neither guide may promise them back that way, and both say what does bring them back.
+	guide := readRepoFile(t, "docs/install.md")
+	for name, text := range map[string]string{"the runbook's Rollback": rollback, "docs/install.md": guide} {
+		for _, promise := range []string{"copy\n   the kept volume back into it", "put it back the same way", "give the new version\nthe volume you kept"} {
+			if strings.Contains(text, promise) {
+				t.Errorf("%s promises the kept worker volume back on the next upgrade (%q)", name, promise)
+			}
+		}
+		if !strings.Contains(text, "from right before") {
+			t.Errorf("%s doesn't say the kept volume goes back only with the upgraded server's own backup", name)
+		}
+	}
 	// A rollback with no record still has a volume: the one the server has.
 	if i, j := strings.Index(rollback, `RECORDED=`), strings.Index(rollback, `[ -z "$VOLUME" ]`); i < 0 || j < i {
 		t.Error("the Rollback doesn't take the recorded volume first, and the server's own when there is none")

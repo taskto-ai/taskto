@@ -155,6 +155,8 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			if err := w.unretire(id, seq); err != nil {
 				return err
 			}
+		case r.Installation != "" && r.Installation != c.Installation:
+			// Another installation's (the volume's pin refuses its censuses; this keeps it so).
 		case !r.Retired && (r.Boot == c.Boot || r.Gen >= seq):
 			// Made by this census's server since it read its database, or made since the census was
 			// registered (by a later server, whose census is still to come). Kept.

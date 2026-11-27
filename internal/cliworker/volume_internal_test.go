@@ -129,3 +129,20 @@ func TestAnOrphanHomeKeepsTheUIDBaseFromBeingGuessed(t *testing.T) {
 		t.Error("a UID base was accepted on a volume with a home and no record of its base")
 	}
 }
+
+// A handover says it worked only if a starting worker would trust what it wrote: here what it
+// wrote is damaged before it reads it back, and it says so.
+func TestAHandoverChecksWhatItWrote(t *testing.T) {
+	layout := Layout{Root: t.TempDir()}
+	trustHookForTest = func(l Layout) {
+		_ = os.WriteFile(filepath.Join(l.Root, ".worker", "boots.json"), []byte("{"), 0o600)
+	}
+	t.Cleanup(func() { trustHookForTest = nil })
+	if err := TrustServer(layout, TestBoot, TestInstallation); err == nil {
+		t.Error("a handover whose writes a worker wouldn't trust said it worked")
+	}
+	trustHookForTest = nil
+	if err := TrustServer(layout, TestBoot, TestInstallation); err != nil {
+		t.Errorf("a sound handover: %v", err)
+	}
+}

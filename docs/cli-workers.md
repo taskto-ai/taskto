@@ -482,9 +482,11 @@ The UI shows what the command prints.
     never heard from, a later one, and an earlier server's census or deletion is always refused as
     stale. A copy of the latest that is gone or behind the history (a stop between the two
     writes) is written again from the history;
-  - if the history is lost or damaged, or doesn't reach as far as its accounts' records, or its
-    copy of the latest isn't one of it, the worker can't tell the current server from an earlier one
-    still trying: it enters the **authority-lost** state below;
+  - the history carries its count and the sha256 of its entries, and each entry must be a boot,
+    once, with numbers in increasing order; the counter must be a number in range. If the history
+    is lost, damaged or not whole, the counter is damaged, the history doesn't reach as far as its
+    accounts' records, or its copy of the latest isn't one of it, the worker can't tell the current
+    server from an earlier one still trying: it enters the **authority-lost** state below;
   - one server runs on a data directory (its lock), and a restore takes that lock too, so an
     earlier server's census can come after a later one's only if it was in flight when its server
     stopped. A census, a deletion or a browser purge whose caller has gone (its connection closed)
@@ -503,10 +505,13 @@ The UI shows what the command prints.
   to one taskto **installation**: a random id made once with the server's database
   (`cli_installation`, migration 0062), which a restore of the same data keeps and another data
   directory doesn't share, sent with every census and every account (`X-Taskto-Installation`).
-  The first census pins the volume to it, durably (`.worker/installation`). From then on a census,
-  a deletion, a browser purge or a new account of another installation is refused
-  (`other_installation`, `409`) and registers nothing; other work for the accounts the worker has
-  goes on. The boot order then only tells apart the boots of one installation, which one server
+  The first census, or the first account given a home if one comes before it, pins the volume to
+  it, durably (`.worker/installation`), and each account's record keeps its installation. From
+  then on a census, a deletion, a browser purge or a new account of another installation is
+  refused (`other_installation`, `409`) and registers nothing, and no census ever retires another
+  installation's account; other work for the accounts the worker has goes on. A volume that has
+  boots, accounts or homes and lost its binding is some installation's, and the worker can't tell
+  whose: that is the authority-lost state below, and the handover must name the installation. The boot order then only tells apart the boots of one installation, which one server
   holds at a time (a dying server's request in flight is a caller that has gone, and does nothing).
   Never run two copies of one data directory against one worker: they are one installation to it.
   Moving the volume to another installation (a cutover to a new data directory) is the operator's
@@ -538,7 +543,10 @@ The UI shows what the command prints.
      Add `-installation <installation>` to move the volume to another installation (a cutover to a
      new data directory); without it the volume stays its own installation's.
 
-     The worker's deletions and censuses from that server go through again; the server's next
+     The handover makes the counter again from the history and the records, and reports success
+     only once it has read back what it wrote as a starting worker would, and that worker would
+     trust it. It needs `-installation` when the volume lost its binding. The worker's deletions
+     and censuses from that server go through again; the server's next
      census (at its next start, or the one it tries again by itself) tidies what waited. The boot
      is the server's process's: if the server starts again before the handover, use its new one.
 
