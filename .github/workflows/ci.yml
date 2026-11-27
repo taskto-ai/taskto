@@ -245,7 +245,7 @@ jobs:
         run: |
           tar -c --exclude=.git --exclude=node_modules . | docker run -i --rm \
             golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d \
-            sh -c 'mkdir -p /w && tar -x -C /w && cd /w && go test -count=1 -v -run Isolation ./internal/cliworker/ > /tmp/out 2>&1; s=$?; cat /tmp/out; [ $s -eq 0 ] && grep -q -- "--- PASS: TestIsolationBetweenUsers" /tmp/out'
+            sh -c 'mkdir -p /w && tar -x -C /w && cd /w && go test -timeout 8m -count=1 -v -run Isolation ./internal/cliworker/ > /tmp/out 2>&1; s=$?; cat /tmp/out; [ $s -eq 0 ] && grep -q -- "--- PASS: TestIsolationBetweenUsers" /tmp/out'
 
   worker-network:
     name: CLI worker network (Docker in Docker, root)
@@ -305,7 +305,7 @@ jobs:
       # can't delete, runs the nightly schedule's backup (`taskto backup-schedule -now`) and
       # checks its status, and that it stops early and leaves nothing behind when the backup
       # host is down, restores into a server that starts, and prunes as the backup host does.
-      - run: TASKTO_BACKUP_IT=1 go test -count=1 -v -run TestAppendOnlyBackupAndRestore ./cmd/taskto/
+      - run: TASKTO_BACKUP_IT=1 go test -timeout 8m -count=1 -v -run TestAppendOnlyBackupAndRestore ./cmd/taskto/
 
   gitleaks:
     name: Secret scan
