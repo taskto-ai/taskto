@@ -973,6 +973,12 @@ func (s *Service) nextAttempt(ctx context.Context, r ref, a attempt) (ref, error
 // try noted of the ref meanwhile: the link is about to be returned, and a ref that doesn't have it would
 // let a later try make a second one. If another try noted the ref's link first, what the ref holds is
 // given, under the check every finished ref is given with (madeLink).
+//
+// Only the key that is still the ref's current one, with no outcome but made, notes its object: a try
+// that read its object open and was slow to save it, while another try saw that object expired and moved
+// the ref to the next key, never installs it (it can't be paid, and the next key's call makes the link).
+// It reads the ref again, and the entry tries again. A ref marked failed meanwhile (a late answer under
+// the same key) still notes it.
 func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Request, l Link) (paylink.Link, error) {
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -981,7 +987,9 @@ func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Re
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `
 		UPDATE integration_refs SET provider_object_id = ?, url = ?, state = 'open'
-		WHERE id = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed')`, l.ObjectID, l.URL, r.id)
+		WHERE id = ? AND provider_object_id IS NULL AND state IN ('creating', 'failed') AND key_seq = ?
+			AND EXISTS (SELECT 1 FROM integration_ref_attempts WHERE ref_id = ? AND seq = ? AND (outcome IS NULL OR outcome = 'made'))`,
+		l.ObjectID, l.URL, r.id, a.seq, a.refID, a.seq)
 	if err != nil {
 		var se *sqlite.Error
 		if errors.As(err, &se) && se.Code() == 2067 { // SQLITE_CONSTRAINT_UNIQUE: the object is another ref's
@@ -1005,6 +1013,15 @@ func (s *Service) noteLink(ctx context.Context, r ref, a attempt, req paylink.Re
 	}
 	_ = tx.Rollback()
 	// Another try noted its answer first (the same object, since the key is the same), or moved the ref
-	// on: what the ref holds now is what is given, checked as any finished ref is.
-	return s.refHolds(ctx, r, req)
+	// on: what the ref holds now is what is given, checked as any finished ref is. A ref with no link yet
+	// is on another key: the entry tries again, and resolves that one.
+	now, err := s.refByID(ctx, r.id)
+	if err != nil {
+		return paylink.Link{}, err
+	}
+	if now.objectID == "" && !paidWithoutLink(now) {
+		slog.Info("integrations: an old key's object was not saved: the ref moved on", "ref", r.id)
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
+	}
+	return madeLink(now, req)
 }
