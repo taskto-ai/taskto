@@ -165,13 +165,14 @@ function DiffBody({ diff }: { diff: Shown }) {
 
 function DiffRow({ line, parts }: { line: Line; parts: WordPart[] | undefined }) {
   const t = useT()
+  const f = useFormat()
   return (
     <tr className={`kb-diff-row kb-diff-${line.kind}`}>
       <td className="kb-diff-num" aria-hidden="true">
-        {line.aLine}
+        {line.aLine === undefined ? null : f.number(line.aLine)}
       </td>
       <td className="kb-diff-num" aria-hidden="true">
-        {line.bLine}
+        {line.bLine === undefined ? null : f.number(line.bLine)}
       </td>
       <td className="kb-diff-code">
         {line.kind !== 'same' && (
