@@ -8,6 +8,7 @@ import { App } from '../App'
 import { api, type Me } from '../api'
 import { cleanUpAfterSignOut, finishUnfinishedSignOuts } from '../signOut'
 import { fakeFetch } from '../test/fakes'
+import { StorageUnavailable } from './idb'
 import {
   backFromSignOut,
   browserLogin,
@@ -1720,7 +1721,7 @@ test("a discard whose check of a database another tab already deleted outlasts t
   expect(await databases()).not.toContain('taskto-offline-7')
 })
 
-test("a start whose upgrade committed before the account's lock ran out, with the open's success still queued, leaves no database made", async () => {
+test("a start whose upgrade committed before the account's lock ran out, with the open's success still queued, reports the delay and never deletes once the lock is gone", async () => {
   fakeLocks()
   const overs: (() => void)[] = []
   lockTimes.holdOver = (_ms, over) => {
@@ -1744,7 +1745,7 @@ test("a start whose upgrade committed before the account's lock ran out, with th
     })
     return request
   })
-  await expect(OfflineStore.open(7)).rejects.toThrow()
+  await expect(OfflineStore.open(7)).rejects.toThrow(StorageUnavailable)
   await new Promise((done) => setTimeout(done, 50))
-  expect(await databases()).not.toContain('taskto-offline-7')
+  expect(await databases()).toContain('taskto-offline-7')
 })

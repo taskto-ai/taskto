@@ -331,7 +331,6 @@ export class OfflineStore {
     } catch {}
     if (expired()) {
       db.close()
-      if (made) await deleteDatabase(name).catch(() => {})
       throw new StorageUnavailable('the offline database took too long')
     }
     if (!still()) return giveUp(db, new Superseded())
