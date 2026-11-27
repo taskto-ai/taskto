@@ -144,8 +144,8 @@ func (k *Key) Seal(plaintext, ad []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	out := make([]byte, 0, 1+len(nonce)+len(plaintext)+k.aead.Overhead())
-	out = append(append(out, version), nonce...)
+	// No size worked out ahead: Seal appends what it needs.
+	out := append([]byte{version}, nonce...)
 	return k.aead.Seal(out, nonce, plaintext, ad), nil
 }
 
