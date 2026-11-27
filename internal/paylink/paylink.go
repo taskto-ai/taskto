@@ -70,6 +70,12 @@ type Request struct {
 	Amount, Currency string
 	// Description is the text the payer reads.
 	Description string
+	// LookupOnly asks only for what the entry's reference already made: a link it saved, or the object
+	// a call whose outcome is unknown may have made, looked for by its token. Nothing is sent to the
+	// provider that could make a link, under the same key or a new one (the record no longer meets the
+	// action's condition). With nothing to find it fails: the lookup's wait while a key's outcome is
+	// unknown, and integration_condition_changed once nothing can exist.
+	LookupOnly bool
 }
 
 // Link is what the provider made.

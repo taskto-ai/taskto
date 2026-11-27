@@ -194,15 +194,17 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	p := e.payload
 	g, err := s.paymentSnapshot(ctx, e)
+	lookupOnly := false
 	if isCode(err, apierr.CodeIntegrationConditionChanged) {
 		res, resolve, uerr := s.paymentConditionUnmet(ctx, e, g)
 		if !resolve {
 			return res, uerr
 		}
 		// The entry's reference may hold an object nobody has seen: the entry stays on its key's lookup
-		// (the integration's side looks for it, and waits, and fails for an admin), and the write's own
-		// check of the condition then says the link was made and kept.
-		err = nil
+		// (the integration's side looks for it, and waits, and fails for an admin), never sending a call
+		// that could make a link for a record that doesn't qualify, and the write's own check of the
+		// condition then says what it found was made and kept.
+		err, lookupOnly = nil, true
 	}
 	if err != nil {
 		return nil, err
@@ -217,6 +219,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
 		Slot: p.Slot, URLField: p.URLField, AmountField: p.AmountField, CurrencyField: p.CurrencyField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
+		LookupOnly: lookupOnly,
 	})
 	if err != nil {
 		var pe *paylink.Error

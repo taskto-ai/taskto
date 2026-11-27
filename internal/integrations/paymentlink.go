@@ -140,6 +140,9 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 	if found && ref.integrationID != req.IntegrationID {
 		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationChanged} // before anything is asked of anyone
 	}
+	if !found && req.LookupOnly {
+		return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationConditionChanged} // nothing was made
+	}
 	// A failure that tells nothing (the provider didn't answer) waits on the reconciliation's schedule
 	// while the ref's key has an unknown outcome, and is an ordinary transient failure otherwise.
 	var pending *attempt
@@ -275,6 +278,14 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			}
 		}
 
+		// Only looking: nothing is sent that could make a link. A key whose outcome is unknown waits on
+		// the lookup (and then an admin decides); a fresh one (after an expired key) holds nothing.
+		if req.LookupOnly {
+			if a.unknown() {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+			return paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationConditionChanged}
+		}
 		// The admin's limits as they are now, read again right before the call leaves: a try that moved on
 		// from an expired key asks for a new link, and a ceiling lowered since the try began refuses it.
 		// A key whose outcome is unknown is not asked again past them; it is only looked for.
