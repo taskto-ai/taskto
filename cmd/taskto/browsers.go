@@ -76,7 +76,14 @@ func (p purgeBrowsers) Forget(ctx context.Context, user int64) error {
 	} else if !errors.Is(err, cliworker.ErrForgotten) {
 		return err
 	}
-	return p.b.Forget(ctx, a)
+	err := p.b.Forget(ctx, a)
+	if errors.Is(err, cliowner.ErrCensusNeeded) {
+		// The CLI worker started again without its list of boots: this server's census sets it.
+		if err = p.cli.ReconcileForgotten(ctx); err == nil || errors.Is(err, cliworker.ErrIncomplete) {
+			err = p.b.Forget(ctx, a)
+		}
+	}
+	return err
 }
 
 // browserUsable is the CLI workers' rule for the agent browser (cli.Usable).

@@ -140,6 +140,17 @@ func TestASecondWorkerOnTheVolumeDoesNotStart(t *testing.T) {
 	if st, err := h.w.Status(context.Background(), acct(1), cliworker.Claude, ""); err != nil || st.LoggedIn {
 		t.Errorf("the first worker after the second's attempt: %+v %v", st, err)
 	}
+	// Nor does it change the layout root's mode the first one set (a worker of another mode would
+	// set another: 711 with isolation, 700 without).
+	if err := os.Chmod(h.layout.Root, 0o711); err != nil { //nolint:gosec // G302: the test's own directory
+		t.Fatal(err)
+	}
+	if w, err := cliworker.New(h.cfg); err == nil {
+		w.Close()
+	}
+	if fi, err := os.Stat(h.layout.Root); err != nil || fi.Mode().Perm() != 0o711 {
+		t.Errorf("the second worker changed the root's mode: %v %v", fi.Mode().Perm(), err)
+	}
 	h.reopen(t)
 }
 

@@ -89,6 +89,9 @@ type Worker struct {
 	helpersBuilt   atomic.Int64
 	// dialHookForTest, in tests, runs in a live view's dial between its admission and its helper.
 	dialHookForTest func()
+	// retiredHookForTest, in tests, runs as a census has recorded an account's retirement, before
+	// it stops what runs for it.
+	retiredHookForTest func(identity string)
 	// arrivedHookForTest, in tests, runs as a census has taken its number, before it waits for
 	// the census lock.
 	arrivedHookForTest func(boot string)
@@ -216,12 +219,15 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.MkdirAll(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
-		return nil, err
-	}
 	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[string]int{}, accounts: map[string]accountRecord{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
 	// The volume first: its lock before anything of a worker's is swept, listened on or written.
 	if err := w.openVolume(); err != nil {
+		w.closeVolume()
+		return nil, err
+	}
+	// Only the worker that holds the volume sets its root's mode: a second one, refused, changes
+	// nothing of the first's (whose users pass through the root to their homes).
+	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
 		w.closeVolume()
 		return nil, err
 	}

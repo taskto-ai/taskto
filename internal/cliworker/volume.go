@@ -409,14 +409,19 @@ func (w *Worker) registerCensus(c Census, n int64) (int64, error) {
 
 // deletionFence admits a deletion (Forget, a browser purge) only from the latest registered boot:
 // one an earlier server sent, delayed past a restore that brought the account back, retires and
-// removes nothing. On a volume that never had a census there is nothing to fence against; one
-// whose list of boots was lost refuses until a census registers one again. The caller holds
-// w.censusMu.
+// removes nothing (ErrStaleBoot). On a volume that never had a census there is nothing to fence
+// against. One whose list of boots was lost can't tell which boot is the latest: it asks for a
+// census (cliowner.ErrCensusNeeded), which the live server sends before it tries again, and which
+// sets the latest boot. The caller holds w.censusMu.
 func (w *Worker) deletionFence(boot string) error {
 	if w.latestSeq() == 0 {
 		return nil
 	}
-	if latest := w.latestBoot(); latest != "" && boot == latest {
+	latest := w.latestBoot()
+	switch {
+	case latest == "":
+		return cliowner.ErrCensusNeeded
+	case boot == latest:
 		return nil
 	}
 	return ErrStaleBoot

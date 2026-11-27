@@ -348,7 +348,14 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	if s.worker == nil {
 		return ErrOff
 	}
-	if err := s.worker.Forget(ctx, user); err != nil {
+	err := s.worker.Forget(ctx, user)
+	if errors.Is(err, cliowner.ErrCensusNeeded) {
+		// The worker started again without its list of boots: this server's census sets it.
+		if err = s.ReconcileForgotten(ctx); err == nil || errors.Is(err, cliworker.ErrIncomplete) {
+			err = s.worker.Forget(ctx, user)
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("removing the CLI worker's files of user %d: %w", user, err)
 	}
 	s.mu.Lock()

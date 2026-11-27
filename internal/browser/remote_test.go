@@ -8,9 +8,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 // The worker's API and the server's client of it, over a Unix socket as in container mode.
@@ -152,5 +155,30 @@ func TestRemoteErrorOrder(t *testing.T) {
 		if remoteErrors[name] == nil {
 			t.Errorf("%s isn't an error", name)
 		}
+	}
+}
+
+// The CLI worker's request for a census, refusing a purge, reaches the server as itself over the
+// worker's socket: the server then sends its census and tries the purge again.
+func TestAPurgeRefusedForACensusSaysSoOverTheSocket(t *testing.T) {
+	m := NewManager(Config{Host: &fakeHost{log: filepath.Join(t.TempDir(), "log")}, Fence: func(context.Context, cliowner.Account, func() error) error {
+		return cliowner.ErrCensusNeeded
+	}})
+	t.Cleanup(m.Close)
+	dir, err := os.MkdirTemp("/tmp", "br")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "w.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: NewHandler(m), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	if err := NewRemote(sock).Forget(context.Background(), acct(1)); !errors.Is(err, cliowner.ErrCensusNeeded) {
+		t.Errorf("the purge over the socket: %v, want ErrCensusNeeded", err)
 	}
 }

@@ -5,7 +5,16 @@
 // account given the number since (docs/cli-workers.md).
 package cliowner
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrCensusNeeded is the CLI worker's answer to a deletion when it has lost the list of server
+// boots it orders deletions by (a worker started again without it): the server sends its census,
+// which sets the latest boot again, and tries the deletion again. A deletion an earlier server
+// sent is refused otherwise (cliworker.ErrStaleBoot), and stays refused.
+var ErrCensusNeeded = errors.New("the CLI worker needs this server's census before a deletion")
 
 type key struct{}
 

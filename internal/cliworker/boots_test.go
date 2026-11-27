@@ -65,8 +65,8 @@ func TestALostListOfBootsLeavesNoAccountUnretired(t *testing.T) {
 	}
 	h.reopen(t)
 	later := strings.Repeat("c", 32)
-	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); !errors.Is(err, cliworker.ErrStaleBoot) {
-		t.Errorf("a deletion before a census set the order again: %v, want ErrStaleBoot", err)
+	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: later}); !errors.Is(err, cliowner.ErrCensusNeeded) {
+		t.Errorf("a deletion before a census set the order again: %v, want ErrCensusNeeded", err)
 	}
 	if err := h.w.Reconcile(ctx, bootCensus(later, time.Now(), nil)); err != nil {
 		t.Fatal(err)
@@ -202,5 +202,37 @@ func TestTheCensusThatArrivesFirstHasTheEarlierNumber(t *testing.T) {
 	}
 	if a == 0 {
 		t.Error("the first census took no number as it arrived")
+	}
+}
+
+// A census whose caller goes just after it recorded an account's retirement still stops what runs
+// for the account: retired and stopped are one step. Then the census is tried again, and succeeds,
+// and the account's first turn, admitted before and slow to make its home, makes none.
+func TestACensusCancelledAfterARetirementStillStopsTheWork(t *testing.T) {
+	h := newHarness(t, func(c *cliworker.Config) { c.Helper = slowHelper(t) })
+	ctx := context.Background()
+	turn, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := h.layout.Home(h.w.HomeForTest(acct(1))).Root
+	cctx, cancel := context.WithCancel(ctx)
+	h.w.SetRetiredHookForTest(func(id string) {
+		if id == cliworker.IdentityForTest(1) {
+			cancel() // the server goes right after the retirement is recorded
+		}
+	})
+	later := bootCensus(strings.Repeat("a", 32), time.Now(), nil)
+	_ = h.w.Reconcile(cctx, later) // canceled part way: whatever it answers
+	h.w.SetRetiredHookForTest(nil)
+	if err := h.w.Reconcile(ctx, later); err != nil {
+		t.Fatalf("the census tried again: %v", err)
+	}
+	if d := last(waitDone(t, turn, 20*time.Second)); d.Status == cliworker.StatusOK {
+		t.Errorf("the retired account's turn finished: %+v", d)
+	}
+	time.Sleep(1500 * time.Millisecond) // past the helper's wait
+	if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a retired account's home was made after its census: %v", err)
 	}
 }

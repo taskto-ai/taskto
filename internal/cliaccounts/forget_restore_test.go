@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -246,4 +248,36 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 		t.Errorf("an account that is live and not being purged is refused: %v", err)
 	}
 	_ = e.svc.worker.CancelLogin(other, cliworker.Claude, "")
+}
+
+// A CLI worker started again on its own, having lost its list of server boots, can't tell which
+// boot is the latest: it asks for a census before a deletion, and the live server sends it and
+// tries again, so the deletion completes without the server starting again.
+func TestADeletionCompletesAfterTheWorkerAloneStartsAgain(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, Container, nil)
+	user := newUser(t, e.db, "leaving@example.com")
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dirs := e.dirs(user)
+	e.worker.Close()
+	if err := os.Remove(filepath.Join(e.layout.Root, ".worker", "boots.json")); err != nil {
+		t.Fatal(err)
+	}
+	again, err := cliworker.New(cliworker.Config{Layout: e.layout, UnsafePrivileged: os.Geteuid() == 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(again.Close)
+	e.svc.worker = accountWorker{w: LocalWorker(again), s: e.svc}
+	if err := e.svc.Forget(ctx, user); err != nil {
+		t.Fatalf("the deletion after the worker started again: %v", err)
+	}
+	if _, err := os.Stat(dirs.Root); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the deleted account's home remains: %v", err)
+	}
+	if _, err := again.AccountDirs(accountIn(t, e.svc, user), "", ""); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Errorf("the deleted account after its deletion: %v, want ErrForgotten", err)
+	}
 }

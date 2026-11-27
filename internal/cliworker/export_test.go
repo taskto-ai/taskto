@@ -169,3 +169,7 @@ func (w *Worker) LatestBootForTest() string { return w.latestBoot() }
 
 // SetArrivedHookForTest has f run as a census has taken its number, before it waits for the lock.
 func (w *Worker) SetArrivedHookForTest(f func(boot string)) { w.arrivedHookForTest = f }
+
+// SetRetiredHookForTest has f run as a census has recorded an account's retirement, before it
+// stops what runs for it.
+func (w *Worker) SetRetiredHookForTest(f func(identity string)) { w.retiredHookForTest = f }

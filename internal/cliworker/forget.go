@@ -165,10 +165,16 @@ func (w *Worker) Reconcile(ctx context.Context, c Census) error {
 			if err != nil {
 				return err
 			}
+			if hook := w.retiredHookForTest; hook != nil {
+				hook(id)
+			}
 			if r.Home == 0 {
 				continue
 			}
-			if err := w.tidy(ctx, account{id: id, user: r.User, home: r.Home}, already); err != nil {
+			// Retired and stopped are one step: once the retirement is recorded, what runs for the
+			// account is stopped even if the caller has gone meanwhile. A retry that finds it
+			// retired would otherwise not stop it (tidy).
+			if err := w.tidy(context.WithoutCancel(ctx), account{id: id, user: r.User, home: r.Home}, already); err != nil {
 				if ctx.Err() != nil {
 					return errors.Join(append(errs, err)...)
 				}

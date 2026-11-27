@@ -403,7 +403,7 @@ The UI shows what the command prints.
   common run one after the other (a disconnect, a second one, a `Forget` of the user): the helper
   requests of one, the sign-out and the removal of the files, never overlap another's. A caller
   that has already given up (its context ended) starts none.
-- **Accounts and their homes.** A user number names an account only within one history of the
+- <a id="accounts-and-their-homes"></a>**Accounts and their homes.** A user number names an account only within one history of the
   server's database: a restore of the server's data goes back in it and gives the numbers after
   the backup again, while the worker's directory (the `cli-homes` volume in container mode) is not
   part of the backup. So the worker keys nothing by a user number. Each account has an identity
@@ -475,16 +475,22 @@ The UI shows what the command prints.
     running now) stays;
   - a deletion (`Forget`, and the agent browsers' purge in the worker, `FenceDeletion`) is taken
     only from the latest registered boot, and retires the account before it stops or removes
-    anything. The server sends its boot with every deletion, the purge's too;
+    anything. The server sends its boot with every deletion, the purge's too. A worker started
+    again without its list of boots can't tell which boot is the latest: it answers a deletion
+    with `census_needed` (`409`), and the live server sends its census, which sets it, and tries
+    the deletion again, the browsers' purge too;
   - the list of boots (`.worker/boots.json`, the last 4096) only names the latest one, for
     deletions: what a census retires is decided by the records' numbers, never by the list. With
-    the list lost, damaged or past its bound, no account is taken for a later server's; deletions
-    wait for the next census, which sets the latest boot again;
+    the list lost, damaged or past its bound, no account is taken for a later server's; a deletion
+    asks for a census first (`census_needed`, above), which sets the latest boot again;
   - one server runs on a data directory (its lock), and a restore takes that lock too, so an
     earlier server's census can come after a later one's only if it was in flight when its server
     stopped. A census, a deletion or a browser purge whose caller has gone (its connection closed)
     does nothing and registers nothing: that is checked once it has the lock, and again before
     each retirement, so a dead server's queued census never retires anything;
+  - once a census has recorded an account's retirement, it stops what runs for the account even if
+    its caller goes meanwhile: retired and stopped are one step, so a retry never finds an account
+    retired with its work still running;
   - censuses and deletions run one at a time, so no boot is registered between a decision and
     what it decides. The server stops
     trying a census the worker calls stale (a later server has spoken to the worker), and logs it.

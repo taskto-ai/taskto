@@ -56,7 +56,7 @@ var _ Browsers = (*Remote)(nil)
 // "invalid" for a BadAction; the message is the Manager's, written for the agent.
 
 // remoteErrorOrder is the order refuse tries remoteErrors in.
-var remoteErrorOrder = []string{"closed", "unavailable", "busy", "not_running", "too_many_live", "no_tab", "stale_ref", "not_agent_tab", "account_closing"}
+var remoteErrorOrder = []string{"closed", "unavailable", "busy", "not_running", "too_many_live", "no_tab", "stale_ref", "not_agent_tab", "account_closing", "census_needed"}
 
 var remoteErrors = map[string]error{
 	"unavailable":     ErrUnavailable,
@@ -68,6 +68,7 @@ var remoteErrors = map[string]error{
 	"closed":          ErrClosed,
 	"too_many_live":   ErrTooManyLive,
 	"account_closing": ErrAccountClosing,
+	"census_needed":   cliowner.ErrCensusNeeded,
 }
 
 // upgradeProtocol is the live view's protocol on the worker's socket.
