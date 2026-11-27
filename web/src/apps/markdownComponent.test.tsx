@@ -15,7 +15,7 @@ function messages() {
       updateComponents: {
         surfaceId: 'notes',
         components: [
-          { id: 'root', component: 'Column', children: ['title', 'notes', 'bound'] },
+          { id: 'root', component: 'Column', children: ['title', 'notes', 'bound', 'missing'] },
           { id: 'title', component: 'Text', text: 'Meeting notes', variant: 'h2' },
           {
             id: 'notes',
@@ -23,6 +23,7 @@ function messages() {
             text: '# Plan\n\nSome **bold**, a [link](https://example.com/x) and <script>alert(1)</script>.\n\n- one\n- two',
           },
           { id: 'bound', component: 'Markdown', text: { path: '/record/notes' } },
+          { id: 'missing', component: 'Markdown', text: { path: '/record/missing' } },
         ],
       },
     },
@@ -43,7 +44,7 @@ test('draws formatted text, from a literal and a record, with links as text and 
   )
   await screen.findByText('Meeting notes')
   await screen.findByText('From a record')
-  const [text, record] = container.querySelectorAll('.ui-app-markdown') as NodeListOf<HTMLElement>
+  const [text, record, missing] = container.querySelectorAll('.ui-app-markdown') as NodeListOf<HTMLElement>
   expect(text.querySelector('h3')?.textContent).toBe('Plan')
   expect(record.querySelector('h4')?.textContent).toBe('From a record')
   expect(text.querySelector('strong')?.textContent).toBe('bold')
@@ -52,4 +53,6 @@ test('draws formatted text, from a literal and a record, with links as text and 
   expect(text.textContent).toContain('link (https://example.com/x)')
   expect(text.querySelector('script, img')).toBeNull()
   expect(text.textContent).toContain('<script>alert(1)</script>')
+  // A binding with no value yet renders nothing instead of failing.
+  expect(missing.textContent).toBe('')
 })
