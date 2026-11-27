@@ -86,7 +86,11 @@ here: M). They are not the server's totals.* The summaries (count, sum, with the
 uses the device's clock for the current month, over the rows with a real date there; a client
 too old to know `month_of` asks to be updated and draws no app that uses it) are
 recomputed from those records with the same rules the server uses
-([`rules.ts`](../web/src/apps/rules.ts)).
+([`rules.ts`](../web/src/apps/rules.ts)). A date is `YYYY-MM-DD` and must exist on the calendar
+(`2026-02-30` and `2026-04-31` are not dates, `2028-02-29` is): the device checks a date it is
+given, and the rows a `month_of` summary counts, with [`dates.ts`](../web/src/offline/dates.ts),
+and the server and the device are tested against the same list of dates
+(`internal/apps/testdata/dates.json`).
 
 ## The outbox
 
