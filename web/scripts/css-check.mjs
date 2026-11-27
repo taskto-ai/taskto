@@ -1,65 +1,9 @@
 #!/usr/bin/env node
-// Checks the web app's stylesheets (every .css file under src/: the design system's files in src/ui/,
-// the screens' beside their components, and styles.css, the list that imports those) against each
-// other and against the components. CI runs it; so can anyone:
-// `pnpm --filter @taskto/web run css`.
-//
-// Fails on:
-// - a `.tt-` or `.ui-` selector declared more than once at the top level, in one file or across files (a
-//   second rule with the same selector silently overrides or merges with the first; a state or a
-//   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
-//   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
-// - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
-// - the reverse for the old classes: a rule naming a `tt-` class that no module mentions (a dead rule,
-//   left behind when a screen moved onto the components; see unusedClassErrors);
-// - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
-//   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
-//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
-// - under src/ui/, apart from the files that define the tokens (tokens.css, themes/, and the old
-//   names' aliases in legacy.css): a font size, a spacing value (margin, padding, gap), a radius, a
-//   shadow or a duration written as a literal, not as a token (var(--space-…), var(--text-…) …).
-//   A few literals are not on any scale and are allowed: SCALE_LITERALS, each with its reason. The
-//   screens' older stylesheets are not held to this until they are rebuilt.
-// - a rule in a stylesheet outside src/ui/, or in src/ui/base.css, that can match an element
-//   wherever it is (by its name, a state, a pseudo-element, an attribute, `*`; not `.tt-x h2`) and
-//   doesn't leave the design system's elements out with OPT_OUT, unless EVERYWHERE lists its
-//   selector and every property it sets: such a rule would beat the components' own styles (in no
-//   layer whatever their specificity; in base.css only if it left its layer);
-// - how the app loads its stylesheets, when the root has the app's entry (src/main.tsx): its first
-//   import is ui/index.css, which declares the layers' order before any stylesheet uses one; every
-//   .css under src/ is loaded exactly one way (listed in src/styles.css, imported by
-//   src/ui/index.css, or imported by a module); src/styles.css is nothing but OLD_STYLESHEETS, in
-//   that order, each a plain @import; those files declare no layer, apart from ui/base.css, which
-//   is one @layer base block, then in no layer only rules EVERYWHERE allows, and last the touch
-//   screen's @media (pointer: coarse) block, its rules opting out (docs/design.md, "Where styles
-//   live").
-//
-// Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
-// components by looking at what each className holds.
-//
-// What it sees, and what it doesn't:
-// - In the stylesheet, a class is a `.tt-name` selector. An attribute selector's value
-//   (`[data-state="tt-name"]`), a string, a comment and an `@keyframes` name are not classes.
-// - In a component, a class is a `tt-` name inside a className: a string, or an expression (a
-//   template, a conditional, a join), and the strings of a lookup table that a constant holds:
-//   `const NAME = { ok: 'tt-ok' }` or `const NAME = ['tt-a', 'tt-b']`, with the name in capitals,
-//   in the same file (a map imported from another file is read there), and the strings of an
-//   array a constant of any name holds (`const cls = ['ui-a', big ? 'ui-a-big' : '']`, the way the
-//   components build their classes). A string that is only a class name in another kind of
-//   constant (`const cls = 'ui-a'`), or built from pieces (`'tt-' + kind`), is not seen: such a
-//   class has to be written out in the stylesheet's component anyway, and the check can't tell it
-//   is missing.
-//
-// --root <dir> checks another web directory (its src/ and the stylesheets in it), for the script's
-// tests.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Classes that components use as hooks (for tests, for scripts, or to say what an element is)
-// and that deliberately have no rule. Each needs a reason; a class that is merely not styled yet
-// gets a rule, not an entry here.
 export const UNSTYLED = new Map([
   [
     'ui-control',
@@ -67,27 +11,19 @@ export const UNSTYLED = new Map([
   ],
 ])
 
-// The app's own classes: `tt-` (the screens) and `ui-` (the design system's components, src/ui/).
 const CLASS = /(?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*/g
-// A class selector: the name after a dot.
 const CLASS_SELECTOR = /\.((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
 
-// The class selectors of a rule's prelude, without what is inside an attribute selector's
-// brackets or a string.
 export function classSelectors(prelude) {
   const bare = prelude.replace(/\[[^\]]*\]/g, '').replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
   return [...bare.matchAll(CLASS_SELECTOR)].map((m) => m[1])
 }
 
-// The stylesheet's rules at the top level (at depth 0, or inside `@layer` blocks only): each with
-// its selector list and the classes it names. Other at-rules (@media, @keyframes, @font-face …) are
-// not rules here, but the classes inside an at-rule's block still count as styled. And every
-// declaration, with its line, for the colour check.
 export function scan(css) {
-  const top = [] // selectors declared at the top level, each with its line
+  const top = []
   const mentioned = new Set()
-  const declarations = [] // { property, value, line }
-  const blocks = [] // for each open block: 'layer', 'at' (another at-rule) or 'rule'
+  const declarations = []
+  const blocks = []
   let depth = 0
   let prelude = ''
   let preludeLine = 1
@@ -138,8 +74,6 @@ export function scan(css) {
   }
   return { top, mentioned, declarations }
 
-  // A declaration is `property: value` in any block: a rule's, or an at-rule's that holds
-  // declarations (@property, @font-face, @page). A selector ends at `{`, so it never gets here.
   function declaration(text, at) {
     if (blocks.length === 0) return
     const colon = text.indexOf(':')
@@ -150,7 +84,6 @@ export function scan(css) {
   }
 }
 
-// The colours CSS knows by name (CSS Color 4), and the colour functions.
 const NAMED_COLORS = new Set(
   (
     'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown ' +
@@ -169,8 +102,6 @@ const NAMED_COLORS = new Set(
     'saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey ' +
     'snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow ' +
     'yellowgreen ' +
-    // The system colours (CSS Color 4, and the deprecated ones browsers still take): the
-    // browser's or the OS's colours, which no theme sets, so they are literals here too.
     'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field ' +
     'fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext ' +
     'visitedtext activeborder activecaption appworkspace background buttonhighlight buttonshadow ' +
@@ -182,8 +113,6 @@ const NAMED_COLORS = new Set(
 const COLOR_FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i
 const HEX = /#[0-9a-fA-F]{3,8}(?![\w-])/
 
-// Properties whose words are names the author picks (an animation, a font, a grid area …), where
-// `red` is an identifier and not a colour. Hex colours and colour functions are still looked for.
 const IDENTIFIER_PROPERTIES = new Set([
   'animation',
   'animation-name',
@@ -207,11 +136,8 @@ const IDENTIFIER_PROPERTIES = new Set([
   'will-change',
 ])
 
-// What is inside the parentheses of a value's functions; the rest is blanked. The fallback of a
-// var() at the value's top level is blanked too: it stands where an identifier would. A var()
-// inside another function (a gradient's colour stop) keeps its fallback looked in.
 function functionArguments(value) {
-  const stack = [] // for each open parenthesis: is it a var()'s?
+  const stack = []
   let out = ''
   for (let i = 0; i < value.length; i++) {
     const c = value[i]
@@ -223,8 +149,6 @@ function functionArguments(value) {
   return out
 }
 
-// The colour literal a declaration's value holds, if any: not in a string, a url() or a custom
-// property's name, and a colour's name not where a name is an identifier.
 export function colorLiteral(value, property = '') {
   const bare = value
     .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
@@ -234,8 +158,6 @@ export function colorLiteral(value, property = '') {
   if (hex) return hex[0]
   const fn = COLOR_FUNCTION.exec(bare)
   if (fn) return `${fn[0]})`
-  // Where words are names the author picks, only a function's arguments can hold a colour's name
-  // (`list-style: linear-gradient(red, blue)`); a bare `red` there is an identifier.
   const words = IDENTIFIER_PROPERTIES.has(property.toLowerCase()) ? functionArguments(bare) : bare
   for (const word of words.matchAll(/(?<![\w-])[a-zA-Z]+(?![\w-])/g)) {
     if (NAMED_COLORS.has(word[0].toLowerCase())) return word[0]
@@ -243,7 +165,6 @@ export function colorLiteral(value, property = '') {
   return undefined
 }
 
-// "a, b > c" → ["a", "b > c"], not splitting inside parentheses (:is(a, b)).
 function splitSelectors(text) {
   const out = []
   let depth = 0
@@ -260,16 +181,13 @@ function splitSelectors(text) {
   return out.map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
 }
 
-// The `tt-` classes inside what a component passes as className: a string, or an expression
-// (a template, a conditional, a join) read up to its closing brace.
 export function classesUsed(raw) {
   const source = blankComments(raw)
-  const used = new Map() // class → offset of the first use
+  const used = new Map()
   for (const m of source.matchAll(/\bclassName\s*=\s*/g)) {
     const start = m.index + m[0].length
     const end = expressionEnd(source, start)
     for (const c of source.slice(start, end).matchAll(CLASS)) {
-      // A whole class name only: not `--tt-fg` (a custom property), nor the end of `not-tt-x`.
       if (/[\w-]/.test(source[start + c.index - 1] ?? '')) continue
       if (!used.has(c[0])) used.set(c[0], start + c.index)
     }
@@ -278,11 +196,6 @@ export function classesUsed(raw) {
   return used
 }
 
-// The strings of the lookup tables a component declares (`const NAME = { ok: 'tt-ok' }`,
-// `const NAME = ['tt-a']`; a name in capitals) that are class names only.
-// The source with its comments replaced by spaces (newlines kept, so offsets and lines stay):
-// `// className="tt-old"` and `{/* className="tt-old" */}` use nothing. Strings and templates are
-// skipped whole, so a `//` in a URL is not a comment.
 export function blankComments(source) {
   let out = ''
   for (let i = 0; i < source.length; ) {
@@ -310,8 +223,6 @@ export function blankComments(source) {
 }
 
 function tableClasses(source, used) {
-  // A table in capitals (an object or an array), or an array a component builds its classes from,
-  // whatever its name, typed or not: `const cls: string[] = ['ui-button', big ? 'ui-button-big' : '']`.
   for (const m of source.matchAll(/\bconst\s+(?:[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])|[a-z]\w*\b[^=\n]*=\s*(?=\[))/g)) {
     const start = m.index + m[0].length
     const end = tableEnd(source, start)
@@ -326,7 +237,6 @@ function tableClasses(source, used) {
   }
 }
 
-// The end of the {…} or […] that begins at start.
 function tableEnd(s, start) {
   let depth = 0
   for (let i = start; i < s.length; i++) {
@@ -365,7 +275,6 @@ function skipString(s, i, q) {
   return j
 }
 
-// A template literal, whose ${ } holes hold code (and may hold templates).
 function skipTemplate(s, i) {
   let j = i + 1
   while (j < s.length && s[j] !== '`') {
@@ -402,27 +311,15 @@ function stylesheets(dir, out = []) {
   return out
 }
 
-// Where the colour literals live: the brand themes, and nowhere else.
 const THEMES = 'src/ui/themes/'
 
-// --- How the app loads its stylesheets -------------------------------------------------------
-
-// The rules of the one stylesheet the app had before its design system, now in files of their own,
-// as src/styles.css lists them: the order is the cascade (most are in no layer, where the later of
-// two equal rules wins), so it is pinned here. A screen's new stylesheet is not one of these: its
-// component imports it. Paths are under src/.
 export const OLD_STYLESHEETS = ['ui/base.css', 'legacy-shared.css', 'markdown.legacy.css']
 const LIST = 'src/styles.css'
-// The cascade layers, in order, as ui/index.css and index.html declare them.
 export const LAYERS = ['tokens', 'themes', 'base', 'components', 'screens']
 const ENTRY = 'src/main.tsx'
 const DESIGN_ENTRY = 'src/ui/index.css'
 const BASE = 'src/ui/base.css'
 
-// A stylesheet's top-level statements: `@import`s with their url and what follows it, and blocks
-// with their prelude, comments left out.
-// The stylesheet with its comments blanked (newlines kept, so offsets and lines stay); a `/*`
-// inside a string is not a comment.
 export function blankCssComments(css) {
   let out = ''
   for (let i = 0; i < css.length; ) {
@@ -466,7 +363,6 @@ export function topLevel(css) {
     const prelude = text.slice(i, j).trim().replace(/\s+/g, ' ')
     const line = text.slice(0, i).split('\n').length
     if (text[j] === '{') {
-      // To the block's end: braces inside a string (`content: "}"`) or escaped are not the block's.
       let depth = 0
       for (; j < text.length; j++) {
         const c = text[j]
@@ -491,10 +387,6 @@ export function topLevel(css) {
   return out
 }
 
-// The .css files a module imports for their styles (`import './x.css'`), resolved under the root:
-// not `?raw` or `?url`, which load no style.
-// The modules the app reaches from its entry: static imports, re-exports and dynamic import(),
-// by relative path (with or without the extension, or a folder's index).
 function reachable(web) {
   const seen = new Set()
   const todo = [join(web, ENTRY)]
@@ -515,7 +407,6 @@ function reachable(web) {
       const next = resolveModule(path, m[1].replace(/\?.*$/, ''))
       if (next && !seen.has(next)) todo.push(next)
     }
-    // import.meta.glob('./*.gallery.tsx'): every file in that folder its pattern matches.
     for (const m of source.matchAll(/\bimport\.meta\.glob(?:<[^>]*>)?\(\s*["'](\.{1,2}\/[^"']*)["']/g)) {
       const dir = join(dirname(path), dirname(m[1]))
       const name = m[1].split('/').pop()
@@ -528,7 +419,7 @@ function reachable(web) {
 }
 
 function moduleImports(web) {
-  const out = new Map() // file → the modules that import it
+  const out = new Map()
   const live = reachable(web)
   for (const path of components(join(web, 'src'))) {
     if (!live.has(path)) continue
@@ -544,7 +435,6 @@ function moduleImports(web) {
   return out
 }
 
-// The files a stylesheet @imports, resolved under the root.
 function cssImports(web, file) {
   if (!existsSync(join(web, file))) return []
   return topLevel(readFileSync(join(web, file), 'utf8'))
@@ -557,8 +447,6 @@ function cssImports(web, file) {
     }))
 }
 
-// The old stylesheets as src/styles.css lists them, read, in order: what the tests of the old
-// rules read (the list itself holds no rule). Missing files are left out.
 export function oldStylesheets(web) {
   return cssImports(web, LIST)
     .filter((s) => existsSync(join(web, s.file)))
@@ -567,7 +455,6 @@ export function oldStylesheets(web) {
 
 function loadingErrors(web, sheets) {
   const errors = []
-  // The entry's first import: the layers are declared by the first stylesheet the build emits.
   const entry = blankComments(readFileSync(join(web, ENTRY), 'utf8'))
   const entryImports = [...entry.matchAll(/\bimport\s+(?:[^'"]*?\bfrom\s+)?["']([^"']+)["']/g)].map((m) => m[1])
   const first = entryImports.length > 0 ? [null, entryImports[0]] : null
@@ -577,7 +464,6 @@ function loadingErrors(web, sheets) {
     )
   }
 
-  // ui/index.css: the layers' order first, then its files, each imported with no condition.
   const design = existsSync(join(web, DESIGN_ENTRY)) ? topLevel(readFileSync(join(web, DESIGN_ENTRY), 'utf8')) : []
   if (design[0]?.kind !== 'statement' || design[0].prelude !== `@layer ${LAYERS.join(', ')}`) {
     errors.push(
@@ -592,7 +478,6 @@ function loadingErrors(web, sheets) {
     }
   }
 
-  // The list: plain @imports of OLD_STYLESHEETS, in order, and nothing else.
   const list = existsSync(join(web, LIST)) ? topLevel(readFileSync(join(web, LIST), 'utf8')) : []
   for (const s of list) {
     if (s.kind !== 'import')
@@ -611,19 +496,14 @@ function loadingErrors(web, sheets) {
   }
   for (const f of listed) if (!sheets.includes(f)) errors.push(`${LIST}: lists ${f}, which is not there`)
 
-  // Every stylesheet is loaded, and one way only.
-  // Each way a stylesheet is loaded, by kind: listed in the list, imported by ui/index.css, or
-  // imported by modules (several modules importing one component's stylesheet are one way).
   const ways = new Map(sheets.map((f) => [f, []]))
   const add = (f, kind, way) => ways.get(f)?.push({ kind, way })
-  // The list itself counts as loaded only if the entry imports it.
   if (!entryImports.includes('./styles.css')) {
     errors.push(`${ENTRY}: doesn't import './styles.css', so no old stylesheet it lists is loaded`)
   }
   for (const f of listed) add(f, 'list', `listed in ${LIST}`)
   for (const s of cssImports(web, DESIGN_ENTRY)) add(s.file, 'index', `imported by ${DESIGN_ENTRY}`)
   for (const [f, modules] of moduleImports(web)) {
-    // The entry's own imports are of the list and of ui/index.css, which load in ways of their own.
     const others = modules.filter((m) => m !== ENTRY)
     if (others.length > 0) add(f, 'module', `imported by ${others.join(', ')}`)
     else if (f !== LIST && f !== DESIGN_ENTRY) add(f, 'module', `imported by ${ENTRY}`)
@@ -642,8 +522,6 @@ function loadingErrors(web, sheets) {
     }
   }
 
-  // The old stylesheets declare no layer, but base.css, which is one @layer base block and then
-  // one block in no layer.
   for (const f of listed) {
     if (f === BASE || !existsSync(join(web, f))) continue
     const text = blankCssComments(readFileSync(join(web, f), 'utf8')).replace(
@@ -661,10 +539,6 @@ function loadingErrors(web, sheets) {
   return errors
 }
 
-// ui/base.css is three parts: one @layer base block; then, in no layer, only rules that reach every
-// element on purpose (EVERYWHERE, with only the properties it lists), which must keep winning over a
-// component's own rule; and last the touch screen's @media (pointer: coarse) block, in no layer,
-// every rule of it leaving the components' elements out.
 function baseErrors(css) {
   const errors = []
   const parts = topLevel(css)
@@ -703,12 +577,9 @@ function baseErrors(css) {
   return errors
 }
 
-// Where every size, space, radius, shadow and duration is a token: the design system's files,
-// except those that define the tokens.
 const TOKENS_ONLY = 'src/ui/'
 const DEFINE_TOKENS = ['src/ui/tokens.css', 'src/ui/legacy.css', THEMES]
 
-// Literals that are not on a scale and never will be, so they may be written as they are.
 export const SCALE_LITERALS = new Map([
   ['0', 'nothing: no space, no radius, no time (with or without a unit)'],
   ['1px', 'a hairline: a border-wide offset, finer than the smallest step'],
@@ -717,14 +588,9 @@ export const SCALE_LITERALS = new Map([
   ['50%', 'half of the box: the radius of a circle'],
 ])
 
-// The properties whose lengths and times are a scale's: a font size, a space, a radius, a shadow
-// and a duration.
 const SCALE_PROPERTY =
   /^(font|font-size|margin(-.+)?|padding(-.+)?|scroll-margin(-.+)?|scroll-padding(-.+)?|gap|row-gap|column-gap|grid-gap|grid-row-gap|grid-column-gap|border(-.+)?-radius|(-webkit-)?box-shadow|text-shadow|(-webkit-)?transition(-duration|-delay)?|(-webkit-)?animation(-duration|-delay)?)$/i
 
-// Custom properties of the design system's own files that may hold a literal size, each with its
-// reason: what such a property holds is used through var() where the check can't see it, so a
-// literal there is held to the same rule as a declaration's.
 export const LOCAL_LITERALS = new Map([
   [
     '--a2ui-button-padding',
@@ -740,19 +606,13 @@ export const LOCAL_LITERALS = new Map([
   ],
 ])
 
-// The first literal length or time a declaration's value holds where a token belongs, if any.
-// A var() without a fallback is a token; a fallback is looked in. env() (the safe areas) is the
-// device's, but its fallback is looked in too; a unitless number (a line height, a weight, a factor
-// in calc()) is no length.
 export function scaleLiteral(value, property) {
-  // A registered property's initial value (@property) is a custom property's value.
   if (property.toLowerCase() === 'initial-value') property = '--registered'
   if (!property.startsWith('--') && !SCALE_PROPERTY.test(property)) return undefined
   if (property.startsWith('--') && LOCAL_LITERALS.has(property)) return undefined
   let bare = value
     .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
     .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
-  // var(--a) and env(name) go; a fallback, var(--a, x) or env(name, x), stays, innermost first.
   for (let prev = ''; prev !== bare; ) {
     prev = bare
     bare = bare.replace(
@@ -762,9 +622,7 @@ export function scaleLiteral(value, property) {
   }
   for (const m of bare.matchAll(/(?<![\w.#-])-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?([a-z%]+)(?![\w-])/gi)) {
     const literal = m[0].toLowerCase()
-    if (/^-?0*\.?0*[a-z%]+$/.test(literal)) continue // a zero, whatever its unit
-    // A custom property may hold a share of something (a slide's distance, a width): its sizes
-    // and times are what a token would be, not its percentages.
+    if (/^-?0*\.?0*[a-z%]+$/.test(literal)) continue
     if (property.startsWith('--') && literal.endsWith('%')) continue
     if (SCALE_LITERALS.has(literal)) continue
     return m[0]
@@ -772,27 +630,10 @@ export function scaleLiteral(value, property) {
   return undefined
 }
 
-// --- Rules that reach every element --------------------------------------------------------
-//
-// The old stylesheets (every one outside src/ui/) are in no cascade layer, so a rule of theirs
-// that can match an element wherever it is beats every component of the design system, whatever
-// the specificity of the component's own rule. Such a rule styles by an element's name (`h2`,
-// `button`), by a state or a pseudo-element alone (`:focus-visible`, `::placeholder`), by an
-// attribute alone, by `*`, or by `:is(…)`; and nothing scopes it but what wraps every page
-// (WRAPPERS). Each one leaves the design system's elements out: every element a component
-// draws has a class that starts with `ui-`, and the rule's subject carries OPT_OUT, which adds no
-// specificity (docs/design.md, "The components"). A rule scoped by an old container
-// (`.tt-markdown h2`) reaches only inside it, and is left alone.
-
 export const OPT_OUT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
 
-// What wraps every page: a rule scoped by one of these still reaches every component. (The old
-// shell's wrappers, `.tt-shell`, `.tt-body` and `.tt-page`, are gone with their rules; a rule naming
-// one fails as a rule nothing uses.)
 export const WRAPPERS = new Set(['#root', '#tt-main'])
 
-// Rules that deliberately reach every element, the design system's too: the selector, the only
-// properties it may set, and the reason. A rule that sets anything else is not allowed by it.
 export const EVERYWHERE = new Map([
   ['html', { properties: ['height', '-webkit-text-size-adjust'], reason: 'the page itself: no component draws it' }],
   [
@@ -867,16 +708,7 @@ export const EVERYWHERE = new Map([
   ],
 ])
 
-// A nested rule's selectors as the ones they stand for, one for each way of choosing a parent for
-// each `&`: `&` is the parent (`.tt-card { &:hover }` is `.tt-card:hover`), and a selector without
-// `&`, or one that starts with a combinator, has the parent in front (`.tt-card { h2 }` is
-// `.tt-card h2`, `.tt-card { + .x + & }` is `.tt-card + .x + .tt-card`). Each `&` is the whole
-// parent list, so `.a, .b { & + & }` is four selectors. At the start of a compound, `&` is the
-// parent's text, which ends in the compound the rest is added to; after the start of one it is
-// `:is(parent)` (`.tt-page&` is not `.tt-pagebody`). Only a bare `&` is the nesting selector: one
-// in a string (`a[href*="&"]`) or escaped (`\\&`) is a character.
 export function nestedSelectors(parents, child) {
-  // The child as text between its `&`s, and for each `&` whether it follows a compound's start.
   const texts = ['']
   const glued = []
   for (let i = 0; i < child.length; i++) {
@@ -910,8 +742,6 @@ export function nestedSelector(parent, child) {
   return nestedSelectors([parent], child)[0]
 }
 
-// The style rule a nested block is in, through the conditional rules between them (`input {
-// @media (…) { … } }` styles `input`): none for a block at the top or only in at-rules.
 function enclosingRule(blocks) {
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].kind === 'rule') return blocks[i]
@@ -920,13 +750,8 @@ function enclosingRule(blocks) {
   return null
 }
 
-// Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
-// whose `from` and `to` are not elements), each with its line and the properties its block sets.
-// A nested rule is recorded as the selectors it stands for (nestedSelectors), and the declarations
-// in a conditional rule nested in a style rule are that style rule's.
 export function allRules(css) {
   const out = []
-  // For each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
   const blocks = []
   let prelude = ''
   let preludeLine = 1
@@ -993,7 +818,6 @@ export function allRules(css) {
   return out
 }
 
-// A selector's compounds: "a > b:has(> c) d" → ["a", "b:has(> c)", "d"].
 export function compounds(selector) {
   const out = []
   let depth = 0
@@ -1010,8 +834,6 @@ export function compounds(selector) {
   return out
 }
 
-// A compound without what is inside its parentheses and brackets: what it says of the element
-// itself (`:is(.a, h2)` says nothing of its own, so it is not scoped by `.a`).
 function own(compound) {
   let out = ''
   let depth = 0
@@ -1023,11 +845,8 @@ function own(compound) {
   return out
 }
 
-// The classes and ids a compound names of its own element.
 const scopes = (compound) => own(compound).match(/[.#][\w-]+/g) ?? []
 
-// Whether a rule can match an element wherever it is in the app: its subject names no class or
-// id of its own, and every compound before it is unscoped or a wrapper of every page.
 export function reachesAnywhere(selector) {
   const parts = compounds(selector)
   const subject = parts.at(-1) ?? ''
@@ -1035,9 +854,6 @@ export function reachesAnywhere(selector) {
   return parts.slice(0, -1).every((p) => scopes(p).every((s) => WRAPPERS.has(s)))
 }
 
-// Whether a compound leaves the design system's elements out: OPT_OUT is one of its own
-// pseudo-classes, at the top level, not inside another function (`:not(:not(…OPT_OUT…))` would
-// select exactly those elements).
 export function optsOut(compound) {
   let depth = 0
   for (let i = 0; i < compound.length; i++) {
@@ -1049,8 +865,6 @@ export function optsOut(compound) {
   return false
 }
 
-// Whether a rule that reaches anywhere is allowed: it leaves the design system's elements out,
-// or EVERYWHERE lists its selector and it sets only the properties listed there.
 export function allowedEverywhere({ selector, properties }) {
   if (optsOut(compounds(selector).at(-1) ?? '')) return true
   const allowed = EVERYWHERE.get(selector)
@@ -1075,7 +889,7 @@ function everywhereErrors(file, css) {
 export function check(web) {
   const errors = []
   const mentioned = new Set()
-  const seen = new Map() // selector → { file, line }
+  const seen = new Map()
   const sheets = stylesheets(join(web, 'src')).map((p) => relative(web, p).split('\\').join('/'))
   if (existsSync(join(web, ENTRY))) errors.push(...loadingErrors(web, sheets))
   for (const path of stylesheets(join(web, 'src'))) {
@@ -1094,8 +908,6 @@ export function check(web) {
     }
     if (!file.startsWith('src/ui/') || file === BASE) errors.push(...everywhereErrors(file, readFileSync(path, 'utf8')))
     if (file.startsWith(THEMES)) continue
-    // Under src/ui/, every declaration; in the files that define the tokens, a custom property is
-    // the definition of one and may hold a literal, but a rule's own declarations may not.
     const tokensOnly = file.startsWith(TOKENS_ONLY)
     const definesTokens = DEFINE_TOKENS.some((d) => file === d || (d.endsWith('/') && file.startsWith(d)))
     for (const { property, value, line } of sheet.declarations) {
@@ -1133,22 +945,8 @@ export function check(web) {
   return errors
 }
 
-// --- Old rules and names nothing uses ---------------------------------------------------------
-
-// A rule that names a `tt-` class (the old stylesheet's) that no module of the app mentions can
-// match nothing: it was left behind when its screen moved onto the components, and it goes. A
-// module mentions a class when the name is anywhere in its code (a className, a lookup table, a
-// string a class is built from), its comments left out; the app's modules under src/ and the
-// end-to-end harnesses under e2e/ count (a harness draws a screen as the app would), tests and the
-// gallery's specimens don't, nor does a name that is only the start of a longer one. Only the old
-// classes are held to it: a component's `ui-` class can be built from pieces
-// (`ui-button-${variant}`), which a search for the name doesn't see.
-
-// Old classes a module builds from pieces (`'tt-' + kind`), so no search finds their names: each with
-// where it is built. None today; a class goes here only when it can't be written out.
 export const BUILT_FROM_PIECES = new Map([])
 
-// The text of an HTML page outside its comments (`<!-- … -->`); an unclosed one runs to the end.
 function outsideHtmlComments(html) {
   let out = ''
   let at = 0
@@ -1162,8 +960,6 @@ function outsideHtmlComments(html) {
   }
 }
 
-// The code that may use an old class or an old name: the app's modules and the end-to-end
-// harnesses (not tests, not the gallery), comments left out, and the page's markup.
 function usersCode(web) {
   const dirs = [join(web, 'src'), join(web, 'e2e')].filter((d) => existsSync(d))
   const code = dirs
@@ -1183,8 +979,6 @@ export function unusedClassErrors(web, built = BUILT_FROM_PIECES) {
   const errors = []
   for (const path of stylesheets(src)) {
     const file = relative(web, path).split('\\').join('/')
-    // The rules' selectors only: not a declaration's value (`content: ".tt-x"`), an attribute
-    // selector's value or a comment.
     const reported = new Set()
     for (const { selector, line } of allRules(readFileSync(path, 'utf8'))) {
       for (const cls of classSelectors(selector)) {
@@ -1204,10 +998,6 @@ export function unusedClassErrors(web, built = BUILT_FROM_PIECES) {
   return errors
 }
 
-// The old `--tt-*` names (src/ui/legacy.css) are aliases kept only while something reads them: one
-// that no stylesheet (legacy.css itself aside) and no module reads is gone, and fails if it comes
-// back. Read means written as `var(--tt-name…`, or the name in a module's code (a script that reads
-// or sets it).
 export const ALIASES = 'src/ui/legacy.css'
 
 export function unusedAliasErrors(web) {
@@ -1215,8 +1005,6 @@ export function unusedAliasErrors(web) {
   if (!existsSync(path)) return []
   const defined = allDeclarations(readFileSync(path, 'utf8'))
   const name = /--tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g
-  // Read by a stylesheet: only through var() (an override, `--tt-x: …`, defines it again and reads
-  // nothing). Read by a module: any mention (a script that reads or sets it).
   const read = new Set()
   for (const p of stylesheets(join(web, 'src'))) {
     if (relative(web, p).split('\\').join('/') === ALIASES) continue
@@ -1229,7 +1017,6 @@ export function unusedAliasErrors(web) {
     .map(({ name, line }) => `${ALIASES}:${line}: ${name} is defined but nothing reads it: delete it`)
 }
 
-// The custom properties a stylesheet defines (`--tt-x: …`), with their lines, comments left out.
 function allDeclarations(css) {
   const text = blankCssComments(css)
   const out = []
@@ -1242,7 +1029,6 @@ function allDeclarations(css) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const at = process.argv.indexOf('--root')
   const web = at > 0 ? process.argv[at + 1] : join(dirname(fileURLToPath(import.meta.url)), '..')
-  // The app's own tree (not a test's): its old rules nothing uses any more, too.
   const errors = [...check(web), ...(at > 0 ? [] : [...unusedClassErrors(web), ...unusedAliasErrors(web)])]
   if (errors.length > 0) {
     console.error(`css-check: ${errors.length} problem${errors.length === 1 ? '' : 's'}\n`)

@@ -16,28 +16,14 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 )
 
-// Automatic switching (docs/account-switching.md): each user's ordered queue of accounts, their
-// own and the shared accounts of their workspaces. While it is on, a turn whose account stops
-// (a usage limit, an expired login) goes on with the next account in the queue that can run,
-// with a hand-off; and a turn doesn't start on an account known to be at its limit. It is off
-// until the user turns it on.
-
-// ModelSetter sets a conversation's model in the agent runtime to cli's (its "default"), so a
-// turn that switched to another CLI shows it, and the next turn starts there.
 type ModelSetter func(ctx context.Context, agentConversation int64, cli cliworker.CLI) error
 
-// SetModelSetter sets how a switch to another CLI changes the conversation's model. Without
-// one, the conversation keeps its model and the server keeps choosing by the queue.
 func (s *Service) SetModelSetter(f ModelSetter) { s.setModel = f }
 
-// maxSwitches bounds the switches in one turn.
 const maxSwitches = 8
 
-// limitedFor is how long a limit reached without a reset time counts: the CLI only said so.
 const limitedFor = time.Hour
 
-// limitedUntil reports whether an account with these limits, read at limitsAt, is at a limit
-// now, and until when (zero if unknown).
 func limitedUntil(limits []cliworker.Limit, limitsAt *string, now time.Time) (bool, time.Time) {
 	var read time.Time
 	if limitsAt != nil {
@@ -77,7 +63,6 @@ func nullString(n sql.NullString) *string {
 	return &n.String
 }
 
-// limited reports whether c's account is at a limit now, and until when.
 func (c choice) limited(now time.Time) (bool, time.Time) {
 	if c.shared != nil {
 		return limitedUntil(c.shared.Limits, c.shared.LimitsAt, now)
@@ -85,7 +70,6 @@ func (c choice) limited(now time.Time) (bool, time.Time) {
 	return limitedUntil(parseLimits(c.row.limits), nullString(c.row.limitsAt), now)
 }
 
-// key names c's account in a chain of switches.
 func (c choice) key() string {
 	if c.shared != nil {
 		return "s" + strconv.FormatInt(c.shared.ID, 10)
@@ -100,7 +84,6 @@ func (c choice) cli() cliworker.CLI {
 	return c.row.ref.cli
 }
 
-// title is how c's account is named in the conversation.
 func (c choice) title() string {
 	if c.shared != nil {
 		return c.shared.Name + " (" + c.shared.Label + ", this workspace's)"
@@ -118,14 +101,12 @@ func accountTitle(r row) string {
 	return r.ref.cli.Name()
 }
 
-// switchingOn reports whether user turned automatic switching on.
 func (s *Service) switchingOn(ctx context.Context, user int64) (bool, error) {
 	var on bool
 	err := s.db.QueryRowContext(ctx, `SELECT coalesce((SELECT enabled FROM cli_switching WHERE user_id = ?), 0)`, user).Scan(&on)
 	return on, err
 }
 
-// queueEntry is one place in a user's queue: one of their own accounts, or a shared one.
 type queueEntry struct {
 	account, shared int64
 }
@@ -148,8 +129,6 @@ func (s *Service) queue(ctx context.Context, user int64) ([]queueEntry, error) {
 	return out, rows.Err()
 }
 
-// byQueue orders own accounts and shared ones as user's queue does: those in it first, in its
-// order, then the others as they were.
 func (s *Service) byQueue(ctx context.Context, user int64, own []row, shared []sharedRow) error {
 	q, err := s.queue(ctx, user)
 	if err != nil || len(q) == 0 {
@@ -174,9 +153,6 @@ func (s *Service) byQueue(ctx context.Context, user int64, own []row, shared []s
 	return nil
 }
 
-// candidates are the accounts of p's owner's queue a turn of p's conversation may switch to,
-// in order: allowed in the conversation's workspace by their mode, installed on the worker,
-// and able to run now (an own account connected, a shared one with the proxy).
 func (s *Service) candidates(ctx context.Context, p conversations.Principal) ([]choice, error) {
 	q, err := s.queue(ctx, p.User)
 	if err != nil || len(q) == 0 {
@@ -211,7 +187,7 @@ func (s *Service) candidates(ctx context.Context, p conversations.Principal) ([]
 				return nil, err
 			}
 			if !ok || !s.worker.Available(a.CLI) {
-				continue // another workspace's, or gone
+				continue
 			}
 			r, err := s.usageRow(ctx, p.User, a)
 			if err != nil {
@@ -223,10 +199,6 @@ func (s *Service) candidates(ctx context.Context, p conversations.Principal) ([]
 	return out, nil
 }
 
-// startChoice is where a turn on cli starts while switching is on, given the account c the
-// mode picks: the conversation's last account, if it is in the queue, of the same CLI and not at
-// a limit; else c, unless c is at a limit; then the first queue entry for the CLI that isn't,
-// else the first of any CLI. why says what changed, for the conversation; empty, c stays.
 func (s *Service) startChoice(ctx context.Context, p conversations.Principal, cli cliworker.CLI, c choice) (choice, string, error) {
 	cands, err := s.candidates(ctx, p)
 	if err != nil || len(cands) == 0 {
@@ -240,7 +212,7 @@ func (s *Service) startChoice(ctx context.Context, p conversations.Principal, cl
 	for _, k := range cands {
 		if k.row.id == last && k.cli() == cli && k.key() != c.key() {
 			if limited, _ := k.limited(now); !limited {
-				return k, "", nil // stays where it switched to: no hand-off back
+				return k, "", nil
 			}
 		}
 	}
@@ -269,8 +241,6 @@ func (s *Service) startChoice(ctx context.Context, p conversations.Principal, cl
 	return next, fmt.Sprintf("%s is at its usage limit%s: this turn runs on %s", c.title(), untilText(until), next.title()), nil
 }
 
-// nextChoice is the account a turn goes on with after its account stopped: the first queue
-// entry not tried in this turn and not at a limit.
 func (s *Service) nextChoice(ctx context.Context, p conversations.Principal, tried map[string]bool) (choice, bool, error) {
 	cands, err := s.candidates(ctx, p)
 	if err != nil {
@@ -295,36 +265,25 @@ func untilText(t time.Time) string {
 	return " until " + t.UTC().Format("2006-01-02 15:04 UTC")
 }
 
-// --- The API: /api/me/cli-switching ---
-
-// QueueAccount is an account in, or for, a user's queue.
 type QueueAccount struct {
-	// Kind is "own" (ID is the account's handle, "claude-2") or "shared" (ID is the shared
-	// account's, Workspace its workspace).
-	Kind  string        `json:"kind"`
-	ID    string        `json:"id"`
-	CLI   cliworker.CLI `json:"cli"`
-	Title string        `json:"title"`
-	// Label is the account's name, if any, and Number an own account's number for its CLI
-	// (1 for the first): for clients that name it in their own words.
-	Label         string `json:"label,omitempty"`
-	Number        int    `json:"number,omitempty"`
-	Workspace     int64  `json:"workspace,omitempty"`
-	WorkspaceName string `json:"workspace_name,omitempty"`
-	// LimitedUntil is set while the account is at a limit ("" when the reset is unknown).
-	Limited      bool   `json:"limited"`
-	LimitedUntil string `json:"limited_until,omitempty"`
+	Kind          string        `json:"kind"`
+	ID            string        `json:"id"`
+	CLI           cliworker.CLI `json:"cli"`
+	Title         string        `json:"title"`
+	Label         string        `json:"label,omitempty"`
+	Number        int           `json:"number,omitempty"`
+	Workspace     int64         `json:"workspace,omitempty"`
+	WorkspaceName string        `json:"workspace_name,omitempty"`
+	Limited       bool          `json:"limited"`
+	LimitedUntil  string        `json:"limited_until,omitempty"`
 }
 
 type switchingState struct {
-	Enabled bool           `json:"enabled"`
-	Queue   []QueueAccount `json:"queue"`
-	// Available are the accounts that can go in the queue: the user's connected own accounts,
-	// and the shared accounts of their workspaces.
+	Enabled   bool           `json:"enabled"`
+	Queue     []QueueAccount `json:"queue"`
 	Available []QueueAccount `json:"available"`
 }
 
-// SwitchingRoutes mounts /api/me/cli-switching on mux, the signed-in user's own.
 func (s *Service) SwitchingRoutes(mux *http.ServeMux, a interface {
 	RequireUser(http.Handler) http.Handler
 },
@@ -333,16 +292,13 @@ func (s *Service) SwitchingRoutes(mux *http.ServeMux, a interface {
 	mux.Handle("PUT /api/me/cli-switching", a.RequireUser(http.HandlerFunc(s.handleSetSwitching)))
 }
 
-// queueable indexes what user may queue: own accounts by handle and by row, shared ones by ID.
 type queueable struct {
 	list   []QueueAccount
-	own    map[string]int64 // handle → cli_accounts id
+	own    map[string]int64
 	byRow  map[int64]QueueAccount
 	shared map[int64]QueueAccount
 }
 
-// available returns the accounts user may queue: own connected (or needing a sign-in) ones,
-// and shared ones of their workspaces, by CLI.
 func (s *Service) available(ctx context.Context, user int64) (queueable, error) {
 	now := time.Now()
 	out := queueable{list: []QueueAccount{}, own: map[string]int64{}, byRow: map[int64]QueueAccount{}, shared: map[int64]QueueAccount{}}
@@ -409,8 +365,6 @@ func (s *Service) handleSwitching(w http.ResponseWriter, r *http.Request) {
 	}
 	out := switchingState{Enabled: on, Queue: []QueueAccount{}, Available: avail.list}
 	for _, e := range q {
-		// An entry the user can't queue any more (they left the workspace) isn't shown, and
-		// turns skip it.
 		if a, ok := avail.byRow[e.account]; ok && e.account != 0 {
 			out.Queue = append(out.Queue, a)
 		} else if a, ok := avail.shared[e.shared]; ok && e.shared != 0 {
@@ -420,7 +374,6 @@ func (s *Service) handleSwitching(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// maxQueue bounds a queue.
 const maxQueue = 32
 
 func (s *Service) handleSetSwitching(w http.ResponseWriter, r *http.Request) {
@@ -461,8 +414,6 @@ func (s *Service) handleSetSwitching(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if e == (queueEntry{}) {
-				// Another user's account, a shared account of a workspace the user isn't in,
-				// or none: all the same to the caller.
 				writeError(w, http.StatusNotFound, apierr.CodeQueueAccountNotFound, "queue: an account that isn't one of yours, or of your workspaces")
 				return
 			}

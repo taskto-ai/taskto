@@ -10,8 +10,6 @@ import { SegmentedControl } from '../ui/SegmentedControl'
 import { Textarea } from '../ui/Textarea'
 import { useDraft } from './drafts'
 
-// The card's description, rendered as Markdown (a task list's boxes are checkboxes), and the
-// editor of its title and description.
 export function CardDescription({
   card,
   canWrite,
@@ -43,14 +41,7 @@ export function CardDescription({
         )}
       </div>
       {editing ? (
-        <EditCard
-          // Per card, not per version: a due date or label saved meanwhile keeps the draft.
-          key={card.id}
-          card={card}
-          busy={busy}
-          onSave={onSave}
-          onCancel={onCancel}
-        />
+        <EditCard key={card.id} card={card} busy={busy} onSave={onSave} onCancel={onCancel} />
       ) : card.body.trim() ? (
         <div className="ui-board-reading">
           <Markdown text={card.body} />

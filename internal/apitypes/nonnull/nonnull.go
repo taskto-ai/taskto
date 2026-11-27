@@ -1,8 +1,3 @@
-// Package nonnull is the check behind the `apitypes:"nonnull"` tag: a slice or map field
-// with it is told to the web app as `T[]`, never `T[] | null`, which holds only if the server
-// never leaves it nil (encoding/json writes a nil slice or map as null). A package's tests
-// call Require on what its code makes for the API, and apitypes's own test checks that each
-// tagged field has such a test.
 package nonnull
 
 import (
@@ -12,19 +7,14 @@ import (
 	"testing"
 )
 
-// Tag is the option of the `apitypes` struct tag this package checks.
 const Tag = "nonnull"
 
-// Violations lists the fields tagged nonnull that are nil anywhere in v (a struct, pointer,
-// slice, map or interface holding them), each as a path like Card.Labels.
 func Violations(v any) []string {
 	var out []string
 	walk(reflect.ValueOf(v), "", map[uintptr]bool{}, &out)
 	return out
 }
 
-// Require fails t for each tagged field of v that is nil, and when v holds no tagged field
-// at all (a test that checks nothing).
 func Require(t testing.TB, v any) {
 	t.Helper()
 	for _, p := range Violations(v) {
@@ -35,7 +25,6 @@ func Require(t testing.TB, v any) {
 	}
 }
 
-// Has is whether v's type holds a tagged field, however deep.
 func Has(v any) bool {
 	return has(reflect.TypeOf(v), map[reflect.Type]bool{})
 }
@@ -90,7 +79,6 @@ func walk(v reflect.Value, path string, seen map[uintptr]bool, out *[]string) {
 	case reflect.Struct:
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// encoding/json writes the exported fields of an unexported embedded struct.
 			if !f.IsExported() && !f.Anonymous {
 				continue
 			}

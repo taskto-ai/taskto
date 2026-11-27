@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// The detail screens of the bundled starter templates (internal/apps/templates/), drawn as the
-// renderer draws them: a choice reads by its label, never by the text stored, and the photo or the
-// signature a record holds is shown on its detail screen as a thumbnail from the app's own server.
 
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -23,8 +19,6 @@ const signature = 'b'.repeat(32)
 
 type Template = { definition: { screens: { name: string; components: unknown[] }[] } }
 
-// What the server sends to draw `screen` with the record it shows: the screen's own components under
-// the root, and the data model with the record at /record, as its items are (internal/apps/app.go).
 function messages(template: Template, screenName: string, record: Record<string, unknown>) {
   const found = template.definition.screens.find((s) => s.name === screenName)
   if (!found) throw new Error(`no screen ${screenName}`)
@@ -112,8 +106,6 @@ test('the equipment detail shows the status by its label', async () => {
   expect(stat('Status')).toBe('Checked out')
 })
 
-// Each template's list screen draws its icons, as paths: one beside the heading and one in the
-// button that starts a new record, both decoration, so the button is named by its text alone.
 test.each([
   ['expense', expense, 'Expenses', 'New expense'],
   ['equipment', equipment, 'Equipment', 'Check out an item'],

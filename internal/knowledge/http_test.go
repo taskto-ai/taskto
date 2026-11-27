@@ -22,7 +22,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// Test passwords: obviously fake, and long enough for the account rules.
 const fakePassword = "fake-test-password"
 
 type env struct {
@@ -34,9 +33,6 @@ type env struct {
 	spaces  *access.Checker
 }
 
-// newEnv serves the account, space and knowledge-base routes, as the server does.
-
-// setupToken is the first-run setup token the tests' server is given.
 var setupToken = auth.NewSetupToken()
 
 func newEnv(t *testing.T, opts Options) *env {
@@ -60,14 +56,12 @@ func newEnv(t *testing.T, opts Options) *env {
 	return &env{t: t, h: auth.CSRF(mux, RawBodyRoutes...), db: sqlDB, dataDir: dataDir, store: store, spaces: spaces}
 }
 
-// user is a logged-in browser.
 type user struct {
 	e      *env
 	id     int64
 	cookie *http.Cookie
 }
 
-// rawBody is a request body sent as it is, as application/octet-stream.
 type rawBody []byte
 
 func (u *user) do(method, target string, body any) *httptest.ResponseRecorder {
@@ -107,7 +101,6 @@ func expect(t *testing.T, rec *httptest.ResponseRecorder, status int) {
 	}
 }
 
-// expectCode checks an error's status, code and params (nil for none).
 func expectCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code string, params map[string]any) {
 	t.Helper()
 	expect(t, rec, status)
@@ -135,13 +128,6 @@ type meReply struct {
 	Workspaces []auth.Membership
 }
 
-// world is a workspace with people in every relation to its spaces:
-//
-//   - owner: admin, editor of team and of old (archived);
-//   - alice: editor of team;
-//   - bob: viewer of team;
-//   - mallory: a member of the workspace, of no shared space;
-//   - stranger: admin of another workspace, with its own private space.
 type world struct {
 	e                                    *env
 	ws                                   int64
@@ -178,8 +164,6 @@ func newWorld(t *testing.T, opts Options) *world {
 	w.ownerPrivate = w.private(w.owner, w.ws)
 	w.alicePrivate = w.private(w.alice, w.ws)
 
-	// The stranger is invited, gets a private space, and is removed: their space is in
-	// this workspace's data, closed to everyone.
 	w.stranger = w.join("Stranger")
 	w.strangerPrivate = w.private(w.stranger, w.ws)
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", w.ws, w.stranger.id), nil),
@@ -254,7 +238,6 @@ func TestHTTPDocs(t *testing.T) {
 		t.Fatalf("read = %s", rec.Body)
 	}
 
-	// Two editors save over version 1: the second gets 409.
 	expect(t, w.owner.do(http.MethodPut, spacePath(sp, "/docs/notes/plan.md"),
 		map[string]string{"content": "owner's", "base_version": v1}), http.StatusOK)
 	rec = alice.do(http.MethodPut, spacePath(sp, "/docs/notes/plan.md"), map[string]string{"content": "alice's", "base_version": v1})
@@ -268,7 +251,6 @@ func TestHTTPDocs(t *testing.T) {
 	expectCode(t, alice.do(http.MethodPut, spacePath(sp, "/docs/c.md"), map[string]string{"content": "x", "message": "two\nlines"}),
 		http.StatusBadRequest, "doc_message_invalid", map[string]any{"max": float64(MaxMessageLen)})
 
-	// An upload: bytes in base64, read back the same way or as a download.
 	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0}
 	expect(t, alice.do(http.MethodPut, spacePath(sp, "/docs/img/logo.png"),
 		map[string]string{"content_base64": base64.StdEncoding.EncodeToString(png)}), http.StatusCreated)
@@ -285,12 +267,10 @@ func TestHTTPDocs(t *testing.T) {
 		t.Fatalf("download: headers %v, body %q", rec.Header(), rec.Body)
 	}
 
-	// Content in the wrong field for its kind of file.
 	expect(t, alice.do(http.MethodPut, spacePath(sp, "/docs/x.md"), map[string]string{"content_base64": "eA=="}), http.StatusBadRequest)
 	expect(t, alice.do(http.MethodPut, spacePath(sp, "/docs/x.png"), map[string]string{"content": "x"}), http.StatusBadRequest)
 	expect(t, alice.do(http.MethodPut, spacePath(sp, "/docs/x.png"), map[string]string{"content_base64": "%%%"}), http.StatusBadRequest)
 
-	// Over the size limit: refused, as content or as a body too big to read.
 	expectCode(t, alice.do(http.MethodPut, spacePath(sp, "/docs/big.png"),
 		map[string]string{"content_base64": base64.StdEncoding.EncodeToString(make([]byte, 1001))}),
 		http.StatusRequestEntityTooLarge, "file_too_large", map[string]any{"path": "big.png", "max": float64(1000)})
@@ -317,7 +297,6 @@ func TestHTTPDocs(t *testing.T) {
 	expectCode(t, alice.do(http.MethodGet, spacePath(sp, "/docs?limit=0"), nil), http.StatusBadRequest, "bad_request", nil)
 	expect(t, alice.do(http.MethodGet, spacePath(sp, "/docs?prefix=notes"), nil), http.StatusOK)
 
-	// Move, history, an old version, restore, delete.
 	rec = alice.do(http.MethodPatch, spacePath(sp, "/docs/notes/plan.md"), map[string]string{"to": "plan.md"})
 	expect(t, rec, http.StatusOK)
 	moved := decode[Result](t, rec)
@@ -337,7 +316,6 @@ func TestHTTPDocs(t *testing.T) {
 		t.Fatalf("old version = %s", rec.Body)
 	}
 	expect(t, alice.do(http.MethodGet, spacePath(sp, "/docs/plan.md?at=nope"), nil), http.StatusBadRequest)
-	// The move deleted notes/plan.md: restoring brings it back.
 	rec = alice.do(http.MethodPost, spacePath(sp, "/restore/notes/plan.md"), map[string]string{"commit": created.Commit})
 	expect(t, rec, http.StatusOK)
 	if decode[Result](t, rec).Doc.Version != v1 {
@@ -367,7 +345,6 @@ func TestHTTPAccess(t *testing.T) {
 	}
 	commit := decode[History](t, w.alice.do(http.MethodGet, spacePath(w.alicePrivate, "/history"), nil)).Commits[0].Commit
 
-	// Every route, as a request with its body.
 	type route struct {
 		method, path string
 		body         any
@@ -414,7 +391,7 @@ func TestHTTPAccess(t *testing.T) {
 				}
 				rec := tt.u.do(r.method, spacePath(tt.sp, r.path), r.body)
 				if want == http.StatusOK && rec.Code == http.StatusNotFound && tt.sp == w.old {
-					continue // nothing was ever written to the archived space
+					continue
 				}
 				if rec.Code != want {
 					t.Errorf("%s %s: status %d, want %d; body %s", r.method, r.path, rec.Code, want, rec.Body)
@@ -426,7 +403,6 @@ func TestHTTPAccess(t *testing.T) {
 		})
 	}
 
-	// Nothing changed in the spaces they could not write.
 	for _, sp := range []access.Space{w.team, w.alicePrivate} {
 		u := w.owner
 		if sp == w.alicePrivate {
@@ -443,8 +419,6 @@ func TestHTTPAccess(t *testing.T) {
 	}
 }
 
-// TestHTTPUnsafeNames tries git metadata and names leading out of the space through every
-// route that takes a name.
 func TestHTTPUnsafeNames(t *testing.T) {
 	w := newWorld(t, Options{})
 	sp, u := w.team, w.alice
@@ -456,12 +430,10 @@ func TestHTTPUnsafeNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Names that reach the handlers, which refuse them with 400.
 	refused := []string{
 		".git", ".git/config", ".git/hooks/pre-commit", ".GIT/config", ".Git/HEAD", ".git./config",
 		"git~1/config", ".g%E2%80%8Cit/config", "notes/.git/config", "a%5C..%5Cb", "a%00b",
 	}
-	// Names the router itself sends elsewhere, cleaning the "..": anything but a 2xx.
 	cleaned := []string{"..%2F..%2Fsecret", "%2e%2e/%2e%2e/secret", "notes/../../../secret", "/etc/passwd"}
 
 	try := func(name string) []*httptest.ResponseRecorder {
@@ -511,8 +483,6 @@ func decodeURL(t *testing.T, s string) string {
 	return strings.TrimPrefix(r.URL.Path, "/")
 }
 
-// An upload renamed to .md keeps its bytes: if they aren't UTF-8 they come back as base64,
-// not as a string with the bytes replaced.
 func TestHTTPNonUTF8MarkdownReadsBack(t *testing.T) {
 	w := newWorld(t, Options{})
 	sp, alice := w.team, w.alice
@@ -527,7 +497,6 @@ func TestHTTPNonUTF8MarkdownReadsBack(t *testing.T) {
 	}
 }
 
-// A DELETE's body is optional, also when its length isn't declared (chunked, empty).
 func TestHTTPDeleteWithEmptyChunkedBody(t *testing.T) {
 	w := newWorld(t, Options{})
 	sp, alice := w.team, w.alice
@@ -544,8 +513,6 @@ func TestHTTPDeleteWithEmptyChunkedBody(t *testing.T) {
 	expect(t, alice.do(http.MethodGet, spacePath(sp, "/docs/gone.md"), nil), http.StatusNotFound)
 }
 
-// A handler mounted without RequireSpace answers 500 rather than serving the zero space
-// (workspaces/0/spaces/0), and a change without a logged-in user answers 401.
 func TestHTTPWithoutRequireSpace(t *testing.T) {
 	w := newWorld(t, Options{})
 	s := w.e.store
@@ -583,13 +550,10 @@ func TestHTTPWithoutRequireSpace(t *testing.T) {
 			t.Errorf("%s without RequireSpace: status = %d, want 500; body %s", rt.pattern, rec.Code, rec.Body)
 		}
 	}
-	// The zero space's directory, where a handler without a space would have written.
 	if _, err := os.Stat(access.SpaceDir(w.e.dataDir, 0, 0)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the zero space's directory exists, or can't be checked (err %v)", err)
 	}
 
-	// Behind RequireSpace, but with the user taken off the context: every handler that
-	// changes something answers 401, and nothing changes.
 	expect(t, w.alice.do(http.MethodPut, spacePath(w.team, "/docs/a.md"), map[string]string{"content": "kept"}), http.StatusCreated)
 	history := w.alice.do(http.MethodGet, spacePath(w.team, "/history"), nil).Body.String()
 	mux := http.NewServeMux()
@@ -619,7 +583,6 @@ func TestHTTPWithoutRequireSpace(t *testing.T) {
 	}
 }
 
-// spaceOnly hides every value on its context but the space RequireSpace put there.
 type spaceOnly struct{ context.Context }
 
 func (c spaceOnly) Value(key any) any {
@@ -633,7 +596,6 @@ func TestHTTPUnversioned(t *testing.T) {
 	w := newWorld(t, Options{LargeFileSize: 100, MaxFileSize: 1000})
 	sp, alice := w.team, w.alice
 
-	// A file's bytes as the body: created, then replaced with base_version in the query.
 	video := []byte("0123456789 frames")
 	rec := alice.do(http.MethodPut, spacePath(sp, "/docs/talk.mp4?message=Add+the+talk"), rawBody(video))
 	expect(t, rec, http.StatusCreated)
@@ -645,20 +607,17 @@ func TestHTTPUnversioned(t *testing.T) {
 	expect(t, alice.do(http.MethodPut, spacePath(sp, "/docs/talk.mp4?base=x"), rawBody("again")), http.StatusBadRequest)
 	expect(t, alice.do(http.MethodPut, spacePath(sp, "/docs/huge.bin"), rawBody(make([]byte, 1001))), http.StatusRequestEntityTooLarge)
 	expect(t, w.bob.do(http.MethodPut, spacePath(sp, "/docs/bob.mp4"), rawBody("x")), http.StatusForbidden)
-	// Small files sent as bytes are versioned like any other; Markdown too.
 	rec = alice.do(http.MethodPut, spacePath(sp, "/docs/notes.md"), rawBody("# Notes\n"))
 	expect(t, rec, http.StatusCreated)
 	if !decode[Result](t, rec).Doc.Versioned {
 		t.Fatalf("notes.md = %s", rec.Body)
 	}
-	// A large file in JSON is unversioned too.
 	rec = alice.do(http.MethodPut, spacePath(sp, "/docs/big.bin"), map[string]string{"content_base64": base64.StdEncoding.EncodeToString(make([]byte, 150))})
 	expect(t, rec, http.StatusCreated)
 	if decode[Result](t, rec).Doc.Versioned {
 		t.Fatalf("big.bin = %s", rec.Body)
 	}
 
-	// Read as JSON: no content, and says it isn't versioned.
 	rec = w.bob.do(http.MethodGet, spacePath(sp, "/docs/talk.mp4"), nil)
 	expect(t, rec, http.StatusOK)
 	var got map[string]any
@@ -671,7 +630,6 @@ func TestHTTPUnversioned(t *testing.T) {
 		t.Fatalf("list = %s", rec.Body)
 	}
 
-	// The download: its media type, still an attachment, and ranges for seeking.
 	rec = w.bob.do(http.MethodGet, spacePath(sp, "/docs/talk.mp4?raw=true"), nil)
 	expect(t, rec, http.StatusOK)
 	if !bytes.Equal(rec.Body.Bytes(), video) || rec.Header().Get("Content-Type") != "video/mp4" ||
@@ -688,7 +646,6 @@ func TestHTTPUnversioned(t *testing.T) {
 		t.Fatalf("range: %d %q", ranged.Code, ranged.Body)
 	}
 
-	// Replaced: the old version's bytes are gone.
 	rec = alice.do(http.MethodPut, spacePath(sp, "/docs/talk.mp4?base_version="+created.Doc.Version), rawBody("new cut"))
 	expect(t, rec, http.StatusOK)
 	expect(t, alice.do(http.MethodGet, spacePath(sp, "/docs/talk.mp4?raw=true&at="+created.Commit), nil), http.StatusGone)
@@ -698,13 +655,9 @@ func TestHTTPUnversioned(t *testing.T) {
 		t.Fatalf("current = %q", rec.Body)
 	}
 
-	// application/octet-stream is for that route only.
 	expect(t, alice.do(http.MethodPatch, spacePath(sp, "/docs/talk.mp4"), rawBody(`{"to":"x.mp4"}`)), http.StatusUnsupportedMediaType)
 }
 
-// Removing a file's old versions from history is for a workspace admin who may write the
-// space, with a session: the space's other editors, viewers, other workspaces' admins and
-// access tokens are refused, and it changes nothing for them.
 func TestHTTPRemoveOldVersions(t *testing.T) {
 	w := newWorld(t, Options{})
 	put := func(u *user, content, base string) Entry {
@@ -725,7 +678,6 @@ func TestHTTPRemoveOldVersions(t *testing.T) {
 		return decode[History](t, w.alice.do(http.MethodGet, target, nil)).Commits
 	}
 
-	// The stranger is an admin of a workspace of their own.
 	res, err := w.e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Elsewhere')`)
 	if err != nil {
 		t.Fatal(err)
@@ -768,7 +720,6 @@ func TestHTTPRemoveOldVersions(t *testing.T) {
 		t.Fatalf("history after the refusals = %+v", h)
 	}
 
-	// A stale version is a conflict; the admin's own request goes through.
 	expectCode(t, w.owner.do(http.MethodDelete, target, map[string]string{"base_version": h0(history())}), http.StatusConflict, "doc_changed", map[string]any{"path": "notes.md"})
 	rec = w.owner.do(http.MethodDelete, target, map[string]string{"base_version": v.Version})
 	expect(t, rec, http.StatusOK)
@@ -788,5 +739,4 @@ func TestHTTPRemoveOldVersions(t *testing.T) {
 	expectCode(t, w.owner.do(http.MethodDelete, spacePath(w.team, "/history/never.md"), nil), http.StatusNotFound, "doc_not_found", nil)
 }
 
-// h0 is the version of a history's oldest entry.
 func h0(h []Commit) string { return h[len(h)-1].Version }

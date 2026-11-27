@@ -31,6 +31,270 @@ linters:
       # httptest requests in tests don't need a context.
       - path: _test\.go
         linters: [noctx]
+      # Each finding below is pinned to its own file and the text of its line, so new code
+      # in the same file is still checked, and a changed line has to be looked at again.
+      # Made-up credentials, error codes, a MAC purpose and an environment variable name, not secrets.
+      - path: '^cmd/taskto/backup_it_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'itRestPassword = "fake-append-only-password"'
+      - path: '^internal/apierr/codes\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'CodeAppTokenRateLimited  Code = "app_token_rate_limited"|CodeBaseURLCredentials         Code = "base_url_credentials"|CodeTokenExpiryInvalid  Code = "token_expiry_invalid"|CodeTwoFactorNoPassword     Code = "two_factor_no_password"|CodeWrongCredentials    Code = "wrong_credentials"'
+      - path: '^internal/auth/sso_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'testClientSecret = "fake-client-secret"'
+      - path: '^internal/cliaccounts/shared_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: '\{"cli": "claude", "label": "x", "api_key": sharedKey, "base_url": "https://user:pw@example\.com"\},'
+      - path: '^internal/cliaccounts/tools\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'const toolsTokenPurpose = "cli-tools-token"'
+      - path: '^internal/cliworker/drivers\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'toolsTokenVar        = "TASKTO_TOOLS_TOKEN"'
+      - path: '^internal/cliworker/proxy_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'const token = "tt1\.payload-for-the-test\.signature"|s\.Proxy = &cliworker\.Proxy\{URL: "http://user:pw@taskto:8081", Token: token\}|s\.Slot, s\.Proxy = "s2", &cliworker\.Proxy\{URL: "http://taskto:8081", Token: "tt1\.payload-for-the-test\.signature"\}'
+      - path: '^internal/cliworker/tools_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: '"a token with a space":   \{URL: "http://127\.0\.0\.1:8081/cli-mcp", Token: "ttm1\.has a space\.signature"\},|"credentials in the URL": \{URL: "http://user:pw@127\.0\.0\.1:8081/cli-mcp", Token: tokenA\},|tokenA = "ttm1\.token-of-user-one\.signature"|tokenB = "ttm1\.token-of-user-two\.signature"'
+      - path: '^internal/config/config_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: '"credentials":                           \{with\(map\[string\]string\{"TASKTO_PUBLIC_URL": "https://user:fake@taskto\.example\.com"\}\), "without a path"\},|cfg, err := Load\(nil, env\(map\[string\]string\{'
+      - path: '^internal/integrations/client_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'for name, url := range map\[string\]string\{'
+      - path: '^internal/server/reset_mail_test\.go$'
+        linters: [gosec]
+        text: 'G101'
+        source: 'const resetPassword = "fake-brand-new-password"'
+      # The integration test downloads its own pinned file.
+      - path: '^internal/dictation/real_it_test\.go$'
+        linters: [gosec]
+        text: 'G107'
+        source: 'resp, err := http\.Get\(url\)'
+      # The rest of a gzip stream is read into io.Discard only to check its checksum.
+      - path: '^internal/backup/backup\.go$'
+        linters: [gosec]
+        text: 'G110'
+        source: 'if _, err := io\.Copy\(io\.Discard, gz\); err != nil \{'
+      # The value is "set"/"not set", or a test builds the credentials it checks.
+      - path: '^internal/integrations/integrations_test\.go$'
+        linters: [gosec]
+        text: 'G117'
+        source: 'raw, _ := json\.Marshal\(creds\)'
+      - path: '^internal/server/mail\.go$'
+        linters: [gosec]
+        text: 'G117'
+        source: '_ = json\.NewEncoder\(w\)\.Encode\(reply\)'
+      # A test server parsing its own test request.
+      - path: '^internal/dictation/http_test\.go$'
+        linters: [gosec]
+        text: 'G120'
+        source: 'if err := r\.ParseMultipartForm\(32 << 20\); err != nil \{'
+      # A test walking its own temporary directory.
+      - path: '^internal/cliaccounts/shared_it_test\.go$'
+        linters: [gosec]
+        text: 'G122'
+        source: 'if b, err := os\.ReadFile\(path\); err == nil && strings\.Contains\(string\(b\), key\) \{'
+      # Secure is off only with the operator's insecure_cookies, or in a test client.
+      - path: '^cmd/taskto/install_test\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'req\.AddCookie\(&http\.Cookie\{Name: "taskto_session", Value: cookie\}\)'
+      - path: '^internal/auth/auth\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'return &http\.Cookie\{'
+      - path: '^internal/auth/auth_test\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'c\.cookie = &http\.Cookie\{Name: "__Host-taskto_session", Value: "made-up-token"\}'
+      - path: '^internal/auth/sso\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'return &http\.Cookie\{'
+      - path: '^internal/auth/twofactor_test\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'half := &client\{e: e, ip: c\.ip, cookie: &http\.Cookie\{Name: name, Value: got\.Challenge\}\}'
+      - path: '^internal/browser/real_it_test\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'http\.SetCookie\(w, &http\.Cookie\{Name: "session",'
+      - path: '^internal/cliworker/browser_isolation_test\.go$'
+        linters: [gosec]
+        text: 'G124'
+        source: 'http\.SetCookie\(w, &http\.Cookie\{Name: "secret", Value: "user-1-session", MaxAge: 3600, HttpOnly: true\}\)'
+      # Queries joined from constant fragments; every value is a bound argument.
+      - path: '^internal/accountdeletion/accountdeletion_test\.go$'
+        linters: [gosec]
+        text: 'G202'
+        source: 'r, err := w\.db\.Query\(`SELECT \* FROM "` \+ tbl \+ `"`\)'
+      - path: '^internal/apps/effects_api\.go$'
+        linters: [gosec]
+        text: 'G202'
+        source: 'counts, err := s\.db\.QueryContext\(ctx, `SELECT e\.state, count\(\*\) `\+effectFrom\+` WHERE `\+where\+` AND e\.state <> ''done'' GROUP BY e\.state`, args\.\.\.\)|rows, err := s\.db\.QueryContext\(ctx, `SELECT `\+effectColumns\+effectFrom\+` WHERE `\+where\+` ORDER BY e\.id DESC LIMIT \?`, append\(args, f\.Limit\+1\)\.\.\.\)'
+      - path: '^internal/audit/audit_test\.go$'
+        linters: [gosec]
+        text: 'G202'
+        source: 'if _, err := d\.Exec\(`SELECT created_at FROM ` \+ table \+ ` WHERE id = 0`\); err != nil \{'
+      - path: '^internal/boards/store\.go$'
+        linters: [gosec]
+        text: 'G202'
+        source: 'rows, err := s\.db\.QueryContext\(ctx, `SELECT `\+cardColumns\+`'
+      - path: '^internal/integrations/integrations_test\.go$'
+        linters: [gosec]
+        text: 'G202'
+        source: 'if _, err := e\.db\.Exec\(`UPDATE integration_secrets SET `\+set\+` WHERE integration_id = \? AND name = ''api_key''`, in\.ID\); err == nil \|\| !strings\.Contains\(err\.Error\(\), "never"\) \{|if _, err := e\.db\.Exec\(`UPDATE integrations SET `\+set\+` WHERE id = \?`, in\.ID\); err == nil \|\| !strings\.Contains\(err\.Error\(\), "never change"\) \{'
+      # Programs the operator configures, the server's own helper, and sudo/doas found by the privilege check.
+      - path: '^internal/agentrt/supervisor\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'cmd := exec\.CommandContext\(context\.WithoutCancel\(ctx\), s\.cfg\.Node, s\.cfg\.Entry\)'
+      - path: '^internal/backup/restic\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'cmd := exec\.CommandContext\(ctx, r\.Path, args\.\.\.\)'
+      - path: '^internal/browser/host_local\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'cmd := exec\.CommandContext\(context\.Background\(\), argv\[0\], argv\[1:\]\.\.\.\)'
+      - path: '^internal/cliworker/helper\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'cmd := exec\.CommandContext\(context\.Background\(\), w\.cfg\.Helper, HelperArg\)'
+      - path: '^internal/cliworker/proc_unix\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'return syscall\.Exec\(bin, argv, env\)'
+      - path: '^internal/dictation/proc\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'cmd := exec\.CommandContext\(ctx, c\.argv\[0\], c\.argv\[1:\]\.\.\.\)'
+      - path: '^internal/privcheck/privcheck\.go$'
+        linters: [gosec]
+        text: 'G204'
+        source: 'cmd := exec\.CommandContext\(ctx, bin, args\.\.\.\)'
+      # The CLI worker's passable 0711 directories.
+      - path: '^cmd/taskto/cliworker_cmd\.go$'
+        linters: [gosec]
+        text: 'G301'
+        source: 'if err := os\.MkdirAll\(dir, 0o711\); err != nil \{|if err := os\.Mkdir\(dir, 0o711\); err != nil && !errors\.Is\(err, os\.ErrExist\) \{'
+      # Exact modes: 0700 directories whatever the umask, 0711 passable directories, the 0666 proxy socket.
+      - path: '^cmd/taskto/cliworker_cmd\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'if err := os\.Chmod\(dir, 0o711\); err != nil \{'
+      - path: '^cmd/taskto/cliworkers\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'if err := os\.Chmod\(filepath\.Dir\(path\), 0o711\); err != nil \{|if err := os\.Chmod\(path, 0o666\); err != nil \{'
+      - path: '^internal/agentrt/supervisor\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'return os\.Chmod\(dir, 0o700\)'
+      - path: '^internal/browser/procs\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'return os\.Chmod\(dir, 0o700\)'
+      - path: '^internal/cliworker/approve\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'if err := os\.Chmod\(dir, 0o711\); err != nil \{'
+      - path: '^internal/cliworker/dirs\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'if err := os\.Chmod\(dir, 0o700\); err != nil \{'
+      - path: '^internal/providers/feed\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'return os\.Chmod\(dir, 0o700\)'
+      # Paths the operator chooses: the backup to restore, the config file, the lock file.
+      - path: '^cmd/taskto/backup\.go$'
+        linters: [gosec]
+        text: 'G304|G703'
+        source: 'f, err := os\.Open\(in\)'
+      - path: '^internal/config/config\.go$'
+        linters: [gosec]
+        text: 'G304|G703'
+        source: 'raw, err := os\.ReadFile\(path\)'
+      - path: '^internal/lockfile/lockfile\.go$'
+        linters: [gosec]
+        text: 'G304|G703'
+        source: 'f, err := os\.OpenFile\(path, os\.O_RDWR\|os\.O_CREATE\|noFollow, 0o600\)'
+      # The generated source file is committed and readable like every other source file.
+      - path: '^internal/apitypes/generate/main\.go$'
+        linters: [gosec]
+        text: 'G306'
+        source: 'if err := os\.WriteFile\(apitypes\.Output, out, 0o644\); err != nil \{'
+      # The fake provider's seeded, repeatable delivery order for tests.
+      - path: '^internal/integrations/testprovider/sender\.go$'
+        linters: [gosec]
+        text: 'G404'
+        source: 'r := rand\.New\(rand\.NewPCG\(seed, seed\^0x9e3779b97f4a7c15\)\)'
+      # RFC 6238 authenticator apps use HMAC-SHA1.
+      - path: '^internal/auth/totp\.go$'
+        linters: [gosec]
+        text: 'G505'
+        source: '"crypto/sha1"'
+      # Paths the operator chooses: the lock file and the PATH directories the privilege check looks in.
+      - path: '^internal/lockfile/lockfile\.go$'
+        linters: [gosec]
+        text: 'G703'
+        source: 'if now, err := os\.Lstat\(path\); err != nil \|\| !os\.SameFile\(locked, now\) \{'
+      - path: '^internal/privcheck/privcheck\.go$'
+        linters: [gosec]
+        text: 'G703'
+        source: 'if info, err := os\.Stat\(bin\); err == nil && info\.Mode\(\)\.IsRegular\(\) && info\.Mode\(\)&0o111 != 0 \{'
+      # A test dialling its own temporary socket.
+      - path: '^internal/agentrt/supervisor_test\.go$'
+        linters: [gosec]
+        text: 'G704'
+        source: 'if c, err := net\.DialTimeout\("unix", socket, 200\*time\.Millisecond\); err == nil \{'
+      # A JSON reply on the sidecar's own socket, or a test server's page.
+      - path: '^internal/agenttools/agenttools\.go$'
+        linters: [gosec]
+        text: 'G705'
+        source: '_, _ = w\.Write\(out\)'
+      - path: '^internal/browser/real_it_test\.go$'
+        linters: [gosec]
+        text: 'G705'
+        source: 'fmt\.Fprintf\(w, "<!doctype html><title>%s</title><body>%s</body>", title, body\)'
+      - path: '^internal/providers/check_test\.go$'
+        linters: [gosec]
+        text: 'G705'
+        source: 'fmt\.Fprintf\(w, `\{"error": "invalid key %s"\}`, key\)'
+      # The apitypes tests check how clashing json names are handled.
+      - path: '^internal/apitypes/apitypes_test\.go$'
+        linters: [govet]
+        text: 'structtag'
+        source: 'right'
+      # The apitypes tests feed the generator malformed tags on purpose.
+      - path: '^internal/apitypes/apitypes_test\.go$'
+        linters: [staticcheck]
+        text: 'SA5008'
+        source: 'Dash               string         `json:"-,"`|Deep  \*\*int            `json:"deep,string"`|Skipped            string         `json:"it''s,omitempty"`'
+      # The fake CLI answers with Claude Code's own capitalised error message.
+      - path: '^internal/cliworker/clitest/clitest\.go$'
+        linters: [staticcheck]
+        text: 'ST1005'
+        source: 'return nil, fmt\.Errorf\("No conversation found with session ID: %s", id\)'
+      # The apitypes tests check that unexported fields are skipped.
+      - path: '^internal/apitypes/apitypes_test\.go$'
+        linters: [unused]
+        text: 'is unused'
+        source: 'hidden             string|secret   string'
 
 formatters:
   enable:

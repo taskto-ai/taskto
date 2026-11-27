@@ -1,7 +1,3 @@
-/* Settling a record that needs the person (Resolve), under its row in the queue: what happened,
-   the values side by side (when the person started, theirs, the server's) on a wide screen and one
-   under the other on a phone, and the choices. */
-
 @layer screens {
   .ui-resolve {
     display: grid;
@@ -72,7 +68,6 @@
     margin: 0;
   }
 
-  /* The values side by side. */
   .ui-resolve-table {
     inline-size: 100%;
     border-collapse: collapse;
@@ -100,7 +95,6 @@
     font-weight: 600;
   }
 
-  /* On a phone: each field a block, its values one under the other, each named by its column. */
   @media (max-width: 640px) {
     .ui-resolve-table thead {
       position: absolute;

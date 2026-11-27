@@ -1,5 +1,3 @@
-/* The records panel under a launched app (AppRecords). */
-
 @layer screens {
   .ui-records {
     display: grid;

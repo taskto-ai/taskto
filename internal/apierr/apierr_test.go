@@ -39,7 +39,6 @@ func TestWrite(t *testing.T) {
 	}
 }
 
-// codes reads codes.go: each constant's name and value.
 func codes(t *testing.T) map[string]string {
 	t.Helper()
 	f, err := parser.ParseFile(token.NewFileSet(), "codes.go", nil, 0)
@@ -53,8 +52,6 @@ func codes(t *testing.T) map[string]string {
 			continue
 		}
 		for _, s := range g.Specs {
-			// One constant per line with its own string literal, which the web app's
-			// check (web/scripts/i18n-check.mjs) also reads.
 			v := s.(*ast.ValueSpec)
 			var lit *ast.BasicLit
 			if len(v.Names) == 1 && len(v.Values) == 1 {
@@ -97,8 +94,6 @@ func TestCodesAreUniqueAndDocumented(t *testing.T) {
 	}
 }
 
-// TestCodesAreConstants checks that every error the server writes with this package uses
-// one of codes.go's constants, never a code made from a string, so the list is complete.
 func TestCodesAreConstants(t *testing.T) {
 	root := "../.."
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -120,13 +115,11 @@ func TestCodesAreConstants(t *testing.T) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.CallExpr:
-				// apierr.Code("…") or Code("…"): a code made from a string.
 				if isName(n.Fun, "Code", inside) && len(n.Args) == 1 {
 					if _, lit := n.Args[0].(*ast.BasicLit); lit {
 						t.Errorf("%s: a code made from a string; add a constant to internal/apierr/codes.go", fset.Position(n.Pos()))
 					}
 				}
-				// Write(w, status, "…", …) and New(status, "…", …): a literal where the code goes.
 				for name, at := range map[string]int{"Write": 2, "New": 1} {
 					if isName(n.Fun, name, inside) && len(n.Args) > at {
 						if lit, ok := n.Args[at].(*ast.BasicLit); ok && lit.Kind == token.STRING {
@@ -144,7 +137,6 @@ func TestCodesAreConstants(t *testing.T) {
 	}
 }
 
-// isName reports whether fun is apierr.name, or name in this package's own files.
 func isName(fun ast.Expr, name string, inside bool) bool {
 	switch f := fun.(type) {
 	case *ast.SelectorExpr:

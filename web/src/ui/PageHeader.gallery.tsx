@@ -11,7 +11,6 @@ export const title = 'PageHeader'
 export default function PageHeaderGallery() {
   const t = useT()
   const full = { inlineSize: '100%' }
-  // A title the keyboard is sent to when what had it goes away.
   const titleRef = useRef<HTMLHeadingElement>(null)
   return (
     <>

@@ -18,12 +18,11 @@ import (
 	"taskto.ai/taskto/internal/mail"
 )
 
-// recorder is a mail.Sender that keeps what it is given, or fails, or waits.
 type recorder struct {
 	mu   sync.Mutex
 	sent []mail.Message
 	err  error
-	hold chan struct{} // if set, Send waits for it to close
+	hold chan struct{}
 }
 
 func (r *recorder) Send(ctx context.Context, m mail.Message) error {
@@ -51,7 +50,6 @@ func (r *recorder) messages() []mail.Message {
 
 const publicURL = "https://taskto.example.com"
 
-// mailEnv is an env whose server sends mail through a recorder and knows its public address.
 func mailEnv(t *testing.T, mod func(*Options)) (*env, *recorder) {
 	t.Helper()
 	rec := &recorder{}
@@ -67,7 +65,6 @@ func mailEnv(t *testing.T, mod func(*Options)) (*env, *recorder) {
 	return e, rec
 }
 
-// requestReset asks for a reset link for email from c, and waits for the work behind the answer.
 func (e *env) requestReset(c *client, email string) *httptest.ResponseRecorder {
 	e.t.Helper()
 	rec := c.do(http.MethodPost, "/api/password-reset/request", map[string]string{"email": email})
@@ -75,7 +72,6 @@ func (e *env) requestReset(c *client, email string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// linkRe finds an emailed link, and its token.
 var linkRe = regexp.MustCompile(regexp.QuoteMeta(publicURL) + `/(?:reset-password|invite)#([A-Za-z0-9_-]+)`)
 
 func tokenIn(t *testing.T, m mail.Message) string {
@@ -108,7 +104,6 @@ func TestForgottenPasswordIsResetByTheEmailedLink(t *testing.T) {
 		t.Fatalf("text = %q", msgs[0].Text)
 	}
 	token := tokenIn(t, msgs[0])
-	// The link is a secret: it is in the email and the database's hash, nowhere else.
 	if strings.Contains(logs.String(), token) {
 		t.Fatalf("the log has the reset token:\n%s", logs.String())
 	}
@@ -119,7 +114,6 @@ func TestForgottenPasswordIsResetByTheEmailedLink(t *testing.T) {
 		t.Fatal("the token is stored in the clear")
 	}
 
-	// The link does what an admin's does: sets the password, once, and signs the user in.
 	rec = browser.do(http.MethodPost, "/api/password-reset", map[string]string{"token": token, "password": newPassword})
 	expect(t, rec, http.StatusOK)
 	if _, code := e.login("owner@example.com", newPassword); code != http.StatusOK {
@@ -149,20 +143,16 @@ func TestResetRequestAnswersTheSameForUnknownAddresses(t *testing.T) {
 	if n := len(sent.messages()); n != 1 {
 		t.Fatalf("%d messages: only the account that exists gets one", n)
 	}
-	// An address that isn't one is a plain mistake, the same for everyone.
 	rec := e.client().do(http.MethodPost, "/api/password-reset/request", map[string]string{"email": "not an address"})
 	expect(t, rec, http.StatusBadRequest)
 }
 
 func TestResetRequestDoesNotWaitForTheMailServer(t *testing.T) {
-	// The answer comes before the lookup and the send, so how long it takes says nothing about
-	// whether the address has an account.
 	e, sent := mailEnv(t, nil)
 	e.setup()
 	sent.hold = make(chan struct{})
 	var release sync.Once
 	open := func() { release.Do(func() { close(sent.hold) }) }
-	// Released however the test ends, so a failure can't leave the worker blocking the cleanup.
 	t.Cleanup(open)
 	done := make(chan struct{})
 	go func() {
@@ -214,7 +204,6 @@ func TestLoginMethodsSaysWhenAResetCanBeEmailed(t *testing.T) {
 	if got := decode[map[string]any](t, rec)["reset_by_email"]; got != true {
 		t.Fatalf("reset_by_email = %v", got)
 	}
-	// With passwords off there is nothing to reset.
 	off, sent := mailEnv(t, func(o *Options) { o.DisablePasswordLogin = true })
 	rec = off.client().do(http.MethodGet, "/api/login/methods", nil)
 	expect(t, rec, http.StatusOK)
@@ -231,11 +220,10 @@ func TestLoginMethodsSaysWhenAResetCanBeEmailed(t *testing.T) {
 func TestResetRequestLimitsPerEmailTheSameForEveryAddress(t *testing.T) {
 	e, sent := mailEnv(t, nil)
 	e.setup()
-	// The same limit and the same answers for an address that has an account and one that hasn't.
 	for _, email := range []string{"owner@example.com", "nobody@example.com"} {
 		for i := range resetEmailAttempts {
 			c := e.client()
-			c.ip = fmt.Sprintf("192.0.2.%d:1", 10+i) // other addresses: this is the per-email limit
+			c.ip = fmt.Sprintf("192.0.2.%d:1", 10+i)
 			if rec := e.requestReset(c, email); rec.Code != http.StatusAccepted {
 				t.Fatalf("%s request %d = %d", email, i, rec.Code)
 			}
@@ -252,7 +240,6 @@ func TestResetRequestLimitsPerEmailTheSameForEveryAddress(t *testing.T) {
 	if n := len(sent.messages()); n != resetEmailAttempts {
 		t.Fatalf("%d messages, want %d: a limited request sends nothing", n, resetEmailAttempts)
 	}
-	// Another address is not held back by it, and the window ends.
 	if rec := e.client().do(http.MethodPost, "/api/password-reset/request", map[string]string{"email": "other@example.com"}); rec.Code != http.StatusAccepted {
 		t.Fatalf("another email = %d", rec.Code)
 	}
@@ -274,7 +261,6 @@ func TestResetRequestLimitsPerClientAddress(t *testing.T) {
 	}
 	rec := c.do(http.MethodPost, "/api/password-reset/request", map[string]string{"email": "one-more@example.com"})
 	expect(t, rec, http.StatusTooManyRequests)
-	// The refused one didn't count against that email: another client can still ask for it.
 	other := e.client()
 	other.ip = "198.51.100.7:1"
 	if rec := other.do(http.MethodPost, "/api/password-reset/request", map[string]string{"email": "one-more@example.com"}); rec.Code != http.StatusAccepted {
@@ -283,8 +269,6 @@ func TestResetRequestLimitsPerClientAddress(t *testing.T) {
 }
 
 func TestResetRequestIsNotRefusedForSendsStillRunning(t *testing.T) {
-	// Whether the answer is a refusal must not depend on how many sends are running: only an
-	// address that has an account holds one, so that would say which addresses have one.
 	e, sent := mailEnv(t, nil)
 	e.setup()
 	for range mailConcurrency {
@@ -306,7 +290,6 @@ func TestResetRequestIsNotRefusedForSendsStillRunning(t *testing.T) {
 	if known.Body.String() != unknown.Body.String() {
 		t.Fatalf("bodies differ: %q vs %q", known.Body.String(), unknown.Body.String())
 	}
-	// The email waits its turn, and goes when one is free.
 	if n := len(sent.messages()); n != 0 {
 		t.Fatalf("%d messages before a turn was free", n)
 	}
@@ -322,7 +305,7 @@ func TestResetRequestIsLimitedByHowManyTheServerStarts(t *testing.T) {
 	e.setup()
 	ask := func(i int, email string) *httptest.ResponseRecorder {
 		c := e.client()
-		c.ip = fmt.Sprintf("192.0.2.%d:1", i) // other addresses and emails: only the server's own limit is left
+		c.ip = fmt.Sprintf("192.0.2.%d:1", i)
 		return c.do(http.MethodPost, "/api/password-reset/request", map[string]string{"email": email})
 	}
 	for i := range resetStartBurst {
@@ -330,7 +313,6 @@ func TestResetRequestIsLimitedByHowManyTheServerStarts(t *testing.T) {
 			t.Fatalf("request %d = %d", i, rec.Code)
 		}
 	}
-	// Busy for everyone, whatever they ask: the same for an address with an account and one without.
 	for i, email := range []string{"owner@example.com", "nobody@example.com"} {
 		rec := ask(200+i, email)
 		expect(t, rec, http.StatusTooManyRequests)
@@ -338,7 +320,6 @@ func TestResetRequestIsLimitedByHowManyTheServerStarts(t *testing.T) {
 			t.Fatalf("%s: headers %v body %s", email, rec.Header(), rec.Body.String())
 		}
 	}
-	// Refused requests counted against nobody: that email is still free to ask once there is room.
 	e.advance(resetStartEvery)
 	if rec := ask(210, "owner@example.com"); rec.Code != http.StatusAccepted {
 		t.Fatalf("after a token came back = %d", rec.Code)
@@ -349,7 +330,7 @@ func TestResetRequestIsLimitedByHowManyTheServerStarts(t *testing.T) {
 func TestAShutdownEndsTheSendsAndWaitsForThem(t *testing.T) {
 	e, sent := mailEnv(t, nil)
 	e.setup()
-	sent.hold = make(chan struct{}) // a relay that never answers
+	sent.hold = make(chan struct{})
 	t.Cleanup(func() {
 		e.svc.stopWork()
 		e.svc.WaitIdle()
@@ -364,7 +345,6 @@ func TestAShutdownEndsTheSendsAndWaitsForThem(t *testing.T) {
 	if n := len(sent.messages()); n != 0 {
 		t.Fatalf("%d messages", n)
 	}
-	// Nothing runs after it: the work has ended, so the database can close.
 	e.svc.WaitIdle()
 }
 
@@ -372,7 +352,7 @@ func TestAShutdownWaitsOnlyUntilItsDeadline(t *testing.T) {
 	e, _ := mailEnv(t, nil)
 	e.setup()
 	release := make(chan struct{})
-	e.svc.mailWork.Add(1) // work that doesn't stop when asked
+	e.svc.mailWork.Add(1)
 	go func() { defer e.svc.mailWork.Done(); <-release }()
 	t.Cleanup(func() { close(release) })
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -383,8 +363,6 @@ func TestAShutdownWaitsOnlyUntilItsDeadline(t *testing.T) {
 }
 
 func TestAnEmailKeepsTheRequestsValuesButNotItsEnd(t *testing.T) {
-	// The work is made from the request's context before the goroutine starts: it has the values
-	// (the client address of the audit log) and isn't ended when the request is.
 	e, sent := mailEnv(t, nil)
 	e.setup()
 	sent.hold = make(chan struct{})
@@ -429,12 +407,10 @@ func TestResetEmailIsInTheRecipientsLanguage(t *testing.T) {
 	owner, ws := e.setup()
 	e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Maria")
 
-	// Nothing picked, no workspace default: English.
 	e.requestReset(e.client(), "member@example.com")
 	if m := sent.messages(); len(m) != 1 || m[0].Subject != "Reset your taskto.ai password" {
 		t.Fatalf("english: %+v", m)
 	}
-	// The workspace's default.
 	if _, err := e.db.Exec(`UPDATE workspaces SET locale = 'pt-BR' WHERE id = ?`, ws); err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +418,6 @@ func TestResetEmailIsInTheRecipientsLanguage(t *testing.T) {
 	if m := sent.messages(); len(m) != 2 || !strings.Contains(m[1].Subject, "Redefina sua senha") || !strings.Contains(m[1].Text, "Olá, Maria") {
 		t.Fatalf("workspace default: %+v", m)
 	}
-	// The one the person picked wins.
 	if _, err := e.db.Exec(`UPDATE users SET locale = 'en' WHERE email = 'member@example.com'`); err != nil {
 		t.Fatal(err)
 	}
@@ -475,8 +450,6 @@ func TestANewResetEmailReplacesTheEarlierLinkOnceSent(t *testing.T) {
 }
 
 func TestAFailedResetEmailKeepsTheEarlierLink(t *testing.T) {
-	// Anyone can ask for any address: a request whose email isn't accepted must not end the link an
-	// admin made, or the last one emailed, and leaves no link of its own.
 	e, sent := mailEnv(t, nil)
 	owner, ws := e.setup()
 	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Maria")
@@ -489,7 +462,6 @@ func TestAFailedResetEmailKeepsTheEarlierLink(t *testing.T) {
 	if n := e.count(`SELECT COUNT(*) FROM password_resets WHERE user_id = ?`, memberID); n != 1 {
 		t.Fatalf("%d reset links stored, want only the admin's", n)
 	}
-	// While a send is going on, both work; the earlier one goes only once the relay has taken the new one.
 	sent.err = nil
 	sent.hold = make(chan struct{})
 	var release sync.Once
@@ -525,7 +497,6 @@ func TestReplacedLinksAreRemovedEvenWhenTheSendUsedUpItsTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The send's context has ended by the time the relay's answer is handled.
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := e.svc.dropOlderResets(ended, memberID, id); err != nil {
@@ -548,8 +519,6 @@ func TestAFailedResetEmailLeavesTheAdminsLinkWorking(t *testing.T) {
 }
 
 func TestARequestCannotReachAnotherPersonsLink(t *testing.T) {
-	// Asking for someone else's address gets the asker nothing: the link goes to the address, and
-	// the answer, the same for everyone, has none.
 	e, sent := mailEnv(t, nil)
 	owner, ws := e.setup()
 	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Maria")
@@ -562,7 +531,6 @@ func TestARequestCannotReachAnotherPersonsLink(t *testing.T) {
 	if rec.Body.String() != "{}\n" {
 		t.Fatalf("body = %q", rec.Body.String())
 	}
-	// The mail's recipient is never the one who asked, unless they are the account.
 	if strings.Contains(fmt.Sprint(msgs[0]), "member@example.com") {
 		t.Fatal("the asker's address is in the message")
 	}
@@ -574,7 +542,7 @@ func TestAFailedResetEmailIsLoggedWithoutTheLinkOrTheReply(t *testing.T) {
 	e.setup()
 	sent.err = &mail.SendError{Stage: mail.StageRejected, Code: 550, Err: errors.New("550 relay.internal.example refused owner@example.com")}
 	rec := e.requestReset(e.client(), "owner@example.com")
-	expect(t, rec, http.StatusAccepted) // the same answer: the person is not told
+	expect(t, rec, http.StatusAccepted)
 	out := logs.String()
 	if !strings.Contains(out, "the reset email wasn't sent") || !strings.Contains(out, "smtp_code=550") || !strings.Contains(out, "stage=rejected") {
 		t.Fatalf("log:\n%s", out)
@@ -591,7 +559,6 @@ func TestResetRequestNeedsNoLoginAndRefusesTokens(t *testing.T) {
 	if code := e.withToken(token, http.MethodPost, "/api/password-reset/request", map[string]string{"email": "owner@example.com"}); code != http.StatusForbidden && code != http.StatusUnauthorized {
 		t.Fatalf("with an access token = %d", code)
 	}
-	// A cross-site request is refused by the CSRF guard, as for every state change.
 	r := e.client().req(http.MethodPost, "/api/password-reset/request", map[string]string{"email": "owner@example.com"})
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	rec := e.client().send(r)
@@ -609,15 +576,12 @@ func TestAResetRequestIsAuditedOnlyForAnAccountThatHasAPassword(t *testing.T) {
 	}
 	e.requestReset(e.client(), "owner@example.com")
 	row := e.one(audit.PasswordResetRequested)
-	// No actor: whoever asked isn't known to be the account's owner. The client address is there.
 	wantEvent(t, row, 0, 0, audit.TargetUser, ownerID)
 	if row.Details["emailed"] != true {
 		t.Fatalf("details = %v", row.Details)
 	}
-	// Neither the link nor the address is in the log.
 	audittest.NoSecrets(t, e.db, map[string]string{"the reset token": tokenIn(t, sent.messages()[0]), "the address": "owner@example.com"})
 
-	// A send that failed says so.
 	sent.err = errors.New("the relay is down")
 	e.requestReset(e.client(), "owner@example.com")
 	if rows := e.events(audit.PasswordResetRequested); len(rows) != 2 || rows[1].Details["emailed"] != false {

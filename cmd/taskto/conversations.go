@@ -20,11 +20,6 @@ import (
 const conversationsUsage = `usage: taskto conversations [-config file] [-data-dir dir] check
        taskto conversations [-config file] [-data-dir dir] [-lost [-all]] [-orphans] clean`
 
-// runConversations is `taskto conversations`: check reports where the server's conversations
-// and the agent runtime's have drifted apart (conversations.CheckDrift), and clean repairs
-// that: -lost deletes the server's rows of conversations the agent runtime has lost, and
-// -orphans retires the agent runtime's conversations the server never recorded. Both talk to
-// the agent runtime of the server running on the data directory.
 func runConversations(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("taskto conversations", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -61,7 +56,6 @@ func runConversations(ctx context.Context, args []string, getenv func(string) st
 	if _, err := os.Stat(dbPath); err != nil {
 		return fmt.Errorf("no database in %s: %w", cfg.DataDir, err)
 	}
-	// Not migrated: that is the running server's job.
 	sqlDB, err := db.Open(ctx, dbPath)
 	if err != nil {
 		return err
@@ -108,7 +102,6 @@ func runConversations(ctx context.Context, args []string, getenv func(string) st
 	return nil
 }
 
-// printDrift writes what CheckDrift found, by IDs only: titles are private to their owners.
 func printDrift(w io.Writer, d conversations.Drift) {
 	fmt.Fprintf(w, "lost: %d conversations the agent runtime no longer has (clean -lost deletes them)\n", len(d.Lost))
 	for _, l := range d.Lost {

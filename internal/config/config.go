@@ -1,8 +1,3 @@
-// Package config reads the server's settings from flags, TASKTO_* environment variables
-// and an optional config file.
-//
-// A setting given in more than one place takes the first of: flag, environment variable,
-// config file, default.
 package config
 
 import (
@@ -27,143 +22,47 @@ import (
 	"taskto.ai/taskto/internal/mail"
 )
 
-// Config is the server's configuration.
 type Config struct {
-	// Addr is the address the HTTP server listens on.
-	Addr string
-	// DataDir holds everything the server stores: the SQLite database, and later the
-	// knowledge-base repositories and the agent runtime's state.
-	DataDir string
-	// UpdateStatusDir is the directory where the host's updater (deploy/taskto-update.sh) writes
-	// the status it shows admins (docs/install.md#automatic-updates); the server only reads it.
-	// Empty means no updater is set up for this server.
-	UpdateStatusDir string
-	// UpdateRequestDir is the directory "Update now" (Settings → About) puts its request in, for
-	// the host's updater to take. It is the one place of the updater's that the server writes.
-	// Empty means the button is off.
-	UpdateRequestDir string
-	// InsecureCookies drops the Secure attribute from the session cookie, so a browser
-	// sends it over plain http. For local development only: on any other network the
-	// cookie would travel in clear text.
-	InsecureCookies bool
-	// TrustedProxies lists the reverse proxies, as comma-separated IP addresses or CIDR
-	// prefixes, whose X-Forwarded-For gives the client's address (see TrustedProxyPrefixes).
-	// Empty means none: the client is whoever connects.
-	TrustedProxies string
-	// SSOProviders is the path of the operator's single sign-on providers file
-	// (docs/sso.md); empty means password logins only.
-	SSOProviders string
-	// PublicURL is the server's external origin, https://taskto.example.com: the base of the
-	// providers' redirect URIs and of integrations' webhook addresses (the reverse proxy must
-	// forward POST /hooks/*). Required with SSOProviders (see ValidatePublicURL).
-	PublicURL string
-	// DisablePasswordLogin turns passwords off, for instances where everyone signs in with a
-	// provider. Needs SSOProviders.
-	DisablePasswordLogin bool
-	// WorkspaceCreation says who may create a workspace besides first-run setup: "admins"
-	// (the default; an admin of any existing workspace), "anyone" (every signed-in person) or
-	// "off" (nobody: the one workspace setup made, and no others). See WorkspaceCreationMode.
-	WorkspaceCreation string
-	// ProviderEgressWorkspace and ProviderEgressPersonal are the egress policies of the
-	// provider accounts workspaces' admins add and those any member adds for themselves: which
-	// addresses the server, and the agent runtime, may connect to when they call the
-	// accounts' endpoints. "any" (the default), "public", or a comma-separated allowlist of
-	// hosts, IP addresses and CIDR prefixes, which may include "public" (see internal/egress).
+	Addr                    string
+	DataDir                 string
+	UpdateStatusDir         string
+	UpdateRequestDir        string
+	InsecureCookies         bool
+	TrustedProxies          string
+	SSOProviders            string
+	PublicURL               string
+	DisablePasswordLogin    bool
+	WorkspaceCreation       string
 	ProviderEgressWorkspace string
 	ProviderEgressPersonal  string
 
-	// Agent runs the agent runtime, a Node sidecar the server starts, supervises and stops.
-	// Its database and socket live under DataDir.
-	Agent bool
-	// AgentNode is the Node.js executable that runs the sidecar, looked up in PATH unless
-	// it is a path.
-	AgentNode string
-	// AgentEntry is the sidecar's entry point. Empty means agent/dist/index.js, looked for
-	// next to the binary, one directory above it (bin/ in a checkout) and in the working
-	// directory.
-	AgentEntry string
-	// AgentProviders is the operator's model providers file (docs/agent-providers.md): its
-	// providers are offered to everyone, before the accounts workspaces and users add. Empty
-	// means the scripted offline model in their place.
+	Agent          bool
+	AgentNode      string
+	AgentEntry     string
 	AgentProviders string
 
-	// CLIWorkers runs conversations on the official coding-agent CLIs, signed in with each
-	// user's own subscription (docs/cli-workers.md): "off" or "" (the default); "local", the CLIs
-	// running as the server's own OS user, allowed only while the instance has one user,
-	// since there is no OS boundary between users then; or "local-unsafe", the same without
-	// that check, for development and tests; or "container", a worker of its own
-	// (`taskto cli-worker`, CLIWorkerSocket) that runs each user's CLIs as a Unix user of
-	// their own.
-	CLIWorkers string
-	// CLIWorkerSocket is the container worker's socket (with CLIWorkers "container").
-	CLIWorkerSocket string
-	// UnsafePrivilegedAgents lets the agent sidecar and local CLI workers start although this
-	// server runs as root or has a passwordless sudo, with a warning (docs/agent-safety.md).
-	// For development only; the install never sets it.
+	CLIWorkers             string
+	CLIWorkerSocket        string
 	UnsafePrivilegedAgents bool
-	// CLIProxyListen is where the per-turn proxy listens: workspaces' shared CLI accounts, and
-	// taskto's tools for CLI turns
-	// (docs/account-switching.md): a listener of its own, never the public one. A TCP address,
-	// or in container mode "unix:" and a socket's absolute path, which the worker relays to
-	// the CLIs (the Compose file's, since the worker's network can't reach the server). Empty
-	// is 127.0.0.1 on a free port in the local modes, and no proxy in container mode.
-	CLIProxyListen string
-	// CLIProxyURL is the proxy's address as the CLIs reach it. Empty is the listener's own
-	// address in the local modes.
-	CLIProxyURL string
-	// Browser gives the agent a browser per user, with a live view and hand-over
-	// (docs/agent-browser.md). It runs in the CLI worker, so it needs CLIWorkers.
-	Browser bool
-	// BrowserChromium is the Chromium (or Chrome) executable in local mode; empty looks for
-	// chromium on the PATH. The container worker uses its image's.
-	BrowserChromium string
+	CLIProxyListen         string
+	CLIProxyURL            string
+	Browser                bool
+	BrowserChromium        string
 
-	// KBMaxFileSize is the largest file of any kind in the knowledge base, in bytes.
-	// Zero means the knowledge base's default.
-	KBMaxFileSize int64
-	// KBLargeFileSize is the size over which a file other than Markdown is kept out of
-	// git, unversioned, in bytes; audio and video always are. It is also the largest
-	// Markdown document. Zero means the knowledge base's default.
-	KBLargeFileSize int64
-	// KBMaxRepoSize caps each space's knowledge-base repository, history included, in
-	// bytes. Zero means the knowledge base's default.
-	KBMaxRepoSize int64
-	// KBMaxUnversionedSize caps the bytes of each space's unversioned files, in bytes.
-	// Zero means the knowledge base's default.
-	KBMaxUnversionedSize int64
-	// StorageQuotaWorkspace caps what all of a workspace's spaces store together, in bytes
-	// (docs/quotas.md). Zero, the default, is unlimited.
+	KBMaxFileSize         int64
+	KBLargeFileSize       int64
+	KBMaxRepoSize         int64
+	KBMaxUnversionedSize  int64
 	StorageQuotaWorkspace int64
-	// StorageQuotaUser caps what each member's private space stores, in bytes. Zero, the
-	// default, is unlimited.
-	StorageQuotaUser int64
-	// AccountDeletionDays is how many days a deleted account is kept, switched off, before it is
-	// purged (docs/api.md#deleting-an-account). Zero means the default, 14.
-	AccountDeletionDays int
-	// SearchVectorCache is the most memory semantic search's vector cache may hold, in
-	// bytes. Zero means the search index's default; negative, "off", turns the cache off.
-	SearchVectorCache int64
+	StorageQuotaUser      int64
+	AccountDeletionDays   int
+	SearchVectorCache     int64
 
-	// DictationLocal is the local speech model dictation uses when a workspace has no API
-	// key (docs/dictation.md): "parakeet-v3" (the default), "whistle", or "off". Its files are
-	// downloaded on first use.
 	DictationLocal string
-	// DictationCache holds the local speech model's files. Empty means <data>/cache/dictation.
 	DictationCache string
-	// AddonsDir is where the operator installs add-ons, such as Desert Ant Voz. Empty means
-	// <data>/addons.
-	AddonsDir string
-	// PushContact is how the push services can reach whoever runs this server (the VAPID subject
-	// of RFC 8292): a mailto: or https: URL. Empty means the project's address.
-	PushContact string
+	AddonsDir      string
+	PushContact    string
 
-	// SMTPHost, SMTPPort, SMTPSecurity, SMTPFrom, SMTPUsername and SMTPPasswordFile are the
-	// operator's outgoing email (docs/install.md#email): the server sends invitations, password
-	// resets and notifications through this SMTP server. SMTPHost empty means no email.
-	// SMTPSecurity is "starttls" (the default), "tls" (implicit TLS) or "none"; SMTPPort 0 is
-	// the security's usual port (587, 465, 25); SMTPFrom is the sender, an address or "Name
-	// <address>". SMTPPasswordFile is the file the password is read from at startup, never the
-	// password itself. SMTPEgress is the egress policy of the connection (see internal/egress).
 	SMTPHost         string
 	SMTPPort         int
 	SMTPSecurity     string
@@ -172,34 +71,20 @@ type Config struct {
 	SMTPPasswordFile string
 	SMTPEgress       string
 
-	// IntegrationEgress is the egress policy of the calls to integrations' providers (Stripe,
-	// Square; see internal/egress and docs/integrations.md). Empty means "public": addresses are
-	// checked after name resolution on every connection, so loopback, private, link-local and
-	// metadata addresses are refused. Each adapter pins its own hosts besides, so the policy
-	// never lists provider names.
 	IntegrationEgress string
 
-	// AuditRetentionDays is how many days the audit log's events are kept (docs/audit.md). Zero
-	// means the default, 365; -1, "off" in the settings, keeps them for ever.
 	AuditRetentionDays int
 
-	// AppDeletedRetentionDays is how many days an app's deleted records stay restorable before
-	// they, and their history, are removed (docs/api.md). Zero means the default, 90; -1, "off" in
-	// the settings, keeps them for ever.
 	AppDeletedRetentionDays int
 
-	// ConfigFile is the config file that was read, or "" if none was.
-	ConfigFile string
-	// ShowVersion asks the binary to print its version and exit (flag only).
+	ConfigFile  string
 	ShowVersion bool
 }
 
-// Default returns the configuration used when nothing is set.
 func Default() Config {
 	return Config{Addr: "127.0.0.1:8080", DataDir: "data", AgentNode: "node"}
 }
 
-// setting is one configuration value and the names it goes by in each source.
 type setting struct {
 	flag, env, key string
 	usage          string
@@ -631,7 +516,6 @@ var settings = []setting{
 	},
 }
 
-// WorkspaceCreationMode is who may create a workspace: "admins" when unset.
 func (c Config) WorkspaceCreationMode() string {
 	if c.WorkspaceCreation == "" {
 		return "admins"
@@ -639,7 +523,6 @@ func (c Config) WorkspaceCreationMode() string {
 	return c.WorkspaceCreation
 }
 
-// SMTPSecurityMode is how the SMTP connection is secured, "starttls" when unset.
 func (c Config) SMTPSecurityMode() string {
 	if c.SMTPSecurity == "" {
 		return "starttls"
@@ -647,7 +530,6 @@ func (c Config) SMTPSecurityMode() string {
 	return c.SMTPSecurity
 }
 
-// SMTPPortNumber is the SMTP server's port: the one set, else the security's usual one.
 func (c Config) SMTPPortNumber() int {
 	if c.SMTPPort != 0 {
 		return c.SMTPPort
@@ -661,15 +543,11 @@ func (c Config) SMTPPortNumber() int {
 	return 587
 }
 
-// SMTPEgressPolicy is the egress policy of the SMTP connection. Load has already checked it.
 func (c Config) SMTPEgressPolicy() egress.Policy {
 	p, _ := egress.Parse(c.SMTPEgress)
 	return p
 }
 
-// IntegrationEgressPolicy is the egress policy of the calls to integrations' providers: what is
-// set, or "public" when nothing is. It fails closed: a value that is empty (egress.Parse reads an
-// empty policy as "any") or that doesn't parse is "public" too. Load has already checked it.
 func (c Config) IntegrationEgressPolicy() egress.Policy {
 	public := egress.MustParse("public")
 	if strings.TrimSpace(c.IntegrationEgress) == "" {
@@ -682,8 +560,6 @@ func (c Config) IntegrationEgressPolicy() egress.Policy {
 	return p
 }
 
-// AuditRetention is how long the audit log's events are kept: a year when unset, and zero, for
-// ever, when turned off.
 func (c Config) AuditRetention() time.Duration {
 	switch {
 	case c.AuditRetentionDays < 0:
@@ -694,8 +570,6 @@ func (c Config) AuditRetention() time.Duration {
 	return time.Duration(c.AuditRetentionDays) * 24 * time.Hour
 }
 
-// AppDeletedRetention is how long an app's deleted records are kept: 90 days when unset, and zero,
-// for ever, when turned off.
 func (c Config) AppDeletedRetention() time.Duration {
 	switch {
 	case c.AppDeletedRetentionDays < 0:
@@ -706,7 +580,6 @@ func (c Config) AppDeletedRetention() time.Duration {
 	return time.Duration(c.AppDeletedRetentionDays) * 24 * time.Hour
 }
 
-// LocalDictation is the local speech model, "off" included: parakeet-v3 when unset.
 func (c Config) LocalDictation() string {
 	if c.DictationLocal == "" {
 		return "parakeet-v3"
@@ -714,7 +587,6 @@ func (c Config) LocalDictation() string {
 	return c.DictationLocal
 }
 
-// DictationCacheDir is where the local speech model's files are kept.
 func (c Config) DictationCacheDir() string {
 	if c.DictationCache != "" {
 		return c.DictationCache
@@ -722,7 +594,6 @@ func (c Config) DictationCacheDir() string {
 	return filepath.Join(c.DataDir, "cache", "dictation")
 }
 
-// AddonsDirectory is where the operator installs add-ons.
 func (c Config) AddonsDirectory() string {
 	if c.AddonsDir != "" {
 		return c.AddonsDir
@@ -730,14 +601,11 @@ func (c Config) AddonsDirectory() string {
 	return filepath.Join(c.DataDir, "addons")
 }
 
-// TrustedProxyPrefixes returns TrustedProxies parsed. Load has already checked it.
 func (c Config) TrustedProxyPrefixes() []netip.Prefix {
 	prefixes, _ := ParseTrustedProxies(c.TrustedProxies)
 	return prefixes
 }
 
-// ParseTrustedProxies parses a comma-separated list of IP addresses and CIDR prefixes,
-// such as "10.0.0.0/8, 192.0.2.7". An address is a prefix of one address.
 func ParseTrustedProxies(list string) ([]netip.Prefix, error) {
 	var prefixes []netip.Prefix
 	for item := range strings.SplitSeq(list, ",") {
@@ -763,15 +631,12 @@ func ParseTrustedProxies(list string) ([]netip.Prefix, error) {
 	return prefixes, nil
 }
 
-// Egress returns the egress policies of workspaces' and personal provider accounts. Load has
-// already checked them.
 func (c Config) Egress() (workspace, personal egress.Policy) {
 	workspace, _ = egress.Parse(c.ProviderEgressWorkspace)
 	personal, _ = egress.Parse(c.ProviderEgressPersonal)
 	return workspace, personal
 }
 
-// setEgress returns a setter for the egress policy field that field points to.
 func setEgress(field func(*Config) *string) func(*Config, string) error {
 	return func(c *Config, v string) error {
 		p, err := egress.Parse(v)
@@ -783,11 +648,6 @@ func setEgress(field func(*Config) *string) func(*Config, string) error {
 	}
 }
 
-// setIntegrationEgress is setEgress for the integrations' policy, where nothing said is "public",
-// not "any": an empty value (an empty flag or file entry) is the default, so it can't open calls
-// that carry credentials to every address. The checked text is kept as it was written, not
-// as the parsed policy prints it: "any." is a host name, and printing it as "any" would read back
-// as the opt-out of every restriction.
 func setIntegrationEgress(field func(*Config) *string) func(*Config, string) error {
 	return func(c *Config, v string) error {
 		v = strings.TrimSpace(v)
@@ -803,7 +663,6 @@ func setIntegrationEgress(field func(*Config) *string) func(*Config, string) err
 	}
 }
 
-// setBool returns a setter for the boolean field that field points to.
 func setBool(field func(*Config) *bool) func(*Config, string) error {
 	return func(c *Config, v string) error {
 		b, err := strconv.ParseBool(v)
@@ -815,14 +674,11 @@ func setBool(field func(*Config) *bool) func(*Config, string) error {
 	}
 }
 
-// sizeUnits are the suffixes a size may have, largest first.
 var sizeUnits = []struct {
 	suffix string
 	bytes  int64
 }{{"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}}
 
-// setSize returns a setter for the size field that field points to: a positive number of
-// bytes, or of KiB, MiB or GiB ("10MiB").
 func setSize(field func(*Config) *int64) func(*Config, string) error {
 	return func(c *Config, v string) error {
 		num, unit := v, int64(1)
@@ -841,7 +697,6 @@ func setSize(field func(*Config) *int64) func(*Config, string) error {
 	}
 }
 
-// formatSize writes n with the largest unit that divides it, and 0 (the default) as "".
 func formatSize(n int64) string {
 	if n == 0 {
 		return ""
@@ -854,7 +709,6 @@ func formatSize(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
-// rawFlag records a flag's text so it can be applied after the lower layers.
 type rawFlag struct {
 	value  string
 	isBool bool
@@ -864,10 +718,6 @@ func (f *rawFlag) String() string     { return f.value }
 func (f *rawFlag) Set(v string) error { f.value = v; return nil }
 func (f *rawFlag) IsBoolFlag() bool   { return f.isBool }
 
-// Load builds the configuration from command-line args (without the program name),
-// the environment as seen through getenv, and the config file named by -config or
-// TASKTO_CONFIG. Flag errors, including flag.ErrHelp for -h, are returned as is, after
-// the flag package has written its message to output.
 func Load(args []string, getenv func(string) string, output io.Writer) (Config, error) {
 	cfg := Default()
 
@@ -900,7 +750,6 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 	}
 
 	for _, s := range settings {
-		// An empty environment variable counts as unset.
 		if v := getenv(s.env); v != "" {
 			if err := s.set(&cfg, v); err != nil {
 				return Config{}, fmt.Errorf("%s: %w", s.env, err)
@@ -971,9 +820,6 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 	return cfg, nil
 }
 
-// validateSMTP checks that the SMTP settings make sense together: a host needs a sender, a
-// username needs a password and the other way round, and a password is never sent over a
-// connection that isn't encrypted: with -smtp-security none there is no sign-in, to any host.
 func validateSMTP(cfg Config) error {
 	if cfg.SMTPHost == "" {
 		if cfg.SMTPPort != 0 || cfg.SMTPSecurity != "" || cfg.SMTPFrom != "" || cfg.SMTPUsername != "" ||
@@ -995,7 +841,7 @@ func validateSMTP(cfg Config) error {
 }
 
 func readFile(cfg *Config, path string) error {
-	raw, err := os.ReadFile(path) // #nosec G304 G703 -- the operator chooses the config file.
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
@@ -1005,10 +851,6 @@ func readFile(cfg *Config, path string) error {
 	return nil
 }
 
-// parse reads a config file. The format is a small subset of TOML, so a file stays
-// valid TOML if a full parser is ever needed: one `key = value` per line, where a value
-// is a double-quoted string or true/false, and `#` starts a comment. Tables, arrays and
-// numbers are not supported, and unknown or repeated keys are errors.
 func parse(cfg *Config, raw []byte) error {
 	byKey := map[string]setting{}
 	for _, s := range settings {
@@ -1056,7 +898,6 @@ func parse(cfg *Config, raw []byte) error {
 	return sc.Err()
 }
 
-// stripComment removes a `#` comment that isn't inside a quoted string.
 func stripComment(line string) string {
 	inString, escaped := false, false
 	for i, r := range line {
@@ -1074,8 +915,6 @@ func stripComment(line string) string {
 	return line
 }
 
-// ValidatePushContact checks a VAPID contact: a mailto: address or an https: URL with a host,
-// which is all RFC 8292 allows a subject to be. "" is valid: the default.
 func ValidatePushContact(v string) error {
 	if v == "" {
 		return nil
@@ -1100,9 +939,6 @@ func ValidatePushContact(v string) error {
 	return errors.New("must be a mailto: address or an https: URL")
 }
 
-// ValidatePublicURL checks the server's external origin and returns it without a trailing
-// slash. It must be https, with a host, and no path, query, fragment or credentials; http is
-// accepted for localhost, 127.x and [::1] when insecureCookies is set, for development.
 func ValidatePublicURL(v string, insecureCookies bool) (string, error) {
 	u, err := url.Parse(v)
 	bad := err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") ||

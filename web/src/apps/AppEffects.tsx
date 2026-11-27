@@ -1,10 +1,3 @@
-// What an app's actions set going: cards, documents and places to open. They are done by the
-// server in the background, as the person who acted, so this only shows how they are getting on
-// and, for one that failed, lets the person who acted retry it. The server decides what each
-// person sees and may retry: this only asks.
-//
-// The same list (EffectItems) shows what a preview of a draft's action would set going.
-
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type AppEffect, type AppEffectList, api, codeText, errorText } from '../api'
 import { type Format, type Key, useFormat, useT } from '../i18n'
@@ -17,11 +10,8 @@ import { Notice } from '../ui/Notice'
 import { Row, Rows } from '../ui/Rows'
 import './AppEffects.css'
 
-// How often the list is asked for again while some effect waits or runs.
 const POLL_MS = 3000
-// How many effects a page holds.
 const PAGE = 50
-// The most the server lists at once.
 const MAX_PAGE = 200
 
 export function AppEffects({
@@ -31,31 +21,26 @@ export function AppEffects({
   reloadKey = 0,
 }: {
   workspace: number
-  // …/spaces/{space}/apps/{app}
   base: string
-  // Whether the space lets the caller write; a retry is a write.
   writable: boolean
-  // Changed when an action ran, which may have queued effects.
   reloadKey?: number
 }) {
   const [open, setOpen] = useState(false)
-  // Only the ones that failed: they stay until retried, however many newer there are.
   const [failedOnly, setFailedOnly] = useState(false)
-  // Older pages the person asked for, after the newest page that is kept fresh.
   const [older, setOlder] = useState<{ effects: AppEffect[]; more: boolean } | null>(null)
   const [olderError, setOlderError] = useState<string | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const t = useT()
   const query = failedOnly ? 'status=failed&' : ''
   const list = useLoad(() => api<AppEffectList>(`${base}/effects?${query}limit=${PAGE}`), [base, query, reloadKey])
-  // Another filter is another list.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a changed filter or app drops the older pages
-  useEffect(() => setOlder(null), [base, query])
+  const pages = `${base}?${query}`
+  const [olderPages, setOlderPages] = useState(pages)
+  if (olderPages !== pages) {
+    setOlderPages(pages)
+    setOlder(null)
+  }
   const olderRef = useRef(older)
   olderRef.current = older
-  // The older pages loaded are read again as one request (they are the newest first, so what they
-  // cover is everything older than their first effect): an effect on one of them that is retried,
-  // or that was waiting, is shown as it is now, not as it was when the page was loaded.
   const refreshOlder = useCallback(async () => {
     const kept = olderRef.current
     const first = kept?.effects[0]
@@ -81,7 +66,6 @@ export function AppEffects({
   }, [waiting, changed])
 
   const data = list.data
-  // An app that never set anything going shows nothing of this.
   if (!data || (data.effects.length === 0 && data.active === 0 && data.failed === 0 && !failedOnly)) return null
   const shown = [...data.effects, ...(older?.effects ?? [])]
   const more = older ? older.more : (data.more ?? false)
@@ -154,8 +138,6 @@ async function retry(base: string, effect: AppEffect): Promise<AppEffect> {
   return api<AppEffect>(`${base}/effects/${effect.id}/retry`, { method: 'POST', body: {} })
 }
 
-// A list of effects, each with its status, what it makes, why it failed and, for a failed one the
-// caller may retry, the retry.
 export function EffectItems({
   workspace,
   effects,
@@ -163,7 +145,6 @@ export function EffectItems({
   onRetry,
   changed,
 }: {
-  // Without one, a done effect's result isn't linked.
   workspace?: number
   effects: AppEffect[]
   label: string
@@ -266,8 +247,6 @@ export function EffectItems({
   )
 }
 
-// The tone of each status: what waits is neutral, what runs informs, what is done succeeded, what
-// failed is the danger; a preview's effects are only simulated.
 const STATUS_TONE: Record<string, BadgeTone> = {
   pending: 'neutral',
   running: 'info',
@@ -276,15 +255,10 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   simulated: 'neutral',
 }
 
-// What an effect makes, in a line: a card's title, a document's path, where a card goes.
 function detail(e: AppEffect, t: ReturnType<typeof useT>, f: Pick<Format, 'number'>): string {
   const d = e.detail
   switch (e.kind) {
     case 'create_payment_link': {
-      // The amount is exact decimal text; only its showing is the locale's. An amount the server
-      // refused is shown as it is, exactly (a number would round 120.123 to 120.12, which is not what
-      // the record holds), and so is one that is not a number. With no amount or currency, nothing is
-      // guessed: it comes from the record.
       const n = Number(d.amount)
       if (!d.amount || !d.currency) return t('apps.effects.paymentLinkNoAmount')
       if (!Number.isFinite(n) || e.error?.code === 'integration_amount_refused') return `${d.amount} ${d.currency}`
@@ -305,9 +279,6 @@ function detail(e: AppEffect, t: ReturnType<typeof useT>, f: Pick<Format, 'numbe
   }
 }
 
-// Where a done effect's result is: the web app turns the kind and IDs the server gives into its own
-// address (never one the server or a definition sent), in the workspace of the space it is in,
-// which may not be the app's own. A card or a document is opened on, in its space.
 function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffect }) {
   const t = useT()
   const result = effect.result ?? {}
@@ -370,7 +341,6 @@ function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffec
   return null
 }
 
-// What a preview of an action of the draft would set going; nothing was saved.
 export function EffectPreview({ workspace, effects }: { workspace?: number; effects: AppEffect[] }) {
   const t = useT()
   return (

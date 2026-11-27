@@ -1,7 +1,3 @@
-// Email notifications: which kinds of notification are also mailed to the person, as they happen or
-// in one summary a day, in this workspace. Off until chosen, and only where the server can send mail.
-// A mail says what happened and links back, never what a card or an app holds (docs/pwa.md#notifications).
-
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -45,8 +41,6 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
     })
   }
 
-  // The summary is at the hour of the person's own time zone (Time zone, above) until they choose
-  // another for it here: the server says which, so nothing about it is sent with a kind.
   const setKind = (kind: EmailKind, mode: EmailMode) => {
     if (!choices) return
     void save({ kinds: { [kind]: mode } })
@@ -57,7 +51,6 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
     setLinkSent(false)
     const ok = await action.run(async () => {
       await api(emailVerificationPath(workspace), { method: 'POST', body: {} })
-      // The state is "waiting for the link" now.
       setSaved(await api<EmailChoices>(emailPath(workspace)))
     })
     setLinkSent(ok)

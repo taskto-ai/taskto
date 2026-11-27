@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// TestDefinitions checks that tools.json defines every tool once, as an object schema, and
-// nothing else: the sidecar and the MCP server list what it says.
 func TestDefinitions(t *testing.T) {
 	s := newWorld(t).tools
 	seen := map[string]bool{}
@@ -37,7 +35,6 @@ func TestDefinitions(t *testing.T) {
 	}
 }
 
-// TestSidecarDefinitions checks the sidecar's copy of tools.json is the same file.
 func TestSidecarDefinitions(t *testing.T) {
 	copied, err := os.ReadFile(filepath.Join("..", "..", "agent", "src", "taskto-tools.json"))
 	if err != nil {

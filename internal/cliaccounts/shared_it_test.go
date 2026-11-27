@@ -14,23 +14,12 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// TestRealCLIsThroughTheProxy runs the installed Claude Code and Codex (and Grok Build, if
-// installed) on a workspace's shared account whose address is a model gateway, so the real
-// CLIs go through the server's proxy, which adds the key. No subscription is involved. It needs
-// the same variables as cliworker's TestRealCLIs:
-//
-//	TASKTO_CLI_IT_BASE_URL  the gateway's root (no /v1)
-//	TASKTO_CLI_IT_KEY_FILE  a file holding a low-value key for it
-//	TASKTO_CLI_IT_MODEL     a model that calls tools well there
-//
-// and is skipped without them. The key goes into the shared account through the API; the CLI
-// only ever gets the turn's token, which the test checks.
 func TestRealCLIsThroughTheProxy(t *testing.T) {
 	base, keyFile, model := os.Getenv("TASKTO_CLI_IT_BASE_URL"), os.Getenv("TASKTO_CLI_IT_KEY_FILE"), os.Getenv("TASKTO_CLI_IT_MODEL")
 	if base == "" || keyFile == "" || model == "" {
 		t.Skip("set TASKTO_CLI_IT_BASE_URL, TASKTO_CLI_IT_KEY_FILE and TASKTO_CLI_IT_MODEL to run the real CLIs")
 	}
-	b, err := os.ReadFile(keyFile) //nolint:gosec // G304: the test's own setting
+	b, err := os.ReadFile(keyFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +51,10 @@ func TestRealCLIsThroughTheProxy(t *testing.T) {
 			if !strings.Contains(strings.ToLower(d.Text), "proxied-ok") {
 				t.Logf("answer %q (the model's wording, not checked strictly)", d.Text)
 			}
-			// The CLI's own files never hold the key.
 			dir := e.layout.User(e.other.id).ConfigOf(cli, sharedSlot(a.ID))
 			_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 				if err == nil && !d.IsDir() {
-					if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), key) { //nolint:gosec // G304: the test's own directory
+					if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), key) {
 						t.Errorf("the key is in %s", path)
 					}
 				}

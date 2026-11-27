@@ -1,18 +1,3 @@
-// The question before an action that can't be taken back: in place of window.confirm. It says what
-// will happen, names the action on its button ("Delete the app", not "OK"), and a destructive
-// one is in the danger tone. Cancel takes the focus first, so Enter doesn't destroy by habit.
-//
-// Drawn by the screen with its state:
-//   <ConfirmDialog open={asking} title=… confirmLabel=… tone="danger" onConfirm=… onCancel=…>
-//     {what will happen}
-//   </ConfirmDialog>
-// or asked from an event handler, as window.confirm was:
-//   const [confirmDialog, confirm] = useConfirm()
-//   …
-//   if (await confirm({ title, body, confirmLabel, tone: 'danger' })) remove()
-//   …
-//   return <>{…}{confirmDialog}</>
-
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useT } from '../i18n'
 import { Button } from './Button'
@@ -22,13 +7,9 @@ import './ConfirmDialog.css'
 export interface ConfirmDialogProps {
   open: boolean
   title: ReactNode
-  // What will happen.
   children?: ReactNode
-  // The action, named: "Delete the app".
   confirmLabel: string
-  // `danger` for what destroys or can't be undone.
   tone?: 'danger' | 'primary'
-  // The action is under way: the button shows it, and nothing closes the dialog.
   busy?: boolean
   onConfirm: () => void
   onCancel: () => void
@@ -50,9 +31,6 @@ export function ConfirmDialog({
   const cancel = () => {
     if (!busy) onCancel()
   }
-  // Busy, Cancel is disabled, and a disabled button can't hold the focus: the browser would drop
-  // it out of the dialog, onto a page that is inert. It goes to the action instead, which says
-  // it is busy.
   const cancelButton = useRef<HTMLButtonElement>(null)
   const confirmButton = useRef<HTMLButtonElement>(null)
   useLayoutEffect(() => {
@@ -90,11 +68,7 @@ export interface ConfirmOptions {
   cancelLabel?: string
 }
 
-// The dialog to draw, and a function that asks and resolves true when the action is confirmed,
-// false when it is cancelled (or the component goes away).
 export function useConfirm(): [ReactNode, (options: ConfirmOptions) => Promise<boolean>] {
-  // Each question has its own key: a new one replaces the dialog whole, so it starts again with
-  // the focus on Cancel (Enter must not approve a different action by habit).
   const [asking, setAsking] = useState<(ConfirmOptions & { key: number }) | null>(null)
   const asked = useRef(0)
   const answer = useRef<((yes: boolean) => void) | null>(null)
@@ -108,7 +82,6 @@ export function useConfirm(): [ReactNode, (options: ConfirmOptions) => Promise<b
     })
   }, [])
 
-  // A question left open when the component goes is a no.
   useEffect(() => () => answer.current?.(false), [])
 
   const settle = (yes: boolean) => {

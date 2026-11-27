@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-//
-// The panel before a publish says what the draft's effects do outside its records, from the
-// Inspection template's own actions, with where they go as the person may see it.
 
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -38,7 +35,6 @@ const all = {
   modify_records: 'all',
 }
 
-// The Inspection template with its board chosen: a board 12 of space 7.
 function inspections(): AppDraft {
   const draft = structuredClone(inspection.definition) as unknown as AppDraft
   for (const action of Object.values(draft.actions ?? {})) {
@@ -205,7 +201,6 @@ test('a rule’s numbers, booleans and a column are said in the user’s languag
 })
 
 test('who may use a restricted app is a skeleton while it loads, said to a screen reader, not a line of text', () => {
-  // The roles' request never answers in this test: the panel stays waiting for them.
   vi.stubGlobal('fetch', () => new Promise(() => {}))
   const app = {
     id: 9,

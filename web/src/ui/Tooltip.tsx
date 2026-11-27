@@ -1,20 +1,3 @@
-// A short line of text about a control, shown while the pointer rests on it or the keyboard's focus
-// is on it. It is a help, never the only way to learn something a person needs: what a control
-// does must be its name or the words beside it.
-//
-// - It opens after a short rest of a mouse or a pen, and at once on focus from the keyboard. It
-//   doesn't open on touch (there is no hover; a tap is a press), nor on the focus a click or a tap
-//   gives, a text field's included (the browser counts every focus of a text field as
-//   :focus-visible, so the last input is asked as well: a key, or a pointer).
-// - The pointer can move onto it without closing it (WCAG 1.4.13); Escape closes it, and so does
-//   leaving, blurring or pressing the control.
-// - It is in the browser's top layer (a popover), so a dialog or an overflow never clips it, and it
-//   is placed above the control, or below when there's no room, inside the window.
-// - By default it describes the control (aria-describedby). When its text is the control's own
-//   name (an icon button's label), `describes={false}` keeps a screen reader from saying it twice.
-//
-// The child is one element that takes aria-describedby: a button, a link, a field.
-
 import {
   cloneElement,
   type ReactElement,
@@ -31,13 +14,9 @@ import {
 import { focusVisible, listenForInput } from './focusInput'
 import './Tooltip.css'
 
-// How long the pointer rests before it opens, and how long it may be away (on its way to the
-// tooltip) before it closes.
 export const OPEN_DELAY_MS = 400
 export const CLOSE_DELAY_MS = 120
 
-// The gap between the control and the tooltip, and the margin kept from the window's edges: a step
-// of the space scale (tokens.css), read from the page, 8px when it has none.
 function spaceToken(name: string): number {
   const v = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name))
   return Number.isFinite(v) ? v : 8
@@ -46,28 +25,18 @@ function spaceToken(name: string): number {
 type Describable = ReactElement<{ 'aria-describedby'?: string }>
 
 export interface TooltipProps {
-  // Nothing (null, false, '') is no tooltip: it never opens and describes nothing. For a tooltip
-  // that is only sometimes needed (a name only when it is cut), so the control isn't drawn again.
   content: ReactNode
   children: Describable
   describes?: boolean
-  // Where it goes: above the control (or below when there's no room), or beside it, after its end
-  // in the writing direction (before its start when there's no room), for a control in a column
-  // such as a sidebar's rail, where above would cover the control before it.
   side?: 'block' | 'inline-end'
 }
 
-// Whether the focus came back to the control from what it opened (its menu, closed by Escape or by
-// a choice): not a new arrival, so its tooltip doesn't open, and the next Escape is for what is
-// under it (a drawer), not for a tooltip that just came.
 function fromOwnPopup(control: Element, from: EventTarget | null): boolean {
   const controlled = control.getAttribute('aria-controls')
   const popup = controlled ? document.getElementById(controlled) : null
   return from instanceof Node && popup !== null && popup.contains(from)
 }
 
-// Whether the tooltip can be seen: a stylesheet may hide one that is open (a sidebar's labels are
-// written out where it is wide). A browser without checkVisibility goes by the computed display.
 function visible(el: HTMLElement): boolean {
   if (typeof el.checkVisibility === 'function') return el.checkVisibility()
   return getComputedStyle(el).display !== 'none'
@@ -75,13 +44,40 @@ function visible(el: HTMLElement): boolean {
 
 const canPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
 
+function placeBeside(el: HTMLElement, target: Element, side: NonNullable<TooltipProps['side']>) {
+  const gap = spaceToken('--space-2')
+  const margin = spaceToken('--space-2')
+  const r = target.getBoundingClientRect()
+  const w = el.offsetWidth
+  const h = el.offsetHeight
+  const vw = document.documentElement.clientWidth || window.innerWidth
+  const vh = document.documentElement.clientHeight || window.innerHeight
+  const clamp = (v: number, size: number, room: number) =>
+    Math.min(Math.max(margin, v), Math.max(margin, room - margin - size))
+  if (side === 'inline-end') {
+    const rtl = getComputedStyle(target).direction === 'rtl'
+    const after = rtl ? r.left - gap - w : r.right + gap
+    const before = rtl ? r.right + gap : r.left - gap - w
+    const fits = (x: number) => x >= margin && x + w <= vw - margin
+    if (fits(after) || fits(before)) {
+      el.style.top = `${clamp(r.top + r.height / 2 - h / 2, h, vh)}px`
+      el.style.left = `${fits(after) ? after : before}px`
+      el.dataset.side = 'inline-end'
+      return
+    }
+  }
+  const above = r.top - gap - h
+  const top = above >= margin || r.bottom + gap + h > vh - margin ? Math.max(margin, above) : r.bottom + gap
+  el.style.top = `${top}px`
+  el.style.left = `${clamp(r.left + r.width / 2 - w / 2, w, vw)}px`
+  delete el.dataset.side
+}
+
 export function Tooltip({ content, children, describes = true, side = 'block' }: TooltipProps) {
   const id = useId()
   const anchor = useRef<HTMLSpanElement>(null)
   const tip = useRef<HTMLSpanElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  // What holds it open: the pointer resting on the control (or on the tooltip) and the keyboard's
-  // focus. Leaving one closes it only when the other is gone too.
   const hovered = useRef(false)
   const focused = useRef(false)
   const [open, setOpen] = useState(false)
@@ -100,8 +96,6 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     if (delay === 0) setOpen(false)
     else timer.current = setTimeout(() => setOpen(false), delay)
   }, [])
-  // Closes it unless something still holds it open. A hold leaves the timer alone: it can only be
-  // an opening on its way (a hold never leaves a closing pending), which must still happen.
   const release = useCallback(
     (delay: number) => {
       if (!hovered.current && !focused.current) hide(delay)
@@ -114,14 +108,10 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     return () => clearTimeout(timer.current)
   }, [])
 
-  // Its words went away while it was open: so does it.
   useEffect(() => {
     if (empty) hide(0)
   }, [empty, hide])
 
-  // Escape closes it, wherever the focus is, until the control is entered or focused again. One
-  // that can be seen takes that Escape (WCAG 1.4.13: dismissed without moving), so a drawer or a
-  // dialog under it stays open; the next Escape is theirs.
   useEffect(() => {
     if (!open) return
     const key = (e: KeyboardEvent) => {
@@ -133,62 +123,33 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     return () => document.removeEventListener('keydown', key, true)
   }, [open, hide])
 
-  // Into the top layer and next to the control, and kept there while the page or any box around
-  // the control scrolls, or the window changes size, or its words change while it is open (a new
-  // size, placed again).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `content` isn't read here, but new words give the tooltip a new size, which must be placed again.
   useLayoutEffect(() => {
+    const el = tip.current
+    if (!el || !anchor.current?.firstElementChild || !canPopover()) return
+    try {
+      if (open) el.showPopover()
+      else el.hidePopover()
+    } catch {}
+  }, [open])
+
+  const place = useCallback(() => {
     const el = tip.current
     const target = anchor.current?.firstElementChild
     if (!el || !target) return
-    if (canPopover()) {
-      try {
-        if (open) el.showPopover()
-        else el.hidePopover()
-      } catch {
-        // Already in the state asked for, or disconnected.
-      }
-    }
+    placeBeside(el, target, side)
+  }, [side])
+  useLayoutEffect(() => {
+    if (open) place()
+  })
+  useLayoutEffect(() => {
     if (!open) return
-    const gap = spaceToken('--space-2')
-    const margin = spaceToken('--space-2')
-    const place = () => {
-      const r = target.getBoundingClientRect()
-      const w = el.offsetWidth
-      const h = el.offsetHeight
-      const vw = document.documentElement.clientWidth || window.innerWidth
-      const vh = document.documentElement.clientHeight || window.innerHeight
-      const clamp = (v: number, size: number, room: number) =>
-        Math.min(Math.max(margin, v), Math.max(margin, room - margin - size))
-      if (side === 'inline-end') {
-        const rtl = getComputedStyle(target).direction === 'rtl'
-        const after = rtl ? r.left - gap - w : r.right + gap
-        const before = rtl ? r.right + gap : r.left - gap - w
-        const fits = (x: number) => x >= margin && x + w <= vw - margin
-        // Room on neither side (a control as wide as a phone's drawer): above or below it, as a
-        // tooltip of the block side, rather than clamped onto the control it is about.
-        if (fits(after) || fits(before)) {
-          el.style.top = `${clamp(r.top + r.height / 2 - h / 2, h, vh)}px`
-          el.style.left = `${fits(after) ? after : before}px`
-          el.dataset.side = 'inline-end'
-          return
-        }
-      }
-      const above = r.top - gap - h
-      const top = above >= margin || r.bottom + gap + h > vh - margin ? Math.max(margin, above) : r.bottom + gap
-      el.style.top = `${top}px`
-      el.style.left = `${clamp(r.left + r.width / 2 - w / 2, w, vw)}px`
-      delete el.dataset.side
-    }
-    place()
-    // Scroll events don't bubble, but a listener capturing on the window hears every box's.
     window.addEventListener('scroll', place, { capture: true, passive: true })
     window.addEventListener('resize', place)
     return () => {
       window.removeEventListener('scroll', place, { capture: true })
       window.removeEventListener('resize', place)
     }
-  }, [open, side, content])
+  }, [open, place])
 
   const pointerIn = (e: ReactPointerEvent) => {
     if (e.pointerType === 'touch') return
@@ -200,17 +161,15 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     hovered.current = false
     release(CLOSE_DELAY_MS)
   }
-  // On the tooltip itself: the pointer on its way from the control keeps it open.
   const tipIn = () => {
     hovered.current = true
     clearTimeout(timer.current)
   }
-  // Off the tooltip and straight back onto the control: still hovering. The wrapper around both
-  // was never left, so it hears no new enter that would hold it again.
   const tipOut = (e: ReactPointerEvent) => {
     if (e.relatedTarget instanceof Node && anchor.current?.contains(e.relatedTarget)) return
     pointerOut(e)
   }
+
   const focus = (e: ReactFocusEvent) => {
     if (!focusVisible(e.target) || fromOwnPopup(e.target, e.relatedTarget)) return
     focused.current = true
@@ -220,9 +179,6 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     focused.current = false
     release(0)
   }
-  // Pressing the control is using it: the tooltip goes, whatever held it. A press of the pointer
-  // closes it at once; Enter or Space give the control a click and no pointer-down, so the click
-  // closes it too.
   const press = () => {
     hovered.current = false
     focused.current = false
@@ -234,10 +190,9 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     .join(' ')
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer, click and focus events; the control is what is interactive.
-    // biome-ignore lint/a11y/useKeyWithClickEvents: the click it hears is the control's, from a pointer or from the keyboard's Enter or Space
     <span
       ref={anchor}
+      role="none"
       className="ui-tooltip-anchor"
       onPointerEnter={pointerIn}
       onPointerLeave={pointerOut}

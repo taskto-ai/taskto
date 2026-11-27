@@ -1,15 +1,7 @@
-// What an app's effects do outside its records, said in words for the panel that comes before a
-// publish ("What it can read and change"): each effect of the draft on its own line, with where it
-// goes as the person may see it (the names the server told, or that it is something they can't
-// see) and, when it has a rule, when it applies. The server decides what an effect may do; this
-// only tells people what the draft says.
-
 import type { App, AppDraft, DraftEffect, EffectTarget } from '../api'
 import { type Format, type Key, t } from '../i18n'
 import type { Rule } from './rules'
 
-// A board as the person may see it: "Maintenance (Field team)", or that it is one they can't see,
-// or that none is chosen yet.
 function boardOf(e: DraftEffect | undefined, targets: EffectTarget[]): string {
   if (!e?.space_id || !e.board_id) return t('apps.builder.can.target.boardUnset')
   const at = targets.find((x) => x.space_id === e.space_id && x.board_id === e.board_id)
@@ -23,7 +15,6 @@ function spaceOf(e: DraftEffect, targets: EffectTarget[]): string {
   return at?.space ? spaceName(at) : t('apps.builder.can.target.spaceHidden')
 }
 
-// A private space is said in the user's language, as everywhere.
 function spaceName(at: EffectTarget): string {
   return at.space_kind === 'private' ? t('knowledge.spaces.private') : (at.space ?? '')
 }
@@ -37,8 +28,6 @@ const COMPARE: Record<string, Key> = {
   gte: 'apps.builder.rule.gte',
 }
 
-// A rule in words: "result is “fail” and status is not “closed”". A rule it can't read is "its rule
-// holds", which is true of any rule.
 export function ruleText(rule: Rule, f: Pick<Format, 'list' | 'number'>, nested = false): string {
   const group = (rules: Rule[], type: 'conjunction' | 'disjunction') => {
     const parts = rules.map((r) => ruleText(r, f, true))
@@ -52,7 +41,6 @@ export function ruleText(rule: Rule, f: Pick<Format, 'list' | 'number'>, nested 
   return t(key, { field: rule.field, value: valueText(rule.value, f) })
 }
 
-// A literal as people read it: text quoted, a number in the locale's format, a boolean in words.
 export function valueText(value: unknown, f: Pick<Format, 'number'>): string {
   if (typeof value === 'string') return t('apps.builder.rule.text', { value })
   if (typeof value === 'number') return f.number(value)
@@ -67,8 +55,6 @@ function column(name: string | undefined): string {
 
 const COLUMNS = new Set(['backlog', 'todo', 'doing', 'review', 'done'])
 
-// The lines of the effects the draft declares, by action (in the order of the actions' names) and
-// then by effect: empty when it declares none.
 export function effectLines(
   app: Pick<App, 'effect_targets'>,
   draft: AppDraft | undefined,
@@ -85,9 +71,6 @@ export function effectLines(
       case 'create_card':
         line = t('apps.builder.can.effect.createCard', { board: boardOf(e, targets) })
         break
-      // Moving, and linking to, a card act on the card the record already has: the one made where the
-      // create_card effect pointed when the record's was made (perhaps by an older release, on another
-      // board), so the board now chosen isn't said.
       case 'update_card':
         line = t('apps.builder.can.effect.updateCard', { column: column(e.column) })
         break

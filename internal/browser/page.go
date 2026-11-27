@@ -17,33 +17,25 @@ import (
 //go:embed snapshot.js
 var snapshotJS string
 
-// passwordField is how snapshot.js writes a password input's line, after its ref:
-// `[e2] input password "Password" (empty)`.
 var passwordField = regexp.MustCompile(`\[e\d+\] input password `)
 
-// HasPasswordField says whether a snapshot shows a password input: a page that wants the
-// user to sign in. The real-Chromium tests check it against snapshot.js's own output (signIn).
 func HasPasswordField(snapshot string) bool { return passwordField.MatchString(snapshot) }
 
-// maxSnapshot bounds a snapshot's text, in bytes, to fit a tool's reply.
 const maxSnapshot = 40 << 10
 
-// How long an action waits for a page to load: past it, the action returns anyway, with the
-// page as it is.
 const (
 	loadWait   = 15 * time.Second
 	settleWait = 300 * time.Millisecond
 )
 
-// instance is a running browser, driven over its DevTools pipe.
 type instance struct {
 	kind Kind
 	cdp  *cdp
 
 	mu       sync.Mutex
-	sessions map[string]string // tab → its flat session
-	worlds   map[string]int64  // tab → the isolated world of its last snapshot
-	agent    map[string]bool   // tabs the agent opened
+	sessions map[string]string
+	worlds   map[string]int64
+	agent    map[string]bool
 }
 
 func newInstance(kind Kind, c *cdp) *instance {
@@ -63,7 +55,6 @@ func (b *instance) tab(t targetInfo) Tab {
 	return Tab{ID: t.TargetID, Title: t.Title, URL: t.URL, Agent: b.agent[t.TargetID]}
 }
 
-// do runs a, already checked, on the browser.
 func (b *instance) do(ctx context.Context, a Action) (Result, error) {
 	switch a.Op {
 	case OpTabs:
@@ -107,7 +98,6 @@ func (b *instance) do(ctx context.Context, a Action) (Result, error) {
 	return Result{Tab: &tab}, err
 }
 
-// tabs lists the open pages.
 func (b *instance) tabs(ctx context.Context) ([]Tab, error) {
 	var out struct {
 		TargetInfos []targetInfo `json:"targetInfos"`
@@ -138,10 +128,6 @@ func (b *instance) info(ctx context.Context, tab string) (Tab, error) {
 	return b.tab(out.TargetInfo), nil
 }
 
-// noTab turns the browser's "no such target" into ErrNoTab. Chromium gives these the generic
-// server error code (-32000), so its message tells them apart: "No target with given id
-// found", "No session with given id". The real-browser tests check them against the Chromium
-// the image installs.
 func noTab(err error) error {
 	var ce *cdpError
 	if errors.As(err, &ce) && (strings.HasPrefix(ce.Message, "No target with given id") || strings.HasPrefix(ce.Message, "No session with given id")) {
@@ -150,15 +136,12 @@ func noTab(err error) error {
 	return err
 }
 
-// goneContext reports whether err is Chromium saying an execution context is gone: the page
-// navigated since the snapshot that made it.
 func goneContext(err error) bool {
 	var ce *cdpError
 	return errors.As(err, &ce) && (strings.HasPrefix(ce.Message, "Cannot find context with specified id") ||
 		strings.HasPrefix(ce.Message, "Execution context was destroyed"))
 }
 
-// open opens url in a new tab, which the agent then owns.
 func (b *instance) open(ctx context.Context, url string) (Result, error) {
 	var out struct {
 		TargetID string `json:"targetId"`
@@ -183,7 +166,6 @@ func (b *instance) open(ctx context.Context, url string) (Result, error) {
 	return Result{Tab: &tab}, err
 }
 
-// attach returns tab's session, attaching to it the first time.
 func (b *instance) attach(ctx context.Context, tab string) (string, error) {
 	b.mu.Lock()
 	s, ok := b.sessions[tab]
@@ -191,7 +173,6 @@ func (b *instance) attach(ctx context.Context, tab string) (string, error) {
 	if ok {
 		return s, nil
 	}
-	// Only pages: Target.attachToTarget would also take a service worker's ID.
 	var info struct {
 		TargetInfo targetInfo `json:"targetInfo"`
 	}
@@ -209,14 +190,13 @@ func (b *instance) attach(ctx context.Context, tab string) (string, error) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if s, ok := b.sessions[tab]; ok { // attached twice at once: keep the first
+	if s, ok := b.sessions[tab]; ok {
 		return s, nil
 	}
 	b.sessions[tab] = out.SessionID
 	return out.SessionID, nil
 }
 
-// prune drops what is kept for tabs no longer open: closed by the user, or crashed.
 func (b *instance) prune(open map[string]bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -237,7 +217,6 @@ func (b *instance) prune(open map[string]bool) {
 	}
 }
 
-// forget drops what is kept for tab, once it is closed.
 func (b *instance) forget(tab string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -267,7 +246,6 @@ func (b *instance) dropWorld(tab string) {
 	b.mu.Unlock()
 }
 
-// evalResult is Runtime.evaluate's answer.
 type evalResult struct {
 	Result struct {
 		Type  string          `json:"type"`
@@ -281,8 +259,6 @@ type evalResult struct {
 	} `json:"exceptionDetails"`
 }
 
-// eval evaluates expr in the page's main world (context 0) or in an isolated world, and
-// returns its value as JSON.
 func (b *instance) eval(ctx context.Context, session string, context int64, expr string) (json.RawMessage, error) {
 	params := map[string]any{"expression": expr, "returnByValue": true, "awaitPromise": false}
 	if context != 0 {
@@ -302,8 +278,6 @@ func (b *instance) eval(ctx context.Context, session string, context int64, expr
 	return out.Result.Value, nil
 }
 
-// waitLoad waits up to max for the page's document to be complete. A page still loading
-// then is left as it is: the agent sees what there is.
 func (b *instance) waitLoad(ctx context.Context, session string, max time.Duration) {
 	deadline := time.Now().Add(max)
 	for time.Now().Before(deadline) {
@@ -319,7 +293,6 @@ func (b *instance) waitLoad(ctx context.Context, session string, max time.Durati
 	}
 }
 
-// settle gives what an input started (a navigation, a script) a moment, then waits for a load.
 func (b *instance) settle(ctx context.Context, session string) {
 	select {
 	case <-ctx.Done():
@@ -362,8 +335,6 @@ func (b *instance) snapshot(ctx context.Context, tab, session string) (string, e
 	return cutText(text, maxSnapshot), nil
 }
 
-// inWorld evaluates expr in the world of tab's last snapshot. A tab never snapshot, or whose
-// world went with a navigation, is ErrStaleRef.
 func (b *instance) inWorld(ctx context.Context, tab, session, expr string) (json.RawMessage, error) {
 	b.mu.Lock()
 	world, ok := b.worlds[tab]
@@ -379,8 +350,6 @@ func (b *instance) inWorld(ctx context.Context, tab, session, expr string) (json
 	return v, err
 }
 
-// front brings tab to the front: the user sees it in the live view, and a headed browser
-// sends input to the tab in front.
 func (b *instance) front(ctx context.Context, tab, session string) error {
 	if b.kind != Personal {
 		return nil
@@ -416,8 +385,6 @@ func (b *instance) click(ctx context.Context, tab, session, ref string) error {
 	return nil
 }
 
-// dropWorldIfNavigated settles the page after an input, and forgets the refs if it moved on
-// to another document.
 func (b *instance) dropWorldIfNavigated(ctx context.Context, tab, session string) {
 	b.settle(ctx, session)
 	if _, err := b.inWorld(ctx, tab, session, "1"); errors.Is(err, ErrStaleRef) {
@@ -450,7 +417,6 @@ func (b *instance) typeText(ctx context.Context, tab, session, ref, text string,
 	return nil
 }
 
-// keyStroke is how a key is sent: its DOM key and code, Windows key code, and the text it types.
 type keyStroke struct {
 	code string
 	vk   int
@@ -474,7 +440,6 @@ var keys = map[string]keyStroke{
 	"Space":      {"Space", 32, " "},
 }
 
-// keyNames lists the keys browser_press takes.
 func keyNames() string {
 	names := make([]string, 0, len(keys))
 	for k := range keys {
@@ -503,8 +468,6 @@ func (b *instance) press(ctx context.Context, session, name string) error {
 	return nil
 }
 
-// close closes tab, if the agent opened it. A headed browser exits with its last tab, so
-// closing that one first opens a blank tab in its place.
 func (b *instance) close(ctx context.Context, tab string) error {
 	b.mu.Lock()
 	mine := b.agent[tab]
@@ -530,8 +493,6 @@ func (b *instance) close(ctx context.Context, tab string) error {
 		return noTab(err)
 	}
 	b.forget(tab)
-	// The tab goes a moment after the browser answers: wait for it, so a list right after
-	// doesn't show it.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := b.info(ctx, tab); errors.Is(err, ErrNoTab) {
@@ -546,13 +507,11 @@ func (b *instance) close(ctx context.Context, tab string) error {
 	return nil
 }
 
-// quote makes s a JavaScript string literal.
 func quote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
 
-// cutText cuts s to at most n bytes, on a character boundary, saying so.
 func cutText(s string, n int) string {
 	if len(s) <= n {
 		return s

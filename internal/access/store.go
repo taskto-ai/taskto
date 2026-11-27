@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// Member is a shared space's view of one of its members.
 type Member struct {
 	auth.User
 	Role    Role   `json:"role"`
@@ -23,12 +22,8 @@ var (
 	errMemberNotFound     = errors.New("not a member of this space")
 )
 
-// timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
-// write runs fn in a transaction. Transactions take the write lock when they begin (see
-// package db), so checks and the writes that depend on them don't interleave with
-// another writer's.
 func (c *Checker) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -47,8 +42,6 @@ func (c *Checker) write(ctx context.Context, fn func(*sql.Tx) error) (err error)
 	return tx.Commit()
 }
 
-// createShared adds a shared space to workspaceID, with its creator as an editor, and
-// returns its ID.
 func (c *Checker) createShared(ctx context.Context, workspaceID, creatorID int64, name string) (int64, error) {
 	var id int64
 	err := c.write(ctx, func(tx *sql.Tx) error {
@@ -70,11 +63,8 @@ func (c *Checker) createShared(ctx context.Context, workspaceID, creatorID int64
 	return id, err
 }
 
-// updateShared renames a shared space, archives it or brings it back, or allows or refuses
-// downloading its apps for offline use; nil leaves that part as it is. Archiving an archived space
-// keeps its first archiving time.
 func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, name *string, archived, offline *bool) error {
-	var archivedAt any // nil: unchanged
+	var archivedAt any
 	if archived != nil {
 		archivedAt = ""
 		if *archived {
@@ -103,8 +93,6 @@ func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, 
 				}
 			}
 		}
-		// What changed, and the two switches' new values; the new name isn't recorded, it is
-		// text a person typed.
 		details := audit.Details{}
 		var fields []string
 		if name != nil {
@@ -122,12 +110,10 @@ func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, 
 	})
 }
 
-// members lists a shared space's members, by name.
 func (c *Checker) members(ctx context.Context, spaceID int64) ([]Member, error) {
 	return spaceMembers(ctx, c.reads, spaceID, auth.RosterPage{})
 }
 
-// spaceMembers lists a shared space's members, as auth.Roster does a workspace's.
 func spaceMembers(ctx context.Context, q auth.Queryer, spaceID int64, page auth.RosterPage) ([]Member, error) {
 	order := "u.name, u.id"
 	if page.ByID || page.AfterID > 0 {
@@ -159,8 +145,6 @@ func spaceMembers(ctx context.Context, q auth.Queryer, spaceID int64, page auth.
 	return all, rows.Err()
 }
 
-// addMember adds userID to a shared space of workspaceID. The user must be a member of
-// the workspace; the schema refuses anyone else too.
 func (c *Checker) addMember(ctx context.Context, workspaceID, spaceID, userID int64, role Role) error {
 	return c.write(ctx, func(tx *sql.Tx) error {
 		var member bool
@@ -226,7 +210,6 @@ func (c *Checker) removeMember(ctx context.Context, workspaceID, spaceID, userID
 	})
 }
 
-// mustAffect returns none if the statement behind res changed no row.
 func mustAffect(res sql.Result, none error) error {
 	n, err := res.RowsAffected()
 	if err != nil {

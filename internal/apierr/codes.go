@@ -1,40 +1,31 @@
 package apierr
 
-// The API's error codes: one list, which docs/api.md describes and the web app translates
-// (errors.<code> in web/src/i18n/locales/en.json; CI checks every code here has one). A
-// code is lower_snake_case, never reused for another meaning, and never renamed once
-// released. Add one when people can cause the error and should be told what to do about
-// it; errors only a broken client causes share CodeBadRequest.
 const (
-	// Any route.
-
-	CodeInternal     Code = "internal"      // 500: details are in the server's log
-	CodeBadRequest   Code = "bad_request"   // 400: a request the web app never sends
-	CodeInvalidJSON  Code = "invalid_json"  // 400: the body isn't one JSON object of known fields
-	CodeNotFound     Code = "not_found"     // 404
-	CodeCrossOrigin  Code = "cross_origin"  // 403: refused by the CSRF guard
-	CodeContentType  Code = "content_type"  // 415: the body's Content-Type isn't accepted
-	CodeNotLoggedIn  Code = "not_logged_in" // 401
-	CodeAdminOnly    Code = "admin_only"    // 403: only a workspace admin may
-	CodeTokenRefused Code = "token_refused" // 403: needs a browser login, not an access token
-	CodeTokenInvalid Code = "token_invalid" // 401: the access token is unknown, revoked or expired
-
-	// Workspaces, accounts and invites (internal/auth).
+	CodeInternal     Code = "internal"
+	CodeBadRequest   Code = "bad_request"
+	CodeInvalidJSON  Code = "invalid_json"
+	CodeNotFound     Code = "not_found"
+	CodeCrossOrigin  Code = "cross_origin"
+	CodeContentType  Code = "content_type"
+	CodeNotLoggedIn  Code = "not_logged_in"
+	CodeAdminOnly    Code = "admin_only"
+	CodeTokenRefused Code = "token_refused"
+	CodeTokenInvalid Code = "token_invalid"
 
 	CodeWorkspaceNotFound   Code = "workspace_not_found"
-	CodeWorkspaceCreation   Code = "workspace_creation_refused" // 403: this server doesn't let the caller create a workspace
-	CodeWorkspaceLimit      Code = "workspace_limit"            // 403: the caller made as many workspaces as an account may; params: max
-	CodeTooManyWorkspaces   Code = "too_many_workspaces"        // 429, with Retry-After: too many made lately
-	CodeOperatorOnly        Code = "operator_only"              // 403: only the server's operator, an admin of its first workspace
+	CodeWorkspaceCreation   Code = "workspace_creation_refused"
+	CodeWorkspaceLimit      Code = "workspace_limit"
+	CodeTooManyWorkspaces   Code = "too_many_workspaces"
+	CodeOperatorOnly        Code = "operator_only"
 	CodeSetupDone           Code = "setup_done"
 	CodeSetupToken          Code = "setup_token"
 	CodeEmailInvalid        Code = "email_invalid"
-	CodeNameLength          Code = "name_length"           // params: max
-	CodeWorkspaceNameLength Code = "workspace_name_length" // params: max
-	CodePasswordTooShort    Code = "password_too_short"    // params: min
-	CodePasswordTooLong     Code = "password_too_long"     // params: max (bytes)
+	CodeNameLength          Code = "name_length"
+	CodeWorkspaceNameLength Code = "workspace_name_length"
+	CodePasswordTooShort    Code = "password_too_short"
+	CodePasswordTooLong     Code = "password_too_long"
 	CodeCredentialsRequired Code = "credentials_required"
-	CodeWrongCredentials    Code = "wrong_credentials" //nolint:gosec // G101: an error code, not a credential
+	CodeWrongCredentials    Code = "wrong_credentials"
 	CodeTooManyLogins       Code = "too_many_logins"
 	CodeLastAdmin           Code = "last_admin"
 	CodeAlreadyMember       Code = "already_member"
@@ -46,44 +37,31 @@ const (
 	CodeLocaleInvalid       Code = "locale_invalid"
 	CodeTimeZoneInvalid     Code = "time_zone_invalid"
 	CodeTokenNotFound       Code = "token_not_found"
-	CodeTokenExpiryInvalid  Code = "token_expiry_invalid" //nolint:gosec // G101: an error code, not a credential
-	CodeTooManyTokens       Code = "too_many_tokens"      // params: max
-
-	// Passwords and reset links (internal/auth/passwords.go).
+	CodeTokenExpiryInvalid  Code = "token_expiry_invalid"
+	CodeTooManyTokens       Code = "too_many_tokens"
 
 	CodeCurrentPasswordRequired Code = "current_password_required"
-	CodeWrongPassword           Code = "wrong_password"     //nolint:gosec // G101: an error code, not a credential
-	CodeTooManyPasswords        Code = "too_many_passwords" //nolint:gosec // G101: an error code, not a credential
-	CodePasswordChanged         Code = "password_changed"   //nolint:gosec // G101: an error code, not a credential
+	CodeWrongPassword           Code = "wrong_password"
+	CodeTooManyPasswords        Code = "too_many_passwords"
+	CodePasswordChanged         Code = "password_changed"
 	CodeResetInvalid            Code = "reset_invalid"
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
-	// CodeTooManyResets is a 429: too many reset emails asked for from this address or for this
-	// email, or the server is busy making them. Retry-After says when to try again.
-	CodeTooManyResets Code = "too_many_resets"
-
-	// Disabling a member (internal/auth/disable.go). account_disabled is also what a login, a
-	// single sign-on and a reset link answer for a disabled account.
+	CodeTooManyResets           Code = "too_many_resets"
 
 	CodeAccountDisabled  Code = "account_disabled"
 	CodeDisableOwn       Code = "disable_own"
 	CodeDisableElsewhere Code = "disable_elsewhere"
 
-	// Deleting an account (internal/auth/deletion.go).
-
-	CodeDeletionReauth       Code = "deletion_reauth_required" // 403: no password to check; sign in again with the provider, then retry
-	CodeDeletionLastAdmin    Code = "deletion_last_admin"      // 409: the only working admin of a workspace; params: workspace
-	CodeDeletionLastOperator Code = "deletion_last_operator"   // 409: the only working admin of the workspace the server's setup made; params: workspace
-	CodeDeletionPending      Code = "deletion_pending"         // 409: the account is waiting to be deleted already; the operator cancels it
-	CodeDeletionNotPending   Code = "deletion_not_pending"     // 404: the account isn't waiting to be deleted
-	CodeDeletionPurging      Code = "deletion_purging"         // 409: the purge has begun: it can't be cancelled any more
-
-	// Your own sessions (internal/auth/sessions.go).
+	CodeDeletionReauth       Code = "deletion_reauth_required"
+	CodeDeletionLastAdmin    Code = "deletion_last_admin"
+	CodeDeletionLastOperator Code = "deletion_last_operator"
+	CodeDeletionPending      Code = "deletion_pending"
+	CodeDeletionNotPending   Code = "deletion_not_pending"
+	CodeDeletionPurging      Code = "deletion_purging"
 
 	CodeSessionNotFound Code = "session_not_found"
 	CodeSessionCurrent  Code = "session_current"
-
-	// Two-factor login (internal/auth/twofactor.go).
 
 	CodeWrongTwoFactorCode      Code = "wrong_two_factor_code"
 	CodeTooManyTwoFactorCodes   Code = "too_many_two_factor_codes"
@@ -91,14 +69,11 @@ const (
 	CodeTwoFactorAlreadyOn      Code = "two_factor_already_on"
 	CodeTwoFactorNotOn          Code = "two_factor_not_on"
 	CodeTwoFactorNotStarted     Code = "two_factor_not_started"
-	CodeTwoFactorNoPassword     Code = "two_factor_no_password" //nolint:gosec // G101: an error code, not a credential
+	CodeTwoFactorNoPassword     Code = "two_factor_no_password"
 	CodeTwoFactorClearOwn       Code = "two_factor_clear_own"
 	CodeTwoFactorClearElsewhere Code = "two_factor_clear_elsewhere"
 
-	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
-	// /?sso_error=<code>; the same codes name the API's own answers.
-
-	CodePasswordLoginDisabled     Code = "password_login_disabled" //nolint:gosec // G101: an error code, not a credential
+	CodePasswordLoginDisabled     Code = "password_login_disabled"
 	CodeSSOUnknownProvider        Code = "sso_unknown_provider"
 	CodeSSOFailed                 Code = "sso_failed"
 	CodeSSOExpired                Code = "sso_expired"
@@ -107,297 +82,235 @@ const (
 	CodeSSONoAccount              Code = "sso_no_account"
 	CodeSSOAccountLinkedElsewhere Code = "sso_account_linked_elsewhere"
 
-	// Spaces (internal/access).
-
 	CodeSpaceNotFound       Code = "space_not_found"
 	CodeSpaceReadOnly       Code = "space_read_only"
 	CodeSpaceArchived       Code = "space_archived"
-	CodeSpaceNameLength     Code = "space_name_length" // params: max
+	CodeSpaceNameLength     Code = "space_name_length"
 	CodeSpaceNotMember      Code = "space_not_workspace_member"
 	CodeSpaceAlreadyMember  Code = "space_already_member"
 	CodeSpaceMemberNotFound Code = "space_member_not_found"
 
-	// Boards and cards (internal/boards).
-
 	CodeBoardArchived       Code = "board_archived"
-	CodeBoardChanged        Code = "board_changed"         // 409, with the board as it is now in "current"
-	CodeCardChanged         Code = "card_changed"          // 409, with the card as it is now in "current"
-	CodeBoardNameLength     Code = "board_name_length"     // params: max
-	CodeCardTitleInvalid    Code = "card_title_invalid"    // params: max
-	CodeCardBodyTooLong     Code = "card_body_too_long"    // params: max (KiB)
-	CodeCommentLength       Code = "comment_length"        // params: max (KiB)
-	CodeBlockedReasonLength Code = "blocked_reason_length" // params: max
-	CodeTooManyLinks        Code = "too_many_links"        // params: max
-	CodeDocPathInvalid      Code = "doc_path_invalid"      // params: path
+	CodeBoardChanged        Code = "board_changed"
+	CodeCardChanged         Code = "card_changed"
+	CodeBoardNameLength     Code = "board_name_length"
+	CodeCardTitleInvalid    Code = "card_title_invalid"
+	CodeCardBodyTooLong     Code = "card_body_too_long"
+	CodeCommentLength       Code = "comment_length"
+	CodeBlockedReasonLength Code = "blocked_reason_length"
+	CodeTooManyLinks        Code = "too_many_links"
+	CodeDocPathInvalid      Code = "doc_path_invalid"
 	CodeAssigneeNoAccess    Code = "assignee_no_access"
-	CodeCardBlockerNotFound Code = "card_blocker_not_found" // params: id
+	CodeCardBlockerNotFound Code = "card_blocker_not_found"
 	CodeCardDueInvalid      Code = "card_due_invalid"
-	CodeCardLabelInvalid    Code = "card_label_invalid" // params: max
-	CodeTooManyLabels       Code = "too_many_labels"    // params: max
+	CodeCardLabelInvalid    Code = "card_label_invalid"
+	CodeTooManyLabels       Code = "too_many_labels"
 
-	// Personal apps (internal/apps).
-
-	CodeAppOffline    Code = "app_offline"
-	CodeAppChanged    Code = "app_changed"     // 409, with the app as it is now in "current"
-	CodeAppNameLength Code = "app_name_length" // params: max
-	CodeTooManyApps   Code = "too_many_apps"   // params: max
-	// CodeAppTokenRateLimited is a 429, with Retry-After: the user's access tokens ran their share
-	// of actions in the workspace this minute (params: max, seconds).
-	CodeAppTokenRateLimited Code = "app_token_rate_limited" //nolint:gosec // G101: an error code, not a credential
-	CodeAppFull             Code = "app_full"               // params: max_rows, max_mib
-	CodeAppRowNotFound      Code = "app_row_not_found"
-	// CodeAppPreviewFull is a preview at its own row limit (params: max_rows); CodeAppPreviewTooLarge
-	// a preview's request over its size limit (413; params: max_mib).
-	CodeAppPreviewFull     Code = "app_preview_full"
-	CodeAppPreviewTooLarge Code = "app_preview_too_large"
-	CodeAppRecordConflict  Code = "app_record_conflict"  // 409: the record changed since the client read it; params: id, revision
-	CodeAppFieldRequired   Code = "app_field_required"   // params: field
-	CodeAppFieldTooLong    Code = "app_field_too_long"   // params: field, max
-	CodeAppFieldNotNumber  Code = "app_field_not_number" // params: field
-	CodeAppFieldTooSmall   Code = "app_field_too_small"  // params: field, min
-	CodeAppFieldTooLarge   Code = "app_field_too_large"  // params: field, max
-	CodeAppFieldNotDate    Code = "app_field_not_date"   // params: field
-	CodeAppFieldNotTime    Code = "app_field_not_time"   // params: field
-	CodeAppFieldNotOption  Code = "app_field_not_option" // params: field
-	// CodeAppFieldRequiredWhen is a field the app requires when another field has a value
-	// (params: field).
+	CodeAppOffline           Code = "app_offline"
+	CodeAppChanged           Code = "app_changed"
+	CodeAppNameLength        Code = "app_name_length"
+	CodeTooManyApps          Code = "too_many_apps"
+	CodeAppTokenRateLimited  Code = "app_token_rate_limited"
+	CodeAppFull              Code = "app_full"
+	CodeAppRowNotFound       Code = "app_row_not_found"
+	CodeAppPreviewFull       Code = "app_preview_full"
+	CodeAppPreviewTooLarge   Code = "app_preview_too_large"
+	CodeAppRecordConflict    Code = "app_record_conflict"
+	CodeAppFieldRequired     Code = "app_field_required"
+	CodeAppFieldTooLong      Code = "app_field_too_long"
+	CodeAppFieldNotNumber    Code = "app_field_not_number"
+	CodeAppFieldTooSmall     Code = "app_field_too_small"
+	CodeAppFieldTooLarge     Code = "app_field_too_large"
+	CodeAppFieldNotDate      Code = "app_field_not_date"
+	CodeAppFieldNotTime      Code = "app_field_not_time"
+	CodeAppFieldNotOption    Code = "app_field_not_option"
 	CodeAppFieldRequiredWhen Code = "app_field_required_when"
-	CodeAppForbidden         Code = "app_forbidden"        // 403: the caller's app roles don't allow it; params: capability
-	CodeAppRolesInvalid      Code = "app_roles_invalid"    // 400
-	CodeAppRolesNotMember    Code = "app_roles_not_member" // 400: a role for someone who can't read the space
-	CodeAppRolesLockout      Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
+	CodeAppForbidden         Code = "app_forbidden"
+	CodeAppRolesInvalid      Code = "app_roles_invalid"
+	CodeAppRolesNotMember    Code = "app_roles_not_member"
+	CodeAppRolesLockout      Code = "app_roles_lockout"
 
-	// Effects of apps on boards and documents (internal/apps/effects.go, outbox.go).
+	CodeAppEffectTarget       Code = "app_effect_target"
+	CodeAppEffectTargetUnset  Code = "app_effect_target_unset"
+	CodeAppTemplateNotFound   Code = "app_template_not_found"
+	CodeAppTemplateBoard      Code = "app_template_board"
+	CodeAppOperationInvalid   Code = "app_operation_invalid"
+	CodeAppOperationReused    Code = "app_operation_reused"
+	CodeAppEffectsBacklog     Code = "app_effects_backlog"
+	CodeAppEffectNotFailed    Code = "app_effect_not_failed"
+	CodeAppEffectAppAccess    Code = "app_effect_app_access"
+	CodeAppEffectTargetAccess Code = "app_effect_target_access"
+	CodeAppEffectTargetGone   Code = "app_effect_target_gone"
+	CodeAppEffectBoardOffline Code = "app_effect_board_offline"
+	CodeAppEffectInvalid      Code = "app_effect_invalid"
+	CodeAppEffectQuota        Code = "app_effect_quota"
+	CodeAppEffectDocExists    Code = "app_effect_doc_exists"
+	CodeAppEffectNoCard       Code = "app_effect_no_card"
+	CodeAppEffectCardArchived Code = "app_effect_card_archived"
+	CodeAppEffectAppOffline   Code = "app_effect_app_offline"
+	CodeAppEffectRecordGone   Code = "app_effect_record_gone"
+	CodeAppEffectGaveUp       Code = "app_effect_gave_up"
+	CodeAppEffectSpaceChanged Code = "app_effect_space_changed"
 
-	CodeAppEffectTarget      Code = "app_effect_target"       // 400: a target the person saving the app can't write; params: space_id
-	CodeAppEffectTargetUnset Code = "app_effect_target_unset" // 400: an effect has no board chosen yet, which publishing needs; params: action
-	CodeAppTemplateNotFound  Code = "app_template_not_found"  // 404: no such app template
-	CodeAppTemplateBoard     Code = "app_template_board"      // 400: the template needs a board and none was given, or takes none and one was
-	CodeAppOperationInvalid  Code = "app_operation_invalid"   // 422: the operation (idempotency key) isn't 8 to 64 letters, digits, - or _
-	CodeAppOperationReused   Code = "app_operation_reused"    // 409: the operation was used for another request
-	CodeAppEffectsBacklog    Code = "app_effects_backlog"     // 409: too many effects wait; params: max
-	CodeAppEffectNotFailed   Code = "app_effect_not_failed"   // 409: only a failed effect is retried
-	// The reasons an effect failed, kept with it and shown by its listing, not answers to a request.
-	CodeAppEffectAppAccess    Code = "app_effect_app_access"    // the user no longer has the access to the app the action needed
-	CodeAppEffectTargetAccess Code = "app_effect_target_access" // the user no longer may write what the effect targets
-	CodeAppEffectTargetGone   Code = "app_effect_target_gone"   // the target board or card is no longer there
-	CodeAppEffectBoardOffline Code = "app_effect_board_offline" // the target board is archived
-	CodeAppEffectInvalid      Code = "app_effect_invalid"       // what the effect makes isn't accepted (a title, a path)
-	CodeAppEffectQuota        Code = "app_effect_quota"         // a storage quota is used up: what the effect makes doesn't fit
-	CodeAppEffectDocExists    Code = "app_effect_doc_exists"    // a different document is at the path; params: path
-	CodeAppEffectNoCard       Code = "app_effect_no_card"       // the card to change was never made for the record
-	CodeAppEffectCardArchived Code = "app_effect_card_archived" // the card to change is archived
-	CodeAppEffectAppOffline   Code = "app_effect_app_offline"   // the app is offline or its space archived
-	CodeAppEffectRecordGone   Code = "app_effect_record_gone"   // the record it came from was deleted: restore it and retry
-	CodeAppEffectGaveUp       Code = "app_effect_gave_up"       // it kept failing for a reason that may pass: retry it
-	CodeAppEffectSpaceChanged Code = "app_effect_space_changed" // the app moved to another space after the payment was queued: what it asked for was never approved there, so it must be started again
+	CodeAppQueryCursor    Code = "app_query_cursor"
+	CodeAppQueryField     Code = "app_query_field"
+	CodeAppQueryCondition Code = "app_query_condition"
 
-	// Querying an app's records (internal/apps/query.go).
+	CodeAppDefinitionVersion   Code = "app_definition_version"
+	CodeAppIconPath            Code = "app_icon_path"
+	CodeAppIconLabel           Code = "app_icon_label"
+	CodeAppNotPublished        Code = "app_not_published"
+	CodeAppReleaseNotFound     Code = "app_release_not_found"
+	CodeAppReleaseOutdated     Code = "app_release_outdated"
+	CodeAppReleaseIncompatible Code = "app_release_incompatible"
+	CodeAppReleaseLive         Code = "app_release_already_live"
+	CodeAppNothingToPublish    Code = "app_nothing_to_publish"
+	CodeAppMigrationRequired   Code = "app_migration_required"
+	CodeAppMigrationUnneeded   Code = "app_migration_unneeded"
+	CodeAppMigrationInvalid    Code = "app_migration_invalid"
 
-	CodeAppQueryCursor    Code = "app_query_cursor"    // 400: the cursor isn't one this query gave; start again from the first page
-	CodeAppQueryField     Code = "app_query_field"     // 400: a field the live release doesn't declare, or can't be used so; params: field
-	CodeAppQueryCondition Code = "app_query_condition" // 400: an operator or value that doesn't fit the field; params: field, op
+	CodeAppFieldFiles       Code = "app_field_files"
+	CodeAppAttachmentBad    Code = "app_attachment_bad"
+	CodeAppAttachmentType   Code = "app_attachment_type"
+	CodeAppUploadSize       Code = "app_upload_size"
+	CodeAppUploadOffset     Code = "app_upload_offset"
+	CodeAppUploadState      Code = "app_upload_state"
+	CodeAppUploadChunk      Code = "app_upload_chunk"
+	CodeAppUploadsPending   Code = "app_uploads_pending"
+	CodeAppFilesFull        Code = "app_files_full"
+	CodeAppFilesUnavailable Code = "app_files_unavailable"
 
-	// Drafts and releases of apps (internal/apps/release.go).
+	CodeAppFieldNotLocation    Code = "app_field_not_location"
+	CodeAppFieldLocationFuture Code = "app_field_location_future"
+	CodeAppFieldNotSignature   Code = "app_field_not_signature"
+	CodeAppFieldNotBarcode     Code = "app_field_not_barcode"
+	CodeAppFieldLocked         Code = "app_field_locked"
+	CodeAppPaymentLinkOpen     Code = "app_payment_link_open"
+	CodeAppSignatureType       Code = "app_signature_type"
 
-	CodeAppDefinitionVersion   Code = "app_definition_version"   // 400: params: version, supported
-	CodeAppIconPath            Code = "app_icon_path"            // 400: an icon's svgPath isn't path data; params: component, max
-	CodeAppIconLabel           Code = "app_icon_label"           // 400: a button or trigger shows only icons, none named; params: component
-	CodeAppNotPublished        Code = "app_not_published"        // 409: no release yet, so nothing to launch
-	CodeAppReleaseNotFound     Code = "app_release_not_found"    // 404: the app has no such release
-	CodeAppReleaseOutdated     Code = "app_release_outdated"     // 409: an action of an older release the live one can't take; params: release, live
-	CodeAppReleaseIncompatible Code = "app_release_incompatible" // 409: the rows don't fit the release; params: fields
-	CodeAppReleaseLive         Code = "app_release_already_live" // 409
-	CodeAppNothingToPublish    Code = "app_nothing_to_publish"   // 409: the draft is the live release
-	CodeAppMigrationRequired   Code = "app_migration_required"   // 409: schema changes to acknowledge; params: changes
-	CodeAppMigrationUnneeded   Code = "app_migration_unneeded"   // 409: an acknowledgement of a change that isn't happening; params: changes
-	CodeAppMigrationInvalid    Code = "app_migration_invalid"    // 400
+	CodeOfflineDisabled Code = "offline_downloads_disabled"
+	CodeAccountChanged  Code = "session_account_changed"
 
-	// Photo attachments of apps and their uploads (internal/apps/attachments.go).
+	CodeHomeWidgetNotFound Code = "home_widget_not_found"
+	CodeHomeLimit          Code = "home_limit"
+	CodeHomeOrderInvalid   Code = "home_order_invalid"
+	CodeHomeDefaultsShared Code = "home_defaults_shared"
 
-	CodeAppFieldFiles       Code = "app_field_files"       // 400: an attachment field's value isn't a list of at most max attachment ids; params: field, max
-	CodeAppAttachmentBad    Code = "app_attachment_bad"    // 400: an attachment can't be used here (unknown, not yours, not finished, another app's or field's, or already attached); params: field
-	CodeAppAttachmentType   Code = "app_attachment_type"   // 400: the bytes aren't a JPEG, PNG or GIF picture the server can read, or it has too many pixels; params: max_megapixels
-	CodeAppUploadSize       Code = "app_upload_size"       // 400: the declared size is 0 or over the field's limit; params: field, max (bytes)
-	CodeAppUploadOffset     Code = "app_upload_offset"     // 409: a chunk wasn't at the upload's offset; params: offset (where the server is)
-	CodeAppUploadState      Code = "app_upload_state"      // 409: the upload isn't in the state that call needs (finished already, or not complete yet)
-	CodeAppUploadChunk      Code = "app_upload_chunk"      // 413: a chunk is over the limit, or runs past the declared size; params: max (bytes)
-	CodeAppUploadsPending   Code = "app_uploads_pending"   // 409: too many unfinished uploads of the caller's; params: max
-	CodeAppFilesFull        Code = "app_files_full"        // 409: the app's attachments are over their total; params: max_mib
-	CodeAppFilesUnavailable Code = "app_files_unavailable" // 503: this server keeps no files for apps
+	CodeAuditTimeInvalid Code = "audit_time_invalid"
 
-	// Location, signature and barcode fields of apps (internal/apps/capture.go).
+	CodeRequestTooLarge   Code = "request_too_large"
+	CodeDocNotFound       Code = "doc_not_found"
+	CodeDocNameInvalid    Code = "doc_name_invalid"
+	CodeDocPathTooLong    Code = "doc_path_too_long"
+	CodeDocPathTooDeep    Code = "doc_path_too_deep"
+	CodeDocNameTooLong    Code = "doc_name_too_long"
+	CodeDocMessageInvalid Code = "doc_message_invalid"
+	CodeDocNotUTF8        Code = "doc_not_utf8"
+	CodeDocConflict       Code = "doc_conflict"
+	CodeDocChanged        Code = "doc_changed"
+	CodeDocDeleted        Code = "doc_deleted"
+	CodeDocExists         Code = "doc_exists"
+	CodeDocCaseConflict   Code = "doc_case_conflict"
+	CodeDocPathTaken      Code = "doc_path_taken"
+	CodeDocMoveIntoItself Code = "doc_move_into_itself"
+	CodeDocMoveKind       Code = "doc_move_kind"
+	CodeDocDeleteFolder   Code = "doc_delete_folder"
+	CodeFileTooLarge      Code = "file_too_large"
+	CodeKnowledgeFull     Code = "knowledge_full"
+	CodeDocNotKept        Code = "doc_not_kept"
 
-	CodeAppFieldNotLocation    Code = "app_field_not_location"    // 400: not a {lat, lon, accuracy_m, captured_at, source} within bounds; params: field
-	CodeAppFieldLocationFuture Code = "app_field_location_future" // 400: a location captured later than the server's clock allows; params: field
-	CodeAppFieldNotSignature   Code = "app_field_not_signature"   // 400: a signature field holds one attachment id; params: field
-	CodeAppFieldNotBarcode     Code = "app_field_not_barcode"     // 400: not a barcode's text, or not valid for the field's format; params: field, format
-	CodeAppFieldLocked         Code = "app_field_locked"          // 400: a captured location or a signature can't be changed once stored; params: field
-	CodeAppPaymentLinkOpen     Code = "app_payment_link_open"     // 422: the amount or currency of a record whose payment link may still be paid (or is still being made) can't change, and no release may read it otherwise (publish, roll back), until it has expired; params: field
-	CodeAppSignatureType       Code = "app_signature_type"        // 400: a signature is a PNG picture
-
-	// Offline use of apps (internal/apps/offline.go).
-
-	CodeOfflineDisabled Code = "offline_downloads_disabled" // 403: an admin turned off downloading this space's apps for offline use
-	CodeAccountChanged  Code = "session_account_changed"    // 409: the request was made for another account than the session's (the browser signed in as someone else)
-
-	// Home widgets and navigation pins (internal/apps/home.go).
-
-	CodeHomeWidgetNotFound Code = "home_widget_not_found" // 404: the app's live release has no such widget
-	CodeHomeLimit          Code = "home_limit"            // 409: params: max
-	CodeHomeOrderInvalid   Code = "home_order_invalid"    // 400: the ids aren't the caller's of that kind
-	CodeHomeDefaultsShared Code = "home_defaults_shared"  // 409: defaults are for the apps of shared spaces
-
-	// The audit log's admin view (internal/server/audit.go).
-
-	CodeAuditTimeInvalid Code = "audit_time_invalid" // 400: from or to isn't a time in RFC 3339 in the years 1000 to 9999
-
-	// The knowledge base (internal/knowledge).
-
-	CodeRequestTooLarge   Code = "request_too_large"    // 413; params: max (bytes)
-	CodeDocNotFound       Code = "doc_not_found"        // 404
-	CodeDocNameInvalid    Code = "doc_name_invalid"     // params: name
-	CodeDocPathTooLong    Code = "doc_path_too_long"    // params: max (bytes)
-	CodeDocPathTooDeep    Code = "doc_path_too_deep"    // params: max
-	CodeDocNameTooLong    Code = "doc_name_too_long"    // params: max (bytes)
-	CodeDocMessageInvalid Code = "doc_message_invalid"  // params: max
-	CodeDocNotUTF8        Code = "doc_not_utf8"         // params: path
-	CodeDocConflict       Code = "doc_conflict"         // 409
-	CodeDocChanged        Code = "doc_changed"          // 409; params: path
-	CodeDocDeleted        Code = "doc_deleted"          // 409; params: path
-	CodeDocExists         Code = "doc_exists"           // 409; params: path
-	CodeDocCaseConflict   Code = "doc_case_conflict"    // 409; params: name, other
-	CodeDocPathTaken      Code = "doc_path_taken"       // 409; params: path
-	CodeDocMoveIntoItself Code = "doc_move_into_itself" // params: path
-	CodeDocMoveKind       Code = "doc_move_kind"        // params: path
-	CodeDocDeleteFolder   Code = "doc_delete_folder"    // params: path
-	CodeFileTooLarge      Code = "file_too_large"       // 413; params: path, max (bytes)
-	CodeKnowledgeFull     Code = "knowledge_full"       // 507
-	CodeDocNotKept        Code = "doc_not_kept"         // 410
-
-	// Storage quotas (internal/quota): the operator's default for a workspace, and for each
-	// member's private space.
-
-	CodeQuotaWorkspace   Code = "quota_workspace"   // 507: the workspace's storage quota is used up; params: max_mib
-	CodeQuotaUser        Code = "quota_user"        // 507: the private space's storage quota is used up; params: max_mib
-	CodeQuotaUnavailable Code = "quota_unavailable" // 503: the usage could not be measured; try again
-
-	// Search (internal/search): searching, and a space's consent to embeddings.
+	CodeQuotaWorkspace   Code = "quota_workspace"
+	CodeQuotaUser        Code = "quota_user"
+	CodeQuotaUnavailable Code = "quota_unavailable"
 
 	CodeSearchQueryRequired Code = "search_query_required"
-	CodeSearchQueryTooLong  Code = "search_query_too_long" // params: max (bytes)
+	CodeSearchQueryTooLong  Code = "search_query_too_long"
 	CodeSearchQueryNoWords  Code = "search_query_no_words"
-
-	// Conversations (internal/conversations).
 
 	CodeConversationNotFound     Code = "conversation_not_found"
 	CodeConversationArchived     Code = "conversation_archived"
-	CodeConversationTitleInvalid Code = "conversation_title_invalid" // params: max
-	CodeConversationLost         Code = "conversation_lost"          // 410: the agent runtime no longer has its content
+	CodeConversationTitleInvalid Code = "conversation_title_invalid"
+	CodeConversationLost         Code = "conversation_lost"
 	CodeConversationNoModel      Code = "conversation_no_model"
-	CodeAgentOff                 Code = "agent_off"        // 503: the server runs without -agent
-	CodeAgentNotReady            Code = "agent_not_ready"  // 503: starting or restarting; Retry-After
-	CodeModelUnknown             Code = "model_unknown"    // the caller may not use the model, or it isn't configured
-	CodeTooManyStreams           Code = "too_many_streams" // params: max
+	CodeAgentOff                 Code = "agent_off"
+	CodeAgentNotReady            Code = "agent_not_ready"
+	CodeModelUnknown             Code = "model_unknown"
+	CodeTooManyStreams           Code = "too_many_streams"
 	CodeCLIPermissionNotFound    Code = "cli_permission_not_found"
 
-	// The agent browser (internal/agentbrowser). The CLI workers' rule applies to it too.
-
-	CodeBrowserOff            Code = "browser_off"             // the server runs without -browser
-	CodeBrowserCLIWorkersOff  Code = "browser_cli_workers_off" // the CLI workers it runs with are off
-	CodeBrowserSingleUser     Code = "browser_single_user"     // local mode, and the server has more than one user
-	CodeBrowserUnusable       Code = "browser_unusable"        // another reason it can't be used now
+	CodeBrowserOff            Code = "browser_off"
+	CodeBrowserCLIWorkersOff  Code = "browser_cli_workers_off"
+	CodeBrowserSingleUser     Code = "browser_single_user"
+	CodeBrowserUnusable       Code = "browser_unusable"
 	CodeBrowserNotInstalled   Code = "browser_not_installed"
 	CodeBrowserNotRunning     Code = "browser_not_running"
 	CodeBrowserTooManyLive    Code = "browser_too_many_live"
-	CodeBrowserBusy           Code = "browser_busy" // too many browsers run on the server
+	CodeBrowserBusy           Code = "browser_busy"
 	CodeBrowserShuttingDown   Code = "browser_shutting_down"
-	CodeBrowserAccountClosing Code = "browser_account_closing" // the account's deletion is removing its browsers
-
-	// Model provider accounts (internal/providers). The endpoint's codes are also those of
-	// the other settings that keep an endpoint of their own: shared CLI accounts and
-	// dictation; and of the tests of an endpoint, in their answer's code.
+	CodeBrowserAccountClosing Code = "browser_account_closing"
 
 	CodeProviderNotFound           Code = "provider_not_found"
-	CodeProviderNameInvalid        Code = "provider_name_invalid" // params: max
+	CodeProviderNameInvalid        Code = "provider_name_invalid"
 	CodeProviderNameTaken          Code = "provider_name_taken"
-	CodeProviderDisplayNameInvalid Code = "provider_display_name_invalid" // params: max
-	CodeProviderModelsCount        Code = "provider_models_count"         // params: max
-	CodeProviderModelInvalid       Code = "provider_model_invalid"        // params: max
-	CodeTooManyProviders           Code = "too_many_providers"            // params: max
-	CodeBaseURLInvalid             Code = "base_url_invalid"              // params: max
-	CodeBaseURLCredentials         Code = "base_url_credentials"          //nolint:gosec // G101: an error code, not a credential
+	CodeProviderDisplayNameInvalid Code = "provider_display_name_invalid"
+	CodeProviderModelsCount        Code = "provider_models_count"
+	CodeProviderModelInvalid       Code = "provider_model_invalid"
+	CodeTooManyProviders           Code = "too_many_providers"
+	CodeBaseURLInvalid             Code = "base_url_invalid"
+	CodeBaseURLCredentials         Code = "base_url_credentials"
 	CodeBaseURLInsecure            Code = "base_url_insecure"
-	CodeAPIKeyInvalid              Code = "api_key_invalid" //nolint:gosec // G101: an error code, not a credential; params: min, max
+	CodeAPIKeyInvalid              Code = "api_key_invalid"
 	CodeEndpointUnreachable        Code = "endpoint_unreachable"
-	CodeEndpointKeyRefused         Code = "endpoint_key_refused" // params: status
-	CodeEndpointStatus             Code = "endpoint_status"      // params: status
+	CodeEndpointKeyRefused         Code = "endpoint_key_refused"
+	CodeEndpointStatus             Code = "endpoint_status"
 	CodeEndpointNoModels           Code = "endpoint_no_models"
 
-	// Egress policies (internal/egress).
+	CodeEgressRefused Code = "egress_refused"
 
-	CodeEgressRefused Code = "egress_refused" // params: host
-
-	// Outgoing email (internal/mail, internal/server/mail.go).
-
-	CodeMailNotConfigured Code = "mail_not_configured"
-	CodeMailConnectFailed Code = "mail_connect_failed" // params: host
-	CodeMailTLSFailed     Code = "mail_tls_failed"
-	CodeMailAuthFailed    Code = "mail_auth_failed"
-	CodeMailRejected      Code = "mail_rejected" // params: smtp_code
-	CodeMailFailed        Code = "mail_failed"
-	// CodeMailTestRateLimited is a 429: the person sent a test email a moment ago, or the server's
-	// test sends are all busy. Retry-After says how long.
+	CodeMailNotConfigured   Code = "mail_not_configured"
+	CodeMailConnectFailed   Code = "mail_connect_failed"
+	CodeMailTLSFailed       Code = "mail_tls_failed"
+	CodeMailAuthFailed      Code = "mail_auth_failed"
+	CodeMailRejected        Code = "mail_rejected"
+	CodeMailFailed          Code = "mail_failed"
 	CodeMailTestRateLimited Code = "mail_test_rate_limited"
-	// CodeTooManyInviteEmails is a 429: the admin, or the invited address, has had too many
-	// invitations emailed lately. Retry-After says how long.
 	CodeTooManyInviteEmails Code = "too_many_invite_emails"
 
-	// The export of a person's own data (internal/export).
-
-	// CodeExportRunning is a 409: the person has an export running already. Retry-After says
-	// when to look again.
-	CodeExportRunning Code = "export_running"
-	// CodeExportRateLimited is a 429: the person started their share of exports this hour, or the
-	// server's exports are all busy. Retry-After says how long.
+	CodeExportRunning     Code = "export_running"
 	CodeExportRateLimited Code = "export_rate_limited"
-
-	// CLI accounts, shared CLI accounts and automatic switching (internal/cliaccounts).
 
 	CodeCLIWorkersOff          Code = "cli_workers_off"
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
-	CodeCLINotInstalled        Code = "cli_not_installed" // params: cli
+	CodeCLINotInstalled        Code = "cli_not_installed"
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
-	CodeCLIAccountForgotten    Code = "cli_account_forgotten" // the worker removed the account's CLI files and refuses it
-	CodeCLIAccountRemoving     Code = "cli_account_removing"  // 409: the account's CLI files are being removed (it is being disconnected)
-	CodeCLIAccountBusy         Code = "cli_account_busy"      // 409: a process of the account is still running; nothing was removed, try again
+	CodeCLIAccountForgotten    Code = "cli_account_forgotten"
+	CodeCLIAccountRemoving     Code = "cli_account_removing"
+	CodeCLIAccountBusy         Code = "cli_account_busy"
 	CodeCLINoLogin             Code = "cli_no_login"
-	CodeCLILoginCodeInvalid    Code = "cli_login_code_invalid" // params: max
+	CodeCLILoginCodeInvalid    Code = "cli_login_code_invalid"
 	CodeCLILoginNoCode         Code = "cli_login_no_code"
-	CodeCLILabelInvalid        Code = "cli_label_invalid" // params: max
+	CodeCLILabelInvalid        Code = "cli_label_invalid"
 	CodeCLIAccountNotConnected Code = "cli_account_not_connected"
 	CodeSharedAccountsOff      Code = "shared_accounts_off"
 	CodeSharedAccountsNoProxy  Code = "shared_accounts_no_proxy"
 	CodeSharedAccountNotFound  Code = "shared_account_not_found"
-	CodeSharedLabelInvalid     Code = "shared_label_invalid" // params: max
-	CodeSharedModelInvalid     Code = "shared_model_invalid" // params: max
+	CodeSharedLabelInvalid     Code = "shared_label_invalid"
+	CodeSharedModelInvalid     Code = "shared_model_invalid"
 	CodeSharedKeyUnreadable    Code = "shared_key_unreadable"
-	CodeTooManySharedAccounts  Code = "too_many_shared_accounts" // params: max
-	CodeQueueTooLong           Code = "queue_too_long"           // params: max
+	CodeTooManySharedAccounts  Code = "too_many_shared_accounts"
+	CodeQueueTooLong           Code = "queue_too_long"
 	CodeQueueAccountNotFound   Code = "queue_account_not_found"
 
-	// Dictation (internal/dictation): its settings, the engine's state, and dictating.
-
 	CodeDictationLanguageInvalid    Code = "dictation_language_invalid"
-	CodeDictationModelInvalid       Code = "dictation_model_invalid" // params: max
+	CodeDictationModelInvalid       Code = "dictation_model_invalid"
 	CodeDictationKeyRequired        Code = "dictation_key_required"
 	CodeDictationNoticeRequired     Code = "dictation_notice_required"
 	CodeDictationEngineUnavailable  Code = "dictation_engine_unavailable"
-	CodeDictationAddonMissing       Code = "dictation_addon_missing" // params: name, vendor
+	CodeDictationAddonMissing       Code = "dictation_addon_missing"
 	CodeDictationLocalOff           Code = "dictation_local_off"
 	CodeDictationLocalNotDownloaded Code = "dictation_local_not_downloaded"
-	CodeDictationLocalDownloading   Code = "dictation_local_downloading" // params: percent
-	CodeDictationLocalNoBuild       Code = "dictation_local_no_build"    // params: model, platform
+	CodeDictationLocalDownloading   Code = "dictation_local_downloading"
+	CodeDictationLocalNoBuild       Code = "dictation_local_no_build"
 	CodeDictationLocalFailed        Code = "dictation_local_failed"
 	CodeDictationLocalUnavailable   Code = "dictation_local_unavailable"
 	CodeDictationBusy               Code = "dictation_busy"
@@ -405,113 +318,95 @@ const (
 	CodeDictationFailed             Code = "dictation_failed"
 	CodeDictationTimeout            Code = "dictation_timeout"
 	CodeAudioInvalid                Code = "audio_invalid"
-	CodeAudioTooLong                Code = "audio_too_long" // params: minutes
+	CodeAudioTooLong                Code = "audio_too_long"
 	CodeAudioEmpty                  Code = "audio_empty"
 
-	// Search's settings and spaces' consent (internal/search).
-
-	CodeEmbeddingsModelInvalid   Code = "embeddings_model_invalid" // params: max
+	CodeEmbeddingsModelInvalid   Code = "embeddings_model_invalid"
 	CodeEmbeddingsAccountInvalid Code = "embeddings_account_invalid"
 	CodeEmbeddingsFailed         Code = "embeddings_failed"
 	CodeConsentForbidden         Code = "consent_forbidden"
 	CodeConsentNoModel           Code = "consent_no_model"
 	CodeConsentEndpointChanged   Code = "consent_endpoint_changed"
 
-	// Notifications and Web Push (internal/notifications).
-
-	CodeNotificationNotFound     Code = "notification_not_found"                      // 404: not the caller's, or gone
-	CodePushEndpointInvalid      Code = "push_endpoint_invalid"                       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
-	CodePushKeysInvalid          Code = "push_keys_invalid"                           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
-	CodePushTooManySubscriptions Code = "push_too_many_subscriptions"                 // 409: the person has the most devices subscribed; params: max
-	CodePushNoWorkspace          Code = "push_no_workspace"                           // 403: push is for people in a workspace, and the caller is in none
-	CodeNotificationEmailInvalid Code = "notification_email_invalid"                  // 400: an unknown kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name
-	CodeEmailVerifyInvalid       Code = "notification_email_verification_invalid"     // 400: the confirmation link is unknown, used, expired or for an address the person no longer has
-	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"    // 429: a link was sent a moment ago; params: seconds to wait
-	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable" // 502: the confirmation mail couldn't be sent
-
-	// Integrations: a workspace's connections to outside providers (internal/integrations).
+	CodeNotificationNotFound     Code = "notification_not_found"
+	CodePushEndpointInvalid      Code = "push_endpoint_invalid"
+	CodePushKeysInvalid          Code = "push_keys_invalid"
+	CodePushTooManySubscriptions Code = "push_too_many_subscriptions"
+	CodePushNoWorkspace          Code = "push_no_workspace"
+	CodeNotificationEmailInvalid Code = "notification_email_invalid"
+	CodeEmailVerifyInvalid       Code = "notification_email_verification_invalid"
+	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"
+	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable"
 
 	CodeIntegrationNotFound            Code = "integration_not_found"
-	CodeIntegrationNameInvalid         Code = "integration_name_invalid"         // params: max
-	CodeIntegrationNameTaken           Code = "integration_name_taken"           // 409
-	CodeIntegrationDisplayNameBad      Code = "integration_display_name_invalid" // params: max
+	CodeIntegrationNameInvalid         Code = "integration_name_invalid"
+	CodeIntegrationNameTaken           Code = "integration_name_taken"
+	CodeIntegrationDisplayNameBad      Code = "integration_display_name_invalid"
 	CodeIntegrationProviderUnknown     Code = "integration_provider_unknown"
-	CodeIntegrationSecretRequired      Code = "integration_secret_required"       // params: secret
-	CodeIntegrationSecretInvalid       Code = "integration_secret_invalid"        // params: secret
-	CodeIntegrationSecretUnreadable    Code = "integration_secret_unreadable"     // in a check's answer: params: secret
-	CodeIntegrationWebhookSecretReused Code = "integration_webhook_secret_reused" // 409: another integration verifies deliveries with this webhook secret
-	CodeIntegrationWebhookSecretShared Code = "integration_webhook_secret_shared" // in a check's answer: params: secret; another integration has this webhook secret too, so it verifies nothing
-	CodeIntegrationSettingInvalid      Code = "integration_setting_invalid"       // params: setting
-	CodeIntegrationLimitInvalid        Code = "integration_limit_invalid"         // params: max
-	CodeIntegrationCurrencyInvalid     Code = "integration_currency_invalid"      // params: max
-	CodeTooManyIntegrations            Code = "too_many_integrations"             // params: max
+	CodeIntegrationSecretRequired      Code = "integration_secret_required"
+	CodeIntegrationSecretInvalid       Code = "integration_secret_invalid"
+	CodeIntegrationSecretUnreadable    Code = "integration_secret_unreadable"
+	CodeIntegrationWebhookSecretReused Code = "integration_webhook_secret_reused"
+	CodeIntegrationWebhookSecretShared Code = "integration_webhook_secret_shared"
+	CodeIntegrationSettingInvalid      Code = "integration_setting_invalid"
+	CodeIntegrationLimitInvalid        Code = "integration_limit_invalid"
+	CodeIntegrationCurrencyInvalid     Code = "integration_currency_invalid"
+	CodeTooManyIntegrations            Code = "too_many_integrations"
 	CodeIntegrationInUse               Code = "integration_in_use"
-	CodeIntegrationEventGaveUp         Code = "integration_event_gave_up" // an event's last stored reason when its tries ran out
-	CodeWebhookRateLimited             Code = "webhook_rate_limited"      // 429, with Retry-After: the webhook route's limits (POST /hooks/{id})
-	CodeWebhookTooLarge                Code = "webhook_too_large"         // 413: a delivery's body is over the route's cap
+	CodeIntegrationEventGaveUp         Code = "integration_event_gave_up"
+	CodeWebhookRateLimited             Code = "webhook_rate_limited"
+	CodeWebhookTooLarge                Code = "webhook_too_large"
 
-	// The operator's "Update now" (internal/server/updates.go, docs/api.md#update-now).
+	CodeUpdateRequestUnsupported Code = "update_request_unsupported"
+	CodeUpdateChannelOff         Code = "update_channel_off"
+	CodeUpdateRequestPending     Code = "update_request_pending"
+	CodeUpdateRunning            Code = "update_running"
 
-	CodeUpdateRequestUnsupported Code = "update_request_unsupported" // 409: no request directory, or the host's updater or its path unit can't take one (deploy/INSTALL.md step 16)
-	CodeUpdateChannelOff         Code = "update_channel_off"         // 409: the updater's channel is off
-	CodeUpdateRequestPending     Code = "update_request_pending"     // 409: a request waits for the host to take it
-	CodeUpdateRunning            Code = "update_running"             // 409: a run is changing the install
-
-	// Apps' use of integrations: the contract an admin approves (internal/apps, integration_approvals.go).
-
-	CodeAppIntegrationUnapproved      Code = "app_integration_unapproved"       // 409: params: slot
-	CodeAppIntegrationSlotUnknown     Code = "app_integration_slot_unknown"     // 404: the draft declares no such slot; params: slot
-	CodeAppIntegrationContractChanged Code = "app_integration_contract_changed" // 409: the draft's contract is no longer the one the request named
-	CodeAppIntegrationNotPending      Code = "app_integration_not_pending"      // 409: the request was already decided
-	CodeAppIntegrationNotApproved     Code = "app_integration_not_approved"     // 409: only an approval can be revoked
+	CodeAppIntegrationUnapproved      Code = "app_integration_unapproved"
+	CodeAppIntegrationSlotUnknown     Code = "app_integration_slot_unknown"
+	CodeAppIntegrationContractChanged Code = "app_integration_contract_changed"
+	CodeAppIntegrationNotPending      Code = "app_integration_not_pending"
+	CodeAppIntegrationNotApproved     Code = "app_integration_not_approved"
 	CodeAppIntegrationNotFound        Code = "app_integration_approval_not_found"
-	CodeAppIntegrationKindMismatch    Code = "app_integration_kind_mismatch"     // 422: the integration's provider doesn't do the slot's kind; params: kind
-	CodeAppIntegrationDisabled        Code = "app_integration_disabled"          // 409: the integration is switched off
-	CodeAppIntegrationSpaceNotAllowed Code = "app_integration_space_not_allowed" // 409: the integration is not allowed in the app's space
+	CodeAppIntegrationKindMismatch    Code = "app_integration_kind_mismatch"
+	CodeAppIntegrationDisabled        Code = "app_integration_disabled"
+	CodeAppIntegrationSpaceNotAllowed Code = "app_integration_space_not_allowed"
 
-	// Why a create_payment_link effect failed (internal/apps, internal/integrations): the codes of
-	// an entry's failure, which the web app tells the person who acted.
+	CodeIntegrationUnavailable         Code = "integration_unavailable"
+	CodeIntegrationAmountRefused       Code = "integration_amount_refused"
+	CodeIntegrationAmountAboveMax      Code = "integration_amount_above_max"
+	CodeIntegrationCurrencyRefused     Code = "integration_currency_refused"
+	CodeIntegrationCredentialsRefused  Code = "integration_credentials_refused"
+	CodeIntegrationProviderRefused     Code = "integration_provider_refused"
+	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable"
+	CodeIntegrationAccountChanged      Code = "integration_account_changed"
+	CodeIntegrationChanged             Code = "integration_changed"
+	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"
+	CodeIntegrationLinkStillOpen       Code = "integration_link_still_open"
+	CodeIntegrationAmountChanged       Code = "integration_amount_changed"
 
-	CodeIntegrationUnavailable         Code = "integration_unavailable"          // the app's approved integration can't be used now: unapproved, switched off, not allowed in the space, or its key can't be read
-	CodeIntegrationAmountRefused       Code = "integration_amount_refused"       // the amount isn't more than zero, isn't a number, or has more decimals than the currency
-	CodeIntegrationAmountAboveMax      Code = "integration_amount_above_max"     // the amount is above the admin's ceiling; params: max, currency
-	CodeIntegrationCurrencyRefused     Code = "integration_currency_refused"     // the currency isn't one the integration allows; params: currency
-	CodeIntegrationCredentialsRefused  Code = "integration_credentials_refused"  // the provider didn't accept the integration's key
-	CodeIntegrationProviderRefused     Code = "integration_provider_refused"     // the provider refused the request, for good
-	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable" // the provider didn't answer, or answered with an error that may pass: tried again, then waits for a retry
-	CodeIntegrationAccountChanged      Code = "integration_account_changed"      // the integration's key is now another provider account's than the one the unfinished payment link was asked in: it must be recreated
-	CodeIntegrationChanged             Code = "integration_changed"              // the payment link was made under another integration than the one the slot is bound to now: it must be recreated
-	CodeIntegrationLinkAlreadyPaid     Code = "integration_link_already_paid"    // an earlier try's payment link is paid, or no longer payable for another reason: nothing is made, an admin reconciles it
-	CodeIntegrationLinkStillOpen       Code = "integration_link_still_open"      // the record's earlier payment link may still take payment (or is still being made) and can't be given again (it asks another amount or currency, reads them from other fields, or the record has more than one): no second link is made until it has expired
-	CodeIntegrationAmountChanged       Code = "integration_amount_changed"       // the record's amount or currency changed since the action queued its payment link: nothing was made for the old money
+	CodeIntegrationEventUnavailable        Code = "integration_event_unavailable"
+	CodeIntegrationEventIntegrationChanged Code = "integration_event_integration_changed"
+	CodeIntegrationEventAppOffline         Code = "integration_event_app_offline"
+	CodeIntegrationEventRecordGone         Code = "integration_event_record_gone"
+	CodeIntegrationEventRecordRefused      Code = "integration_event_record_refused"
+	CodeIntegrationAmountMismatch          Code = "integration_amount_mismatch"
+	CodeIntegrationEventPaymentUnknown     Code = "integration_event_payment_unknown"
 
-	// What became of a verified provider event the integrations' worker applies to a record
-	// (internal/integrations apply.go). The first group are an event's failures: it waits for an
-	// admin and is tried again once what is wrong is fixed. The second are events that are real
-	// and change nothing, kept as ignored with the reason.
+	CodeIntegrationEventNotFound     Code = "integration_event_not_found"
+	CodeIntegrationEventNotRetriable Code = "integration_event_not_retriable"
 
-	CodeIntegrationEventUnavailable        Code = "integration_event_unavailable"         // the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot
-	CodeIntegrationEventIntegrationChanged Code = "integration_event_integration_changed" // the app's slot is bound to another integration than the one whose payment this is
-	CodeIntegrationEventAppOffline         Code = "integration_event_app_offline"         // the app is offline, archived or not published, or its space is archived
-	CodeIntegrationEventRecordGone         Code = "integration_event_record_gone"         // the record, or its app, is gone or is in another workspace
-	CodeIntegrationEventRecordRefused      Code = "integration_event_record_refused"      // the record, as the event would leave it, doesn't fit the app
-	CodeIntegrationAmountMismatch          Code = "integration_amount_mismatch"           // the payment isn't the amount and currency the payment link asked: not applied
-	CodeIntegrationEventPaymentUnknown     Code = "integration_event_payment_unknown"     // a full refund of a payment no reference has been paid by yet, which one may still be: waits for that payment for up to 72 hours, then waits for an admin
-
-	CodeIntegrationEventNotFound     Code = "integration_event_not_found"     // 404: no such event in this integration
-	CodeIntegrationEventNotRetriable Code = "integration_event_not_retriable" // 409: only a failed event is retried
-
-	CodeIntegrationEventRefUnknown     Code = "integration_event_ref_unknown"     // ignored: no payment link of this integration has the event's reference
-	CodeIntegrationEventModeMismatch   Code = "integration_event_mode_mismatch"   // ignored: an event of live money for a link made in test mode, or the other way round
-	CodeIntegrationEventDuplicate      Code = "integration_event_duplicate"       // ignored: the event is the payment or the end the reference already has
-	CodeIntegrationEventLate           Code = "integration_event_late"            // ignored: the reference has moved past what the event says
-	CodeIntegrationEventNoHandler      Code = "integration_event_no_handler"      // ignored: the app declares nothing for the event, so its record is left as it is
-	CodeIntegrationEventConditionUnmet Code = "integration_event_condition_unmet" // ignored: the record didn't meet the rule of the app's handler, so it is left as it is
-	CodeIntegrationEventPartialRefund  Code = "integration_event_partial_refund"  // ignored: a refund of part of the payment
-	CodeIntegrationEventSecondPayment  Code = "integration_event_second_payment"  // ignored: a second payment for a reference that was paid, kept for the admins to reconcile
-	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"       // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
-	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"   // a call may have run and nobody knows what it made: only its object is looked for and the call asked again under its own key, for a bounded time, and no other key is used meanwhile
-	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"    // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
-	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable"  // 409: an object of the payment link was seen at the provider (an answer named one, or a lookup found one), or one of its keys was resolved already: an admin's confirmation never allows a new key for it
-	CodeIntegrationConditionChanged    Code = "integration_condition_changed"     // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
+	CodeIntegrationEventRefUnknown     Code = "integration_event_ref_unknown"
+	CodeIntegrationEventModeMismatch   Code = "integration_event_mode_mismatch"
+	CodeIntegrationEventDuplicate      Code = "integration_event_duplicate"
+	CodeIntegrationEventLate           Code = "integration_event_late"
+	CodeIntegrationEventNoHandler      Code = "integration_event_no_handler"
+	CodeIntegrationEventConditionUnmet Code = "integration_event_condition_unmet"
+	CodeIntegrationEventPartialRefund  Code = "integration_event_partial_refund"
+	CodeIntegrationEventSecondPayment  Code = "integration_event_second_payment"
+	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"
+	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"
+	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"
+	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable"
+	CodeIntegrationConditionChanged    Code = "integration_condition_changed"
 )

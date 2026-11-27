@@ -1,28 +1,3 @@
-// Package notifications is the notification inbox and, for the people who opt in, Web Push and
-// email (email.go).
-//
-// A notification says that something happened that a person may want to see: a card was assigned
-// to them, someone commented on a card of theirs or mentioned them in a comment, an effect of an app
-// they used failed and needs them. The inbox is the one place they are
-// all found, in the web app, whether or not the browser can push; push is an extra that tells a
-// device about one when the app isn't open, and nothing relies on it: a push may arrive late,
-// twice or never (the service of the browser's maker carries it, once, with a lifetime), and the
-// inbox is what is true. Nothing is pushed to a device until its person turns push on in that
-// browser.
-//
-// What a notification holds is a kind and the IDs of what it is about (Ref), for one person in one
-// workspace. It never holds what the record says. What an item says (a card's title, an app's name)
-// is worked out whenever it is read or pushed, from what the recipient may read at that moment
-// (render.go): a person who lost access to the card since, or whose access to the space ended, is
-// shown a generic "something changed" with no names, no IDs and a link to the workspace's home,
-// and a push for it says the same. The deep link of an item is an address of the web app, which
-// checks access again when it opens.
-//
-// Push (push.go) is delivered by a worker with bounded tries to the endpoints browsers gave, which
-// are reached under the egress policy for public addresses only; a subscription that a push service
-// says is gone is removed, one is bound to the session that made it, and leaving a workspace ends
-// its notifications. webpush.go has the standards (VAPID and message encryption), made with the
-// standard library only. docs/pwa.md and docs/install.md describe it for people.
 package notifications
 
 import (
@@ -44,68 +19,48 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// The kinds of notification. KindChanged is never stored: it is what an item is shown as when its
-// recipient can no longer read what it was about.
 const (
-	KindCardAssigned    = "card_assigned"
-	KindCardComment     = "card_comment"
-	KindCardMention     = "card_mention"
-	KindAppEffectFailed = "app_effect_failed"
-	KindCardDue         = "card_due"
-	KindCardOverdue     = "card_overdue"
-	// KindIntegrationEvent is for a workspace's admins: a payment event of an integration wasn't
-	// applied and waits for them (internal/integrations apply.go).
+	KindCardAssigned     = "card_assigned"
+	KindCardComment      = "card_comment"
+	KindCardMention      = "card_mention"
+	KindAppEffectFailed  = "app_effect_failed"
+	KindCardDue          = "card_due"
+	KindCardOverdue      = "card_overdue"
 	KindIntegrationEvent = "integration_event"
 	KindChanged          = "changed"
 )
 
-// Bounds.
 const (
-	// MaxSubscriptions is how many devices a person may have subscribed.
 	MaxSubscriptions = 20
-	// MaxListed and DefaultListed bound a page of the inbox.
-	MaxListed     = 50
-	DefaultListed = 30
-	// keepRead and keepAll say how long notifications are kept; perUser caps what a person has in a
-	// workspace.
-	keepRead = 90 * 24 * time.Hour
-	keepAll  = 180 * 24 * time.Hour
-	perUser  = 500
+	MaxListed        = 50
+	DefaultListed    = 30
+	keepRead         = 90 * 24 * time.Hour
+	keepAll          = 180 * 24 * time.Hour
+	perUser          = 500
 )
 
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
-// Ref says what a notification is about: the IDs the kind needs, and no more.
 type Ref struct {
-	Space  int64 `json:"space,omitempty"`
-	Board  int64 `json:"board,omitempty"`
-	Card   int64 `json:"card,omitempty"`
-	App    int64 `json:"app,omitempty"`
-	Effect int64 `json:"effect,omitempty"`
-	// Integration and Event are an integration of the workspace and one of its stored events.
-	Integration int64 `json:"integration,omitempty"`
-	Event       int64 `json:"event,omitempty"`
-	// Due is the date a card's reminder or overdue notice was made for, a calendar date: the
-	// notice says it only while the card is still due then.
-	Due string `json:"due,omitempty"`
+	Space       int64  `json:"space,omitempty"`
+	Board       int64  `json:"board,omitempty"`
+	Card        int64  `json:"card,omitempty"`
+	App         int64  `json:"app,omitempty"`
+	Effect      int64  `json:"effect,omitempty"`
+	Integration int64  `json:"integration,omitempty"`
+	Event       int64  `json:"event,omitempty"`
+	Due         string `json:"due,omitempty"`
 }
 
-// Notice is a notification to add.
 type Notice struct {
 	UserID, WorkspaceID int64
 	Kind                string
 	Ref                 Ref
-	// DedupeKey makes adding it again (a retry) add nothing: one per person, kind and key. "" has
-	// none.
-	DedupeKey string
+	DedupeKey           string
 }
 
 var errUnknownKind = errors.New("notifications: unknown kind")
 
-// Add makes a notification in tx, the transaction of what it is about, and queues a push of it to
-// each device its person has subscribed so far. It makes none for someone who isn't a member of
-// the workspace, and none twice for one DedupeKey. Producers call it; it checks nothing about what
-// the notification is about, which is checked when it is shown.
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	switch n.Kind {
 	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent:
@@ -138,8 +93,6 @@ func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 		SELECT ?, id, ?, ? FROM push_subscriptions WHERE user_id = ?`, id, at, at, n.UserID); err != nil {
 		return err
 	}
-	// And a mail, if the person chose to have this kind mailed as it happens and has confirmed the
-	// address it would go to (it is checked again when the mail is sent).
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO email_deliveries (notification_id, next_attempt_at, updated_at)
 		SELECT ?, ?, ? WHERE EXISTS (
@@ -152,60 +105,35 @@ func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	return err
 }
 
-// Options are the service's settings.
 type Options struct {
-	// Key seals the browsers' auth secrets and the VAPID private key.
-	Key *serverkey.Key
-	// HTTPClient sends the pushes. nil is the egress client for public addresses only, which is
-	// what it must be in a server: an endpoint is an address a person gave.
+	Key        *serverkey.Key
 	HTTPClient *http.Client
-	// Egress is where endpoints may be: the policy of registration and of every push. nil is the
-	// policy for public addresses only, which is what it must be in a server (an endpoint is an
-	// address a person gave); a test that gives its own HTTPClient gives its own policy too.
-	Egress *egress.Policy
-	// Contact says to the push services who runs the server (the VAPID subject): a mailto: or
-	// https: URL. Empty is the project's address.
-	Contact string
-	// Mail sends the notification emails people opted in to; nil, or one with no SMTP server,
-	// sends none (email.go).
-	Mail *mail.Service
-	// PublicURL is the server's external origin, https://taskto.example.com, which the links in an
-	// email go to. Empty: no email is sent, as the links would have nowhere to lead.
-	PublicURL string
-	// Now is the clock, for tests.
-	Now func() time.Time
+	Egress     *egress.Policy
+	Contact    string
+	Mail       *mail.Service
+	PublicURL  string
+	Now        func() time.Time
 }
 
-// DefaultContact is the VAPID subject when the operator gives none.
 const DefaultContact = "https://taskto.ai"
 
-// Service is the inbox and push.
 type Service struct {
-	db      *sql.DB
-	access  *access.Checker
-	key     *serverkey.Key
-	vapid   *vapidKey
-	client  *http.Client
-	contact string
-	egress  egress.Policy
-	clock   func() time.Time
-	// mail, publicURL and sched are the email channel's (email.go); sched is set by AttachScheduler.
-	mail      *mail.Service
-	publicURL string
-	sched     *schedule.Service
-	// tidyEvery is how often the worker tidies; a field for tests.
-	tidyEvery time.Duration
-	// afterReserve runs between a mail's place in the ledger being reserved and the last check
-	// before it is submitted; a field for tests, which change the world in that gap.
+	db           *sql.DB
+	access       *access.Checker
+	key          *serverkey.Key
+	vapid        *vapidKey
+	client       *http.Client
+	contact      string
+	egress       egress.Policy
+	clock        func() time.Time
+	mail         *mail.Service
+	publicURL    string
+	sched        *schedule.Service
+	tidyEvery    time.Duration
 	afterReserve func()
-	// betweenReads runs, in the transaction that decides whether an instant mail may go out, between
-	// reading what the person may read and reading the address; a field for tests, which change that
-	// transaction's state from inside it.
 	betweenReads func(*sql.Tx)
 }
 
-// New returns the service over a migrated database, making the server's VAPID key pair if it has
-// none yet.
 func New(ctx context.Context, sqlDB *sql.DB, spaces *access.Checker, opts Options) (*Service, error) {
 	if opts.Key == nil {
 		return nil, errors.New("notifications: a server key is required")
@@ -237,7 +165,6 @@ func (s *Service) stamp(t time.Time) string { return t.UTC().Format(timeFormat) 
 
 func (s *Service) now() string { return s.stamp(s.clock()) }
 
-// write runs fn in a transaction.
 func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

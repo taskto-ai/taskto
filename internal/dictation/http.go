@@ -25,8 +25,6 @@ import (
 	"taskto.ai/taskto/internal/providers"
 )
 
-// Routes mounts the dictation endpoints on mux, behind a's access checks. c finds the spaces
-// whose glossaries a dictation may use: those its caller can read.
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	s.language = a.Language
@@ -39,16 +37,15 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker)
 type apiReply struct {
 	BaseURL string `json:"base_url"`
 	Model   string `json:"model"`
-	APIKey  string `json:"api_key"` // "set" or "not set", never the key
+	APIKey  string `json:"api_key"`
 }
 
 type settingsReply struct {
-	Engine   string   `json:"engine"`
-	Language string   `json:"language"`
-	API      apiReply `json:"api"`
-	// AcceptedNotice is the add-on whose notice an admin confirmed, or "".
-	AcceptedNotice string `json:"accepted_notice"`
-	UpdatedAt      string `json:"updated_at,omitempty"`
+	Engine         string   `json:"engine"`
+	Language       string   `json:"language"`
+	API            apiReply `json:"api"`
+	AcceptedNotice string   `json:"accepted_notice"`
+	UpdatedAt      string   `json:"updated_at,omitempty"`
 }
 
 type localReply struct {
@@ -62,20 +59,15 @@ type addonReply struct {
 }
 
 type statusReply struct {
-	// Engine is what a dictation uses now ("api", "local", an add-on's ID), or "" for none.
-	Engine string `json:"engine"`
-	// Reason says why there is none, or why it can't run yet; ReasonCode and ReasonParams
-	// are its code, for the web app to translate (apierr).
+	Engine       string        `json:"engine"`
 	Reason       string        `json:"reason,omitempty"`
 	ReasonCode   apierr.Code   `json:"reason_code,omitempty"`
 	ReasonParams apierr.Params `json:"reason_params,omitempty"`
 	Settings     settingsReply `json:"settings"`
-	// Local is the operator's local engine, or null when it is off.
-	Local *localReply `json:"local"`
-	// Addons are the add-ons taskto knows of, and whether the operator installed them.
-	Addons     []addonReply `json:"addons"`
-	Credits    []Credit     `json:"credits"`
-	MaxSeconds int          `json:"max_seconds"`
+	Local        *localReply   `json:"local"`
+	Addons       []addonReply  `json:"addons"`
+	Credits      []Credit      `json:"credits"`
+	MaxSeconds   int           `json:"max_seconds"`
 }
 
 func (s *Service) status(ctx context.Context, workspaceID int64) (statusReply, error) {
@@ -126,7 +118,6 @@ func (s *Service) status(ctx context.Context, workspaceID int64) (statusReply, e
 	return reply, nil
 }
 
-// localReason says why the local engine can't run yet.
 func localReason(ls LocalState) *Unavailable {
 	switch ls.State {
 	case LocalNotDownloaded:
@@ -142,8 +133,6 @@ func localReason(ls LocalState) *Unavailable {
 		}
 	}
 	if ls.Error != "" {
-		// Every state with an error sets its code (local.go); the fallback keeps a new one
-		// from reaching the web app without one.
 		return &Unavailable{Reason: ls.Error, Code: cmp.Or(ls.ErrorCode, apierr.CodeDictationLocalUnavailable), Params: ls.ErrorParams}
 	}
 	return &Unavailable{Reason: "the local speech model can't run on this server", Code: apierr.CodeDictationLocalUnavailable}
@@ -159,7 +148,6 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// optional is a field that may be absent, null or a value.
 type optional[T any] struct {
 	set   bool
 	value *T
@@ -174,8 +162,6 @@ func (o *optional[T]) UnmarshalJSON(raw []byte) error {
 	return json.Unmarshal(raw, o.value)
 }
 
-// updateRequest is the body of a PATCH: an absent field stays as it is. api.api_key: a
-// string sets a new key, null removes it.
 type updateRequest struct {
 	Engine   *string `json:"engine"`
 	Language *string `json:"language"`
@@ -184,7 +170,6 @@ type updateRequest struct {
 		Model   *string          `json:"model"`
 		APIKey  optional[string] `json:"api_key"`
 	} `json:"api"`
-	// AcceptNotice confirms an add-on's notice, which choosing it as the engine needs.
 	AcceptNotice *string `json:"accept_notice"`
 }
 
@@ -192,8 +177,6 @@ var languageRe = regexp.MustCompile(`^[a-z]{2,3}$`)
 
 const maxModelLen = 100
 
-// badRequest is a refused setting, a 400 with code: its message is safe to show and never
-// quotes a value.
 func badRequest(code apierr.Code, msg string, params ...apierr.Params) *apierr.Error {
 	return apierr.New(http.StatusBadRequest, code, msg, params...)
 }
@@ -205,9 +188,6 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, maxRequest) {
 		return
 	}
-	// One change at a time, so two admins' changes don't overwrite each other's fields, and
-	// the stored key's host is checked against what is stored. One server per data directory
-	// (AGENTS.md) makes an in-process lock enough.
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	st, err := s.load(r.Context(), m.WorkspaceID)
@@ -239,8 +219,6 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// apply checks req and applies it to st. It returns the new key to store (nil: keep the
-// stored one; "": remove it), and whether an add-on's notice was newly confirmed.
 func (s *Service) apply(ctx context.Context, st *settings, req updateRequest) (*string, bool, error) {
 	if req.Language != nil {
 		if l := *req.Language; l != "" && !languageRe.MatchString(l) {
@@ -268,7 +246,6 @@ func (s *Service) apply(ctx context.Context, st *settings, req updateRequest) (*
 		}
 		normalized, key, err := providers.CheckEndpoint(baseURL, a.APIKey.value, hasKey)
 		if bad := (*apierr.Error)(nil); errors.As(err, &bad) {
-			// The same refusal, for the field under api.
 			e := *bad
 			e.Msg = "api." + e.Msg
 			return nil, false, &e
@@ -276,12 +253,9 @@ func (s *Service) apply(ctx context.Context, st *settings, req updateRequest) (*
 		if err != nil {
 			return nil, false, err
 		}
-		// A stored key goes only where it was set for: a new host or port needs it sent again.
 		if st.sealed != nil && !a.APIKey.set && hostOf(normalized) != hostOf(st.baseURL) {
 			return nil, false, badRequest(apierr.CodeDictationKeyRequired, "api.api_key must be sent again to change api.base_url's host")
 		}
-		// Checked whenever the API's settings change, the default endpoint included; every
-		// connection is checked again anyway.
 		if err := s.checkEgress(ctx, hostname(normalized)); err != nil {
 			if refused := egress.Refusal(err); refused != nil {
 				return nil, false, refused.APIError("api.base_url")
@@ -308,8 +282,6 @@ func (s *Service) apply(ctx context.Context, st *settings, req updateRequest) (*
 		switch e := *req.Engine; e {
 		case EngineAPI:
 		case EngineLocal:
-			// Refused only as a change: local is the default, so a form saved unchanged on a
-			// server whose local model is off sends it back.
 			if s.local == nil && st.engine != EngineLocal {
 				return nil, false, badRequest(apierr.CodeDictationLocalOff, "engine: the server's local speech model is off (dictation_local)")
 			}
@@ -317,7 +289,6 @@ func (s *Service) apply(ctx context.Context, st *settings, req updateRequest) (*
 			if _, ok := s.addons[e]; !ok {
 				return nil, false, badRequest(apierr.CodeDictationEngineUnavailable, "engine must be api, local or an add-on installed on this server")
 			}
-			// An add-on needs its notice confirmed first: in this request or an earlier one.
 			if st.notice != e {
 				return nil, false, badRequest(apierr.CodeDictationNoticeRequired, "engine: confirm the add-on's notice first (accept_notice)")
 			}
@@ -327,8 +298,6 @@ func (s *Service) apply(ctx context.Context, st *settings, req updateRequest) (*
 	return newKey, noticeBy, nil
 }
 
-// hostOf is where a base URL sends its requests, as compared for the stored key: the host,
-// lower-cased and without a trailing dot, and the port, the scheme's by default.
 func hostOf(baseURL string) string {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -341,7 +310,6 @@ func hostOf(baseURL string) string {
 	return net.JoinHostPort(hostname(baseURL), port)
 }
 
-// hostname is a base URL's host name, lower-cased and without a trailing dot.
 func hostname(baseURL string) string {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -357,7 +325,6 @@ func (s *Service) handleWarm(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	// Only a workspace that uses the local engine starts its download.
 	if name, _, err := s.engine(m.WorkspaceID, st); err == nil && name == EngineLocal {
 		s.local.Warm()
 	}
@@ -369,7 +336,6 @@ func (s *Service) handleWarm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// maxAudioRequest is room for ten minutes and a few seconds of WAV, base64-encoded.
 const maxAudioRequest = 28 << 20
 
 type transcribeReply struct {
@@ -381,8 +347,6 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, _ := auth.UserFrom(r.Context())
 		m, _ := auth.MembershipFrom(r.Context())
-		// Slots before the body is read, so the body's memory is bounded too: one per person,
-		// so nobody holds the server's few, then one of the server's.
 		if !s.claim(u.ID) {
 			apierr.Write(w, http.StatusTooManyRequests, apierr.CodeDictationBusy, "you are already dictating: wait for that one to finish")
 			return
@@ -396,12 +360,10 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			AudioBase64 string  `json:"audio_base64"`
-			Language    *string `json:"language"`
-			// BrowserLocale is the browser's language, for a user who picked none.
-			BrowserLocale string `json:"browser_locale"`
+			AudioBase64   string  `json:"audio_base64"`
+			Language      *string `json:"language"`
+			BrowserLocale string  `json:"browser_locale"`
 		}
-		// The upload has a deadline of its own, so a slow one can't hold a slot for long.
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadTimeout))
 		if !readJSON(w, r, &req, maxAudioRequest) {
 			return
@@ -411,7 +373,7 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 			return
 		}
 		audio, err := decodeAudio(req.AudioBase64)
-		req.AudioBase64 = "" // the encoded copy can go before the long call
+		req.AudioBase64 = ""
 		var bad *errAudio
 		if errors.As(err, &bad) {
 			apierr.Write(w, http.StatusBadRequest, bad.code, bad.msg, bad.params)
@@ -431,8 +393,6 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 			opts.Language = *req.Language
 		}
 		if req.Language == nil && opts.Language == "" && s.language != nil {
-			// The workspace sets no language: the user's own is the likeliest one they speak
-			// (docs/i18n.md#the-agent-and-dictation). An engine that doesn't know it detects the language.
 			opts.Language = primaryLanguage(s.language(r, req.BrowserLocale))
 		}
 		name, engine, err := s.engine(m.WorkspaceID, st)
@@ -446,7 +406,7 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 		}
 		terms := glossary(r.Context(), c, s.docs, u.ID, m.WorkspaceID)
 		if name != EngineAPI {
-			opts.Terms = terms // engines on this server only: see Options.Terms
+			opts.Terms = terms
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), transcribeTimeout)
 		defer cancel()
@@ -458,7 +418,7 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 		}
 		if err != nil {
 			if r.Context().Err() != nil {
-				return // the client went away
+				return
 			}
 			slog.Warn("dictation: transcription failed", "workspace", m.WorkspaceID, "engine", name,
 				"audio_seconds", int(audio.Duration()/time.Second), "err", err)
@@ -480,11 +440,8 @@ func (s *Service) handleTranscribe(c *access.Checker) http.HandlerFunc {
 	}
 }
 
-// maxRequest is the largest settings body.
 const maxRequest = 64 << 10
 
-// readJSON decodes the request body into v strictly, answering 400 or 413 and returning
-// false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
@@ -503,17 +460,14 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	return false
 }
 
-// serverError logs err and answers 500 without details.
 func serverError(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
-		return // the client went away
+		return
 	}
 	slog.Error("dictation: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	apierr.Internal(w)
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
-// with a broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -526,14 +480,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(append(body, '\n'))
 }
 
-// writeUnavailable answers 503 with why the engine can't transcribe now.
 func writeUnavailable(w http.ResponseWriter, u *Unavailable) {
 	apierr.Write(w, http.StatusServiceUnavailable, cmp.Or(u.Code, apierr.CodeDictationEngineUnavailable), u.Reason, u.Params)
 }
 
 const errLanguage = `language must be an ISO 639-1 code such as "pt", or ""`
 
-// decodeAudio reads a base64 WAV. Only the samples outlive it.
 func decodeAudio(b64 string) (Audio, error) {
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
@@ -546,7 +498,6 @@ func decodeAudio(b64 string) (Audio, error) {
 	return audio, err
 }
 
-// primaryLanguage is tag's language alone, the form engines take: "pt" for "pt-BR".
 func primaryLanguage(tag string) string {
 	lang, _, _ := strings.Cut(tag, "-")
 	return lang

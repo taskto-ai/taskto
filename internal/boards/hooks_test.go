@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// The hooks package apps' outbox uses to make a card's change and its own note of it one
-// transaction.
-
 var errNoGo = errors.New("no go")
 
 func agentFor(u *user) Actor { return Actor{UserID: u.id, Agent: true} }
@@ -26,17 +23,14 @@ func TestCreateCardHooksRunInTheCardsTransaction(t *testing.T) {
 	}
 	before := count()
 
-	// A check that refuses makes nothing.
 	_, err := s.CreateCard(ctx, who, w.shared.ID, w.team.ID, NewCard{Title: "x", Check: func(*sql.Tx) error { return errNoGo }})
 	if !errors.Is(err, errNoGo) || count() != before {
 		t.Fatalf("err = %v, %d cards", err, count()-before)
 	}
-	// A failure after the card exists takes the card with it.
 	_, err = s.CreateCard(ctx, who, w.shared.ID, w.team.ID, NewCard{Title: "x", Created: func(*sql.Tx, int64) error { return errNoGo }})
 	if !errors.Is(err, errNoGo) || count() != before {
 		t.Fatalf("err = %v, %d cards", err, count()-before)
 	}
-	// With an origin it is called with the card, new or found.
 	var seen []int64
 	nc := NewCard{Title: "x", Origin: "test:1", Created: func(_ *sql.Tx, id int64) error { seen = append(seen, id); return nil }}
 	first, err := s.CreateCard(ctx, who, w.shared.ID, w.team.ID, nc)
@@ -59,7 +53,6 @@ func TestMoveCardIfMovesOnlyAfterItsGuardAndKeepsItsWrites(t *testing.T) {
 		}
 	}
 
-	// A guard that says no leaves the card where it is, and what it wrote is kept.
 	c, moved, err := s.MoveCardIf(ctx, who, w.shared.ID, w.team.ID, w.teamCard.ID, Done, func(tx *sql.Tx, _ Card) (bool, error) {
 		note(tx, "noted")
 		return false, nil
@@ -67,7 +60,6 @@ func TestMoveCardIfMovesOnlyAfterItsGuardAndKeepsItsWrites(t *testing.T) {
 	if err != nil || moved || c.Column == Done || c.Body != "noted" {
 		t.Fatalf("card = %+v, moved %v, %v", c, moved, err)
 	}
-	// A guard that refuses makes nothing: its writes are rolled back.
 	_, _, err = s.MoveCardIf(ctx, who, w.shared.ID, w.team.ID, w.teamCard.ID, Done, func(tx *sql.Tx, _ Card) (bool, error) {
 		note(tx, "lost")
 		return false, errNoGo
@@ -75,7 +67,6 @@ func TestMoveCardIfMovesOnlyAfterItsGuardAndKeepsItsWrites(t *testing.T) {
 	if !errors.Is(err, errNoGo) {
 		t.Fatalf("err = %v", err)
 	}
-	// Going on moves the card, whatever its version, and bumps it.
 	c, moved, err = s.MoveCardIf(ctx, who, w.shared.ID, w.team.ID, w.teamCard.ID, Done, func(tx *sql.Tx, c Card) (bool, error) {
 		if c.Body != "noted" {
 			t.Errorf("the guard saw %q", c.Body)
@@ -85,13 +76,11 @@ func TestMoveCardIfMovesOnlyAfterItsGuardAndKeepsItsWrites(t *testing.T) {
 	if err != nil || !moved || c.Column != Done || c.Body != "noted" {
 		t.Fatalf("card = %+v, moved %v, %v", c, moved, err)
 	}
-	// Already there: the guard runs, nothing is moved.
 	version := c.Version
 	c, moved, err = s.MoveCardIf(ctx, who, w.shared.ID, w.team.ID, w.teamCard.ID, Done, func(*sql.Tx, Card) (bool, error) { return true, nil })
 	if err != nil || moved || c.Version != version {
 		t.Fatalf("card = %+v, moved %v, %v", c, moved, err)
 	}
-	// A reader can't, and a column that isn't on the board is refused.
 	if _, _, err := s.MoveCardIf(ctx, agentFor(w.bob), w.shared.ID, w.team.ID, w.teamCard.ID, Todo, nil); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("viewer: %v", err)
 	}

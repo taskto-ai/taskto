@@ -40,7 +40,6 @@ func TestRead(t *testing.T) {
 		t.Fatalf("status = %+v", s)
 	}
 
-	// Null runs and no needs are a status too.
 	write(t, dir, `{"version":1,"checked":"2026-11-20T03:10:00Z","channel":"off","last_run":null,"last_change":null,"needs_person":null}`)
 	if s, ok, err := Read(dir); err != nil || !ok || s.LastRun != nil || s.NeedsPerson != nil {
 		t.Fatalf("empty: %+v %v %v", s, ok, err)
@@ -59,7 +58,6 @@ func TestReadRefusesWhatIsNotAStatus(t *testing.T) {
 			t.Errorf("%s: ok=%v err=%v", name, ok, err)
 		}
 	}
-	// A directory (or a link to anything else) in its place isn't read.
 	if err := os.Remove(Path(dir)); err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +69,6 @@ func TestReadRefusesWhatIsNotAStatus(t *testing.T) {
 	}
 }
 
-// The status is structured: whatever the file holds, only words of the closed lists and real
-// versions come out, so a path, a host or a volume's name in it never reaches an admin's page.
 func TestReadKeepsOnlyStructuredStatus(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, `{"version":1,"checked":"2026-11-20T03:10:00Z","channel":"registry.internal.example/x","recorded_version":"/var/lib/taskto-update",
@@ -97,7 +93,6 @@ func TestReadKeepsOnlyStructuredStatus(t *testing.T) {
 	if s.NeedsPerson.Kind != KindBlocked || s.NeedsPerson.Code != CodeOther {
 		t.Errorf("needs = %+v", s.NeedsPerson)
 	}
-	// What is sent on has no field to carry a text, whatever the file had.
 	out, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +102,6 @@ func TestReadKeepsOnlyStructuredStatus(t *testing.T) {
 			t.Errorf("the status has %q: %s", never, out)
 		}
 	}
-	// A need of a kind this version doesn't know is none.
 	write(t, dir, `{"version":1,"needs_person":{"kind":"sudo rm -rf","code":"other"}}`)
 	if s, _, err := Read(dir); err != nil || s.NeedsPerson != nil {
 		t.Errorf("unknown kind: %+v %v", s.NeedsPerson, err)
@@ -133,7 +127,6 @@ func TestStale(t *testing.T) {
 	}
 }
 
-// The reader never follows the status file out of the directory it was given.
 func TestPath(t *testing.T) {
 	if got := Path("/update-status"); got != filepath.Join("/update-status", "status.json") {
 		t.Fatal(got)

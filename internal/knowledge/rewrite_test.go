@@ -21,8 +21,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// tick makes commit times one minute apart, each in a time zone of its own, so a rewrite
-// that lost a date or a zone shows.
 func tick(t *testing.T) {
 	clock := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	n := 0
@@ -34,8 +32,6 @@ func tick(t *testing.T) {
 	t.Cleanup(func() { now = time.Now })
 }
 
-// snapshot is a commit of main as git has it: everything but its ID and parents, with its
-// files' blobs by path.
 type snapshot struct {
 	id                plumbing.Hash
 	author, committer string
@@ -47,7 +43,6 @@ func signature(s object.Signature) string {
 	return fmt.Sprintf("%s <%s> %d %s", s.Name, s.Email, s.When.Unix(), s.When.Format("-0700"))
 }
 
-// history returns main's commits, newest first, as git has them.
 func gitHistory(t *testing.T, dataDir string, sp access.Space) []snapshot {
 	t.Helper()
 	repo, err := git.PlainOpen(sp.Dir(dataDir))
@@ -91,7 +86,6 @@ func blobHash(content []byte) plumbing.Hash {
 
 func pointerBlob(content []byte) plumbing.Hash { return blobHash([]byte(pointerText(content))) }
 
-// hasObject reports whether the space's git has the object h, loose or packed.
 func hasGitObject(t *testing.T, dataDir string, sp access.Space, h plumbing.Hash) bool {
 	t.Helper()
 	repo, err := git.PlainOpen(sp.Dir(dataDir))
@@ -101,10 +95,6 @@ func hasGitObject(t *testing.T, dataDir string, sp access.Space, h plumbing.Hash
 	return repo.Storer.HasEncodedObject(h) == nil
 }
 
-// checkRewritten checks that after is before with every blob of name in old (but the
-// current one) replaced by its pointer, and nothing else: the same commits, in the same
-// order, by the same people at the same times, with the same messages and files. It
-// returns the commits whose ID changed.
 func checkRewritten(t *testing.T, before, after []snapshot, name string, old map[plumbing.Hash][]byte) int {
 	t.Helper()
 	if len(after) != len(before) {
@@ -133,8 +123,6 @@ func checkRewritten(t *testing.T, before, after []snapshot, name string, old map
 	return changed
 }
 
-// A versioned file whose new content is over the limit leaves git history: every older
-// version becomes a pointer whose bytes are gone, and nothing else in any commit changes.
 func TestGrownFileLeavesHistory(t *testing.T) {
 	tick(t)
 	s, dataDir := newStore(t, Options{LargeFileSize: 100})
@@ -144,7 +132,7 @@ func TestGrownFileLeavesHistory(t *testing.T) {
 	r1 := must[Result](t)(s.Put(ctx, sp, "data/file.bin", v1, "", alice, ""))
 	notes := must[Result](t)(s.Put(ctx, sp, "notes.md", []byte("# Notes\nmore\n"), first.Doc.Version, Author{Name: "Bob", Email: "bob@example.com", Agent: "Helper"}, ""))
 	r2 := must[Result](t)(s.Put(ctx, sp, "data/file.bin", v2, r1.Doc.Version, alice, "Second"))
-	must[Result](t)(s.Put(ctx, sp, "data/other.bin", v1, "", bob, "")) // the same bytes, at another path
+	must[Result](t)(s.Put(ctx, sp, "data/other.bin", v1, "", bob, ""))
 	before := gitHistory(t, dataDir, sp)
 
 	big := bytesOf(500, 'g')
@@ -156,7 +144,6 @@ func TestGrownFileLeavesHistory(t *testing.T) {
 	if r3.Commit != after[0].id.String() {
 		t.Fatalf("the change returned %s, main is at %s", r3.Commit, after[0].id)
 	}
-	// The new commit is the last; the ones before it are the old ones, rewritten.
 	changed := checkRewritten(t, before, after[1:], "data/file.bin", map[plumbing.Hash][]byte{blobHash(v1): v1, blobHash(v2): v2})
 	if changed != 4 {
 		t.Errorf("%d commits changed ID, want the 4 from the file's first version on", changed)
@@ -165,8 +152,6 @@ func TestGrownFileLeavesHistory(t *testing.T) {
 		t.Error("the commit before the file's first version changed ID")
 	}
 
-	// Its old versions are gone: their bytes can't be read or restored, and git has only
-	// the copy at the other path.
 	for _, at := range []string{after[2].id.String(), after[4].id.String()} {
 		_, err := openBytes(t, s, sp, "data/file.bin", at)
 		wantErr(t, err, ErrNotKept)
@@ -190,12 +175,10 @@ func TestGrownFileLeavesHistory(t *testing.T) {
 		wantErr(t, err, ErrNotFound)
 	}
 
-	// Its history still lists every change, by whom, when.
 	h := must[History](t)(s.History(ctx, sp, "data/file.bin", "", 0))
 	if len(h.Commits) != 3 || h.Commits[1].Message != "Second" || h.Commits[2].Author.Name != "Alice" {
 		t.Fatalf("history = %+v", h.Commits)
 	}
-	// Other documents keep their versions, so their editors' base_version still holds.
 	must[Result](t)(s.Put(ctx, sp, "notes.md", []byte("# Notes\nedited\n"), notes.Doc.Version, bob, ""))
 	checkClean(t, dataDir, sp, map[string]string{
 		"data/file.bin": pointerText(big), "data/other.bin": string(v1), "notes.md": "# Notes\nedited\n",
@@ -206,7 +189,6 @@ func TestGrownFileLeavesHistory(t *testing.T) {
 	gitFsck(t, dataDir, sp)
 }
 
-// gitFsck checks the repository with git itself, if it is installed.
 func gitFsck(t *testing.T, dataDir string, sp access.Space) {
 	t.Helper()
 	gitBin, err := exec.LookPath("git")
@@ -220,8 +202,6 @@ func gitFsck(t *testing.T, dataDir string, sp access.Space) {
 	}
 }
 
-// An editor holding a version from before the rewrite gets a conflict, never a silent
-// overwrite: the file's version is new, and commits from before are gone.
 func TestStaleBaseVersionAfterRewrite(t *testing.T) {
 	s, _ := newStore(t, Options{LargeFileSize: 100})
 	sp := writable(1)
@@ -235,7 +215,6 @@ func TestStaleBaseVersionAfterRewrite(t *testing.T) {
 	wantErr(t, err, ErrConflict)
 	_, err = s.Move(ctx, sp, "file.bin", "moved.bin", stale, alice, "")
 	wantErr(t, err, ErrConflict)
-	// A history link or restore from before the rewrite names a commit that is gone.
 	_, err = s.Restore(ctx, sp, "file.bin", r1.Commit, "", alice, "")
 	wantErr(t, err, ErrNotFound)
 	_, err = s.Read(ctx, sp, "file.bin", r1.Commit)
@@ -245,8 +224,6 @@ func TestStaleBaseVersionAfterRewrite(t *testing.T) {
 	}
 }
 
-// A versioned file renamed to a kind that is always unversioned moves its bytes out of
-// git, and its older versions, under its old name, leave history.
 func TestRenameToUnversionedKindLeavesHistory(t *testing.T) {
 	tick(t)
 	s, dataDir := newStore(t, Options{})
@@ -276,7 +253,6 @@ func TestRenameToUnversionedKindLeavesHistory(t *testing.T) {
 	checkClean(t, dataDir, sp, map[string]string{"art/cover.PSD": pointerText(v2)})
 	gitFsck(t, dataDir, sp)
 
-	// A Markdown document renamed so leaves too; its old versions read as such.
 	md := must[Result](t)(s.Put(ctx, sp, "draft.md", []byte("# Draft\n"), "", alice, ""))
 	md = must[Result](t)(s.Put(ctx, sp, "draft.md", []byte("# Draft\nsecond\n"), md.Doc.Version, alice, ""))
 	must[Result](t)(s.Move(ctx, sp, "draft.md", "draft.zip", "", alice, ""))
@@ -287,8 +263,6 @@ func TestRenameToUnversionedKindLeavesHistory(t *testing.T) {
 	}
 }
 
-// A rewrite stopped at any step, as by a crash, is finished at the next start, or at the
-// next write; one planned for a change that never landed is dropped.
 func TestRewriteRecoversFromACrash(t *testing.T) {
 	for _, step := range []string{"objects", "ref"} {
 		t.Run(step, func(t *testing.T) {
@@ -312,7 +286,6 @@ func TestRewriteRecoversFromACrash(t *testing.T) {
 				t.Fatal("the crash came after the old version was deleted")
 			}
 
-			// The next process.
 			s = New(dataDir, Options{LargeFileSize: 100})
 			if err := s.Recover(ctx); err != nil {
 				t.Fatal(err)
@@ -366,8 +339,6 @@ func TestRewriteRecoversFromACrash(t *testing.T) {
 	})
 }
 
-// Writers and readers of the space wait for a rewrite and see the history before it or
-// after it, never half of it; no change is lost.
 func TestRewriteWithConcurrentWrites(t *testing.T) {
 	s, dataDir := newStore(t, Options{LargeFileSize: 100})
 	sp := writable(1)
@@ -396,7 +367,6 @@ func TestRewriteWithConcurrentWrites(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			// Every commit it lists can be read: none is from a history half rewritten.
 			for _, c := range h.Commits {
 				if _, err := s.Read(ctx, sp, "grows.bin", c.Commit); err != nil && !errors.Is(err, ErrNotFound) {
 					t.Error(err)
@@ -423,8 +393,6 @@ func TestRewriteWithConcurrentWrites(t *testing.T) {
 	gitFsck(t, dataDir, sp)
 }
 
-// A history that git gc packed (outside the server) loses the old versions too: the packs
-// are rewritten with only what main reaches.
 func TestRewritePrunesPacks(t *testing.T) {
 	gitBin, err := exec.LookPath("git")
 	if err != nil {
@@ -450,7 +418,6 @@ func TestRewritePrunesPacks(t *testing.T) {
 	gitFsck(t, dataDir, sp)
 }
 
-// The rewrite is idempotent: done again, it changes nothing.
 func TestRewriteIsIdempotent(t *testing.T) {
 	s, dataDir := newStore(t, Options{LargeFileSize: 100})
 	sp := writable(1)
@@ -476,7 +443,6 @@ func TestRewriteIsIdempotent(t *testing.T) {
 	}
 }
 
-// A rewrite's cost grows with the history: about a commit and a tree per commit.
 func BenchmarkRewrite(b *testing.B) {
 	for _, commits := range []int{100, 1000} {
 		b.Run(fmt.Sprint(commits), func(b *testing.B) {
@@ -517,9 +483,6 @@ func BenchmarkRewrite(b *testing.B) {
 	}
 }
 
-// An admin takes a document's old versions out of history, say for personal data saved by
-// mistake: its current version stays, every other is gone for good, and the history says
-// who did it.
 func TestRemoveOldVersions(t *testing.T) {
 	tick(t)
 	s, dataDir := newStore(t, Options{})
@@ -532,7 +495,6 @@ func TestRemoveOldVersions(t *testing.T) {
 	r = must[Result](t)(s.Put(ctx, sp, "contacts.md", clean, r.Doc.Version, alice, "Take the number out"))
 	before := gitHistory(t, dataDir, sp)
 
-	// The current version must be the one the admin saw.
 	_, err := s.RemoveOldVersions(ctx, sp, "contacts.md", blobHash(leaked).String(), bob)
 	wantErr(t, err, ErrConflict)
 
@@ -548,7 +510,6 @@ func TestRemoveOldVersions(t *testing.T) {
 	if fmt.Sprint(after[0].files) != fmt.Sprint(before[0].files) {
 		t.Fatal("the record changed a file")
 	}
-	// The same version as now, earlier on, isn't an old version: it stays readable.
 	checkRewritten(t, before, after[1:], "contacts.md", map[plumbing.Hash][]byte{blobHash(leaked): leaked})
 	if hasGitObject(t, dataDir, sp, blobHash(leaked)) {
 		t.Fatal("git still has the leaked version")
@@ -569,13 +530,11 @@ func TestRemoveOldVersions(t *testing.T) {
 	checkClean(t, dataDir, sp, map[string]string{"contacts.md": string(clean), "other.md": "# Other\n"})
 	gitFsck(t, dataDir, sp)
 
-	// Again: nothing left to take out, and nothing happens.
 	again := must[Removed](t)(s.RemoveOldVersions(ctx, sp, "contacts.md", "", bob))
 	if again.Removed != 0 || again.Commit != res.Commit {
 		t.Fatalf("again = %+v", again)
 	}
 
-	// A deleted file loses every version.
 	must[Result](t)(s.Delete(ctx, sp, "other.md", "", bob, ""))
 	gone := must[Removed](t)(s.RemoveOldVersions(ctx, sp, "other.md", "", bob))
 	if gone.Removed != 1 || gone.Doc != nil {
@@ -594,11 +553,9 @@ func TestRemoveOldVersions(t *testing.T) {
 	wantErr(t, err, ErrReadOnly)
 }
 
-// A space whose repository is full can still have old versions taken out: it frees space.
 func TestRemoveOldVersionsInAFullSpace(t *testing.T) {
 	s, _ := newStore(t, Options{MaxRepoSize: 24 << 10})
 	sp := writable(1)
-	// Bytes that don't compress, so each version takes its size.
 	noise := rand.NewChaCha8([32]byte{})
 	var base string
 	var err error
@@ -618,8 +575,6 @@ func TestRemoveOldVersionsInAFullSpace(t *testing.T) {
 	must[Result](t)(s.Put(ctx, sp, "next.txt", []byte("room again"), "", alice, ""))
 }
 
-// A ref other than main, made with git outside the server against the rules, never ends
-// up pointing at deleted objects: what it reaches is kept (and logged), the rest goes.
 func TestRewriteKeepsWhatOtherRefsReach(t *testing.T) {
 	s, dataDir := newStore(t, Options{LargeFileSize: 100})
 	sp := writable(1)

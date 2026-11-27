@@ -1,15 +1,3 @@
-// refguard fails when a tracked file refers to something outside the repository: an
-// issue-tracker or planning-board number (a hash sign and two to four digits), or a
-// private name (a host, a network, another product, a person, a private tool). Docs and
-// comments keep the reasoning and drop the reference.
-//
-// The private names are listed by the sha256 of the lowercased word, so this file doesn't
-// spell them out. A word is a run of letters and digits; an IPv4 address is checked by its
-// first three numbers. To add one: printf '%s' word | sha256sum.
-//
-// Usage: go run .github/scripts/refguard.go   (from the repository's root; CI runs it)
-//
-// Standard library only, and outside ./... on purpose: it is CI's glue, not the product.
 package main
 
 import (
@@ -42,15 +30,11 @@ var private = map[string]bool{
 }
 
 var (
-	// A hash sign and two to four digits, unless right after an ampersand (an HTML entity),
-	// a slash (a URL's fragment) or a letter or digit. A CSS colour of digits only trips it
-	// too: write it with rgb() or a six-digit form that has a letter, or in a CSS variable.
 	numberRef = regexp.MustCompile(`(^|[^&\w/])#[0-9]{2,4}\b`)
 	words     = regexp.MustCompile(`[a-z0-9]+`)
 	ipv4      = regexp.MustCompile(`\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\.[0-9]{1,3}\b`)
 )
 
-// Generated or third-party files: lockfiles hold hashes, not prose.
 var skip = map[string]bool{"pnpm-lock.yaml": true, "go.sum": true, "tools/go.sum": true}
 
 func hash(s string) string {
@@ -72,13 +56,13 @@ func main() {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			if os.IsNotExist(err) {
-				continue // deleted in the working tree
+				continue
 			}
 			fmt.Fprintln(os.Stderr, "refguard:", err)
 			os.Exit(2)
 		}
 		if bytes.IndexByte(data, 0) >= 0 {
-			continue // binary
+			continue
 		}
 		sc := bufio.NewScanner(bytes.NewReader(data))
 		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)

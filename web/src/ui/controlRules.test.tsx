@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
 
-// The old stylesheets (those src/styles.css lists) is in no cascade layer, so any of its rules that
-// matched an element a control draws would beat the control's own style (a checkbox rule under
-// `pointer: coarse` once made the switch a 20px square). This draws every gallery of the controls
-// and checks that no rule of that stylesheet styling an element by its name, in any media block,
-// reaches an element with a ui- class; and that the opt-out is spelled so it adds no specificity.
-
 import { join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
@@ -26,12 +20,9 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-// Every old stylesheet the app loads (src/styles.css lists them, ui/base.css first), not the list,
-// which holds no rule.
 const sheets = oldStylesheets(join(__dirname, '../..'))
 const css = sheets.map((s) => s.css).join('\n')
 
-// "a, b:not(:where(c, d))" → ["a", "b:not(:where(c, d))"]: commas inside parentheses stay.
 function split(list: string): string[] {
   const out: string[] = []
   let depth = 0
@@ -48,13 +39,8 @@ function split(list: string): string[] {
   return out.filter(Boolean)
 }
 
-// Every selector of the stylesheet, in any media block.
 const selectors = rules(css).flatMap((r) => split(r.selector))
 
-// The rules that style an element by its name: a selector that starts with one (`input`,
-// `label:has(> input)`), not a class's, a pseudo-element's or `*`'s.
-// The bare `input`, `select` and `textarea` reach every field on purpose, ours too: the caret's
-// colour, and 16px text in a narrow window, which keeps iOS from zooming in on focus.
 const EVERY_FIELD = new Set(['input', 'select', 'textarea'])
 const elementSelectors = selectors.filter((s) => /^[a-z]/.test(s) && !s.includes('::') && !EVERY_FIELD.has(s))
 
@@ -118,7 +104,6 @@ describe('the old stylesheet and the controls', () => {
         out = out.slice(0, at) + out.slice(end + 1)
       }
     }
-    // A ui- class, not the end of another name (.a2ui-button).
     expect(selectors.filter((s) => /(^|[^\w-])ui-/.test(outside(s)))).toEqual([])
   })
 })

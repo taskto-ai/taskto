@@ -1,11 +1,3 @@
-// The parts of `make screens` (screens.mjs) that decide whether it can be trusted, tested without
-// a browser and without the real server: the screen list, starting and stopping the server (against
-// tiny fake server processes, a Node child that listens, one that says the web app isn't built, one
-// that never says anything), the cleanup on an ordinary end and on a real signal, the script's own
-// HTTP client, what it leaves in the output folder, and the ready check of every capture. The
-// script only runs when it is the program being started, so importing it starts nothing. Nothing
-// here waits for a fixed time: each test waits for the event it is about.
-
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import {
@@ -52,13 +44,9 @@ import {
 const scriptPath = fileURLToPath(new URL('./screens.mjs', import.meta.url))
 const scriptUrl = pathToFileURL(scriptPath).href
 
-// A made-up token of the length the server's is.
 const FAKE_TOKEN = 'x'.repeat(43)
 const LISTENING = `taskto listening addr=127.0.0.1:1 web_app_built=true setup_token=${FAKE_TOKEN}`
 
-// A tiny stand-in for the server: one constant Node script, run with `-e`. What differs between
-// the fakes (how it behaves, and the line it prints) is given as arguments and read on the other
-// side, so no source code is ever built from a value.
 const FAKE_SERVER = `
 const [mode, line] = process.argv.slice(1)
 if (mode === 'stubborn') process.on('SIGTERM', () => {})
@@ -88,7 +76,6 @@ const fakes = {
   wrapper: ['wrapper', LISTENING],
 }
 
-// Every server a test starts, stopped after it, whether or not the test got to stop it.
 const started = []
 const start = (fake, options = {}) =>
   launch({
@@ -160,9 +147,7 @@ describe('screens', () => {
       const expected = sizes.flatMap((size) => THEMES.map((theme) => `${size.name}-${theme}/${screen.name}`))
       expect(all.filter((c) => c.screen === screen).map((c) => c.id)).toEqual(expected)
     }
-    // Only the drawer is for one size, and the phone's.
     expect(SCREENS.filter((s) => s.only).map((s) => [s.name, s.only])).toEqual([['drawer', 'phone']])
-    // Each Settings tab is captured at every size and theme, under its own name.
     for (const tab of SETTINGS_TABS) {
       const ids = all.filter((c) => c.screen.name === `settings-${tab}`).map((c) => c.id)
       expect(ids).toHaveLength(SIZES.length * THEMES.length)
@@ -176,7 +161,6 @@ describe('screens', () => {
 })
 
 describe('ready checks', () => {
-  // A page whose every locator is the same stand-in: enough to see what a ready check asks for.
   const everything = new Proxy(() => {}, { get: () => () => everything })
   const stand = () => ({
     page: new Proxy({}, { get: () => () => everything }),
@@ -193,8 +177,6 @@ describe('ready checks', () => {
   })
 
   it("opens the account menu by the person's name, through the drawer only where there is one", async () => {
-    // A page that records what the screen asks of it; `drawer` says whether the phone's menu
-    // button is on screen.
     const run = async (drawer) => {
       const calls = []
       const s = {
@@ -221,13 +203,10 @@ describe('ready checks', () => {
       await SCREENS.find((x) => x.name === 'account-menu').show(s)
       return calls
     }
-    // Never by a class: the New workspace menu once shared the account menu's.
     for (const drawer of [false, true]) expect((await run(drawer)).some(([what]) => what === 'locator')).toBe(false)
-    // The account button is found and pressed by the person's name.
     const wide = await run(false)
     expect(wide).toContainEqual(['click', 'Account: Ana Ribeiro'])
     expect(wide).not.toContainEqual(['click', 'Open the menu'])
-    // On a phone, the drawer is opened first.
     const phone = await run(true)
     expect(phone.filter(([what]) => what === 'click').map(([, name]) => name)).toEqual([
       'Open the menu',
@@ -285,7 +264,6 @@ describe('ready checks', () => {
     const outDir = temp()
     const saved = []
     const written = new Set()
-    // A stand-in server that answers every path with a generic page: the screen's heading isn't on it.
     const wrong = capture({ name: 'setup', show: async () => {}, ready: () => locator(false) })
     const result = await captureOne(wrong, { page: page(saved) }, { outDir, written })
     expect(result.ok).toBe(false)
@@ -317,7 +295,6 @@ describe('ready checks', () => {
     expect(saved).toEqual([])
     expect(written.size).toBe(0)
     expect(readFileSync(join(outDir, 'desktop-light/setup.png'), 'utf8')).toBe('someone else’s picture')
-    // The failed capture does not take it away either.
     recordCaptures({ outDir, written, failed: ['desktop-light/setup'], prune: false })
     expect(readFileSync(join(outDir, 'desktop-light/setup.png'), 'utf8')).toBe('someone else’s picture')
 
@@ -479,18 +456,12 @@ describe('the cleanup', () => {
       const untrap = trapSignals(cleanup, { target, exit: (n) => leave({ n, cleaned }), say: () => {} })
       expect(target.listenerCount(signal)).toBe(1)
       target.emit(signal)
-      // The process leaves only after the cleanup is done.
       expect(await left).toEqual({ n: code, cleaned: true })
       untrap()
       expect(target.listenerCount(signal)).toBe(0)
     }
   })
 
-  // A real Node process that does what the script does at its start (traps the signals, then
-  // spawns a fake server and waits), given a real signal. `startup` is the signal arriving while
-  // the server is starting, `running` while it waits for something else, such as the setup request.
-  // The program is a constant: the script's address, the directory and the fake server's source
-  // and arguments reach it as its arguments.
   const INTERRUPTED = `
     import { rmSync } from 'node:fs'
     const [url, dir, ...fake] = process.argv.slice(1)
@@ -537,11 +508,8 @@ describe('the cleanup', () => {
       if (spawned) serverPid = Number(spawned[1])
       for (const wait of waits.splice(0)) wait()
     })
-    // `close`, not `exit`: it comes after the last of the child's output has been read.
     const exited = new Promise((resolve) => child.once('close', (c, s) => resolve({ code: c, signal: s })))
     const failedToSpawn = new Promise((_, reject) => child.once('error', reject))
-    // Waits for the child to print `marker`, and fails with what happened to it instead if it
-    // ends, or never starts, first.
     const until = (marker) =>
       Promise.race([
         (async () => {
@@ -563,7 +531,6 @@ describe('the cleanup', () => {
       expect(existsSync(dir)).toBe(false)
       finished = true
     } finally {
-      // After a failure: nothing of the fixture is left running.
       if (!finished) {
         if (serverPid !== undefined && alive(serverPid)) process.kill(serverPid, 'SIGKILL')
         child.kill('SIGKILL')
@@ -579,7 +546,6 @@ describe('the cleanup', () => {
 })
 
 describe('the script’s own HTTP client', () => {
-  // Made-up values of what must never be printed.
   const COOKIE = 'fake-session-value-for-test'
   const TOKEN = 'fake-setup-token-for-test'
   const PASSWORD = 'fake-password-for-test'
@@ -603,7 +569,6 @@ describe('the script’s own HTTP client', () => {
           res.statusCode = 204
           return res.end()
         }
-        // A failing server that echoes everything it was sent, as an unlucky one might.
         res.statusCode = req.url === '/api/denied' ? 401 : 500
         res.end(JSON.stringify({ code: 'sample_code', error: `${req.headers.cookie} ${body}` }))
       })
@@ -674,7 +639,6 @@ describe('the script’s own HTTP client', () => {
   it('turns off Playwright’s debug traces, which print every call’s arguments, and keeps the rest', () => {
     expect(withoutPlaywrightDebug('pw:channel')).toBeUndefined()
     expect(withoutPlaywrightDebug('pw:api, other:thing pw:browser*')).toBe('other:thing,-pw:*')
-    // A wildcard would take Playwright's namespaces in again: they are excluded by name.
     expect(withoutPlaywrightDebug('*')).toBe('*,-pw:*')
     expect(withoutPlaywrightDebug(undefined)).toBeUndefined()
   })
@@ -696,7 +660,6 @@ describe('the output folder', () => {
 
     put(outDir, 'desktop-light/boards')
     recordCaptures({ outDir, written: new Set(['desktop-light/boards']), prune: true })
-    // A later full run that failed somewhere, and one that succeeded, with no pictures at all.
     recordCaptures({ outDir, written: new Set(), failed: ['desktop-light/boards'], prune: false })
     recordCaptures({ outDir, written: new Set(), prune: true })
 
@@ -718,11 +681,9 @@ describe('the output folder', () => {
       'phone-dark/drawer',
     ])
 
-    // A run with a failure leaves the earlier run's others in place.
     recordCaptures({ outDir, written: new Set(['desktop-light/boards']), prune: false })
     expect(has(outDir, 'desktop-light/old-screen')).toBe(true)
 
-    // A full run that failed nowhere replaces them.
     const { removed } = recordCaptures({ outDir, written: new Set(['desktop-light/boards']), prune: true })
     expect(removed).toEqual(['desktop-light/old-screen', 'phone-dark/drawer'])
     expect(has(outDir, 'desktop-light/old-screen')).toBe(false)
@@ -736,7 +697,6 @@ describe('the output folder', () => {
     const ids = ['desktop-light/boards', 'desktop-light/conversation', 'desktop-light/home']
     for (const id of ids) put(outDir, id, 'old')
     recordCaptures({ outDir, written: new Set(ids) })
-    // The run selected boards (failed) and conversation (skipped, no agent runtime); home was not selected.
     recordCaptures({
       outDir,
       written: new Set(),
@@ -772,7 +732,6 @@ describe('the output folder', () => {
 
   it('makes the run fail when the manifest cannot be written, and still lets the cleanup go on', () => {
     const outDir = temp()
-    // The manifest's path is a directory: the picture can be saved, the list of pictures cannot.
     mkdirSync(join(outDir, MANIFEST), { recursive: true })
     put(outDir, 'desktop-light/boards')
     const failures = []
@@ -789,7 +748,6 @@ describe('the output folder', () => {
       expect(failures).toHaveLength(1)
       expect(failures[0]).toMatch(new RegExp(`^could not update ${MANIFEST.replace('.', '\\.')}: `))
       expect(errors).toHaveBeenCalledTimes(1)
-      // The run's one update: a second call (the cleanup's) neither tries again nor adds another failure.
       record(false)
       expect(failures).toHaveLength(1)
     } finally {
@@ -831,7 +789,6 @@ describe('the output folder', () => {
     expect(readFileSync(target, 'utf8')).toBe('not a manifest')
     expect(lstatSync(join(outDir, MANIFEST)).isSymbolicLink()).toBe(true)
 
-    // A regular manifest is replaced by rename: no temporary file is left.
     const plain = temp()
     recordCaptures({ outDir: plain, written: new Set(['desktop-light/boards']) })
     expect(readdirSync(plain)).toEqual([MANIFEST])

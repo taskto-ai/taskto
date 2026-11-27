@@ -17,7 +17,6 @@ import (
 
 const setupToken = "fake-setup-token-for-the-mcp-test-0000000"
 
-// do sends a same-origin JSON request to the account routes.
 func do(t *testing.T, h http.Handler, cookie *http.Cookie, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, _ := json.Marshal(body)

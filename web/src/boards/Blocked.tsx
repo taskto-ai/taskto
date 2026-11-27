@@ -8,8 +8,6 @@ import { Input } from '../ui/Input'
 import { useDraft } from './drafts'
 import { blockedText } from './text'
 
-// Why the card is blocked: a reason, other cards of the board it waits for, or both. A writer
-// sets or changes it in a small form, or unblocks the card.
 export function Blocked({
   card,
   board,

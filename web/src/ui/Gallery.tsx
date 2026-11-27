@@ -1,12 +1,3 @@
-// The gallery of the design system, for development only: /_gallery on the Vite dev server
-// (main.tsx opens it there and nowhere else, so a production build has none of it). It shows the
-// colour roles, the type roles and every component's specimens, collected from the
-// `<Name>.gallery.tsx` files beside the components, so adding a component never edits this file.
-//
-// Its switches set what the app's own settings would: light or dark (data-theme on <html>), the
-// brand (data-brand, with the sample second brand's stylesheet loaded here only) and the
-// direction, to see a brand swap and right to left on every control.
-
 import { type ReactNode, useEffect, useState } from 'react'
 import { useT } from '../i18n'
 import type { GalleryModule } from './GalleryParts'
@@ -35,7 +26,6 @@ function useHtml(theme: Theme, brand: Brand, dir: Dir) {
   }, [theme, brand, dir])
 }
 
-// What the page starts with, from its query: ?theme=dark&brand=harbor&dir=rtl (for captures).
 function initial<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   const v = new URLSearchParams(window.location.search).get(key)
   return allowed.includes(v as T) ? (v as T) : fallback
@@ -63,7 +53,6 @@ export default function Gallery() {
     <main className="ui-gallery">
       <header className="ui-gallery-head">
         <div>
-          {/* The display type inline: styles.css's h1 rule is in no layer and would win over a class. */}
           <h1 className="ui-gallery-heading" style={{ font: 'var(--type-display)' }}>
             {t('gallery.title')}
           </h1>

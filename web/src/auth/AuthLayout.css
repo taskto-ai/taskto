@@ -1,8 +1,4 @@
 @layer screens {
-  /* The page: the brand's ground, the card centred on it. Clear of an installed app's status and
-     home bars, and of the notch on its sides. It scrolls on its own: with the on-screen keyboard up
-     (html[data-keyboard], ui/base.css) the page is only the part above it and the body doesn't
-     scroll, so a form taller than that is scrolled here. */
   .ui-auth {
     block-size: 100%;
     overflow-y: auto;
@@ -10,8 +6,6 @@
     display: flex;
     flex-direction: column;
     padding-block: max(var(--space-6), env(safe-area-inset-top)) max(var(--space-6), env(safe-area-inset-bottom));
-    /* env()'s insets are the screen's left and right whatever the language's direction (a notch
-       in landscape), so these are physical. */
     padding-left: max(var(--space-4), env(safe-area-inset-left));
     padding-right: max(var(--space-4), env(safe-area-inset-right));
     background: var(--color-bg);
@@ -19,8 +13,6 @@
     font: var(--type-ui);
   }
 
-  /* Centred by its margins, not by the container's alignment: a card taller than the page then
-     starts at the top and scrolls, where centring would cut its top off. */
   .ui-auth-card {
     flex: none;
     margin: auto;
@@ -34,7 +26,6 @@
     box-shadow: var(--shadow-pop);
   }
 
-  /* The brand speaks a little louder here than in the app: the logo at a confident size. */
   .ui-auth-brand {
     display: flex;
     color: var(--color-text);
@@ -72,14 +63,11 @@
     gap: var(--space-4);
   }
 
-  /* The one primary button of the screen, the width of the form. */
   .ui-auth-form > .ui-button-primary,
   .ui-auth-stack > .ui-button {
     inline-size: 100%;
   }
 
-  /* The form's error, focused after a failed submit so the person lands on it; it is no control,
-     so it shows no ring: the danger notice is what marks it. */
   .ui-auth-error {
     display: grid;
     outline: none;
@@ -107,7 +95,6 @@
     font: var(--type-small);
   }
 
-  /* The other paths, quieter than the form: under it, centred. */
   .ui-auth-links {
     display: flex;
     flex-wrap: wrap;
@@ -124,7 +111,6 @@
     margin: 0;
   }
 
-  /* The password and its Show button, inside the field's edge. */
   .ui-auth-password {
     position: relative;
     display: grid;
@@ -141,16 +127,12 @@
     margin-block: auto;
   }
 
-  /* Signing out: the spinner beside what is happening. */
   .ui-auth-signing-out {
     display: flex;
     align-items: center;
     gap: var(--space-3);
   }
 
-  /* On a touch screen a button is the touch target's height, and so is the field: the Show button
-     keeps the whole 44px to tap, while what it draws (its hover fill and its focus ring) keeps a
-     space's clearance inside the field's edges, not over them. */
   @media (pointer: coarse) {
     .ui-auth-password > .ui-button {
       padding-block: var(--space-1);
@@ -162,7 +144,6 @@
     }
   }
 
-  /* Before the app knows who is signed in: the logo and the shape of a form, still. */
   .ui-auth-skeleton {
     display: grid;
     gap: var(--space-3);

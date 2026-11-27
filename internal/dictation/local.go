@@ -27,30 +27,24 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// readyFile marks a model's folder complete; it holds the fingerprint of its files.
 const readyFile = ".ready"
 
-// downloadTimeout bounds a whole download, the 670 MB of Parakeet included.
 const downloadTimeout = 2 * time.Hour
 
-// localEngine runs a local model: a runtime started for each dictation with the model's
-// files, downloaded the first time they are needed.
 type localEngine struct {
 	spec     spec
-	files    []download // nil when the model has no build for this platform
-	dir      string     // the cache: the model's files are in dir/<id>
+	files    []download
+	dir      string
 	client   *http.Client
 	platform string
 
 	mu    sync.Mutex
 	state LocalState
-	done  atomic.Int64 // bytes downloaded so far
+	done  atomic.Int64
 	total int64
-	jobs  chan struct{} // one dictation at a time: each holds the model in memory
+	jobs  chan struct{}
 }
 
-// NewLocal returns the local engine of model ("parakeet-v3" or "whistle"), keeping its files
-// under dir.
 func NewLocal(model, dir string) (Local, error) {
 	s, ok := specs[model]
 	if !ok {
@@ -91,10 +85,8 @@ func newLocal(s spec, dir, platform string, client *http.Client) *localEngine {
 func (e *localEngine) Model() string     { return e.spec.id }
 func (e *localEngine) Credits() []Credit { return slices.Clone(e.spec.credits) }
 
-// root is the folder of the model's files.
 func (e *localEngine) root() string { return filepath.Join(e.dir, e.spec.id) }
 
-// ready reports whether the model's folder holds this version's files.
 func (e *localEngine) ready() bool {
 	b, err := os.ReadFile(filepath.Join(e.root(), readyFile))
 	return err == nil && strings.TrimSpace(string(b)) == fingerprint(e.files)
@@ -110,7 +102,6 @@ func (e *localEngine) State() LocalState {
 	return st
 }
 
-// Warm starts the download unless the model is here, on its way, or can't run here.
 func (e *localEngine) Warm() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -142,14 +133,9 @@ func (e *localEngine) fetch() {
 	e.state = LocalState{State: LocalReady}
 }
 
-// download fetches every file into a fresh folder, checks each against its sha256, and only
-// then puts the folder in place. A file with the right hash already in the model's folder (a
-// previous version's, or one the operator copied there) or left by a failed attempt is
-// moved over instead of downloaded again.
 func (e *localEngine) download(ctx context.Context) error {
 	root := e.root()
 	partial, previous, old := root+".partial", root+".previous", root+".old"
-	// A failed attempt's verified files are kept for this one.
 	if _, err := os.Stat(partial); err == nil {
 		if err := os.RemoveAll(previous); err != nil {
 			return err
@@ -163,13 +149,12 @@ func (e *localEngine) download(ctx context.Context) error {
 	}
 	for _, f := range e.files {
 		if err := e.fetchOne(ctx, f, []string{root, previous}, partial); err != nil {
-			return err // partial keeps what was verified, for the next attempt
+			return err
 		}
 	}
 	if err := os.WriteFile(filepath.Join(partial, readyFile), []byte(fingerprint(e.files)+"\n"), 0o600); err != nil {
 		return err
 	}
-	// Swap the folders, putting the old one back if the new one can't go in its place.
 	if err := os.RemoveAll(old); err != nil {
 		return err
 	}
@@ -207,7 +192,6 @@ func (e *localEngine) fetchOne(ctx context.Context, f download, sources []string
 	}
 	resp, err := e.client.Do(req)
 	if err != nil {
-		// Name the pinned URL, not where it redirected: a CDN's signed, short-lived link.
 		if ue := (*url.Error)(nil); errors.As(err, &ue) {
 			err = ue.Err
 		}
@@ -237,7 +221,6 @@ func (e *localEngine) fetchOne(ctx context.Context, f download, sources []string
 	return place(tmp.Name(), filepath.Join(dst, filepath.FromSlash(f.dest)))
 }
 
-// progress counts bytes as they are written.
 type progress struct{ n *atomic.Int64 }
 
 func (p progress) Write(b []byte) (int, error) {
@@ -245,9 +228,8 @@ func (p progress) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// reuse moves the file at from to to if it has f's size and sha256.
 func reuse(f download, from, to string) bool {
-	in, err := os.Open(from) //nolint:gosec // G304: a manifest file name under the cache folder
+	in, err := os.Open(filepath.Clean(from))
 	if err != nil {
 		return false
 	}
@@ -262,7 +244,6 @@ func reuse(f download, from, to string) bool {
 	return place(from, to) == nil
 }
 
-// place moves a verified file to its place, executable if it is a program.
 func place(from, to string) error {
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 		return err
@@ -277,10 +258,8 @@ func place(from, to string) error {
 	return os.Rename(from, to)
 }
 
-// extract writes an archive's members (dest => path after the archive's top folder) under
-// dst. Only the named members are written, to the names the manifest gives.
 func extract(r io.Reader, members map[string]string, dst string) error {
-	want := map[string]string{} // path in the archive => dest
+	want := map[string]string{}
 	for dest, member := range members {
 		want[member] = dest
 	}
@@ -321,7 +300,6 @@ func extract(r io.Reader, members map[string]string, dst string) error {
 	return nil
 }
 
-// Transcribe runs the runtime on the audio, cut into pieces it can take.
 func (e *localEngine) Transcribe(ctx context.Context, audio Audio, opts Options) (string, error) {
 	if st := e.State(); st.State != LocalReady {
 		e.Warm()
@@ -374,8 +352,6 @@ func joinTexts(texts []string) string {
 	return strings.Join(out, " ")
 }
 
-// runSherpa transcribes every piece in one run of sherpa-onnx-offline, which prints a JSON
-// line per file, in order.
 func (e *localEngine) runSherpa(ctx context.Context, work string, files []string) ([]string, error) {
 	root := e.root()
 	argv := []string{
@@ -411,8 +387,6 @@ func (e *localEngine) runSherpa(ctx context.Context, work string, files []string
 	return texts, nil
 }
 
-// runCactus transcribes each piece with a run of cactus, which loads Whistle (17 MB) in
-// milliseconds. It gets the glossary as keywords.
 func (e *localEngine) runCactus(ctx context.Context, work string, files []string, opts Options) ([]string, error) {
 	root := e.root()
 	base := []string{filepath.Join(root, "bin", "cactus"), "--model", filepath.Join(root, "whistle.cact")}

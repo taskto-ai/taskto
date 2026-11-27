@@ -12,7 +12,6 @@ import { useDraft } from './drafts'
 
 type LinkChange = (fields: (base: Card) => Partial<Pick<Card, 'docs' | 'conversations'>>) => Promise<boolean>
 
-// The documents of its space the card links to, by path. Writers link and unlink them.
 export function Documents({
   card,
   canWrite,
@@ -72,8 +71,6 @@ export function Documents({
   )
 }
 
-// The conversations the card links to. A conversation is private to its owner: only they can
-// link it or open it, and the others see only that the card links one. Writers may unlink any.
 export function Conversations({
   workspace,
   card,
@@ -88,7 +85,6 @@ export function Conversations({
   onChange: LinkChange
 }) {
   const needed = canWrite || card.conversations.length > 0
-  // The caller's own conversations, archived ones too: the ones they may open or link.
   const mine = useLoad(
     () =>
       needed

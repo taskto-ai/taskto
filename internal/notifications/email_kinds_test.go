@@ -15,9 +15,6 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 )
 
-// The kinds that came after the first two (a card assigned, an app action that failed): a comment
-// on a card, a mention, and a card that is due or overdue. Each is mailed exactly as the first two
-// are, so these tests ask the same things of each one.
 var cardEmailKinds = []string{
 	notifications.KindCardComment,
 	notifications.KindCardMention,
@@ -25,7 +22,6 @@ var cardEmailKinds = []string{
 	notifications.KindCardOverdue,
 }
 
-// emailSubject is what the English mail of each kind says, and all it says of what happened.
 var emailSubject = map[string]string{
 	notifications.KindCardComment: "A card of yours has a new comment",
 	notifications.KindCardMention: "You were mentioned in a comment",
@@ -33,9 +29,6 @@ var emailSubject = map[string]string{
 	notifications.KindCardOverdue: "A card of yours is overdue",
 }
 
-// notice makes a card titled title in the shared space and tells bob of it as kind: a comment and a
-// mention come from the comment that makes them, a due or overdue notice as the reminders add them.
-// What isn't of kind (the assignment that tells bob of his own card) is a kind bob didn't choose.
 func (w *world) notice(kind, title string) {
 	w.t.Helper()
 	ctx := context.Background()
@@ -54,7 +47,6 @@ func (w *world) notice(kind, title string) {
 	case notifications.KindCardMention:
 		w.comment(w.owner, newCard(nil, nil), "Plain words about the paint "+mention("Bob", w.bob))
 	case notifications.KindCardDue, notifications.KindCardOverdue:
-		// A reminder is for the card's assignee, and a card that isn't theirs says nothing of being due.
 		d := due
 		card := newCard(&boards.Assignee{Kind: boards.AssignUser, ID: w.bob.id}, &d)
 		tx, err := w.db.Begin()
@@ -73,7 +65,6 @@ func (w *world) notice(kind, title string) {
 	}
 }
 
-// ofKind is the newest notification of kind in u's inbox.
 func (w *world) ofKind(u *user, kind string) (id int64) {
 	w.t.Helper()
 	for _, it := range w.inbox(u, "").Notifications {
@@ -111,7 +102,6 @@ func TestEveryKindThatIsMailedHasItsOwnChoiceOffByDefault(t *testing.T) {
 	if len(got.Kinds) != len(want) {
 		t.Fatalf("choices for %d kinds: %+v", len(got.Kinds), got.Kinds)
 	}
-	// Nothing is mailed for any of them until chosen, whatever happens.
 	for _, k := range cardEmailKinds {
 		w.notice(k, "Nobody asked")
 	}
@@ -137,7 +127,6 @@ func TestEachKindIsMailedAsItHappensWhenChosenAndNoOtherIs(t *testing.T) {
 					t.Fatalf("choosing %s turned %s to %q", kind, other, got.Kinds[other])
 				}
 			}
-			// Every kind happens; only the chosen one is mailed.
 			for _, k := range cardEmailKinds {
 				w.notice(k, "Quarterly layoffs plan")
 			}
@@ -154,14 +143,12 @@ func TestEachKindIsMailedAsItHappensWhenChosenAndNoOtherIs(t *testing.T) {
 			if !strings.Contains(msgs[0].Text, link) || !strings.Contains(msgs[0].HTML, link) {
 				t.Fatalf("no link %s in %q", link, msgs[0].Text)
 			}
-			// Kind and link, and none of the record: no title, comment, date, name or ID.
 			for _, leak := range []string{"Quarterly", "layoffs", "paint", "Plain words", "2026", "Owner", "Bob", "Team", "Home",
 				fmt.Sprintf("%d:%d:", w.space.ID, w.board)} {
 				if strings.Contains(all, leak) {
 					t.Fatalf("the mail says %q: %s", leak, all)
 				}
 			}
-			// Once, even when the worker comes again; and nothing for another person who didn't choose.
 			w.svc.DrainEmailOnce(ctx)
 			if len(w.box.messages()) != 1 {
 				t.Fatalf("%d mails after the worker came again", len(w.box.messages()))
@@ -201,7 +188,6 @@ func TestADueNoticeIsNotMailedOnceTheCardsDateHasMoved(t *testing.T) {
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardDue: "instant", notifications.KindCardOverdue: "digest"}})
 	w.notice(notifications.KindCardDue, "Moved")
 	w.notice(notifications.KindCardOverdue, "Moved")
-	// The date was cleared before the mail was sent: the notice no longer says anything.
 	if _, err := w.db.Exec(`UPDATE cards SET due = NULL WHERE title = 'Moved'`); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +202,6 @@ func TestADueNoticeIsNotMailedOnceTheCardsDateHasMoved(t *testing.T) {
 func TestTheSummaryCountsEveryKindChosenForItAndNoOther(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
-	// The overdue kind stays off, and a card assigned to bob (the comment's) is a kind he left off.
 	chosen := map[string]string{
 		notifications.KindCardComment: "digest", notifications.KindCardMention: "digest", notifications.KindCardDue: "digest",
 	}
@@ -237,10 +222,9 @@ func TestTheSummaryCountsEveryKindChosenForItAndNoOther(t *testing.T) {
 	if all := msgs[0].Subject + msgs[0].Text + msgs[0].HTML; strings.Contains(all, "Secret") || strings.Contains(all, "plan") {
 		t.Fatalf("the summary says what the notifications are about: %s", all)
 	}
-	// And the one kind left out is counted when it is chosen too, from then on.
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardOverdue: "digest"}})
 	w.notice(notifications.KindCardOverdue, "Secret plan")
-	w.stampNow() // the clock was moved on above: the notice is as new as the service thinks
+	w.stampNow()
 	w.later(25 * time.Hour)
 	w.sched.RunDue(ctx)
 	msgs = w.box.messages()
@@ -271,9 +255,6 @@ func TestEveryKindThatIsMailedHasAMessageInEveryLanguage(t *testing.T) {
 	}
 }
 
-// A notice of a card that is due is only true while the card is what the reminder was made for: the
-// reminder's own job drops it the moment it runs otherwise, and the mail, the summary and the inbox
-// must too, for the time between the notice being made and being read or mailed.
 func TestADueNoticeIsNotToldOnceTheCardIsNoLongerOpenAndBobs(t *testing.T) {
 	for name, change := range map[string]string{
 		"done":               `UPDATE cards SET col = 'done' WHERE title = 'Finished'`,
@@ -317,7 +298,6 @@ func TestADueNoticeIsNotToldOnceTheCardIsNoLongerOpenAndBobs(t *testing.T) {
 			})
 		}
 	}
-	// And the same notice of a card that is still open and bob's is told.
 	w := newMailWorld(t)
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardDue: "instant"}})
 	w.notice(notifications.KindCardDue, "Open")
@@ -327,10 +307,6 @@ func TestADueNoticeIsNotToldOnceTheCardIsNoLongerOpenAndBobs(t *testing.T) {
 	}
 }
 
-// What decides that a mail may go out and where it goes are read at the last moment before it is
-// submitted, in one transaction, so a change that lands between the reads of it (here made inside
-// that transaction, after the address and before the access) can't be missed by either of them: the
-// address read is of a confirmed address, and what the person may read is the last thing read.
 func TestAnInstantMailIsDecidedAndAddressedInOneFinalRead(t *testing.T) {
 	for name, change := range map[string]func(w *world, tx *sql.Tx){
 		"access to the space ends": func(w *world, tx *sql.Tx) {
@@ -348,7 +324,6 @@ func TestAnInstantMailIsDecidedAndAddressedInOneFinalRead(t *testing.T) {
 			w := newMailWorld(t)
 			w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardDue: "instant"}})
 			w.notice(notifications.KindCardDue, "Racing")
-			// The change is made in the final read (the one after the place in the ledger is reserved).
 			final := false
 			w.svc.AfterReserve(func() { final = true })
 			w.svc.BetweenReads(func(tx *sql.Tx) {

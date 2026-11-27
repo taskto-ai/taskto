@@ -15,26 +15,18 @@ import (
 	"strings"
 )
 
-// SSOProvider is one OpenID Connect provider the operator configured
-// (docs/sso.md#the-providers-file), with its client secret already read.
 type SSOProvider struct {
-	// ID is the provider's name in URLs: /api/sso/{id}/start.
-	ID string
-	// Name is what the sign-in button says.
-	Name string
-	// Issuer is the provider's issuer URL, whose /.well-known/openid-configuration is used.
+	ID           string
+	Name         string
 	Issuer       string
 	ClientID     string
 	ClientSecret string
 	Scopes       []string
-	// TrustEmail accepts the provider's email without its email_verified claim, for a
-	// provider whose admins control every user's address.
-	TrustEmail bool
+	TrustEmail   bool
 }
 
 var providerID = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 
-// secretRef says where a secret is: a file or an environment variable, never the secret.
 type secretRef struct {
 	File string `json:"file"`
 	Env  string `json:"env"`
@@ -50,11 +42,8 @@ type providerEntry struct {
 	TrustEmail   bool       `json:"trust_email"`
 }
 
-// LoadSSOProviders reads the operator's providers file. The JSON is strict: unknown fields
-// are refused. Errors name the file's field, never a value, so a secret can't end up in a
-// log through one. getenv reads an environment variable a client secret names.
 func LoadSSOProviders(path string, getenv func(string) string) ([]SSOProvider, error) {
-	raw, err := os.ReadFile(path) // #nosec G304 -- the operator chooses the file.
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, fmt.Errorf("sso providers: %w", err)
 	}
@@ -86,7 +75,6 @@ func LoadSSOProviders(path string, getenv func(string) string) ([]SSOProvider, e
 	return out, nil
 }
 
-// jsonProblem describes a JSON decoding error without quoting any of the document's values.
 func jsonProblem(err error) string {
 	var syntax *json.SyntaxError
 	var typ *json.UnmarshalTypeError
@@ -96,12 +84,11 @@ func jsonProblem(err error) string {
 	case errors.As(err, &typ):
 		return fmt.Sprintf("%s: wrong type, want %s", typ.Field, typ.Type)
 	case strings.HasPrefix(err.Error(), "json: unknown field"):
-		return err.Error() // names the field only
+		return err.Error()
 	}
 	return "not valid JSON"
 }
 
-// provider validates an entry. Its errors continue the field path: ".issuer: …".
 func (e providerEntry) provider(getenv func(string) string) (SSOProvider, error) {
 	p := SSOProvider{ID: e.ID, Name: strings.TrimSpace(e.Name), Issuer: e.Issuer, ClientID: e.ClientID,
 		Scopes: e.Scopes, TrustEmail: e.TrustEmail}
@@ -132,7 +119,7 @@ func (e providerEntry) provider(getenv func(string) string) (SSOProvider, error)
 		if !filepath.IsAbs(f) {
 			return p, errors.New(".client_secret.file: want an absolute path")
 		}
-		b, err := os.ReadFile(f) // #nosec G304 -- the operator names the file.
+		b, err := os.ReadFile(filepath.Clean(f))
 		if err != nil {
 			return p, fmt.Errorf(".client_secret.file: %w", err)
 		}
@@ -146,8 +133,6 @@ func (e providerEntry) provider(getenv func(string) string) (SSOProvider, error)
 	return p, nil
 }
 
-// validIssuer accepts an https URL with a host and no credentials, query or fragment; http
-// only for a loopback host, for a provider running next to the server in development.
 func validIssuer(v string) bool {
 	u, err := url.Parse(v)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {

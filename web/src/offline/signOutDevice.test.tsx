@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// A sign-out on a browser two people share, with the offline database there: what one person
-// agreed to lose is gone once their login is over, whichever way it ends; what they did not agree
-// to lose is kept; and nothing of a newer login (the same person, signed in again) is touched.
 
 import 'fake-indexeddb/auto'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -16,8 +12,6 @@ import { pendingSignOuts } from './pendingSignOut'
 import { activate, deactivate, lastUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
 
-// How long a logout is waited for: long by default, so a logout a test holds is never cut short by
-// a loaded machine; a test that wants it to time out says so (`deadline.logout = 0`).
 const deadline = vi.hoisted(() => ({ logout: 60_000 }))
 vi.mock('../signOut', async (original) => {
   const real = await original<typeof import('../signOut')>()
@@ -94,8 +88,6 @@ function logOut() {
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
 }
 
-// Signed in with one record the server hasn't had, which the person is asked about and agrees to
-// lose; the device has no connection, so the queue sends nothing on its own.
 async function signOutDiscarding() {
   render(<App />)
   await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
@@ -113,28 +105,22 @@ async function signOutDiscarding() {
 }
 
 test('a logout that got no answer and reaches the server after Back finishes the sign-out the person chose', async () => {
-  // The logout's answer doesn't come in time.
   deadline.logout = 0
   let session: 'on' | 'over' = 'on'
   fakeFetch({
     ...signedIn,
     'GET /api/me': () => (session === 'on' ? { body: me } : { status: 401, body: { error: 'not logged in' } }),
-    // The logout is held somewhere on the way: the page never hears from it.
     'POST /api/logout': () => new Promise(() => {}),
   })
   await signOutDiscarding()
   fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
   await screen.findByRole('navigation', { name: 'Sections' })
-  // The shell's effects (the listener for a session that ends among them) are in place.
   await act(async () => {})
-  // The stalled logout reaches the server now: the login is over, and the next request says so.
   session = 'over'
   await act(async () => {
     await api('/api/me').catch(() => {})
   })
   await screen.findByRole('heading', { name: 'Log in' })
-  // The device is cleared as the person decided: the record they agreed to lose is not kept to be
-  // sent at the next sign-in, and an offline start doesn't open the account.
   await waitFor(() => expect(pending()).toEqual([]))
   expect(lastUser()).toBeNull()
   expect(await databases()).not.toContain('taskto-offline-7')
@@ -150,7 +136,6 @@ test('a logout the server refused, then Back, is no sign-out: a session that end
   const runtime = await signOutDiscarding()
   fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
   await screen.findByRole('navigation', { name: 'Sections' })
-  // The shell's effects (the listener for a session that ends among them) are in place.
   await act(async () => {})
   expect(pending()).toEqual([])
   session = 'over'
@@ -180,12 +165,10 @@ test('another tab finishing the same sign-out takes this one to the login even w
   await screen.findByRole('banner')
   logOut()
   await waitFor(() => expect(confirm).not.toBeNull())
-  // The other tab's cleanup forgets the account: nobody is signed in on this browser now.
   localStorage.removeItem('taskto:offline-last')
   window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last', newValue: null }))
   await screen.findByRole('heading', { name: 'Log in' })
   expect(screen.queryByText('The account changed')).toBeNull()
-  // This tab's own logout never gets an answer: the page stays where it is.
   await new Promise((r) => setTimeout(r, 150))
   expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
   expect(screen.queryByText('The account changed')).toBeNull()
@@ -206,8 +189,6 @@ test('a logout confirmed after the same person signed in again in another tab le
   await screen.findByRole('banner')
   logOut()
   await waitFor(() => expect(confirm).not.toBeNull())
-  // Meanwhile another tab signs the same person in with a new login, as its start does, and they
-  // begin a draft there.
   await finishUnfinishedSignOuts({ ...me, session: 's2' } as never)
   localStorage.setItem('taskto:builder-start:7:1', 'a draft of the newer login')
   await act(async () => confirm?.())
@@ -253,7 +234,6 @@ test('“Discard and sign out” for a database the person was told can’t be r
   if (!runtime) throw new Error('no runtime')
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
-  // The database can't be read: the person is told so when they sign out, and at the cleanup still.
   vi.spyOn(OfflineStore.prototype, 'unsynced').mockRejectedValue(new Error('read failed'))
   vi.spyOn(OfflineStore.prototype, 'unapproved').mockRejectedValue(new Error('read failed'))
   vi.spyOn(OfflineStore.prototype, 'retireOrKeepUnsent').mockRejectedValue(new Error('read failed'))
@@ -272,8 +252,6 @@ test('a newer login of the account that starts while the cleanup waits keeps its
   await finishUnfinishedSignOuts(me as never)
   localStorage.setItem('taskto:drafts-of', '7')
   const cleaning = cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map() })
-  // Before the cleanup's first wait is over, another tab starts with a newer login of the same
-  // account, and a draft is begun there.
   await finishUnfinishedSignOuts({ ...me, session: 's2' } as never)
   localStorage.setItem('taskto:builder-start:7:1', 'a draft of the newer login')
   expect(await cleaning).toBe(true)

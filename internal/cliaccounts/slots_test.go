@@ -29,8 +29,6 @@ func TestParseHandle(t *testing.T) {
 	}
 }
 
-// A user connects a second account to a CLI next to the first, names it, and disconnects it
-// without touching the first.
 func TestSeveralAccountsPerCLI(t *testing.T) {
 	e := newEnv(t, LocalUnsafe, nil)
 	owner, ws := e.setup()
@@ -50,7 +48,6 @@ func TestSeveralAccountsPerCLI(t *testing.T) {
 		t.Fatalf("second account = %+v", second)
 	}
 
-	// A label is the account's own.
 	rec := owner.do(http.MethodPatch, base+"/claude-2", map[string]string{"label": "  Work  "})
 	expect(t, rec, http.StatusOK)
 	if a := decode[Account](t, rec); a.Label != "Work" || a.ID != "claude-2" {
@@ -64,7 +61,6 @@ func TestSeveralAccountsPerCLI(t *testing.T) {
 	expect(t, owner.do(http.MethodPatch, base+"/claude-3", map[string]string{"label": "none"}), http.StatusNotFound)
 	expect(t, owner.do(http.MethodPatch, base+"/claude-2", map[string]any{}), http.StatusBadRequest)
 
-	// Another user's requests name their own accounts: they never reach the owner's.
 	expect(t, other.do(http.MethodPatch, base+"/claude-2", map[string]string{"label": "mine"}), http.StatusNotFound)
 	expect(t, other.do(http.MethodDelete, base+"/claude-2", nil), http.StatusNoContent)
 	expect(t, other.do(http.MethodGet, base+"/claude-2/login", nil), http.StatusNotFound)
@@ -77,12 +73,10 @@ func TestSeveralAccountsPerCLI(t *testing.T) {
 		}
 	}
 
-	// Handles that aren't accounts.
 	for _, bad := range []string{"claude-1", "claude-10", "claude-s1", "nope"} {
 		expect(t, owner.do(http.MethodPost, base+"/"+bad+"/login", map[string]any{}), http.StatusNotFound)
 	}
 
-	// Disconnecting the second leaves the first signed in.
 	expect(t, owner.do(http.MethodDelete, base+"/claude-2", nil), http.StatusNoContent)
 	for _, a := range owner.list().Accounts {
 		if a.ID == "claude-2" {
@@ -94,7 +88,6 @@ func TestSeveralAccountsPerCLI(t *testing.T) {
 	}
 }
 
-// A second account whose login is under way is listed, so its sign-in can be shown.
 func TestAccountListedWhileItsLoginRuns(t *testing.T) {
 	e := newEnv(t, LocalUnsafe, nil)
 	owner, _ := e.setup()
@@ -105,9 +98,6 @@ func TestAccountListedWhileItsLoginRuns(t *testing.T) {
 	}
 }
 
-// A turn runs on the owner's first connected account for the CLI, and a conversation that
-// moves to another account starts a new session there with the conversation so far, also on
-// an account where it had one before.
 func TestTurnOnAnotherAccount(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
@@ -122,8 +112,6 @@ func TestTurnOnAnotherAccount(t *testing.T) {
 		t.Fatalf("turns on the first account = %d", n)
 	}
 
-	// The first needs a new sign-in: the turn goes to the second, which starts with the
-	// conversation so far.
 	if err := e.svc.setReconnect(t.Context(), e.accountID(e.owner.id, cliworker.Claude)); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +126,6 @@ func TestTurnOnAnotherAccount(t *testing.T) {
 		t.Error("a new account resumed a session")
 	}
 
-	// Back on the first: its old session doesn't know the second's part, so a new one starts.
 	clitest.SignIn(t, "claude", first)
 	expect(t, e.owner.do(http.MethodPost, base+"/claude/check", map[string]any{}), http.StatusOK)
 	e.turn(conv, turnBody{Turn: "t3", CLI: "claude", Model: "default", Prompt: "three", History: history})
@@ -149,7 +136,6 @@ func TestTurnOnAnotherAccount(t *testing.T) {
 	if slices.Contains(calls[1].Args, "--resume") || !strings.Contains(calls[1].Prompt, "user: remember zup") {
 		t.Errorf("back on the first account: args %v, prompt %q", calls[1].Args, calls[1].Prompt)
 	}
-	// Then it resumes, as the conversation's last session.
 	e.turn(conv, turnBody{Turn: "t4", CLI: "claude", Model: "default", Prompt: "four", History: history})
 	calls = turnCalls(t, first)
 	if last := calls[len(calls)-1]; !slices.Contains(last.Args, "--resume") || last.Prompt != "four" {
@@ -157,7 +143,6 @@ func TestTurnOnAnotherAccount(t *testing.T) {
 	}
 }
 
-// turnCalls returns the fake CLI's turns (not status checks) recorded in configDir.
 func turnCalls(t *testing.T, configDir string) []clitest.Call {
 	t.Helper()
 	var out []clitest.Call

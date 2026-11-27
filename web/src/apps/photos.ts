@@ -1,9 +1,3 @@
-// Uploading a photo to an app (docs/api.md, "Photo attachments"): create an upload for a field,
-// send the file in chunks that each say the offset they start at, finalize. The server answers each
-// chunk with how much it has, so an upload that was interrupted (a dropped connection, a chunk
-// whose answer was lost) goes on from the server's offset and never sends a byte twice; a failed
-// upload can be resumed by giving its id back.
-
 import { ApiError, api } from '../api'
 import { sameSession } from '../session'
 
@@ -12,7 +6,6 @@ export type Attachment = {
   field: string
   status: 'uploading' | 'ready'
   size: number
-  // How much the server has: the offset the next chunk starts at.
   received: number
   content_type?: string
   width?: number
@@ -22,24 +15,19 @@ export type Attachment = {
   max_chunk?: number
 }
 
-// The limits of an attachment field, which the server puts in the screen's data model.
 export type PhotoLimits = { max_files: number; max_bytes: number }
 
 export const DEFAULT_LIMITS: PhotoLimits = { max_files: 1, max_bytes: 8 << 20 }
 
-// The pictures the server accepts. The server finds the type in the bytes; this only saves a trip.
 export const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/gif']
 
 export const ATTACHMENT_ID = /^[0-9a-f]{32}$/
 
-// A field's value as the screen holds it: a list of attachment ids.
 export function photoIds(value: unknown): string[] {
-  // A signature field holds one id, as text.
   if (typeof value === 'string') return ATTACHMENT_ID.test(value) ? [value] : []
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && ATTACHMENT_ID.test(v)) : []
 }
 
-// A signature field's value as the screen holds it: one attachment id.
 export function signatureId(value: unknown): string | undefined {
   const id = Array.isArray(value) ? value[0] : value
   return typeof id === 'string' && ATTACHMENT_ID.test(id) ? id : undefined
@@ -54,21 +42,13 @@ export function photoUrl(base: string, id: string): string {
 }
 
 export type UploadOptions = {
-  // The id of an upload that was started and didn't finish: it goes on from where the server is.
   resume?: string
-  // Called once the upload has an id, so a failure can be resumed.
   onStarted?: (id: string) => void
   onProgress?: (sent: number, total: number) => void
-  // Checked between chunks: true stops the upload.
   cancelled?: () => boolean
-  // How many times in a row a chunk may fail for the network's or the server's sake before the
-  // upload gives up; the client can resume it later.
   retries?: number
-  // The wait before a retry, in milliseconds.
   backoff?: number
-  // Headers every request of the upload carries (the account the upload is for).
   headers?: Record<string, string>
-  // Aborting stops the upload, and the request in flight, at once: it throws UploadCancelled.
   signal?: AbortSignal
 }
 
@@ -76,19 +56,13 @@ export class UploadCancelled extends Error {}
 
 const OFFSET = 'app_upload_offset'
 
-// The server's codes for a write refused because the storage is used up (a 507). Trying again
-// changes nothing until someone makes room, so none of the retries below, nor the outbox's, is for
-// these: the person is told, translated, and decides.
 const STORAGE_FULL = new Set(['quota_workspace', 'quota_user', 'knowledge_full'])
 export const storageFull = (e: unknown) => e instanceof ApiError && !!e.code && STORAGE_FULL.has(e.code)
 
-// An error worth trying again: no answer at all, or the server's own trouble (not its being full).
 const transient = (e: unknown) => !(e instanceof ApiError) || (e.status >= 500 && !storageFull(e))
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// Uploads file for field of the app at base (…/spaces/{space}/apps/{app}) and returns the
-// finished attachment.
 export async function uploadPhoto(
   base: string,
   field: string,
@@ -97,9 +71,6 @@ export async function uploadPhoto(
 ): Promise<Attachment> {
   const retries = opts.retries ?? 3
   const upload = (id: string, rest = '') => `${base}/uploads/${id}${rest}`
-  // An upload begun in a session goes on only in it: it stops before its next trip once that
-  // session ended (session.ts), and while it lasts api() names its account on every trip. The
-  // offline queue names its own account (`headers`) and is stopped by the queue itself.
   const same = sameSession()
   const online = opts.headers === undefined
   const headers = opts.headers
@@ -109,7 +80,6 @@ export async function uploadPhoto(
     try {
       state = await api<Attachment>(upload(opts.resume), { headers, signal })
     } catch (e) {
-      // Gone (it expired): start again.
       if (!(e instanceof ApiError && e.status === 404)) throw e
     }
   }
@@ -127,7 +97,6 @@ export async function uploadPhoto(
   const chunk = Math.min(state.chunk_size ?? 1 << 20, state.max_chunk ?? 1 << 20)
   let offset = state.received
   let failures = 0
-  // A bound on the trips, so a server that never agrees can't keep the upload going for ever.
   for (let trips = 0, max = Math.ceil(file.size / chunk) * 3 + 20; trips < max; trips++) {
     if (opts.cancelled?.() || signal?.aborted || (online && !same())) throw new UploadCancelled()
     opts.onProgress?.(offset, file.size)
@@ -145,8 +114,6 @@ export async function uploadPhoto(
     } catch (e) {
       if (signal?.aborted) throw new UploadCancelled()
       if (e instanceof ApiError && e.code === OFFSET && typeof e.params?.offset === 'number') {
-        // The server is somewhere else than we thought (a chunk we never heard was applied): go on
-        // from where it is.
         offset = e.params.offset
         continue
       }
@@ -155,20 +122,14 @@ export async function uploadPhoto(
       if (online && !same()) throw new UploadCancelled()
       try {
         offset = (await api<Attachment>(upload(id), { headers, signal })).received
-      } catch {
-        // Still not reachable: the next try finds out.
-      }
+      } catch {}
     }
   }
   throw new Error('the upload did not finish')
 }
 
-// Drops an upload, or a photo that is in no record yet, on the server. Best effort: what is
-// left expires by itself.
 export async function discardPhoto(base: string, id: string): Promise<void> {
   try {
     await api(`${base}/uploads/${id}`, { method: 'DELETE' })
-  } catch {
-    // Expires on its own after a day.
-  }
+  } catch {}
 }

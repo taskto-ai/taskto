@@ -180,10 +180,8 @@ test('the local model says On only once it is ready, Not ready yet before, and t
     ['local', 'not_downloaded', 'Not ready yet'],
     ['local', 'downloading', 'Not ready yet'],
     ['local', 'failed', 'Not ready yet'],
-    // A platform with no build of the model: it never will be ready here.
     ['local', 'unavailable', 'Not available on this server'],
     ['local', 'ready', 'On'],
-    // The local model's state is the local engine's only: the hosted API and an add-on are on.
     ['api', 'not_downloaded', 'On'],
     ['api', 'unavailable', 'On'],
     ['desertant-voz', 'not_downloaded', 'On'],

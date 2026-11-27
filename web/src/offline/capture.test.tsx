@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// The capture fields offline (docs/offline.md): the device checks a location, a barcode and a
-// signature as the server does, so a record whose form needs one is queued, not refused; a signature's
-// picture is kept with the record like a photo, uploaded first and named by the server's id.
 
 import 'fake-indexeddb/auto'
 import { Blob as NodeBlob } from 'node:buffer'
@@ -101,7 +97,6 @@ test('a record with a required code, location and signature parses offline, as t
   const values = parseInsert(definition, { ...good(), title: 'Gate', signed: [sig] })
   expect(values).toMatchObject({ code: '4006381333931', signed: sig, place: { lat: 38.7223, source: 'device' } })
   expect((values.place as { captured_at: string }).captured_at).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/)
-  // What isn't there is still required.
   expect(refusal({ ...good(), code: '' })).toBe('app_field_required')
   expect(refusal({ ...good(), place: {} })).toBe('app_field_required')
   expect(refusal({ ...good(), signed: [] })).toBe('app_field_required')
@@ -111,7 +106,7 @@ test('a barcode is checked offline as the server checks it', () => {
   for (const code of ['4006381333930', '400638133393', 'ABCDEFGHIJKLM', '4006381333931\n', '\t4006381333931']) {
     expect(refusal({ ...good(), code }), JSON.stringify(code)).toBe('app_field_not_barcode')
   }
-  expect(refusal({ ...good(), code: ' 4006381333931 ' })).toBeUndefined() // spaces are padding
+  expect(refusal({ ...good(), code: ' 4006381333931 ' })).toBeUndefined()
   expect(refusal({ ...good(), code: 12 })).toBe('app_field_not_barcode')
   const upce = { ...definition, collection: { fields: [{ name: 'c', type: 'barcode', max_length: 4 }] } }
   expect(() => parseInsert(upce as never, { c: 'ABCDE' })).toThrow(
@@ -143,7 +138,6 @@ test('a location is checked offline as the server checks it', () => {
   expect(refusal({ ...good(), place: place({ captured_at: new Date(Date.now() + 3_600_000).toISOString() }) })).toBe(
     'app_field_location_future',
   )
-  // Typed by hand: no accuracy needed. And the edges, and an offset zone.
   expect(refusal({ ...good(), place: place({ source: 'manual', accuracy_m: undefined }) })).toBeUndefined()
   expect(refusal({ ...good(), place: place({ lat: -90, lon: 180, accuracy_m: 0 }) })).toBeUndefined()
   expect(refusal({ ...good(), place: place({ captured_at: '2026-11-20T10:00:00.250+05:30' }) })).toBeUndefined()
@@ -175,16 +169,13 @@ test('offline, a record with a required code, location and signature is queued, 
     expect.objectContaining({ localId: staged, field: 'signed', state: 'pending', type: 'image/png' }),
   ])
   expect(await (await store.getBlob(item.attachments[0].blobId))?.text()).toBe('png bytes')
-  // What the page shows of the queued record, from the same parse.
   const [shown] = itemsOf(d, [item]).filter((i) => i.title === 'Gate')
   expect(shown).toMatchObject({ code: '4006381333931', signed: staged })
-  // A signature whose picture isn't here is refused, not queued without it.
   await expect(transport.act(press({ ...good(), signed: 'e'.repeat(32) }))).rejects.toMatchObject({
     code: 'app_attachment_bad',
   })
   expect(await store.listItems()).toHaveLength(1)
 
-  // Sent: the picture goes up first, for the signature's field, and the record names the server's id.
   const sent: unknown[] = []
   fakeFetch({
     [`POST ${base}/actions`]: (call) => {

@@ -26,7 +26,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// An app whose collection has two attachment fields, drawn with the photo components.
 const photoDefinition = `{
   "components": [
     {"id": "root", "component": "Column", "children": ["title", "photo", "receipt", "add", "list"]},
@@ -59,7 +58,6 @@ func photoBody(name string) map[string]any {
 	return map[string]any{"name": name, "definition": def}
 }
 
-// createPhotos makes and publishes an app with photoDefinition as u.
 func (w *world) createPhotos(u *user, s access.Space, name string) App {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, appsPath(s, ""), photoBody(name))
@@ -67,7 +65,6 @@ func (w *world) createPhotos(u *user, s access.Space, name string) App {
 	return w.publish(u, s, decode[App](w.e.t, rec))
 }
 
-// raw sends body as application/octet-stream, as a chunk is sent.
 func (u *user) raw(method, path string, body []byte) *httptest.ResponseRecorder {
 	u.e.t.Helper()
 	r := httptest.NewRequest(method, path, bytes.NewReader(body))
@@ -111,7 +108,6 @@ func testJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// withOrientation inserts an EXIF segment saying orientation o after a JPEG's start.
 func withOrientation(jpg []byte, o int) []byte {
 	var tiff bytes.Buffer
 	tiff.WriteString("MM")
@@ -141,7 +137,6 @@ func testGIF(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// pngClaiming is a PNG whose header claims w by h pixels (with a right checksum), and holds one.
 func pngClaiming(t *testing.T, w, h uint32) []byte {
 	t.Helper()
 	b := testPNG(t, 1, 1)
@@ -151,8 +146,6 @@ func pngClaiming(t *testing.T, w, h uint32) []byte {
 	return b
 }
 
-// upload is the API's three steps as u, with the chunk size given, returning the finalized
-// attachment's id. It fails the test if a step doesn't succeed.
 func (w *world) upload(u *user, s access.Space, a App, field string, data []byte, chunk int) string {
 	w.e.t.Helper()
 	id := w.start(u, s, a, field, len(data))
@@ -205,7 +198,6 @@ func (w *world) fetch(u *user, s access.Space, a App, id string, thumb bool) *ht
 	return u.do(http.MethodGet, appPath(s, a.ID, "/attachments/"+id+suffix), nil)
 }
 
-// recordWith inserts a record holding the attachments ids in photos, as u, and returns its id.
 func (w *world) recordWith(u *user, s access.Space, a App, ids ...string) int64 {
 	w.e.t.Helper()
 	list := make([]any, len(ids))
@@ -265,7 +257,6 @@ func TestUploadThenAttachThenRead(t *testing.T) {
 	picture := testPNG(t, 640, 480)
 
 	id := w.upload(w.alice, s, a, "photos", picture, 1000)
-	// Before it is in a record the uploader reads it, to see what they are about to submit.
 	rec := w.fetch(w.alice, s, a, id, false)
 	expect(t, rec, http.StatusOK)
 	if !bytes.Equal(rec.Body.Bytes(), picture) {
@@ -287,7 +278,6 @@ func TestUploadThenAttachThenRead(t *testing.T) {
 	if thumb.Header().Get("Content-Type") != "image/jpeg" {
 		t.Fatalf("thumbnail type %q", thumb.Header().Get("Content-Type"))
 	}
-	// A conditional request is answered without the bytes.
 	r := httptest.NewRequest(http.MethodGet, appPath(s, a.ID, "/attachments/"+id), nil)
 	r.Header.Set("If-None-Match", h.Get("ETag"))
 	r.AddCookie(w.alice.cookie)
@@ -297,7 +287,6 @@ func TestUploadThenAttachThenRead(t *testing.T) {
 		t.Fatalf("conditional get = %d", cond.Code)
 	}
 
-	// Insert a record with it: the screen's data carries the id, and the record is attached.
 	rec = w.insert(w.alice, s, a, map[string]any{"photos": []any{id}})
 	expect(t, rec, http.StatusOK)
 	if !strings.Contains(rec.Body.String(), id) {
@@ -306,14 +295,12 @@ func TestUploadThenAttachThenRead(t *testing.T) {
 	if w.attachedTo(id) == nil {
 		t.Fatal("the attachment isn't attached to the record")
 	}
-	// The surface tells the screen the field's limits.
 	surface := w.alice.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil).Body.String()
 	if !strings.Contains(surface, `"_files":{"photos":{"max_bytes":200000,"max_files":2},"receipt":{"max_bytes":8388608,"max_files":1}}`) {
 		t.Fatalf("surface lacks the limits: %s", surface)
 	}
 	expect(t, w.fetch(w.alice, s, a, id, true), http.StatusOK)
 
-	// The file is in the space's managed storage, not the database.
 	if got := w.files(s, a); len(got) != 2 {
 		t.Fatalf("files = %v", got)
 	}
@@ -322,7 +309,6 @@ func TestUploadThenAttachThenRead(t *testing.T) {
 		t.Fatalf("blob columns: %d %v", blobs, err)
 	}
 
-	// The agent reads metadata, never bytes.
 	items, err := w.e.s.ListRows(context.Background(), Actor{UserID: w.alice.id, Agent: true}, s.ID, a.ID)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("ListRows = %v %v", items, err)
@@ -333,8 +319,6 @@ func TestUploadThenAttachThenRead(t *testing.T) {
 	}
 }
 
-// A chunk whose answer was lost is sent again, and is refused with where the server is: no byte
-// is written twice, and the finished file is exactly the picture, once.
 func TestInterruptedUploadResumesWithoutDuplicates(t *testing.T) {
 	w := newWorld(t)
 	s := w.alicePrivate
@@ -344,32 +328,24 @@ func TestInterruptedUploadResumesWithoutDuplicates(t *testing.T) {
 
 	id := w.start(w.alice, s, a, "photos", len(picture))
 	expect(t, w.chunk(w.alice, s, a, id, 0, picture[:third]), http.StatusOK)
-	// The same chunk again (the client never heard it was applied): refused, and the answer says
-	// where to go on.
 	rec := w.chunk(w.alice, s, a, id, 0, picture[:third])
 	expectCode(t, rec, http.StatusConflict, "app_upload_offset")
 	if decode[struct{ Params map[string]int64 }](t, rec).Params["offset"] != int64(third) {
 		t.Fatalf("offset in %s", rec.Body)
 	}
-	// A chunk from beyond the offset is refused too.
 	expectCode(t, w.chunk(w.alice, s, a, id, third+10, picture[third+10:]), http.StatusConflict, "app_upload_offset")
-	// Asking where the server is gives the same.
 	rec = w.alice.do(http.MethodGet, appPath(s, a.ID, "/uploads/"+id), nil)
 	expect(t, rec, http.StatusOK)
 	if got := decode[Attachment](t, rec); got.Received != int64(third) || got.Status != "uploading" {
 		t.Fatalf("state = %+v", got)
 	}
-	// Finalizing early says where the server is.
 	expectCode(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{}), http.StatusConflict, "app_upload_offset")
 
-	// The server restarts: a new service over the same store and files goes on from the offset.
 	restarted := New(w.e.db, w.e.s.access).WithFiles(w.e.dataDir)
 	if _, err := restarted.putChunk(context.Background(), s, Actor{UserID: w.alice.id}, a.ID, id, int64(third), picture[third:2*third]); err != nil {
 		t.Fatal(err)
 	}
 
-	// A chunk that was written and never recorded (the server stopped in between) leaves bytes
-	// past the offset: the rest is written over them, and what they are is cut off.
 	part := filepath.Join(s.Dir(w.e.dataDir), filesDir, fmt.Sprint(a.ID), id+".part")
 	f, err := os.OpenFile(part, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
@@ -380,14 +356,12 @@ func TestInterruptedUploadResumesWithoutDuplicates(t *testing.T) {
 	expect(t, w.chunk(w.alice, s, a, id, 2*third, picture[2*third:]), http.StatusOK)
 	rec = w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{})
 	expect(t, rec, http.StatusOK)
-	// Finalizing again says the same.
 	again := w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{})
 	expect(t, again, http.StatusOK)
 	if again.Body.String() != rec.Body.String() {
 		t.Fatalf("finalize twice: %s then %s", rec.Body, again.Body)
 	}
 
-	// Exactly the picture, and only its two files.
 	got := w.fetch(w.alice, s, a, id, false)
 	expect(t, got, http.StatusOK)
 	if !bytes.Equal(got.Body.Bytes(), picture) {
@@ -400,7 +374,6 @@ func TestInterruptedUploadResumesWithoutDuplicates(t *testing.T) {
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM app_attachments`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("attachments: %d %v", n, err)
 	}
-	// A chunk after finalizing is refused.
 	expectCode(t, w.chunk(w.alice, s, a, id, len(picture), []byte("x")), http.StatusConflict, "app_upload_state")
 }
 
@@ -411,15 +384,12 @@ func TestUploadChecksTypeSizeAndBounds(t *testing.T) {
 	post := func(body map[string]any) *httptest.ResponseRecorder {
 		return w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads"), body)
 	}
-	// Declared size: at least a byte, at most the field's.
 	expectCode(t, post(map[string]any{"field": "photos", "size": 0}), http.StatusBadRequest, "app_upload_size")
 	expectCode(t, post(map[string]any{"field": "photos", "size": 200001}), http.StatusBadRequest, "app_upload_size")
 	expect(t, post(map[string]any{"field": "photos", "size": 200000}), http.StatusCreated)
-	// Only an attachment field of the app takes one.
 	expect(t, post(map[string]any{"field": "title", "size": 10}), http.StatusBadRequest)
 	expect(t, post(map[string]any{"field": "nothing", "size": 10}), http.StatusBadRequest)
 
-	// Not a picture, whatever it is called: refused at finalize, and nothing is left.
 	for name, data := range map[string][]byte{
 		"text":            []byte("hello, this is not a picture"),
 		"html":            []byte("<html><script>alert(1)</script></html>"),
@@ -444,7 +414,6 @@ func TestUploadChecksTypeSizeAndBounds(t *testing.T) {
 		t.Fatalf("files left: %v", files)
 	}
 
-	// JPEG, PNG and GIF are accepted; the type is the bytes'.
 	for want, data := range map[string][]byte{"image/jpeg": testJPEG(t, 30, 20), "image/png": testPNG(t, 30, 20), "image/gif": testGIF(t)} {
 		id := w.upload(w.alice, s, a, "photos", data, 4096)
 		if got := w.fetch(w.alice, s, a, id, false).Header().Get("Content-Type"); got != want {
@@ -452,7 +421,6 @@ func TestUploadChecksTypeSizeAndBounds(t *testing.T) {
 		}
 	}
 
-	// A chunk is bounded: over the maximum, or past the declared size.
 	id := w.start(w.alice, s, a, "photos", 100)
 	expectCode(t, w.chunk(w.alice, s, a, id, 0, make([]byte, 101)), http.StatusRequestEntityTooLarge, "app_upload_chunk")
 	expectCode(t, w.chunk(w.alice, s, a, id, 0, make([]byte, MaxChunk+1)), http.StatusRequestEntityTooLarge, "app_upload_chunk")
@@ -460,7 +428,6 @@ func TestUploadChecksTypeSizeAndBounds(t *testing.T) {
 	expect(t, w.alice.raw(http.MethodPut, appPath(s, a.ID, "/uploads/"+id+"?offset=-1"), []byte("x")), http.StatusBadRequest)
 	expect(t, w.alice.raw(http.MethodPut, appPath(s, a.ID, "/uploads/"+id), []byte("x")), http.StatusBadRequest)
 
-	// Too many waiting at once.
 	var last *httptest.ResponseRecorder
 	for range MaxPendingAttachments + 1 {
 		if last = post(map[string]any{"field": "receipt", "size": 10}); last.Code != http.StatusCreated {
@@ -476,14 +443,11 @@ func TestUploadRoutesAreProtected(t *testing.T) {
 	a := w.createPhotos(w.alice, s, "Photos")
 	id := w.start(w.alice, s, a, "photos", 10)
 
-	// No session.
 	anon := &user{e: w.e}
 	expect(t, anon.do(http.MethodPost, appPath(s, a.ID, "/uploads"), map[string]any{"field": "photos", "size": 1}), http.StatusUnauthorized)
 	expect(t, anon.raw(http.MethodPut, appPath(s, a.ID, "/uploads/"+id+"?offset=0"), []byte("x")), http.StatusUnauthorized)
 	expect(t, anon.do(http.MethodGet, appPath(s, a.ID, "/attachments/"+id), nil), http.StatusUnauthorized)
 
-	// The CSRF guard: a chunk is bytes, and only bytes; a cross-site one is refused; and a
-	// state-changing request is never a GET.
 	put := func(contentType, site string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPut, appPath(s, a.ID, "/uploads/"+id+"?offset=0"), strings.NewReader("x"))
 		r.Header.Set("Content-Type", contentType)
@@ -496,12 +460,9 @@ func TestUploadRoutesAreProtected(t *testing.T) {
 	expect(t, put("application/octet-stream", "cross-site"), http.StatusForbidden)
 	expect(t, put("text/plain", "same-origin"), http.StatusUnsupportedMediaType)
 	expect(t, put("multipart/form-data; boundary=x", "same-origin"), http.StatusUnsupportedMediaType)
-	// JSON passes the guard (as on any route) and the route itself wants bytes.
 	expect(t, put("application/json", "same-origin"), http.StatusUnsupportedMediaType)
 	expect(t, put("application/octet-stream", "same-origin"), http.StatusOK)
-	// Creating an upload takes JSON, not bytes.
 	expect(t, w.alice.raw(http.MethodPost, appPath(s, a.ID, "/uploads"), []byte(`{"field":"photos","size":1}`)), http.StatusUnsupportedMediaType)
-	// A GET changes nothing: it can't create, write or finalize.
 	for _, p := range []string{"/uploads", "/uploads/" + id + "/finalize"} {
 		if rec := w.alice.do(http.MethodGet, appPath(s, a.ID, p), nil); rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
 			t.Fatalf("GET %s = %d", p, rec.Code)
@@ -513,7 +474,6 @@ func TestUploadRoutesAreProtected(t *testing.T) {
 		t.Fatalf("received %d, want only the one accepted byte", received)
 	}
 
-	// A viewer reads the space and uploads nothing.
 	expectForbidden0(t, w.bob.do(http.MethodPost, appPath(s, a.ID, "/uploads"), map[string]any{"field": "photos", "size": 1}))
 	expectForbidden0(t, w.bob.raw(http.MethodPut, appPath(s, a.ID, "/uploads/"+id+"?offset=1"), []byte("x")))
 }
@@ -525,8 +485,6 @@ func expectForbidden0(t *testing.T, rec *httptest.ResponseRecorder) {
 	}
 }
 
-// Only the uploader may continue, ask about, finalize or drop an upload; to everyone else, in the
-// space or not, in this app or another, it isn't there.
 func TestUploadsBelongToTheirUploader(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -549,20 +507,17 @@ func TestUploadsBelongToTheirUploader(t *testing.T) {
 			}
 		}
 	}
-	// The owner is an editor of the space too, and still not the uploader.
 	probe("another editor", w.owner, s, a)
 	probe("a viewer", w.bob, s, a)
 	probe("a member of no shared space", w.mallory, s, a)
 	probe("another workspace's admin, through the space", w.stranger, in(w.other, s), a)
 	probe("the uploader, through another app", w.alice, s, other)
 	probe("the uploader, through another space", w.alice, w.alicePrivate, a)
-	// Nothing of it changed.
 	var received int64
 	var status string
 	if err := w.e.db.QueryRow(`SELECT received, status FROM app_attachments WHERE id = ?`, id).Scan(&received, &status); err != nil || received != 50 || status != "uploading" {
 		t.Fatalf("upload = %d %s %v", received, status, err)
 	}
-	// The uploader goes on.
 	expect(t, w.chunk(w.alice, s, a, id, 50, picture[50:]), http.StatusOK)
 	_ = w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{})
 	expect(t, w.fetch(w.alice, s, a, id, false), http.StatusOK)
@@ -576,7 +531,7 @@ func TestRecordsNeverHoldInaccessibleAttachments(t *testing.T) {
 	picture := testPNG(t, 40, 30)
 
 	mine := w.upload(w.alice, s, a, "photos", picture, 4096)
-	theirs := w.upload(w.owner, s, a, "photos", picture, 4096) // the owner's: not alice's to attach
+	theirs := w.upload(w.owner, s, a, "photos", picture, 4096)
 	unfinished := w.start(w.alice, s, a, "photos", len(picture))
 	inOther := w.upload(w.alice, s, other, "photos", picture, 4096)
 	wrongField := w.upload(w.alice, s, a, "receipt", picture, 4096)
@@ -607,25 +562,21 @@ func TestRecordsNeverHoldInaccessibleAttachments(t *testing.T) {
 	refused("not a list", map[string]any{"photos": 7})
 	refused("the same twice", map[string]any{"photos": []any{mine, mine}})
 	refused("too many", map[string]any{"photos": []any{mine, w.upload(w.alice, s, a, "photos", picture, 4096), w.upload(w.alice, s, a, "photos", picture, 4096)}})
-	// The same refusal, whatever the reason: someone else's id isn't told from a missing one.
 	a1 := decode[struct{ Error string }](t, w.insert(w.alice, s, a, map[string]any{"photos": []any{theirs}})).Error
 	a2 := decode[struct{ Error string }](t, w.insert(w.alice, s, a, map[string]any{"photos": []any{strings.Repeat("cd", 16)}})).Error
 	if a1 != a2 {
 		t.Fatalf("%q vs %q", a1, a2)
 	}
 
-	// A refused change attaches nothing, valid ones among its ids included.
 	refused("one good, one bad", map[string]any{"photos": []any{mine, theirs}})
 	if w.attachedTo(mine) != nil {
 		t.Fatal("a refused record kept an attachment")
 	}
-	// And it is still usable.
 	expect(t, w.insert(w.alice, s, a, map[string]any{"photos": []any{mine}}), http.StatusOK)
 	if w.attachedTo(mine) == nil {
 		t.Fatal("not attached")
 	}
 
-	// An update obeys the same checks, and a record keeps what it had.
 	row := w.recordWith(w.alice, s, a, w.upload(w.alice, s, a, "photos", picture, 4096))
 	update := func(fields map[string]any) *httptest.ResponseRecorder {
 		ctx := map[string]any{"id": row}
@@ -644,13 +595,11 @@ func TestRecordsNeverHoldInaccessibleAttachments(t *testing.T) {
 	}
 }
 
-// An action from an older release is held to the same checks as one from the live release.
 func TestOlderReleaseActionsCheckAttachments(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
 	a := w.createPhotos(w.alice, s, "Photos")
 	first := a.Live.Number
-	// Publish a second release that adds a field.
 	var def map[string]any
 	if err := jsonUnmarshal(photoDefinition, &def); err != nil {
 		t.Fatal(err)
@@ -693,15 +642,12 @@ func TestReplacingAndDeletingKeepsFiles(t *testing.T) {
 	second := w.upload(w.alice, s, a, "photos", picture, 4096)
 	row := w.recordWith(w.alice, s, a, first)
 
-	// Replace the photo: the new one is claimed, and the old one stays with the record, which its
-	// history refers to.
 	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), ClientAction{
 		Name: "edit_note", SurfaceID: SurfaceID(a.ID), Context: map[string]any{"id": row, "photos": []any{second}}}), http.StatusOK)
 	if w.attachedTo(first) == nil || w.attachedTo(second) == nil {
 		t.Fatal("an attachment came off its record")
 	}
 	expect(t, w.fetch(w.bob, s, a, first, false), http.StatusOK)
-	// It can't be put on another record, though.
 	expect(t, w.insert(w.alice, s, a, map[string]any{"photos": []any{first}}), http.StatusUnprocessableEntity)
 	if err := w.e.s.Sweep(context.Background(), time.Now().Add(100*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -709,26 +655,23 @@ func TestReplacingAndDeletingKeepsFiles(t *testing.T) {
 	expect(t, w.fetch(w.bob, s, a, first, true), http.StatusOK)
 }
 
-// What a caller may read of an attachment is what they may read of its record.
 func TestAttachmentsAreReadAsTheirRecordsAre(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
 	a := w.createPhotos(w.alice, s, "Photos")
-	// owner may submit and read only their own records; alice does everything.
 	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...), fallback(access.AppReader))
 	picture := testPNG(t, 40, 30)
 
 	alices := w.upload(w.alice, s, a, "photos", picture, 4096)
 	w.recordWith(w.alice, s, a, alices)
 	owners := w.upload(w.owner, s, a, "photos", picture, 4096)
-	pending := w.upload(w.alice, s, a, "photos", picture, 4096) // never put in a record
+	pending := w.upload(w.alice, s, a, "photos", picture, 4096)
 	ownersRow := w.recordWith(w.owner, s, a, owners)
 
 	for _, thumb := range []bool{false, true} {
 		expect(t, w.fetch(w.alice, s, a, alices, thumb), http.StatusOK)
-		expect(t, w.fetch(w.alice, s, a, owners, thumb), http.StatusOK) // reads all
-		expect(t, w.fetch(w.owner, s, a, owners, thumb), http.StatusOK) // their own
-		// Their role reads only their own records: alice's is as if it didn't exist.
+		expect(t, w.fetch(w.alice, s, a, owners, thumb), http.StatusOK)
+		expect(t, w.fetch(w.owner, s, a, owners, thumb), http.StatusOK)
 		own := w.fetch(w.owner, s, a, alices, thumb)
 		expect(t, own, http.StatusNotFound)
 		missing := w.fetch(w.owner, s, a, strings.Repeat("ef", 16), thumb)
@@ -736,22 +679,16 @@ func TestAttachmentsAreReadAsTheirRecordsAre(t *testing.T) {
 		if own.Body.String() != missing.Body.String() {
 			t.Fatalf("unreadable %q, missing %q", own.Body, missing.Body)
 		}
-		// Not in the space, or in no workspace: the same.
 		expect(t, w.fetch(w.mallory, s, a, alices, thumb), http.StatusNotFound)
 		expect(t, w.fetch(w.stranger, in(w.other, s), a, alices, thumb), http.StatusNotFound)
-		// Another space's path doesn't reach it.
 		expect(t, w.fetch(w.alice, w.alicePrivate, a, alices, thumb), http.StatusNotFound)
-		// A viewer reads every record.
 		expect(t, w.fetch(w.bob, s, a, alices, thumb), http.StatusOK)
-		// Before it is in a record only its uploader reads it.
 		expect(t, w.fetch(w.alice, s, a, pending, thumb), http.StatusOK)
 		expect(t, w.fetch(w.bob, s, a, pending, thumb), http.StatusNotFound)
 		expect(t, w.fetch(w.owner, s, a, pending, thumb), http.StatusNotFound)
 	}
-	// An unfinished upload is no attachment to anyone.
 	id := w.start(w.alice, s, a, "photos", 10)
 	expect(t, w.fetch(w.alice, s, a, id, false), http.StatusNotFound)
-	// Nothing that isn't an id gets to a file.
 	for _, bad := range []string{"..", "..%2F..%2Fetc%2Fpasswd", strings.Repeat("g", 32), strings.Repeat("a", 31), "x"} {
 		if rec := w.alice.do(http.MethodGet, appPath(s, a.ID, "/attachments/"+bad), nil); rec.Code != http.StatusNotFound && rec.Code != http.StatusTemporaryRedirect && rec.Code != http.StatusMovedPermanently {
 			t.Fatalf("%q: %d", bad, rec.Code)
@@ -776,7 +713,6 @@ func TestADeletedRecordsAttachmentsAreHidden(t *testing.T) {
 			expect(t, w.fetch(u, s, a, id, thumb), http.StatusNotFound)
 		}
 	}
-	// The files are kept, and come back with the record.
 	if got := w.files(s, a); len(got) != 2 {
 		t.Fatalf("files = %v", got)
 	}
@@ -795,13 +731,11 @@ func TestExpiredAttachmentsAreSwept(t *testing.T) {
 	abandoned := w.start(w.alice, s, a, "photos", 100)
 	w.send(w.alice, s, a, abandoned, make([]byte, 40), 40)
 
-	// Nothing is old yet.
 	if err := w.e.s.Sweep(context.Background(), time.Now().Add(-AttachmentTTL)); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, w.fetch(w.alice, s, a, orphan, false), http.StatusOK)
 
-	// A stray file no row knows, and a directory of an app that is gone.
 	dir := filepath.Join(s.Dir(w.e.dataDir), filesDir, fmt.Sprint(a.ID))
 	stray := filepath.Join(dir, strings.Repeat("0", 32)+".thumb")
 	gone := filepath.Join(s.Dir(w.e.dataDir), filesDir, "99999")
@@ -821,12 +755,11 @@ func TestExpiredAttachmentsAreSwept(t *testing.T) {
 		t.Fatalf("a recent file was removed: %v", err)
 	}
 
-	// A day on.
 	if err := w.e.s.Sweep(context.Background(), time.Now().Add(AttachmentTTL+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, w.fetch(w.alice, s, a, orphan, false), http.StatusNotFound)
-	expect(t, w.fetch(w.alice, s, a, kept, false), http.StatusOK) // in a record: never swept
+	expect(t, w.fetch(w.alice, s, a, kept, false), http.StatusOK)
 	for _, id := range []string{orphan, abandoned} {
 		var n int
 		if err := w.e.db.QueryRow(`SELECT count(*) FROM app_attachments WHERE id = ?`, id).Scan(&n); err != nil || n != 0 {
@@ -840,7 +773,6 @@ func TestExpiredAttachmentsAreSwept(t *testing.T) {
 		t.Fatalf("the directory of an app that is gone is still there: %v", err)
 	}
 
-	// Starting an upload clears what has expired for its app, without a timer.
 	old := w.upload(w.alice, s, a, "photos", picture, 4096)
 	if _, err := w.e.db.Exec(`UPDATE app_attachments SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`, old); err != nil {
 		t.Fatal(err)
@@ -863,14 +795,11 @@ func TestAbandoningAnUpload(t *testing.T) {
 	if got := w.files(s, a); len(got) != 0 {
 		t.Fatalf("files = %v", got)
 	}
-	// One in a record stays.
 	kept := w.upload(w.alice, s, a, "photos", picture, 4096)
 	w.recordWith(w.alice, s, a, kept)
 	expectCode(t, w.alice.do(http.MethodDelete, appPath(s, a.ID, "/uploads/"+kept), nil), http.StatusConflict, "app_upload_state")
 }
 
-// Moving an app to another space keeps its photos readable, wherever the move got to, and brings
-// the files along.
 func TestMovingAnAppMovesItsFiles(t *testing.T) {
 	w := newWorld(t)
 	from, to := w.alicePrivate, w.shared
@@ -883,8 +812,6 @@ func TestMovingAnAppMovesItsFiles(t *testing.T) {
 		t.Fatalf("files before: %v", w.files(from, a))
 	}
 
-	// The move can't copy the files (something is in the way at the new space): it still succeeds,
-	// and the photos are read from where they are.
 	blocker := filepath.Join(to.Dir(w.e.dataDir), filesDir)
 	if err := os.MkdirAll(filepath.Dir(blocker), 0o700); err != nil {
 		t.Fatal(err)
@@ -897,15 +824,12 @@ func TestMovingAnAppMovesItsFiles(t *testing.T) {
 	expect(t, w.fetch(w.alice, to, a, id, false), http.StatusOK)
 	expect(t, w.fetch(w.alice, to, a, id, true), http.StatusOK)
 	expect(t, w.fetch(w.alice, to, a, pending, false), http.StatusOK)
-	expect(t, w.fetch(w.alice, from, a, id, false), http.StatusNotFound) // the old space no longer has the app
-	// The readers of the new space read it; nobody of the old one does by that.
+	expect(t, w.fetch(w.alice, from, a, id, false), http.StatusNotFound)
 	expect(t, w.fetch(w.bob, to, a, id, false), http.StatusOK)
 	expect(t, w.fetch(w.bob, from, a, id, false), http.StatusNotFound)
-	// The way is cleared and the sweep goes on: the files are in the new space, and gone from the old.
 	if err := os.Remove(blocker); err != nil {
 		t.Fatal(err)
 	}
-	// A new photo goes to the new space, and a record in the app takes it, whichever holds the others.
 	more := w.upload(w.alice, to, a, "photos", picture, 4096)
 	w.recordWith(w.alice, to, a, more)
 	if err := w.e.s.Sweep(context.Background(), time.Now().Add(-AttachmentTTL)); err != nil {
@@ -927,7 +851,6 @@ func TestMovingAnAppMovesItsFiles(t *testing.T) {
 		t.Fatal("the moved picture changed")
 	}
 
-	// A move with nothing in the way does it at once.
 	b := w.createPhotos(w.alice, w.alicePrivate, "More photos")
 	bid := w.upload(w.alice, w.alicePrivate, b, "photos", picture, 4096)
 	w.recordWith(w.alice, w.alicePrivate, b, bid)
@@ -963,7 +886,6 @@ func TestAttachmentFieldDefinitions(t *testing.T) {
 	if f, _ := checked.Collection.field("receipt"); f.MaxFiles != 1 || f.MaxBytes != DefaultMaxFileBytes {
 		t.Fatalf("defaults = %+v", f)
 	}
-	// The capability is needed even when no screen draws a photo.
 	bare := `{"components": [{"id": "root", "component": "Text", "text": "hi"}],
 		"collection": {"fields": [{"name": "p", "type": "attachment"}]}, "actions": {"a": {"kind": "insert"}}}`
 	var b Definition
@@ -992,7 +914,6 @@ func TestAttachmentFieldDefinitions(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// An attachment field may itself be required, or conditionally.
 	cond := strings.Replace(photoDefinition, `{"name": "receipt", "type": "attachment"}`,
 		`{"name": "receipt", "type": "attachment", "required_when": {"field": "title", "op": "eq", "value": "refund"}}`, 1)
 	if err := check(cond); err != nil {
@@ -1031,7 +952,6 @@ func TestAttachmentValuesAreChecked(t *testing.T) {
 }
 
 func TestPicturesAreInspectedAndThumbnailed(t *testing.T) {
-	// A big picture is made small, and keeps its proportions.
 	big := testJPEG(t, 2000, 1000)
 	info, err := inspect(big)
 	if err != nil || info.format != "jpeg" || info.width != 2000 || info.height != 1000 {
@@ -1044,7 +964,6 @@ func TestPicturesAreInspectedAndThumbnailed(t *testing.T) {
 	if cfg, _, err := image.DecodeConfig(bytes.NewReader(thumb)); err != nil || cfg.Width != 320 || cfg.Height != 160 {
 		t.Fatalf("thumbnail = %+v %v", cfg, err)
 	}
-	// A small one isn't enlarged.
 	small, err := thumbnail(testPNG(t, 30, 20), "png")
 	if err != nil {
 		t.Fatal(err)
@@ -1052,8 +971,6 @@ func TestPicturesAreInspectedAndThumbnailed(t *testing.T) {
 	if cfg, _, _ := image.DecodeConfig(bytes.NewReader(small)); cfg.Width != 30 || cfg.Height != 20 {
 		t.Fatalf("small thumbnail = %+v", cfg)
 	}
-	// A phone's photo says how it is to be turned: the picture is shown that way, and so is its
-	// thumbnail.
 	for o, swapped := range map[int]bool{1: false, 3: false, 6: true, 8: true} {
 		jpg := withOrientation(testJPEG(t, 60, 40), o)
 		info, err := inspect(jpg)
@@ -1073,7 +990,6 @@ func TestPicturesAreInspectedAndThumbnailed(t *testing.T) {
 			t.Fatalf("orientation %d: shown %dx%d, thumbnail %dx%d, want %dx%d", o, info.width, info.height, cfg.Width, cfg.Height, wantW, wantH)
 		}
 	}
-	// A transparent PNG is laid on white.
 	clear := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, clear)
@@ -1085,16 +1001,12 @@ func TestPicturesAreInspectedAndThumbnailed(t *testing.T) {
 	if r, g, b, _ := img.At(1, 1).RGBA(); r>>8 < 250 || g>>8 < 250 || b>>8 < 250 {
 		t.Fatalf("transparent pixel = %d %d %d", r>>8, g>>8, b>>8)
 	}
-	// Garbage in the EXIF segment is no reason to fail.
 	broken := append([]byte{0xff, 0xd8, 0xff, 0xe1, 0x00, 0x08, 'E', 'x', 'i', 'f', 0, 0}, testJPEG(t, 10, 10)[2:]...)
 	if o := orientationOf(broken); o != 1 {
 		t.Fatalf("orientation of garbage = %d", o)
 	}
 }
 
-// A write whose context ends inside its transaction is rolled back before write returns: left to
-// database/sql's own goroutine, the connection would still be busy, and a worker that closes the
-// database at shutdown (or begins the next write) would meet a locked file.
 func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) {
 	e := newEnv(t)
 	for range 200 {
@@ -1111,7 +1023,6 @@ func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) 
 			t.Fatalf("%d connections still busy after write returned", inUse)
 		}
 	}
-	// Nothing was written, and the next writer begins at once.
 	var n int
 	if err := e.db.QueryRow(`SELECT count(*) FROM users WHERE email = 'c@example.com'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("users = %d, %v; want the cancelled insert rolled back", n, err)
@@ -1121,7 +1032,6 @@ func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) 
 	}
 }
 
-// A sweep whose context has ended stops at once and removes nothing more.
 func TestCancelledSweepRemovesNothing(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -1140,7 +1050,6 @@ func TestCancelledSweepRemovesNothing(t *testing.T) {
 	if _, err := os.Stat(stray); err != nil {
 		t.Fatalf("a cancelled sweep removed a file: %v", err)
 	}
-	// The strays' scan itself checks between spaces, apps and files.
 	if err := w.e.s.sweepStrays(ctx, time.Now().Add(AttachmentTTL+time.Hour)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("sweepStrays = %v, want context.Canceled", err)
 	}
@@ -1149,8 +1058,6 @@ func TestCancelledSweepRemovesNothing(t *testing.T) {
 	}
 }
 
-// A caller that gave up after the transaction's last statement isn't told "no" for a write that
-// was committed: the write is rolled back.
 func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
 	e := newEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1170,8 +1077,6 @@ func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
 	}
 }
 
-// An upload's row says its files are still to be removed: a purge that can't unlink a file keeps
-// the row and fails, and a retry removes the file and then the row.
 func TestPurgeUploadsKeepsTheRowUntilTheFilesAreRemoved(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("a directory can't be made unwritable for root")
@@ -1220,8 +1125,6 @@ func TestPurgeUploadsKeepsTheRowUntilTheFilesAreRemoved(t *testing.T) {
 	}
 }
 
-// What the caller keeps of a removed upload is written in the transaction that deletes its row:
-// when it can't be, the row stays, to be removed (and counted) by the retry.
 func TestPurgeUploadsNotingCountsInTheRemovalsTransaction(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared

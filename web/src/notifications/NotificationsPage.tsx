@@ -1,12 +1,3 @@
-// The notification inbox: what happened that the person may want to see, newest first, in the
-// workspace shown, as rows: what happened, where and when, an unread one in bold with a mark before
-// it (and "Unread:" said before it, so the mark is never the only sign). When is "5 minutes ago"
-// for the last day, kept current while the page is open, with the date and time on hover and
-// focus; the date and time after that. It works in every browser, whether or not it can push, and
-// is what is true: a push is only a prompt to come here. Each item is a link to where it leads, which checks access
-// again when it opens; an item whose subject the person can no longer read says only that
-// something changed.
-
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText } from '../api'
 import { type Key, useFormat, useT } from '../i18n'
@@ -26,11 +17,9 @@ import { INBOX_CHANGED, inboxPath, type NotificationItem, type NotificationList 
 import './Inbox.css'
 
 const PAGE = 30
-// How long "how long ago" stays the way a time is said, and how often it is said again.
 const RECENT_MS = 24 * 60 * 60 * 1000
 const REFRESH_MS = 30 * 1000
 
-// The time now, again every `interval` while the page is open.
 function useNow(interval: number): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -40,8 +29,6 @@ function useNow(interval: number): number {
   return now
 }
 
-// When a notification arrived: relative for the last day, with the date and time a hover or the
-// keyboard shows (and a screen reader reads as its description); the date and time after that.
 function When({ at, now }: { at: string; now: number }) {
   const f = useFormat()
   const full = f.dateTime(at)
@@ -54,7 +41,6 @@ function When({ at, now }: { at: string; now: number }) {
   }
   return (
     <Tooltip content={full}>
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the keyboard reaches it to show the date and time, as a hover does */}
       <time className="ui-inbox-when" dateTime={at} tabIndex={0}>
         {f.relative(at, now)}
       </time>
@@ -62,7 +48,6 @@ function When({ at, now }: { at: string; now: number }) {
   )
 }
 
-// A due date is a calendar date, which the language's own format says; the rest is shown as it is.
 function shownParams(params: NotificationItem['params'], calendarDate: (ymd: string) => string) {
   if (!params?.due) return params
   return { ...params, due: calendarDate(params.due) }
@@ -166,7 +151,6 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
                   </span>
                 }
                 detail={
-                  // A "changed" item says nothing of its subject, so not where it was either.
                   item.kind === 'changed' ? (
                     <When at={item.created_at} now={now} />
                   ) : (
@@ -192,7 +176,6 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
   )
 }
 
-// While the inbox loads: the shape of a few rows, and a word for screen readers.
 function InboxSkeleton() {
   const t = useT()
   return (
@@ -212,15 +195,8 @@ function InboxSkeleton() {
   )
 }
 
-/**
- * The address a push opens, /notification/{id}, which holds nothing but the notification's own
- * ID. It is read as the signed-in person (someone else's is as missing as one that never was),
- * marked read, and the person is taken to where it leads: that page checks their access again.
- */
 export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallbackWorkspace: number | null }) {
   const t = useT()
-  // Gone: the server answered that there is no such notification for this person (404, or 403).
-  // Failed: anything else (no answer, the server's own failure), which says nothing about it.
   const [outcome, setOutcome] = useState<'waiting' | 'gone' | 'failed'>('waiting')
   useEffect(() => {
     let live = true

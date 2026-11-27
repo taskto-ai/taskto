@@ -13,36 +13,24 @@ import (
 	"sync"
 )
 
-// The translated templates (docs/i18n.md#the-servers-side). The web app holds the web's
-// translations; an email is made on the server, in the recipient's language, so its texts
-// are here: one file per language in locales/, named by its BCP 47 tag like the web app's,
-// with English the reference that fills in what a language doesn't have yet.
-//
 //go:embed locales/*.json
 var localeFiles embed.FS
 
-// file is one language's file: the footer every message ends with and the messages.
 type file struct {
 	Footer   string             `json:"footer"`
 	Messages map[string]message `json:"messages"`
 }
 
-// message is one email's text. Placeholders are {name}, filled from the params.
 type message struct {
-	// Subject is the one-line subject.
-	Subject string `json:"subject"`
-	// Title is the heading of the HTML, and the first line of the text.
-	Title string `json:"title"`
-	// Paragraphs are the body.
+	Subject    string   `json:"subject"`
+	Title      string   `json:"title"`
 	Paragraphs []string `json:"paragraphs"`
-	// Action, if set, is the label of a link to the "action_url" param.
-	Action string `json:"action"`
+	Action     string   `json:"action"`
 }
 
-// Catalog is every language's templates.
 type Catalog struct {
 	langs map[string]file
-	order []string // the tags, sorted, so a language's pick among regions is stable
+	order []string
 }
 
 var (
@@ -50,12 +38,10 @@ var (
 	defaultCatalog *Catalog
 )
 
-// DefaultCatalog is the templates embedded in the binary.
 func DefaultCatalog() *Catalog {
 	defaultOnce.Do(func() {
 		c, err := loadCatalog(localeFiles, "locales")
 		if err != nil {
-			// The files are embedded and a test loads them: this is a build that was never tested.
 			panic(err)
 		}
 		defaultCatalog = c
@@ -92,15 +78,10 @@ func loadCatalog(fsys fs.FS, dir string) (*Catalog, error) {
 	return c, nil
 }
 
-// fallback is the language that fills in what another lacks.
 const fallback = "en"
 
-// Languages are the tags the catalog has templates for.
 func (c *Catalog) Languages() []string { return slices.Clone(c.order) }
 
-// Resolve returns the catalog's language for a BCP 47 tag, or "" for none picked: the tag
-// itself if the catalog has it, else a language with the same primary subtag (a "pt" or a
-// "pt-PT" reader gets "pt-BR"), else English.
 func (c *Catalog) Resolve(tag string) string {
 	if _, ok := c.langs[tag]; ok {
 		return tag
@@ -120,9 +101,7 @@ func (c *Catalog) Resolve(tag string) string {
 	return fallback
 }
 
-// Content is a rendered message: what a Message is made from.
 type Content struct {
-	// Language is the catalog language the message is in.
 	Language string
 	Subject  string
 	Text     string
@@ -131,10 +110,6 @@ type Content struct {
 
 var placeholder = regexp.MustCompile(`\{([a-z][a-z0-9_]*)\}`)
 
-// Render makes the catalog's message name in the language of locale, filling the
-// placeholders from params. A message a language lacks is English. A placeholder with no
-// param is an error, so a mistake shows in a test and not in someone's inbox. The HTML
-// escapes every value; the subject has no line breaks whatever the values hold.
 func (c *Catalog) Render(locale, name string, params map[string]string) (Content, error) {
 	lang := c.Resolve(locale)
 	f := c.langs[lang]
@@ -212,9 +187,6 @@ func (c *Catalog) Render(locale, name string, params map[string]string) (Content
 	return Content{Language: lang, Subject: subject, Text: text.String(), HTML: h.String()}, nil
 }
 
-// webURL reports whether s is an absolute http or https URL with a host: the only links a
-// message carries, so a value from elsewhere can't make one that runs code (javascript:) or
-// opens a local file.
 func webURL(s string) bool {
 	u, err := url.Parse(s)
 	if err != nil || u.Hostname() == "" || strings.ContainsAny(s, " \t\r\n") {
@@ -223,8 +195,6 @@ func webURL(s string) bool {
 	return u.Scheme == "http" || u.Scheme == "https"
 }
 
-// rtl reports whether lang is written right to left, by its language: the web app decides
-// by script, and these are the languages it does for.
 func rtl(lang string) bool {
 	primary, _, _ := strings.Cut(lang, "-")
 	switch primary {

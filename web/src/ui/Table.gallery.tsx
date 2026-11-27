@@ -73,7 +73,6 @@ export default function TableGallery() {
   )
 }
 
-// Sortable columns: a header is a button, and its cell says the order the rows are in.
 function SortedTable({ rows, columns }: { rows: Member[]; columns: Column<Member>[] }) {
   const t = useT()
   const [by, setBy] = useState<{ key: string; dir: 'ascending' | 'descending' }>({ key: 'docs', dir: 'descending' })

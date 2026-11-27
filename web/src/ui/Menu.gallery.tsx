@@ -29,7 +29,6 @@ function Items() {
   )
 }
 
-// One choice of several, as radio items in a named group, behind a switcher's button.
 function Choices() {
   const t = useT()
   const options = [t('gallery.layout.newest'), t('gallery.layout.oldest'), t('gallery.layout.name')]
@@ -57,7 +56,6 @@ export default function MenuGallery() {
   return (
     <>
       <Specimen caption={t('gallery.layout.menuClip')}>
-        {/* A small box that clips: an open menu is in the top layer, so it is not cut. */}
         <div
           data-gallery="clip"
           style={{

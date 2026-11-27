@@ -1,7 +1,4 @@
 @layer screens {
-  /* The update prompt: a toast's look at the window's bottom, over the page, clear of the home
-     bar; with the on-screen keyboard up (html[data-keyboard], src/pwa/viewport.ts) the page is the
-     part above it, and so is this. */
   .ui-update {
     position: fixed;
     z-index: var(--z-toast);

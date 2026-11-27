@@ -1,8 +1,3 @@
-// The conversation's model, chosen among what the caller may use, with the CLI workers as one
-// group and a hint when the chosen CLI's login isn't ready. It sits in the composer's box as a
-// quiet control (the browser's own select, so a phone's picker and the keyboard work as
-// everywhere), its hints and errors on a line of their own under the box's controls.
-
 import { type ReactNode, useId, useState } from 'react'
 import { api, CLI_PRODUCTS, type CliAccounts, cliAccountFor, cliOfProvider, codeText, errorText } from '../api'
 import { useT } from '../i18n'
@@ -15,8 +10,6 @@ export type ModelProvider = { provider: string; name: string; scope: string; mod
 
 const modelKey = (m: ModelRef) => JSON.stringify([m.provider, m.model_id])
 
-// Hidden by the view when either can't be read (the agent runtime is off, say): the conversation
-// still works on the model it has.
 export function ModelPicker({
   workspace,
   url,
@@ -35,7 +28,6 @@ export function ModelPicker({
   disabled: boolean
 }) {
   const t = useT()
-  // Generated, as the view can be on a page twice (the builder).
   const id = useId()
   const [chosen, setChosen] = useState<ModelRef | null>(null)
   const [busy, setBusy] = useState(false)
@@ -105,8 +97,6 @@ export function ModelPicker({
         )}
         {groups.map((g) =>
           g === 'cli' ? (
-            // The CLI workers are one group, whatever their place in the list: they run on the
-            // user's own subscription, not on a provider account.
             <optgroup key="cli" label={t('conversations.model.cliGroup')}>
               {cliProviders.flatMap((p) => {
                 const a = account(p.provider)

@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-//
-// An app's icons are SVG path data from its definition (internal/apps/icons.go). The renderer draws
-// a valid path in an <svg> it makes itself, and nothing for anything that isn't path data, even when
-// the definition reached it without the server's check. A name is shown as its word only where it is
-// all a control shows, as before icons were paths; elsewhere it draws nothing.
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
@@ -17,7 +12,6 @@ const PLUS = 'M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z'
 const BACK = 'M3 12l8-8v5h10v6H11v5z'
 const BOUND = 'm0 0h24v24H0z'
 
-// What isn't path data, as the server refuses it; here it is drawn as nothing.
 const NOT_PATHS = [
   '',
   'M0 0<script>alert(1)</script>',
@@ -38,14 +32,11 @@ test('the grammar takes path data and nothing else', () => {
   for (const d of [PLUS, BACK, BOUND, 'M1.5e1-2E-1,3 4Z', `M${'0'.repeat(MAX_ICON_PATH - 1)}`])
     expect(iconPath({ svgPath: d })).toBe(d)
   for (const d of NOT_PATHS) expect(iconPath({ svgPath: d })).toBeNull()
-  // A name, a bound value that isn't {svgPath}, and an object with more keys draw nothing.
   for (const name of ['add', 'star', null, undefined, 5, ['M0 0'], { path: '/x' }, { svgPath: 5 }])
     expect(iconPath(name)).toBeNull()
   expect(iconPath({ svgPath: PLUS, href: 'http://elsewhere.example' })).toBeNull()
 })
 
-// A surface the server never checked: a valid icon beside a label, one that is all of a button, a
-// name, a bound path, and every kind of string that isn't path data.
 function messages() {
   const bad = NOT_PATHS.map((d, i) => ({ id: `bad-${i}`, component: 'Icon', name: { svgPath: d } }))
   return [
@@ -95,26 +86,22 @@ test('draws valid paths in its own svg and nothing for the rest', async () => {
   for (const svg of drawn) {
     expect(svg.getAttribute('viewBox')).toBe('0 0 24 24')
     expect(svg.getAttribute('fill')).toBe('currentColor')
-    // The svg and one path, with no attribute from the definition but d.
     expect(svg.children).toHaveLength(1)
     expect([...(svg.querySelector('path')?.attributes ?? [])].map((a) => a.name)).toEqual(['d'])
   }
 
-  // The icon that is all of the button names it; the one beside a label is hidden.
   expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy()
   expect(screen.getByRole('img', { name: 'Add' }).querySelector('path')?.getAttribute('d')).toBe(PLUS)
   const back = drawn.find((svg) => svg.querySelector('path')?.getAttribute('d') === BACK)
   expect(back?.getAttribute('aria-hidden')).toBe('true')
   expect(back?.hasAttribute('role')).toBe(false)
 
-  // A name shows neither an icon nor the word, and nothing that isn't path data got anywhere.
   expect(screen.queryByText('star')).toBeNull()
   expect(container.querySelector('img, script, i.material-icons')).toBeNull()
   expect(container.innerHTML).not.toContain('alert(1)')
   expect(container.innerHTML).not.toContain('elsewhere.example')
 })
 
-// Which icons given by name show their word: the same walk as the server's label rule.
 test('a name shows its word only where nothing else names the control', () => {
   const c = (component: string, props: Record<string, unknown> = {}): SurfaceComponent => ({ component, props })
   const named = c('Icon', { name: 'delete' })
@@ -180,7 +167,6 @@ test('a name shows its word only where nothing else names the control', () => {
     expect([...iconsShowingTheirName(new Map(Object.entries(components)))], name).toEqual(want)
 })
 
-// A fan-out of references to one child is looked at once per depth: this returns at once.
 test('the walk does not multiply references that fan out', () => {
   const fan = (next: string) => ({ component: 'Row', props: { children: Array(200).fill(next) } })
   const components = new Map<string, SurfaceComponent>([
@@ -194,8 +180,6 @@ test('the walk does not multiply references that fan out', () => {
   expect([...iconsShowingTheirName(components)]).toEqual(['n'])
 })
 
-// Apps saved when names drew the word: a button and a modal's trigger that are only a name keep
-// their word, so they keep a name and something to press, and the modal still opens.
 test('a control that is only a name keeps its word, its name and its use', async () => {
   const messages = [
     { version: 'v0.9', createSurface: { surfaceId: 'named', catalogId: APPS_CATALOG_ID } },
@@ -222,7 +206,6 @@ test('a control that is only a name keeps its word, its name and its use', async
   )
   await screen.findByText('Favourites')
   expect(screen.getByRole('button', { name: 'delete' }).textContent).toContain('delete')
-  // Beside a label a name draws nothing.
   expect(screen.queryByText('star')).toBeNull()
   expect(container.querySelectorAll('.ui-app-icon-name')).toHaveLength(2)
   fireEvent.click(screen.getByText('menu'))

@@ -14,7 +14,7 @@ type world struct {
 	t   *testing.T
 	db  *sql.DB
 	ws  int64
-	ann int64 // the workspace's admin
+	ann int64
 }
 
 func newWorld(t *testing.T) *world {
@@ -117,7 +117,6 @@ func TestStepsAreDoneByWhatExists(t *testing.T) {
 	svc := New(w.db, Options{})
 	ctx := context.Background()
 
-	// The invite step: a second member, or an invite (accepted or not).
 	w.exec(`INSERT INTO invites (workspace_id, token_hash, email, role, expires_at) VALUES (?, 'h', 'b@example.com', 'member', '2999-01-01T00:00:00.000Z')`, w.ws)
 	if got := w.view(svc, w.ws, w.ann)[Invite]; got != Done {
 		t.Fatalf("a pending invite: %s", got)
@@ -242,7 +241,6 @@ func TestServerStepsFollowTheServer(t *testing.T) {
 	if got := w.view(svc, w.ws, w.ann); got[Email] != Done || got[Backups] != Done {
 		t.Fatalf("%v", got)
 	}
-	// A status that can't be read leaves the step to do, not the checklist failing.
 	failing := New(w.db, Options{Backups: func() (bool, error) { return true, errors.New("unreadable") }})
 	if got := w.view(failing, w.ws, w.ann)[Backups]; got != Todo {
 		t.Fatalf("unreadable status: %s", got)
@@ -258,7 +256,6 @@ func TestSkippingAndCompleting(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Skipping twice is the same as once.
 	if err := svc.Skip(ctx, w.ws, w.ann, Invite, true); err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +270,6 @@ func TestSkippingAndCompleting(t *testing.T) {
 	if !v.Complete {
 		t.Fatalf("every required step is handled, the optional ones don't hold it open: %+v", v)
 	}
-	// A skipped step that then gets done is done.
 	w.provider(w.ws)
 	if got := w.view(svc, w.ws, w.ann)[Provider]; got != Done {
 		t.Fatalf("done beats skipped: %s", got)
@@ -309,7 +305,6 @@ func TestDismissing(t *testing.T) {
 	if v, _ := svc.View(ctx, w.ws, w.ann); v.Dismissed {
 		t.Fatal("still dismissed")
 	}
-	// The marks go with the workspace.
 	if err := svc.Dismiss(ctx, w.ws, w.ann, true); err != nil {
 		t.Fatal(err)
 	}

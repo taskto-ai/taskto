@@ -1,24 +1,3 @@
-// CLI workers (docs/cli-workers.md): a conversation whose model is a CLI (provider kind "cli",
-// "cli-claude", "cli-codex", "cli-grok") runs each turn on the official CLI, signed in with the
-// conversation owner's own login. The Go server runs the CLI; the sidecar records the turn.
-//
-// The model of such a conversation is a driver that makes no model call: it turns the user's
-// new input into one cli_turn tool call, and the tool's result into the answer. The tool calls
-// the server on the tools socket (POST /cli/turn) with the conversation's capability, streams
-// the CLI's work into its output as it happens, and returns the CLI's answer.
-//
-// The tool is replay-safe. It memoises a turn ID before it calls the server, so a sidecar that
-// restarts in the middle of a turn runs it again with the same ID, and the server, whose worker
-// still has the turn, sends its events from the start instead of running the CLI twice. If the
-// worker restarted too, the server resumes the CLI session and says so ("interrupted").
-//
-// An expired login doesn't fail the turn: the tool says so, waits until the owner signs in again
-// (POST /cli/wait, which answers once the account is connected), and goes on with the turn.
-//
-// The CLI has taskto's tools over MCP (docs/cli-tools.md). When it asks the user to take over
-// the browser (browser_help), the request is kept in the result's details, as `help`, so the
-// conversation shows the same card as for the built-in agent's call.
-
 import { randomBytes } from 'node:crypto'
 import { request } from 'node:http'
 import type { createModels } from '@earendil-works/pi-ai/models'
@@ -58,12 +37,11 @@ function textOf(content: unknown): string {
     .join('')
 }
 
-/** Registers the driver model of a CLI provider with pi-ai. */
 export function installCliDriver(models: ReturnType<typeof createModels>, p: CliProviderConfig): void {
   const faux = fauxProvider({
     provider: p.id,
     models: p.models.map((m) => ({ id: m.id, name: m.name })),
-    tokensPerSecond: 4000, // the answer is already there: show it at once
+    tokensPerSecond: 4000,
   })
   const answer: FauxResponseFactory = (context, _options, _state, model) => {
     if (faux.getPendingResponseCount() < 1000) refill()
@@ -73,15 +51,12 @@ export function installCliDriver(models: ReturnType<typeof createModels>, p: Cli
     }
     return fauxAssistantMessage(fauxToolCall(CLI_TOOL, { cli: p.cli, model: model.id }), { stopReason: 'toolUse' })
   }
-  // The faux provider takes a list of steps; the factory is stateless, so any number of them
-  // answer the same way, and it tops the list up as it goes.
   const refill = () => faux.appendResponses(Array.from({ length: 10_000 }, () => answer))
   faux.setResponses([])
   refill()
   models.setProvider(faux.provider)
 }
 
-/** A conversation's messages as the tool needs them. */
 export type MessagesOf = (conversationId: number) => Promise<readonly Message[]>
 
 type CliEvent = {
@@ -95,21 +70,13 @@ type CliEvent = {
 
 type Done = { status: string; text: string }
 
-/** An app the CLI saved with taskto's create_app or update_app (the server read it from the whole answer). */
 export type SavedApp = { space: number; app: number }
 
-/** A browser_help call's request to the user: why, and what to do. */
 type Help = { reason: string; message: string }
 
-/**
- * The CLI's latest browser_help call in a turn. As for the built-in agent's, the card is shown
- * from the call itself: what the model asked the user to do.
- */
 class Helps {
   private help?: Help
-  // The apps the turn saved, by the call that saved each (a replayed event is the same call).
   private apps = new Map<string, SavedApp>()
-  /** Records a tool call event. */
   see(tool: NonNullable<CliEvent['tool']>): void {
     const { saved } = tool
     if (
@@ -127,17 +94,13 @@ class Helps {
   latest(): Help | undefined {
     return this.help
   }
-  /** The apps the turn saved, in the order they were saved. */
   savedApps(): SavedApp[] {
     return [...this.apps.values()]
   }
 }
 
-// The names a CLI gives taskto's browser_help: Claude Code's MCP name, the worker's for a Codex
-// MCP call (server.tool), and Grok Build's; Grok Build may also call it through use_tool.
 const HELP_NAMES = new Set(['mcp__taskto__browser_help', 'taskto.browser_help', 'taskto__browser_help'])
 
-/** The request of a CLI's tool call, if it is taskto's browser_help with a message. */
 export function helpOf(tool: { name: string; input?: string }): Help | undefined {
   let args: unknown
   try {
@@ -157,24 +120,18 @@ export function helpOf(tool: { name: string; input?: string }): Help | undefined
   return { reason: typeof a.reason === 'string' ? a.reason : 'other', message: a.message.trim() }
 }
 
-// How long a call waits for the server's first byte, and for its socket while it starts.
 const CONNECT_RETRY_MS = 30_000
 const WAIT_FOR_LOGIN_MS = 24 * 60 * 60 * 1000
 const MAX_HISTORY = 64 << 10
 
-// What the CLI did in a turn, as the tool's output showed it while it ran, is kept in the
-// result's details (the output gives way to the result): the conversation shows it after the
-// turn too. It is for people, not the model, which reads only the answer. Bounded.
 const MAX_TRANSCRIPT = 64 << 10
 
-// How many saved apps a turn's result keeps: the last ones.
 const MAX_APPS = 20
 
 function result(value: string, transcript: string, isError = false, help?: Help, apps: SavedApp[] = []) {
   const details = {
     ...(transcript ? { transcript: transcript.slice(-MAX_TRANSCRIPT) } : {}),
     ...(help ? { help } : {}),
-    // The apps the CLI saved: the conversation shows them like the built-in agent's saved apps.
     ...(apps.length > 0 ? { apps: apps.slice(-MAX_APPS) } : {}),
   }
   return {
@@ -184,7 +141,6 @@ function result(value: string, transcript: string, isError = false, help?: Help,
   }
 }
 
-/** api.output, keeping what it shows for the result's details too. */
 function recorder(api: ToolExecutionApi): { api: ToolExecutionApi; text: () => string } {
   let text = ''
   const output = (chunk: string) => {
@@ -194,15 +150,8 @@ function recorder(api: ToolExecutionApi): { api: ToolExecutionApi; text: () => s
   return { api: { ...api, output } as ToolExecutionApi, text: () => text }
 }
 
-/**
- * Splits the conversation at the current turn: the prompt is the user's input since the last
- * CLI turn (or the start), the history everything before it, for a CLI session that starts in
- * the middle of a conversation.
- */
 export function splitTurn(messages: readonly Message[]): { prompt: string; history: { role: string; text: string }[] } {
   let end = messages.length
-  // The newest entries are this very tool call: an assistant message without text, and the
-  // stand-in result the view shows for a call still running.
   const current = (m: Message | undefined) =>
     (m?.role === 'assistant' && !textOf(m.content).trim()) ||
     (m?.role === 'toolResult' && (m.details as { reason?: unknown } | undefined)?.reason === 'missing_result')
@@ -241,7 +190,6 @@ class HttpRefusal extends Error {
   }
 }
 
-/** POSTs body to path on the tools socket and calls onLine with each line of the answer. */
 function post(
   socketPath: string,
   path: string,
@@ -276,9 +224,7 @@ function post(
             try {
               const parsed = JSON.parse(buffer) as { error?: unknown }
               if (typeof parsed.error === 'string') message = parsed.error
-            } catch {
-              // not JSON
-            }
+            } catch {}
             reject(new HttpRefusal(res.statusCode ?? 0, message))
           })
           return
@@ -312,8 +258,6 @@ function unreachable(error: unknown): boolean {
   return code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EPIPE'
 }
 
-// One line per event, readable as it streams: the CLI's text as it comes, its tool calls, and
-// what the server says. Thinking and token counts stay out. Tool calls go to helps too.
 function show(api: ToolExecutionApi, cli: CliName, e: CliEvent, helps: Helps): void {
   switch (e.type) {
     case 'text':
@@ -337,8 +281,6 @@ function show(api: ToolExecutionApi, cli: CliName, e: CliEvent, helps: Helps): v
     case 'login_required':
       api.output(`⚠ ${PRODUCT[cli]} needs you to sign in again.\n`)
       break
-    // A permission question to the owner, answered in the web app (docs/agent-safety.md),
-    // and later its answer.
     case 'permission': {
       const p = e.permission
       if (!p) break
@@ -354,9 +296,7 @@ function show(api: ToolExecutionApi, cli: CliName, e: CliEvent, helps: Helps): v
   }
 }
 
-/** The cli_turn tool, calling the server on socketPath. */
 export function cliTools(socketPath: string, messagesOf: MessagesOf) {
-  // Runs (or re-attaches to) one worker turn and returns how it ended.
   async function runTurn(
     api: ToolExecutionApi,
     capability: string,
@@ -365,8 +305,6 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
     helps: Helps,
     signal?: AbortSignal,
   ): Promise<Done> {
-    // How long the server has been failing us: since the first failure after the last line
-    // that came through, so a long turn that loses its connection late still re-attaches.
     let failingSince: number | undefined
     const givenUp = () => failingSince !== undefined && Date.now() - failingSince > CONNECT_RETRY_MS
     let seen = 0
@@ -386,9 +324,7 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
             } catch {
               return
             }
-            // A resumed turn is a new worker turn: its events count from 1 again.
             if (e.type === 'interrupted') seen = 0
-            // Re-attached after a lost connection, the server sends the turn from its start.
             if (typeof e.seq === 'number' && e.seq > 0) {
               if (e.seq <= seen) return
               seen = e.seq
@@ -413,8 +349,6 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
         continue
       }
       if (done) return done
-      // The stream ended without its last event (the server restarted): read the turn again,
-      // as a replay, so a turn the worker lost is resumed rather than run as new.
       failingSince ??= Date.now()
       if (givenUp()) return { status: 'failed', text: 'the CLI turn ended without an answer' }
       body = { ...body, replay: true }
@@ -422,7 +356,6 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
     }
   }
 
-  // Waits until the owner's account for cli is connected again: true, or false after a day.
   async function waitForLogin(capability: string, cli: CliName, signal?: AbortSignal): Promise<boolean> {
     const until = Date.now() + WAIT_FOR_LOGIN_MS
     while (Date.now() < until) {
@@ -436,15 +369,12 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           (line) => {
             try {
               state = String((JSON.parse(line) as { state?: unknown }).state ?? '')
-            } catch {
-              // not JSON
-            }
+            } catch {}
           },
           signal,
         )
       } catch (error) {
         if (signal?.aborted) throw error
-        // A refusal (the conversation archived, its capability changed) won't pass by itself.
         if (error instanceof HttpRefusal) throw error
         await sleep(5_000)
         continue
@@ -473,18 +403,15 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
         )
       }
       const signal = context.abortSignal
-      // Each run of this call memoises its number: a later one is a replay after a restart.
       let attempt = 1
       while ((await api.memo(`attempt-${attempt}`, context)) !== undefined) attempt++
       await api.memo(`attempt-${attempt}`, Date.now(), context)
       let replay = attempt > 1
-      // A turn that waited for a new login goes on as another worker turn: resume the newest.
       let round = 1
       while ((await api.memo(`turn-${round + 1}`, context)) !== undefined) round++
 
       const { prompt, history } = splitTurn(await messagesOf(api.conversationId))
       if (!prompt) return result('there is no new message for the CLI', '', true)
-      // The CLI's requests to take over the browser, for the conversation's card.
       const helps = new Helps()
       for (;;) {
         const turn = await api.memo(`turn-${round}`, newTurnId(), context)
@@ -500,7 +427,6 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           )
         } catch (error) {
           if (signal?.aborted) {
-            // Stopped: stop the CLI too. Not awaited by anyone, so it can't hold the abort up.
             void post(socketPath, '/cli/stop', access.capability, { turn }, () => {}).catch(() => {})
           }
           throw error

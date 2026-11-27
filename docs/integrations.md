@@ -1114,8 +1114,8 @@ webhook's event takes. It never reads an event feed: it retrieves the objects th
 
 ### What the adapter was written against (Stripe)
 
-Pinned from Stripe's public documentation on the day the adapter was written (the code comments
-in `internal/integrations/stripe_webhook.go` say the same). A change of any of it is a change of
+Pinned from Stripe's public documentation on the day the adapter was written, and implemented in
+`internal/integrations/stripe_webhook.go`. A change of any of it is a change of
 code and of this section; the real-provider check is manual and never in CI.
 
 - **Signature.** The `Stripe-Signature` header is comma-separated `name=value` entries: `t`, the

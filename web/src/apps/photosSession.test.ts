@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// A photo goes up in several trips (start, chunks, finalize). One begun in a session goes on only in
-// it, and every trip names its account.
-
 import { expect, test } from 'vitest'
 import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
@@ -23,7 +20,6 @@ test('every trip names the account the upload began for, even after another sign
   beginSession(7)
   const going = uploadPhoto(base, 'receipt', new Blob([new Uint8Array([1, 2, 3])])).catch((e) => e)
   await expect.poll(() => calls.length).toBe(1)
-  // The first person signs out, the next signs in, before the start is answered.
   endSession()
   beginSession(8)
   start()
@@ -63,7 +59,6 @@ test('an upload whose session ended while it waited to try again asks nothing mo
   beginSession(7)
   const going = uploadPhoto(base, 'receipt', new Blob([new Uint8Array([1, 2, 3])]), { backoff: 300 }).catch((e) => e)
   await expect.poll(() => failures).toBe(1)
-  // While it waits before trying again, the session ends.
   endSession()
   expect(await going).toBeInstanceOf(UploadCancelled)
   expect(calls.some((c) => c.method === 'GET')).toBe(false)

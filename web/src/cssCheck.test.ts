@@ -5,10 +5,6 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { allowedEverywhere, allRules, OLD_STYLESHEETS, OPT_OUT, reachesAnywhere } from '../scripts/css-check.mjs'
 
-// scripts/css-check.mjs: the stylesheets are global (one list of files, every rule in force on every
-// page), so a selector declared twice, in one file or two, a class a component uses that no rule
-// has, a colour outside the themes and a literal size in the design system are caught here, not on
-// a screen.
 const web = resolve(__dirname, '..')
 const script = join(web, 'scripts/css-check.mjs')
 
@@ -17,7 +13,6 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-// A web directory with this stylesheet and these components, and what the script says of it.
 function run(css: string, components: Record<string, string> = {}, args: string[] = []) {
   const root = mkdtempSync(join(tmpdir(), 'css-check-'))
   dirs.push(root)
@@ -67,8 +62,7 @@ test('fails on a tt- class a component uses that has no rule, in a string, a tem
   const css = '.tt-known { color: inherit; }\n'
   for (const [expr, missing] of [
     ['"tt-known tt-missing"', 'tt-missing'],
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: the component's source, not this file's
-    ['{`tt-known ${on ? "tt-on" : ""}`}', 'tt-on'],
+    ['{`tt-known $' + '{on ? "tt-on" : ""}`}', 'tt-on'],
     ['{on ? "tt-known" : "tt-off"}', 'tt-off'],
     ["{['tt-known', 'tt-listed'].join(' ')}", 'tt-listed'],
   ]) {
@@ -104,7 +98,6 @@ export const A = ({ h }: { h: string }) => <p className={HEALTH[h]}>x</p>
   expect(r.err).toContain('src/A.tsx:1: tt-missing is used but no rule')
   expect(r.err).not.toContain('tt-known is used')
 
-  // An id in the same file, and a table not in capitals, are not classes it reads.
   const quiet = run('.tt-known { color: inherit; }\n', {
     'A.tsx': `const lower = { a: 'tt-nothing' }\nexport const A = () => <p id="tt-anchor" className="tt-known">{lower.a}</p>\n`,
   })
@@ -140,11 +133,9 @@ test('a className in a comment uses nothing, and a // in a string is not a comme
   })
   expect(r.code).toBe(1)
   expect(r.err).not.toMatch(/tt-old\b|tt-older|tt-oldest/)
-  // The class after a URL's // is still read, and reported at its own line.
   expect(r.err).toContain('src/A.tsx:6: tt-after-url is used but no rule')
 })
 
-// More stylesheets than styles.css: the design system's files under src/ui/.
 function runFiles(files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), 'css-check-'))
   dirs.push(root)
@@ -249,7 +240,6 @@ test("checks the design system's ui- classes as it checks tt- ones", () => {
   expect(unstyled.code).toBe(1)
   expect(unstyled.err).toContain('ui-missing is used but no rule')
   expect(unstyled.err).not.toContain('ui-button is used')
-  // A custom property that happens to start like a class is not one.
   const prop = run('.ui-x { --ui-y: 0; }\n', { 'A.tsx': component('"ui-x"') })
   expect(prop.code).toBe(0)
 })
@@ -336,7 +326,6 @@ describe('in the design system, a size, a space, a radius, a shadow and a durati
   })
 
   test("a rule in the files that define the tokens is held to them too; only the definitions aren't", () => {
-    // (A theme is held to colour roles alone by its own test, ui/tokens.test.ts.)
     for (const file of ['ui/tokens.css', 'ui/legacy.css']) {
       const r = runFiles({ [file]: '@layer tokens {\n  :root { --space-1: 4px; }\n  .ui-x { padding: 4px; }\n}\n' })
       expect(r.code, file).toBe(1)
@@ -382,8 +371,6 @@ describe('in the design system, a size, a space, a radius, a shadow and a durati
   })
 })
 
-// A whole app's stylesheets, as main.tsx loads them: the entry, ui/index.css, the list of the old
-// stylesheets with each of them, and what `changes` adds, replaces or (with null) removes.
 const OPT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
 const GOOD_BASE = `@layer base {\n  a${OPT} { color: inherit; }\n}\n\n@media (pointer: coarse) {\n  label${OPT} { min-height: var(--tt-touch); }\n}\n`
 function app(changes: Record<string, string | null> = {}) {
@@ -549,11 +536,8 @@ describe('how the app loads its stylesheets', () => {
 
   test('ui/base.css is one @layer base block, then what reaches everything on purpose, then the touch block', () => {
     for (const base of [
-      // The touch screen's block moved into the layer.
       `@layer base {\n  a${OPT} { color: inherit; }\n  @media (pointer: coarse) { label${OPT} { min-height: 0; } }\n}\n`,
-      // The base in another layer.
       GOOD_BASE.replace('@layer base', '@layer screens'),
-      // A rule after the blocks, in no layer.
       `${GOOD_BASE}\nfieldset${OPT} { margin: 0; }\n`,
     ]) {
       const r = app({ 'ui/base.css': base })
@@ -626,7 +610,6 @@ describe('how the app loads its stylesheets', () => {
 })
 
 describe('nested rules in an old stylesheet', () => {
-  // What css-check makes of each rule: whether it reaches anywhere, and if so whether it may.
   const verdicts = (css: string) =>
     allRules(css).map((r) => ({
       selector: r.selector,
@@ -643,27 +626,20 @@ describe('nested rules in an old stylesheet', () => {
       { selector: '.tt-card:hover', properties: ['opacity'], refused: false },
       { selector: '.tt-card h3', properties: ['margin'], refused: false },
     ])
-    // An ampersand in a string or escaped is a character, not the parent.
     expect(allRules('.tt-card { a[href*="&"] { margin: 0; } .x\\&y { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-card',
       '.tt-card a[href*="&"]',
       '.tt-card .x\\&y',
     ])
-    // After a compound's start, the parent is a condition on that element, and a parent of
-    // wrappers alone scopes nothing.
-    // (Glued on as text, `#tt-main&` would be `#tt-mainbody #root input`, an id of its own that
-    // seems to scope it.)
     expect(verdicts('body #root { #tt-main& input { margin: 0; } }').at(-1)).toEqual({
       selector: '#tt-main:is(body #root) input',
       properties: ['margin'],
       refused: true,
     })
-    // A leading combinator keeps the parent in front, even with an & later on.
     expect(allRules('.tt-card { + .x + & { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-card',
       '.tt-card + .x + .tt-card',
     ])
-    // Each & is the whole parent list, chosen on its own.
     expect(allRules('.tt-a, .tt-b { & + & { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-a',
       '.tt-b',
@@ -672,7 +648,6 @@ describe('nested rules in an old stylesheet', () => {
       '.tt-b + .tt-a',
       '.tt-b + .tt-b',
     ])
-    // Each of several parents.
     expect(allRules('.tt-a, .tt-b { & p { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-a',
       '.tt-b',
@@ -697,7 +672,6 @@ describe('nested rules in an old stylesheet', () => {
     expect(verdicts('input { @media (max-width: 40rem) { @supports (x: y) { font-size: 16px; } } }')).toEqual([
       { selector: 'input', properties: ['font-size'], refused: false },
     ])
-    // At the top, a @media's rules are what they are, as before.
     expect(verdicts('@media (pointer: coarse) { h2 { margin: 0; } .tt-x { margin: 0; } }')).toEqual([
       { selector: 'h2', properties: ['margin'], refused: true },
       { selector: '.tt-x', properties: ['margin'], refused: false },

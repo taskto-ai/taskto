@@ -1,9 +1,3 @@
-// The records made on this device, each with its own state: a local draft, queued, syncing,
-// synced (the server acknowledged it) or needing attention, and its photos' state apart, since a
-// record's photos can still be on their way when the record is not. The controls to recover are
-// here: try again now, keep as a draft, send, discard. They are the offline writer's (writer.ts): in
-// a tab that isn't, the queue is shown and nothing here changes it.
-
 import { useState } from 'react'
 import { ApiError, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -21,8 +15,6 @@ import { type Download, kindOf, NotWriter, type OutboxItem } from './store'
 import { RESOLVE, type SyncStatus, waitsForEarlier } from './sync'
 import './OutboxList.css'
 
-// What a record is called in the list: the app, and its first filled-in value (for a change to a
-// record, the one it is about: as it was downloaded, else what the change sets).
 function summaryOf(item: OutboxItem): string | undefined {
   if (kindOf(item) === 'insert') {
     for (const [name, v] of Object.entries(item.action.context)) {
@@ -32,7 +24,6 @@ function summaryOf(item: OutboxItem): string | undefined {
     }
     return undefined
   }
-  // A change to a record is named by the record: its first text as it was downloaded, else a number.
   const values = [...Object.entries(item.original ?? {}), ...Object.entries(item.action.context)].filter(
     ([name]) => name !== 'id',
   )
@@ -70,9 +61,7 @@ export function OutboxList({
   runtime: Runtime
   items: OutboxItem[]
   status: SyncStatus
-  // App names by scope key, for the label of each record.
   apps: Record<string, string>
-  // The downloaded copies, which a change needing attention is compared against.
   downloads?: Download[]
 }) {
   const t = useT()
@@ -80,14 +69,11 @@ export function OutboxList({
   const [resolving, setResolving] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const writer = useWriter(runtime)
-  // What a person's press does to the queue: a refusal (this tab lost the right meanwhile) is said.
   const act = (go: () => Promise<unknown>) =>
     void go().then(
       () => setNotice(null),
       (e) => setNotice(e instanceof NotWriter ? t('errors.offline_not_writer') : errorText(e)),
     )
-  // What the server has acknowledged and the person has not cleared from the list. A cleared one
-  // stays (it keeps the record as the server has it on screen) until a download holds the change.
   const shown = items.filter((i) => !i.cleared)
   const synced = shown.filter((i) => i.state === 'synced')
   const waiting = items.filter((i) => i.state !== 'synced')
@@ -129,8 +115,6 @@ export function OutboxList({
                     ? t('offline.queue.item', { app, summary })
                     : t('offline.queue.itemNew', { app })
             const settle = item.state === 'attention' && item.attention !== undefined && RESOLVE.has(item.attention)
-            // Offered for what can be looked at and settled: a conflict, a deleted record, what no
-            // longer fits, and a refusal of the server's.
             const reviewable =
               item.state === 'attention' &&
               (settle || item.attention === 'refused' || item.attention === 'outdated') &&
@@ -182,8 +166,6 @@ export function OutboxList({
                     )}
                   </>
                 }
-                // Under the row, on a line of their own that wraps: a record that needs attention can
-                // have four. A row with nothing to do (sent, being sent) has none.
                 actionsBelow
                 actions={
                   writer &&
@@ -228,7 +210,6 @@ export function OutboxList({
                           {t('offline.queue.send')}
                         </Button>
                       )}
-                      {/* Apart from the safe ones, at the end. */}
                       <span className="ui-outbox-discard">
                         <DiscardButton
                           runtime={runtime}
@@ -263,8 +244,6 @@ export function OutboxList({
           size="sm"
           variant="ghost"
           onClick={() =>
-            // Out of the list, not out of the queue: a deleted record would be shown again from the
-            // copy, which doesn't know of the deletion, until a download does.
             act(() =>
               Promise.all(
                 synced.map((i) =>
@@ -283,8 +262,6 @@ export function OutboxList({
   )
 }
 
-// The tone of each state: a draft and what is queued are neutral, sending informs, sent succeeded,
-// and what needs the person is a warning, or the danger when the server refused it.
 export function toneOf(item: OutboxItem): BadgeTone {
   switch (item.state) {
     case 'syncing':

@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// purgedDetails is the account_purged event's details.
 func (w *world) purgedDetails() map[string]any {
 	w.t.Helper()
 	var details string
@@ -24,9 +23,6 @@ func (w *world) purgedDetails() map[string]any {
 	return got
 }
 
-// A purge that took two tries reports what both did: the first removed the unfinished upload and
-// rewrote the team space's history, then failed on another shared space; the second finds both done
-// and counts nothing for them.
 func TestPurgeTotalsAreKeptAcrossItsTries(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -53,13 +49,11 @@ func TestPurgeTotalsAreKeptAcrossItsTries(t *testing.T) {
 	if got["uploads_removed"] != float64(1) {
 		t.Errorf("uploads_removed = %v, want 1 (removed by the first try)", got["uploads_removed"])
 	}
-	// The team space has two commits of theirs (plan.md's first version and minutes.md).
 	if got["documents_anonymized"] != float64(2) {
 		t.Errorf("documents_anonymized = %v, want 2 (rewritten by the first try)", got["documents_anonymized"])
 	}
 }
 
-// A purge in one try reports the same totals.
 func TestPurgeTotalsInOneTry(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -76,8 +70,6 @@ func TestPurgeTotalsInOneTry(t *testing.T) {
 	}
 }
 
-// stopsAfterKB does the rewrite and then fails, as a rewrite that published its new history and
-// stopped before it had cleaned up does; the next try finishes it and finds nothing to count.
 type stopsAfterKB struct {
 	Knowledge
 	stop bool
@@ -91,7 +83,6 @@ func (k *stopsAfterKB) AnonymizeAuthorsNoting(ctx context.Context, sp access.Spa
 	return n, err
 }
 
-// stopsAfterApps removes the uploads and then fails, as a removal that stops partway does.
 type stopsAfterApps struct {
 	Apps
 	stop bool
@@ -105,8 +96,6 @@ func (a *stopsAfterApps) PurgeUploadsNoting(ctx context.Context, owner int64, re
 	return n, err
 }
 
-// The steps' own failures after their work was done: the counts are kept with the work, not with
-// what the failing call returned.
 func TestPurgeTotalsSurviveAStepThatFailsAfterItsWork(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -136,8 +125,6 @@ func TestPurgeTotalsSurviveAStepThatFailsAfterItsWork(t *testing.T) {
 	}
 }
 
-// stopsBeforeJournalKB keeps the count and then stops before the rewrite is journaled, as a try
-// that ends between the two does: the history is as it was, and the retry counts the same commits.
 type stopsBeforeJournalKB struct {
 	Knowledge
 	stop bool
@@ -155,8 +142,6 @@ func (k *stopsBeforeJournalKB) AnonymizeAuthorsNoting(ctx context.Context, sp ac
 	})
 }
 
-// A space's count kept by a try that stopped before its rewrite is replaced by the retry's, which
-// counts the same commits again, not added to it.
 func TestARewriteCountedTwiceBeforeItsJournalIsCountedOnce(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)

@@ -14,18 +14,8 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// streamMemory is how large a versioned file may be to be held in memory by Stream; a larger one
-// is spooled to a temporary file.
 var streamMemory int64 = 1 << 20
 
-// Stream is Open for a reader that copies the file through and never needs it whole in memory: a
-// versioned file's bytes are read from git into a temporary file (or, when small, memory) while
-// the space is held for readers, and then the space is let go, so a slow reader never holds a
-// writer up. An unversioned file is read from its own storage, which no change locks. It reads
-// only: nothing here writes the repository.
-//
-// The file is as it was at the commit at (the head if empty). The caller closes the reader, which
-// removes any temporary file.
 func (s *Store) Stream(ctx context.Context, sp access.Space, name, at string) (Entry, io.ReadCloser, error) {
 	if err := checkPath(name); err != nil {
 		return Entry{}, nil, err
@@ -51,7 +41,7 @@ func (s *Store) Stream(ctx context.Context, sp access.Space, name, at string) (E
 		if p != nil {
 			f, err := r.openObject(p, name)
 			if err == nil {
-				rc = f // an open file stays readable after the space is let go
+				rc = f
 			}
 			return err
 		}
@@ -64,8 +54,6 @@ func (s *Store) Stream(ctx context.Context, sp access.Space, name, at string) (E
 	return entry, rc, nil
 }
 
-// spoolBlob copies the blob h out of the repository: into memory if it is small, else into a
-// temporary file that its Close removes.
 func spoolBlob(r *repo, h plumbing.Hash, size int64) (io.ReadCloser, error) {
 	blob, err := object.GetBlob(r.st, h)
 	if err != nil {
@@ -96,7 +84,6 @@ func spoolBlob(r *repo, h plumbing.Hash, size int64) (io.ReadCloser, error) {
 	return sp, nil
 }
 
-// spooled is a temporary file that is removed when it is closed.
 type spooled struct{ *os.File }
 
 func (s *spooled) Close() error {

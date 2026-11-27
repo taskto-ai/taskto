@@ -17,7 +17,6 @@ import (
 	"time"
 )
 
-// The strings that stand for what a camera wrote into a photo; none may be in what is served.
 var secrets = []string{"SECRET-GPS-COORDS", "SECRET-XMP", "SECRET-COMMENT", "SECRET-IPTC", "SECRET-TEXT", "SECRET-TIME", "SECRET-APP"}
 
 func noSecrets(t *testing.T, what string, data []byte) {
@@ -29,22 +28,18 @@ func noSecrets(t *testing.T, what string, data []byte) {
 	}
 }
 
-// jpegSegment is a JPEG segment: marker, length, payload.
 func jpegSegment(marker byte, payload string) []byte {
 	seg := []byte{0xff, marker}
 	seg = binary.BigEndian.AppendUint16(seg, uint16((len(payload)+2)&0xffff))
 	return append(seg, payload...)
 }
 
-// gpsExif is an Exif payload (big-endian) with orientation o, a pointer to a GPS directory, and in
-// it a coordinate string kept out of line, as a camera writes them.
 func gpsExif(o int) string {
 	var b bytes.Buffer
 	put16 := func(v int) { _ = binary.Write(&b, binary.BigEndian, uint16(v&0xffff)) }
 	put32 := func(v int) { _ = binary.Write(&b, binary.BigEndian, uint32(v&0xffffffff)) }
 	b.WriteString("MM\x00\x2a")
 	put32(8)
-	// IFD0 at 8: two entries (2 + 2*12 + 4 = 30 bytes), the GPS directory after it at 38.
 	put16(2)
 	put16(0x0112)
 	put16(3)
@@ -56,7 +51,6 @@ func gpsExif(o int) string {
 	put32(1)
 	put32(38)
 	put32(0)
-	// GPS directory at 38: one entry, the string at 38 + 2 + 12 + 4 = 56.
 	put16(1)
 	put16(0x0002)
 	put16(2)
@@ -67,9 +61,6 @@ func gpsExif(o int) string {
 	return "Exif\x00\x00" + b.String()
 }
 
-// photoWithMetadata is a JPEG with every kind of segment a camera or an editor adds, in the order
-// they come: JFIF, Exif with a GPS directory and orientation o, XMP, a colour profile, Photoshop's
-// IPTC, a vendor's APP15 and a comment.
 func photoWithMetadata(t *testing.T, o int) []byte {
 	t.Helper()
 	plain := testJPEG(t, 64, 48)
@@ -88,7 +79,6 @@ func photoWithMetadata(t *testing.T, o int) []byte {
 	return append(append(append([]byte{}, plain[:2]...), segs...), plain[2:]...)
 }
 
-// segments lists the markers of a JPEG up to its scan.
 func segments(t *testing.T, data []byte) []byte {
 	t.Helper()
 	var markers []byte
@@ -114,7 +104,6 @@ func decodeAll(t *testing.T, data []byte) image.Image {
 	return img
 }
 
-// stored is the size and received count the store has of an attachment.
 func (w *world) stored(id string) (size, received int64) {
 	w.e.t.Helper()
 	if err := w.e.db.QueryRow(`SELECT size, received FROM app_attachments WHERE id = ?`, id).Scan(&size, &received); err != nil {
@@ -138,7 +127,6 @@ func TestJPEGMetadataIsStrippedAndOrientationKept(t *testing.T) {
 	served := rec.Body.Bytes()
 
 	noSecrets(t, "the photo", served)
-	// JFIF and the colour profile stay; the only Exif left is one segment holding the orientation.
 	if got, want := segments(t, served), []byte{0xe0, 0xe1, 0xe2, 0xdb}; !bytes.HasPrefix(got, want) {
 		t.Fatalf("segments %x, want them to start %x", got, want)
 	}
@@ -155,7 +143,6 @@ func TestJPEGMetadataIsStrippedAndOrientationKept(t *testing.T) {
 	if got := orientationOf(served); got != 6 {
 		t.Fatalf("orientation %d, want 6", got)
 	}
-	// Same picture, to the pixel, with the same size shown (the orientation turns it).
 	if !reflect.DeepEqual(decodeAll(t, served), decodeAll(t, original)) {
 		t.Fatal("the pixels changed")
 	}
@@ -163,7 +150,6 @@ func TestJPEGMetadataIsStrippedAndOrientationKept(t *testing.T) {
 	if got.Status != "ready" || got.Width != 48 || got.Height != 64 {
 		t.Fatalf("attachment %+v: a photo turned by its orientation is shown 48 by 64", got)
 	}
-	// The thumbnail is turned upright, as before.
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(w.fetch(w.alice, s, a, id, true).Body.Bytes()))
 	if err != nil || cfg.Width != 48 || cfg.Height != 64 {
 		t.Fatalf("thumbnail %v %v", cfg, err)
@@ -188,15 +174,12 @@ func TestSizeIsWhatIsServed(t *testing.T) {
 	if size, received := w.stored(id); size != int64(served) || received != size {
 		t.Fatalf("the store has size %d, received %d; served %d", size, received, served)
 	}
-	// Orientation 1 needs no Exif at all.
 	if bytes.Contains(w.fetch(w.alice, s, a, id, false).Body.Bytes(), []byte("Exif")) {
 		t.Fatal("an upright photo keeps an Exif segment")
 	}
-	// The files are the stored picture and its thumbnail, and nothing of the upload.
 	if files := w.files(s, a); len(files) != 2 {
 		t.Fatalf("files = %v", files)
 	}
-	// And the agent is told the stored size.
 	items := w.recordWith(w.alice, s, a, id)
 	_ = items
 	rows, err := w.e.s.ListRows(context.Background(), Actor{UserID: w.alice.id, Agent: true}, s.ID, a.ID)
@@ -208,7 +191,6 @@ func TestSizeIsWhatIsServed(t *testing.T) {
 	}
 }
 
-// pngChunk is a PNG chunk with its checksum.
 func pngChunk(kind, data string) []byte {
 	b := binary.BigEndian.AppendUint32(nil, uint32(len(data)&0xffffffff))
 	b = append(b, kind...)
@@ -232,7 +214,6 @@ func TestPNGMetadataIsStripped(t *testing.T) {
 	s := w.alicePrivate
 	a := w.createPhotos(w.alice, s, "Photos")
 	plain := testPNG(t, 40, 30)
-	// After the header (8 + 25 bytes): metadata, and chunks that tell how to show the picture.
 	var extra []byte
 	for _, c := range [][]byte{
 		pngChunk("tEXt", "Comment\x00SECRET-TEXT"),
@@ -265,7 +246,6 @@ func TestPNGMetadataIsStripped(t *testing.T) {
 	if len(kinds) < 4 || kinds[0] != "IHDR" || kinds[1] != "gAMA" || kinds[2] != "pHYs" || kinds[len(kinds)-1] != "IEND" {
 		t.Fatalf("chunks %v", kinds)
 	}
-	// The kept chunks are the very bytes sent.
 	if !bytes.Contains(served, pngChunk("pHYs", "\x00\x00\x0b\x13\x00\x00\x0b\x13\x01")) || !bytes.Contains(served, plain[33:]) {
 		t.Fatal("a kept chunk changed")
 	}
@@ -313,7 +293,6 @@ func TestGIFMetadataIsStripped(t *testing.T) {
 	}
 }
 
-// What can't be walked with certainty is refused, not guessed at.
 func TestStrippingRefusesWhatItCannotWalk(t *testing.T) {
 	jpg := photoWithMetadata(t, 6)
 	png := testPNG(t, 8, 8)
@@ -343,7 +322,6 @@ func TestStrippingRefusesWhatItCannotWalk(t *testing.T) {
 	if _, err := stripMetadata(png, "webp"); !errors.Is(err, errNotPicture) {
 		t.Errorf("another format: err = %v", err)
 	}
-	// Whatever follows the end of a PNG or a GIF is not the picture's.
 	for _, c := range []struct {
 		format string
 		data   []byte
@@ -355,12 +333,10 @@ func TestStrippingRefusesWhatItCannotWalk(t *testing.T) {
 	}
 }
 
-// A picture whose structure can't be walked is refused when it is finalized, and removed.
 func TestFinalizeRefusesAPictureItCannotStrip(t *testing.T) {
 	w := newWorld(t)
 	s := w.alicePrivate
 	a := w.createPhotos(w.alice, s, "Photos")
-	// A GIF with an extension nothing defines: the standard library reads it, this doesn't walk it.
 	gif := testGIF(t)
 	odd := append(append(append([]byte{}, gif[:len(gif)-1]...), 0x21, 0x77, 0), 0x3b)
 	if _, _, err := image.DecodeConfig(bytes.NewReader(odd)); err != nil {
@@ -374,8 +350,6 @@ func TestFinalizeRefusesAPictureItCannotStrip(t *testing.T) {
 	}
 }
 
-// Finalizing is stopped after the stored picture was written and before the store heard of it:
-// the received file is still there, so the retry starts from it and ends with the stripped bytes.
 func TestFinalizeAfterACrashBeforeTheCommit(t *testing.T) {
 	w := newWorld(t)
 	s := w.alicePrivate
@@ -384,8 +358,6 @@ func TestFinalizeAfterACrashBeforeTheCommit(t *testing.T) {
 	id := w.start(w.alice, s, a, "photos", len(original))
 	w.send(w.alice, s, a, id, original, 5000)
 
-	// What the stopped finalize left: a stored picture (here a stale one, which must be replaced)
-	// and a thumbnail, with the row still "uploading" and the received file whole.
 	dir := filepath.Join(s.Dir(w.e.dataDir), filesDir, fmt.Sprint(a.ID))
 	if err := os.WriteFile(filepath.Join(dir, id), []byte("half-written stored picture"), 0o600); err != nil {
 		t.Fatal(err)
@@ -393,10 +365,8 @@ func TestFinalizeAfterACrashBeforeTheCommit(t *testing.T) {
 	if status := decode[Attachment](t, w.alice.do(http.MethodGet, appPath(s, a.ID, "/uploads/"+id), nil)).Status; status != "uploading" {
 		t.Fatalf("status %s", status)
 	}
-	// Not readable until the store says so.
 	expect(t, w.fetch(w.alice, s, a, id, false), http.StatusNotFound)
 
-	// A new server (the old one is gone) finalizes it again.
 	restarted := New(w.e.db, w.e.s.access).WithFiles(w.e.dataDir)
 	ready, err := restarted.finalizeUpload(context.Background(), s, Actor{UserID: w.alice.id}, a.ID, id)
 	if err != nil || ready.Status != "ready" {
@@ -413,15 +383,12 @@ func TestFinalizeAfterACrashBeforeTheCommit(t *testing.T) {
 	if files := w.files(s, a); len(files) != 2 {
 		t.Fatalf("files = %v", files)
 	}
-	// Finalizing again answers the same, and a chunk is refused as before.
 	again, err := restarted.finalizeUpload(context.Background(), s, Actor{UserID: w.alice.id}, a.ID, id)
 	if err != nil || again != ready {
 		t.Fatalf("finalize again = %+v, %v", again, err)
 	}
 }
 
-// Finalizing is stopped after the commit and before the received file was removed: the original,
-// with its metadata, is only a leftover, which the sweep removes and a move doesn't carry over.
 func TestAReceivedFileLeftAfterReadyIsSwept(t *testing.T) {
 	w := newWorld(t)
 	s := w.alicePrivate
@@ -432,10 +399,8 @@ func TestAReceivedFileLeftAfterReadyIsSwept(t *testing.T) {
 	if err := os.WriteFile(left, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// What is served is still the stripped picture, and finalizing again changes nothing.
 	noSecrets(t, "the photo", w.fetch(w.alice, s, a, id, false).Body.Bytes())
 
-	// A sweep with a cutoff in the past (nothing is old) still removes it: it is of no use at all.
 	if err := w.e.s.Sweep(context.Background(), time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -448,8 +413,6 @@ func TestAReceivedFileLeftAfterReadyIsSwept(t *testing.T) {
 	expect(t, w.fetch(w.alice, s, a, id, false), http.StatusOK)
 }
 
-// What follows a JPEG's end (the video of a phone's motion photo, with metadata of its own) is not
-// the picture, and is not kept.
 func TestJPEGTrailerAfterTheEndIsDropped(t *testing.T) {
 	original := photoWithMetadata(t, 1)
 	trailer := []byte("ftypmp42 GPS 48.8584N 2.2945E")
@@ -466,7 +429,6 @@ func TestJPEGTrailerAfterTheEndIsDropped(t *testing.T) {
 	if !reflect.DeepEqual(decodeAll(t, stripped), decodeAll(t, original)) {
 		t.Fatal("the pixels changed")
 	}
-	// A picture that never ends is refused rather than guessed at.
 	if _, err := stripJPEG(original[:len(original)-2]); !errors.Is(err, errNotPicture) {
 		t.Fatalf("a JPEG without its end: %v", err)
 	}

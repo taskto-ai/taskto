@@ -25,7 +25,6 @@ func TestHashAndVerify(t *testing.T) {
 			t.Errorf("verify(%q) = %v, %v; want %v", password, ok, err, want)
 		}
 	}
-	// A hash made with other parameters still verifies: they are read from the hash.
 	if ok, err := newHasher(Params{Memory: 128, Time: 2, Threads: 2}).verify(ctx, "fake-password-one", encoded); err != nil || !ok {
 		t.Fatalf("verify with other default params = %v, %v", ok, err)
 	}
@@ -74,7 +73,7 @@ func TestCheckPassword(t *testing.T) {
 		"ünïcödé-pässwörd":            true,
 		strings.Repeat("a", 1024):     true,
 		strings.Repeat("a", 1025):     false,
-		strings.Repeat("é", 12):       true, // 24 bytes, 12 characters
+		strings.Repeat("é", 12):       true,
 		strings.Repeat("é", 11) + "x": true,
 	} {
 		if got := checkPassword(password) == nil; got != ok {

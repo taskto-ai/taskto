@@ -17,36 +17,28 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Params are argon2id's cost settings. A hash records the ones it was made with, so
-// changing them only affects new hashes.
 type Params struct {
-	Memory  uint32 // KiB
-	Time    uint32 // passes over the memory
+	Memory  uint32
+	Time    uint32
 	Threads uint8
 }
 
-// DefaultParams are the second recommended option of RFC 9106 (section 4): 64 MiB, three
-// passes and four lanes. A hash takes some tens of milliseconds on a current CPU.
 var DefaultParams = Params{Memory: 64 * 1024, Time: 3, Threads: 4}
 
 const (
-	saltLen = 16
-	keyLen  = 32
+	saltLen         = 16
+	keyLen          = 32
+	minStoredKeyLen = 16
+	maxStoredKeyLen = 128
 
-	// MinPasswordLen and MaxPasswordLen bound a new password, in characters and bytes.
-	// The upper bound only stops a client from sending megabytes to hash.
 	MinPasswordLen = 12
 	MaxPasswordLen = 1024
 
-	// maxHashing is how many hashes run at once. Each holds Params.Memory, so this caps
-	// the memory a burst of logins can take.
 	maxHashing = 2
 )
 
-// errBadHash means a stored hash couldn't be parsed.
 var errBadHash = errors.New("auth: malformed password hash")
 
-// hasher hashes and checks passwords, at most maxHashing at a time.
 type hasher struct {
 	params Params
 	slots  chan struct{}
@@ -62,7 +54,6 @@ func newHasher(p Params) *hasher {
 	return &hasher{params: p, slots: make(chan struct{}, maxHashing)}
 }
 
-// acquire waits for a free hashing slot, or until ctx is done.
 func (h *hasher) acquire(ctx context.Context) error {
 	select {
 	case h.slots <- struct{}{}:
@@ -74,8 +65,6 @@ func (h *hasher) acquire(ctx context.Context) error {
 
 func (h *hasher) release() { <-h.slots }
 
-// hash returns password's argon2id hash in the PHC string format:
-// $argon2id$v=19$m=65536,t=3,p=4$<salt>$<key>, with unpadded standard base64.
 func (h *hasher) hash(ctx context.Context, password string) (string, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
@@ -91,25 +80,25 @@ func (h *hasher) hash(ctx context.Context, password string) (string, error) {
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
 }
 
-// verify reports whether password matches encoded, comparing in constant time.
 func (h *hasher) verify(ctx context.Context, password, encoded string) (bool, error) {
 	p, salt, key, err := decodeHash(encoded)
 	if err != nil {
 		return false, err
 	}
+	size := len(key)
+	if size < minStoredKeyLen || size > maxStoredKeyLen {
+		return false, errBadHash
+	}
 	if err := h.acquire(ctx); err != nil {
 		return false, err
 	}
 	defer h.release()
-	got := argon2.IDKey([]byte(password), salt, p.Time, p.Memory, p.Threads, uint32(len(key))) // #nosec G115 -- decodeHash bounds len(key).
+	got := argon2.IDKey([]byte(password), salt, p.Time, p.Memory, p.Threads, uint32(size))
 	return subtle.ConstantTimeCompare(got, key) == 1, nil
 }
 
-// burn does the work of a failed verify, for a login with an unknown email, so the reply
-// takes as long as one for a known email with a wrong password.
 func (h *hasher) burn(ctx context.Context, password string) {
 	h.dummyOnce.Do(func() {
-		// Not ctx: a cancelled first caller mustn't leave the dummy empty for good.
 		h.dummy, _ = h.hash(context.Background(), "not a password: equalises the time of a failed login")
 	})
 	if h.dummy != "" {
@@ -118,7 +107,6 @@ func (h *hasher) burn(ctx context.Context, password string) {
 }
 
 func decodeHash(encoded string) (Params, []byte, []byte, error) {
-	// "", "argon2id", "v=19", "m=…,t=…,p=…", salt, key
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
 		return Params{}, nil, nil, errBadHash
@@ -137,13 +125,12 @@ func decodeHash(encoded string) (Params, []byte, []byte, error) {
 		return Params{}, nil, nil, errBadHash
 	}
 	key, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(key) < 16 || len(key) > 128 {
+	if err != nil {
 		return Params{}, nil, nil, errBadHash
 	}
 	return p, salt, key, nil
 }
 
-// checkPassword says what is wrong with a new password, or returns nil.
 func checkPassword(password string) *apierr.Error {
 	switch {
 	case utf8.RuneCountInString(password) < MinPasswordLen:

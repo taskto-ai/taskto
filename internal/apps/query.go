@@ -20,29 +20,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// The data explorer's query: a page of an app's records, filtered, searched and sorted, with the
-// totals of everything that matches. The server does the work in SQL, so an app's records are
-// never all loaded to answer it.
-//
-// What a query reads is what the caller reads: the live (or deleted) records of the app's read
-// scope, all or only their own, as the live release declares them. The fields a query names are
-// the live release's, and a value counts only if it is of its field's type (see typed): the
-// values a release retyped past, and the fields it removed, are in no filter, sort, search or
-// total, exactly as they are in no item. The cursor of a page only says where in the order the
-// page ended; the scope, the filters and everything else are asked again at every request, so a
-// cursor can never reach a record its holder couldn't read.
-//
-// The order is total: records are sorted by the sort key (nothing set last, in either direction)
-// and then by id, the id in the same direction as the key. Paging is by keyset: a page asks for
-// the records after the cursor's position in that order, so it never repeats or skips a record
-// that doesn't change while the pages are read, whatever is inserted or deleted meanwhile. A
-// record whose own sort key changes meanwhile (it is edited, for the default order) is read where
-// it is when each page is asked: again, if it moved into the pages still to come, or not at all,
-// if it moved into the ones already read. A text sort key orders by its first sortPrefix
-// characters, so a cursor stays small whatever the field holds; records whose keys share those
-// characters are in id order.
-
-// Bounds of a query.
 const (
 	DefaultPageSize = 50
 	MaxPageSize     = 200
@@ -50,20 +27,16 @@ const (
 	maxSearchTerms  = 5
 	maxTermLen      = 100
 	maxAggregates   = 8
-	// A cursor holds at most sortPrefix characters of a text key, each at most 6 bytes as JSON
-	// (\u escapes), in base64.
-	maxCursorLen = 4096
-	sortPrefix   = 200
-	maxValueLen  = 1000
+	maxCursorLen    = 4096
+	sortPrefix      = 200
+	maxValueLen     = 1000
 )
 
-// The states of the records a query reads.
 const (
 	StateLive    = "live"
 	StateDeleted = "deleted"
 )
 
-// The aggregates a query may ask for.
 const (
 	AggCount = "count"
 	AggSum   = "sum"
@@ -72,7 +45,6 @@ const (
 	AggAvg   = "avg"
 )
 
-// The sort keys that aren't fields.
 const (
 	SortUpdated = "_updated"
 	SortCreated = "_created"
@@ -80,64 +52,37 @@ const (
 	SortID      = "id"
 )
 
-// Query asks for one page of an app's records, with totals.
 type Query struct {
-	// State is StateLive (the default) or StateDeleted.
-	State string `json:"state,omitempty"`
-	// Filters all have to hold. A comparison of a declared field with a value of its type: eq
-	// and ne for every field, lt, lte, gt and gte for numbers, dates, times and strings, and
-	// contains (a case-insensitive substring) for strings. A record that has no value of the
-	// field equals nothing (so it is ne anything, and in no other comparison), as in rules.
-	Filters []Condition `json:"filters,omitempty"`
-	// Search is words that each have to be in some string or choice field of the record
-	// (case-insensitively, as a part of a word).
-	Search string `json:"search,omitempty"`
-	// Sort is a declared field, or _updated, _created, _deleted (deleted records only) or id.
-	// Left out, it is _updated, or _deleted for the deleted records.
-	Sort string `json:"sort,omitempty"`
-	// Dir is "asc" or "desc": desc for the times, asc for the rest, if left out.
-	Dir string `json:"dir,omitempty"`
-	// Limit is the records in a page: DefaultPageSize if left out, at most MaxPageSize.
-	Limit int `json:"limit,omitempty"`
-	// Cursor is the next_cursor of the previous page of the same query.
-	Cursor string `json:"cursor,omitempty"`
-	// Aggregates are computed over every record the filters and the search match, not the page.
+	State      string      `json:"state,omitempty"`
+	Filters    []Condition `json:"filters,omitempty"`
+	Search     string      `json:"search,omitempty"`
+	Sort       string      `json:"sort,omitempty"`
+	Dir        string      `json:"dir,omitempty"`
+	Limit      int         `json:"limit,omitempty"`
+	Cursor     string      `json:"cursor,omitempty"`
 	Aggregates []Aggregate `json:"aggregates,omitempty"`
 }
 
-// Condition is one comparison of a field with a value.
 type Condition struct {
 	Field string `json:"field"`
 	Op    string `json:"op"`
-	// Value is of the field's type; a number or a boolean may be given as text too, as a form
-	// does.
-	Value any `json:"value"`
+	Value any    `json:"value"`
 }
 
-// Operators of a condition besides the rules' (OpEq … OpGte).
 const OpContains = "contains"
 
-// Aggregate asks for a value over all the matching records. count counts them (with a field,
-// those that have a value of it); sum and avg are of a number field; min and max of a number,
-// date or time field.
 type Aggregate struct {
 	Kind  string `json:"kind"`
 	Field string `json:"field,omitempty"`
 }
 
-// QueryResult is a page of records and what the whole query matches.
 type QueryResult struct {
-	Records []Record `json:"records"`
-	// NextCursor asks for the page after this one, or is nil at the last.
-	NextCursor *string `json:"next_cursor"`
-	// Total is how many records the filters and the search match in all, not in this page.
+	Records    []Record          `json:"records"`
+	NextCursor *string           `json:"next_cursor"`
 	Total      int               `json:"total"`
 	Aggregates []AggregateResult `json:"aggregates"`
 }
 
-// AggregateResult is the answer to one Aggregate, in the order they were asked in. Count is how
-// many records it was computed over: those with a value of the field. Value is nil if there is
-// none (but for count and sum, which are 0), or if the result is too large to be a number.
 type AggregateResult struct {
 	Kind  string `json:"kind"`
 	Field string `json:"field,omitempty"`
@@ -145,9 +90,6 @@ type AggregateResult struct {
 	Count int    `json:"count"`
 }
 
-// QueryFromValues reads a query from a request's parameters: state, q (the search), sort, dir,
-// limit, cursor, filter=field:op:value (repeated: the value is what follows the second colon) and
-// aggregate=kind or kind:field (repeated).
 func QueryFromValues(v url.Values) (Query, error) {
 	q := Query{State: v.Get("state"), Search: v.Get("q"), Sort: v.Get("sort"), Dir: v.Get("dir"), Cursor: v.Get("cursor")}
 	if s := v.Get("limit"); s != "" {
@@ -171,12 +113,6 @@ func QueryFromValues(v url.Values) (Query, error) {
 	return q, nil
 }
 
-// typed is the SQL expression for the value of field f in row r, NULL if the row has none
-// of the field's type. It is the one place that decides what counts as a value, and it holds
-// the Go side's rule (ofType, with no limits applied) for the type stored as JSON: a number is
-// a JSON number, a boolean a JSON boolean, the others text, and a date, a time or a text that
-// is blank is checked as Field.parse does. (A number held as text, "12", is not a number here:
-// it is shown as it is stored, but is in no comparison, sort or sum, as in no summary.)
 func typed(f Field) string {
 	path := "'$." + f.Name + "'"
 	t := "json_type(r.data, " + path + ")"
@@ -191,18 +127,15 @@ func typed(f Field) string {
 	case TypeTime:
 		return "(CASE WHEN " + t + " = 'text' AND " + x + " GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(" + x + ", 1, 2) < '24' THEN " + x + " END)"
 	case TypeLocation:
-		// Counts only: a location is no value to compare or sort by.
 		return "(CASE WHEN " + t + " = 'object' THEN 1 END)"
-	default: // string, choice, barcode, signature
+	default:
 		return "(CASE WHEN " + t + " = 'text' AND trim(" + x + ", " + blanks + ") <> '' THEN " + x + " END)"
 	}
 }
 
-// blanks is, as an SQL expression, every character strings.TrimSpace trims (unicode.IsSpace),
-// so a text that is blank to Go (ofType) is blank to SQL too.
 var blanks = func() string {
 	var codes []string
-	for r := rune(0); r <= 0x3000; r++ { // the last space unicode.IsSpace knows is U+3000
+	for r := rune(0); r <= 0x3000; r++ {
 		if unicode.IsSpace(r) {
 			codes = append(codes, strconv.Itoa(int(r)))
 		}
@@ -210,7 +143,6 @@ var blanks = func() string {
 	return "char(" + strings.Join(codes, ", ") + ")"
 }()
 
-// fieldOf returns a declared field, as a name the SQL can carry.
 func fieldOf(def Definition, name string) (Field, error) {
 	f, ok := def.Collection.field(name)
 	if !ok || !namePattern.MatchString(name) {
@@ -219,7 +151,6 @@ func fieldOf(def Definition, name string) (Field, error) {
 	return f, nil
 }
 
-// keyType is what a sort key's values are, for a cursor to carry and check.
 type keyType int
 
 const (
@@ -227,8 +158,6 @@ const (
 	keyText
 )
 
-// sortKey is how a query orders records: by expr, nothing last, then by id, both in desc's
-// direction.
 type sortKey struct {
 	name     string
 	expr     string
@@ -285,8 +214,6 @@ func sortOf(def Definition, name, dir string, deleted bool) (sortKey, error) {
 	return k, nil
 }
 
-// condition turns c into SQL over row r and the arguments it binds, and returns it as it was
-// understood, its value of the field's type.
 func (c Condition) sql(def Definition) (string, []any, Condition, error) {
 	f, err := fieldOf(def, c.Field)
 	if err != nil {
@@ -339,7 +266,6 @@ func (c Condition) sql(def Definition) (string, []any, Condition, error) {
 	return e + " " + op + " ?", []any{arg}, c, nil
 }
 
-// searchSQL is the condition that each of terms is in some string or choice field of the row.
 func searchSQL(def Definition, terms []string) (string, []any) {
 	var cols []string
 	for _, f := range def.Collection.Fields {
@@ -350,7 +276,6 @@ func searchSQL(def Definition, terms []string) (string, []any) {
 	if len(cols) == 0 {
 		return "0", nil
 	}
-	// One haystack, the fields apart by a character no term holds.
 	hay := db.FoldFunc + "(" + strings.Join(cols, " || char(31) || ") + ")"
 	var parts []string
 	var args []any
@@ -361,7 +286,6 @@ func searchSQL(def Definition, terms []string) (string, []any) {
 	return strings.Join(parts, " AND "), args
 }
 
-// aggregatePlan is an Aggregate worked out: the SQL columns it takes.
 type aggregatePlan struct {
 	Aggregate
 	cols  []string
@@ -385,7 +309,6 @@ func (a Aggregate) plan(def Definition) (aggregatePlan, error) {
 	if err != nil {
 		return p, err
 	}
-	// An attachment field holds a list of files: there is no value to count, total or compare.
 	if f.Type == TypeAttachment {
 		return p, invalidAs(apierr.CodeAppQueryField, apierr.Params{"field": a.Field}, "a %s field can't be aggregated", f.Type)
 	}
@@ -412,7 +335,6 @@ func (a Aggregate) plan(def Definition) (aggregatePlan, error) {
 	return p, nil
 }
 
-// queryPlan is a Query checked against the live release and the caller's scope.
 type queryPlan struct {
 	deleted bool
 	where   string
@@ -421,8 +343,7 @@ type queryPlan struct {
 	limit   int
 	cursor  *cursorPos
 	aggs    []aggregatePlan
-	// print says which query this is, for the cursors of its pages.
-	print string
+	print   string
 }
 
 func (q Query) plan(def Definition, v visibility, appID int64) (queryPlan, error) {
@@ -447,7 +368,6 @@ func (q Query) plan(def Definition, v visibility, appID int64) (queryPlan, error
 		return p, err
 	}
 
-	// The scope first: nothing below can add to what it allows.
 	where := []string{"r.app_id = ?"}
 	args := []any{appID}
 	if p.deleted {
@@ -512,9 +432,6 @@ func (q Query) plan(def Definition, v visibility, appID int64) (queryPlan, error
 	return p, nil
 }
 
-// fingerprint says which query a cursor belongs to: the app, who asks, and everything that decides
-// which records there are and in what order. A cursor of another query, or another person's, is
-// not accepted. (It couldn't widen what is read in any case; this is so a mistake shows.)
 func fingerprint(appID int64, v visibility, p queryPlan, conds []Condition, terms []string) string {
 	raw, _ := json.Marshal(struct {
 		App     int64
@@ -532,11 +449,9 @@ func fingerprint(appID int64, v visibility, p queryPlan, conds []Condition, term
 	return hex.EncodeToString(sum[:8])
 }
 
-// cursorPos is where in the order a page ended: whether the record had a sort key at all, the key
-// and the id.
 type cursorPos struct {
 	null bool
-	key  any // float64 or string
+	key  any
 	id   int64
 }
 
@@ -579,7 +494,6 @@ func writeCursor(print string, k sortKey, sk any, id int64) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// readCursor checks a cursor strictly: it must be one this query's page wrote.
 func readCursor(s, print string, k sortKey) (*cursorPos, error) {
 	if len(s) > maxCursorLen {
 		return nil, badCursor()
@@ -591,7 +505,7 @@ func readCursor(s, print string, k sortKey) (*cursorPos, error) {
 	var b cursorBody
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
-	dec.UseNumber() // an integer key stays exact, past what a float64 holds
+	dec.UseNumber()
 	if err := dec.Decode(&b); err != nil || dec.More() || b.V != 1 || b.F != print || b.I < 0 || (b.N != 0 && b.N != 1) {
 		return nil, badCursor()
 	}
@@ -627,7 +541,6 @@ func readCursor(s, print string, k sortKey) (*cursorPos, error) {
 	return pos, nil
 }
 
-// after is the condition that a row comes after the cursor in the order.
 func (p queryPlan) after() (string, []any) {
 	cmp := ">"
 	if p.key.desc {
@@ -637,11 +550,9 @@ func (p queryPlan) after() (string, []any) {
 	if c.null {
 		return "(" + e + " IS NULL AND r.id " + cmp + " ?)", []any{c.id}
 	}
-	// Rows with no key are after every row that has one.
 	return "(" + e + " IS NULL OR " + e + " " + cmp + " ? OR (" + e + " = ? AND r.id " + cmp + " ?))", []any{c.key, c.key, c.id}
 }
 
-// keyed adds a sort key's value to what Scan reads.
 type keyed struct {
 	scanner
 	key *any
@@ -649,7 +560,6 @@ type keyed struct {
 
 func (k keyed) Scan(dest ...any) error { return k.scanner.Scan(append(dest, k.key)...) }
 
-// run answers the query: the totals first, then the page.
 func (p queryPlan) run(ctx context.Context, q queryer, def Definition) (QueryResult, error) {
 	out := QueryResult{Records: []Record{}, Aggregates: []AggregateResult{}}
 	if err := p.totals(ctx, q, &out); err != nil {
@@ -695,8 +605,6 @@ func (p queryPlan) run(ctx context.Context, q queryer, def Definition) (QueryRes
 	return out, nil
 }
 
-// totals counts every record the query matches and computes its aggregates, in one statement
-// over the same conditions as the page, whatever page it is.
 func (p queryPlan) totals(ctx context.Context, q queryer, out *QueryResult) error {
 	cols := []string{"count(*)"}
 	for _, a := range p.aggs {
@@ -716,7 +624,7 @@ func (p queryPlan) totals(ctx context.Context, q queryer, out *QueryResult) erro
 	for _, a := range p.aggs {
 		res := AggregateResult{Kind: a.Kind, Field: a.Field}
 		switch {
-		case len(a.cols) == 0: // count of the matching records
+		case len(a.cols) == 0:
 			res.Value, res.Count = out.Total, out.Total
 		case a.Kind == AggCount:
 			n, _ := vals[next].(int64)
@@ -732,8 +640,6 @@ func (p queryPlan) totals(ctx context.Context, q queryer, out *QueryResult) erro
 	return nil
 }
 
-// aggregateValue is a number or text SQLite computed, as the reply carries it: numbers as
-// float64, and nil for none or for what JSON can't hold.
 func aggregateValue(v any) any {
 	switch x := v.(type) {
 	case int64:
@@ -751,8 +657,6 @@ func aggregateValue(v any) any {
 	return nil
 }
 
-// queryRecords answers a query over an app's records as the caller reads them: ErrNotFound for
-// an app they can't see, ErrForbidden if their roles read no record.
 func (s *Service) queryRecords(ctx context.Context, sp access.Space, a Actor, appID int64, q Query) (QueryResult, error) {
 	v, def, err := s.readableRecords(ctx, sp, a, appID)
 	if err != nil {

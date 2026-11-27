@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-//
-// The Apps section knows whether the person is an admin of the workspace it shows: the shell says it,
-// from the role the server gave for that workspace, and nothing else does.
 
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -10,7 +7,6 @@ import { useIsAdmin } from '../apps/admin'
 import { fakeFetch } from '../test/fakes'
 import { Shell } from './Shell'
 
-// The Apps page is a probe: it says what the shell told it.
 vi.mock('../apps/AppsPage', () => ({
   AppsPage: ({ workspace }: { workspace: number }) => (
     <p>{`workspace ${workspace}: ${useIsAdmin() ? 'admin' : 'member'}`}</p>

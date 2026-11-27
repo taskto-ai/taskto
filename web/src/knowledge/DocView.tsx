@@ -1,10 +1,6 @@
-// One open document: a bar with where it is (space, folders, name), its size and its actions
-// (Edit, History, and a menu with Move and Delete), and what the chosen action shows (the
-// reader, the editor, history). Moving and deleting ask in a dialog. On a phone, or when it was
-// opened from search results, its back button returns there.
-
-import { useContext, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import type { Doc } from '../api'
+import { byPlace } from '../byPlace'
 import { useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { Heading } from '../ui/Heading'
@@ -43,21 +39,16 @@ export function DocView({
 }: {
   base: string
   path: string
-  // The space's name, for the path line.
   space: string
   canWrite: boolean
   admin: boolean
   editing: boolean
-  // Where the back button returns: the list (on a phone) or the search results (always shown).
   back: 'list' | 'results'
-  // Opened by something other than the tree (a link, a search result, a new document): the
-  // keyboard moves to the document.
   takeFocus: boolean
   onBack: () => void
   onOpen: (path: string) => void
   onChanged: () => void
   onDeleted: (doc: Doc) => void
-  // The editor opened or closed: its Save is then the page's primary action.
   onEditing?: (editing: boolean) => void
 }) {
   const url = `${base}/docs/${encodePath(path)}`
@@ -70,7 +61,6 @@ export function DocView({
   const isEditing = mode === 'edit' && text !== undefined
   const reportEditing = useRef(onEditing)
   reportEditing.current = onEditing
-  // Before the screen is painted, so New and Save are never both primary.
   useLayoutEffect(() => {
     reportEditing.current?.(isEditing)
     return () => reportEditing.current?.(false)
@@ -80,9 +70,6 @@ export function DocView({
     return target === null ? null : () => onOpen(target)
   }
 
-  // Where the keyboard goes when the view changes: the heading when the document opens (from
-  // anywhere but the tree), Edit after saving or cancelling an edit, the heading after a
-  // restore, and otherwise the button that brings back what was there when the focus was lost.
   const article = useRef<HTMLElement>(null)
   const editButton = useRef<HTMLButtonElement>(null)
   const toggleButton = useRef<HTMLButtonElement>(null)
@@ -90,29 +77,34 @@ export function DocView({
   const first = useRef(true)
   const lastMode = useRef(mode)
   const heading = () => article.current?.querySelector<HTMLElement>('h2')
-  // Also when the document comes (back): Edit is drawn only then.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the view changes or the document comes
-  useLayoutEffect(() => {
+  const focusEditIfWanted = useCallback(() => {
+    if (next.current !== 'edit' || !editButton.current) return
+    next.current = null
+    editButton.current.focus()
+  }, [])
+  const editButtonRef = useCallback(
+    (el: HTMLButtonElement | null) => {
+      editButton.current = el
+      focusEditIfWanted()
+    },
+    [focusEditIfWanted],
+  )
+  const placeFocus = useEffectEvent((mode: Mode) => {
     const modeChanged = lastMode.current !== mode
     lastMode.current = mode
     if (first.current) {
       first.current = false
-      // A page that just loaded has the keyboard nowhere yet: that is not a focus to restore.
       const hidden = document.activeElement !== document.body && focusLost()
       if (mode !== 'edit' && (takeFocus || hidden)) heading()?.focus()
       return
     }
+    if (next.current === 'edit') return focusEditIfWanted()
     const want = next.current
-    if (want === 'edit') {
-      // Kept until Edit is there again (the document reloads after a save).
-      if (!editButton.current) return
-      next.current = null
-      return editButton.current.focus()
-    }
     next.current = null
     if (want === 'heading') return heading()?.focus()
     if (modeChanged && focusLost()) (toggleButton.current ?? heading())?.focus()
-  }, [mode, doc.data !== undefined])
+  })
+  useLayoutEffect(() => placeFocus(mode), [mode])
 
   const { ask } = useContext(GuardContext)
   const shown = useLatest(mode)
@@ -123,8 +115,6 @@ export function DocView({
     onChanged()
     setMode('view')
   }
-  // A restore that finishes after the person went on to Edit (or Move) changes the document,
-  // but doesn't take the screen from them: the draft they are writing stays.
   const restored = () => {
     doc.reload()
     onChanged()
@@ -144,8 +134,6 @@ export function DocView({
           <IconButton
             icon="back"
             label={t(back === 'results' ? 'knowledge.doc.backToResults' : 'knowledge.doc.back')}
-            // Back to the results keeps the document behind them, draft and all; back to the list
-            // closes it, so a draft that would be lost asks first.
             onClick={() => (back === 'results' ? onBack() : ask(onBack))}
           />
         </span>
@@ -157,9 +145,8 @@ export function DocView({
                 <Separator />
               </>
             )}
-            {folders.map((folder, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: a path's folders have no identity but their place
-              <span key={i} className="kb-doc-crumbs">
+            {byPlace(folders).map(({ key, item: folder }) => (
+              <span key={key} className="kb-doc-crumbs">
                 <span className="kb-doc-crumb">{folder}</span>
                 <Separator />
               </span>
@@ -183,7 +170,7 @@ export function DocView({
             ) : (
               <>
                 {canWrite && text !== undefined && (
-                  <Button ref={editButton} icon="edit" onClick={() => setMode('edit')}>
+                  <Button ref={editButtonRef} icon="edit" onClick={() => setMode('edit')}>
                     {t('knowledge.doc.edit')}
                   </Button>
                 )}
@@ -214,7 +201,6 @@ export function DocView({
             <Button
               size="sm"
               onClick={() => {
-                // The button goes while the document loads again: the keyboard waits on the heading.
                 heading()?.focus()
                 doc.reload()
               }}
@@ -257,8 +243,6 @@ export function DocView({
           doc={doc.data}
           onMoved={(to) => {
             onChanged()
-            // The person may have gone elsewhere, or on to edit, while it was moving: the moved
-            // document opens for someone who is still here, and asks before it replaces a draft.
             if (mounted.current) ask(() => onOpen(to), 'moved')
           }}
           onReload={doc.reload}
@@ -278,7 +262,6 @@ export function DocView({
   )
 }
 
-// Between the parts of the path: a chevron to see, a slash to hear.
 function Separator() {
   const t = useT()
   return (
@@ -289,15 +272,13 @@ function Separator() {
   )
 }
 
-// The shape of a document while it loads: a title and some lines.
 function DocSkeleton() {
   useLoadingStatus(true)
   return (
     <div className="kb-doc-loading">
       <Skeleton width="55%" height="var(--space-8)" />
-      {['100%', '92%', '96%', '70%'].map((width, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place
-        <Skeleton key={i} width={width} />
+      {['100%', '92%', '96%', '70%'].map((width) => (
+        <Skeleton key={width} width={width} />
       ))}
       <Skeleton shape="block" />
     </div>

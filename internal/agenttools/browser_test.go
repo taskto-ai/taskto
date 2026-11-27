@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// browserRecorder stands in for the agent browser, recording whom each call was for.
 type browserRecorder struct {
 	mu    sync.Mutex
 	calls []struct{ user, conversation int64 }
@@ -21,8 +20,6 @@ func (b *browserRecorder) Call(_ context.Context, user, conversation int64, _ st
 	return map[string]string{"ok": "yes"}, nil
 }
 
-// The browser tools act for the conversation's owner, in that conversation: whom they are for
-// comes from the capability, never from the arguments.
 func TestBrowserToolsActForTheConversationsOwner(t *testing.T) {
 	w := newWorld(t)
 	if code, out := w.call(w.aliceConv, "browser_open", map[string]any{"url": "https://example.com"}); code != http.StatusConflict || out["error"] != "the agent browser is off on this server" {
@@ -42,7 +39,6 @@ func TestBrowserToolsActForTheConversationsOwner(t *testing.T) {
 			t.Errorf("call %d was for %v, want %v", i, rec.calls[i], c)
 		}
 	}
-	// Over MCP (no conversation) the browser tools are refused, though they aren't listed.
 	if _, err := w.tools.Call(context.Background(), Caller{Workspace: w.one, User: w.alice, Token: "t"}, "browser_open", json.RawMessage(`{"url":"https://example.com"}`)); err == nil {
 		t.Fatal("a browser tool ran without a conversation")
 	}

@@ -13,8 +13,6 @@ import { useDraft } from './drafts'
 import type { Person } from './people'
 import { authorLabel } from './text'
 
-// The card's thread: its comments, oldest first, each with who wrote it (the agent's marked by
-// its dot) and when.
 export function Thread({ comments }: { comments: Comment[] }) {
   const t = useT()
   const f = useFormat()
@@ -47,7 +45,6 @@ export function Thread({ comments }: { comments: Comment[] }) {
   )
 }
 
-// A writer's box for a new comment, at the foot of the open card, with people to mention.
 export function Composer({
   url,
   people,
@@ -64,7 +61,6 @@ export function Composer({
   const field = useRef<HTMLTextAreaElement>(null)
   const form = useRef<HTMLFormElement>(null)
   useDraft(body.trim() !== '')
-  // Puts the person's mention where the cursor is, and the cursor after it.
   const mention = (who: Person) => {
     const at = field.current
     const start = at?.selectionStart ?? body.length
@@ -85,8 +81,6 @@ export function Composer({
     try {
       onAdded(await api<Comment>(url, { method: 'POST', body: { body } }))
       setBody('')
-      // Sent, the button can't be pressed again (the box is empty): the focus goes back to the box
-      // for the next comment, rather than to the page; unless the person went on elsewhere.
       const now = document.activeElement
       if (!now || now === document.body || form.current?.contains(now)) field.current?.focus()
     } catch (err) {

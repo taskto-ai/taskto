@@ -28,97 +28,64 @@ var (
 	errInUse    = errors.New("the integration is in use")
 )
 
-// unreadableError says a sealed secret doesn't open: the server key is not the one that sealed it,
-// or the value was tampered with.
 type unreadableError struct{ secret string }
 
 func (e unreadableError) Error() string { return "the sealed " + e.secret + " can't be opened" }
 
 const (
 	maxIntegrations = 20
-	// previousOverlap is how long the webhook secret a person replaced keeps verifying events:
-	// the provider may still be signing with it, since it rotates its own secret with an overlap.
 	previousOverlap = 24 * time.Hour
 )
 
-// Integration is an integration as the API shows it. A secret is never in it: Secrets says,
-// for each, "set" or "not set".
 type Integration struct {
-	ID          int64             `json:"id"`
-	Provider    string            `json:"provider"`
-	Kind        string            `json:"kind"`
-	Name        string            `json:"name"`
-	DisplayName string            `json:"display_name"`
-	Mode        string            `json:"mode"`
-	Settings    map[string]string `json:"settings" apitypes:"nonnull"`
-	// MaxAmountMinor is the admin's ceiling for one payment, in the smallest unit of its
-	// currency; Currencies are the codes a payment may ask for.
-	MaxAmountMinor int64             `json:"max_amount_minor"`
-	Currencies     []string          `json:"currencies" apitypes:"nonnull"`
-	Secrets        map[string]string `json:"secrets" apitypes:"nonnull"`
-	// WebhookURL is the address to register at the provider, null when the server has no public
-	// URL (payments are then found by polling).
-	WebhookURL *string `json:"webhook_url"`
-	// WebhookURLChanged says that the address the webhook signing secret was saved for is not
-	// webhook_url any more: the server's public URL changed since. The provider still sends to,
-	// and Square signs over, the old address, so the admin registers the new one and saves the
-	// signing secret again.
-	WebhookURLChanged bool    `json:"webhook_url_changed"`
-	Disabled          bool    `json:"disabled"`
-	DisabledAt        *string `json:"disabled_at"`
-	// Spaces are the spaces whose apps may use the integration, by id: only the ones the caller
-	// may manage (their own private space and the workspace's shared ones), never another
-	// person's private space. OtherSpaces counts the rest, which the caller can neither see nor
-	// change.
-	Spaces      []int64 `json:"spaces" apitypes:"nonnull"`
-	OtherSpaces int     `json:"other_spaces"`
-	// ApprovalSpaces are the ones of Spaces an app's approval allowed (not an admin): they go with
-	// the approval, unless an admin keeps them (PUT .../spaces, "keep"). Saving the list never
-	// keeps them.
-	ApprovalSpaces []int64 `json:"approval_spaces" apitypes:"nonnull"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	LastEventAt    *string `json:"last_event_at"`
+	ID                int64             `json:"id"`
+	Provider          string            `json:"provider"`
+	Kind              string            `json:"kind"`
+	Name              string            `json:"name"`
+	DisplayName       string            `json:"display_name"`
+	Mode              string            `json:"mode"`
+	Settings          map[string]string `json:"settings" apitypes:"nonnull"`
+	MaxAmountMinor    int64             `json:"max_amount_minor"`
+	Currencies        []string          `json:"currencies" apitypes:"nonnull"`
+	Secrets           map[string]string `json:"secrets" apitypes:"nonnull"`
+	WebhookURL        *string           `json:"webhook_url"`
+	WebhookURLChanged bool              `json:"webhook_url_changed"`
+	Disabled          bool              `json:"disabled"`
+	DisabledAt        *string           `json:"disabled_at"`
+	Spaces            []int64           `json:"spaces" apitypes:"nonnull"`
+	OtherSpaces       int               `json:"other_spaces"`
+	ApprovalSpaces    []int64           `json:"approval_spaces" apitypes:"nonnull"`
+	CreatedAt         string            `json:"created_at"`
+	UpdatedAt         string            `json:"updated_at"`
+	LastEventAt       *string           `json:"last_event_at"`
 }
 
-// The values of Integration.Secrets.
 const (
 	secretSet    = "set"
 	secretNotSet = "not set"
 )
 
-// record is a stored integration with what the API doesn't show. Its Spaces are all of them,
-// whoever's: the API shows a caller only the ones they manage (Service.view).
 type record struct {
 	Integration
-	publicID string
-	// registeredURL is the webhook address the signing secret was saved for, "" for none.
+	publicID      string
 	registeredURL string
 }
 
-// Store keeps integrations in the database, their secrets sealed with the server key. Every
-// method takes the workspace the caller belongs to and touches only its rows: an id of another
-// workspace is "not found".
 type Store struct {
 	db  *sql.DB
 	key *serverkey.Key
 	now func() time.Time
 }
 
-// NewStore returns the store backed by sqlDB, which must be migrated, sealing secrets with key.
 func NewStore(sqlDB *sql.DB, key *serverkey.Key) *Store {
 	return &Store{db: sqlDB, key: key, now: time.Now}
 }
 
-// sealRef is what a sealed secret is bound to: the integration's workspace, row id and public id.
-// Each part is checked when a secret is opened, so a sealed value copied to another row (even one
-// that took a deleted row's id), another workspace or another name doesn't open.
 type sealRef struct {
 	workspace, id int64
 	publicID      string
 }
 
-// ad is the associated data a secret called name is sealed under. None of the parts holds a ":".
 func (r sealRef) ad(name string) []byte {
 	return []byte("taskto integration:" + strconv.FormatInt(r.workspace, 10) + ":" + r.publicID + ":" +
 		strconv.FormatInt(r.id, 10) + ":" + name)
@@ -128,7 +95,6 @@ func (r record) sealRef(workspace int64) sealRef {
 	return sealRef{workspace: workspace, id: r.ID, publicID: r.publicID}
 }
 
-// timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's default.
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
 func (s *Store) stamp(t time.Time) string { return t.UTC().Format(timeFormat) }
@@ -141,8 +107,6 @@ type querier interface {
 const columns = `i.id, i.public_id, i.provider, i.name, i.display_name, i.mode, i.settings, i.max_amount_minor,
 	i.currencies, i.disabled_at, i.created_at, i.updated_at, i.last_event_at, coalesce(i.webhook_registered_url, '')`
 
-// load reads the workspace's integrations (all of them, or the one with id), oldest first, with
-// which secrets are set and which spaces are allowed.
 func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]record, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+columns+` FROM integrations i
 		WHERE i.workspace_id = ? AND (? = 0 OR i.id = ?) ORDER BY i.id`, workspace, id, id)
@@ -228,14 +192,12 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 	return recs, nil
 }
 
-// read runs fn in one read-only transaction: a single snapshot, so what it reads together (an
-// integration, its secrets and its spaces) is of one state, whatever commits meanwhile.
 func (s *Store) read(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }() // nothing was written
+	defer func() { _ = tx.Rollback() }()
 	return fn(tx)
 }
 
@@ -248,7 +210,6 @@ func (s *Store) list(ctx context.Context, workspace int64) ([]record, error) {
 	return recs, err
 }
 
-// getSnapshot is get in a transaction of its own, for a reader that isn't in one.
 func (s *Store) getSnapshot(ctx context.Context, workspace, id int64) (rec record, err error) {
 	err = s.read(ctx, func(tx *sql.Tx) (err error) {
 		rec, err = s.get(ctx, tx, workspace, id)
@@ -257,8 +218,6 @@ func (s *Store) getSnapshot(ctx context.Context, workspace, id int64) (rec recor
 	return rec, err
 }
 
-// get reads one integration. An id that isn't positive is "not found": load's 0 means every
-// integration, which a lookup by id must never fall into.
 func (s *Store) get(ctx context.Context, q querier, workspace, id int64) (record, error) {
 	if id <= 0 {
 		return record{}, errNotFound
@@ -273,9 +232,6 @@ func (s *Store) get(ctx context.Context, q querier, workspace, id int64) (record
 	return recs[0], nil
 }
 
-// write runs fn in a transaction, which takes the write lock when it begins (see package db). The
-// admin who is acting is read again first: one disabled after RequireAdmin let the request in
-// changes nothing (auth.ErrAccountDisabled).
 func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -297,19 +253,16 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	return tx.Commit()
 }
 
-// draft is a new integration, validated.
 type draft struct {
 	provider    Provider
 	name        string
 	displayName string
 	settings    map[string]string
-	secrets     map[string]string // clear: only between the request and sealing
+	secrets     map[string]string
 	maxAmount   int64
 	currencies  []string
 	mode        string
-	// publicURL is the server's public URL, which the webhook address a signing secret is saved for
-	// is made of.
-	publicURL string
+	publicURL   string
 }
 
 func newPublicID() (string, error) {
@@ -320,7 +273,6 @@ func newPublicID() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-// seal stores a secret sealed for its integration and name.
 func (s *Store) seal(ctx context.Context, tx *sql.Tx, ref sealRef, name, value string, expires *time.Time) error {
 	sealed, err := s.key.Seal([]byte(value), ref.ad(name))
 	if err != nil {
@@ -338,24 +290,16 @@ func (s *Store) seal(ctx context.Context, tx *sql.Tx, ref sealRef, name, value s
 	return err
 }
 
-// fingerprintPurpose is what the webhook secrets' fingerprints are made for (serverkey.MAC).
 const fingerprintPurpose = "taskto integration webhook secret fingerprint"
 
-// isWebhookSecret says whether name is one of the secrets a delivery is verified with.
 func isWebhookSecret(name string) bool {
 	return name == SecretWebhookSecret || name == SecretWebhookSecretPrevious
 }
 
-// webhookFingerprint is the keyed fingerprint stored beside a webhook secret. The same secret has
-// the same fingerprint wherever it is kept, which is what makes reuse a lookup; it is made with
-// the server's key, so it can't be computed, or checked against a guess, by anyone who only has
-// the database.
 func (s *Store) webhookFingerprint(value string) []byte {
 	return s.key.MAC(fingerprintPurpose, []byte(value))
 }
 
-// fingerprintFor is what is stored in the fingerprint column for a secret called name: nil for
-// any secret that isn't a webhook secret.
 func (s *Store) fingerprintFor(name, value string) any {
 	if !isWebhookSecret(name) {
 		return nil
@@ -363,12 +307,6 @@ func (s *Store) fingerprintFor(name, value string) any {
 	return s.webhookFingerprint(value)
 }
 
-// BackfillFingerprints gives the webhook secrets saved before fingerprints existed theirs, which
-// the server does when it starts. A secret that doesn't open (the server key changed) stays
-// without one: it verifies nothing either.
-//
-// It also records every fingerprint found held by more than one integration (see
-// markSharedSecrets), which a start does whether or not anything was missing.
 func (s *Store) BackfillFingerprints(ctx context.Context) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		if _, err := s.backfillFingerprints(ctx, tx); err != nil {
@@ -378,9 +316,6 @@ func (s *Store) BackfillFingerprints(ctx context.Context) error {
 	})
 }
 
-// backfillFingerprints fills in the fingerprints that are missing, and says how many it did. The
-// query is bounded by the partial index on exactly those rows (migration 0053), so with nothing
-// missing, which is every create and rotation after the first start, it reads no row of the table.
 func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) (int, error) {
 	rows, err := tx.QueryContext(ctx, backfillQuery)
 	if err != nil {
@@ -416,7 +351,6 @@ func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) (int, erro
 		filled++
 	}
 	if filled > 0 {
-		// Secrets that were just given their fingerprint may be ones two integrations hold.
 		if err := s.markSharedSecrets(ctx, tx); err != nil {
 			return 0, err
 		}
@@ -424,19 +358,11 @@ func (s *Store) backfillFingerprints(ctx context.Context, tx *sql.Tx) (int, erro
 	return filled, nil
 }
 
-// backfillQuery finds the webhook secrets without a fingerprint. Its names are literals, the very
-// ones of the partial index integration_secrets_unfingerprinted, because SQLite only uses a
-// partial index for a query whose condition it can see implies the index's; a test checks the plan.
 const backfillQuery = `SELECT i.id, i.workspace_id, i.public_id, s.name, s.sealed
 	FROM integration_secrets s INDEXED BY integration_secrets_unfingerprinted
 	JOIN integrations i ON i.id = s.integration_id
 	WHERE s.fingerprint IS NULL AND s.name IN ('webhook_secret', 'webhook_secret_previous')`
 
-// markSharedSecrets records, as compromised, every webhook secret that more than one integration
-// holds now (an expired previous secret holds nothing): it is known to each of their workspaces.
-// Once recorded it
-// verifies for no integration, whoever rotates away from it first, and no integration may be given
-// it again; each that holds it refuses deliveries until its provider gives it a fresh secret.
 func (s *Store) markSharedSecrets(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO integration_shared_secrets (fingerprint, found_at)
 		SELECT fingerprint, ? FROM integration_secrets WHERE fingerprint IS NOT NULL AND (expires_at IS NULL OR expires_at > ?)
@@ -444,9 +370,6 @@ func (s *Store) markSharedSecrets(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
-// markSharedSecretsOf is markSharedSecrets for the secrets of one integration of the workspace,
-// run before a change or a removal takes a copy away, so the other holder is not left as the only
-// one. A write is the only place it can be recorded: a delivery or a check only reads.
 func (s *Store) markSharedSecretsOf(ctx context.Context, tx *sql.Tx, workspace, id int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO integration_shared_secrets (fingerprint, found_at)
 		SELECT DISTINCT a.fingerprint, ? FROM integration_secrets a JOIN integrations i ON i.id = a.integration_id
@@ -505,7 +428,6 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 		if err != nil {
 			return err
 		}
-		// The secrets are sealed for the row's id, which only exists now.
 		ref := sealRef{workspace: workspace, id: id, publicID: publicID}
 		for name, value := range d.secrets {
 			if err := s.seal(ctx, tx, ref, name, value, nil); err != nil {
@@ -524,7 +446,6 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 	return rec, err
 }
 
-// change is an edit of an integration: nil or empty fields stay as they are.
 type change struct {
 	displayName *string
 	settings    map[string]string
@@ -532,14 +453,9 @@ type change struct {
 	maxAmount   *int64
 	currencies  []string
 	disabled    *bool
-	// publicURL is the server's public URL: a webhook secret in secrets is saved for the address
-	// made of it.
-	publicURL string
+	publicURL   string
 }
 
-// update applies c to the workspace's integration id. Everything is validated against the
-// stored integration inside the transaction, so a concurrent change can't slip between a check
-// and the write.
 func (s *Store) update(ctx context.Context, workspace, user, id int64, c change) (record, error) {
 	var rec record
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -551,7 +467,7 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		if p == nil {
 			return errUnknownProvider
 		}
-		n := old // the new state
+		n := old
 		changed := map[string]bool{}
 		if c.displayName != nil {
 			name, err := checkDisplayName(*c.displayName, old.Name)
@@ -599,9 +515,6 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		now := s.now()
 		ref := old.sealRef(workspace)
 		if webhook, ok := c.secrets[SecretWebhookSecret]; ok {
-			// Whatever copy of a shared secret this change takes away, the other holder must not be left
-			// as the only one: it is recorded first. Then the new secret must be one that was never
-			// shared, even if it is the one this integration has now.
 			if err := s.markSharedSecretsOf(ctx, tx, workspace, id); err != nil {
 				return err
 			}
@@ -610,10 +523,6 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 			}
 		}
 		if webhook, ok := c.secrets[SecretWebhookSecret]; ok && !s.holds(ctx, tx, ref, SecretWebhookSecret, webhook) {
-			// The secret that is replaced keeps verifying for a day, so events the provider signed
-			// with it before the change took effect there aren't refused. Sending the secret that
-			// is already current (a retry whose answer was lost) leaves both slots as they are:
-			// copying it into the previous slot would drop the one it replaced.
 			if err := s.keepPrevious(ctx, tx, ref, now); err != nil {
 				return err
 			}
@@ -622,9 +531,6 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 			}
 		}
 		if _, ok := c.secrets[SecretWebhookSecret]; ok {
-			// Saving the signing secret, the same one included, says the provider sends to the address
-			// shown now: an admin who registered the new address after the public URL changed saves the
-			// secret again, which is what clears the warning.
 			if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_registered_url = ? WHERE id = ? AND workspace_id = ?`,
 				nullString(hookURL(c.publicURL, old.publicID)), id, workspace); err != nil {
 				return err
@@ -681,12 +587,6 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 	return rec, err
 }
 
-// checkWebhookSecretFree refuses value as the webhook secret of integration except (0 for one not
-// made yet) when another integration, in any workspace, verifies deliveries with it: as its
-// current secret or as a previous one that hasn't expired. A signature has to open exactly one
-// integration, so one secret can't serve two. It is a lookup of the secret's fingerprint (after
-// giving any secret saved before fingerprints their own), and the answer names nothing of the
-// integration that holds it.
 func (s *Store) checkWebhookSecretFree(ctx context.Context, tx *sql.Tx, except int64, value string) error {
 	if _, err := s.backfillFingerprints(ctx, tx); err != nil {
 		return err
@@ -701,9 +601,6 @@ func (s *Store) checkWebhookSecretFree(ctx context.Context, tx *sql.Tx, except i
 	return nil
 }
 
-// unusable says whether a webhook secret with the fingerprint can verify no delivery for integration
-// except: one that was found held by more than one integration, ever (integration_shared_secrets),
-// or that another holds now.
 func (s *Store) unusable(ctx context.Context, q querier, except int64, fingerprint []byte) (bool, error) {
 	var found bool
 	if err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_shared_secrets WHERE fingerprint = ?)`,
@@ -713,8 +610,6 @@ func (s *Store) unusable(ctx context.Context, q querier, except int64, fingerpri
 	return s.heldByAnother(ctx, q, except, fingerprint)
 }
 
-// heldByAnother says whether an integration other than except has a webhook secret, current or
-// previous and not expired, with the fingerprint.
 func (s *Store) heldByAnother(ctx context.Context, q querier, except int64, fingerprint []byte) (bool, error) {
 	var held bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_secrets
@@ -723,9 +618,6 @@ func (s *Store) heldByAnother(ctx context.Context, q querier, except int64, fing
 	return held, err
 }
 
-// sharedWebhookSecrets says which of creds' webhook secrets another integration holds too (one an
-// old install can have, from before a secret was refused for it). Such a secret opens more than
-// one integration, so it is used for none.
 func (s *Store) sharedWebhookSecrets(ctx context.Context, q querier, integration int64, creds Credentials) (current, previous bool, err error) {
 	check := func(secret Secret) (bool, error) {
 		if secret == "" {
@@ -740,8 +632,6 @@ func (s *Store) sharedWebhookSecrets(ctx context.Context, q querier, integration
 	return current, previous, err
 }
 
-// holds says whether the integration's stored secret called name is, once opened, value. A
-// secret that is missing or doesn't open is not.
 func (s *Store) holds(ctx context.Context, tx *sql.Tx, ref sealRef, name, value string) bool {
 	var sealed []byte
 	if err := tx.QueryRowContext(ctx, `SELECT sealed FROM integration_secrets WHERE integration_id = ? AND name = ?`,
@@ -752,10 +642,6 @@ func (s *Store) holds(ctx context.Context, tx *sql.Tx, ref sealRef, name, value 
 	return err == nil && subtle.ConstantTimeCompare(plain, []byte(value)) == 1
 }
 
-// keepPrevious moves the integration's current webhook secret to the previous one, valid for
-// previousOverlap, with the address it was saved for, and drops a previous one that has expired. With no current secret, or one that
-// doesn't open (the server key changed) or that another integration holds too, there is nothing
-// to keep.
 func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM integration_secrets WHERE integration_id = ? AND name = ? AND expires_at <= ?`,
 		ref.id, SecretWebhookSecretPrevious, s.stamp(now)); err != nil {
@@ -770,12 +656,10 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 	if err != nil {
 		return err
 	}
-	plain, err := s.key.Open(sealed, ref.ad(SecretWebhookSecret))
-	if err != nil {
-		return nil //nolint:nilerr // a secret that doesn't open can't be kept: the replacement stands alone
+	plain, ok := s.opens(sealed, ref, SecretWebhookSecret)
+	if !ok {
+		return nil
 	}
-	// A secret another integration holds too (one an old install can have) verified nothing here, and
-	// kept as the previous one it would keep the other's from verifying for the overlap: it is let go.
 	held, err := s.unusable(ctx, tx, ref.id, s.webhookFingerprint(string(plain)))
 	if err != nil {
 		return err
@@ -785,7 +669,6 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 			ref.id, SecretWebhookSecretPrevious)
 		return err
 	}
-	// The secret goes with the address it was saved for: Square signed with it over that address.
 	if _, err := tx.ExecContext(ctx, `UPDATE integrations SET webhook_previous_registered_url = webhook_registered_url WHERE id = ?`,
 		ref.id); err != nil {
 		return err
@@ -794,11 +677,8 @@ func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now t
 	return s.seal(ctx, tx, ref, SecretWebhookSecretPrevious, string(plain), &expires)
 }
 
-// remove deletes the workspace's integration id with its secrets and spaces. Anything that
-// names it with an ON DELETE RESTRICT (an app's approval) makes the delete fail: errInUse.
 func (s *Store) remove(ctx context.Context, workspace, id int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
-		// Its secrets go with it: one another integration holds too is recorded as shared first.
 		if err := s.markSharedSecretsOf(ctx, tx, workspace, id); err != nil {
 			return err
 		}
@@ -823,7 +703,6 @@ func (s *Store) remove(ctx context.Context, workspace, id int64) error {
 	})
 }
 
-// sqliteForeignKey is SQLITE_CONSTRAINT_FOREIGNKEY.
 const sqliteForeignKey = 787
 
 func isForeignKey(err error) bool {
@@ -837,14 +716,6 @@ func isForeignKey(err error) bool {
 	return strings.Contains(err.Error(), "FOREIGN KEY constraint failed")
 }
 
-// setSpaces replaces the spaces the integration may be used in, among the ones the caller may
-// manage (manageable): the integration's spaces outside it, another person's private space, are
-// kept as they are. The caller has checked that spaces are all manageable; the schema checks
-// that they are in the workspace.
-//
-// A space an app's approval allowed stays the approval's when the list names it: only a space in
-// keep (a subset of spaces, the admin's explicit word) becomes the admin's own, which no approval
-// takes away, and each such change is an audit event of its own.
 func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces, keep []int64, manageable []int64) (record, error) {
 	var rec record
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -856,9 +727,8 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 		for _, sp := range spaces {
 			if slices.Contains(old.Spaces, sp) {
 				if !slices.Contains(keep, sp) {
-					continue // already allowed, and left as it is: an approval's grant stays its own
+					continue
 				}
-				// Kept by the admin who named it: it is theirs now, and no approval takes it away.
 				res, err := tx.ExecContext(ctx, `UPDATE integration_spaces SET from_approval = 0, allowed_by = ?, allowed_at = ?
 					WHERE integration_id = ? AND space_id = ? AND from_approval = 1`, user, s.stamp(s.now()), id, sp)
 				if err != nil {
@@ -910,7 +780,6 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 	return rec, err
 }
 
-// usable reports whether the workspace's integration is enabled and allowed in the space.
 func (s *Store) usable(ctx context.Context, workspace, integration, space int64) (bool, error) {
 	var ok bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integrations i
@@ -919,8 +788,6 @@ func (s *Store) usable(ctx context.Context, workspace, integration, space int64)
 	return ok, err
 }
 
-// credentials opens the integration's secrets. A previous webhook secret that has expired, or
-// doesn't open, is left out; the others failing to open is an unreadableError.
 func (s *Store) credentials(ctx context.Context, workspace, id int64) (creds Credentials, err error) {
 	err = s.read(ctx, func(tx *sql.Tx) error {
 		creds, err = s.openCredentials(ctx, tx, workspace, id)
@@ -929,16 +796,11 @@ func (s *Store) credentials(ctx context.Context, workspace, id int64) (creds Cre
 	return creds, err
 }
 
-// hookCredentials is credentials with the revision of the webhook secrets it read, from the same
-// snapshot, for the webhook route's guard, and without a webhook secret that more than one
-// integration holds.
 func (s *Store) hookCredentials(ctx context.Context, workspace, id int64) (creds Credentials, revision string, err error) {
 	err = s.read(ctx, func(tx *sql.Tx) error {
 		if creds, err = s.openCredentials(ctx, tx, workspace, id); err != nil {
 			return err
 		}
-		// A webhook secret that another integration holds too is left out, as if it were not set:
-		// the delivery can't be told to be for this integration, so it is refused.
 		current, previous, err := s.sharedWebhookSecrets(ctx, tx, id, creds)
 		if err != nil {
 			return err
@@ -993,24 +855,18 @@ func (s *Store) openCredentials(ctx context.Context, tx *sql.Tx, workspace, id i
 	return creds, rows.Err()
 }
 
-// SpaceIntegration is an integration as someone who works in a space sees it: enough to build an
-// app against, nothing about the account.
 type SpaceIntegration struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 	Kind        string `json:"kind"`
-	// Status is "active", or "disabled" while an admin has switched the integration off.
-	Status string `json:"status"`
+	Status      string `json:"status"`
 }
 
-// ForSpace lists the integrations allowed in the workspace's space, as someone who works there
-// sees them. The caller has checked that they may read the space.
 func (s *Store) ForSpace(ctx context.Context, workspace, space int64) ([]SpaceIntegration, error) {
 	return s.forSpace(ctx, workspace, space)
 }
 
-// forSpace lists the integrations allowed in the workspace's space.
 func (s *Store) forSpace(ctx context.Context, workspace, space int64) ([]SpaceIntegration, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.name, i.display_name, i.provider, i.disabled_at IS NOT NULL
 		FROM integrations i JOIN integration_spaces s ON s.integration_id = i.id
@@ -1039,13 +895,16 @@ func (s *Store) forSpace(ctx context.Context, workspace, space int64) ([]SpaceIn
 	return out, rows.Err()
 }
 
-// HookPrefix starts the path of an integration's webhook address: HookPrefix + its public id.
 const HookPrefix = "/hooks/"
 
-// hookURL is the address to register at the provider for the public id, "" without a public URL.
 func hookURL(publicURL, publicID string) string {
 	if publicURL == "" {
 		return ""
 	}
 	return strings.TrimRight(publicURL, "/") + HookPrefix + publicID
+}
+
+func (s *Store) opens(sealed []byte, ref sealRef, name string) ([]byte, bool) {
+	plain, err := s.key.Open(sealed, ref.ad(name))
+	return plain, err == nil
 }

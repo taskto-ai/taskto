@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"slices"
@@ -28,27 +29,18 @@ import (
 
 const (
 	gitDir = ".git"
-	// branch is the one branch: every change is a commit on it.
 	branch = plumbing.ReferenceName("refs/heads/main")
 )
 
-// repo is a space's repository, open for one call of the Store.
 type repo struct {
-	root  *os.Root // the space's directory, the working tree
-	st    *filesystem.Storage
-	state *spaceState
-	// added are the objects this call stored, for the size count.
-	added []plumbing.Hash
-	// collect is set by a change that can leave unversioned files' bytes nothing points
-	// to: the write runs gc after it.
-	collect bool
-	// releases give back what the write reserved of the storage quotas (Store.reserveQuota),
-	// once the usage is published.
+	root     *os.Root
+	st       *filesystem.Storage
+	state    *spaceState
+	added    []plumbing.Hash
+	collect  bool
 	releases []func()
 }
 
-// openRepo opens sp's repository. Without one, it creates it if create is set, and
-// returns nil otherwise.
 func openRepo(dataDir string, sp access.Space, state *spaceState, create bool) (*repo, error) {
 	root, err := access.OpenRoot(dataDir, sp)
 	if err != nil {
@@ -83,8 +75,6 @@ func openRepo(dataDir string, sp access.Space, state *spaceState, create bool) (
 	return r, nil
 }
 
-// init makes the new .git a repository whose HEAD is main, with the space's directory as
-// its working tree.
 func (r *repo) init() error {
 	if err := r.st.Init(); err != nil {
 		return err
@@ -103,7 +93,6 @@ func (r *repo) close() {
 	_ = r.root.Close()
 }
 
-// head returns main's last commit, or nil before the first.
 func (r *repo) head() (*object.Commit, error) {
 	ref, err := r.st.Reference(branch)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
@@ -115,12 +104,6 @@ func (r *repo) head() (*object.Commit, error) {
 	return object.GetCommit(r.st, ref.Hash())
 }
 
-// revision returns the commit at, or the head if at is empty. A commit that isn't in main's
-// history (one a failed change stored and left behind, say) is ErrNotFound, as if the
-// repository didn't have it: nothing a person could have seen is read from it. A commit the
-// repository doesn't have is refused before any history is read, and whether main reaches one it
-// has is answered from the space's cached ancestry (see ancestry), which only walks commits it
-// hasn't seen, and stops when ctx does.
 func (r *repo) revision(ctx context.Context, at string) (*object.Commit, error) {
 	head, err := r.head()
 	if at == "" || err != nil {
@@ -150,24 +133,23 @@ func (r *repo) revision(ctx context.Context, at string) (*object.Commit, error) 
 	return c, err
 }
 
-// ancestry is the commits of main, oldest first, as the last reader saw them. History is one
-// line and a commit's ID covers its parent's, so what lies below a commit never changes: a new
-// head is walked only down to a commit already known, and a head that went back (an undone
-// change) or a rewrite's new commits cut the chain at the commit they still share with it. No
-// other invalidation is needed. It holds a commit ID (about 60 bytes) per commit of the space,
-// while the Store runs.
 type ancestry struct {
 	mu    sync.Mutex
 	chain []plumbing.Hash
 	idx   map[plumbing.Hash]int
 }
 
-// reaches reports whether want is head or one of its ancestors.
+func (a *ancestry) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.chain, a.idx = nil, nil
+}
+
 func (a *ancestry) reaches(ctx context.Context, r *repo, head *object.Commit, want plumbing.Hash) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	var fresh []plumbing.Hash // head's commits not in the chain, newest first
-	keep := 0                 // how much of the chain head's history still shares
+	var fresh []plumbing.Hash
+	keep := 0
 	for c := head; c != nil; {
 		if k, ok := a.idx[c.Hash]; ok {
 			keep = k + 1
@@ -197,8 +179,6 @@ func (a *ancestry) reaches(ctx context.Context, r *repo, head *object.Commit, wa
 	return ok, nil
 }
 
-// entryAt finds name in c's tree, walking it one element at a time. A nil c is the empty
-// tree.
 func (r *repo) entryAt(c *object.Commit, name string) (*object.TreeEntry, error) {
 	if c == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
@@ -226,8 +206,6 @@ func (r *repo) entryAt(c *object.Commit, name string) (*object.TreeEntry, error)
 	panic("unreachable")
 }
 
-// nameKey is a name prepared to be compared with sameName: normalised once, so a folder's
-// names are each normalised once per comparison and not twice.
 type nameKey struct{ nfc, fold string }
 
 func newNameKey(s string) nameKey {
@@ -235,15 +213,8 @@ func newNameKey(s string) nameKey {
 	return nameKey{nfc: nfc, fold: foldNFC(nfc)}
 }
 
-// foldNFC is the full case fold of nfc, normalised again: folding doesn't preserve
-// normalisation, so two names that fold to canonically equivalent text must be compared in one form.
 func foldNFC(nfc string) string { return norm.NFC.String(cases.Fold().String(nfc)) }
 
-// same reports whether a file system that treats them so has one file for both names: macOS and
-// Windows unpack é written as one character or as two to the same name, and ignore case. Two
-// names are the same if either their NFC forms are equal ignoring case (simple folding, which is
-// what those file systems do) or their full case folds are equal; the two tests differ for a few
-// scripts, such as Cherokee, where each catches names the other misses.
 func (k nameKey) same(name string) bool {
 	nfc := norm.NFC.String(name)
 	return strings.EqualFold(k.nfc, nfc) || k.fold == foldNFC(nfc)
@@ -258,7 +229,6 @@ func findEntry(entries []object.TreeEntry, name string) *object.TreeEntry {
 	return nil
 }
 
-// readDoc returns the document name in c.
 func (r *repo) readDoc(c *object.Commit, name string) (Doc, error) {
 	e, err := r.entryAt(c, name)
 	if err != nil {
@@ -269,7 +239,7 @@ func (r *repo) readDoc(c *object.Commit, name string) (Doc, error) {
 	}
 	entry, p, err := r.describe(name, e.Hash)
 	if err != nil || p != nil {
-		return Doc{Entry: entry}, err // an unversioned file: Open reads its bytes
+		return Doc{Entry: entry}, err
 	}
 	content, err := r.blobBytes(e.Hash)
 	if err != nil {
@@ -278,7 +248,6 @@ func (r *repo) readDoc(c *object.Commit, name string) (Doc, error) {
 	return Doc{Entry: entry, Content: content}, nil
 }
 
-// storeBlob stores content and returns its hash.
 func (r *repo) storeBlob(content []byte) (plumbing.Hash, error) {
 	obj := r.st.NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
@@ -296,7 +265,6 @@ func (r *repo) storeBlob(content []byte) (plumbing.Hash, error) {
 	return r.store(obj)
 }
 
-// store stores obj, unless the repository has it already.
 func (r *repo) store(obj plumbing.EncodedObject) (plumbing.Hash, error) {
 	h := obj.Hash()
 	if r.st.HasEncodedObject(h) == nil {
@@ -309,19 +277,12 @@ func (r *repo) store(obj plumbing.EncodedObject) (plumbing.Hash, error) {
 	return h, nil
 }
 
-// edit sets a file of the tree to a blob, or removes it if hash is zero.
 type edit struct {
-	name string
-	hash plumbing.Hash
-	// checked is how many of name's leading elements are checked against their folder's other
-	// names for one a file system would treat as the same; 0 is all of them. A folder's
-	// move sets it to the destination's depth, so what the folder holds isn't checked against
-	// itself.
+	name    string
+	hash    plumbing.Hash
 	checked int
 }
 
-// moveEdits are the edits that move cur, the entry at from, to to: one for a document,
-// two for each document of a folder.
 func (r *repo) moveEdits(cur *object.TreeEntry, from, to string) ([]edit, error) {
 	if cur.Mode != filemode.Dir {
 		return []edit{{name: from}, {name: to, hash: cur.Hash}}, nil
@@ -330,26 +291,17 @@ func (r *repo) moveEdits(cur *object.TreeEntry, from, to string) ([]edit, error)
 	destDepth := strings.Count(to, "/") + 1
 	err := r.walk(cur.Hash, from, func(name string, e object.TreeEntry) error {
 		dest := to + strings.TrimPrefix(name, from)
-		// The destination folder passed the checks, but what's inside it can still end up
-		// too deep or too long: every document's new path must be one we'd accept.
 		if err := checkPath(dest); err != nil {
 			return err
 		}
 		removes = append(removes, edit{name: name})
-		// Only the destination folder's own name is compared with its new siblings. What is
-		// inside came as it was: a folder with two spellings of a name moves whole.
 		adds = append(adds, edit{name: dest, hash: e.Hash, checked: destDepth})
 		return nil
 	})
 	return append(removes, adds...), err
 }
 
-// change commits edits on top of head, then brings the working tree and the index up to
-// date, and returns the commit. Edits apply in order. If they change nothing, nothing is
-// committed and the commit is the head.
 func (r *repo) change(head *object.Commit, edits []edit, by Author, message string) (_ string, err error) {
-	// Any failure may leave stored objects behind (a blob before a path conflict, say):
-	// measure .git again at the next write rather than trust the cached size.
 	defer func() {
 		if err != nil {
 			r.recount()
@@ -371,7 +323,6 @@ func (r *repo) change(head *object.Commit, edits []edit, by Author, message stri
 		}
 	}
 	if root.IsZero() {
-		// The last document went: an empty tree, which git stores like any other.
 		var err error
 		if root, err = r.storeTree(nil); err != nil {
 			return "", err
@@ -380,14 +331,10 @@ func (r *repo) change(head *object.Commit, edits []edit, by Author, message stri
 	if head != nil && root == head.TreeHash {
 		return head.Hash.String(), nil
 	}
-	// The commit object first, then the files and the index, and main moves last: a
-	// failure on the way leaves main where it was and the files as they were, so the
-	// change either happened completely or not at all, and can simply be retried.
 	commit, old, err := r.newCommit(head, root, by, message)
 	if err != nil {
 		return "", err
 	}
-	// Recorded first, so a crash before main moves can be undone by the next write.
 	if err := r.markPending(edits); err != nil {
 		return "", err
 	}
@@ -401,7 +348,6 @@ func (r *repo) change(head *object.Commit, edits []edit, by Author, message stri
 	return commit.String(), nil
 }
 
-// result is a change's Result, with the document name at the blob h.
 func (r *repo) result(commit, name string, h plumbing.Hash) (Result, error) {
 	e, _, err := r.describe(name, h)
 	if err != nil {
@@ -410,10 +356,6 @@ func (r *repo) result(commit, name string, h plumbing.Hash) (Result, error) {
 	return Result{Commit: commit, Doc: &e}, nil
 }
 
-// setPath returns the hash of the tree treeHash (zero for none) with the file at elems
-// set to blob, or removed if blob is zero. A tree left empty is the zero hash. name is
-// the whole path, for errors. Only the first checked elements of elems are checked for a name in
-// their folder that a file system treats as the same.
 func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob plumbing.Hash, checked int) (plumbing.Hash, error) {
 	var entries []object.TreeEntry
 	if !treeHash.IsZero() {
@@ -428,9 +370,6 @@ func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob
 		if blob.IsZero() {
 			return plumbing.ZeroHash, fmt.Errorf("%w: %s", ErrNotFound, name)
 		}
-		// Two names that differ only by case, or by how an accent is encoded (é as one
-		// character or as e and a combining accent), are one file on macOS and Windows: the
-		// second would overwrite the first in the checkout.
 		var key nameKey
 		if checked > 0 {
 			key = newNameKey(elems[0])
@@ -476,8 +415,6 @@ func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob
 	return r.storeTree(entries)
 }
 
-// storeTree stores a tree of entries, in git's order: by name, a folder's name followed
-// by a slash.
 func (r *repo) storeTree(entries []object.TreeEntry) (plumbing.Hash, error) {
 	key := func(e object.TreeEntry) string {
 		if e.Mode == filemode.Dir {
@@ -493,8 +430,6 @@ func (r *repo) storeTree(entries []object.TreeEntry) (plumbing.Hash, error) {
 	return r.store(obj)
 }
 
-// newCommit stores a commit of tree on top of parent (nil for the first), by by. It
-// returns the commit and the reference main must still be at for setMain to move it.
 func (r *repo) newCommit(parent *object.Commit, tree plumbing.Hash, by Author, message string) (plumbing.Hash, *plumbing.Reference, error) {
 	author := object.Signature{Name: sigText(by.Name), Email: sigText(by.Email), When: now().UTC()}
 	committer := author
@@ -515,7 +450,6 @@ func (r *repo) newCommit(parent *object.Commit, tree plumbing.Hash, by Author, m
 	return h, old, err
 }
 
-// setMain moves main to the commit h, if main is still at old.
 func (r *repo) setMain(h plumbing.Hash, old *plumbing.Reference) error {
 	if err := r.st.CheckAndSetReference(plumbing.NewHashReference(branch, h), old); err != nil {
 		return err
@@ -524,8 +458,6 @@ func (r *repo) setMain(h plumbing.Hash, old *plumbing.Reference) error {
 	return nil
 }
 
-// undo rolls back a change that failed in this process. The pending mark stays if the
-// files couldn't all be put back, so the next write repairs them.
 func (r *repo) undo(head *object.Commit, edits []edit) error {
 	r.recount()
 	err := r.rollback(head, edits)
@@ -535,9 +467,6 @@ func (r *repo) undo(head *object.Commit, edits []edit) error {
 	return err
 }
 
-// rollback puts the files the edits touched back as they are in head, after a change
-// that didn't complete. The index is only written once every file is, so it still
-// matches head. It carries on past a failure, and returns them all.
 func (r *repo) rollback(head *object.Commit, edits []edit) error {
 	var errs []error
 	seen := map[string]bool{}
@@ -567,8 +496,6 @@ func (r *repo) rollback(head *object.Commit, edits []edit) error {
 	return nil
 }
 
-// sigText makes s safe in a commit's author line, where angle brackets and line breaks
-// would end the name or the email early.
 func sigText(s string) string {
 	return strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r == '<' || r == '>' || r < ' ' || r == 0x7f {
@@ -578,9 +505,6 @@ func sigText(s string) string {
 	}, s))
 }
 
-// checkout writes the edits to the working tree, through the space's os.Root, and to the
-// index, so the directory is a clean checkout of main for anyone reading it, git
-// included.
 func (r *repo) checkout(edits []edit) error {
 	idx, err := r.st.Index()
 	if err != nil {
@@ -598,15 +522,12 @@ func (r *repo) checkout(edits []edit) error {
 		if err != nil {
 			return err
 		}
-		// No stat data: git sees the file as possibly changed and compares its content.
-		idx.Entries = append(idx.Entries, &index.Entry{Name: e.name, Hash: e.hash, Mode: filemode.Regular, Size: uint32(min(size, 1<<32-1))}) // #nosec G115 -- clamped
+		idx.Entries = append(idx.Entries, &index.Entry{Name: e.name, Hash: e.hash, Mode: filemode.Regular, Size: indexSize(size)})
 	}
 	slices.SortFunc(idx.Entries, func(a, b *index.Entry) int { return strings.Compare(a.Name, b.Name) })
 	return r.st.SetIndex(idx)
 }
 
-// writeFile writes the blob h to the file name, replacing it at once: readers see the
-// old content or the new, never part of it.
 func (r *repo) writeFile(name string, h plumbing.Hash) (int64, error) {
 	blob, err := object.GetBlob(r.st, h)
 	if err != nil {
@@ -640,12 +561,10 @@ func (r *repo) writeFile(name string, h plumbing.Hash) (int64, error) {
 	return blob.Size, nil
 }
 
-// removeFile removes the file name, and the folders it leaves empty.
 func (r *repo) removeFile(name string) error {
 	if err := r.root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	// Remove fails on the first folder that isn't empty.
 	dir := path.Dir(name)
 	for dir != "." && r.root.Remove(dir) == nil {
 		dir = path.Dir(dir)
@@ -653,8 +572,6 @@ func (r *repo) removeFile(name string) error {
 	return nil
 }
 
-// size returns the bytes in .git, but for .git/lfs (unversioned files have a limit of
-// their own), counting them the first time.
 func (r *repo) size() (int64, error) {
 	if r.state.size >= 0 {
 		return r.state.size, nil
@@ -667,7 +584,6 @@ func (r *repo) size() (int64, error) {
 	return n, nil
 }
 
-// gitSize is the bytes under .git in fsys, the unversioned files' (.git/lfs) apart.
 func gitSize(fsys fs.FS) (int64, error) {
 	var n int64
 	err := fs.WalkDir(fsys, gitDir, func(p string, d fs.DirEntry, err error) error {
@@ -687,8 +603,6 @@ func gitSize(fsys fs.FS) (int64, error) {
 	return n, err
 }
 
-// pendingFile lists, one per line, the files a change in progress is writing. It exists
-// only while a change runs: finding it means the last process stopped mid-change.
 var pendingFile = path.Join(gitDir, "taskto-pending")
 
 func (r *repo) markPending(edits []edit) error {
@@ -702,9 +616,6 @@ func (r *repo) markPending(edits []edit) error {
 
 func (r *repo) clearPending() { _ = r.root.Remove(pendingFile) }
 
-// repair undoes a change the last process left half done: the files it listed, and
-// their index entries, go back to what main holds. main moves last, so it is the truth:
-// a change that got as far as moving main is simply completed.
 func (r *repo) repair() error {
 	raw, err := r.root.ReadFile(pendingFile)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -719,7 +630,7 @@ func (r *repo) repair() error {
 	var edits []edit
 	for _, name := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		if name == "" || checkPath(name) != nil {
-			continue // never act on a name a change couldn't have made
+			continue
 		}
 		var h plumbing.Hash
 		if head != nil {
@@ -732,23 +643,20 @@ func (r *repo) repair() error {
 	if err := r.checkout(edits); err != nil {
 		return fmt.Errorf("knowledge: repairing an unfinished change: %w", err)
 	}
-	r.collect = true // it may have adopted an upload's bytes
+	r.collect = true
 	r.recount()
 	r.clearPending()
 	return nil
 }
 
-// recount drops the cached size after a change that didn't complete: the objects it
-// stored are on disk but weren't counted, so the next write measures .git again.
 func (r *repo) recount() {
 	r.added = nil
 	r.state.size = -1
 }
 
-// countAdded adds the loose objects this call stored to the size count.
 func (r *repo) countAdded() {
 	if r.state.size < 0 {
-		return // counted in full at the next write
+		return
 	}
 	for _, h := range r.added {
 		hex := h.String()
@@ -759,7 +667,6 @@ func (r *repo) countAdded() {
 	r.added = nil
 }
 
-// walk calls fn for every file under the tree h, whose path is dir, in path order.
 func (r *repo) walk(h plumbing.Hash, dir string, fn func(name string, e object.TreeEntry) error) error {
 	tree, err := object.GetTree(r.st, h)
 	if err != nil {
@@ -779,13 +686,8 @@ func (r *repo) walk(h plumbing.Hash, dir string, fn func(name string, e object.T
 	return nil
 }
 
-// errPageFull stops a walk once a page has one entry more than it shows.
 var errPageFull = errors.New("page full")
 
-// list returns the documents under the folder prefix, after the path after, at most
-// limit of them, as of the commit at (the head if empty). A tree's entries are in git's order,
-// which is the order of the full paths, so a walk lists them sorted and can skip the folders
-// before after.
 func (r *repo) list(ctx context.Context, at, prefix, after string, limit int) (Page, error) {
 	head, err := r.revision(ctx, at)
 	if err != nil || head == nil {
@@ -817,7 +719,7 @@ func (r *repo) list(ctx context.Context, at, prefix, after string, limit int) (P
 			name := path.Join(dir, e.Name)
 			if e.Mode == filemode.Dir {
 				if after > name+"/" && !strings.HasPrefix(after, name+"/") {
-					continue // every path in it sorts before after
+					continue
 				}
 				if err := visit(e.Hash, name); err != nil {
 					return err
@@ -849,8 +751,6 @@ func (r *repo) list(ctx context.Context, at, prefix, after string, limit int) (P
 	return page, nil
 }
 
-// history walks main's commits from the head, or from the parent of before, and returns
-// those that changed name (all of them if name is empty), at most limit.
 func (r *repo) history(ctx context.Context, name, before string, limit int) (History, error) {
 	c, err := r.head()
 	if err != nil || c == nil {
@@ -865,7 +765,7 @@ func (r *repo) history(ctx context.Context, name, before string, limit int) (His
 		}
 	}
 	var h History
-	var cur plumbing.Hash // name's blob in c
+	var cur plumbing.Hash
 	if c != nil && name != "" {
 		if cur, err = r.blobAt(c, name); err != nil {
 			return History{}, err
@@ -922,7 +822,6 @@ func (r *repo) parent(c *object.Commit) (*object.Commit, error) {
 	return object.GetCommit(r.st, c.ParentHashes[0])
 }
 
-// blobAt returns the hash of the document name in c, or zero if there is none.
 func (r *repo) blobAt(c *object.Commit, name string) (plumbing.Hash, error) {
 	e, err := r.entryAt(c, name)
 	switch {
@@ -947,4 +846,11 @@ func commitEntry(c *object.Commit) Commit {
 		entry.Agent = c.Committer.Name
 	}
 	return entry
+}
+
+func indexSize(size int64) uint32 {
+	if size < 0 || size > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(size)
 }

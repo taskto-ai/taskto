@@ -18,7 +18,6 @@ func defaultsPath(s access.Space, rest string) string {
 	return fmt.Sprintf("/api/workspaces/%d/spaces/%d/home/defaults%s", s.WorkspaceID, s.ID, rest)
 }
 
-// offers is what the test apps contribute: a summaries widget over the total, a shortcut, and a pin.
 func offers() *Contributions {
 	return &Contributions{
 		Widgets: []Widget{
@@ -29,7 +28,6 @@ func offers() *Contributions {
 	}
 }
 
-// contribute gives app a's draft contributions c and publishes it, as u, who may do both.
 func (w *world) contribute(u *user, s access.Space, a App, c *Contributions) App {
 	w.e.t.Helper()
 	got := decode[App](w.e.t, u.do(http.MethodGet, appPath(s, a.ID, ""), nil))
@@ -57,7 +55,6 @@ func (w *world) place(u *user, s access.Space, a App, kind, widget string, statu
 	return decode[HomeItem](w.e.t, rec)
 }
 
-// widgetData is the data model of a widget's surface, as the caller reads it.
 func (w *world) widgetData(u *user, s access.Space, a App, widget string) (map[string]any, int) {
 	w.e.t.Helper()
 	rec := u.do(http.MethodGet, appPath(s, a.ID, "/surface?widget="+widget), nil)
@@ -129,21 +126,18 @@ func TestContributionsAreCheckedStrictly(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// A definition in version 1 has none of it.
 	old := def
 	old.DefinitionVersion = 1
 	old.Contributions = offers()
 	if _, err := old.Check(); err == nil || !strings.Contains(err.Error(), "contributions") {
 		t.Errorf("version 1 with contributions: %v", err)
 	}
-	// An unknown slot or key is refused where the definition is read, not skipped.
 	for _, text := range []string{`{"widgetz": []}`, `{"pin": {"label": "x", "url": "https://example.com"}}`, `{"widgets": [{"id": "a", "title": "t", "kind": "shortcut", "html": "<b>"}]}`} {
 		var c Contributions
 		if err := json.Unmarshal([]byte(text), &c); err == nil {
 			t.Errorf("%s: read", text)
 		}
 	}
-	// Screens: a widget opens on a screen that shows no record, and so does a pin.
 	planner := plannerDefinition(t)
 	planner.Contributions = &Contributions{
 		Widgets: []Widget{{ID: "tasks", Title: "Tasks", Kind: WidgetKindScreen, Screen: "tasks", Size: WidgetLarge}},
@@ -192,7 +186,6 @@ func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.alicePrivate, w.aliceApp, offers())
 
-	// An app with no contributions can still be pinned (under its name); a widget needs one.
 	pin := w.place(w.alice, w.alicePrivate, app, KindPin, "", http.StatusCreated)
 	if pin.State != StateReady || pin.Label != "Spend" || pin.Source != SourcePersonal || pin.Release == nil {
 		t.Fatalf("pin = %+v", pin)
@@ -213,12 +206,10 @@ func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	if len(home.Widgets) != 1 || len(home.Pins) != 1 || home.Widgets[0].ID != widget.ID || home.Pins[0].AppName != app.Name {
 		t.Fatalf("home = %+v", home)
 	}
-	// Nothing of it is anyone else's.
 	if other := w.home(w.bob); len(other.Widgets)+len(other.Pins)+len(other.Hidden) != 0 {
 		t.Fatalf("bob's home = %+v", other)
 	}
 
-	// The widget draws the app's summary over the rows alice reads, through the app's surface.
 	data, code := w.widgetData(w.alice, w.alicePrivate, app, "spend")
 	if code != http.StatusOK || data["total"] != "1.00" {
 		t.Fatalf("widget data = %v (%d)", data, code)
@@ -229,14 +220,12 @@ func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	if _, code := w.widgetData(w.alice, w.alicePrivate, app, "nope"); code != http.StatusNotFound {
 		t.Fatalf("an unknown widget = %d", code)
 	}
-	// A shortcut has nothing to draw, and reads no row.
 	rec := w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, "/surface?widget=open"), nil)
 	expect(t, rec, http.StatusOK)
 	if strings.TrimSpace(rec.Body.String()) != "[]" {
 		t.Fatalf("a shortcut's surface = %s", rec.Body.String())
 	}
 
-	// Order.
 	second := w.place(w.alice, w.alicePrivate, app, KindWidget, "open", http.StatusCreated)
 	rec = w.alice.do(http.MethodPut, homePath(w.ws, "/order"), map[string]any{"kind": KindWidget, "ids": []int64{second.ID, widget.ID}})
 	expect(t, rec, http.StatusOK)
@@ -252,7 +241,6 @@ func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 		t.Fatalf("a refused order changed it: %+v", got)
 	}
 
-	// Someone else can neither place nor remove it.
 	w.place(w.bob, w.alicePrivate, app, KindPin, "", http.StatusNotFound)
 	expect(t, w.bob.do(http.MethodDelete, homePath(w.ws, fmt.Sprintf("/items/%d", widget.ID)), nil), http.StatusNotFound)
 	expect(t, w.alice.do(http.MethodDelete, homePath(w.ws, fmt.Sprintf("/items/%d", widget.ID)), nil), http.StatusNoContent)
@@ -279,18 +267,14 @@ func TestHomeIsBounded(t *testing.T) {
 func TestWidgetsFollowTheAppsAccessRules(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.shared, w.sharedApp, offers())
-	// Bob is a viewer of the space: a reader of every record.
 	w.place(w.bob, w.shared, app, KindWidget, "spend", http.StatusCreated)
 	if data, code := w.widgetData(w.bob, w.shared, app, "spend"); code != http.StatusOK || data["total"] != "3.00" {
 		t.Fatalf("bob's widget = %v (%d)", data, code)
 	}
-	// A member of the workspace who isn't in the space neither places nor reads it.
 	w.place(w.mallory, w.shared, app, KindWidget, "spend", http.StatusNotFound)
 	if _, code := w.widgetData(w.mallory, w.shared, app, "spend"); code != http.StatusNotFound {
 		t.Fatalf("mallory's widget = %d", code)
 	}
-	// Alice reads and manages everything; the owner is an app user who reads and changes only
-	// their own records; bob is a reader.
 	setRoles := func(grants ...access.AppGrant) {
 		t.Helper()
 		expect(t, w.alice.do(http.MethodPut, appPath(w.shared, app.ID, "/roles"), map[string]any{"grants": grants}), http.StatusOK)
@@ -307,8 +291,6 @@ func TestWidgetsFollowTheAppsAccessRules(t *testing.T) {
 	if data, _ := w.widgetData(w.bob, w.shared, app, "spend"); data["total"] != "3.00" {
 		t.Fatalf("bob's widget = %v", data)
 	}
-	// An action through the widget is the app's: the owner may submit, and is answered with
-	// their own rows and totals, never alice's; the space's viewer may not.
 	rec := w.owner.do(http.MethodPost, appPath(w.shared, app.ID, "/actions?widget=spend"),
 		action(app, "add_expense", map[string]any{"description": "owner-coffee", "amount": "2"}))
 	expect(t, rec, http.StatusOK)
@@ -317,7 +299,6 @@ func TestWidgetsFollowTheAppsAccessRules(t *testing.T) {
 	}
 	expect(t, w.bob.do(http.MethodPost, appPath(w.shared, app.ID, "/actions?widget=spend"),
 		action(app, "add_expense", map[string]any{"description": "x", "amount": "1"})), http.StatusForbidden)
-	// Bob loses every role: the widget leaves his Home and its data is not there.
 	setRoles(alice, access.AppGrant{UserID: &w.owner.id, Roles: []access.AppRole{access.AppUser}})
 	if got := w.home(w.bob); len(got.Widgets) != 0 {
 		t.Fatalf("bob still has %+v", got.Widgets)
@@ -325,7 +306,6 @@ func TestWidgetsFollowTheAppsAccessRules(t *testing.T) {
 	if _, code := w.widgetData(w.bob, w.shared, app, "spend"); code != http.StatusNotFound {
 		t.Fatalf("bob's widget after losing the app = %d", code)
 	}
-	// Given a role again, it is back (the placement was only set aside); out of the space, it is gone.
 	setRoles(alice, access.AppGrant{UserID: &w.bob.id, Roles: []access.AppRole{access.AppReader}})
 	if got := w.home(w.bob); len(got.Widgets) != 1 {
 		t.Fatalf("bob's widget came back as %+v", got.Widgets)
@@ -345,7 +325,6 @@ func TestAnUnavailableAppIsToldAsSuchAndNeverShowsData(t *testing.T) {
 	widget := w.place(w.alice, w.alicePrivate, app, KindWidget, "spend", http.StatusCreated)
 	pin := w.place(w.alice, w.alicePrivate, app, KindPin, "", http.StatusCreated)
 
-	// Offline: both stay, unavailable, and the widget has no data.
 	expect(t, w.alice.do(http.MethodPatch, appPath(w.alicePrivate, app.ID, ""), map[string]any{"version": app.Version, "archived": true}), http.StatusOK)
 	home := w.home(w.alice)
 	if home.Widgets[0].State != StateUnavailable || home.Widgets[0].Reason != ReasonOffline || home.Widgets[0].Widget != nil || home.Widgets[0].Release != nil ||
@@ -362,7 +341,6 @@ func TestAnUnavailableAppIsToldAsSuchAndNeverShowsData(t *testing.T) {
 		t.Fatalf("restored = %+v", home)
 	}
 
-	// A release without the widget: the placement says so, and draws nothing.
 	cur = decode[App](t, w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, ""), nil))
 	def := *cur.Draft
 	def.Contributions = &Contributions{Widgets: []Widget{offers().Widgets[1]}}
@@ -377,14 +355,12 @@ func TestAnUnavailableAppIsToldAsSuchAndNeverShowsData(t *testing.T) {
 		t.Fatalf("a removed widget = %d", code)
 	}
 
-	// Moved to another space she may read: the placements follow the app.
 	cur = decode[App](t, w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, ""), nil))
 	expect(t, w.alice.do(http.MethodPost, appPath(w.alicePrivate, app.ID, "/move"), map[string]any{"version": cur.Version, "space_id": w.shared.ID}), http.StatusOK)
 	home = w.home(w.alice)
 	if len(home.Pins) != 1 || home.Pins[0].SpaceID != w.shared.ID || home.Pins[0].ID != pin.ID || len(home.Widgets) != 1 || home.Widgets[0].ID != widget.ID {
 		t.Fatalf("after the move = %+v", home)
 	}
-	// Where others can't read it, they see nothing of it: bob is in the space, mallory is not.
 	if got := w.home(w.mallory); len(got.Widgets)+len(got.Pins) != 0 {
 		t.Fatalf("mallory's home = %+v", got)
 	}
@@ -394,8 +370,6 @@ func TestSharedDefaults(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.shared, w.sharedApp, offers())
 
-	// Only those who may publish the app set defaults: bob is a viewer of the space, mallory isn't
-	// in it, and an editor without the publisher role in a restricted app doesn't either.
 	body := NewHomeItem{Kind: KindWidget, AppID: app.ID, Widget: "spend"}
 	expect(t, w.bob.do(http.MethodPost, defaultsPath(w.shared, ""), body), http.StatusForbidden)
 	expect(t, w.mallory.do(http.MethodPost, defaultsPath(w.shared, ""), body), http.StatusNotFound)
@@ -408,11 +382,9 @@ func TestSharedDefaults(t *testing.T) {
 	}
 	expect(t, w.alice.do(http.MethodPost, defaultsPath(w.shared, ""), NewHomeItem{Kind: KindPin, AppID: app.ID}), http.StatusCreated)
 	expect(t, w.alice.do(http.MethodPost, defaultsPath(w.shared, ""), NewHomeItem{Kind: KindWidget, AppID: app.ID, Widget: "nope"}), http.StatusNotFound)
-	// Apps of private spaces have no defaults, and neither does a space's app through another's path.
 	expect(t, w.alice.do(http.MethodPost, defaultsPath(w.alicePrivate, ""), NewHomeItem{Kind: KindPin, AppID: w.aliceApp.ID}), http.StatusConflict)
 	expect(t, w.alice.do(http.MethodPost, defaultsPath(w.shared, ""), NewHomeItem{Kind: KindPin, AppID: w.aliceApp.ID}), http.StatusNotFound)
 
-	// Bob sees them without having placed anything, and can hide and show them; nobody else's home changes.
 	home := w.home(w.bob)
 	if len(home.Widgets) != 1 || home.Widgets[0].Source != SourceDefault || home.Widgets[0].DefaultID != def.DefaultID || len(home.Pins) != 1 {
 		t.Fatalf("bob's home = %+v", home)
@@ -440,13 +412,11 @@ func TestSharedDefaults(t *testing.T) {
 	if home = w.home(w.bob); len(home.Widgets) != 1 || len(home.Hidden) != 0 {
 		t.Fatalf("shown again = %+v", home)
 	}
-	// If he places the same widget himself, it is his, once.
 	mine := w.place(w.bob, w.shared, app, KindWidget, "spend", http.StatusCreated)
 	if home = w.home(w.bob); len(home.Widgets) != 1 || home.Widgets[0].ID != mine.ID || home.Widgets[0].Source != SourcePersonal {
 		t.Fatalf("a placed default = %+v", home.Widgets)
 	}
 
-	// Removing a default: not by a viewer, not through another space, not by one who can't publish.
 	removal := defaultsPath(w.shared, fmt.Sprintf("/%d", def.DefaultID))
 	expect(t, w.bob.do(http.MethodDelete, removal, nil), http.StatusForbidden)
 	expect(t, w.mallory.do(http.MethodDelete, removal, nil), http.StatusNotFound)
@@ -466,7 +436,6 @@ func TestSharedDefaults(t *testing.T) {
 		t.Fatalf("after removing the default = %+v", home)
 	}
 
-	// Moving the app out of the space takes its defaults with it.
 	expect(t, w.owner.do(http.MethodPut, appPath(w.shared, app.ID, "/roles"), map[string]any{"grants": []access.AppGrant{}}), http.StatusOK)
 	cur := decode[App](t, w.alice.do(http.MethodGet, appPath(w.shared, app.ID, ""), nil))
 	expect(t, w.alice.do(http.MethodPost, appPath(w.shared, app.ID, "/move"), map[string]any{"version": cur.Version, "space_id": w.alicePrivate.ID}), http.StatusOK)
@@ -532,7 +501,6 @@ func TestHomeRoutesNeedASession(t *testing.T) {
 			t.Errorf("%s %s = %d without a session", r.method, r.path, rec.Code)
 		}
 	}
-	// Another workspace's address: a stranger of it gets nothing, and places nothing in ours.
 	app := w.contribute(w.alice, w.shared, w.sharedApp, offers())
 	expect(t, w.stranger.do(http.MethodGet, homePath(w.ws, ""), nil), http.StatusNotFound)
 	rec := w.stranger.do(http.MethodPost, homePath(w.other, "/items"), NewHomeItem{Kind: KindPin, SpaceID: w.shared.ID, AppID: app.ID})
@@ -562,7 +530,6 @@ func TestWidgetScreensAndPinsOpenWhereTheyShould(t *testing.T) {
 	if items, _ := data["items"].([]any); len(items) != MaxWidgetItems || data["open"] != fmt.Sprint(MaxWidgetItems+5) {
 		t.Fatalf("a screen widget holds %d rows, open = %v", len(items), data["open"])
 	}
-	// The pin opens the app on its screen; any other screen name is refused.
 	rec = w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, "/surface?screen=new"), nil)
 	expect(t, rec, http.StatusOK)
 	if !strings.Contains(rec.Body.String(), `"screen":"new"`) {
@@ -571,7 +538,6 @@ func TestWidgetScreensAndPinsOpenWhereTheyShould(t *testing.T) {
 	expect(t, w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, "/surface?screen=detail"), nil), http.StatusBadRequest)
 	expect(t, w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, "/surface?screen=zzz"), nil), http.StatusBadRequest)
 	expect(t, w.alice.do(http.MethodGet, appPath(w.alicePrivate, app.ID, "/surface?widget=tasks&screen=new"), nil), http.StatusBadRequest)
-	// A widget's actions are answered with the bounded rows too.
 	rec = w.alice.do(http.MethodPost, appPath(w.alicePrivate, app.ID, "/actions?widget=tasks"),
 		ClientAction{Name: "add_task", SurfaceID: SurfaceID(app.ID), Context: map[string]any{"title": "One more", "category": "work"}})
 	expect(t, rec, http.StatusOK)
@@ -591,7 +557,6 @@ func TestWidgetScreensAndPinsOpenWhereTheyShould(t *testing.T) {
 			}
 		}
 	}
-	// A refused widget id does nothing: the action doesn't run.
 	before := storedRows(t, w.e.db, app.ID)
 	expect(t, w.alice.do(http.MethodPost, appPath(w.alicePrivate, app.ID, "/actions?widget=NOT%20AN%20ID"),
 		ClientAction{Name: "add_task", SurfaceID: SurfaceID(app.ID), Context: map[string]any{"title": "x", "category": "work"}}), http.StatusBadRequest)

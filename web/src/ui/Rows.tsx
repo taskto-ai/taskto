@@ -1,17 +1,9 @@
-// A list of objects (apps, invites, documents): each row a leading visual, a title and a line of
-// detail, a status, and the row's actions at the end. A row with `href` is a link: the title is
-// the link, and the whole row answers a click on it, while the actions stay their own buttons.
-// A row with `onOpen` and no `href` opens something in place (a search result, a version): the
-// title is a button, and the whole row answers a click on it the same way.
-
 import type { ReactNode } from 'react'
 import { Link } from '../router'
 import './Rows.css'
 
 export interface RowsProps {
-  // What the list is, for a screen reader, when no heading says it.
   label?: string
-  // Rows whose order means something (the steps of a checklist): an ordered list.
   ordered?: boolean
   children: ReactNode
 }
@@ -19,8 +11,6 @@ export interface RowsProps {
 export function Rows({ label, ordered = false, children }: RowsProps) {
   const List = ordered ? 'ol' : 'ul'
   return (
-    // role="list" says again what the element says: Safari drops a list's role when its markers
-    // are styled away (list-style: none) and it has no name.
     <List className="ui-rows" role="list" aria-label={label}>
       {children}
     </List>
@@ -30,23 +20,13 @@ export function Rows({ label, ordered = false, children }: RowsProps) {
 export interface RowProps {
   title: ReactNode
   detail?: ReactNode
-  // An avatar, an icon, an app's mark.
   leading?: ReactNode
-  // A badge: live, a draft, pending.
   status?: ReactNode
-  // Buttons and a menu, at the end.
   actions?: ReactNode
-  // The actions on a line of their own under the title, wrapping there when they don't fit: for a
-  // row with several actions (more than a phone's width holds beside the title).
   actionsBelow?: boolean
-  // The row opens this, in the app.
   href?: string
-  // Called when the row's link is followed, before the app goes there; with no `href`, what
-  // the row opens in place, its title then being a button.
   onOpen?: () => void
   current?: boolean
-  // What opens under the row, across its width (a form to settle it, its details): part of the row,
-  // in its list item, so what it says belongs to the row.
   children?: ReactNode
 }
 

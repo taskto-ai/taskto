@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The record of a sign-out not finished yet: only a whole, well-formed record is acted on, and one
-// account's never stands in another's way.
-
 import { beforeEach, expect, test, vi } from 'vitest'
 import {
   backFromSignOut,
@@ -46,13 +43,11 @@ test('a record that is not a whole one is not acted on, and another account’s 
   localStorage.setItem(
     KEY,
     JSON.stringify([
-      // Cut short, or written by something else.
       { user: 1 },
       { user: 1, session: 's1', phase: 'gone', keep: false, approved: [] },
       { user: 1, session: 's1', phase: 'requested', keep: 'no', approved: [] },
       { user: 1, session: 's1', phase: 'requested', keep: false, approved: [['r1', { version: 'x' }]] },
       { user: 0, session: '', phase: 'requested', keep: false, approved: [] },
-      // Whole: the second person's.
       { user: 2, session: 's2', phase: 'confirmed', keep: true, approved: [] },
     ]),
   )
@@ -69,11 +64,9 @@ test('storage that is not a list is no record at all', () => {
 })
 
 test("a confirmation of one login's sign-out leaves the record of a newer login of the account as it is", () => {
-  // The person went back from a sign-out of their newer login (its logout got no answer).
   recordSignOut(1, 's2', false, new Map())
   unansweredSignOut(1, 's2')
   backFromSignOut(1, 's2')
-  // An older login's logout, sent long before, is confirmed now.
   confirmSignOut(1, 's1')
   expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'backed' })
   confirmSignOut(1, 's2')
@@ -81,9 +74,7 @@ test("a confirmation of one login's sign-out leaves the record of a newer login 
 })
 
 test("an older login's unanswered logout and Back leave the record of a newer login of the account as it is", () => {
-  // Another tab signed the account in again and is signing that newer login out.
   recordSignOut(1, 's2', false, new Map())
-  // The older login's logout got no answer, and this tab goes back from it.
   unansweredSignOut(1, 's1')
   backFromSignOut(1, 's1')
   expect(pendingSignOutOf(1)).toMatchObject({ session: 's2', phase: 'requested' })
@@ -95,12 +86,9 @@ test('a sign-out of the same login again keeps that an earlier logout of it got 
   recordSignOut(1, 's1', false, new Map())
   unansweredSignOut(1, 's1')
   backFromSignOut(1, 's1')
-  // Signed out again from the same login: this logout is refused, and the person goes back.
   recordSignOut(1, 's1', false, new Map())
   backFromSignOut(1, 's1')
-  // The first logout may still reach the server: the sign-out is kept, as gone back from.
   expect(pendingSignOutOf(1)).toMatchObject({ session: 's1', phase: 'backed', unanswered: true })
-  // Not for another login of the account, whose record is its own (the first one's stays).
   recordSignOut(1, 's2', false, new Map())
   expect(pendingSignOuts().find((p) => p.session === 's2')?.unanswered).toBeUndefined()
   expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'backed', unanswered: true })
@@ -108,10 +96,8 @@ test('a sign-out of the same login again keeps that an earlier logout of it got 
 
 test('the browser keeps the login it learned last of an account, whatever order the answers come in', () => {
   rememberLogin(1, 's2', 200)
-  // A start that asked earlier is answered now.
   rememberLogin(1, 's1', 100)
   expect(browserLogin()).toMatchObject({ user: 1, session: 's2' })
-  // Another account's is the browser's from its sign-in on.
   rememberLogin(2, 't1', 300)
   expect(browserLogin()).toMatchObject({ user: 2, session: 't1' })
   forgetLogin(2, 't0')
@@ -124,7 +110,6 @@ test("two tabs recording sign-outs of two logins at once keep both: neither writ
   const set = Storage.prototype.setItem
   let raced = false
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
-    // Another tab records its login's sign-out between this tab's reading and its writing.
     if (!raced && key.startsWith(KEY)) {
       raced = true
       recordSignOut(1, 's2', false, new Map([['r2', { version: 1, operation: 'op-2' }]]))
@@ -146,7 +131,6 @@ test("two tabs recording sign-outs of two logins at once keep both: neither writ
 test('a logout with no answer keeps its mark when the browser refuses to note that on the sign-out', () => {
   recordSignOut(1, 's1', false, new Map())
   const logout = beginLogout(1, 's1')
-  // The browser refuses the write that would mark the sign-out as unanswered.
   const set = Storage.prototype.setItem
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
     if (key.startsWith(`${KEY}:`)) throw new DOMException('full', 'QuotaExceededError')
@@ -154,7 +138,6 @@ test('a logout with no answer keeps its mark when the browser refuses to note th
   })
   endLogout(logout, 1, 's1', false)
   vi.restoreAllMocks()
-  // The logout may still end the login: Back keeps the sign-out for it.
   backFromSignOut(1, 's1')
   expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'backed' })
 })

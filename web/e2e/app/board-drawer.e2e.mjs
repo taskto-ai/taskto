@@ -1,7 +1,3 @@
-// An open card on a wide board, where only layout tells: the card lies over the columns, which keep
-// the width they have with it closed; the head (Add a card, the filters) stays clear of it; the
-// board's sideways scroll brings the last column out from under it; the open card's tile, and a
-// tile that takes the keyboard, are beside it, never under it; closing gives the focus back.
 import assert from 'node:assert/strict'
 import { api, scenario, setUp } from '../support.mjs'
 
@@ -19,7 +15,6 @@ for (const width of [1100, 1440, 1920]) {
       const base = `/api/workspaces/1/spaces/${space.id}/boards`
       const { boards } = await api(context, 'GET', base)
       const cards = `${base}/${boards[0].id}/cards`
-      // A card in every column, the last column's the one to open.
       for (const column of COLUMNS) await api(context, 'POST', cards, { title: `In ${column}`, column })
       await page.goto('/w/1/boards')
       const tile = (name) => page.getByRole('button', { name: new RegExp(`^${name}`) })
@@ -32,18 +27,15 @@ for (const width of [1100, 1440, 1920]) {
           .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().width)))
       const closed = await widths()
 
-      // Open the last column's card: the drawer is over the board, which keeps its columns' widths.
       await tile('In done').click()
       const drawer = page.getByRole('region', { name: 'In done' })
       await drawer.waitFor()
-      // Measured where it settles, after its entry (it slides in from the edge).
       await drawer.evaluate((el) =>
         Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => {}))),
       )
       const edge = (await drawer.boundingBox()).x
       assert.deepEqual(await widths(), closed, 'the columns keep the width they have with the card closed')
 
-      // The head stays in reach beside the drawer.
       const add = page.getByRole('button', { name: 'Add a card', exact: true })
       const addBox = await add.boundingBox()
       assert.ok(
@@ -51,21 +43,18 @@ for (const width of [1100, 1440, 1920]) {
         `Add a card (${addBox.x + addBox.width}) is clear of the drawer (${edge})`,
       )
 
-      // The open card's own tile is beside the drawer, not under it.
       const open = await tile('In done').boundingBox()
       assert.ok(
         open.x + open.width <= edge + 1,
         `the open tile (${open.x + open.width}) is beside the drawer (${edge})`,
       )
 
-      // The board's sideways scroll brings the last column out from under the drawer.
       await columns.evaluate((el) => {
         el.scrollLeft = el.scrollWidth
       })
       const last = await columns.locator('.ui-board-column').last().boundingBox()
       assert.ok(last.x + last.width <= edge + 1, `the last column (${last.x + last.width}) clears the drawer (${edge})`)
 
-      // A tile that takes the keyboard is scrolled beside the drawer, never left under it.
       await columns.evaluate((el) => {
         el.scrollLeft = 0
       })
@@ -78,8 +67,6 @@ for (const width of [1100, 1440, 1920]) {
         )
       }
 
-      // The start edge too: scrolled to the end, a tile of the first column that takes the keyboard
-      // comes into view whole, not clipped at the columns' start.
       await columns.evaluate((el) => {
         el.scrollLeft = el.scrollWidth
       })
@@ -88,15 +75,12 @@ for (const width of [1100, 1440, 1920]) {
       const first = await tile('In backlog').boundingBox()
       assert.ok(first.x >= start.x - 1, `In backlog with the focus (${first.x}) is whole after the start (${start.x})`)
 
-      // Escape on the card closes it, and the focus goes back to its tile.
       await drawer.getByRole('button', { name: 'Close', exact: true }).focus()
       await page.keyboard.press('Escape')
       await drawer.waitFor({ state: 'detached' })
       assert.equal(await tile('In done').evaluate((el) => el === document.activeElement), true)
       assert.deepEqual(await widths(), closed)
 
-      // A comment left unsent: closing asks first, and the question is a dialog of its own size, its
-      // buttons inside it and pressable by pointer (not padded as the board's head is).
       await tile('In done').click()
       await drawer.waitFor()
       await drawer.getByLabel('Comment', { exact: true }).fill('Half a thought')
@@ -113,7 +97,6 @@ for (const width of [1100, 1440, 1920]) {
           `${name} (${b.x},${b.y} ${b.width}x${b.height}) is inside the question (${q.x},${q.y} ${q.width}x${q.height})`,
         )
       }
-      // Cancel keeps the card and its draft; Discard closes it.
       await question.getByRole('button', { name: 'Cancel', exact: true }).click({ timeout: 5_000 })
       await question.waitFor({ state: 'detached' })
       assert.equal(await drawer.getByLabel('Comment', { exact: true }).inputValue(), 'Half a thought')
@@ -121,9 +104,6 @@ for (const width of [1100, 1440, 1920]) {
       await question.getByRole('button', { name: 'Discard', exact: true }).click({ timeout: 5_000 })
       await drawer.waitFor({ state: 'detached' })
 
-      // Dragging a card to the columns' end, beside an open card, scrolls the board as it does with
-      // the card closed: the scroll box ends at the drawer's edge. A real drag, by the DevTools
-      // protocol's mouse events (Playwright's own drag doesn't make the browser scroll).
       await tile('In todo').click()
       await page.locator('.ui-board-drawer').waitFor()
       await columns.evaluate((el) => {

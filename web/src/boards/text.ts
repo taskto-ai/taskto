@@ -1,10 +1,6 @@
-// The sentences the board and the card make from a card's fields, in the reader's language.
-
 import type { Author, Card } from '../api'
 import type { T } from '../i18n'
 
-// Why a card is blocked, as one sentence: its reason, the cards it waits for (a list made
-// in the user's language, "" for none), or both.
 export function blockedText(t: T, reason: string | null, cards: string): string {
   if (reason && cards) return t('boards.blockedBecauseWaiting', { reason, cards })
   if (reason) return t('boards.blockedBecause', { reason })

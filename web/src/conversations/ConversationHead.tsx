@@ -1,7 +1,3 @@
-// The conversation's head: back to the list (on a phone), its title, renamed in place, the events
-// stream's status, rename and archive, and in a menu the link to build an app in it and the agent
-// browser's switch.
-
 import { type FormEvent, useRef, useState } from 'react'
 import { api, type Conversation, errorText } from '../api'
 import { useT } from '../i18n'
@@ -23,7 +19,6 @@ const STATUS_LABEL = {
   gone: 'conversations.status.gone',
 } as const satisfies Record<StreamStatus, string>
 
-// The words say the state; the tone only repeats it.
 const STATUS_TONE = {
   connecting: 'neutral',
   live: 'success',
@@ -44,15 +39,11 @@ export function ConversationHead({
   status,
 }: {
   backHref: string
-  // The conversation once read; failed when it couldn't be.
   conversation: Conversation | undefined
   failed: boolean
   url: string
-  // Renamed or archived.
   onChanged: () => void
-  // Where to build an app in this conversation; no link without it.
   buildHref?: string
-  // Whether the user has an agent browser, and whether its panel is open.
   browserEnabled: boolean
   browserOpen: boolean
   onToggleBrowser: () => void
@@ -64,7 +55,6 @@ export function ConversationHead({
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Where the focus goes back to when the rename ends.
   const renameButton = useRef<HTMLButtonElement>(null)
 
   const patch = async (body: { title?: string; archived?: boolean }) => {
@@ -82,7 +72,6 @@ export function ConversationHead({
   }
   const stopEditing = () => {
     setEditing(false)
-    // After the button is back on the page.
     requestAnimationFrame(() => renameButton.current?.focus())
   }
   const save = (e: FormEvent) => {
@@ -115,7 +104,6 @@ export function ConversationHead({
                   stopEditing()
                 }
               }}
-              // The field the reader just asked for.
               autoFocus
             />
             <Button type="submit" size="sm" loading={busy}>

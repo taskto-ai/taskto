@@ -1,12 +1,3 @@
-// Package lockfile holds an exclusive lock on a file for as long as a process runs: the
-// data directory's (DataDir), so only one server, or one restore, uses it at a time, and
-// the agent runtime's database's.
-//
-// The lock is a flock(2) on the open file, not the file's existence: the kernel releases
-// it when the file is closed or the process exits, however it exits, so a lock file left
-// behind by a crash is no obstacle. The file is opened close-on-exec, so child processes
-// (the agent sidecar and the commands it runs) never inherit it and can't hold it after
-// the process that took it has gone.
 package lockfile
 
 import (
@@ -18,18 +9,13 @@ import (
 	"strings"
 )
 
-// DataDirName is the lock file in the data directory.
 const DataDirName = "taskto.lock"
 
-// ErrLocked is matched (errors.Is) by the error Lock returns when another open file holds
-// the lock, in this process or another.
 var ErrLocked = errors.New("locked by another process")
 
-// HeldError is the error Lock returns when the lock is held.
 type HeldError struct {
 	Path string
-	// PID is the process ID the holder wrote into the lock file, or 0 if it hasn't yet.
-	PID int
+	PID  int
 }
 
 func (e *HeldError) Error() string {
@@ -43,8 +29,6 @@ func (e *HeldError) holder() string {
 	return "pid " + strconv.Itoa(e.PID)
 }
 
-// dataDirHeldError is DataDir's error when another process holds the lock: a message for the
-// operator, still matching errors.Is(err, ErrLocked) and errors.As(err, **HeldError).
 type dataDirHeldError struct {
 	dir  string
 	held *HeldError
@@ -56,17 +40,9 @@ func (e *dataDirHeldError) Error() string {
 
 func (e *dataDirHeldError) Unwrap() error { return e.held }
 
-// Is makes errors.Is(err, ErrLocked) true.
 func (e *HeldError) Is(target error) bool { return target == ErrLocked }
 
-// Lock creates path if needed and takes an exclusive lock on it without waiting, then
-// writes this process's ID into it. The lock is held until the returned file is closed or
-// the process exits. If another holds it, Lock returns a *HeldError naming its PID. A
-// symbolic link in place of path is not followed.
 func Lock(path string) (*os.File, error) {
-	// The file can be removed and made again between opening and locking it, by another
-	// process doing the same: then this lock is on a file nobody else will find. Locking
-	// again on what the path names now settles it; it is rare, so a few tries do.
 	for range 5 {
 		f, err := lockOnce(path)
 		if !errors.Is(err, errReplaced) {
@@ -76,15 +52,12 @@ func Lock(path string) (*os.File, error) {
 	return nil, fmt.Errorf("lock %s: the file keeps being replaced", path)
 }
 
-// errReplaced is for a lock file replaced while it was being locked.
 var errReplaced = errors.New("lock file replaced")
 
-// afterOpen, when set (by tests), runs between opening the lock file and locking it.
 var afterOpen func()
 
 func lockOnce(path string) (*os.File, error) {
-	// os.OpenFile opens close-on-exec. No O_TRUNC: if another holds the lock, its PID stays.
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|noFollow, 0o600) //nolint:gosec // G304: the path comes from the server's config
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|noFollow, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -100,18 +73,15 @@ func lockOnce(path string) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
-	// Still the file the path names? If not, this lock guards nothing.
 	locked, err := f.Stat()
 	if err != nil {
 		f.Close()
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
-	if now, err := os.Lstat(path); err != nil || !os.SameFile(locked, now) { //nolint:gosec // G703: the path comes from the server's config, as above
+	if now, err := os.Lstat(path); err != nil || !os.SameFile(locked, now) {
 		f.Close()
 		return nil, errReplaced
 	}
-	// Only the holder writes, so the PID in the file is the holder's, or a crashed
-	// holder's until this write.
 	pid := []byte(strconv.Itoa(os.Getpid()) + "\n")
 	err = f.Truncate(0)
 	if err == nil {
@@ -124,8 +94,6 @@ func lockOnce(path string) (*os.File, error) {
 	return f, nil
 }
 
-// holder returns the PID written in the lock file f, read through f itself (the very file
-// whose lock is held, not whatever the path names now), or 0 if there is none yet.
 func holder(f *os.File) int {
 	b := make([]byte, 32)
 	n, err := f.ReadAt(b, 0)
@@ -140,9 +108,6 @@ func holder(f *os.File) int {
 	return pid
 }
 
-// DataDir locks the data directory dir, which must exist, for the whole of a server's or
-// a restore's run: exactly one process uses a data directory at a time. Close the file
-// to release it.
 func DataDir(dir string) (*os.File, error) {
 	f, err := Lock(filepath.Join(dir, DataDirName))
 	if held := (*HeldError)(nil); errors.As(err, &held) {

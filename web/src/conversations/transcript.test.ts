@@ -1,6 +1,3 @@
-// The stream fixture is what the server sent for one message to the scripted model (with the
-// reply's text growing in one append, as a real model's does), so these follow a real view.
-
 import { applyImmutable, type Op } from '@earendil-works/chord/delta'
 import { expect, test } from 'vitest'
 import stream from './testdata/stream.json'
@@ -8,7 +5,6 @@ import { type ConversationView, transcript } from './transcript'
 
 type Event = { type: string; value?: ConversationView; ops?: Op[] }
 
-// The view after each event, as the client builds it.
 function views(): ConversationView[] {
   const out: ConversationView[] = []
   let view: ConversationView | undefined
@@ -25,18 +21,14 @@ test('follows a message and its reply through the stream', () => {
   const steps = views().map(transcript)
   expect(steps[0]).toEqual({ messages: [], running: false, truncated: false })
 
-  // The message is in, and the agent is working.
   expect(steps[1].running).toBe(true)
   expect(steps[1].messages.map((m) => [m.role, m.text])).toEqual([['user', 'Hello there, agent']])
 
-  // The system entry the run adds isn't shown.
   expect(steps[2].messages).toHaveLength(1)
 
-  // The reply as it is written: pending, then growing.
   expect(steps[4].messages.at(-1)).toMatchObject({ role: 'assistant', text: '', pending: true })
   expect(steps[5].messages.at(-1)).toMatchObject({ role: 'assistant', text: 'echo: Hello', pending: true })
 
-  // Done: the reply is an entry, nothing is live.
   const done = steps[6]
   expect(done.running).toBe(false)
   expect(done.messages.map((m) => [m.role, m.text, m.pending ?? false])).toEqual([
@@ -112,7 +104,6 @@ test('a tool use names the app only from a saved result, never from its argument
           result('other', 'show_app', saved),
         ],
       },
-      // The result can come in a later entry.
       { id: 2, kind: 'pi.tool', model: [result('ok', 'create_app', saved)] },
     ],
   })
@@ -125,7 +116,6 @@ test('a tool use names the app only from a saved result, never from its argument
 })
 
 test('a result answers the latest call with its id: ids can repeat across turns', () => {
-  // Some providers number a turn's calls from 0, so two turns both have a "call_0".
   const call = (name: string) => ({ type: 'toolCall', id: 'call_0', name, arguments: {} })
   const result = (name: string, app: number) => ({
     role: 'toolResult',
@@ -177,7 +167,6 @@ test('an app a CLI turn saved is the app of its cli_turn call, from the result i
             content: [{ type: 'text', text: 'Saved.' }],
             details: {
               transcript: '▸ mcp__taskto__create_app',
-              // The last is the one shown; what isn't an id is passed over.
               apps: [{ space: 2, app: 1 }, { space: 'x', app: 3 }, { space: 2, app: 4 }, null],
             },
           },

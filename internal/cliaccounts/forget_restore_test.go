@@ -21,7 +21,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// openData opens (and migrates) the database of data directory dir.
 func openData(t *testing.T, dir string) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -36,8 +35,6 @@ func openData(t *testing.T, dir string) *sql.DB {
 	return sqlDB
 }
 
-// newUser adds a user the way the server does: with a number above every number there has been
-// (auth's insertUser), so a purged account's number is not given again by this database.
 func newUser(t *testing.T, sqlDB *sql.DB, email string) int64 {
 	t.Helper()
 	var id int64
@@ -51,7 +48,6 @@ func newUser(t *testing.T, sqlDB *sql.DB, email string) int64 {
 	return id
 }
 
-// purge deletes user from the database and has the worker forget them, as the account purge does.
 func purge(t *testing.T, svc *Service, sqlDB *sql.DB, user int64) {
 	t.Helper()
 	if _, err := sqlDB.Exec(`DELETE FROM users WHERE id = ?`, user); err != nil {
@@ -62,17 +58,10 @@ func purge(t *testing.T, svc *Service, sqlDB *sql.DB, user int64) {
 	}
 }
 
-// A restore of the server's data goes back in the database's history, while the CLI worker's own
-// directory (a volume of its own in container mode) is not part of the backup. What the worker
-// forgot must not be refused after it, or a live person is locked out for good: the numbers
-// after the backup are given again, and a person whose account was purged since may be back.
-// After the server has told the worker who is here (at every start), only the accounts that are
-// really gone stay refused.
 func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 	ctx := context.Background()
 	dataA := t.TempDir()
 	dbA := openData(t, dataA)
-	// The worker is on a root of its own, as the container worker is: no backup covers it.
 	e := newEnv(t, Container, nil)
 	svcA := New(dbA, Container, LocalWorker(e.worker))
 	t.Cleanup(svcA.Close)
@@ -80,24 +69,21 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 	one := newUser(t, dbA, "one@example.com")
 	gone := newUser(t, dbA, "gone@example.com")
 	back := newUser(t, dbA, "back@example.com")
-	purge(t, svcA, dbA, gone) // purged before the backup: gone for good
+	purge(t, svcA, dbA, gone)
 
 	var archive bytes.Buffer
 	if _, err := backup.Create(ctx, dataA, "test", &archive, backup.Options{}); err != nil {
 		t.Fatal(err)
 	}
 
-	// After the backup: a person is added and deleted, and the account that is in the backup is
-	// purged.
 	later := newUser(t, dbA, "later@example.com")
 	purge(t, svcA, dbA, later)
 	purge(t, svcA, dbA, back)
 	if next := newUser(t, dbA, "after@example.com"); next <= later {
 		t.Fatalf("fixture: the database gave %d again", next)
 	}
-	time.Sleep(20 * time.Millisecond) // the marks are older than the next server's read
+	time.Sleep(20 * time.Millisecond)
 
-	// The operator restores the backup into a data directory and starts a server on it.
 	dataB := filepath.Join(t.TempDir(), "restored")
 	if _, err := backup.Restore(ctx, bytes.NewReader(archive.Bytes()), dataB); err != nil {
 		t.Fatal(err)
@@ -105,7 +91,6 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 	dbB := openData(t, dataB)
 	svcB := New(dbB, Container, LocalWorker(e.worker))
 	t.Cleanup(svcB.Close)
-	// A person is added in the restored database and gets the number the other history gave away.
 	fresh := newUser(t, dbB, "fresh@example.com")
 	if fresh != later {
 		t.Fatalf("fixture: the restored database gave %d, want %d (the number the lost history used)", fresh, later)
@@ -115,7 +100,6 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 		_, err := e.worker.StartLogin(user, cliworker.Claude, "")
 		return err
 	}
-	// Until the server has told the worker, it refuses: that is the moment the fix closes.
 	if err := started(fresh); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Fatalf("before the server tells the worker: %v (fixture)", err)
 	}
@@ -128,11 +112,9 @@ func TestForgottenMarksDoNotOutliveARestore(t *testing.T) {
 		}
 		e.worker.CancelLogin(user, cliworker.Claude, "")
 	}
-	// The account that was gone before the backup is still gone.
 	if err := started(gone); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("an account that is gone for good was let back: %v", err)
 	}
-	// And a turn runs on the restored person's own login, as it did.
 	dirs, err := e.layout.Ensure(back)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +147,6 @@ func waitTurn(t *testing.T, turn *cliworker.Turn) {
 	}
 }
 
-// flakyWorker is a worker that can't be reached for its first few Reconcile calls.
 type flakyWorker struct {
 	Worker
 	fails atomic.Int32
@@ -181,16 +162,12 @@ func (f *flakyWorker) Reconcile(ctx context.Context, live []int64, next int64, b
 	return err
 }
 
-// A worker that can't be reached when the server starts (in container mode it starts beside it)
-// is told as soon as it can be, and its refusal of a forgotten user is an answer the API gives
-// with a code the web app translates.
 func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	ctx := context.Background()
 	if err := e.svc.Forget(ctx, 9); err != nil {
 		t.Fatal(err)
 	}
-	// The database has no user 9 and the next number is 1: the mark is for a number to come.
 	w := &flakyWorker{Worker: LocalWorker(e.worker), told: make(chan struct{})}
 	w.fails.Store(1)
 	svc := New(e.db, Container, w)
@@ -216,10 +193,6 @@ func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	}
 }
 
-// An account whose purge began keeps its mark across a start of the server, until the purge has
-// deleted it: the purge forgets the worker's files before it deletes the account, and one that
-// failed in between is made again from its start. A person whose deletion is only requested is
-// not forgotten yet, and nothing marks them.
 func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	ctx := context.Background()
@@ -233,7 +206,7 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	if _, err := e.db.Exec(`INSERT INTO account_deletions (user_id, requested_at, purge_at, purge_started_at) VALUES (?, 'x', 'x', 'x')`, begun); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond) // the marks are older than the read
+	time.Sleep(20 * time.Millisecond)
 	if err := e.svc.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}

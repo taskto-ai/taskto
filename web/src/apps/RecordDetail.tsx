@@ -1,10 +1,3 @@
-// One record of an app, in a drawer beside the records: its fields, which a person who may change it
-// edits, its history as a timeline, and for a deleted one its restore. Deleting asks first. Edits go through the app's own update action with the revision the
-// person saw (as the screen's buttons do), so someone else's change is a conflict and never a silent
-// overwrite. On a conflict nothing the person typed is lost: their input stays in the form, the
-// server's current values are shown beside it, and they choose to save theirs over them or to drop
-// theirs. What the server decides is never second-guessed here.
-
 import { useEffect, useId, useRef, useState } from 'react'
 import { ApiError, type AppField, type AppRecord, api, errorText, type RecordVersion } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -30,7 +23,6 @@ import { SignatureField } from './SignaturePad'
 const RECORD_CONFLICT = 'app_record_conflict'
 
 type History = { record: AppRecord; history: RecordVersion[]; truncated: boolean }
-// The record as the server has it now, after a conflict: its revision and its fields.
 type Current = { revision: number; data: Record<string, unknown> }
 
 export function RecordDetail({
@@ -48,34 +40,24 @@ export function RecordDetail({
   onChanged,
   onUnsaved,
 }: {
-  // …/spaces/{space}/apps/{app}
   base: string
   appId: number
   id: number
   fields: AppField[]
-  // The app's actions that change and remove a record; without one the record is read-only.
   updateAction?: string
   deleteAction?: string
-  // The live release the actions are named from.
   release?: number
   deleted: boolean
   canChange: boolean
   canRestore: boolean
-  // Asked to close (its close button, Escape); or, with 'gone', closed because the record left the
-  // list (deleted, restored), which nothing is lost by.
   onClose: (how?: 'gone') => void
-  // Whether the drawer holds what isn't saved: a field the person changed, or a conflict on screen
-  // (their version and the server's). The explorer asks before anything closes it then.
   onUnsaved?: (unsaved: boolean) => void
-  // Something changed (an edit, a delete, a restore): the list and the app's screen are loaded again.
   onChanged: () => void
 }) {
   const t = useT()
   const f = useFormat()
   const formId = useId()
   const loaded = useLoad(() => api<History>(`${base}/records/${id}/history`), [base, id])
-  // What the person typed, by field name: only the fields they touched. The rest of the form is the
-  // record as it is, so an edit never carries a stale value of a field it didn't change.
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [conflict, setConflict] = useState<Current | null>(null)
   const [busy, setBusy] = useState(false)
@@ -86,10 +68,6 @@ export function RecordDetail({
   const editable = canChange && !deleted && !!updateAction && !record?.deleted_at
   const title = t('apps.records.record', { id: String(id) })
 
-  // What isn't saved: a field that differs from the record's value (one typed and put back by hand
-  // is saved as it is), or a conflict on screen (both versions are the person's to choose from).
-  // Said to the explorer, which asks before anything closes the drawer then; and to the browser,
-  // which asks before the tab closes or reloads. The drawer going says nothing is left.
   const saved = conflict?.data ?? record?.data
   const unsaved = conflict !== null || Object.entries(edits).some(([name, value]) => value !== toText(saved?.[name]))
   const tell = useRef(onUnsaved)
@@ -124,8 +102,6 @@ export function RecordDetail({
     )
   }
 
-  // What the form shows for a field: what was typed, else the record's value (the server's current
-  // one once a conflict has been shown).
   const base0: Record<string, unknown> = conflict?.data ?? record.data
   const textOf = (name: string) => edits[name] ?? toText(base0[name])
   const touched = Object.keys(edits)
@@ -145,11 +121,9 @@ export function RecordDetail({
       },
     })
 
-  // The record as the server has it now, from the conflict's answer or, failing that, read again.
   const adoptCurrent = async (e: ApiError) => {
     const item = (e.body as { current?: Record<string, unknown> } | undefined)?.current
     if (item && typeof item._revision === 'number') {
-      // The record's own fields: not its id, nor the keys the server adds (its revision, its choices' labels).
       const data = Object.fromEntries(Object.entries(item).filter(([k]) => k !== 'id' && !k.startsWith('_')))
       setConflict({ revision: item._revision, data })
       return
@@ -157,9 +131,7 @@ export function RecordDetail({
     try {
       const now = await api<History>(`${base}/records/${id}/history`)
       setConflict({ revision: now.record.revision, data: now.record.data })
-    } catch {
-      // The conflict is what the person is told.
-    }
+    } catch {}
   }
 
   const save = async () => {
@@ -228,7 +200,6 @@ export function RecordDetail({
     loaded.reload()
   }
 
-  // The fields the person typed in where the server's value now differs: shown side by side.
   const clashes = conflict
     ? touched
         .filter((name) => edits[name] !== toText(conflict.data[name]))
@@ -266,7 +237,6 @@ export function RecordDetail({
   return (
     <Drawer open title={title} onClose={() => onClose()} footer={footer}>
       {confirmDialog}
-      {/* Escape in a field (a text box, a date, a choice) is the field's: the Drawer leaves it. */}
       <div className="ui-record">
         <p className="ui-record-meta">
           {t('apps.records.revision', { revision: String(revision) })}
@@ -347,7 +317,6 @@ export function RecordDetail({
   )
 }
 
-// A typed value in the person's language, for the conflict's comparison.
 function shownText(
   text: string | undefined,
   field: AppField,
@@ -373,7 +342,6 @@ function FieldRow({
   base: string
   field: AppField
   text: string
-  // The value as the record holds it (an object for a location).
   raw: unknown
   editable: boolean
   onChange: (v: string) => void
@@ -382,11 +350,7 @@ function FieldRow({
   const f = useFormat()
   const id = `${idPrefix}-${field.name}`
   const known = ['string', 'number', 'boolean', 'date', 'time', 'choice', 'barcode'].includes(field.type)
-  // A field this version doesn't know how to edit (captured evidence such as media, a location or a
-  // signature) is shown as it was recorded, never as an input.
   if (field.type === 'location' || field.type === 'signature') {
-    // Captured evidence: shown as recorded, never an input. The server refuses a change to it (unless
-    // the field says it is editable), so no control is offered.
     return (
       <div className="ui-record-readonly">
         {field.type === 'location' ? (
@@ -412,7 +376,6 @@ function FieldRow({
     )
   }
   if (!editable || !known) {
-    // Photos are shown as thumbnails, through the viewer's own session.
     const photos = field.type === 'attachment' ? photoIds(text.split(',')) : []
     return (
       <div className="ui-record-readonly">
@@ -438,11 +401,9 @@ function FieldRow({
               { value: 'false', label: t('apps.records.no') },
             ]
           : (field.options ?? []).map((o) => ({ value: o, label: optionLabel(field, o) }))
-      // A stored choice the options no longer list stays selectable as it is.
       if (text !== '' && !options.some((o) => o.value === text)) options.push({ value: text, label: text })
       return (
         <Field id={id} label={field.name} required={field.required}>
-          {/* The mark and aria-required say it is required; the server checks it, as it always has, not the browser. */}
           <Select
             required={false}
             aria-required={field.required || undefined}

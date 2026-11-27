@@ -1,6 +1,3 @@
-// The service worker's behaviour, run against fakes of the worker's globals: the template as
-// the build renders it, with a precache list.
-
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeEach, expect, test, vi } from 'vitest'
@@ -11,7 +8,6 @@ const PRECACHE = ['/assets/AppsPage-def456.js', '/assets/index-abc123.js', '/ico
 
 type Listener = (event: unknown) => void
 
-// An in-memory CacheStorage, keys in the order the caches were created.
 class FakeCache {
   entries = new Map<string, Response>()
   async put(key: string | Request, response: Response) {
@@ -65,7 +61,6 @@ function boot(
     fetchCalls.push({ url: new URL(request.url).pathname, cache: request.cache })
     return network(new URL(request.url).pathname, undefined)
   }
-  // In a worker a relative URL resolves against its own location.
   class WorkerRequest extends Request {
     constructor(input: string | Request, init?: RequestInit) {
       super(typeof input === 'string' ? new URL(input, self.location.origin).href : input, init)
@@ -79,7 +74,6 @@ function boot(
     listeners.get(type)?.({ waitUntil: (p: Promise<unknown>) => (work = p) })
     await work
   }
-  // A page request; returns what the worker answered, or "pass" when it left it to the browser.
   const request = async (
     path: string,
     { method = 'GET', mode = 'cors', origin = 'https://tasks.example.com' } = {},
@@ -90,7 +84,6 @@ function boot(
     listeners.get('fetch')?.({ request: req, respondWith: (p: Promise<Response>) => (answer = p) })
     return answer ? await answer : 'pass'
   }
-  // An event with data the test gives (a push, a click, a message), and what the worker waited on.
   const emit = async (type: string, event: Record<string, unknown>) => {
     let work: Promise<unknown> = Promise.resolve()
     listeners.get(type)?.({ ...event, waitUntil: (p: Promise<unknown>) => (work = p) })
@@ -146,7 +139,6 @@ test('activate keeps this version and the previous active one, drops older ones,
 
 test('two deploys before an update: the version tabs still run keeps its cache', async () => {
   const caches = new FakeCaches()
-  // v1 is active, with tabs open; v2 installed and waited, then v3 installed over it.
   await (await caches.open('taskto-shell-v1')).put('/__taskto-activated', new Response(''))
   await (await caches.open('taskto-shell-v1')).put('/assets/Apps-v1.js', new Response('v1 chunk'))
   await caches.open('taskto-shell-v2')
@@ -154,7 +146,6 @@ test('two deploys before an update: the version tabs still run keeps its cache',
   await caches.open('taskto-shell-v3')
   await v3.dispatchWait('activate')
   expect(await caches.keys()).toEqual(['taskto-shell-v1', 'taskto-shell-v3'])
-  // A v1 tab, now controlled by v3, still gets its lazy chunk.
   expect(await text(await v3.request('/assets/Apps-v1.js'))).toBe('v1 chunk')
 })
 
@@ -229,8 +220,6 @@ test('offline, an app route opens the cached page; a server route is not answere
   expect(await flaky.request('/api/me', { mode: 'navigate' })).toBe('pass')
 })
 
-// --- Push ----------------------------------------------------------------------------------
-
 const WORDS = {
   card_assigned: 'A card was assigned to you',
   card_due: 'A card of yours is due',
@@ -256,7 +245,6 @@ test('a push shows the brand and the words for its kind, tagged and carrying onl
 })
 
 test('a push shows something whatever it carries: unknown kinds and unreadable data say only the brand and a generic line', async () => {
-  // No words given yet (push turned on, the page not yet started): the brand alone.
   await sw.emit('push', pushOf({ id: 7, kind: 'card_assigned' }))
   expect((shown(sw)[0] as [string, { body: string }])[1].body).toBe('')
   await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
@@ -276,8 +264,6 @@ test('a push shows something whatever it carries: unknown kinds and unreadable d
     expect(call[0]).toBe('taskto.ai')
     expect(call[1].body).toBe('Something changed')
   }
-  // Data that isn't a notification's ID is never used as one, and nothing the push said but the
-  // ID and the kind is shown.
   expect(calls.slice(1).map((c) => c[1].data.id)).toEqual([8, 0, 0, 0, 0])
   expect(JSON.stringify(calls)).not.toContain('Secret plan')
 })
@@ -292,7 +278,6 @@ test('the words a page gives are kept only for the kinds the server sends, and s
   await sw.emit('push', pushOf({ id: 3, kind: 'app_effect_failed' }))
   const bodies = (shown(sw) as [string, { body: string }][]).map((c) => c[1].body)
   expect(bodies).toEqual(['', '', 'An app action needs your attention'])
-  // They live apart from the app's caches, so an update of the app keeps them and a cleanup drops nothing of theirs.
   expect(await sw.caches.keys()).toEqual(['taskto-push-strings'])
 })
 
@@ -307,7 +292,6 @@ test('a push of a kind that a cache made before it existed has no words for says
 })
 
 test('a kind the saved words lack (kept from before an update) says the generic line', async () => {
-  // WORDS are the lines of the version before the comment and mention kinds.
   await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
   await sw.emit('push', pushOf({ id: 1, kind: 'card_comment' }))
   await sw.emit('push', pushOf({ id: 2, kind: 'card_mention' }))

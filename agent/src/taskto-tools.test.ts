@@ -9,7 +9,6 @@ import { testHooks } from './test-hooks.js'
 
 const specs = definitions as ToolSpec[]
 
-// The tools of the extension the sidecar registers.
 function toolsOf(socket: string, options?: { browser?: boolean }) {
   const { tools } = tasktoTools(socket, options)
   if (!tools) throw new Error('the extension has no tools')
@@ -70,9 +69,6 @@ describe('tool selection', () => {
     expect(names({ browser: true })).toEqual(specs.map((s) => s.name))
   })
 
-  // That the production entry (index.ts) registers no spike tools is covered by the integration test
-  // TestProductionSidecarRefusesThePauseTools (internal/agentrt/tools_it_test.go): this one only
-  // checks the hooks' defaults, which the test entry alone changes.
   it('names the extension, and its test hooks are off by default', () => {
     expect(tasktoTools('/unused.sock').name).toBe('taskto-tools')
     expect(testHooks.extraToolSpecs).toEqual([])
@@ -138,7 +134,6 @@ describe('a tool call', () => {
     seen.length = 0
   })
 
-  // The tool as Pi Durable runs it, with a conversation that holds the given capability.
   async function run(name: string, args: unknown, capability: string, abort?: AbortSignal) {
     const tool = toolsOf(socket, { browser: true }).find((t) => t.name === name)
     if (!tool) throw new Error(`no tool ${name}`)
@@ -149,8 +144,7 @@ describe('a tool call', () => {
         return { capability }
       },
     }
-    // biome-ignore lint/suspicious/noExplicitAny: the execution API is Pi Durable's, and only these two members are used
-    return (await tool.execute(args as never, api as any, { abortSignal: abort } as never)) as {
+    return (await tool.execute(args as never, api as never, { abortSignal: abort } as never)) as {
       output: { type: string; text: string }[]
       isError?: boolean
     }
@@ -212,11 +206,9 @@ describe('a tool call', () => {
       arrived = resolve
     })
     handler = () => {
-      // Never answers; the abort comes once the request is here.
       arrived()
     }
     const call = run('list_spaces', {}, 'cap-123', controller.signal)
-    // Attach the assertion first so the rejection is never unhandled.
     const rejection = expect(call).rejects.toMatchObject({ name: 'AbortError' })
     await requestArrived
     controller.abort()

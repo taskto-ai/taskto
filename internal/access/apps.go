@@ -7,47 +7,8 @@ import (
 	"slices"
 )
 
-// App roles. Access to an app is first access to its space (Space.Access); app roles only
-// narrow it further, and never widen it: what a user may do in an app is what their roles
-// grant, limited to what their role in the space allows (a viewer of the space never writes,
-// whatever app roles they hold; nobody writes in an archived space).
-//
-// An app without any role assignment is unrestricted: its users have what their role in the
-// space allows. Once it has one, it is restricted for everyone: a member holds their own
-// roles, else the default's, else none (they don't see the app). That is what every app had before roles existed, and what apps keep until
-// someone sets roles on them.
-//
-// A role is a set of capabilities, and a user may hold several:
-//
-//	role          design  publish  submit  read records  modify records
-//	builder       yes     -        -       -             -
-//	publisher     -       yes      -       -             -
-//	user          -       -        yes     own           own
-//	data_manager  -       -        yes     all           all
-//	reader        -       -        -       all           -
-//
-// Every role may view the app (launch it and read its live definition), and a builder may also
-// manage the app's roles. design is changing the app's draft (its screen, collection, actions
-// and summaries), renaming the app and moving it; publish is making the draft the
-// live release (publishing it, or rolling back to an earlier release: internal/apps, release.go)
-// and taking the app offline and back; submit is adding records. Reading and modifying
-// records have a scope: "own" is the records the user created (the agent's included, as it
-// acts for them), "all" every record, "none" no record. Every way to read records answers to
-// the read scope, summaries (count, sum) and the counts in lists included.
-//
-// The space allows write: every capability; read: view and read all records.
-//
-// One more rule keeps an app from being left with nobody to set it right: roles are removed with
-// the member who held them (someone leaving the space), so the last builder's departure would
-// strand an app whose roles are assigned. Only then, while no assignment gives anyone the builder
-// role, a workspace admin who may write the shared space can view the app and manage its roles,
-// to give someone the builder (or data manager) role again. While the app has a builder, an admin
-// has only the roles assigned to them, like anyone: the rule is a way back, not standing access.
-
-// AppRole is a role in one app.
 type AppRole string
 
-// The roles of an app.
 const (
 	AppBuilder     AppRole = "builder"
 	AppPublisher   AppRole = "publisher"
@@ -56,15 +17,12 @@ const (
 	AppReader      AppRole = "reader"
 )
 
-// AppRoles lists every role, in the order they are shown.
 var AppRoles = []AppRole{AppBuilder, AppPublisher, AppUser, AppDataManager, AppReader}
 
 func (r AppRole) valid() bool { return slices.Contains(AppRoles, r) }
 
-// Scope is how many of an app's records a capability reaches.
 type Scope string
 
-// The scopes, each including the ones before it.
 const (
 	ScopeNone Scope = "none"
 	ScopeOwn  Scope = "own"
@@ -96,11 +54,8 @@ func maxScope(a, b Scope) Scope {
 	return b
 }
 
-// Capability is something a user may do in an app, apart from the scoped reading and
-// modifying of records.
 type Capability string
 
-// The capabilities.
 const (
 	CapView        Capability = "view"
 	CapDesign      Capability = "design"
@@ -109,25 +64,19 @@ const (
 	CapManageRoles Capability = "manage_roles"
 )
 
-// AppAccess is what one user may do in one app, as the Checker works it out.
 type AppAccess struct {
-	// Roles are the roles the user holds in the app: every role they could hold if the app
-	// is unrestricted, or the ones assigned to them (their own, or else the default's).
-	Roles []AppRole `json:"roles" apitypes:"nonnull"`
-	// Restricted is whether roles were assigned for the app at all.
-	Restricted bool `json:"restricted"`
+	Roles      []AppRole `json:"roles" apitypes:"nonnull"`
+	Restricted bool      `json:"restricted"`
 
-	View        bool `json:"view"`
-	Design      bool `json:"design"`
-	Publish     bool `json:"publish"`
-	Submit      bool `json:"submit"`
-	ManageRoles bool `json:"manage_roles"`
-	// ReadRecords and ModifyRecords (update and delete) are scoped.
+	View          bool  `json:"view"`
+	Design        bool  `json:"design"`
+	Publish       bool  `json:"publish"`
+	Submit        bool  `json:"submit"`
+	ManageRoles   bool  `json:"manage_roles"`
 	ReadRecords   Scope `json:"read_records"`
 	ModifyRecords Scope `json:"modify_records"`
 }
 
-// Has reports whether the user has capability c.
 func (a AppAccess) Has(c Capability) bool {
 	switch c {
 	case CapView:
@@ -144,7 +93,6 @@ func (a AppAccess) Has(c Capability) bool {
 	return false
 }
 
-// roleCaps is what a set of roles grants, before the space's limit.
 func roleCaps(roles []AppRole) AppAccess {
 	a := AppAccess{ReadRecords: ScopeNone, ModifyRecords: ScopeNone}
 	for _, r := range roles {
@@ -169,8 +117,6 @@ func roleCaps(roles []AppRole) AppAccess {
 	return a
 }
 
-// spaceLimit is what a user's access to the space allows an app role to give: the ceiling
-// that app roles never go over.
 func spaceLimit(sp Access) AppAccess {
 	switch sp {
 	case Write:
@@ -182,8 +128,6 @@ func spaceLimit(sp Access) AppAccess {
 	}
 }
 
-// defaultRoles are the roles of an unrestricted app for a user whose access to the space
-// is sp.
 func defaultRoles(sp Access) []AppRole {
 	switch sp {
 	case Write:
@@ -195,11 +139,6 @@ func defaultRoles(sp Access) []AppRole {
 	}
 }
 
-// appAccess works out a user's access to an app: the capabilities of roles (nil if the app
-// is unrestricted), limited to what sp allows.
-//
-// rescue is whether the user may set a stranded app right (see the note on the rules above): it
-// only adds to what roles give, view and manage_roles, and never beyond the space's limit.
 func appAccess(sp Access, roles []AppRole, restricted, rescue bool) AppAccess {
 	limit := spaceLimit(sp)
 	if !restricted {
@@ -232,25 +171,16 @@ func sortedRoles(roles []AppRole) []AppRole {
 	return out
 }
 
-// AppGrant assigns roles of an app to one user, or with a nil UserID to every member of
-// the space who has no assignment of their own. Once an app has any assignment, a member
-// with neither theirs nor a default holds no role in it, and doesn't see it.
 type AppGrant struct {
 	UserID *int64    `json:"user_id"`
 	Roles  []AppRole `json:"roles"`
 }
 
-// grantRow is one stored role assignment.
 type grantRow struct {
 	userID sql.NullInt64
 	role   AppRole
 }
 
-// resolve picks the roles that apply to userID among an app's rows: their own if they have
-// any, else the default's. anyGrants is whether the app has any assignment at all, anyone's:
-// without one the app is unrestricted; with one, a user named nowhere and with no default
-// holds no role, so restricting an app never leaves a member it doesn't name (one who joins
-// the space later included) with every role.
 func resolve(rows []grantRow, userID int64, anyGrants bool) (roles []AppRole, restricted bool) {
 	var own, def []AppRole
 	for _, r := range rows {
@@ -272,12 +202,8 @@ func resolve(rows []grantRow, userID int64, anyGrants bool) (roles []AppRole, re
 	return nil, false
 }
 
-// ErrAppNotFound is for an app that isn't in the space it was asked for in.
 var ErrAppNotFound = errors.New("app not found")
 
-// App returns what userID may do in appID of spaceID: ErrNotFound if they can't read the
-// space, ErrAppNotFound if the space has no such app. It is the one place that answers
-// app-level access; callers act on the answer for requests and for the agent alike.
 func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAccess, error) {
 	sp, err := c.Check(ctx, userID, spaceID)
 	if err != nil {
@@ -308,10 +234,6 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 	return appAccess(sp.Access, roles, restricted, rescue), nil
 }
 
-// AppNamed is App and the app's name, read in one snapshot: what the person may do and what the
-// app is called come from the same state, which two reads can't give (the app could be renamed
-// and its roles changed between them). It returns the space as the person sees it too. The errors
-// are App's.
 func (c *Checker) AppNamed(ctx context.Context, userID, spaceID, appID int64) (Space, AppAccess, string, error) {
 	var sp Space
 	var acc AppAccess
@@ -331,14 +253,6 @@ func (c *Checker) AppNamed(ctx context.Context, userID, spaceID, appID int64) (S
 	return sp, acc, name, nil
 }
 
-// Snapshot runs fn in one read-only transaction: a single snapshot that takes no write lock (see
-// package db). snap is a Checker whose checks read inside it, and tx is the same transaction for
-// the reads that go with them, so what a person may do and what fn reads of it come from one
-// state: nothing that changes meanwhile (a demotion, a removal, an app moving) can make the two
-// disagree. The snapshot starts with the first read, and fn must not write.
-//
-// On a checker that already reads inside a transaction (Checker.On) that transaction is the
-// snapshot: a second one would wait for the one that holds the write lock.
 func (c *Checker) Snapshot(ctx context.Context, fn func(snap *Checker, tx *sql.Tx) error) error {
 	tx, held := c.reads.(*sql.Tx)
 	if !held {
@@ -347,16 +261,14 @@ func (c *Checker) Snapshot(ctx context.Context, fn func(snap *Checker, tx *sql.T
 		if err != nil {
 			return err
 		}
-		defer func() { _ = tx.Rollback() }() // nothing was written
+		defer func() { _ = tx.Rollback() }()
 	}
 	return fn(&Checker{db: c.db, reads: tx, auth: c.auth}, tx)
 }
 
-// stranded is whether a set of assignments (every one of an app's) leaves it with nobody who may
-// manage its roles: there are some, and none of them, anyone's or the default's, is the builder's.
 func stranded(all []grantRow) bool {
 	if len(all) == 0 {
-		return false // unassigned: everyone who may write the space builds it
+		return false
 	}
 	for _, r := range all {
 		if r.role == AppBuilder {
@@ -366,15 +278,12 @@ func stranded(all []grantRow) bool {
 	return true
 }
 
-// strandedApps are the stranded apps of a space, by ID, as their stored assignments stand.
 const strandedApps = `
 	SELECT a.id FROM apps a
 	WHERE a.space_id = ?
 	  AND EXISTS (SELECT 1 FROM app_roles r WHERE r.app_id = a.id)
 	  AND NOT EXISTS (SELECT 1 FROM app_roles r WHERE r.app_id = a.id AND r.role = 'builder')`
 
-// rescues is whether userID may set appID of sp right: they administer the space, and the app is
-// stranded.
 func (c *Checker) rescues(ctx context.Context, userID int64, sp Space, appID int64) (bool, error) {
 	admin, err := c.administers(ctx, userID, sp)
 	if err != nil || !admin {
@@ -385,8 +294,6 @@ func (c *Checker) rescues(ctx context.Context, userID int64, sp Space, appID int
 	return isStranded, err
 }
 
-// administers is whether userID is an administrator of sp: a workspace admin, in a shared space
-// (a private space has its owner alone, who holds every role of an app that has none assigned).
 func (c *Checker) administers(ctx context.Context, userID int64, sp Space) (bool, error) {
 	if sp.Kind != Shared {
 		return false, nil
@@ -398,8 +305,6 @@ func (c *Checker) administers(ctx context.Context, userID int64, sp Space) (bool
 	return admin, err
 }
 
-// AppsIn returns what userID may do in each app of the space, by app ID, for a space they
-// can read (as Check returned it), in one query: every app of the space has an entry.
 func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64]AppAccess, error) {
 	rows, err := c.reads.QueryContext(ctx, `
 		SELECT a.id, EXISTS (SELECT 1 FROM app_roles x WHERE x.app_id = a.id), r.user_id, r.role
@@ -461,7 +366,6 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 	return out, nil
 }
 
-// grantRows reads the role rows of an app that concern userID (theirs and the default's).
 func (c *Checker) grantRows(ctx context.Context, userID, appID int64) ([]grantRow, error) {
 	rows, err := c.reads.QueryContext(ctx,
 		`SELECT user_id, role FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id IS NULL)`, appID, userID)
@@ -480,25 +384,15 @@ func (c *Checker) grantRows(ctx context.Context, userID, appID int64) ([]grantRo
 	return all, rows.Err()
 }
 
-// maxAppGrants bounds the assignments of one app.
 const maxAppGrants = 1000
 
-// Errors of SetAppGrants, for the caller to answer.
 var (
-	// ErrBadGrants is for assignments that make no sense: an unknown role, an empty role
-	// list, a user twice, or too many.
-	ErrBadGrants = errors.New("invalid role assignments")
-	// ErrGrantUnknownUser is for a user who can't read the space.
+	ErrBadGrants        = errors.New("invalid role assignments")
 	ErrGrantUnknownUser = errors.New("a role can only go to a member of the space")
-	// ErrGrantForbidden is for a caller who doesn't manage the app's roles.
-	ErrGrantForbidden = errors.New("you can't manage this app's roles")
-	// ErrGrantLockout is for assignments that would leave the person making them unable to
-	// manage the app's roles.
-	ErrGrantLockout = errors.New("you would lose the right to manage this app's roles")
+	ErrGrantForbidden   = errors.New("you can't manage this app's roles")
+	ErrGrantLockout     = errors.New("you would lose the right to manage this app's roles")
 )
 
-// AppGrants lists the role assignments of an app of spaceID: those of single users first,
-// by user ID, then the default's.
 func (c *Checker) AppGrants(ctx context.Context, spaceID, appID int64) ([]AppGrant, error) {
 	rows, err := c.reads.QueryContext(ctx, `
 		SELECT r.user_id, r.role FROM app_roles r JOIN apps a ON a.id = r.app_id
@@ -545,11 +439,6 @@ func sameUser(a *int64, b sql.NullInt64) bool {
 	return *a == b.Int64
 }
 
-// SetAppGrants replaces the role assignments of appID of spaceID with grants; an empty list
-// makes the app unrestricted again. actorID is the user making the change, who must keep
-// the right to manage the app's roles (they would be locked out otherwise: nobody could set
-// them right). Every user named must be able to read the space. The actor must manage the
-// app's roles now, which is checked under the write lock (ErrGrantForbidden).
 func (c *Checker) SetAppGrants(ctx context.Context, actorID, spaceID, appID int64, grants []AppGrant) error {
 	if len(grants) > maxAppGrants {
 		return ErrBadGrants
@@ -611,9 +500,6 @@ func (c *Checker) SetAppGrants(ctx context.Context, actorID, spaceID, appID int6
 			}
 		}
 		roles, restricted := resolve(rows, actorID, len(rows) > 0)
-		// After the change: an admin keeps the way back while the new assignments leave the app
-		// stranded, and an admin who gives someone the builder role has handed the app over,
-		// which is no lockout.
 		admin, err := c.administers(ctx, actorID, sp)
 		if err != nil {
 			return err

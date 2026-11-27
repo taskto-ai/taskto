@@ -1,12 +1,3 @@
-// Searching the knowledge base (docs/api.md, Search): a box that searches the space shown or
-// every space of the workspace, and the results with the server's notice, which says when
-// a search is full text only (no embeddings model, no consent, the model didn't answer), or
-// what it can't find yet (documents still being embedded, an index catching up). The notice
-// is said from its codes, in the user's language; the server's words are the fallback.
-// The same words also search the cards of the boards, the records of the apps and, when the
-// whole workspace is searched, the person's own conversations: each comes apart from the
-// documents, under a heading of its own, linking to its card, its app or its conversation.
-
 import { type FormEvent, useRef, useState } from 'react'
 import { api, errorText, type Space, ws } from '../api'
 import { appPath } from '../apps/route'
@@ -28,6 +19,7 @@ import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { cleanSnippet, isMarkdownPath } from './snippet'
 import './search.css'
+import { byPlace } from '../byPlace'
 
 export type SearchQuery = { q: string; scope: 'space' | 'workspace' }
 
@@ -96,8 +88,6 @@ const NOTICES: Record<string, Key> = {
   behind: 'search.notice.behind',
 }
 
-// A page's notice in the user's language, or the server's words if it sent a code this
-// version doesn't know (or none).
 export function noticeText(t: T, page: Pick<SearchPage, 'notice' | 'notices'>): string | undefined {
   const notices = page.notices ?? []
   if (notices.length === 0 || notices.some((n) => !(n.code in NOTICES))) return page.notice
@@ -160,7 +150,6 @@ export function SearchResults({
   const url = `${where}/search?q=${q}`
   const cardsUrl = `${where}/search/cards?q=${q}`
   const recordsUrl = `${where}/search/records?q=${q}`
-  // Conversations belong to a person, not to a space: only a search of the whole workspace has them.
   const conversationsUrl = query.scope === 'workspace' || !space ? `${ws(workspace)}/search/conversations?q=${q}` : null
   return (
     <ResultPages
@@ -177,18 +166,13 @@ export function SearchResults({
   )
 }
 
-// A search's pages: the first, and those "more" loads one at a time, also for two clicks in
-// the same tick (as the history's Older).
 function usePages<P extends { next_offset?: number }>(url: string | null) {
   const first = useLoad<P | undefined>(() => (url ? api<P>(url) : Promise.resolve(undefined)), [url])
   const [more, setMore] = useState<P[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pages = first.data ? [first.data, ...more] : []
-  // Answered, or skipped (no url): what it found is all there is of it. A failed search is not
-  // answered, and is not "nothing found" either.
   const answered = url === null || first.data !== undefined
-  // Answered or failed: nothing more is awaited of it.
   const settled = answered || first.error !== null
   const last = pages.at(-1)
   const loadingMore = useRef(false)
@@ -240,13 +224,8 @@ function ResultPages({
   const conversationResults = conversations.pages.flatMap((p) => p.results)
   const t = useT()
   const format = useFormat()
-  // The notice of the latest page: the index may have caught up meanwhile.
   const notice = last && noticeText(t, last)
-  // The cards, the records and the conversations are searches of their own: one that fails or
-  // is slow leaves the documents as they are, and says so beside them. Nothing is "not found"
-  // until every search answered (one that failed hasn't).
   const othersAnswered = cards.answered && records.answered && conversations.answered
-  // A records page with none to show may be followed by pages that have some.
   const recordsMore = records.last?.next_offset !== undefined
   const nothingElse =
     cardResults.length === 0 && recordResults.length === 0 && conversationResults.length === 0 && !recordsMore
@@ -266,7 +245,6 @@ function ResultPages({
           {t('search.results.close')}
         </Button>
       </div>
-      {/* Something that is off, in the neutral tone, and said when it appears or changes. */}
       {notice && (
         <div role="status">
           <NoticeBox tone="neutral">{notice}</NoticeBox>
@@ -384,7 +362,6 @@ function ResultPages({
           </Panel>
         </>
       )}
-      {/* Also when this page held none the caller reads: the later ones may. */}
       {recordsMore && (
         <div className="search-more">
           <Button size="sm" onClick={records.loadMore} loading={records.loading}>
@@ -441,10 +418,8 @@ function ResultPages({
   )
 }
 
-// What a search shows while it waits: the shape of a few results, and its words for a screen reader.
 function Searching({ label }: { label: string }) {
   return (
-    // A status: said when the search starts waiting, as the old line of text was shown.
     <div className="search-loading" role="status">
       <VisuallyHidden>{label}</VisuallyHidden>
       {['45%', '35%', '50%'].map((width, i) => (
@@ -457,17 +432,13 @@ function Searching({ label }: { label: string }) {
   )
 }
 
-// A snippet: plain text in pieces, never markup: matches are marked by the element. A document's
-// Markdown marks are left out for display (the server's result is unchanged); an upload's name
-// and a card's words, which have none to show, are shown as they are (path is set for documents).
 function Snippet({ pieces, path }: { pieces: SearchResult['snippet']; path?: string }) {
   const shown = cleanSnippet(pieces, { markdown: path !== undefined && isMarkdownPath(path) })
   if (shown.length === 0) return null
   return (
     <span className="search-snippet">
-      {shown.map((s, i) =>
-        // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
-        s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
+      {byPlace(shown).map(({ key, item: s }) =>
+        s.match ? <mark key={key}>{s.text}</mark> : <span key={key}>{s.text}</span>,
       )}
     </span>
   )

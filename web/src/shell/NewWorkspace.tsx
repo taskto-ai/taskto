@@ -1,17 +1,3 @@
-// "New workspace": a small form in a dialog, the one the shell has, opened from the workspace
-// switcher's menu and from the screen for someone with no workspace yet. The server decides who may
-// (`can_create_workspace` in /api/me, the operator's -workspace-creation); the shell only offers it
-// to those it says yes to.
-//
-// Made, it gives the account's new state to `onMe` (first, so the shell knows the workspace when the
-// address names it) and opens the workspace. A save the person cancelled that still succeeds made a
-// workspace all the same: the account is updated and a toast says so, with a way to open it, but
-// the page stays where the person is. One that fails after Cancel made nothing, and isn't shown.
-// One that ends after the session did (logged out, or the session lost) does nothing at all: no
-// toast and no change of address on the login screen, or in the next person's session. One that
-// ends while the dialog is gone but the session isn't (the shell is showing a push's notification)
-// still updates the account and says so, and opens nothing.
-
 import { type FormEvent, useEffect, useId, useRef, useState } from 'react'
 import { api, errorText, forAccount, type Me, type Workspace } from '../api'
 import { useT } from '../i18n'
@@ -25,7 +11,6 @@ import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
 import { toast } from '../ui/Toast'
 
-// The answer of POST /api/workspaces: what /api/me says now, and the new workspace.
 type Created = Me & { workspace: Workspace }
 
 const MAX_NAME = 100
@@ -33,11 +18,7 @@ const MAX_NAME = 100
 export interface NewWorkspaceDialogProps {
   open: boolean
   onClose: () => void
-  // The account the form was opened for; the server refuses the request (409) if the browser's
-  // session became another account's since, so a workspace is never made for someone the person
-  // didn't mean.
   user: number
-  // The account's new state, with the workspace made.
   onMe: (me: Me) => void
 }
 
@@ -49,13 +30,9 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Which opening of the dialog this is: each opening and each closing counts one more. A save
-  // belongs to the opening it was started in, and outlives a Cancel: when it ends, it acts on the
-  // dialog only if that same opening is still there (not one opened again since).
   const opening = useRef(0)
   const mounted = useMounted()
 
-  // Each opening starts clean: no name, no error and no save left from one before.
   useEffect(() => {
     opening.current += 1
     if (!open) return

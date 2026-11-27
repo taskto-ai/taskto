@@ -1,7 +1,4 @@
-// The transcript: earlier messages on demand, the messages, and while the agent works and hasn't
-// begun its reply, a line saying so. It scrolls on its own, never the page.
-
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { type RefObject, useEffect, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n'
 import { AgentDot } from '../ui/AgentDot'
 import { Button } from '../ui/Button'
@@ -10,7 +7,6 @@ import { Notice } from '../ui/Notice'
 import { Message } from './Message'
 import type { ChatMessage, ToolUse } from './transcript'
 
-// How near the bottom the reader must be for the transcript to follow new text.
 const FOLLOW_PX = 48
 
 export function ChatTranscript({
@@ -26,12 +22,9 @@ export function ChatTranscript({
 }: {
   workspace: number
   messages: ChatMessage[]
-  // The stream has shown the conversation: with no messages, it has none yet.
   started: boolean
   running: boolean
-  // There are messages before the first one shown.
   truncated: boolean
-  // The tool uses whose app shows launched.
   apps: Set<ToolUse>
   onLoadEarlier: () => void
   loadingEarlier: boolean
@@ -39,30 +32,24 @@ export function ChatTranscript({
 }) {
   const t = useT()
 
-  // Follows the newest text as it grows, but only while the reader is at the bottom: someone
-  // who scrolled up to re-read stays where they are.
   const scroller = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const last = messages.at(-1)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: follows the newest text as it grows
-  useEffect(() => {
-    const el = scroller.current
-    if (el && atBottom.current) el.scrollTop = el.scrollHeight
-  }, [last?.key, last?.text])
 
-  // Earlier messages go in above what the reader is looking at, which stays where it is.
-  const fromBottom = useRef<number | null>(null)
+  const before = useRef<{ first: string | undefined; fromBottom: number } | null>(null)
+  const firstKey = messages[0]?.key
   const loadEarlier = () => {
     const el = scroller.current
-    if (el) fromBottom.current = el.scrollHeight - el.scrollTop
+    if (el) before.current = { first: firstKey, fromBottom: el.scrollHeight - el.scrollTop }
     onLoadEarlier()
   }
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when earlier messages arrive
   useLayoutEffect(() => {
+    const kept = before.current
+    if (!kept || kept.first === firstKey) return
+    before.current = null
     const el = scroller.current
-    if (el && fromBottom.current !== null) el.scrollTop = el.scrollHeight - fromBottom.current
-    fromBottom.current = null
-  }, [messages[0]?.key])
+    if (el) el.scrollTop = el.scrollHeight - kept.fromBottom
+  }, [firstKey])
 
   return (
     <div
@@ -73,7 +60,6 @@ export function ChatTranscript({
         atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_PX
       }}
     >
-      {/* At a reading width, in the middle of the pane. */}
       <div className="ui-chat-column">
         {truncated && (
           <div className="ui-chat-earlier">
@@ -87,6 +73,11 @@ export function ChatTranscript({
         {messages.map((m) => (
           <Message key={m.key} message={m} workspace={workspace} apps={apps} />
         ))}
+        <FollowNewest
+          key={JSON.stringify([last?.key ?? null, last?.text ?? null])}
+          scroller={scroller}
+          atBottom={atBottom}
+        />
         {running && !last?.pending && (
           <p className="ui-chat-working">
             <AgentDot />
@@ -96,4 +87,18 @@ export function ChatTranscript({
       </div>
     </div>
   )
+}
+
+function FollowNewest({
+  scroller,
+  atBottom,
+}: {
+  scroller: RefObject<HTMLDivElement | null>
+  atBottom: RefObject<boolean>
+}) {
+  useEffect(() => {
+    const el = scroller.current
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight
+  }, [scroller, atBottom])
+  return null
 }

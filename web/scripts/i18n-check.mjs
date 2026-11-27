@@ -1,18 +1,4 @@
 #!/usr/bin/env node
-// Checks the web app's translations (docs/i18n.md), and reports what each language still
-// lacks. CI runs it; so can anyone: `pnpm --filter @taskto/web run i18n`.
-//
-// Fails on:
-// - a key the code uses (t('…'), t.rich('…')) that English, the reference, doesn't have;
-// - an API error code (internal/apierr/codes.go) without a message, errors.<code>, in English;
-// - a key another language has that English doesn't (renamed or removed in English);
-// - a translation whose {placeholders} or <tags> aren't English's, so a value would be lost
-//   (a plural form may leave out {count}: "One file");
-// - a plural message missing a form its language needs (Intl.PluralRules), once it has any;
-// - a file that isn't nested objects of strings, or isn't named as a BCP 47 tag.
-// Reports, without failing: each language's untranslated keys, which show in English.
-//
-// --verbose lists every untranslated key, not only the count and the first few.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -28,7 +14,6 @@ const verbose = process.argv.includes('--verbose')
 const errors = []
 const fail = (msg) => errors.push(msg)
 
-// key → message, flattened with dots.
 function flatten(node, file, prefix = '', out = new Map()) {
   for (const [k, v] of Object.entries(node)) {
     const key = prefix + k
@@ -63,7 +48,6 @@ for (const tag of tagsFound) {
 if (!tagsFound.includes(REFERENCE)) fail(`src/i18n/locales/${REFERENCE}.json is missing`)
 
 const reference = load(REFERENCE)
-// Plural messages, by the key the code calls them with: their English forms.
 const plurals = new Map()
 for (const key of reference.keys()) {
   if (PLURAL.test(key)) plurals.set(base(key), [...(plurals.get(base(key)) ?? []), key])
@@ -71,8 +55,6 @@ for (const key of reference.keys()) {
 for (const [key, forms] of plurals) {
   if (!forms.includes(`${key}_other`)) fail(`en.json: ${key} has plural forms but no ${key}_other`)
 }
-// What a key may say: English's own placeholders and tags. For a plural, any of English's
-// forms': a language's forms don't match English's one for one (Polish _few has none).
 function expected(key) {
   const forms = plurals.get(base(key)) ?? [key]
   const msgs = forms.map((f) => reference.get(f)).filter((m) => m !== undefined)
@@ -82,7 +64,6 @@ function expected(key) {
   }
 }
 
-// The keys the code uses must be English's.
 const known = new Set([...reference.keys()].map(base))
 function sources(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -99,17 +80,13 @@ for (const file of sources(join(web, 'src'))) {
   }
 }
 
-// Every API error code (internal/apierr/codes.go) has a message in English.
 const codesFile = join(web, '../internal/apierr/codes.go')
 let codesText = null
 try {
   codesText = readFileSync(codesFile, 'utf8')
-} catch {
-  // A checkout without the server: nothing to check.
-}
+} catch {}
 const codes = []
 if (codesText !== null) {
-  // Every `CodeName Code` declaration must have the one shape this reads, so none is skipped.
   for (const m of codesText.matchAll(/^\s*(Code\w+)\s+Code\b(.*)$/gm)) {
     const value = /^\s*=\s*"([a-z0-9_]+)"/.exec(m[2])
     if (value) codes.push(value[1])
@@ -122,9 +99,6 @@ for (const code of codes) {
     fail(`en.json: errors.${code} is missing, for the API error code ${code} (internal/apierr/codes.go)`)
 }
 
-// The server, the web app and the agent runtime read language tags with one pattern
-// (internal/auth/locale.go, web/src/i18n/index.tsx, agent/src/language.ts): a tag one takes
-// and another refuses would drop a language on the way to the agent.
 const tagPatterns = [
   ['internal/auth/locale.go', /localeRe = regexp\.MustCompile\(`([^`]+)`\)/],
   ['web/src/i18n/index.tsx', /const SERVER_TAG = \/(.+)\/\n/],
@@ -136,7 +110,7 @@ for (const [file, re] of tagPatterns) {
   try {
     text = readFileSync(join(web, '..', file), 'utf8')
   } catch {
-    continue // a checkout without that part
+    continue
   }
   const m = re.exec(text)
   if (m) patterns.push([file, m[1]])
@@ -162,14 +136,12 @@ for (const tag of tagsFound.filter((t) => t !== REFERENCE).sort()) {
     const got = placeholders(msg).filter((p, i, all) => all.indexOf(p) === i)
     const extra = got.filter((p) => !want.placeholders.includes(p))
     if (extra.length) fail(`${file}: ${key} has {${extra.join('}, {')}}, which English doesn't fill in`)
-    // A plural form may say its number in words ("One file"); every other value must show.
     const missing = want.placeholders.filter((p) => !got.includes(p) && !(PLURAL.test(key) && p === 'count'))
     if (missing.length) fail(`${file}: ${key} leaves out {${missing.join('}, {')}}, which English shows`)
     if (!same([...new Set(tags(msg))].sort(), want.tags)) {
       fail(`${file}: ${key} has the tags <${tags(msg).join('>, <')}>, English <${want.tags.join('>, <')}>`)
     }
   }
-  // A plural translated at all needs every form its language has (zero stays optional).
   for (const key of plurals.keys()) {
     const have = categories.filter((c) => messages.has(`${key}_${c}`))
     if (have.length === 0) continue

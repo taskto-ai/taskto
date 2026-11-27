@@ -3,7 +3,7 @@ package auth
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1" // #nosec G505 -- HMAC-SHA1 is what RFC 6238 authenticator apps implement
+	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
@@ -12,34 +12,26 @@ import (
 	"strings"
 )
 
-// Time-based one-time codes (RFC 6238, with RFC 4226's truncation): six digits of an
-// HMAC-SHA1 of the 30-second step the time falls in, which is what authenticator apps make.
 const (
-	totpDigits = 6
-	totpPeriod = 30 // seconds
-	// totpSkew is how many steps either side of the current one are accepted, for clocks that
-	// differ a little.
-	totpSkew = 1
-	// totpSecretBytes is the secret's length: 160 bits, as RFC 4226 recommends.
+	totpDigits      = 6
+	totpPeriod      = 30
+	totpSkew        = 1
 	totpSecretBytes = 20
-	// totpIssuer is the name authenticator apps list the account under.
-	totpIssuer = "taskto"
+	totpIssuer      = "taskto"
 )
 
 var secretEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 func newTOTPSecret() []byte {
 	b := make([]byte, totpSecretBytes)
-	_, _ = rand.Read(b) // crypto/rand.Read never returns an error
+	_, _ = rand.Read(b)
 	return b
 }
 
-// totpCode is the code for the given step.
 func totpCode(secret []byte, step int64) string {
-	var msg [8]byte
-	binary.BigEndian.PutUint64(msg[:], uint64(step)) // #nosec G115 -- steps are positive
+	msg, _ := binary.Append(make([]byte, 0, 8), binary.BigEndian, step)
 	mac := hmac.New(sha1.New, secret)
-	mac.Write(msg[:])
+	mac.Write(msg)
 	sum := mac.Sum(nil)
 	off := sum[len(sum)-1] & 0x0f
 	bin := binary.BigEndian.Uint32(sum[off:off+4]) & 0x7fffffff
@@ -50,12 +42,8 @@ func totpCode(secret []byte, step int64) string {
 	return fmt.Sprintf("%0*d", totpDigits, bin%mod)
 }
 
-// totpStep is the step a time falls in.
 func totpStep(unix int64) int64 { return unix / totpPeriod }
 
-// matchTOTP returns the step whose code is code, among the current step and totpSkew
-// either side, that is later than lastStep (the last one accepted), or false. A code
-// is compared in constant time against every candidate.
 func matchTOTP(secret []byte, code string, unix, lastStep int64) (int64, bool) {
 	now := totpStep(unix)
 	var found int64
@@ -69,7 +57,6 @@ func matchTOTP(secret []byte, code string, unix, lastStep int64) (int64, bool) {
 	return found, ok
 }
 
-// totpURI is the otpauth URI authenticator apps read, usually from a QR code.
 func totpURI(secret []byte, account string) string {
 	label := url.PathEscape(totpIssuer + ":" + account)
 	q := url.Values{}
@@ -81,9 +68,6 @@ func totpURI(secret []byte, account string) string {
 	return "otpauth://totp/" + label + "?" + q.Encode()
 }
 
-// Recovery codes: 60 random bits as twelve characters of Crockford's base32 (no i, l, o or
-// u), written in three groups of four. Typing is forgiving: case, spaces and dashes don't
-// matter, and o, i and l read as 0, 1 and 1.
 const (
 	recoveryCodeCount = 10
 	recoveryAlphabet  = "0123456789abcdefghjkmnpqrstvwxyz"
@@ -103,8 +87,6 @@ func newRecoveryCode() string {
 	return sb.String()
 }
 
-// normalizeCode strips what people type around a code and folds the look-alikes, so a
-// TOTP code and a recovery code can be told apart by length and compared as stored.
 func normalizeCode(s string) string {
 	var sb strings.Builder
 	for _, r := range strings.ToLower(s) {
@@ -121,7 +103,6 @@ func normalizeCode(s string) string {
 	return sb.String()
 }
 
-// isTOTPCode reports whether a normalized code has the shape of a TOTP code.
 func isTOTPCode(code string) bool {
 	if len(code) != totpDigits {
 		return false

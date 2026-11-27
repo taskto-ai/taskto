@@ -21,9 +21,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// Square's own tests: what the contract suite (contract_square_test.go) can't say in common words.
-
-// squareRig is the adapter's real client against a fake Square.
 type squareRig struct {
 	fake   *testprovider.Square
 	clock  *testprovider.ManualClock
@@ -57,10 +54,6 @@ func squareNewLink(t *testing.T, pages bool) NewLink {
 	return l
 }
 
-// Square's own known answers (its Go SDK's tests of the webhook helper): the HMAC-SHA256 of the
-// notification URL followed by the body, keyed with the signature key, in Base64. The key is Square's
-// example, not a secret. The expected values are written in pieces so that no line reads as one
-// credential to a secret scanner.
 func TestSquareSignatureIsSquaresScheme(t *testing.T) {
 	for _, c := range []struct{ body, url, key, want string }{
 		{`{"data":{"type":"webhooks","id":"fake_id"}}`, "https://webhook.site/webhooks", "signature-key", "W3FlCNk5IA3" + "ZQ2LHTWoajv" + "zfaDu/OwY2t" + "NHIHC3IUOA="},
@@ -75,8 +68,6 @@ func TestSquareSignatureIsSquaresScheme(t *testing.T) {
 	}
 }
 
-// The address is signed: a delivery verifies only against the address it was sent to, which the server
-// makes from its public URL. Anything else a request carries (its Host) is never used.
 func TestSquareSignatureCoversTheAddress(t *testing.T) {
 	now := testprovider.DefaultStart
 	body := testprovider.NewSquareEvent("payment.updated", "payment", "P1", map[string]any{"payment": map[string]any{"id": "P1"}}, now).Body()
@@ -101,7 +92,6 @@ func TestSquareSignatureCoversTheAddress(t *testing.T) {
 			t.Errorf("a delivery signed over the integration's address verifies against %s", name)
 		}
 	}
-	// A signature of the address alone, or of the body alone, is not one of both.
 	for name, sig := range map[string]string{
 		"the body alone":    testprovider.SignSquare(key, "", body),
 		"the address alone": testprovider.SignSquare(key, squareHookURL, nil),
@@ -134,8 +124,6 @@ func TestSquareSignatureHeaderAndTime(t *testing.T) {
 			t.Errorf("%s verifies", name)
 		}
 	}
-	// The time is the event's created_at, which the signature covers: Square retries for a day after the
-	// event, so a delivery that old still verifies, and one older, or from the future, doesn't.
 	for name, c := range map[string]struct {
 		at time.Time
 		ok bool
@@ -155,7 +143,6 @@ func TestSquareSignatureHeaderAndTime(t *testing.T) {
 			t.Errorf("%s: %v, want verified %v", name, err, c.ok)
 		}
 	}
-	// A body with no time, or a time that can't be read, is refused even when its signature is right.
 	for name, raw := range map[string]string{
 		"no created_at":    `{"type":"payment.updated","event_id":"e1"}`,
 		"a date alone":     `{"created_at":"2030-03-01"}`,
@@ -169,8 +156,6 @@ func TestSquareSignatureHeaderAndTime(t *testing.T) {
 	}
 }
 
-// Every well-formed delivery costs the same number of MACs as Stripe's, whatever secrets there are, so
-// timing says nothing of an integration's provider or secrets.
 func TestSquareVerificationCostsTheSame(t *testing.T) {
 	now := testprovider.DefaultStart
 	b := testprovider.NewSquareEvent("payment.updated", "payment", "P1", nil, now).Body()
@@ -192,8 +177,6 @@ func TestSquareVerificationCostsTheSame(t *testing.T) {
 	}
 }
 
-// Square documents no failure as given before the request ran, so every answer that isn't a success
-// leaves a creation's outcome unknown, and only a request that never left is not executed.
 func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 	for status, kind := range map[int]CallKind{
 		400: CallRefused, 404: CallRefused, 409: CallRefused, 422: CallRefused,
@@ -228,7 +211,6 @@ func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 			if !ok || ce.Kind != c.kind || ce.NotExecuted || !ce.OutcomeUnknown {
 				t.Fatalf("%v (%+v), want an unknown outcome", err, ce)
 			}
-			// The outcome is resolved by the key: asked again, it is one link, made once.
 			got, err := (square{}).CreatePaymentLink(ctx, r.creds, r.client, l)
 			if err != nil {
 				t.Fatal(err)
@@ -236,7 +218,6 @@ func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 			if n := len(r.fake.Links()); n != 1 {
 				t.Fatalf("%d links after a retry under the same key", n)
 			}
-			// And the lookup by the key's token finds the same one.
 			found, ok, _, err := (square{}).FindPaymentLink(ctx, r.creds, r.client, l, time.Time{})
 			if err != nil || !ok || found != got {
 				t.Fatalf("lookup = %+v, %v, %v; made %+v", found, ok, err, got)
@@ -244,8 +225,6 @@ func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 		})
 	}
 
-	// The same key with another request: Square's IDEMPOTENCY_KEY_REUSED, a refusal whose outcome is not
-	// known to be nothing (the key made a link).
 	r := newSquareRig(t)
 	l := squareNewLink(t, false)
 	if _, err := (square{}).CreatePaymentLink(ctx, r.creds, r.client, l); err != nil {
@@ -259,7 +238,6 @@ func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 		t.Fatalf("a key reused: %+v", ce)
 	}
 
-	// A request that never left (nothing listens) is the one failure that is not executed.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -274,8 +252,6 @@ func TestSquareErrorsAreUnknownUnlessTheRequestNeverLeft(t *testing.T) {
 	}
 }
 
-// Square publishes no retention for idempotency keys: a key whose outcome is unknown is never relied
-// on, only looked for.
 func TestSquareKeysAreNeverReliedOn(t *testing.T) {
 	if (square{}).KeyKept() != 0 {
 		t.Fatalf("Square's keys are relied on for %v", (square{}).KeyKept())
@@ -285,7 +261,6 @@ func TestSquareKeysAreNeverReliedOn(t *testing.T) {
 func TestSquareCallsSendTheVersionTokenAndLocation(t *testing.T) {
 	ctx := context.Background()
 	r := newSquareRig(t)
-	// The fake refuses any other Square-Version and another location: a call that forgets either fails.
 	if _, err := (square{}).CreatePaymentLink(ctx, r.creds, r.client, squareNewLink(t, true)); err != nil {
 		t.Fatal(err)
 	}
@@ -299,9 +274,6 @@ func TestSquareCallsSendTheVersionTokenAndLocation(t *testing.T) {
 	}
 }
 
-// A link asks exactly the invoice's amount: the create request turns off, explicitly, every checkout
-// option that would let a buyer pay another amount (a tip, a seller's coupon, a loyalty reward), and
-// sends no shipping or app fee. The fake Square refuses a link without them, as the next test shows.
 func TestSquareLinksLetNoBuyerPayAnotherAmount(t *testing.T) {
 	ctx := context.Background()
 	r := newSquareRig(t)
@@ -334,8 +306,6 @@ func TestSquareLinksLetNoBuyerPayAnotherAmount(t *testing.T) {
 	}
 }
 
-// The fake Square refuses a link that lets the buyer pay another amount: any of the three options
-// left out, or turned on.
 func TestTheFakeSquareRefusesALinkOfAnotherAmount(t *testing.T) {
 	fake := testprovider.NewSquare(t)
 	post := func(options map[string]any) int {
@@ -391,8 +361,6 @@ func TestTheFakeSquareRefusesALinkOfAnotherAmount(t *testing.T) {
 	}
 }
 
-// A link is read through its order: unpaid while the order has no tender, settled once paid or deleted.
-// A lookup reads every page, and says so when there are more than it reads.
 func TestSquareLinkStateAndLookup(t *testing.T) {
 	ctx := context.Background()
 	r := newSquareRig(t, testprovider.WithSquarePageSize(2))
@@ -406,12 +374,10 @@ func TestSquareLinkStateAndLookup(t *testing.T) {
 		}
 		links, made = append(links, l), append(made, m)
 	}
-	// The last one, on the third page.
 	got, ok, expired, err := (square{}).FindPaymentLink(ctx, r.creds, r.client, links[4], time.Time{})
 	if err != nil || !ok || expired || got != made[4] {
 		t.Fatalf("lookup on the third page = %+v, %v, %v, %v", got, ok, expired, err)
 	}
-	// A link of the other shape (no redirect) under the same token is not the one asked for.
 	hosted := links[1]
 	hosted.SuccessURL, hosted.CancelURL = "", ""
 	if _, _, _, err := (square{}).FindPaymentLink(ctx, r.creds, r.client, hosted, time.Time{}); !isCall(err, CallRefused) {
@@ -430,13 +396,11 @@ func TestSquareLinkStateAndLookup(t *testing.T) {
 	if _, err := r.fake.PaySquare(made[0].ObjectID); err == nil {
 		t.Fatal("a link was paid twice")
 	}
-	// A deleted link is gone, and its state can't be read as open.
 	r.fake.DeleteLink(made[1].ObjectID)
 	if st, err := (square{}).LinkState(ctx, r.creds, r.client, false, made[1].ObjectID); err == nil || st == LinkOpen {
 		t.Fatalf("a deleted link: %v, %v", st, err)
 	}
 
-	// More than a lookup reads: it says it couldn't tell, never "not found".
 	small := newSquareRig(t, testprovider.WithSquarePageSize(1))
 	for range squareFindMaxPages + 1 {
 		if _, err := (square{}).CreatePaymentLink(ctx, small.creds, small.client, squareNewLink(t, true)); err != nil {
@@ -448,9 +412,6 @@ func TestSquareLinkStateAndLookup(t *testing.T) {
 	}
 }
 
-// A lookup that finds the link of the token and refuses it (other terms, another redirect, paid)
-// names that link with the refusal, and gives no address: the caller keeps it on the key, so a
-// refusal is never "nothing made" and no second payable link is made beside it.
 func TestSquareRefusedLookupNamesTheLinkItSaw(t *testing.T) {
 	ctx := context.Background()
 	r := newSquareRig(t)
@@ -479,14 +440,12 @@ func TestSquareRefusedLookupNamesTheLinkItSaw(t *testing.T) {
 	if !isCall(err, CallSettled) || found || got.URL != "" || got.ObjectID != made.ObjectID {
 		t.Fatalf("a paid link: %+v, %v, %v; want settled naming %s", got, found, err, made.ObjectID)
 	}
-	// A lookup of a token with no link still finds nothing, and names nothing.
 	got, found, _, err = (square{}).FindPaymentLink(ctx, r.creds, r.client, squareNewLink(t, true), time.Time{})
 	if err != nil || found || got != (Link{}) {
 		t.Fatalf("a token with no link: %+v, %v, %v", got, found, err)
 	}
 }
 
-// What Square sends that isn't a payment of ours, or isn't the end of one, is not an event.
 func TestSquareNormalizeReadsOnlyOurFinishedPayments(t *testing.T) {
 	at := testprovider.DefaultStart
 	tok, _ := newToken()
@@ -543,13 +502,10 @@ func TestSquareNormalizeReadsOnlyOurFinishedPayments(t *testing.T) {
 	}
 }
 
-// serveAt rebuilds the env's handler with another public URL, over the same database: a server whose
-// address changed.
 func (e *env) serveAt(publicURL string) {
 	e.serveAtWith(publicURL, func() time.Time { return testprovider.DefaultStart })
 }
 
-// serveAtWith is serveAt with the server's clock.
 func (e *env) serveAtWith(publicURL string, now func() time.Time) {
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
@@ -562,8 +518,6 @@ func (e *env) serveAtWith(publicURL string, now func() time.Time) {
 	e.h = a.ClientAddr(auth.CSRF(mux))
 }
 
-// deliverSquare posts a Square delivery to the hook route, signed over signedOver, with the request's
-// Host set to host.
 func (e *env) deliverSquare(path, signedOver, host string, body []byte) int {
 	e.t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
@@ -575,9 +529,6 @@ func (e *env) deliverSquare(path, signedOver, host string, body []byte) int {
 	return rec.Code
 }
 
-// Each secret verifies over its own address only, whichever of the two is empty: the current secret
-// saved while the server had no public URL has none, and the previous one still verifies over the
-// address it was saved for; a secret with no address verifies nothing.
 func TestSquareASecretWithNoAddressVerifiesNothing(t *testing.T) {
 	const oldURL = "https://old.example.test/hooks/abc"
 	at := testprovider.DefaultStart
@@ -602,7 +553,6 @@ func TestSquareASecretWithNoAddressVerifiesNothing(t *testing.T) {
 	}
 }
 
-// deliverSquareAs posts a Square delivery signed with secret over signedOver, and returns the answer.
 func (e *env) deliverSquareAs(path, secret, signedOver string, body []byte) *httptest.ResponseRecorder {
 	e.t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
@@ -613,11 +563,6 @@ func (e *env) deliverSquareAs(path, secret, signedOver string, body []byte) *htt
 	return rec
 }
 
-// A new signing secret saved after the public URL changed: during the overlap each secret verifies
-// over the address it was saved for, the previous one over the old address (Square signed what it sent
-// before the change with it, over that address) and the new one over the new address, never the other
-// way round. After the overlap the previous secret verifies nothing. Every refusal is the route's one
-// answer, the same as for an id with nothing behind it.
 func TestSquareEachSecretVerifiesOverItsOwnAddress(t *testing.T) {
 	const oldOrigin, newOrigin = "https://old.example.test", "https://new.example.test"
 	at := testprovider.DefaultStart
@@ -631,7 +576,6 @@ func TestSquareEachSecretVerifiesOverItsOwnAddress(t *testing.T) {
 	oldURL := *in.WebhookURL
 	path := strings.TrimPrefix(oldURL, oldOrigin)
 
-	// The public URL changes; the admin registers the new address at Square and saves its new key.
 	e.serveAtWith(newOrigin, now)
 	got := decode[Integration](t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": newKey}}))
@@ -645,7 +589,6 @@ func TestSquareEachSecretVerifiesOverItsOwnAddress(t *testing.T) {
 			"id": "PAY1", "status": "COMPLETED", "note": tok, "total_money": map[string]any{"amount": 500, "currency": "USD"},
 		}}, at).Body()
 	}
-	// The route's answer to an id with nothing behind it: what every refusal must look like.
 	nothing := e.deliverSquareAs("/hooks/"+strings.Repeat("0", 32), newKey, newURL, event())
 	refused := func(what string, rec *httptest.ResponseRecorder) {
 		t.Helper()
@@ -667,7 +610,6 @@ func TestSquareEachSecretVerifiesOverItsOwnAddress(t *testing.T) {
 	refused("the previous key over the new address", e.deliverSquareAs(path, oldKey, newURL, event()))
 	refused("the new key over the old address", e.deliverSquareAs(path, newKey, oldURL, event()))
 
-	// The overlap ends: the previous key verifies nothing, the new one still does.
 	at = at.Add(previousOverlap + time.Minute)
 	refused("the previous key over the old address after the overlap", e.deliverSquareAs(path, oldKey, oldURL, event()))
 	refused("the previous key over the new address after the overlap", e.deliverSquareAs(path, oldKey, newURL, event()))
@@ -676,10 +618,6 @@ func TestSquareEachSecretVerifiesOverItsOwnAddress(t *testing.T) {
 	}
 }
 
-// The hook route verifies a Square delivery over the address the signing secret was saved for, made from
-// the server's public URL, never from the request; the event takes the integration's mode. When the public
-// URL changes, the admin is told, the registered address keeps verifying, and saving the secret again
-// moves to the new one.
 func TestSquareWebhooksThroughTheRoute(t *testing.T) {
 	const oldOrigin, newOrigin = "https://old.example.test", "https://new.example.test"
 	e := newEnvWith(t, Options{PublicURL: oldOrigin, Now: func() time.Time { return testprovider.DefaultStart }})
@@ -706,7 +644,6 @@ func TestSquareWebhooksThroughTheRoute(t *testing.T) {
 		return n
 	}
 
-	// Signed over the address the request names, not the integration's: refused.
 	if code := e.deliverSquare(path, "https://evil.example.test"+path, "evil.example.test", event()); code != http.StatusNotFound {
 		t.Fatalf("signed over the request's Host: %d", code)
 	}
@@ -721,8 +658,6 @@ func TestSquareWebhooksThroughTheRoute(t *testing.T) {
 		t.Fatalf("a sandbox event's livemode = %v, %v", live, err)
 	}
 
-	// The public URL changes: the admin is told, and Square, still signing over the registered address,
-	// is still verified.
 	e.serveAt(newOrigin)
 	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
 	got := decode[Integration](t, owner.do(http.MethodGet, one, nil))
@@ -736,8 +671,6 @@ func TestSquareWebhooksThroughTheRoute(t *testing.T) {
 		t.Fatalf("a delivery over the new address before it was registered: %d", code)
 	}
 
-	// The admin registers the new address and saves the signing secret again (the same one): the warning
-	// goes, and the new address is the one verified.
 	got = decode[Integration](t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"webhook_secret": testprovider.SquareSignatureKey}}))
 	if got.WebhookURLChanged {
 		t.Fatalf("after saving the secret again: %+v", got)
@@ -749,7 +682,6 @@ func TestSquareWebhooksThroughTheRoute(t *testing.T) {
 		t.Fatalf("a delivery over the old address after the change: %d", code)
 	}
 
-	// Without a public URL there is no address, so nothing verifies: Square's deliveries need one.
 	e.serveAt("")
 	got = decode[Integration](t, owner.do(http.MethodGet, one, nil))
 	if got.WebhookURL != nil || !got.WebhookURLChanged {
@@ -757,7 +689,6 @@ func TestSquareWebhooksThroughTheRoute(t *testing.T) {
 	}
 }
 
-// An integration of the production environment is live: its events are of live money, whatever its body says.
 func TestSquareProductionEventsAreLive(t *testing.T) {
 	e := newEnvWith(t, Options{PublicURL: hookOrigin, Now: func() time.Time { return testprovider.DefaultStart }})
 	owner, ws := e.setup()
@@ -781,7 +712,6 @@ func TestSquareProductionEventsAreLive(t *testing.T) {
 	}
 }
 
-// The fake answers the version the adapter pins, and reads the header the adapter verifies.
 func TestTheFakeSquareIsTheAdaptersVersion(t *testing.T) {
 	if testprovider.SquareAPIVersion != SquareAPIVersion || (square{}).APIVersion() != SquareAPIVersion {
 		t.Fatalf("the fake answers %q, the adapter pins %q", testprovider.SquareAPIVersion, SquareAPIVersion)
@@ -791,11 +721,6 @@ func TestTheFakeSquareIsTheAdaptersVersion(t *testing.T) {
 	}
 }
 
-// The binding rule with Square: an invoice never has two payable links. A creation whose answer is lost
-// leaves the key's outcome unknown; past the time Square is relied on to keep the key, a lookup that
-// sees the link of the token but can't check it (its order unreadable) keeps that link on the key. The
-// ref takes no new key, the entry stops for an admin, and the admin's "no link" is refused, since a
-// link was seen: no second link is ever made.
 func TestSquareASeenLinkIsNeverConfirmedAway(t *testing.T) {
 	ctx := context.Background()
 	p := newSquarePay(t, publicURL)
@@ -811,7 +736,6 @@ func TestSquareASeenLinkIsNeverConfirmedAway(t *testing.T) {
 		t.Fatalf("%d links at Square after the lost answer, want 1", n)
 	}
 
-	// Only looked for (Square's key is never relied on); the link is listed, its order can't be read.
 	p.later(time.Minute)
 	p.sq.FailOrderReads(true)
 	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationLinkLookupPending) {
@@ -825,21 +749,15 @@ func TestSquareASeenLinkIsNeverConfirmedAway(t *testing.T) {
 	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
 		t.Fatalf("at the end of the wait: %v", err)
 	}
-	// What the worker does with that answer.
 	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ?`, string(apierr.CodeIntegrationOutcomeUnknown))
 	p.refusedConfirmation(p.entries()[0], 0)
 
-	// Square answers again: the seen link is the invoice's, and still the only one.
 	p.sq.FailOrderReads(false)
 	if n := len(p.sq.Links()); n != 1 {
 		t.Fatalf("%d links at Square, want 1", n)
 	}
 }
 
-// A Square call that failed without making anything leaves its outcome unknown all the same: it is
-// never sent again under its key, which Square may have forgotten (it publishes no retention), only
-// looked for. When the wait ends, an admin who finds nothing at Square allows exactly one new key,
-// which makes the one link.
 func TestSquareAnUnknownOutcomeIsOnlyLookedForUntilAnAdminDecides(t *testing.T) {
 	ctx := context.Background()
 	p := newSquarePay(t, publicURL)
@@ -890,8 +808,6 @@ func TestSquareAnUnknownOutcomeIsOnlyLookedForUntilAnAdminDecides(t *testing.T) 
 	}
 }
 
-// A clock that reads earlier than a key's first call says nothing of how long ago it was: the key is
-// not relied on, and a Square key whose outcome is unknown is still only looked for.
 func TestAClockThatWentBackDoesNotResendAKey(t *testing.T) {
 	ctx := context.Background()
 	p := newSquarePay(t, publicURL)

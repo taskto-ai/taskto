@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 
-// What a member sees of the workspace's accounts: the accounts, never the controls that change
-// them, which the server would refuse. Each check has the admin's view beside it, so it fails if
-// the control is gone for everyone rather than hidden from members.
-
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Me, ProviderAccount, Workspace } from '../api'
@@ -123,7 +119,6 @@ describe("the workspace's shared CLI accounts", () => {
     expect(within(region).queryByRole('button')).toBeNull()
     expect(within(region).queryByRole('heading', { name: "Which accounts members' turns use" })).toBeNull()
     expect(within(region).queryByLabelText('Accounts for Bea')).toBeNull()
-    // Not even asked for: the modes are the admins'.
     expect(calls.filter((c) => c.path.endsWith('/modes'))).toEqual([])
   })
 

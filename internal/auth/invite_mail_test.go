@@ -41,7 +41,6 @@ func TestInviteIsEmailedWhenAsked(t *testing.T) {
 	if !strings.Contains(msgs[0].Subject, "Owner invited you to Home") || !strings.Contains(msgs[0].Text, "7 days") {
 		t.Fatalf("message = %+v", msgs[0])
 	}
-	// The emailed link is the very invite the admin was given, and works.
 	if got := tokenIn(t, msgs[0]); got != inv.Token {
 		t.Fatalf("emailed token %q isn't the invite's", got)
 	}
@@ -88,7 +87,6 @@ func TestInviteEmailIsRefusedWhereTheServerCantEmailLinks(t *testing.T) {
 			if n := e.count(`SELECT COUNT(*) FROM invites`); n != 0 {
 				t.Fatalf("%d invites made for a refused request", n)
 			}
-			// Without asking, the flow is what it was.
 			expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com"}), http.StatusCreated)
 		})
 	}
@@ -113,7 +111,6 @@ func TestInviteStaysWhenTheEmailFails(t *testing.T) {
 		strings.Contains(out, "relay.internal.example") || strings.Contains(out, "ana@example.com") || strings.Contains(out, inv.Token) {
 		t.Fatalf("log:\n%s", out)
 	}
-	// The link still works: the admin copies it.
 	e.join(inv.Token, "Ana")
 }
 
@@ -135,7 +132,6 @@ func TestInviteEmailLimitPerInvitedAddress(t *testing.T) {
 	if e.count(`SELECT COUNT(*) FROM invites`) != before || len(sent.messages()) != inviteRecipientAttempts {
 		t.Fatal("a limited request made an invite or sent mail")
 	}
-	// Copying the link has no such limit, and another address is free.
 	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com"}), http.StatusCreated)
 	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "bea@example.com", "send_email": true}), http.StatusCreated)
 	e.advance(inviteWindow + time.Second)
@@ -156,17 +152,14 @@ func TestInviteEmailLimitPerAdmin(t *testing.T) {
 	if len(sent.messages()) != inviteAdminAttempts {
 		t.Fatalf("%d messages", len(sent.messages()))
 	}
-	// The limit is the admin's, not the workspace's: another admin writes freely.
 	admin, _ := e.join(e.invite(owner, ws, "admin@example.com", RoleAdmin), "Second")
 	expect(t, admin.do(http.MethodPost, invitePath(ws), map[string]any{"email": "one-more@example.com", "send_email": true}), http.StatusCreated)
-	// And the refused request wasn't counted against the address.
 	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com"}), http.StatusCreated)
 }
 
 func TestInviteThatFailsGivesBackItsEmailAttempt(t *testing.T) {
 	e, sent := mailEnv(t, nil)
 	owner, ws := e.setup()
-	// An existing member can't be invited: 409, and nothing sent or counted.
 	for range inviteRecipientAttempts + 2 {
 		rec := owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "owner@example.com", "send_email": true})
 		expect(t, rec, http.StatusConflict)
@@ -187,19 +180,16 @@ func TestOnlyAnAdminOfTheWorkspaceEmailsItsInvites(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("member = %d", rec.Code)
 	}
-	// A stranger who isn't in the workspace at all.
 	stranger := e.client()
 	if rec := stranger.do(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com", "send_email": true}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous = %d", rec.Code)
 	}
-	// A member of one workspace can't use the other's name or admin.
 	if rec := member.do(http.MethodPost, invitePath(other), map[string]any{"email": "ana@example.com", "send_email": true}); rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
 		t.Fatalf("member of another workspace = %d", rec.Code)
 	}
 	if len(sent.messages()) != 0 {
 		t.Fatalf("mail sent for refused requests: %+v", sent.messages())
 	}
-	// The message names the workspace it is for.
 	expect(t, owner.do(http.MethodPost, invitePath(other), map[string]any{"email": "ana@example.com", "send_email": true}), http.StatusCreated)
 	if m := sent.messages(); len(m) != 1 || !strings.Contains(m[0].Subject, "to Other") {
 		t.Fatalf("messages = %+v", m)
@@ -215,29 +205,23 @@ func TestInviteEmailIsInTheRightLanguage(t *testing.T) {
 		m := sent.messages()
 		return m[len(m)-1]
 	}
-	// Nothing picked anywhere: English.
 	if m := send("a@example.com"); !strings.Contains(m.Subject, "invited you to Home") {
 		t.Fatalf("english: %q", m.Subject)
 	}
-	// The inviting admin's own language, for someone with no account.
 	e.exec(t, `UPDATE users SET locale = 'pt-BR' WHERE email = 'owner@example.com'`)
 	if m := send("b@example.com"); !strings.Contains(m.Subject, "convidou você para Home") {
 		t.Fatalf("admin's: %q", m.Subject)
 	}
-	// The workspace's default beats the admin's.
 	e.exec(t, `UPDATE workspaces SET locale = 'en' WHERE id = ?`, ws)
 	if m := send("c@example.com"); !strings.Contains(m.Subject, "invited you to Home") {
 		t.Fatalf("workspace's: %q", m.Subject)
 	}
-	// A person with an account who picked a language gets it.
 	e.join(e.invite(owner, ws, "d@example.com", RoleMember), "Dora")
 	e.exec(t, `UPDATE users SET locale = 'pt-BR' WHERE email = 'd@example.com'`)
 	e.exec(t, `DELETE FROM memberships WHERE user_id = (SELECT id FROM users WHERE email = 'd@example.com')`)
 	if m := send("d@example.com"); !strings.Contains(m.Subject, "convidou você para Home") {
 		t.Fatalf("invitee's: %q", m.Subject)
 	}
-	// A person who picked none isn't given the default of another workspace they belong to: the
-	// inviting workspace's default (English, here) applies.
 	e.join(e.invite(owner, ws, "f@example.com", RoleMember), "Fay")
 	other := e.addWorkspace(e.userID(owner), "Elsewhere")
 	e.exec(t, `UPDATE workspaces SET locale = 'pt-BR' WHERE id = ?`, other)
@@ -267,7 +251,6 @@ func TestAnEmailedInviteIsAuditedOnlyWhenTheRelayTookIt(t *testing.T) {
 	wantEvent(t, row, ws, ownerID, audit.TargetInvite, e.scalar(`SELECT id FROM invites WHERE email = 'ana@example.com'`))
 	audittest.NoSecrets(t, e.db, map[string]string{"the invite token": inv.Token})
 
-	// Not asked for, or refused by the relay: no such event, though the invite is made either way.
 	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "bea@example.com"}), http.StatusCreated)
 	sent.err = errors.New("the relay is down")
 	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "cai@example.com", "send_email": true}), http.StatusCreated)
@@ -288,8 +271,6 @@ func (e *env) scalar(query string, args ...any) int64 {
 	return n
 }
 
-// slowRelay is a mail.Sender that takes a while, as a slow relay does, and gives up when the
-// context it is sent with is cancelled, as a real SMTP dial or write does.
 type slowRelay struct {
 	recorder
 	started chan struct{}
@@ -303,8 +284,6 @@ func (s *slowRelay) Send(ctx context.Context, m mail.Message) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	// Released and cancelled at once, the select may pick either: a send whose context was
-	// cancelled fails whichever it picked, so a test can't pass by luck.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -333,7 +312,6 @@ func TestInviteEmailSurvivesTheClientDisconnecting(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the relay was never reached")
 	}
-	// The client goes away while the relay is still working, then the relay finishes.
 	disconnect()
 	release()
 
@@ -372,8 +350,6 @@ func TestAShutdownEndsAnInviteEmailAndWaitsForIt(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the relay was never reached")
 	}
-	// The relay never answers: the server stopping ends the send, and Shutdown has waited for it by
-	// the time it returns, so the database can close.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := e.svc.Shutdown(ctx); err != nil {
@@ -381,7 +357,7 @@ func TestAShutdownEndsAnInviteEmailAndWaitsForIt(t *testing.T) {
 	}
 	select {
 	case rec := <-done:
-		expect(t, rec, http.StatusCreated) // the invite exists, with its link to pass on
+		expect(t, rec, http.StatusCreated)
 		if got := decode[emailedInvite](t, rec); got.EmailSent == nil || *got.EmailSent {
 			t.Fatalf("reply = %s", rec.Body.String())
 		}

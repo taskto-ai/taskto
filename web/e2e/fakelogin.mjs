@@ -1,13 +1,3 @@
-// A fake site with a login, for the hand-over end to end test (browser-handover.e2e.mjs). It
-// runs in the CLI worker's network namespace, so the user's browser reaches it on
-// http://127.0.0.1:8000/ whatever network the worker is on, and nothing outside the worker does.
-//
-// One user, whose password only the test knows, and an access code shown only after signing
-// in: the agent can read the code only once the person has signed in for it. Every login
-// attempt is logged, so the test can tell who signed in, and how many times.
-//
-// The inputs are huge, so the test's clicks in the live view land on them whatever the scale.
-
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 

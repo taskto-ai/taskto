@@ -17,13 +17,6 @@ import (
 	"taskto.ai/taskto/internal/knowledge"
 )
 
-// fx is a world with an inspections app in the Team space whose actions set effects going on a
-// maintenance board and in the Maintenance space's knowledge base:
-//
-//   - alice: editor of Team and of Maintenance, builds and publishes the app;
-//   - owner: admin and editor of both;
-//   - bob: viewer of both;
-//   - mallory: in neither.
 type fx struct {
 	*world
 	maint  access.Space
@@ -31,13 +24,10 @@ type fx struct {
 	boards *boards.Service
 	docs   *knowledge.Store
 	app    App
-	// skew is how far the worker's clock is ahead of the real one.
-	skew time.Duration
-	// next is the ID the app's first record gets.
-	next int64
+	skew   time.Duration
+	next   int64
 }
 
-// east is the path of the document the first inspection of East gate makes.
 func (f *fx) east() string { return fmt.Sprintf("inspections/%d-east-gate.md", f.next) }
 
 func (f *fx) ctx() context.Context { return context.Background() }
@@ -64,8 +54,6 @@ func newFX(t *testing.T) *fx {
 	return f
 }
 
-// inspections is the app: a failed inspection makes a maintenance card, a document and a route to
-// the card; resolving one moves the card to done and reopening it back to todo.
 func (f *fx) inspections() Definition {
 	failed := &Rule{Field: "result", Op: OpEq, Value: "fail"}
 	comp := func(s string) json.RawMessage { return json.RawMessage(s) }
@@ -105,7 +93,6 @@ func (f *fx) publishApp(u *user, def Definition) App {
 	return f.publish(u, f.shared, decode[App](f.e.t, rec))
 }
 
-// submit presses the submit button as u, under operation.
 func (f *fx) submit(u *user, operation, site, result string) *httptest.ResponseRecorder {
 	f.e.t.Helper()
 	a := action(f.app, "submit_inspection", map[string]any{"site": site, "result": result, "notes": "leaking"})
@@ -118,10 +105,8 @@ func (f *fx) mustSubmit(u *user, operation, site, result string) {
 	expect(f.e.t, f.submit(u, operation, site, result), http.StatusOK)
 }
 
-// work does every entry that is due, as the server's worker would.
 func (f *fx) work() { f.e.s.drain(f.ctx()) }
 
-// later moves the worker's clock on.
 func (f *fx) later(d time.Duration) { f.skew += d }
 
 type cardRow struct {
@@ -163,7 +148,6 @@ func (f *fx) effects(u *user, query string) EffectList {
 	return decode[EffectList](f.e.t, rec)
 }
 
-// only returns the one effect of a kind of a list.
 func only(t *testing.T, l EffectList, kind string) EffectView {
 	t.Helper()
 	var found []EffectView
@@ -180,15 +164,13 @@ func only(t *testing.T, l EffectList, kind string) EffectView {
 
 func TestFailedInspectionMakesOneCardWhateverIsRepeated(t *testing.T) {
 	f := newFX(t)
-	// A passing inspection sets nothing going.
 	f.mustSubmit(f.alice, "op-pass-0001", "North gate", "pass")
-	f.next++ // the record the passing inspection made
+	f.next++
 	if n := f.count(`SELECT count(*) FROM app_effects`); n != 0 {
 		t.Fatalf("a passing inspection queued %d effects", n)
 	}
 
 	f.mustSubmit(f.alice, "op-fail-0001", "East gate", "fail")
-	// The client never saw the answer: it sends the request again, twice.
 	f.mustSubmit(f.alice, "op-fail-0001", "East gate", "fail")
 	f.mustSubmit(f.alice, "op-fail-0001", "East gate", "fail")
 	if n := f.count(`SELECT count(*) FROM app_rows WHERE app_id = ? AND data LIKE '%East gate%'`, f.app.ID); n != 1 {
@@ -204,7 +186,6 @@ func TestFailedInspectionMakesOneCardWhateverIsRepeated(t *testing.T) {
 		}
 	}
 
-	// The worker runs, and runs again, and the entries are never redone.
 	f.work()
 	f.work()
 	cards := f.cards()
@@ -233,13 +214,11 @@ func TestFailedInspectionMakesOneCardWhateverIsRepeated(t *testing.T) {
 		t.Fatalf("route effect = %+v", route)
 	}
 
-	// The same key for another request is refused, and changes nothing.
 	rec := f.submit(f.alice, "op-fail-0001", "West gate", "fail")
 	expect(t, rec, http.StatusConflict)
 	if errorCode(t, rec) != "app_operation_reused" {
 		t.Fatalf("code = %s", errorCode(t, rec))
 	}
-	// A key that isn't one is refused.
 	rec = f.submit(f.alice, "short", "West gate", "fail")
 	expect(t, rec, http.StatusUnprocessableEntity)
 	if errorCode(t, rec) != "app_operation_invalid" {
@@ -269,7 +248,6 @@ func TestACrashBetweenMakingTheCardAndNotingItMakesNoSecondCard(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-crash-001", "East gate", "fail")
 
-	// The server dies right after the card is made, before the entry says so.
 	f.e.s.hooks.afterWork = func(e effectRow) error {
 		if e.kind == EffectCreateCard {
 			return errCrash
@@ -283,8 +261,6 @@ func TestACrashBetweenMakingTheCardAndNotingItMakesNoSecondCard(t *testing.T) {
 	if got := f.count(`SELECT count(*) FROM app_effects WHERE state = 'running'`); got != 1 {
 		t.Fatalf("%d running", got)
 	}
-	// Until the dead worker's lease runs out nobody else takes it: the card is not made twice
-	// meanwhile either.
 	f.e.s.hooks.afterWork = nil
 	f.work()
 	if got := f.count(`SELECT count(*) FROM app_effects WHERE state = 'running'`); got != 1 {
@@ -332,7 +308,6 @@ func TestADocumentIsNotMadeTwiceAfterACrashEither(t *testing.T) {
 func TestAFailedTryIsRetriedWithBackoffAndMakesOneCard(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-retry-001", "East gate", "fail")
-	// The first try makes the card and then fails for a reason that passes (a timeout, say).
 	tries := 0
 	f.e.s.hooks.afterWork = func(e effectRow) error {
 		if e.kind == EffectCreateCard {
@@ -348,7 +323,6 @@ func TestAFailedTryIsRetriedWithBackoffAndMakesOneCard(t *testing.T) {
 	if card.Status != StatePending || card.Attempts != 1 || card.NextAttemptAt == nil || card.Error == nil || card.Error.Code != "app_effect_gave_up" {
 		t.Fatalf("after the first try: %+v", card)
 	}
-	// Not before the wait is over.
 	f.work()
 	if tries != 1 {
 		t.Fatalf("tried again before the wait was over")
@@ -382,12 +356,9 @@ func TestAnEntryThatKeepsFailingFailsForGoodAndIsRetriedOnPurpose(t *testing.T) 
 	if card.Status != StateFailed || card.Attempts != maxAttempts || card.Error == nil || card.Error.Code != "app_effect_gave_up" || !card.CanRetry || l.Failed != 1 {
 		t.Fatalf("card effect = %+v, list %+v", card, l)
 	}
-	// The card was made before the failure was noted, and the record's link knows it: the route
-	// to it is done, not failed for a card nobody noted.
 	if route := only(t, l, EffectOpenRoute); route.Status != StateDone {
 		t.Fatalf("route effect = %+v", route)
 	}
-	// Nothing tries a failed entry again by itself.
 	f.work()
 	if card = only(t, f.effects(f.alice, ""), EffectCreateCard); card.Attempts != maxAttempts {
 		t.Fatalf("attempts = %d", card.Attempts)
@@ -396,13 +367,11 @@ func TestAnEntryThatKeepsFailingFailsForGoodAndIsRetriedOnPurpose(t *testing.T) 
 		t.Fatalf("%d cards (made before the failure noted)", n)
 	}
 
-	// Only the user who acted may retry it; someone else who sees it is refused.
 	other := f.effects(f.owner, "")
 	if v := only(t, other, EffectCreateCard); v.CanRetry {
 		t.Fatalf("another user can retry: %+v", v)
 	}
 	expectForbidden(t, f.owner.do(http.MethodPost, appPath(f.shared, f.app.ID, fmt.Sprintf("/effects/%d/retry", card.ID)), struct{}{}), "retry_effect")
-	// A viewer can't retry anything.
 	expect(t, f.bob.do(http.MethodPost, appPath(f.shared, f.app.ID, fmt.Sprintf("/effects/%d/retry", card.ID)), struct{}{}), http.StatusForbidden)
 
 	broken = false
@@ -411,7 +380,6 @@ func TestAnEntryThatKeepsFailingFailsForGoodAndIsRetriedOnPurpose(t *testing.T) 
 	if v := decode[EffectView](t, rec); v.Status != StatePending || v.Attempts != 0 || v.Error != nil {
 		t.Fatalf("retried = %+v", v)
 	}
-	// Retrying what isn't failed is refused.
 	rec = f.alice.do(http.MethodPost, appPath(f.shared, f.app.ID, fmt.Sprintf("/effects/%d/retry", card.ID)), struct{}{})
 	expect(t, rec, http.StatusConflict)
 	if errorCode(t, rec) != "app_effect_not_failed" {
@@ -430,7 +398,6 @@ func TestAnEntryThatKeepsFailingFailsForGoodAndIsRetriedOnPurpose(t *testing.T) 
 func TestRemovedAccessToTheAppStopsTheEffects(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-access-01", "East gate", "fail")
-	// Alice leaves the space the app is in before the worker gets to it.
 	expect(t, f.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", f.ws, f.shared.ID, f.alice.id), nil), http.StatusNoContent)
 	f.work()
 	if n := len(f.cards()); n != 0 {
@@ -453,7 +420,6 @@ func TestRemovedAccessToTheAppStopsTheEffects(t *testing.T) {
 func TestRemovedRoleInTheAppStopsTheEffects(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.owner, "op-role-0001", "East gate", "fail")
-	// Alice manages the roles: the owner is left a reader, who can't submit.
 	f.w().mustSetRoles(f.alice, f.shared, f.app, grant(f.alice.id, access.AppBuilder, access.AppPublisher, access.AppDataManager, access.AppUser), grant(f.owner.id, access.AppReader))
 	f.work()
 	if n := len(f.cards()); n != 0 {
@@ -471,7 +437,6 @@ func (f *fx) w() *world { return f.world }
 func TestRemovedAccessToTheTargetStopsTheEffectsUntilRestored(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-target-01", "East gate", "fail")
-	// Alice still has the app, but loses the board's space (cross-space: both are needed).
 	expect(t, f.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", f.ws, f.maint.ID, f.alice.id), nil), http.StatusNoContent)
 	f.work()
 	if n := len(f.cards()); n != 0 {
@@ -485,7 +450,6 @@ func TestRemovedAccessToTheTargetStopsTheEffectsUntilRestored(t *testing.T) {
 	if card.Status != StateFailed || card.Error.Code != "app_effect_target_access" {
 		t.Fatalf("card effect = %+v", card)
 	}
-	// Read-only access to the target is not enough to write it.
 	f.e.addMember(f.owner, f.maint, f.alice, access.RoleViewer)
 	rec := f.alice.do(http.MethodPost, appPath(f.shared, f.app.ID, fmt.Sprintf("/effects/%d/retry", card.ID)), struct{}{})
 	expect(t, rec, http.StatusOK)
@@ -493,7 +457,6 @@ func TestRemovedAccessToTheTargetStopsTheEffectsUntilRestored(t *testing.T) {
 	if n := len(f.cards()); n != 0 {
 		t.Fatalf("%d cards made with read access only", n)
 	}
-	// With the access back, a retry makes the card, once.
 	expect(t, f.owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", f.ws, f.maint.ID, f.alice.id), map[string]any{"role": access.RoleEditor}), http.StatusNoContent)
 	rec = f.alice.do(http.MethodPost, appPath(f.shared, f.app.ID, fmt.Sprintf("/effects/%d/retry", card.ID)), struct{}{})
 	expect(t, rec, http.StatusOK)
@@ -522,7 +485,6 @@ func TestAnArchivedBoardRefusesTheCard(t *testing.T) {
 func TestUpdateCardMovesTheCardTheRecordMadeAndIsIdempotent(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-move-0001", "East gate", "fail")
-	// Resolving straight away: the card is still to be made, and the move waits for it.
 	resolve := func(op string) {
 		a := action(f.app, "resolve", map[string]any{"id": f.next, "state": "resolved"})
 		a.Operation = op
@@ -538,7 +500,6 @@ func TestUpdateCardMovesTheCardTheRecordMadeAndIsIdempotent(t *testing.T) {
 	if v := only(t, l, EffectUpdateCard); v.Status != StateDone || v.Result["column"] != "done" {
 		t.Fatalf("update effect = %+v", v)
 	}
-	// A card moved back by someone is moved again by another resolve, and none is ever added.
 	if _, err := f.e.db.Exec(`UPDATE cards SET col = 'doing', rank = 'a1' WHERE id = ?`, cards[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +515,6 @@ func TestUpdateCardMovesTheCardTheRecordMadeAndIsIdempotent(t *testing.T) {
 		t.Fatalf("cards = %+v", cards)
 	}
 
-	// An archived card is not touched, and the entry says why.
 	if _, err := f.e.db.Exec(`UPDATE cards SET col = 'archived', archived_from = 'done' WHERE id = ?`, cards[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +534,6 @@ func TestUpdateCardMovesTheCardTheRecordMadeAndIsIdempotent(t *testing.T) {
 
 func TestUpdateCardWithoutACardForTheRecordFails(t *testing.T) {
 	f := newFX(t)
-	// A record that passed has no maintenance card: resolving it has nothing to move.
 	f.mustSubmit(f.alice, "op-nocard-01", "East gate", "pass")
 	a := action(f.app, "resolve", map[string]any{"id": f.next, "state": "resolved"})
 	a.Operation = "op-nocard-02"
@@ -601,7 +560,6 @@ func TestADocumentOfAnotherIsNeverOverwritten(t *testing.T) {
 	if d, _ := f.docs.Read(f.ctx(), f.maint, f.east(), ""); string(d.Content) != "someone else's" {
 		t.Fatalf("the document was overwritten: %q", d.Content)
 	}
-	// The card was made all the same: effects don't hold each other up.
 	if len(f.cards()) != 1 {
 		t.Fatalf("cards = %+v", f.cards())
 	}
@@ -615,7 +573,6 @@ func TestWhatIsPutInATemplateIsNeverReadAsOne(t *testing.T) {
 	if len(cards) != 1 || cards[0].Title != fmt.Sprintf("Fix {{notes}} ../../etc/{{id}} (inspection %d)", f.next) {
 		t.Fatalf("cards = %+v", cards)
 	}
-	// In a path the same text is made a safe name: no folder to climb out of.
 	doc := only(t, f.effects(f.alice, ""), EffectCreateDocument)
 	if doc.Status != StateDone || doc.Result["path"] != fmt.Sprintf("inspections/%d-notes-etc-id.md", f.next) {
 		t.Fatalf("document effect = %+v", doc)
@@ -641,7 +598,6 @@ func TestAPreviewSimulatesAndChangesNothing(t *testing.T) {
 	if p.Effects[0].Detail.Title != "Fix East gate (inspection new)" || p.Effects[1].Detail.Path != "inspections/new-east-gate.md" {
 		t.Fatalf("details = %+v", p.Effects)
 	}
-	// A passing one sets nothing going.
 	rec = preview(f.alice, map[string]any{"site": "East gate", "result": "pass"})
 	expect(t, rec, http.StatusOK)
 	if p = decode[Preview](t, rec); len(p.Effects) != 0 {
@@ -660,10 +616,8 @@ func TestAPreviewSimulatesAndChangesNothing(t *testing.T) {
 		t.Fatal("a preview made a document")
 	}
 
-	// It is for those who may design or publish; the others are told no, and a stranger finds nothing.
 	expect(t, preview(f.bob, map[string]any{"site": "x", "result": "fail"}), http.StatusForbidden)
 	expect(t, preview(f.mallory, map[string]any{"site": "x", "result": "fail"}), http.StatusNotFound)
-	// One whose target the previewer couldn't write says so.
 	if _, err := f.e.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, f.maint.ID, f.alice.id); err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +629,6 @@ func TestAPreviewSimulatesAndChangesNothing(t *testing.T) {
 
 func TestEffectsOfADraftAreNeverQueued(t *testing.T) {
 	f := newFX(t)
-	// A draft with other effects is not live: actions run as the live release says.
 	cur := f.view(f.alice, f.shared, f.app)
 	f.mustPatchDraft(f.alice, f.shared, cur, withTitle(f.inspections(), "DRAFT {{site}}"))
 	f.mustSubmit(f.alice, "op-draft-0001", "East gate", "fail")
@@ -684,8 +637,6 @@ func TestEffectsOfADraftAreNeverQueued(t *testing.T) {
 	if len(cards) != 1 || strings.Contains(cards[0].Title, "DRAFT") {
 		t.Fatalf("cards = %+v: the draft's effects ran", cards)
 	}
-	// An app that was never published has no live release: its actions don't run at all, so
-	// they queue nothing.
 	d := f.draft(f.alice, f.shared, "Drafted")
 	rec := f.alice.do(http.MethodPost, appPath(f.shared, d.ID, "/actions"), action(d, "add_expense", map[string]any{"description": "x", "amount": "1"}))
 	expect(t, rec, http.StatusConflict)
@@ -696,7 +647,6 @@ func TestEffectsOfADraftAreNeverQueued(t *testing.T) {
 
 func TestEffectsAreSeenByWhoeverReadsTheRecord(t *testing.T) {
 	f := newFX(t)
-	// The owner submits as a plain user (own records), alice reads and changes all.
 	f.w().mustSetRoles(f.alice, f.shared, f.app, grant(f.alice.id, access.AppBuilder, access.AppPublisher, access.AppDataManager, access.AppUser), grant(f.owner.id, access.AppUser), grant(f.bob.id, access.AppReader))
 	f.mustSubmit(f.owner, "op-own-00001", "East gate", "fail")
 	f.mustSubmit(f.alice, "op-own-00002", "West gate", "fail")
@@ -716,7 +666,6 @@ func TestEffectsAreSeenByWhoeverReadsTheRecord(t *testing.T) {
 			t.Fatalf("effect = %+v", v)
 		}
 	}
-	// By record, and a record that isn't theirs is empty to them.
 	rec := f.owner.do(http.MethodGet, appPath(f.shared, f.app.ID, fmt.Sprintf("/records/%d/effects", f.next+1)), nil)
 	expect(t, rec, http.StatusOK)
 	if got := decode[EffectList](t, rec); len(got.Effects) != 0 || got.Active != 0 || got.Failed != 0 {
@@ -727,13 +676,10 @@ func TestEffectsAreSeenByWhoeverReadsTheRecord(t *testing.T) {
 	if got := decode[EffectList](t, rec); len(got.Effects) != 3 {
 		t.Fatalf("effects of own record = %+v", got)
 	}
-	// Strangers and people outside the space find nothing; a viewer of the space may read.
 	expect(t, f.mallory.do(http.MethodGet, appPath(f.shared, f.app.ID, "/effects"), nil), http.StatusNotFound)
 	expect(t, f.stranger.do(http.MethodGet, appPath(in(f.other, f.shared), f.app.ID, "/effects"), nil), http.StatusNotFound)
 	expect(t, f.bob.do(http.MethodGet, appPath(f.shared, f.app.ID, "/effects"), nil), http.StatusOK)
-	// And a retry from outside is not found either.
 	expect(t, f.mallory.do(http.MethodPost, appPath(f.shared, f.app.ID, "/effects/1/retry"), struct{}{}), http.StatusNotFound)
-	// What an effect made is told only to someone who may read where it is.
 	if _, err := f.e.db.Exec(`UPDATE space_members SET role = 'viewer' WHERE space_id = ? AND user_id = ?`, f.maint.ID, f.owner.id); err != nil {
 		t.Fatal(err)
 	}
@@ -807,7 +753,6 @@ func TestDefinitionsNameOnlyWhatTheRegistryHas(t *testing.T) {
 			t.Errorf("%s: Check = %v, want an invalid definition", name, err)
 		}
 	}
-	// Only an insert or an update has effects, and only version 2 has them.
 	d := with(card)
 	d.Actions["delete_it"] = Action{Kind: ActionDelete, Effects: []Effect{card}}
 	if _, err := d.Check(); err == nil {
@@ -818,7 +763,6 @@ func TestDefinitionsNameOnlyWhatTheRegistryHas(t *testing.T) {
 	if _, err := d.Check(); err == nil || !strings.Contains(err.Error(), "effects") {
 		t.Errorf("version 1: %v", err)
 	}
-	// Names are unique, and too many effects are refused.
 	d = with(Effect{Kind: EffectCreateCard, Name: "a", SpaceID: 1, BoardID: 1, Title: "x"}, Effect{Kind: EffectCreateCard, Name: "a", SpaceID: 1, BoardID: 1, Title: "x"})
 	if _, err := d.Check(); err == nil {
 		t.Error("two effects named a")
@@ -852,7 +796,6 @@ func TestAnEffectIsStrictAboutItsKeys(t *testing.T) {
 
 func TestAnAppCantTargetWhatItsAuthorCantWrite(t *testing.T) {
 	f := newFX(t)
-	// Bob only reads the maintenance space, mallory is not in it: neither's draft may point at it.
 	otherBoard := f.board + 100
 	for name, c := range map[string]struct {
 		space, board int64
@@ -867,7 +810,6 @@ func TestAnAppCantTargetWhatItsAuthorCantWrite(t *testing.T) {
 		act := d.Actions["submit_inspection"]
 		act.Effects = []Effect{{Kind: EffectCreateCard, SpaceID: c.space, BoardID: c.board, Title: "x"}}
 		d.Actions = map[string]Action{"submit_inspection": act}
-		// Bob and mallory can't write the shared space's apps at all, so they make their own.
 		space := f.shared
 		if c.by == f.bob || c.by == f.mallory {
 			space = f.e.private(c.by, f.ws)
@@ -878,8 +820,6 @@ func TestAnAppCantTargetWhatItsAuthorCantWrite(t *testing.T) {
 			t.Errorf("%s: code = %s", name, errorCode(t, rec))
 		}
 	}
-	// Publishing checks again: a draft saved while the author could write the target is not
-	// published by someone who can't.
 	d := f.inspections()
 	cur := f.view(f.alice, f.shared, f.app)
 	cur = f.mustPatchDraft(f.alice, f.shared, cur, withTitle(d, "Fix {{site}} soon"))
@@ -901,8 +841,6 @@ func withTitle(d Definition, title string) Definition {
 
 func TestAnOlderScreenRunsTheLiveReleasesEffects(t *testing.T) {
 	f := newFX(t)
-	// Publishing a release with other effects: an action of a screen drawn from release 1 is run
-	// as the live release says, never as the old one did.
 	d := withTitle(f.inspections(), "Urgent: {{site}}")
 	cur := f.mustPatchDraft(f.alice, f.shared, f.view(f.alice, f.shared, f.app), d)
 	f.publish(f.alice, f.shared, cur)
@@ -928,7 +866,6 @@ func TestOutboxPurgeKeepsWhatIsPending(t *testing.T) {
 	if err := f.e.s.purge(f.ctx()); err != nil {
 		t.Fatal(err)
 	}
-	// The finished operation is gone, the one still waiting is kept.
 	if n := f.count(`SELECT count(*) FROM app_operations WHERE app_id = ?`, f.app.ID); n != 1 {
 		t.Fatalf("%d operations kept", n)
 	}
@@ -956,7 +893,6 @@ func TestTheWorkerRunsInTheBackgroundAndStops(t *testing.T) {
 
 func TestTooManyWaitingEffectsAreRefused(t *testing.T) {
 	f := newFX(t)
-	// Fill the app's queue directly, then one more request does not queue.
 	for i := 0; i < maxOutstanding-2; i++ {
 		if _, err := f.e.db.Exec(`INSERT INTO app_operations (app_id, user_id, operation, action, request_hash) VALUES (?, ?, ?, 'x', 'x')`,
 			f.app.ID, f.alice.id, fmt.Sprintf("filler-%05d", i)); err != nil {
@@ -982,8 +918,6 @@ func TestTooManyWaitingEffectsAreRefused(t *testing.T) {
 	}
 }
 
-// The retry route is the web app's: what a token reads of a failed effect doesn't say it may be
-// retried, though the same user's session is told it may.
 func TestAFailedEffectReadWithATokenIsNotRetryable(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-token-retry", "East gate", "fail")
@@ -1010,9 +944,6 @@ func TestAFailedEffectReadWithATokenIsNotRetryable(t *testing.T) {
 	}
 }
 
-// The entries of a user whose account is disabled wait: they neither run nor fail (no code, no
-// notification, no try used up), however many times the worker looks, and they are done, once,
-// when the account is enabled again.
 func TestEffectsOfADisabledUserWaitForTheAccount(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-disabled-1", "East gate", "fail")
@@ -1021,7 +952,6 @@ func TestEffectsOfADisabledUserWaitForTheAccount(t *testing.T) {
 		expect(t, f.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/%s", f.ws, f.alice.id, verb), nil), http.StatusNoContent)
 	}
 	disable("disable")
-	// Many more rounds than an entry has tries, each past the longest wait.
 	for range 3 * maxAttempts {
 		f.later(backoffMax + holdDelay)
 		f.work()

@@ -8,8 +8,6 @@ import { toast } from './Toast'
 
 export const title = 'ConfirmDialog'
 
-// The action runs for a while (busy: nothing closes the dialog), then fails, and the dialog stays
-// open to say so.
 function BusyThenFails() {
   const t = useT()
   const [open, setOpen] = useState(false)

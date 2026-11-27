@@ -1,13 +1,4 @@
 #!/usr/bin/env node
-// Draws the app's PNG icons (public/icons/) from the same tile as icon.svg, with Chromium
-// through Playwright. Run it by hand when the mark changes: `node scripts/make-icons.mjs`;
-// the PNGs are committed, so a build needs no browser. CHROMIUM_PATH names a Chromium to use
-// when Playwright's own isn't installed.
-//
-// - icon-192.png, icon-512.png: the rounded mark, for the manifest's "any" purpose;
-// - icon-maskable-512.png: full-bleed background with the mark inside the central 80%, the
-//   safe zone a launcher may crop a mask from;
-// - apple-touch-icon.png: 180×180, full-bleed and opaque (iOS rounds it itself).
 
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -17,9 +8,6 @@ import { chromium } from 'playwright'
 const out = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'icons')
 mkdirSync(out, { recursive: true })
 
-// The taskto.ai website's app tile (its favicon): an emerald ground and the logo's mark, the arrow
-// and the dot both in ink, so the dot stays seen on the green. The mark is drawn on a 64-unit grid
-// and placed at 0.76 of the tile, as on the website.
 const BG = '#00a86b'
 const INK = '#0b0d12'
 const MARK = `<g transform="translate(61.6 61.6) scale(6.08)">
@@ -28,7 +16,6 @@ const MARK = `<g transform="translate(61.6 61.6) scale(6.08)">
       <circle cx="51" cy="32" r="9" fill="${INK}"/>
     </g>`
 
-// scale shrinks the mark about the centre for the full-bleed ones.
 function svg({ rounded, scale }) {
   const rx = rounded ? 120 : 0
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">

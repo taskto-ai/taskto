@@ -36,7 +36,6 @@ func TestAuditDictationSettings(t *testing.T) {
 		t.Fatalf("event = %+v", r)
 	}
 
-	// Choosing the hosted engine, without touching the key.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "api"}), http.StatusOK)
 	rows = e.events(ws)
 	if len(rows) != 2 || rows[0].Details["engine"] != "api" || rows[0].Details["api_key_changed"] != false || rows[0].Details["api_key_set"] != true {
@@ -52,7 +51,6 @@ func TestAuditDictationRefusalsRecordNothing(t *testing.T) {
 	member := e.join(owner, ws, "member")
 	stranger, other := e.otherWorkspace(owner, ws)
 
-	// A member, someone outside, and settings that are refused.
 	expect(t, member.do(http.MethodPatch, route(ws, ""), map[string]any{"language": "pt"}), http.StatusForbidden)
 	expect(t, stranger.do(http.MethodPatch, route(ws, ""), map[string]any{"language": "pt"}), http.StatusNotFound)
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"language": "not a language!"}), http.StatusBadRequest)
@@ -61,7 +59,6 @@ func TestAuditDictationRefusalsRecordNothing(t *testing.T) {
 		t.Fatalf("refusals left %+v", rows)
 	}
 
-	// Another workspace's change is its own log's.
 	expect(t, stranger.do(http.MethodPatch, route(other, ""), map[string]any{"language": "de"}), http.StatusOK)
 	if len(e.events(other)) != 1 || len(e.events(ws)) != 0 {
 		t.Fatalf("events: other %d, this %d", len(e.events(other)), len(e.events(ws)))

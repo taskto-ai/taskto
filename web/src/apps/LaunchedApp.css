@@ -1,5 +1,3 @@
-/* The frame of a launched app (LaunchedApp). */
-
 @layer screens {
   .ui-launched-loading {
     display: grid;

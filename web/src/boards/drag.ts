@@ -3,10 +3,6 @@ import { ApiError, api, type Card, errorText } from '../api'
 import { useT } from '../i18n'
 import { dropPosition } from './move'
 
-// Dragging a card: which one, and the column it is over. Each card's Move menu does the same
-// from the keyboard and on touch, so dragging is only a quicker way for a mouse. A drop (or the
-// menu) moves the card with the version last read; onMoved gets the card as moved and where it went, and onError the
-// error to show (null when a move starts). The board is read again after every move.
 export function useCardDrag({
   url,
   cards,
@@ -24,9 +20,6 @@ export function useCardDrag({
   const [over, setOver] = useState<Card['column'] | null>(null)
   const t = useT()
 
-  // Moves a card to `column`, before `before` or last; position counts the column's cards without
-  // it, as the server does. Answers whether a move was sent: none when it would leave the card
-  // where it is. A drop and the card's Move menu both move through it.
   const move = async (c: Card, column: Card['column'], before?: Card): Promise<boolean> => {
     const position = dropPosition(cards ?? [], c, column, before)
     if (position === null) return false
@@ -46,7 +39,6 @@ export function useCardDrag({
     return true
   }
 
-  // Drops the dragged card in `column`, before `before` or last.
   const drop = async (e: DragEvent, column: Card['column'], before?: Card) => {
     e.preventDefault()
     e.stopPropagation()
@@ -63,7 +55,6 @@ export function useCardDrag({
     setOver(column)
   }
   const start = (e: DragEvent, c: Card) => {
-    // Some browsers start a drag only with data set.
     e.dataTransfer?.setData('text/plain', c.title)
     if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
     setDragged(c)
@@ -77,5 +68,4 @@ export function useCardDrag({
 
 export type CardDrag = ReturnType<typeof useCardDrag>
 
-// Where a move put a card: before `before` (at `position` among the column's other cards), or last.
 export type MovedTo = { before?: Card; position: number }

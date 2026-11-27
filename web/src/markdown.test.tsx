@@ -73,8 +73,6 @@ test('only http(s), mailto and relative links are links', () => {
   ]) {
     expect(safeHref(bad)).toBeNull()
   }
-  // Characters browsers don't skip in a scheme (zero-width, other Unicode spaces) make it no
-  // scheme at all: whatever safeHref keeps is, to the browser's own parser, http(s) or mailto.
   for (const odd of [
     'java\u200bscript:alert(1)',
     '\u00a0javascript:x',
@@ -105,7 +103,6 @@ test('only http(s), mailto and relative links are links', () => {
     expect(a.getAttribute('target')).toBe('_blank')
     expect(a.getAttribute('rel')).toBe('noopener noreferrer')
   }
-  // The refused links keep their text; an image never loads.
   expect(container.textContent).toContain('bad')
   expect(container.textContent).toContain('data')
   expect(container.querySelector('img')).toBeNull()
@@ -120,7 +117,6 @@ test('a relative link is handed to the page, which opens the document', () => {
   fireEvent.click(getByText('the plan'))
   expect(onLink).toHaveBeenCalledWith('../plan.md')
   expect(open).toHaveBeenCalledOnce()
-  // A link the page has nowhere for is text: no anchor, so nothing to follow away.
   expect(getByText('the admin').closest('a')).toBeNull()
   expect(container.querySelectorAll('a')).toHaveLength(1)
 })
@@ -142,16 +138,9 @@ test('deep nesting stays text instead of exhausting the stack', () => {
   expect(container.textContent).toContain('quoted')
 })
 
-// The bounded-time tests guard against quadratic parsing, which took 9 to 31 s on these
-// inputs: their budget is far above a linear parse on a slow, busy CI runner (about 2 s with
-// every core loaded on a laptop) and far below that. Each test may also run past vitest's
-// default 5 s timeout.
 const BUDGET_MS = 10_000
 const TIMEOUT_MS = 60_000
 
-// The time a parse takes is the test process's own CPU time (vitest runs each test file in a
-// process of its own), not the wall clock: on a machine busy with other jobs, the wall clock
-// also counts the time the test waited for a CPU, and once ran 11 s for a 1 s parse.
 function cpuMs(): number {
   const { process } = globalThis as unknown as { process: { cpuUsage(): { user: number; system: number } } }
   const { user, system } = process.cpuUsage()
@@ -182,9 +171,6 @@ test(
   },
   TIMEOUT_MS,
 )
-
-// From the conversation view's tests: what models write, as a reply shows it (headings
-// lowered by two, line breaks kept).
 
 const md = (text: string) =>
   render(<Markdown text={text} headingShift={2} lineBreaks />).container.firstElementChild as HTMLElement
@@ -255,7 +241,6 @@ test('raw HTML in a reply is shown as text', () => {
   for (const text of attacks) {
     const el = md(text)
     expect(el.querySelector('script, img, iframe, svg, b, [onerror], [onload], [onmouseover]')).toBeNull()
-    // The tags are there, as text.
     expect(el.textContent).toContain('<')
     cleanup()
   }
@@ -307,7 +292,6 @@ test('javascript: and other unsafe links are never links', () => {
   ]) {
     expect(safeHref(href), JSON.stringify(href)).toBeNull()
   }
-  // An image is a link to it, so a reply never loads anything by itself.
   const img = md('![chart](https://example.com/c.png)')
   expect(img.querySelector('img')).toBeNull()
   expect(img.querySelector('a')?.getAttribute('href')).toBe('https://example.com/c.png')
@@ -347,7 +331,6 @@ test('task list items are read-only checkboxes, labelled by their text', () => {
   const boxes = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
   expect(boxes.map((b) => b.checked)).toEqual([false, true, true, false])
   expect(boxes.every((b) => b.disabled)).toBe(true)
-  // The text is the box's label, so a screen reader names it; the brackets are gone.
   expect(boxes.map((b) => b.closest('label')?.textContent)).toEqual([
     'write the post',
     'get approval',
@@ -391,7 +374,6 @@ test('a task item keeps its line breaks in a reply, as an ordinary list item doe
     (li) => !li.classList.contains('tt-task-item'),
   ) as HTMLElement
   expect(plain.querySelectorAll('br')).toHaveLength(1)
-  // Without line breaks (a document), a task item's lines are one line, as a paragraph's are.
   const doc = render(<Markdown text={['- [ ] First line', '  Second line'].join('\n')} />)
   expect(doc.container.querySelector('li.tt-task-item br')).toBeNull()
 })

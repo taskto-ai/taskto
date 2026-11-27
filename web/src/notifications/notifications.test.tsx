@@ -11,7 +11,7 @@ import { fakeFetch } from '../test/fakes'
 import { NotificationsPage } from './NotificationsPage'
 import { disablePush, enablePush, leavePush, PushBusy, sendPushStrings, syncPush } from './push'
 
-const SERVER_KEY = 'AQID' // the server's public key, as the push endpoint gives it: 1, 2, 3
+const SERVER_KEY = 'AQID'
 
 const me = {
   user: { id: 1, email: 'owner@example.com', name: 'Owner' },
@@ -31,8 +31,6 @@ function fakeSub(endpoint = 'https://push.example.net/abc', key: number[] = [1, 
   }
 }
 
-// A browser that can push, as far as the page can tell: the worker's registration, the push
-// manager, and the Notification permission, which the test sets.
 function pushBrowser({
   permission = 'default',
   answer = 'granted',
@@ -91,7 +89,6 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   resetInstallInfo()
-  // The person whose settings these are is signed in: push is turned on and off in their session.
   beginSession(1)
 })
 afterEach(() => {
@@ -102,8 +99,6 @@ afterEach(() => {
 })
 
 const pushCalls = (calls: { path: string }[]) => calls.filter((c) => c.path.startsWith('/api/me/push'))
-
-// --- Settings: push is optional and explicit ------------------------------------------------
 
 test('a browser that cannot push is told so, keeps the inbox, and nothing is asked of the server', async () => {
   const calls = fakeFetch({})
@@ -157,21 +152,18 @@ test('nothing is asked or subscribed until the person turns push on, and then on
   fireEvent.click(button)
   await screen.findByText('Push is on for this device.')
   expect(browser.FakeNotification.requestPermission).toHaveBeenCalledOnce()
-  // Subscribed with the server's key, for visible notifications only.
   const options = browser.subscribe.mock.calls[0]?.[0] as unknown as {
     userVisibleOnly: boolean
     applicationServerKey: Uint8Array
   }
   expect(options.userVisibleOnly).toBe(true)
   expect([...options.applicationServerKey]).toEqual([1, 2, 3])
-  // The endpoint and keys, and not the browser's other fields (the API refuses unknown ones).
   const put = calls.find((c) => c.method === 'PUT')
   expect(put?.path).toBe('/api/me/push/subscription')
   expect(put?.body).toEqual({
     endpoint: 'https://push.example.net/abc',
     keys: { p256dh: 'device-key', auth: 'device-auth' },
   })
-  // The service worker is given the words for a push, in this language.
   expect(browser.postMessage).toHaveBeenCalledWith({
     type: 'PUSH_STRINGS',
     strings: {
@@ -243,20 +235,15 @@ test('turning push off removes the subscription from the server and the browser'
   expect(localStorage.getItem('taskto.push')).toBeNull()
 })
 
-// --- Starting the app signed in, and signing out --------------------------------------------
-
 test('a device whose person turned push on is registered again at start; another person never gets it', async () => {
   const sub = fakeSub()
   pushBrowser({ permission: 'granted', subscription: sub })
   const calls = fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
 
-  // Never turned on: nothing.
   expect(await syncPush(1)).toBe(false)
-  // Turned on by someone else on this browser: not registered for this person.
   localStorage.setItem('taskto.push', '2')
   expect(await syncPush(1)).toBe(false)
   expect(pushCalls(calls)).toEqual([])
-  // Turned on by this person: registered again (a new login is a new session).
   localStorage.setItem('taskto.push', '1')
   expect(await syncPush(1)).toBe(true)
   expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1)
@@ -292,8 +279,6 @@ test('signing out removes this device once the server confirmed it, which droppe
     fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
   })
   await screen.findByRole('heading', { name: 'Log in' })
-  // The server first; it drops the session's subscription with the session, so no request removes
-  // it; then the browser's own subscription ends.
   const order = calls
     .filter((c) => c.method === 'DELETE' || c.path === '/api/logout')
     .map((c) => `${c.method} ${c.path}`)
@@ -301,8 +286,6 @@ test('signing out removes this device once the server confirmed it, which droppe
   await waitFor(() => expect(sub.unsubscribe).toHaveBeenCalled())
   expect(localStorage.getItem('taskto.push')).toBeNull()
 })
-
-// --- The inbox works in every browser -------------------------------------------------------
 
 const item = (id: number, over: Record<string, unknown> = {}) => ({
   id,
@@ -344,7 +327,6 @@ test('the inbox lists notifications, marks one read when it is opened, and all r
     'Something changed. Open it to see what you can still see.',
   ])
   expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/boards/3%3A4%3A3', '/w/1/apps/3-7', '/w/1/home'])
-  // This browser has no push, and the page doesn't mind: it offers the settings.
   expect(screen.getByRole('link', { name: 'Notification settings' }).getAttribute('href')).toBe(
     '/w/1/settings/notifications',
   )
@@ -419,7 +401,6 @@ test('each notification says where it happened and when: how long ago for the la
               target: { section: 'apps' },
               read: true,
             }),
-            // Five weeks old: its date, not "last month".
             item(1, { created_at: '2026-01-25T09:30:00.000Z', read: true }),
           ],
           more: false,
@@ -435,7 +416,6 @@ test('each notification says where it happened and when: how long ago for the la
     const when = recent.querySelector('time') as HTMLTimeElement
     expect(when.textContent).toBe('2 hours ago')
     expect(when.dateTime).toBe('2026-03-01T10:00:00.000Z')
-    // The date and time are its description, shown on focus as on hover.
     expect(when.tabIndex).toBe(0)
     const described = document.getElementById(when.getAttribute('aria-describedby') ?? '')
     expect(described?.textContent).toMatch(/Mar 1, 2026/)
@@ -443,7 +423,6 @@ test('each notification says where it happened and when: how long ago for the la
     expect(oldWhen.dateTime).toBe('2026-01-25T09:30:00.000Z')
     expect(oldWhen.textContent).toMatch(/Jan 25, 2026/)
     expect(oldWhen.textContent).not.toMatch(/ago|last/)
-    // Left open, the inbox keeps saying how long ago it is.
     act(() => {
       vi.setSystemTime(new Date('2026-03-01T13:00:00.000Z'))
       vi.advanceTimersByTime(30_000)
@@ -463,7 +442,6 @@ test('an unread notification is marked for the eye and the ear, a read one is no
   render(<NotificationsPage workspace={1} />)
   const list = await screen.findByRole('list', { name: 'Notifications' })
   const [unread, read] = within(list).getAllByRole('listitem')
-  // Bold with a mark, and "Unread:" for a screen reader, on the unread one only.
   expect(within(unread).getByRole('link').textContent).toMatch(/^Unread: /)
   expect(within(read).getByRole('link').textContent).not.toMatch(/Unread/)
   expect(unread.querySelector('[data-unread]')).toBeTruthy()
@@ -494,8 +472,6 @@ test('an empty inbox says what will show there', async () => {
   expect(screen.getByText(/When a card is assigned to you/)).toBeTruthy()
   expect((screen.getByRole('button', { name: 'Mark all as read' }) as HTMLButtonElement).disabled).toBe(true)
 })
-
-// --- The shell: the bell, and the address a push opens --------------------------------------
 
 test("the sidebar's inbox has the unread count, which opens it", async () => {
   window.history.replaceState(null, '', '/w/1/home')
@@ -598,7 +574,6 @@ test('a click on a push while the login is showing is kept: signing in opens the
     for (const h of handlers) h({ data: { type: 'OPEN', path: '/notification/8' } } as MessageEvent)
   })
   expect(window.location.pathname).toBe('/notification/8')
-  // Still the login: nothing was read as nobody.
   expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
   expect(calls.some((c) => c.path === '/api/me/notifications/8')).toBe(false)
 
@@ -615,9 +590,6 @@ test('a screen that holds a one-time token in its address is not replaced by a c
   fakeFetch({ 'GET /api/setup': { body: { needed: false } } })
   render(<App />)
   await screen.findByRole('heading', { name: /password/i })
-  // The app listened while it was loading and stopped when this screen came up, in an effect
-  // that can run just after the screen is drawn: settle the effects, or the listener that is
-  // about to be removed is still counted as listening.
   await act(async () => {})
   const container = navigator.serviceWorker as unknown as {
     addEventListener: ReturnType<typeof vi.fn>
@@ -634,8 +606,6 @@ test('a screen that holds a one-time token in its address is not replaced by a c
   expect(window.location.hash).toBe('#token-value')
 })
 
-// --- Turning push off, with the server or the browser failing ---------------------------------
-
 test('when the server cannot be told, push stays on, as it is, with the reason and a way to try again', async () => {
   const sub = fakeSub()
   pushBrowser({ permission: 'granted', subscription: sub })
@@ -647,7 +617,6 @@ test('when the server cannot be told, push stays on, as it is, with the reason a
   render(<NotificationsTab me={1} workspace={1} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off push on this device' }))
   await screen.findByRole('alert')
-  // Nothing was changed on this device, and the page still says push is on.
   expect(sub.unsubscribe).not.toHaveBeenCalled()
   expect(localStorage.getItem('taskto.push')).toBe('1')
   expect(screen.getByText('Push is on for this device.')).toBeTruthy()
@@ -737,7 +706,6 @@ test('email is chosen per kind, as it happens or in a daily summary, and is off 
 
   const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as Record<string, unknown>)
   expect(puts[0]).toEqual({ kinds: { card_assigned: 'instant' } })
-  // The first summary sends no time zone: the server uses the one of the person's profile.
   expect(puts[1]).toEqual({ kinds: { app_effect_failed: 'digest' } })
   expect(puts[2]).toEqual({ digest: { hour: 18, timezone: 'UTC' } })
 })
@@ -793,11 +761,9 @@ test('email that is on can be turned off where the server can no longer send mai
   await screen.findByText(/You can still turn email off/)
   const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
   expect(assigned.value).toBe('instant')
-  // Nothing can be turned on, and off is still there.
   const options = within(assigned).getAllByRole('option') as HTMLOptionElement[]
   expect(options.filter((o) => o.disabled).map((o) => o.value)).toEqual(['instant', 'digest'])
   fireEvent.change(assigned, { target: { value: 'off' } })
-  // With nothing on there is nothing left to turn off: the panel says email can't be set up.
   await screen.findByText(/so notifications can't be sent by email/)
   expect(screen.queryByLabelText('A card was assigned to you')).toBeNull()
   expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([{ kinds: { card_assigned: 'off' } }])
@@ -855,7 +821,6 @@ test('a confirmation link that does not work says why', async () => {
 
 test("a time zone the person picked for the summary is not replaced by their profile's when it is turned on again", async () => {
   pushBrowser({ permission: 'denied' })
-  // The server says the summary is in the zone of the person's profile until they choose one for it.
   let saved = emailChoices({ digest: { hour: 8, timezone: 'America/New_York', chosen: false } })
   const calls = fakeFetch({
     'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
@@ -878,7 +843,6 @@ test("a time zone the person picked for the summary is not replaced by their pro
   await waitFor(() => expect(saved.digest.timezone).toBe('UTC'))
   fireEvent.change(assigned, { target: { value: 'off' } })
   await waitFor(() => expect(saved.kinds.card_assigned).toBe('off'))
-  // Leaving the page and coming back forgets nothing: the server says the zone was chosen.
   first.unmount()
   render(<NotificationsTab me={1} workspace={1} />)
   assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
@@ -892,7 +856,6 @@ test("a time zone the person picked for the summary is not replaced by their pro
 
 test("a new time zone is shown by the summary, which follows it, and not sent back as the summary's own", async () => {
   pushBrowser({ permission: 'denied' })
-  // The summary is on, and follows the profile's zone (Lisbon) until one is chosen for it.
   let profile = 'Europe/Lisbon'
   const calls = fakeFetch({
     'GET /api/workspaces/1/notification-email': () => ({
@@ -915,13 +878,10 @@ test("a new time zone is shown by the summary, which follows it, and not sent ba
 
   fireEvent.change(screen.getByLabelText('Your time zone'), { target: { value: 'Asia/Tokyo' } })
   await waitFor(() => expect((screen.getByLabelText('Time zone') as HTMLSelectElement).value).toBe('Asia/Tokyo'))
-  // Changing the hour now keeps the zone the server reported, Tokyo, not the one from before.
   fireEvent.change(screen.getByLabelText('Send the daily summary at'), { target: { value: '18' } })
   await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
   expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ digest: { hour: 18, timezone: 'Asia/Tokyo' } })
 })
-
-// --- Push while the session changes hands ---------------------------------------------------
 
 test('turning push on, when the session ends while the server key is fetched, subscribes nobody and remembers nobody', async () => {
   const browser = pushBrowser({ permission: 'granted' })
@@ -938,7 +898,6 @@ test('turning push on, when the session ends while the server key is fetched, su
     (async () => {
       const on = enablePush(1)
       await vi.waitFor(() => expect(calls.some((c) => c.path === '/api/me/push/key')).toBe(true))
-      // The first person signs out, the next signs in.
       endSession()
       beginSession(2)
       key()
@@ -963,8 +922,6 @@ test('a subscription made just as the session ended is undone, and nothing is re
   beginSession(1)
   const on = enablePush(1).catch((e) => e)
   await vi.waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
-  // The PUT names the person it is for: the server refuses it if the browser's session became
-  // someone else's.
   expect(calls.find((c) => c.method === 'PUT')?.headers).toMatchObject({ 'x-taskto-expected-user': '1' })
   endSession()
   put()
@@ -1013,7 +970,6 @@ test('registering again at start stops if the session ended meanwhile: the devic
   localStorage.setItem('taskto.push', '2')
   registered()
   expect(await synced).toBe(false)
-  // The second person's own flag is left as it is, and nothing was sent.
   expect(localStorage.getItem('taskto.push')).toBe('2')
   expect(pushCalls(calls)).toEqual([])
 })
@@ -1043,7 +999,6 @@ test('a tab whose push turned on as the session ended says nothing of it', async
   endSession()
   await act(async () => key())
   await new Promise((r) => setTimeout(r, 20))
-  // No error of the push section: the session ending is not something that went wrong.
   expect(screen.queryByText(/session ended/)).toBeNull()
 })
 
@@ -1051,7 +1006,6 @@ test("a sign-out's push removal that finds the subscription after someone else t
   const sub = fakeSub()
   pushBrowser({ permission: 'granted', subscription: sub })
   localStorage.setItem('taskto.push', '1')
-  // The browser is slow to give the subscription.
   let found: () => void = () => {}
   const reg = await navigator.serviceWorker.getRegistration()
   Object.defineProperty(navigator, 'serviceWorker', {
@@ -1066,12 +1020,10 @@ test("a sign-out's push removal that finds the subscription after someone else t
     configurable: true,
   })
   vi.useFakeTimers({ toFake: ['setTimeout'] })
-  // The first person signs out (their session is over); signing out doesn't wait past its bound.
   const leaving = leavePush(1)
   await vi.advanceTimersByTimeAsync(3000)
   await leaving
   vi.useRealTimers()
-  // The second person signs in and turns push on, with the same browser subscription.
   beginSession(2)
   localStorage.setItem('taskto.push', '2')
   found()
@@ -1094,7 +1046,6 @@ test("turning push on, answered after its person signed out and someone else tur
   const on = enablePush(1).catch((e) => e)
   await vi.waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
   const sub = (await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription()) as unknown as Sub
-  // The first person signs out; the second signs in and turns push on, with the same subscription.
   endSession()
   beginSession(2)
   localStorage.setItem('taskto.push', '2')
@@ -1105,10 +1056,8 @@ test("turning push on, answered after its person signed out and someone else tur
 })
 
 test("an older tab's sign-out never ends the subscription another tab is registering for the next account", async () => {
-  // The browser has one subscription, the first person's, which another tab is about to reuse.
   const sub = fakeSub('https://push.example.net/abc', [1, 2, 3])
   const browser = pushBrowser({ permission: 'granted', subscription: sub })
-  // As a browser does: an ended subscription is no longer the browser's.
   sub.unsubscribe.mockImplementation(async () => {
     browser.state.subscription = null
     return true
@@ -1122,7 +1071,6 @@ test("an older tab's sign-out never ends the subscription another tab is registe
         put = () => done({ status: 204 })
       }),
   })
-  // The older tab's sign-out finds the browser slow to give the subscription.
   const reg = await navigator.serviceWorker.getRegistration()
   let found: () => void = () => {}
   let first = true
@@ -1141,7 +1089,6 @@ test("an older tab's sign-out never ends the subscription another tab is registe
     configurable: true,
   })
   const leaving = leavePush(1)
-  // Meanwhile the other tab, where the next person signed in, turns push on with that subscription.
   const turningOn = enablePush(2).catch((e) => e)
   await new Promise((r) => setTimeout(r, 20))
   found()
@@ -1150,7 +1097,6 @@ test("an older tab's sign-out never ends the subscription another tab is registe
   await leaving
   await turningOn
   await new Promise((r) => setTimeout(r, 20))
-  // Whatever subscription the next person ended up registering is still there.
   const registered = calls.filter((c) => c.method === 'PUT')
   const current = (await (
     await navigator.serviceWorker.getRegistration()
@@ -1203,16 +1149,12 @@ test('turning push on claims this browser’s subscription for its account befor
   })
   beginSession(2)
   const on = enablePush(2)
-  // While it registers, the flag already names the account it is for: another tab's cleanup of the
-  // first account's push leaves the subscription alone.
   await vi.waitFor(() => expect(localStorage.getItem('taskto.push')).toBe('2'))
   put()
   await on
   expect(localStorage.getItem('taskto.push')).toBe('2')
 })
 
-// The browser's one subscription is being ended (a sign-out's removal) while the person clicks to
-// turn push on; the turn comes only once it is over.
 function heldUnsubscribe() {
   const sub = fakeSub()
   let end: (ended: boolean) => void = () => {}
@@ -1232,12 +1174,9 @@ test('turning push on is for the session of the click: a turn that comes after t
     'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
     'PUT /api/me/push/subscription': { status: 204 },
   })
-  // An earlier person's sign-out is ending the subscription.
   localStorage.setItem('taskto.push', '9')
   const leaving = leavePush(9)
   await vi.waitFor(() => expect(held.sub.unsubscribe).toHaveBeenCalled())
-  // The first person clicks to turn push on; before their turn comes, they sign out and the next
-  // person signs in.
   const on = enablePush(1)
   endSession()
   beginSession(2)
@@ -1255,16 +1194,13 @@ test('without Web Locks, a subscription another tab is still ending is never reu
     'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
     'PUT /api/me/push/subscription': { status: 204 },
   })
-  // Another tab began ending the subscription a moment ago, and hasn't heard back from the browser.
   localStorage.setItem('taskto.push-unsubscribing:other-tab', String(Date.now()))
   await expect(enablePush(1)).rejects.toBeInstanceOf(PushBusy)
-  // Nor is it registered again at a start.
   localStorage.setItem('taskto.push', '1')
   expect(await syncPush(1)).toBe(false)
   expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   expect(browser.subscribe).not.toHaveBeenCalled()
 
-  // Once that is over (or long past), it goes on.
   localStorage.removeItem('taskto.push-unsubscribing:other-tab')
   expect(await syncPush(1)).toBe(true)
 })
@@ -1285,7 +1221,6 @@ test('waiting for a turn to change push is bounded, and the turn held by a chang
     const settled = expect(on).rejects.toBeInstanceOf(PushBusy)
     await vi.advanceTimersByTimeAsync(10_000)
     await settled
-    // The next change still waits for the one going on: nothing reached the server meanwhile.
     const off = disablePush().catch((e) => e)
     await vi.advanceTimersByTimeAsync(1_000)
     expect(calls.some((c) => c.method === 'DELETE' || c.method === 'PUT')).toBe(false)
@@ -1311,7 +1246,6 @@ test('turning push off never ends a subscription another account claimed while t
   const off = disablePush()
   await vi.waitFor(() => expect(localStorage.getItem('taskto.push')).toBe('1'))
   await new Promise((r) => setTimeout(r, 0))
-  // Another tab, without Web Locks to order it: the second person turns push on with it.
   localStorage.setItem('taskto.push', '2')
   answer()
   await off
@@ -1330,13 +1264,10 @@ test("a sign-out's turn after another account's failed turning on leaves no opt-
         refuse = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
       }),
   })
-  // The second person turns push on; the flag is theirs while it registers.
   beginSession(2)
   const on = enablePush(2).catch(() => {})
   await vi.waitFor(() => expect(localStorage.getItem('taskto.push')).toBe('2'))
-  // The first person's sign-out (from another tab) comes now: the flag isn't theirs, so it waits its turn.
   const leaving = leavePush(1)
-  // The second person's turning on fails, and gives the flag back as it found it.
   refuse()
   await on
   await leaving
@@ -1344,8 +1275,6 @@ test("a sign-out's turn after another account's failed turning on leaves no opt-
 })
 
 test("turning push off ends a subscription whose flag was another account's before the click", async () => {
-  // The first person turned push on, and their session ended with no tab open to clean up: the
-  // second person, signed in now, is shown push on, and turns it off.
   const sub = fakeSub()
   pushBrowser({ permission: 'granted', subscription: sub })
   localStorage.setItem('taskto.push', '2')
@@ -1365,12 +1294,10 @@ test('a tab closed while turning push off leaves it off: shown off elsewhere, an
     'DELETE /api/me/push/subscription': { status: 204 },
     'PUT /api/me/push/subscription': { status: 204 },
   })
-  // The server forgets the device; the tab closes while the browser ends the subscription.
   const off = disablePush().catch(() => {})
   try {
     await vi.waitFor(() => expect(held.sub.unsubscribe).toHaveBeenCalled())
     expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
-    // Another tab, a minute later (the closed tab's mark has lapsed), with its own copy of the code.
     const later = Date.now() + 61_000
     vi.spyOn(Date, 'now').mockReturnValue(later)
     vi.resetModules()
@@ -1394,8 +1321,6 @@ test('without Web Locks, two tabs ending the subscription at once never rewrite 
   localStorage.setItem('taskto.push', '9')
   const leaving = leavePush(9)
   await vi.waitFor(() => expect(first.sub.unsubscribe).toHaveBeenCalled())
-  // Another tab, with its own copy of the code and nothing to order it with this one, ends the
-  // subscription too.
   vi.resetModules()
   const other = await import('./push')
   const second = heldUnsubscribe()
@@ -1417,12 +1342,9 @@ test('without Web Locks, two tabs ending the subscription at once never rewrite 
     const theirs = written.filter((k) => k.startsWith('taskto.push-unsubscribing'))
     expect(theirs.length).toBeGreaterThan(0)
     written.length = 0
-    // This tab's unsubscribe ends: what it writes is its own mark only, never the key holding the
-    // other tab's (which, written back from what was read before, could drop it).
     first.end()
     await leaving
     expect(written.filter((k) => theirs.includes(k))).toEqual([])
-    // The other tab's unsubscribe still counts: push isn't turned on over it.
     await expect(enablePush(1)).rejects.toBeInstanceOf(PushBusy)
   } finally {
     first.end()
@@ -1437,7 +1359,6 @@ test('without Web Locks, a start that registers the device again stops when anot
   pushBrowser({ permission: 'granted', subscription: sub })
   localStorage.setItem('taskto.push', '1')
   const calls = fakeFetch({ 'PUT /api/me/push/subscription': { status: 204 } })
-  // The browser is slow to say which subscription it has.
   const registration = await navigator.serviceWorker.getRegistration()
   let answer: (() => void) | undefined
   vi.mocked(registration?.pushManager.getSubscription as () => Promise<unknown>).mockImplementationOnce(
@@ -1449,7 +1370,6 @@ test('without Web Locks, a start that registers the device again stops when anot
   const synced = syncPush(1)
   await vi.waitFor(() => expect(answer).toBeDefined())
   await new Promise((r) => setTimeout(r, 0))
-  // Meanwhile another tab is turning push off: it marked the flag before asking the server.
   localStorage.setItem('taskto.push', 'off:1')
   answer?.()
   expect(await synced).toBe(false)
@@ -1471,7 +1391,6 @@ test("a sign-out's removal of push stops when a newer login of the account start
   let older = true
   const leaving = leavePush(1, () => older)
   await vi.waitFor(() => expect(answer).toBeDefined())
-  // The same person signs in again in another tab, and push goes on for that login.
   older = false
   localStorage.setItem('taskto.push', '1')
   answer?.()
@@ -1499,7 +1418,6 @@ test("without Web Locks, a turn-off that fails never puts push back on over anot
   fakeFetch({
     'DELETE /api/me/push/subscription': () => {
       deletes++
-      // This tab's request fails, later; the other tab's is still on its way.
       return deletes === 1
         ? new Promise((done) => {
             fail = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
@@ -1509,7 +1427,6 @@ test("without Web Locks, a turn-off that fails never puts push back on over anot
   })
   const mine = disablePush().catch(() => {})
   await vi.waitFor(() => expect(deletes).toBe(1))
-  // Another tab, with nothing to order it with this one, turns push off too.
   vi.resetModules()
   const other = await import('./push')
   ;(await import('../session')).beginSession(1)
@@ -1517,7 +1434,6 @@ test("without Web Locks, a turn-off that fails never puts push back on over anot
   await vi.waitFor(() => expect(deletes).toBe(2))
   fail()
   await mine
-  // The other tab's turn-off stands: push is not shown on, nor registered again at a start.
   expect(localStorage.getItem('taskto.push')).not.toBe('1')
 })
 
@@ -1539,12 +1455,10 @@ test('without Web Locks, two turn-offs that both fail leave push on as it was, r
   ;(await import('../session')).beginSession(1)
   const second = other.disablePush().catch(() => {})
   await vi.waitFor(() => expect(fails).toHaveLength(2))
-  // The first fails first, then the second.
   fails[0]()
   await first
   fails[1]()
   await second
-  // Neither reached the server: push is as it was, and a start registers it again.
   expect(localStorage.getItem('taskto.push')).toBe('1')
   expect(await other.syncPush(1)).toBe(true)
   expect(calls.some((c) => c.method === 'PUT')).toBe(true)
@@ -1568,13 +1482,11 @@ test('without Web Locks, a turn-off that fails while an earlier one is still on 
   ;(await import('../session')).beginSession(1)
   const second = other.disablePush().catch(() => {})
   await vi.waitFor(() => expect(fails).toHaveLength(2))
-  // The second fails first, while the first may still reach the server.
   fails[1]()
   await second
   expect(localStorage.getItem('taskto.push')).not.toBe('1')
   expect(await other.syncPush(1)).toBe(false)
   expect(calls.some((c) => c.method === 'PUT')).toBe(false)
-  // Then the first fails too: push is on as it was.
   fails[0]()
   await first
   expect(localStorage.getItem('taskto.push')).toBe('1')
@@ -1583,7 +1495,6 @@ test('without Web Locks, a turn-off that fails while an earlier one is still on 
 test("turning push off over another account's stale flag never ends that account's push turned on again meanwhile", async () => {
   const sub = fakeSub()
   pushBrowser({ permission: 'granted', subscription: sub })
-  // The second person's flag, left from a session that ended with no tab to clean up.
   localStorage.setItem('taskto.push', '2')
   let answer: (() => void) | undefined
   fakeFetch({
@@ -1594,7 +1505,6 @@ test("turning push off over another account's stale flag never ends that account
   })
   const off = disablePush()
   await vi.waitFor(() => expect(answer).toBeDefined())
-  // The second person signs in again in another tab and turns push on with the same subscription.
   localStorage.setItem('taskto.push', '2')
   answer?.()
   await off
@@ -1604,7 +1514,6 @@ test("turning push off over another account's stale flag never ends that account
 
 test("turning push off over another account's stale flag, with no subscription here, leaves that account's flag", async () => {
   pushBrowser({ permission: 'granted', subscription: null })
-  // The second person's flag, left from a session that ended with no tab to clean up.
   localStorage.setItem('taskto.push', '2')
   const registration = await navigator.serviceWorker.getRegistration()
   let answer: ((sub: null) => void) | undefined
@@ -1616,7 +1525,6 @@ test("turning push off over another account's stale flag, with no subscription h
   )
   const off = disablePush()
   await vi.waitFor(() => expect(answer).toBeDefined())
-  // The second person signs in again in another tab and turns push on meanwhile.
   localStorage.setItem('taskto.push', '2')
   answer?.(null)
   await off

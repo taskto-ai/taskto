@@ -1,6 +1,3 @@
-// A short status in a pill: Live, Draft, Overdue, Offline. The tone colours it, and its words say
-// it, so the colour is never the only sign. A dot or an icon may go before the words.
-
 import type { ReactNode } from 'react'
 import { Icon, type IconName } from './Icon'
 import './Badge.css'
