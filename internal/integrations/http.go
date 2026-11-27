@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -83,6 +84,9 @@ type Service struct {
 	afterLookup func()
 	applier     atomic.Pointer[Applier]
 	wake        chan struct{}
+	// pollMu guards polls, the reconciliation polling's memory of each integration's reads (poll.go).
+	pollMu sync.Mutex
+	polls  pollLimits
 }
 
 // New returns the API over store.

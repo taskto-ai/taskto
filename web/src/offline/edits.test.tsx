@@ -836,7 +836,7 @@ test('unsent changes are never lost by signing out or in as someone else: they a
   expect(await store.listDownloads()).toEqual([])
   expect((await store.listItems()).map((i) => i.state)).toEqual(['queued', 'queued'])
   expect(runtimeState().runtime).toBeNull()
-  expect(await settle(7, new Map())).toHaveLength(2)
+  expect((await settle(7, new Map())).left).toHaveLength(2)
 })
 
 // --- the database
@@ -1322,12 +1322,12 @@ test('signing out loses only what the person was shown: a newer edit of the same
   const shown = await unsentOf(7)
   // Another tab changes the same item (the same action, so the same item, under a new key).
   await transport.act(press('edit_expense', { id: 1, amount: '11' }, 1))
-  const left = await settle(7, approvalOf(shown.items))
+  const { left } = await settle(7, approvalOf(shown.items))
   expect(left).toHaveLength(1)
   expect(left[0].version).toBeGreaterThan(shown.items[0].version)
   expect((await store.listItems())[0].action.context).toEqual({ id: 1, amount: '11' })
   // Shown again, as it is now, it is what they agree to lose.
-  expect(await settle(7, approvalOf(left))).toEqual([])
+  expect((await settle(7, approvalOf(left))).left).toEqual([])
 })
 
 test('an answer of 401 to a send that may already be on the server does not make the record free: its key is never reused', async () => {

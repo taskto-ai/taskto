@@ -24,7 +24,9 @@ func TestStripeMeetsThePaymentsContract(t *testing.T) {
 // payer, expiry and refund.
 func stripeFixture(t *testing.T) *paymentsFixture {
 	t.Helper()
-	fake := testprovider.NewStripe(t)
+	// A clock the fixture moves: what the provider says of a moment is checked against it.
+	clock := testprovider.NewManualClock(time.Now().UTC())
+	fake := testprovider.NewStripe(t, testprovider.WithClock(clock))
 	// Stripe signs its time in the header: the body stays as it is.
 	sign := func(body []byte, secret string, at time.Time) signedDelivery {
 		return signedDelivery{Header: http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}, Body: body}
@@ -51,6 +53,7 @@ func stripeFixture(t *testing.T) *paymentsFixture {
 			{Name: "payment link", Pages: false},
 		},
 		Now:         fake.Clock().Now,
+		Later:       clock.Advance,
 		Tolerance:   StripeTolerance,
 		OtherSecret: testprovider.OtherWebhookSecret,
 		PayerHosts:  []string{stripeCheckoutHost, stripeLinkHost},
@@ -102,6 +105,23 @@ type brokenStripe struct {
 	ignoresTime bool
 	// leaksPayer puts what the payer typed into the event.
 	leaksPayer string
+	// datesByRead dates a payment it reads by the time it read it (now), not the provider's; undated
+	// gives it no time at all.
+	datesByRead, undated bool
+	now                  func() time.Time
+}
+
+func (b brokenStripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error) {
+	obs, err := b.stripe.ReadPayment(ctx, creds, c, hosted, objectID)
+	for i := range obs.Payments {
+		switch {
+		case b.datesByRead:
+			obs.Payments[i].PaidAt = b.now().Truncate(time.Second)
+		case b.undated:
+			obs.Payments[i].PaidAt = time.Time{}
+		}
+	}
+	return obs, err
 }
 
 func (b brokenStripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error) {
@@ -161,10 +181,14 @@ func TestTheContractSuiteNoticesABrokenAdapter(t *testing.T) {
 		"a payer's email in the event":            {brokenStripe{leaksPayer: payer.Email}, "a payment is one succeeded event"},
 		"a payer's name in the event":             {brokenStripe{leaksPayer: payer.Name}, "a payment is one succeeded event"},
 		"a signature of the wrong secret passing": {brokenStripe{acceptsAnything: true}, "the previous secret verifies"},
+		"a payment dated by its read":             {brokenStripe{datesByRead: true}, "a payment read back is dated"},
+		"a payment read with no time":             {brokenStripe{undated: true}, "a payment read back is dated"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fx := stripeFixture(t)
-			fx.Provider = tc.fault
+			fault := tc.fault
+			fault.now = fx.Now
+			fx.Provider = fault
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := caseNamed(t, tc.failing).run(ctx, fx); err == nil {

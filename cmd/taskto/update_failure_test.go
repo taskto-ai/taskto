@@ -63,6 +63,7 @@ func (e *updEnv) wantNeverRestores() {
 // The updater's lines of code never restore a backup or touch a volume: the failure of an
 // update is a person's to put right, with deploy/INSTALL.md's Rollback.
 func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
+	t.Parallel()
 	script := readRepoFile(t, "deploy/taskto-update.sh")
 	var code []string
 	for _, l := range strings.Split(script, "\n") {
@@ -102,6 +103,7 @@ func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 }
 
 func TestSafetyCheckTakesOnlyItsOwnArguments(t *testing.T) {
+	t.Parallel()
 	needTools(t, "bash")
 	script, _ := filepath.Abs(filepath.Join("..", "..", "deploy", "safety-check.sh"))
 	for _, args := range [][]string{{"--nope"}, {"--static"}, {"--static", "a", "b"}} {
@@ -118,6 +120,7 @@ func asExit(err error, target **exec.ExitError) bool { return errors.As(err, tar
 // The new Compose settings are checked against the safety rules before anything starts: a
 // candidate that breaks one is refused with nothing changed, and its servers are never started.
 func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		edit, reason string
 		imageUser    string
@@ -179,6 +182,7 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		"an existing volume that binds the status, writable": {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", volume: {}}] | .volumes.statevol = {name: "taskto_statevol"}`, volumeOptions: "taskto_statevol {linkpub}", reason: "a host path that holds the updater's state"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.edit != "" {
@@ -213,6 +217,7 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 // version is started and checked, and the release is recorded as failed. The data is never
 // touched, so there is nothing to restore.
 func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		setup  func(e *updEnv)
 		reason string
@@ -229,6 +234,7 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 		}, "docker compose create and start failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			tc.setup(e)
@@ -295,6 +301,7 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 // is stopped, the backup and the record are kept, the next runs are blocked, and the status
 // says which backup to restore.
 func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
+	t.Parallel()
 	for name, setup := range map[string]func(e *updEnv){
 		"the server isn't healthy":                                     func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
 		"docker compose start fails after it started":                  func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
@@ -314,6 +321,7 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 		"the proxy still answers as the old version":                   func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)
@@ -384,6 +392,7 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 // A marker that can't be written changes nothing: the transaction record alone blocks the next
 // run, even when the old version answers, healthy, at /healthz.
 func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/health-bad", updNew+"\n")
@@ -416,6 +425,7 @@ func TestUpdateStopStaysBlockedWithoutTheBlockedMarker(t *testing.T) {
 // When putting the old version back fails too, the install is left as it is, with the record
 // and the marker, and nothing runs again until a person has cleared it.
 func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	// The new version can't be started, and neither can the old.
@@ -453,6 +463,7 @@ func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 // failed is not forgotten: the update's record stays, which blocks the next run, whatever it is
 // asked, with no candidate started, until a person has looked and cleared it.
 func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.failCalls(`^compose start .* @` + updNew + `$`)
@@ -512,6 +523,7 @@ func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 // tried again. The failed list is written to a file of its own and moved into place, before
 // the record goes.
 func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("state/failed", updNew+"\n")
@@ -556,6 +568,7 @@ func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
 
 // The data volume is the one the running server has mounted, not a name assumed.
 func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/volname", "acme_data")
@@ -572,6 +585,7 @@ func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
 // An update killed between putting the old version back and writing what it did is found by the
 // next run, which is blocked; once a person clears it, the release that failed isn't tried again.
 func TestClearBlock(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	if code, out := e.run("--clear-block"); code != 0 || !strings.Contains(out, "nothing to clear") {
@@ -641,6 +655,7 @@ func TestClearBlock(t *testing.T) {
 // or dated in the future, with the least to keep, doesn't cost the update its way back, and a
 // stopped update keeps every archive.
 func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.extra = []string{"TASKTO_UPDATE_KEEP=1"}
@@ -675,6 +690,7 @@ func TestUpdatePruneNeverTakesTheArchiveAStopNeeds(t *testing.T) {
 // manual-upgrade release can be on a page after the newest ones, and a page that can't be read
 // stops the update.
 func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
+	t.Parallel()
 	setup := func() *updEnv {
 		e := newUpdEnv(t)
 		e.installAt("v1.0.0")
@@ -709,7 +725,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 
 	// A page after the first that can't be read: nothing is installed.
 	e = setup()
-	e.gh.failPages = map[int]bool{2: true}
+	e.gh.locked(func() { e.gh.failPages = map[int]bool{2: true} })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -720,7 +736,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 
 	// The same list without the marker is taken: the newest by version.
 	e = setup()
-	e.gh.releases[2]["body"] = ""
+	e.gh.locked(func() { e.gh.releases[2]["body"] = "" })
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -738,6 +754,7 @@ func (e *updEnv) traefik() {
 // port: before the update (a broken proxy isn't the update's fault, so nothing is changed) and
 // after it (a stop).
 func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.traefik()
 	e.release(updNew, "", false, false)
@@ -772,6 +789,7 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 		"a stale LAN port":       func(e *updEnv) { e.write("fake/lan-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.traefik()
 			e.release(updNew, "", false, false)
@@ -790,6 +808,7 @@ func TestUpdateChecksThePublicAddressInTraefikMode(t *testing.T) {
 // A changed Caddyfile recreates Caddy after the switch, and again when the old version is put
 // back.
 func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/Caddyfile", "caddy changed\n")
@@ -831,6 +850,7 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 // as JSON; the URL is never in a command line, the journal or the status; and a notification
 // that fails never changes the outcome.
 func TestUpdateNotifies(t *testing.T) {
+	t.Parallel()
 	const secret = "SECRET-TOKEN-123"
 	notify := func(e *updEnv) { e.write("etc/update-notify-url", e.server.URL+"/notify/"+secret+"\n") }
 	posts := func(e *updEnv) []notification {
@@ -895,6 +915,7 @@ func TestUpdateNotifies(t *testing.T) {
 		"a version on file": {func(e *updEnv) { e.setVersion(updNew) }, "blocked"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			notify(e)
@@ -915,6 +936,7 @@ func TestUpdateNotifies(t *testing.T) {
 		"a dry run":  func(e *updEnv) { e.run("--dry-run") },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			if name != "up to date" {
 				e.release(updNew, "", false, false)
@@ -932,7 +954,7 @@ func TestUpdateNotifies(t *testing.T) {
 	// A notification that fails never changes the outcome: an error from the server, nothing
 	// listening, and a file that isn't an address.
 	for name, setup := range map[string]func(e *updEnv){
-		"the server answers 500": func(e *updEnv) { notify(e); e.gh.notifyStatus = 500 },
+		"the server answers 500": func(e *updEnv) { notify(e); e.gh.locked(func() { e.gh.notifyStatus = 500 }) },
 		"nothing listens":        func(e *updEnv) { e.write("etc/update-notify-url", "http://127.0.0.1:1/notify/"+secret+"\n") },
 		"not an address":         func(e *updEnv) { e.write("etc/update-notify-url", "not a url "+secret+"\n") },
 		"an address with a quote": func(e *updEnv) {
@@ -940,6 +962,7 @@ func TestUpdateNotifies(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			setup(e)

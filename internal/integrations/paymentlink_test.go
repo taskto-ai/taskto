@@ -96,17 +96,38 @@ func newSquarePay(t *testing.T, public string) *pay {
 
 func newPayFor(t *testing.T, public, definition, provider string) *pay {
 	t.Helper()
+	return newPayClocked(t, public, definition, provider, false)
+}
+
+// newPayOnOneClock is newPay with the fake Stripe on the server's clock too, for a test of the times
+// the provider says: p.later moves the provider's time as well.
+func newPayOnOneClock(t *testing.T, public string) *pay {
+	t.Helper()
+	return newPayClocked(t, public, invoiceApp, "stripe", true)
+}
+
+// clockFunc is a testprovider.Clock of a function.
+type clockFunc func() time.Time
+
+func (f clockFunc) Now() time.Time { return f() }
+
+func newPayClocked(t *testing.T, public, definition, provider string, providerToo bool) *pay {
+	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
-	fake := testprovider.NewStripe(t)
+	// One clock moves the integrations' and the apps' alike.
+	offset := new(atomic.Int64)
+	var fakeOpts []testprovider.Option
+	if providerToo {
+		fakeOpts = append(fakeOpts, testprovider.WithClock(clockFunc(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })))
+	}
+	fake := testprovider.NewStripe(t, fakeOpts...)
 	var sq *testprovider.Square
 	endpoint := fake.Host()
 	if provider == "square" {
 		sq = testprovider.NewSquare(t)
 		endpoint = sq.Host()
 	}
-	// One clock moves the integrations' and the apps' alike.
-	offset := new(atomic.Int64)
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
 		Now:           func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
 		ClientOptions: []ClientOption{WithTestEndpoint(endpoint), WithoutConnectionReuse()}})
@@ -120,7 +141,9 @@ func newPayFor(t *testing.T, public, definition, provider string) *pay {
 	svc.HookRoutes(mux)
 	p := &pay{env: e, fake: fake, sq: sq, svc: svc, offset: offset}
 	p.apps = apps.New(e.db, spaces).WithPlatform(apps.Platform{ProviderKinds: providerKinds, Payments: svc}).
-		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) })
+		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) }).
+		// The worker sees a moved clock on its next poll: a short one, so a test's wait for it is short.
+		WithOutboxPoll(25 * time.Millisecond)
 	p.apps.Routes(mux)
 	p.apps.ApprovalRoutes(mux, a)
 	svc.UseRecords(p.apps) // stored events are applied (by drainEvents: the tests run the worker by hand)
@@ -1110,9 +1133,16 @@ func TestAProviderThatNeverAnswersExhaustsTheEntry(t *testing.T) {
 	p.startWorker()
 	p.send(record, "op-down-0001")
 	for i := 0; i < 6; i++ {
-		p.waitFor("a try", func() bool { return len(p.posts()) >= i+1 || p.entries()[0].state == "failed" })
+		// The try is over once the entry waits again: its next attempt is then set from the
+		// clock, so moving the clock only now never lands between the call and that. The calls are
+		// counted first: a pending state read after them is the one that try left, not the one
+		// before it.
+		p.waitFor("a try", func() bool {
+			posts := len(p.posts())
+			es := p.entries()
+			return len(es) == 1 && (es[0].state == "failed" || es[0].state == "pending" && posts == i+1)
+		})
 		p.later(10 * time.Minute)
-		time.Sleep(50 * time.Millisecond)
 	}
 	e := p.settled(apps.StateFailed)
 	if e.code != string(apierr.CodeIntegrationProviderUnreachable) || e.attempts != 5 {

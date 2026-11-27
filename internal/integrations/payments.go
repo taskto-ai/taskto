@@ -57,6 +57,47 @@ type PaymentProvider interface {
 	KeyKept() time.Duration
 }
 
+// PaymentPoller is the part of a provider that reads what became of an object the server made, for
+// the reconciliation polling (poll.go). It only reads: a call of it never makes, changes or deletes
+// anything at the provider. Its failures are *CallError, with RetryAfter set when the provider asked
+// for a wait.
+type PaymentPoller interface {
+	// ReadPayment retrieves the object (a Checkout Session, or for a hosted link, the sessions that
+	// took a payment through a Payment Link) and says what it shows: payments that arrived, an end that
+	// isn't money (an expired session), or nothing yet. Every id and amount in the answer is checked
+	// against the provider's shape, as an event's is.
+	ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error)
+}
+
+// Observed is what ReadPayment found.
+type Observed struct {
+	// Expired says that the object can take no payment any more and was never paid.
+	Expired bool
+	// Livemode says whether the object is of live money; it is what an expired object's event is of.
+	Livemode bool
+	// Payments are the payments that arrived on the object, oldest first: one for a session, and for a
+	// Payment Link one for each of its sessions that was paid.
+	Payments []ObservedPayment
+}
+
+// ObservedPayment is a payment that arrived, as the apply step is told of it: the same fields a paid
+// event holds.
+type ObservedPayment struct {
+	// ObjectID is the session the payment arrived on, and PaymentID the payment itself ("" when the
+	// provider names none).
+	ObjectID, PaymentID string
+	AmountMinor         int64
+	// Currency is the code, upper case.
+	Currency string
+	Livemode bool
+	// PaidAt is when the payment was made, as the provider says, read in the same request as the
+	// payment: the time a webhook's event of the payment would carry, so that a payment made just
+	// before midnight and found by a poll just after it is dated the day it was made. An adapter whose
+	// provider says when gives it (the contract suite requires it); the zero time means the provider
+	// says nothing, and only then is the payment dated by the time the poll found it.
+	PaidAt time.Time
+}
+
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
 // exact, in the currency's smallest unit; the token is the key's; the two addresses are the
 // server's own pages, never a definition's, and both are empty when the server has no public
@@ -143,6 +184,9 @@ type CallError struct {
 	// once execution began (https://docs.stripe.com/error-low-level#content-errors), so the reference
 	// gets no new key until it is resolved.
 	OutcomeUnknown bool
+	// RetryAfter is how long the provider asked for the next call to wait (its Retry-After of a 429),
+	// 0 when it said nothing; bounded by maxRetryAfter.
+	RetryAfter time.Duration
 }
 
 func (e *CallError) Error() string {
@@ -612,17 +656,192 @@ func stripeGet(ctx context.Context, creds Credentials, c *Client, pathAndQuery s
 		return nil, resp.StatusCode, &CallError{Kind: CallUnreachable, Status: resp.StatusCode}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, stripeLookupFailure(resp.StatusCode)
+		return nil, resp.StatusCode, stripeLookupFailure(resp.StatusCode, resp.Header)
 	}
 	return body, resp.StatusCode, nil
 }
 
-// stripeLookupFailure classifies an answer to a read, which makes nothing.
-func stripeLookupFailure(status int) error {
+// maxRetryAfter bounds a wait a provider asks for: a header can't park the polling for longer.
+const maxRetryAfter = time.Hour
+
+// stripeLookupFailure classifies an answer to a read, which makes nothing. A 429 carries the wait
+// Stripe asked for (https://docs.stripe.com/rate-limits: "Retry-After", whole seconds).
+func stripeLookupFailure(status int, h http.Header) error {
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return &CallError{Kind: CallCredentials, Status: status}
 	}
-	return &CallError{Kind: CallUnreachable, Status: status}
+	ce := &CallError{Kind: CallUnreachable, Status: status}
+	if status == http.StatusTooManyRequests {
+		if secs, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && secs > 0 {
+			ce.RetryAfter = min(time.Duration(secs)*time.Second, maxRetryAfter)
+		}
+	}
+	return ce
+}
+
+// polledSession holds the fields of a Checkout Session that a poll reads. Nothing a payer typed (name,
+// email, address) is decoded, of the session or of the charge expanded into it.
+type polledSession struct {
+	ID            string        `json:"id"`
+	Object        string        `json:"object"`
+	Mode          string        `json:"mode"`
+	Status        string        `json:"status"`
+	PaymentStatus string        `json:"payment_status"`
+	PaymentIntent *polledIntent `json:"payment_intent"`
+	PaymentLink   *string       `json:"payment_link"`
+	AmountTotal   int64         `json:"amount_total"`
+	Currency      string        `json:"currency"`
+	Livemode      bool          `json:"livemode"`
+}
+
+// stripePollExpand asks for the session's PaymentIntent and its latest Charge as objects in the same
+// answer (https://docs.stripe.com/expand), for the time of the payment: a Checkout Session and a
+// PaymentIntent say when they were created, not when they were paid, and the Charge's "created" is
+// when the payer's payment was made (for a card, the moment it succeeded). The webhook's
+// checkout.session.completed is sent at that moment too. For a list the paths are under "data.".
+const stripePollExpand = "payment_intent.latest_charge"
+
+// polledIntent is a session's payment_intent: its id, or with the expansion the object, of which the
+// id and the latest charge's time are read.
+type polledIntent struct {
+	ID            string
+	ChargeCreated int64
+}
+
+func (pi *polledIntent) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		return json.Unmarshal(b, &pi.ID)
+	}
+	var o struct {
+		ID           string          `json:"id"`
+		Object       string          `json:"object"`
+		LatestCharge json.RawMessage `json:"latest_charge"`
+	}
+	if err := json.Unmarshal(b, &o); err != nil {
+		return err
+	}
+	if o.Object != "payment_intent" {
+		return errors.New("integrations: payment_intent isn't a PaymentIntent")
+	}
+	pi.ID = o.ID
+	if len(o.LatestCharge) > 0 && o.LatestCharge[0] == '{' {
+		var ch struct {
+			Object  string `json:"object"`
+			Created int64  `json:"created"`
+		}
+		if err := json.Unmarshal(o.LatestCharge, &ch); err != nil {
+			return err
+		}
+		if ch.Object == "charge" {
+			pi.ChargeCreated = ch.Created
+		}
+	}
+	return nil
+}
+
+// payment is what the session says of a payment made on it, or false if it isn't a paid session of
+// the shape Normalize relies on (a one-time payment, an exact positive amount, ids of the provider's
+// shapes).
+func (o polledSession) payment() (ObservedPayment, bool) {
+	if o.Object != "checkout.session" || o.Mode != "payment" || o.Status != "complete" || o.PaymentStatus != "paid" ||
+		!stripeSessionIDRe.MatchString(o.ID) || o.AmountTotal <= 0 || !currencyCodeRe.MatchString(o.Currency) {
+		return ObservedPayment{}, false
+	}
+	p := ObservedPayment{ObjectID: o.ID, AmountMinor: o.AmountTotal, Currency: strings.ToUpper(o.Currency), Livemode: o.Livemode}
+	if o.PaymentIntent != nil {
+		if !stripeIntentIDRe.MatchString(o.PaymentIntent.ID) {
+			return ObservedPayment{}, false
+		}
+		p.PaymentID = o.PaymentIntent.ID
+		if o.PaymentIntent.ChargeCreated > 0 {
+			p.PaidAt = time.Unix(o.PaymentIntent.ChargeCreated, 0).UTC()
+		}
+	}
+	return p, true
+}
+
+// ReadPayment retrieves what became of the object, and nothing else is called:
+//   - a Checkout Session, by Retrieve a Checkout Session
+//     (https://docs.stripe.com/api/checkout/sessions/retrieve): status "complete" with payment_status
+//     "paid" is a payment ("unpaid" is a delayed method that hasn't settled: nothing yet), "expired"
+//     is an end, "open" is nothing yet;
+//   - a Payment Link, by List Checkout Sessions with the payment_link filter and status "complete"
+//     (https://docs.stripe.com/api/checkout/sessions/list): each paid session is a payment. A link
+//     itself has no payment status, and one that was deactivated says nothing of whether it was paid.
+//
+// Both ask for the session's intent and its latest charge in the same answer (stripePollExpand), for
+// the time of each payment. An expiry has no such time: expires_at is when the session was due to
+// expire, and one the server expired early keeps it, so an expired session is dated by the read.
+func (stripe) ReadPayment(ctx context.Context, creds Credentials, c *Client, hosted bool, objectID string) (Observed, error) {
+	if hosted {
+		return stripeReadLinkPayments(ctx, creds, c, objectID)
+	}
+	if !stripeSessionID.MatchString(objectID) {
+		return Observed{}, &CallError{Kind: CallRefused}
+	}
+	q := url.Values{"expand[]": {stripePollExpand}}
+	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions/"+objectID+"?"+q.Encode())
+	if err != nil {
+		return Observed{}, err
+	}
+	var out polledSession
+	if err := json.Unmarshal(body, &out); err != nil || out.Object != "checkout.session" || out.ID != objectID {
+		return Observed{}, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	switch out.Status {
+	case "open":
+		return Observed{Livemode: out.Livemode}, nil
+	case "expired":
+		return Observed{Livemode: out.Livemode, Expired: true}, nil
+	case "complete":
+		if out.PaymentStatus != "paid" {
+			return Observed{Livemode: out.Livemode}, nil // a delayed payment that hasn't settled
+		}
+		p, ok := out.payment()
+		if !ok {
+			return Observed{}, &CallError{Kind: CallRefused, Status: status}
+		}
+		return Observed{Livemode: out.Livemode, Payments: []ObservedPayment{p}}, nil
+	}
+	return Observed{}, &CallError{Kind: CallRefused, Status: status} // a state not said
+}
+
+func stripeReadLinkPayments(ctx context.Context, creds Credentials, c *Client, linkID string) (Observed, error) {
+	if !stripeLinkID.MatchString(linkID) {
+		return Observed{}, &CallError{Kind: CallRefused}
+	}
+	q := url.Values{"payment_link": {linkID}, "status": {"complete"}, "limit": {strconv.Itoa(findPageSize)},
+		"expand[]": {"data." + stripePollExpand}}
+	body, status, err := stripeGet(ctx, creds, c, "/v1/checkout/sessions?"+q.Encode())
+	if err != nil {
+		return Observed{}, err
+	}
+	var page struct {
+		Object  string           `json:"object"`
+		HasMore *bool            `json:"has_more"`
+		Data    *[]polledSession `json:"data"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil || page.Object != "list" || page.Data == nil || page.HasMore == nil {
+		return Observed{}, &CallError{Kind: CallUnreachable, Status: status}
+	}
+	var out Observed
+	data := *page.Data // newest first: the payments are told oldest first
+	for i := len(data) - 1; i >= 0; i-- {
+		o := data[i]
+		if o.PaymentLink == nil || *o.PaymentLink != linkID {
+			continue // not of this link, whatever the list said
+		}
+		if o.Status != "complete" || o.PaymentStatus != "paid" {
+			continue
+		}
+		p, ok := o.payment()
+		if !ok {
+			return Observed{}, &CallError{Kind: CallRefused, Status: status}
+		}
+		out.Livemode = p.Livemode
+		out.Payments = append(out.Payments, p)
+	}
+	return out, nil
 }
 
 // stripeFailure classifies an answer to a call that makes an object and isn't a success, from its
